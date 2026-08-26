@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -25,9 +25,9 @@ from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 
 def _build_request(
     task_type: TaskType = TaskType.IMPLEMENT,
-    repo_path: Optional[str] = "/tmp/repo",
-    base_branch: Optional[str] = "main",
-    backend: Optional[str] = "codex-o3",
+    repo_path: str | None = "/tmp/repo",
+    base_branch: str | None = "main",
+    backend: str | None = "codex-o3",
 ) -> DelegateRequest:
   return DelegateRequest(
       session_id="session-id",
@@ -39,14 +39,14 @@ def _build_request(
   )
 
 
-def _user_event(content: str, timestamp: Optional[str] = None) -> dict[str, Any]:
+def _user_event(content: str, timestamp: str | None = None) -> dict[str, Any]:
   event: dict[str, Any] = {"type": ET.USER, "content": content}
   if timestamp is not None:
     event["timestamp"] = timestamp
   return event
 
 
-def _scheduled_trigger_event(content: str, timestamp: Optional[str] = None) -> dict[str, Any]:
+def _scheduled_trigger_event(content: str, timestamp: str | None = None) -> dict[str, Any]:
   event: dict[str, Any] = {"type": ET.SCHEDULED_TRIGGER, "content": content}
   if timestamp is not None:
     event["timestamp"] = timestamp
@@ -205,7 +205,7 @@ def test_ordinary_takeoff_needs_no_timestamp_and_is_not_expiring() -> None:
 
 
 @pytest.mark.parametrize("timestamp", [None, "not-a-timestamp"])
-def test_pre_takeoff_with_missing_or_unparseable_timestamp_fails_closed(timestamp: Optional[str]) -> None:
+def test_pre_takeoff_with_missing_or_unparseable_timestamp_fails_closed(timestamp: str | None) -> None:
   session_mgr = FakeSessionManager([
       _user_event("pre take off", timestamp),
       _user_event("a later real user message"),
@@ -366,7 +366,7 @@ async def test_delegate_task_verify_skips_takeoff_gate_and_spawns_repoless(monke
       session_id: str,
       cfg: Any,
       mgr: Any,
-      requested_backend: Optional[str] = None,
+      requested_backend: str | None = None,
   ) -> tuple[str, str]:
     assert session_id == req.session_id
     assert mgr is session_mgr
@@ -380,12 +380,12 @@ async def test_delegate_task_verify_skips_takeoff_gate_and_spawns_repoless(monke
       cfg: Any,
       mgr: Any,
       t_mgr: Any,
-      request: Optional[SpawnRequest] = None,
+      request: SpawnRequest | None = None,
   ) -> None:
     assert mgr is session_mgr
     assert t_mgr is thread_mgr
 
-  def fake_create_logged_task(coro: Any, *, name: Optional[str] = None) -> Any:
+  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> Any:
     del name
     if coro.cr_frame is not None:
       captured.update(coro.cr_frame.f_locals)
@@ -465,7 +465,7 @@ async def test_delegate_task_does_not_pass_takeoff_gate_to_spawn_worker(monkeypa
       session_id: str,
       cfg: Any,
       mgr: Any,
-      requested_backend: Optional[str] = None,
+      requested_backend: str | None = None,
   ) -> tuple[str, str]:
     assert session_id == req.session_id
     assert mgr is session_mgr
@@ -479,12 +479,12 @@ async def test_delegate_task_does_not_pass_takeoff_gate_to_spawn_worker(monkeypa
       cfg: Any,
       mgr: Any,
       t_mgr: Any,
-      request: Optional[SpawnRequest] = None,
+      request: SpawnRequest | None = None,
   ) -> None:
     assert mgr is session_mgr
     assert t_mgr is thread_mgr
 
-  def fake_create_logged_task(coro: Any, *, name: Optional[str] = None) -> Any:
+  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> Any:
     del name
     if coro.cr_frame is not None:
       captured.update(coro.cr_frame.f_locals)
@@ -581,8 +581,8 @@ async def _authorize_verify(
     monkeypatch: pytest.MonkeyPatch,
     session_backend: str,
     model_preference: list[str],
-    backend: Optional[str] = None,
-) -> tuple[Optional[str], Optional[str]]:
+    backend: str | None = None,
+) -> tuple[str | None, str | None]:
   req = _build_request(task_type=TaskType.VERIFY, repo_path=None, base_branch=None, backend=backend)
   monkeypatch.setattr(internal, "get_config", lambda: _build_verify_cfg(model_preference))
   session_mgr = BackendFakeSessionManager(session_backend)

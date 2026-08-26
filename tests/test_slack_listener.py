@@ -6,7 +6,6 @@ import asyncio
 import re
 import shutil
 from pathlib import Path
-from typing import Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -60,7 +59,7 @@ class _FakeSlackClient:
     self.calls.append(("open_connection", {"channel": None}))
     return "wss://fake.example/socket"
 
-  async def post_message(self, channel: str, text: str, thread_ts: Optional[str] = None) -> dict:
+  async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
     self.calls.append(("post_message", {"channel": channel, "text": text, "thread_ts": thread_ts}))
     return {"ok": True}
 

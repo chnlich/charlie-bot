@@ -3,7 +3,7 @@
 from collections.abc import Coroutine
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
@@ -53,14 +53,14 @@ async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
   )
   fake_thread_mgr = FakeThreadManager()
   resolve_backend = AsyncMock(return_value=("codex-o3", "o3"))
-  spawn_request: Optional[SpawnRequest] = None
+  spawn_request: SpawnRequest | None = None
 
   def fake_spawn_worker(**kwargs: Any) -> Coroutine[Any, Any, None]:
     nonlocal spawn_request
     spawn_request = kwargs["request"]
     return _noop()
 
-  def fake_create_logged_task(coro: Coroutine[Any, Any, None], name: Optional[str] = None) -> None:
+  def fake_create_logged_task(coro: Coroutine[Any, Any, None], name: str | None = None) -> None:
     coro.close()
 
   monkeypatch.setattr("src.core.scheduler.ThreadManager", lambda _cfg: fake_thread_mgr)
@@ -105,7 +105,7 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
   def fake_spawn_worker(**_kwargs: Any) -> Coroutine[Any, Any, None]:
     return _noop()
 
-  def fake_create_logged_task(coro: Coroutine[Any, Any, None], name: Optional[str] = None) -> None:
+  def fake_create_logged_task(coro: Coroutine[Any, Any, None], name: str | None = None) -> None:
     coro.close()
 
   monkeypatch.setattr("src.core.scheduler.ThreadManager", lambda _cfg: fake_thread_mgr)

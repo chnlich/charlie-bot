@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 from unittest.mock import patch
 
 import pytest
@@ -45,7 +45,7 @@ class _FakeSlackClient:
     self._fail_posts = fail_posts
     self._fail_remove = fail_remove
 
-  async def post_message(self, channel: str, text: str, thread_ts: Optional[str] = None) -> dict:
+  async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
     if self._fail_posts:
       raise RuntimeError("chat.postMessage failed")
     self.posts.append({"channel": channel, "text": text, "thread_ts": thread_ts})
@@ -96,7 +96,7 @@ def _assistant(text: str) -> dict:
   return {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}}
 
 
-def _done(input_event_id: Optional[str], exit_code: int = 0) -> dict:
+def _done(input_event_id: str | None, exit_code: int = 0) -> dict:
   event = {"type": ET.MASTER_DONE, "exit_code": exit_code, "still_thinking": False}
   if input_event_id is not None:
     event["input_event_id"] = input_event_id

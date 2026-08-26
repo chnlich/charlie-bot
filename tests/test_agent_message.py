@@ -8,7 +8,7 @@ spawner gate code itself stays untouched (the exclusion is by type, like
 """
 
 from pathlib import Path
-from typing import Any, Coroutine, Optional
+from typing import Any, Coroutine
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -29,7 +29,7 @@ from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _agent_message_event(content: str, timestamp: Optional[str] = None) -> dict[str, Any]:
+def _agent_message_event(content: str, timestamp: str | None = None) -> dict[str, Any]:
   event: dict[str, Any] = {
       "type": ET.AGENT_MESSAGE,
       "content": content,
@@ -95,7 +95,7 @@ class RouteSessionManager:
     self.sessions = sessions
     self.persisted: list[tuple[str, dict[str, Any]]] = []
 
-  async def get_session(self, session_id: str) -> Optional[SessionMetadata]:
+  async def get_session(self, session_id: str) -> SessionMetadata | None:
     return self.sessions.get(session_id)
 
   async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
@@ -162,7 +162,7 @@ def test_session_message_relay_persists_event_and_wakes_master(
 
   created: list[str] = []
 
-  def fake_create_logged_task(coro: Coroutine[Any, Any, Any], name: Optional[str] = None) -> None:
+  def fake_create_logged_task(coro: Coroutine[Any, Any, Any], name: str | None = None) -> None:
     created.append(name or "")
     coro.close()
 

@@ -57,17 +57,6 @@ def _write_legacy_cron(home: Path) -> Path:
   return p
 
 
-@pytest.fixture
-def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-  """Point HOME at a temp dir and reset the config/cron module-level caches."""
-  monkeypatch.setenv("HOME", str(tmp_path))
-  import src.core.config as cm
-  cm._config = None
-  cm._config_mtime = 0.0
-  cm._cron_snapshot = cm._CronSnapshot()
-  return tmp_path
-
-
 # --- 1. seed idempotence (per-job files) -------------------------------------
 
 

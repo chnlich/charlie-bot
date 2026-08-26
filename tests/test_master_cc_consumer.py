@@ -7,10 +7,15 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import make_work_item, mock_session_callbacks, patch_instructions_content
+from conftest import (
+  make_work_item,
+  mock_session_callbacks,
+  patch_instructions_content,
+  run_session_consumer,
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -51,30 +56,13 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
   item_bootstrap = make_work_item(MagicMock(), meta_bootstrap, None, user_content="hi", callbacks=cb)
   item_user = make_work_item(MagicMock(), meta_user_message, None, user_content="hi", callbacks=cb)
 
-  master_cc_state._session_queues.pop(session_id, None)
-  master_cc_state._session_queues[session_id] = asyncio.Queue()
-  master_cc_state._session_queues[session_id].put_nowait(item_bootstrap)
-  master_cc_state._session_queues[session_id].put_nowait(item_user)
-
   observed_cc_session_ids: list = []
 
   async def fake_run_cc(item: master_cc._WorkItem):
     observed_cc_session_ids.append(item.session_meta.cc_session_id)
     return ("cc-id-from-bootstrap", 0, None, {})
 
-  workers_mock = MagicMock()
-  workers_mock._has_running_tasks = AsyncMock(return_value=False)
-
-  try:
-    with (
-        patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
-        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
-        patch("src.core.sessions.SessionManager", return_value=workers_mock),
-    ):
-      await asyncio.wait_for(master_cc._session_consumer(session_id), timeout=5)
-  finally:
-    master_cc_state._session_queues.pop(session_id, None)
-    master_cc_state._session_consumers.pop(session_id, None)
+  await run_session_consumer(session_id, [item_bootstrap, item_user], fake_run_cc)
 
   assert observed_cc_session_ids == [None, "cc-id-from-bootstrap"], (
       "second _run_cc must observe cc_session_id relayed from bootstrap meta")

@@ -6,10 +6,10 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from conftest import make_fake_git_create_worktree
 
 from src.core import git as git_module
 from src.core import improve_command, review, spawner, spawner_finalize
-from src.core.git import BaseResolution
 from src.core.improve_command import load_loop_state
 from src.core.models import ThreadMetadata
 
@@ -171,11 +171,6 @@ async def test_improve_loop_keeps_worktree_on_failure(tmp_path: Path, monkeypatc
       del meta, require_review
       return MagicMock(id="thread-1", description=description)
 
-  async def fake_git_create_worktree(repo: Any, base: str, branch: str, wt: Path) -> BaseResolution:
-    del repo, branch
-    wt.mkdir(parents=True, exist_ok=True)
-    return BaseResolution(canonical=base, start_point=base, detail="fake")
-
   async def boom_spawn_worker(*args: Any, **kwargs: Any) -> None:
     raise RuntimeError("worker blew up")
 
@@ -188,7 +183,7 @@ async def test_improve_loop_keeps_worktree_on_failure(tmp_path: Path, monkeypatc
   async def noop_async(*args: Any, **kwargs: Any) -> None:
     del args, kwargs
 
-  monkeypatch.setattr(improve_command, "git_create_worktree", fake_git_create_worktree)
+  monkeypatch.setattr(improve_command, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
   monkeypatch.setattr("src.core.spawner.spawn_worker", boom_spawn_worker)
   monkeypatch.setattr(improve_command, "git_worktree_remove", fake_remove)
   monkeypatch.setattr(improve_command, "git_worktree_prune", noop_async)

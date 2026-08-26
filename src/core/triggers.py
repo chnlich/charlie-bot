@@ -315,8 +315,9 @@ async def _probe_sacct(
   """
   ids = ",".join(str(j) for j in job_ids)
   sacct_args = ["sacct", "-j", ids, "-X", "-n", "-P", "--format=JobID,State,ExitCode"]
-  # A local sacct call cannot hang on a dead remote host, so only remote probes
-  # carry a deadline.
+  # Remote probes get a deadline: ssh to a dead host would otherwise hang
+  # forever. A local sacct goes bare; a wedged local slurmdbd is not a failure
+  # mode this watcher bounds.
   if host is None:
     cmd = sacct_args
     timeout = None

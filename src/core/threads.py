@@ -20,6 +20,11 @@ from src.core.models import (
 log = structlog.get_logger()
 
 
+def thread_events_log_path(session_dir: Path, thread_id: str) -> Path:
+  """Return the path to a thread's events.jsonl under its session directory."""
+  return session_dir / "threads" / thread_id / "data" / "events.jsonl"
+
+
 class ThreadManager:
   """Creates and manages Worker threads."""
 
@@ -101,7 +106,7 @@ class ThreadManager:
     return self._cfg.sessions_dir / session_id / "threads" / thread_id
 
   async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
-    return self.thread_dir(session_id, thread_id) / "data" / "events.jsonl"
+    return thread_events_log_path(self._cfg.sessions_dir / session_id, thread_id)
 
   async def save_metadata(self, meta: ThreadMetadata) -> None:
     """Persist thread metadata to disk."""

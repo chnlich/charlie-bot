@@ -8,6 +8,7 @@ import structlog
 
 from src.core import event_types as ET
 from src.core import finalize_effects
+from src.core.chat_events import chat_events_path
 from src.core.config import CharlieBotConfig
 from src.core.git import (
   git_current_branch,
@@ -26,7 +27,7 @@ from src.core.models import (
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
-from src.core.threads import ThreadManager
+from src.core.threads import ThreadManager, thread_events_log_path
 
 log = structlog.get_logger()
 
@@ -127,8 +128,9 @@ def build_review_prompt(
     context_lines.append("*(Log extraction unavailable — review based on delegator hint and diff only.)*")
   context_lines.append(f"**Delegator hint:** {context_hint}")
   context_section = "\n".join(context_lines)
-  chat_log_path = sessions_dir / session_id / "data" / "chat_events.jsonl"
-  worker_log_path = sessions_dir / session_id / "threads" / original_thread_id / "data" / "events.jsonl"
+  session_dir = sessions_dir / session_id
+  chat_log_path = chat_events_path(session_dir)
+  worker_log_path = thread_events_log_path(session_dir, original_thread_id)
   return (
       f"## Code Review\n"
       f"You are reviewing another worker's code changes.\n\n"
@@ -181,9 +183,10 @@ async def extract_review_context(
   worker_summary: str | None = None
   has_user_request = False
   has_worker_summary = False
+  session_dir = sessions_dir / session_id
 
   try:
-    chat_log = sessions_dir / session_id / "data" / "chat_events.jsonl"
+    chat_log = chat_events_path(session_dir)
     events = await asyncio.to_thread(parse_ndjson_file, chat_log)
     for ev in events:
       if ev.get("type") == ET.TASK_DELEGATED and ev.get("thread_id") == thread_id:
@@ -200,7 +203,7 @@ async def extract_review_context(
     log.warning("review_context_user_request_unavailable", session=session_id, thread=thread_id)
 
   try:
-    worker_log = sessions_dir / session_id / "threads" / thread_id / "data" / "events.jsonl"
+    worker_log = thread_events_log_path(session_dir, thread_id)
     events = await asyncio.to_thread(parse_ndjson_file, worker_log)
     result_text: str | None = None
     assistant_text: str | None = None

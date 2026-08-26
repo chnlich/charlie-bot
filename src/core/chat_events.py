@@ -21,6 +21,11 @@ from src.core.ndjson import (
 log = structlog.get_logger()
 
 
+def chat_events_path(session_dir: Path) -> Path:
+  """Return the path to a session's chat_events.jsonl under its session directory."""
+  return session_dir / "data" / "chat_events.jsonl"
+
+
 class ChatEventStore:
   """Persistence and cache operations for per-session chat_events.jsonl."""
 
@@ -169,7 +174,7 @@ class ChatEventStore:
     return events
 
   def _chat_events_path(self, session_id: str) -> Path:
-    return self._session_dir(session_id) / "data" / "chat_events.jsonl"
+    return chat_events_path(self._session_dir(session_id))
 
   def archive_old_chat_events_sync(self, session_id: str, cutoff_utc: datetime) -> dict:
     """Split live chat_events.jsonl at cutoff_utc, append the head to a weekly archive."""

@@ -25,6 +25,7 @@ from src.api.message_utils import (
   build_session_view_data,
   events_to_messages,
 )
+from src.core.chat_events import chat_events_path
 from src.core.config import (
   CharlieBotConfig,
   claude_config_dir,
@@ -789,7 +790,7 @@ async def get_events_jsonl(session_id: str):
   """Serve the raw chat_events.jsonl file for a session."""
   from src.core.config import get_config
   cfg = get_config()
-  path = cfg.sessions_dir / session_id / "data" / "chat_events.jsonl"
+  path = chat_events_path(cfg.sessions_dir / session_id)
   if not path.exists():
     raise HTTPException(status_code=404, detail="Events file not found")
   return FileResponse(path, media_type="application/x-ndjson")

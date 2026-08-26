@@ -28,7 +28,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import make_work_item, patch_instructions_content
+from conftest import make_work_item, patch_instructions_content, run_session_consumer
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import init as init_module
@@ -170,24 +170,9 @@ async def test_consumer_clears_master_run_after_master_done(monkeypatch: pytest.
   async def fake_run_cc(item: master_cc._WorkItem):
     return "cc-1", 0, None, {}
 
-  workers_mock = MagicMock()
-  workers_mock._has_running_tasks = AsyncMock(return_value=False)
-
   item = make_work_item(
       _cfg(Path("/tmp/charliebot-unit")), session_meta, None, user_content="hi", callbacks=callbacks)
-  master_cc_state._session_queues.pop(session_meta.id, None)
-  master_cc_state._session_queues[session_meta.id] = asyncio.Queue()
-  master_cc_state._session_queues[session_meta.id].put_nowait(item)
-  try:
-    with (
-        patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
-        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
-        patch("src.core.sessions.SessionManager", return_value=workers_mock),
-    ):
-      await asyncio.wait_for(master_cc._session_consumer(session_meta.id), timeout=5)
-  finally:
-    master_cc_state._session_queues.pop(session_meta.id, None)
-    master_cc_state._session_consumers.pop(session_meta.id, None)
+  await run_session_consumer(session_meta.id, [item], fake_run_cc)
 
   assert persist_order == ["master_done", "master_run_cleared"], (
       "the restart identity must outlive the result boundary: clearing it first "

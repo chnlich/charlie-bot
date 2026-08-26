@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from pathlib import Path
 from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-from conftest import make_work_item, mock_session_callbacks
+from conftest import make_work_item, mock_session_callbacks, run_session_consumer
 
-from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
+from src.agents import master_cc
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import (
@@ -76,25 +75,11 @@ async def _run_one_round(user_event_id: Optional[str]) -> dict:
       callbacks=callbacks,
       user_event_id=user_event_id,
   )
-  master_cc_state._session_queues.pop(session_id, None)
-  master_cc_state._session_queues[session_id] = asyncio.Queue()
-  master_cc_state._session_queues[session_id].put_nowait(item)
 
   async def fake_run_cc(_item: master_cc._WorkItem) -> tuple:
     return ("cc-1", 0, None, {})
 
-  workers_mock = MagicMock()
-  workers_mock._has_running_tasks = AsyncMock(return_value=False)
-  try:
-    with (
-        patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
-        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
-        patch("src.core.sessions.SessionManager", return_value=workers_mock),
-    ):
-      await asyncio.wait_for(master_cc._session_consumer(session_id), timeout=5)
-  finally:
-    master_cc_state._session_queues.pop(session_id, None)
-    master_cc_state._session_consumers.pop(session_id, None)
+  await run_session_consumer(session_id, [item], fake_run_cc)
 
   done_events = [
       call.args[1] for call in callbacks.persist_and_broadcast.call_args_list

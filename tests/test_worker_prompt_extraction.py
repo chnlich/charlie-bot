@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from conftest import build_worker_prompt
+from conftest import cfg_with_repo as _cfg_with_repo
 
 from src.core import review, spawner
 from src.core.config import CharlieBotConfig
@@ -61,18 +62,6 @@ def _real_worker_prompt_text() -> str:
   return (
       CharlieBotConfig(charliebot_home=Path("/tmp/unused"), worktree_dir="/tmp/worktrees").charlie_bot_repo /
       "prompts" / "worker.md").read_text(encoding="utf-8")
-
-
-def _cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
-  """A cfg-like object whose charlie_bot_repo points at *repo_root* (real CharlieBotConfig's
-  charlie_bot_repo is a derived property tied to the installed package location, so a plain
-  namespace stand-in is used to redirect it for these isolated fail-loud tests)."""
-
-  class _Cfg:
-    charlie_bot_repo = repo_root
-    memory_dir = repo_root / "memory"
-
-  return _Cfg()  # type: ignore[return-value]
 
 
 def test_missing_worker_prompt_file_raises_with_path_and_cause(tmp_path: Path) -> None:

@@ -10,7 +10,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import FakeAsyncProcess, patch_trigger_fire
+from conftest import (
+  FakeAsyncProcess,
+  assert_trigger_fired_completed,
+  patch_trigger_fire,
+)
 from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
 
@@ -18,7 +22,6 @@ from src.core.models import (
   LocalPid,
   PendingTrigger,
   SlurmJob,
-  TriggerStatus,
 )
 from src.core.triggers import TriggerManager
 
@@ -69,11 +72,7 @@ async def test_slurm_single_job_completes(tmp_path: Path) -> None:
     task = trigger_mgr._tasks[trigger.id]
     await asyncio.wait_for(task, timeout=10)
 
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.status == TriggerStatus.FIRED
-  assert stored.fire_reason == "completed"
-  msg = mock_master.await_args.args[1]
-  assert "[Scheduled trigger fired | completed]" in msg
+  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
   assert "finished: slurm:12345: COMPLETED 0:0" in msg
 
 

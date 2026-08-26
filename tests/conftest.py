@@ -564,6 +564,19 @@ def patch_trigger_fire(
     yield stack.enter_context(master_patch)
 
 
+async def assert_trigger_fired_completed(
+    trigger_mgr: TriggerManager, session_id: str, trigger_id: str, mock_master: AsyncMock
+) -> str:
+  """Asserts the trigger persisted FIRED with the "completed" reason and the standard fired prefix;
+  returns the fired message so the caller can assert its site-specific suffix (pids, slurm states)."""
+  stored = await trigger_mgr._load_trigger(session_id, trigger_id)
+  assert stored.status == models.TriggerStatus.FIRED
+  assert stored.fire_reason == "completed"
+  msg = mock_master.await_args.args[1]
+  assert "[Scheduled trigger fired | completed]" in msg
+  return msg
+
+
 def make_fake_run_tmux(calls: list[tuple[str, ...]]) -> Callable[..., Awaitable[tuple[int, str]]]:
   """A `_run_tmux` stand-in that answers "has-session" as missing and records every call.
 

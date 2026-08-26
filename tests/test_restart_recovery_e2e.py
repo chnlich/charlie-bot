@@ -520,7 +520,8 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
   # finalize_review_chain removes it once a review lands, which would make rounds
   # 2 and 3 exit at validate_review_prerequisites' worktree-exists check before ever
   # reaching the reviewer_thread_exists judgment (src/core/review.py::spawn_review_worker,
-  # src/core/init_worker_recovery.py::_maybe_respawn) — masking whether that judgment actually works. Neutering
+  # src/core/init_worker_recovery.py::_effects_maybe_missing) — masking whether that judgment actually
+  # works. Neutering
   # only the worktree-removal step (a test-side no-op) lets every round walk the
   # judgment for real. ---
   async def fake_finalize_review_chain(*args, **kwargs) -> None:

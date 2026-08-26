@@ -3,24 +3,19 @@
 Subcommands (verbs) follow the same caller contract as ``charliebot delegate``:
 session id is resolved from cwd (explicit ``--session`` mismatches are rejected),
 the result is a single JSON object on stdout, and server 4xx/5xx ``detail`` is
-written to stderr as a JSON error with a non-zero exit code. The exception is
-``check``: a local dry run of the registration gates against an ordinary
-filesystem file — no session, no HTTP, no registry write.
+written to stderr as a JSON error with a non-zero exit code.
 
   charliebot plan present --file artifacts/plan_01.html --title "…"
   charliebot plan amend --file artifacts/plan_02.html [--plan N]
   charliebot plan approve [--plan N]
   charliebot plan close --plan N --as superseded|abandoned|completed
   charliebot plan list
-  charliebot plan check --file <artifact.html>
 """
 
 import argparse
 import json
 import os.path
-import sys
 from collections.abc import Sequence
-from pathlib import Path
 
 from src.cli.common import (
   add_session_arg,
@@ -28,8 +23,6 @@ from src.cli.common import (
   post_internal_api,
   resolve_session_id,
 )
-from src.core import plans
-from src.core.config import get_config
 
 _PLAN_REMINDER = (
     "A read-only verify delegation runs, and its adequacy findings are reported alongside "
@@ -120,14 +113,6 @@ def _add_close(parser: argparse.ArgumentParser) -> None:
   parser.add_argument("--as", dest="close_as", required=True, choices=["superseded", "abandoned", "completed"])
 
 
-def _add_check(parser: argparse.ArgumentParser) -> None:
-  parser.add_argument(
-      "--file",
-      required=True,
-      help="Artifact path as an ordinary filesystem path (absolute or cwd-relative), "
-      "unlike the session-relative --file of the other verbs")
-
-
 def _build_parser() -> argparse.ArgumentParser:
   parent = argparse.ArgumentParser(add_help=False)
   add_session_arg(parent)
@@ -138,32 +123,7 @@ def _build_parser() -> argparse.ArgumentParser:
   _add_approve(sub.add_parser("approve", parents=[parent], help="Record a takeoff"))
   _add_close(sub.add_parser("close", parents=[parent], help="Terminate a plan lineage"))
   sub.add_parser("list", parents=[parent], help="Print the session's plan registry")
-  _add_check(sub.add_parser("check", help="Dry-run the registration gates on a local artifact file"))
   return parser
-
-
-def _run_check(args: argparse.Namespace) -> int:
-  """Run both registration gates locally and print one measured line per gate.
-
-  Exit code is 0 when both gates pass and 1 otherwise; a gate failing for a
-  non-budget reason (missing Problem / Goal section, missing or unusable
-  renderer) reports the error to stderr instead of a gate line.
-  """
-  # Resolve cwd-relative spellings up front: the page probe builds file:// URIs from
-  # the artifact path, which requires an absolute path.
-  artifact = Path(args.file).resolve()
-  try:
-    page_height, goal_weighted = plans.measure_plan_gates(get_config(), artifact)
-  except (OSError, ValueError) as e:
-    print(json.dumps({"error": str(e)}), file=sys.stderr)
-    return 1
-  page_ok = page_height <= plans.PAGE_HEIGHT_BUDGET
-  goal_ok = goal_weighted <= plans.GOAL_WEIGHTED_BUDGET
-  print(f"page height: {page_height} px (budget {plans.PAGE_HEIGHT_BUDGET}) {'PASS' if page_ok else 'FAIL'}")
-  print(
-      f"goal weighted length: {goal_weighted} (budget {plans.GOAL_WEIGHTED_BUDGET}) "
-      f"{'PASS' if goal_ok else 'FAIL'}")
-  return 0 if page_ok and goal_ok else 1
 
 
 def _build_payload(verb: str, session_id: str, args: argparse.Namespace) -> dict:
@@ -196,8 +156,6 @@ def _build_payload(verb: str, session_id: str, args: argparse.Namespace) -> dict
 def main(argv: Sequence[str] | None = None) -> None:
   parser = _build_parser()
   args = parser.parse_args(argv if argv is not None else None)
-  if args.verb == "check":
-    sys.exit(_run_check(args))
   session_id = resolve_session_id(args.session)
 
   if args.verb == "list":

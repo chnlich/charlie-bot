@@ -117,7 +117,8 @@
 
       Readability rules, head and style: referenced from prompts/sitrep_template.html (single canonical home).
 
-      Pre-share: run the cold-read gate (file-server skill) one step before delivery.
+      Pre-share: run the cold-read gate one step before delivery: charliebot artifact check
+      &lt;page.html&gt; --genre debug --trigger "&lt;trigger message verbatim&gt;" (contract: file-server skill).
 -->
 
     <section class="plan-section">
@@ -175,7 +176,7 @@
       <h3>Why the clock ran fast</h3>
       <p><span class="tag hyp">Hypothesis</span> The clock drifted because Sunday 18:00's base-image re-image left the clock-sync service disabled. Confidence: moderate; the service currently reads disabled. The check that would decide it compares Sunday's image manifest with the previous one for the clock-sync entry. <span class="src">Source: ~/workspace/reviewwall/services.log.</span></p>
       <h3>Boundary of the claim</h3>
-      <p><span class="tag fact">Fact</span> Only frames re-exported inside the skew window stick: every frame whose newest primary mtime already passes its cache stamp syncs normally, which is why most of Tuesday's saves appeared on time and only the fresh re-exports looked frozen.</p>
+      <p><span class="tag fact">Fact</span> Only frames re-exported inside the skew window stick: every frame whose newest primary mtime already passes its cache stamp syncs normally, which is why most of Tuesday's saves appeared on time and only the fresh re-exports looked frozen. <span class="src">Source: ~/workspace/reviewwall/fetch.log.</span></p>
       <details class="details-layer">
         <summary>Full fictional chronology</summary>
         <ul>

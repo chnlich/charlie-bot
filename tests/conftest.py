@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -272,7 +273,20 @@ THREE_BACKEND_OPTIONS = [
 
 PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
 
-PLAN_GOAL_OK_HTML = "<html><section><h2>1 Problem / Goal</h2><p>Ship the fix.</p></section></html>"
+def plan_page_html(goal_body: str = "Ship the fix.") -> str:
+  """Minimal plan page passing the plan assertion set: the shipped template's <style> block
+  verbatim (style-verbatim compares after whitespace collapse), six numbered sections, and a footer,
+  with *goal_body* as the Problem / Goal section's body."""
+  template = (ROOT / "prompts" / "plan_template.html").read_text(encoding="utf-8")
+  style = re.search(r"<style>.*?</style>", template, re.DOTALL).group(0)
+  titles = [
+      "Problem / Goal", "Context", "High Level Solution", "Detailed Design", "Trade-offs", "Other Details"
+  ]
+  sections = "".join(
+      f'<section class="plan-section"><h2><span class="n">{i}</span> {title}</h2>'
+      f"<p>{goal_body if i == 1 else title}</p></section>" for i, title in enumerate(titles, 1))
+  return (f"<html><head>{style}</head><body>{sections}"
+          '<div class="foot"><p>How to respond.</p></div></body></html>')
 
 
 def write_stub_chrome(tmp_path: Path, height: int) -> str:
@@ -381,10 +395,12 @@ def build_recovery_cfg(home: Path) -> CharlieBotConfig:
 
 
 def write_plan_artifact(
-    cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html", content: str = PLAN_GOAL_OK_HTML
+    cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html", content: str | None = None
 ) -> str:
   """Write one plan artifact under cfg's sessions dir and return its plan-relative path; the default content
-  satisfies the page gate's required section so tests can present/approve directly."""
+  passes the plan assertion set so tests can present/approve directly."""
+  if content is None:
+    content = plan_page_html()
   artifacts_dir = cfg.sessions_dir / session_id / "artifacts"
   artifacts_dir.mkdir(parents=True, exist_ok=True)
   (artifacts_dir / name).write_text(content, encoding="utf-8")

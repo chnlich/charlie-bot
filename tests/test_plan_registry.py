@@ -13,6 +13,7 @@ from conftest import (
 from conftest import (
   write_stub_chrome as _write_stub_chrome,
 )
+from conftest import plan_page_html
 
 from src.core.plans import (
   PlanRegistryManager,
@@ -732,7 +733,8 @@ async def test_present_stores_initial_trigger(tmp_path: Path) -> None:
 
 
 def _goal_doc(goal_text: str) -> str:
-  return f"<html><section><h2>1 Problem / Goal</h2><p>{goal_text}</p></section></html>"
+  """A page passing every plan assertion except goal-budget, carrying *goal_text* as the goal body."""
+  return plan_page_html(goal_body=goal_text)
 
 
 @pytest.mark.asyncio
@@ -804,3 +806,32 @@ async def test_present_rejects_failing_renderer_with_reason(tmp_path: Path) -> N
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
   with pytest.raises(ValueError, match="renderer exploded"):
     await plan_mgr.present(meta.id, file=file_rel, title="P1")
+
+
+# ---------------------------------------------------------------------------
+# DOM assertions: present/amend enforce the full plan assertion set, not just budgets
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_present_rejects_missing_section_number_naming_the_assertion(tmp_path: Path) -> None:
+  """A page whose sections number 1,2,3,5,6,7 fails sections-numbered; one ValueError lists it."""
+  broken = plan_page_html().replace('<span class="n">4</span>', '<span class="n">5</span>')
+  assert '<span class="n">4</span>' not in broken
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=broken)
+  with pytest.raises(ValueError, match="sections-numbered"):
+    await plan_mgr.present(meta.id, file=file_rel, title="P1")
+
+
+@pytest.mark.asyncio
+async def test_present_rejection_lists_every_failed_assertion(tmp_path: Path) -> None:
+  """Deprived of its footer and numbered sections, one failure message names both defects."""
+  broken = plan_page_html().replace('<span class="n">2</span>', '<span class="n">9</span>').replace(
+      '<div class="foot"><p>How to respond.</p></div>', "")
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=broken)
+  with pytest.raises(ValueError) as exc_info:
+    await plan_mgr.present(meta.id, file=file_rel, title="P1")
+  assert "sections-numbered" in str(exc_info.value)
+  assert "foot-present" in str(exc_info.value)

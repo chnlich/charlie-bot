@@ -45,6 +45,15 @@ SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT = 120  # seconds
 AUTONAMER_TIMEOUT = 30.0  # seconds
 
 # ---------------------------------------------------------------------------
+# Artifact cold-read probe
+# ---------------------------------------------------------------------------
+
+# One-shot model pass over an entire artifact page (sitrep / debug / explain
+# cold-read gate); the page text alone dwarfs a naming prompt, so the 30 s
+# autonamer budget does not apply.
+ARTIFACT_PROBE_TIMEOUT = 300.0  # seconds
+
+# ---------------------------------------------------------------------------
 # HTTP client timeouts (outbound requests)
 # ---------------------------------------------------------------------------
 

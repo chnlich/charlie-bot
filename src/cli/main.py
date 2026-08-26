@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 _COMMANDS = {
+    "artifact": "src.cli.artifact",
     "config": "src.cli.config",
     "delegate": "src.cli.delegate",
     "improve": "src.cli.improve",

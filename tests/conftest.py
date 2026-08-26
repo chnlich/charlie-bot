@@ -213,6 +213,21 @@ def make_page_request(path: str) -> Request:
   return Request(scope)
 
 
+def make_transcript(config_dir: Path, cc_session_id: str) -> Path:
+  """Write a fake Claude Code session transcript under config_dir and return its path."""
+  transcript = config_dir / "projects" / "slug" / f"{cc_session_id}.jsonl"
+  transcript.parent.mkdir(parents=True, exist_ok=True)
+  transcript.write_text("[]", encoding="utf-8")
+  return transcript
+
+
+def session_dir_names(cfg: CharlieBotConfig) -> set[str]:
+  """Snapshot the names of session directories on disk (existence, not content)."""
+  if not cfg.sessions_dir.exists():
+    return set()
+  return {d.name for d in cfg.sessions_dir.iterdir() if d.is_dir()}
+
+
 OPUS_BACKEND_OPTION = models.BackendOption(
     id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"
 )

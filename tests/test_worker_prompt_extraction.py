@@ -126,12 +126,8 @@ def test_unresolved_token_in_assembled_output_raises(tmp_path: Path) -> None:
   prompts_dir.mkdir()
   (prompts_dir / "worker.md").write_text(mutated, encoding="utf-8")
 
-  class _Cfg:
-    charlie_bot_repo = tmp_path
-    memory_dir = tmp_path / "memory"  # missing -> memory_section empty, irrelevant here
-
   with pytest.raises(ValueError, match="unresolved"):
-    build_worker_prompt("desc", cfg=_Cfg())  # type: ignore[arg-type]
+    build_worker_prompt("desc", cfg=_cfg_with_repo(tmp_path))
 
 
 # --- Reviewer-prompt sourcing --------------------------------------------------

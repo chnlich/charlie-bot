@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -75,80 +76,38 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
   assert stored_trigger.fire_reason == "timeout"
 
 
+class _Invalidation(enum.Enum):
+  ARCHIVED = 1
+  MISSING_METADATA = 2
+  EMPTY_METADATA = 3
+
+
 @pytest.mark.asyncio
-async def test_archived_session_trigger_is_cancelled_without_waking_master(tmp_path: Path) -> None:
+@pytest.mark.parametrize("invalidation", list(_Invalidation))
+async def test_invalid_session_trigger_is_cancelled_without_waking_master(
+    tmp_path: Path, invalidation: _Invalidation) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
   session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Archived trigger"))
+  session = await session_mgr.create_session(CreateSessionRequest(name="Invalid session trigger"))
   trigger_mgr = TriggerManager(cfg, session_mgr)
   trigger = PendingTrigger(
-      id="archived-trigger",
+      id="invalid-session-trigger",
       session_id=session.id,
       fire_at=datetime.now(timezone.utc),
       message="must not wake",
   )
   await trigger_mgr._save_trigger(trigger)
-  await session_mgr.archive_session(session.id)
-
-  with (
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
-      patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_trigger_master,
-      patch("src.core.triggers.get_config", return_value=cfg),
-  ):
-    await trigger_mgr._wait_and_fire(trigger)
-
-  assert session_mgr.load_chat_events_sync(session.id) == []
-  mock_broadcast.assert_not_awaited()
-  mock_trigger_master.assert_not_awaited()
-  stored_trigger = await trigger_mgr._load_trigger(session.id, trigger.id)
-  assert stored_trigger.status == TriggerStatus.CANCELLED
-
-
-@pytest.mark.asyncio
-async def test_trigger_with_missing_session_metadata_is_cancelled_without_waking_master(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Missing metadata trigger"))
-  trigger_mgr = TriggerManager(cfg, session_mgr)
-  trigger = PendingTrigger(
-      id="missing-metadata-trigger",
-      session_id=session.id,
-      fire_at=datetime.now(timezone.utc),
-      message="must not wake",
-  )
-  await trigger_mgr._save_trigger(trigger)
-  (cfg.sessions_dir / session.id / "metadata.json").unlink()
-  session_mgr._metadata_cache.pop(session.id)
-
-  with (
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
-      patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_trigger_master,
-      patch("src.core.triggers.get_config", return_value=cfg),
-  ):
-    await trigger_mgr._wait_and_fire(trigger)
-
-  assert session_mgr.load_chat_events_sync(session.id) == []
-  mock_broadcast.assert_not_awaited()
-  mock_trigger_master.assert_not_awaited()
-  stored_trigger = await trigger_mgr._load_trigger(session.id, trigger.id)
-  assert stored_trigger.status == TriggerStatus.CANCELLED
-
-
-@pytest.mark.asyncio
-async def test_trigger_with_empty_session_metadata_is_cancelled_without_waking_master(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Empty metadata trigger"))
-  trigger_mgr = TriggerManager(cfg, session_mgr)
-  trigger = PendingTrigger(
-      id="empty-metadata-trigger",
-      session_id=session.id,
-      fire_at=datetime.now(timezone.utc),
-      message="must not wake",
-  )
-  await trigger_mgr._save_trigger(trigger)
-  (cfg.sessions_dir / session.id / "metadata.json").write_text("")
-  session_mgr._metadata_cache.pop(session.id)
+  metadata_path = cfg.sessions_dir / session.id / "metadata.json"
+  if invalidation is _Invalidation.ARCHIVED:
+    await session_mgr.archive_session(session.id)
+  elif invalidation is _Invalidation.MISSING_METADATA:
+    metadata_path.unlink()
+    session_mgr._metadata_cache.pop(session.id)
+  elif invalidation is _Invalidation.EMPTY_METADATA:
+    metadata_path.write_text("")
+    session_mgr._metadata_cache.pop(session.id)
+  else:
+    raise AssertionError(f"unhandled invalidation: {invalidation}")
 
   with (
       patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,

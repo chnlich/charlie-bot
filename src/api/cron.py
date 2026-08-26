@@ -3,7 +3,6 @@
 import asyncio
 import copy
 import re
-from pathlib import Path
 from typing import Literal
 
 import structlog
@@ -17,12 +16,11 @@ from src.core.config import (
   ScheduledTaskConfig,
   _load_cron_file,
   _validate_cron_body,
+  cron_dir,
+  cron_path,
   get_config,
   get_scheduled_task_errors,
   get_scheduled_tasks,
-)
-from src.core.config import (
-  cron_dir as _core_cron_dir,
 )
 from src.core.models import PROJECT_ROLE, SessionMetadata
 from src.core.scheduler import effective_scheduled_task_backend
@@ -33,16 +31,6 @@ log = structlog.get_logger()
 router = APIRouter()
 
 _CRON_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-
-
-def cron_dir() -> Path:
-  """Path of this profile's per-job cron config directory, from the canonical core helper."""
-  return _core_cron_dir()
-
-
-def cron_path(name: str) -> Path:
-  """Path of one job's cron config file. Resolved per call, never at import."""
-  return cron_dir() / f'{name}.yaml'
 
 
 def _read_cron_yaml(name: str) -> dict:

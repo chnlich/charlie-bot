@@ -7,6 +7,9 @@ from conftest import (
   CODEX_BACKEND_OPTION,
   CapturingThreadManager,
   JudgmentShim,
+  ReviewSpawnSessionManager,
+  ReviewSpawnThreadManager,
+  patch_review_spawn_path,
   recording_notify_completion,
 )
 
@@ -606,66 +609,11 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
 async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   cfg = _build_cfg()
   captured: dict[str, Any] = {}
-  saved_review_thread: dict[str, ThreadMetadata] = {}
   repo_path = tmp_path / "repo"
   worktree_path = tmp_path / "worktrees" / "charliebot-task-1"
   repo_path.mkdir()
   worktree_path.mkdir(parents=True)
-
-  class FakeSessionManager(JudgmentShim):
-
-    async def get_session(self, session_id: str) -> SessionMetadata | None:
-      return SessionMetadata(id=session_id, name="Scheduled: nightly", backend="claude-opus-4.6")
-
-  class FakeThreadManager(JudgmentShim):
-
-    async def create_thread(
-        self,
-        session_meta: SessionMetadata,
-        description: str,
-        branch_name: str | None = None,
-        review_of: str | None = None,
-    ) -> ThreadMetadata:
-      return ThreadMetadata(
-          id="review-thread-id",
-          session_id=session_meta.id,
-          description=description,
-          branch_name=branch_name,
-          review_of=review_of,
-      )
-
-    async def save_metadata(self, meta: ThreadMetadata) -> None:
-      saved_review_thread["meta"] = meta
-
-  async def fake_git_current_branch(repo_path: Path) -> str:
-    return "main"
-
-  async def fake_spawn_worker(
-      session_id: str,
-      description: str,
-      thread_id: str,
-      cfg: CharlieBotConfig,
-      session_mgr: Any,
-      thread_mgr: Any,
-      request: SpawnRequest | None = None,
-  ) -> None:
-    return None
-
-  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> Any:
-    if coro.cr_frame is not None:
-      captured.update(coro.cr_frame.f_locals)
-    coro.close()
-
-    class DummyTask:
-
-      def add_done_callback(self, cb: Any) -> None:
-        pass
-
-    return DummyTask()
-
-  monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
-  monkeypatch.setattr(spawner, "spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr(review, "create_logged_task", fake_create_logged_task)
+  patch_review_spawn_path(monkeypatch, captured)
 
   original = ThreadMetadata(
       id="origin-thread-id",
@@ -678,20 +626,21 @@ async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.
       backend="codex-o3",
       model="o3-pro",
   )
+  thread_mgr = ReviewSpawnThreadManager()
 
   await review.spawn_review_worker(
       "session-id",
       original,
       cfg,
-      FakeSessionManager(),
-      FakeThreadManager(),
+      ReviewSpawnSessionManager("Scheduled: nightly"),
+      thread_mgr,
   )
 
   assert captured["request"].repo_path == str(repo_path)
   assert captured["request"].prompt_override is not None
   assert captured["request"].resolved_backend == "codex-o3"
   assert captured["request"].resolved_model == "o3-pro"
-  assert saved_review_thread["meta"].worktree_path == str(worktree_path)
+  assert thread_mgr.saved[0].worktree_path == str(worktree_path)
 
 
 @pytest.mark.asyncio
@@ -701,34 +650,6 @@ async def test_spawn_review_worker_fails_if_backend_model_missing(tmp_path: Path
   worktree_path = tmp_path / "worktrees" / "charliebot-task-1"
   repo_path.mkdir()
   worktree_path.mkdir(parents=True)
-
-  class FakeSessionManager(JudgmentShim):
-
-    async def get_session(self, session_id: str) -> SessionMetadata | None:
-      return SessionMetadata(id=session_id, name="Scheduled: nightly", backend="claude-opus-4.6")
-
-  class FakeThreadManager(JudgmentShim):
-
-    async def create_thread(
-        self,
-        session_meta: SessionMetadata,
-        description: str,
-        branch_name: str | None = None,
-        review_of: str | None = None,
-    ) -> ThreadMetadata:
-      return ThreadMetadata(
-          id="review-thread-id",
-          session_id=session_meta.id,
-          description=description,
-          branch_name=branch_name,
-          review_of=review_of,
-      )
-
-  async def fake_git_current_branch(repo_path: Path) -> str:
-    return "main"
-
-  monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
 
   original = ThreadMetadata(
       id="origin-thread-id",
@@ -747,10 +668,9 @@ async def test_spawn_review_worker_fails_if_backend_model_missing(tmp_path: Path
         "session-id",
         original,
         cfg,
-        FakeSessionManager(),
-        FakeThreadManager(),
+        ReviewSpawnSessionManager("Scheduled: nightly"),
+        ReviewSpawnThreadManager(),
     )
-  monkeypatch.undo()
 
 
 @pytest.mark.asyncio

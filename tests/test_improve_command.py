@@ -429,9 +429,9 @@ async def _run_loop(
     session_id: str,
     iterations: int,
     goal: str,
-    cfg,
-    session_mgr,
-    thread_mgr,
+    cfg: Any,
+    session_mgr: Any,
+    thread_mgr: Any,
     plan: str | None = None,
 ) -> None:
   """run_improve_loop on the call tail the run-path tests share: /tmp/repo, improve/test off

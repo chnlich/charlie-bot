@@ -63,6 +63,27 @@ def _cost_from_result_events(events: list[dict]) -> float | None:
   return round(total_cost, 4)
 
 
+def _usage_dict(
+    context_tokens: int | None,
+    context_full: int | None,
+    context_compact_at: int | None,
+    model: str,
+    events: list[dict],
+) -> dict:
+  """Single construction site for the usage-dict shape declared in the module docstring.
+
+  Every tier fills the four context fields from its own source; the cost field
+  is always the sum over result events of the same full event list.
+  """
+  return {
+      "context_tokens": context_tokens,
+      "context_full": context_full,
+      "context_compact_at": context_compact_at,
+      "total_cost_usd": _cost_from_result_events(events),
+      "model": model,
+  }
+
+
 def _model_context_windows_from_results(events: list[dict]) -> dict[str, int]:
   """Merge ``modelUsage[model].contextWindow`` across every result event (last wins)."""
   windows: dict[str, int] = {}
@@ -136,13 +157,7 @@ def _resolve_claude_tier(events: list[dict]) -> dict | None:
     context_compact_at: int | None = None
   else:
     context_compact_at = context_full - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
-  return {
-      "context_tokens": context_tokens,
-      "context_full": context_full,
-      "context_compact_at": context_compact_at,
-      "total_cost_usd": _cost_from_result_events(events),
-      "model": model,
-  }
+  return _usage_dict(context_tokens, context_full, context_compact_at, model, events)
 
 
 def _snapshot_tokens_sum(tokens: dict) -> int:
@@ -205,13 +220,7 @@ def _resolve_snapshot_tier(events: list[dict]) -> dict | None:
   else:
     context_full, context_compact_at = None, None
   model = snapshot.get("model") or ""
-  return {
-      "context_tokens": context_tokens,
-      "context_full": context_full,
-      "context_compact_at": context_compact_at,
-      "total_cost_usd": _cost_from_result_events(events),
-      "model": model,
-  }
+  return _usage_dict(context_tokens, context_full, context_compact_at, model, events)
 
 
 def _resolve_no_source_tier(events: list[dict]) -> dict:
@@ -220,13 +229,12 @@ def _resolve_no_source_tier(events: list[dict]) -> dict:
   context_tokens / context_full / context_compact_at are ``None`` (rendered as
   ``unknown``); cost is still summed over result events.
   """
-  return {
-      "context_tokens": None,
-      "context_full": None,
-      "context_compact_at": None,
-      "total_cost_usd": _cost_from_result_events(events),
-      "model": "",
-  }
+  return _usage_dict(
+      context_tokens=None,
+      context_full=None,
+      context_compact_at=None,
+      model="",
+      events=events)
 
 
 class SessionUsageResolver:

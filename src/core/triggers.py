@@ -211,18 +211,18 @@ async def _run_probe_cmd(
   except OSError as e:
     return f"spawn failed: {e}"
 
-  try:
-    if timeout is None:
-      stdout_b, stderr_b = await proc.communicate()
-    else:
-      stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-  except asyncio.TimeoutError:
-    proc.kill()
+  if timeout is None:
+    stdout_b, stderr_b = await proc.communicate()
+  else:
     try:
-      await proc.wait()
-    except Exception as e:
-      log.debug(kill_wait_log_event, error=str(e), **kill_wait_ctx)
-    return f"ssh timeout after {timeout}s"
+      stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+      proc.kill()
+      try:
+        await proc.wait()
+      except Exception as e:
+        log.debug(kill_wait_log_event, error=str(e), **kill_wait_ctx)
+      return f"ssh timeout after {timeout}s"
   return stdout_b, stderr_b, proc.returncode
 
 

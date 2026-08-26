@@ -7,9 +7,9 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from conftest import make_fake_git_create_worktree
 
 from src.core import improve_command
-from src.core.git import BaseResolution
 from src.core.improve_command import (
     ImproveLoopAlreadyRunningError,
     ImproveState,
@@ -362,12 +362,6 @@ def _patch_improve_loop_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[SpawnR
     del session, _cfg, _session_mgr
     triggered_payloads.append(json.loads(summary))
 
-  async def fake_git_create_worktree(
-      repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
-    del repo_path
-    wt_path.mkdir(parents=True, exist_ok=True)
-    return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
-
   async def fake_git_push_branch(repo_path: Path, branch_name: str) -> tuple[bool, str]:
     del repo_path, branch_name
     return True, ""
@@ -390,7 +384,7 @@ def _patch_improve_loop_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[SpawnR
 
   monkeypatch.setattr("src.core.spawner.spawn_worker", fake_spawn_worker)
   monkeypatch.setattr(improve_command, "trigger_master", fake_trigger_master)
-  monkeypatch.setattr(improve_command, "git_create_worktree", fake_git_create_worktree)
+  monkeypatch.setattr(improve_command, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
   monkeypatch.setattr(improve_command, "git_push_branch", fake_git_push_branch)
   monkeypatch.setattr(improve_command, "git_worktree_remove", fake_git_worktree_remove)
   monkeypatch.setattr(improve_command, "git_worktree_prune", fake_git_worktree_prune)
@@ -656,12 +650,6 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
   async def fake_trigger_master(session: str, summary: str, _cfg, _session_mgr) -> None:
     del session, summary, _cfg, _session_mgr
 
-  async def fake_git_create_worktree(
-      repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
-    del repo_path
-    wt_path.mkdir(parents=True, exist_ok=True)
-    return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
-
   async def fake_git_push_branch(repo_path: Path, branch_name: str) -> tuple[bool, str]:
     del repo_path, branch_name
     return True, ""
@@ -685,7 +673,7 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
 
   monkeypatch.setattr("src.core.spawner.spawn_worker", fake_spawn_worker)
   monkeypatch.setattr("src.core.improve_command.trigger_master", fake_trigger_master)
-  monkeypatch.setattr(improve_command, "git_create_worktree", fake_git_create_worktree)
+  monkeypatch.setattr(improve_command, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
   monkeypatch.setattr(improve_command, "git_push_branch", fake_git_push_branch)
   monkeypatch.setattr(improve_command, "git_worktree_remove", fake_git_worktree_remove)
   monkeypatch.setattr(improve_command, "git_worktree_prune", fake_git_worktree_prune)

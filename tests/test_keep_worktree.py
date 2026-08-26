@@ -15,12 +15,12 @@ from conftest import (
   JudgmentShim,
   build_worker_prompt,
   capturing_worker,
+  make_fake_git_create_worktree,
   recording_notify_completion,
 )
 
 from src.core import review, spawner, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
-from src.core.git import BaseResolution
 from src.core.models import (
   SessionMetadata,
   SpawnRequest,
@@ -204,12 +204,8 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
     async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
       captures.setdefault("broadcasts", []).append(event)
 
-  async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
-    wt_path.mkdir(parents=True, exist_ok=True)
-    return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
-
   monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner_launch, "git_create_worktree", fake_git_create_worktree)
+  monkeypatch.setattr(spawner_launch, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
   monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 

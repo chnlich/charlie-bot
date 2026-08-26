@@ -10,13 +10,13 @@ from conftest import (
   ReviewSpawnThreadManager,
   build_worker_prompt,
   capturing_worker,
+  make_fake_git_create_worktree,
   patch_review_spawn_path,
   recording_notify_completion,
 )
 
 from src.core import review, spawner, spawner_events, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
-from src.core.git import BaseResolution
 from src.core.models import (
   BackendOption,
   SessionMetadata,
@@ -341,17 +341,9 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
       captures["broadcast_event"] = event
 
-  async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
-    captures["git_create_worktree"] = {
-        "repo": repo,
-        "base_branch": base_branch,
-        "branch_name": branch_name,
-        "wt_path": wt_path,
-    }
-    return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
-
   monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner_launch, "git_create_worktree", fake_git_create_worktree)
+  monkeypatch.setattr(
+      spawner_launch, "git_create_worktree", make_fake_git_create_worktree(captures=captures))
   monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 
@@ -430,10 +422,7 @@ async def test_create_worktree_and_process_raises_when_session_missing_on_fresh_
     async def get_session(self, session_id: str) -> SessionMetadata | None:
       return None
 
-  async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
-    return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
-
-  monkeypatch.setattr(spawner_launch, "git_create_worktree", fake_git_create_worktree)
+  monkeypatch.setattr(spawner_launch, "git_create_worktree", make_fake_git_create_worktree())
 
   with pytest.raises(ValueError, match="session 'session-id' not found"):
     await spawner._create_worktree_and_process(

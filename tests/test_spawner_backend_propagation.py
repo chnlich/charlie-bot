@@ -3,7 +3,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import CODEX_BACKEND_OPTION, JudgmentShim, recording_notify_completion
+from conftest import (
+  CODEX_BACKEND_OPTION,
+  CapturingThreadManager,
+  JudgmentShim,
+  recording_notify_completion,
+)
 
 from src.core import review, spawner, spawner_events, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
@@ -450,29 +455,6 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
     async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
       captures["broadcast_event"] = event
 
-  class FakeThreadManager(JudgmentShim):
-
-    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
-      return thread
-
-    async def save_metadata(self, meta: ThreadMetadata) -> None:
-      captures["saved_thread"] = meta
-
-    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
-      return events_log
-
-    async def update_status(
-        self,
-        session_id: str,
-        thread_id: str,
-        status: Any,
-        pid: int | None = None,
-        exit_code: int | None = None,
-        completed_at: Any = None,
-    ) -> None:
-      captures["status"] = status
-      captures["exit_code"] = exit_code
-
   async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
     captures["git_create_worktree"] = {
         "repo": repo,
@@ -493,7 +475,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
       thread_id="thread-1",
       cfg=cfg,
       session_mgr=FakeSessionManager(),
-      thread_mgr=FakeThreadManager(),
+      thread_mgr=CapturingThreadManager(thread, captures, events_log),
       request=SpawnRequest(
           repo_path=str(repo_path),
           base_branch="main",
@@ -599,24 +581,6 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
   )
   captures: dict[str, Any] = {}
 
-  class FakeThreadManager(JudgmentShim):
-
-    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata:
-      del session_id, thread_id
-      return thread
-
-    async def update_status(
-        self,
-        session_id: str,
-        thread_id: str,
-        status: Any,
-        pid: int | None = None,
-        exit_code: int | None = None,
-        completed_at: Any = None,
-    ) -> None:
-      captures["status"] = status
-      captures["exit_code"] = exit_code
-
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 
   await spawner._finalize_worker(
@@ -624,7 +588,7 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
       description="Prompt-only task",
       thread=thread,
       outcome=spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""),
-      thread_mgr=FakeThreadManager(),
+      thread_mgr=CapturingThreadManager(thread, captures),
       session_mgr=object(),
       cfg=cfg,
       skip_notify=False,
@@ -805,14 +769,6 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
   )
   captures: dict[str, Any] = {}
 
-  class FakeThreadManager(JudgmentShim):
-
-    async def save_metadata(self, meta: ThreadMetadata) -> None:
-      captures["saved_thread"] = meta
-
-    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
-      return tmp_path / "events.jsonl"
-
   monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
 
   await spawner._create_repoless_process(
@@ -820,7 +776,7 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
       thread,
       "Prompt task",
       cfg,
-      FakeThreadManager(),
+      CapturingThreadManager(thread, captures, tmp_path / "events.jsonl"),
       SpawnRequest(resolved_backend="agy", task_type=task_type),
   )
 
@@ -845,14 +801,6 @@ async def test_create_repoless_worker_assigns_claude_session_id(
   )
   captures: dict[str, Any] = {}
 
-  class FakeThreadManager(JudgmentShim):
-
-    async def save_metadata(self, meta: ThreadMetadata) -> None:
-      captures["saved_thread"] = meta
-
-    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
-      return tmp_path / "events.jsonl"
-
   monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
 
   await spawner._create_repoless_process(
@@ -860,7 +808,7 @@ async def test_create_repoless_worker_assigns_claude_session_id(
       thread,
       "Prompt task",
       cfg,
-      FakeThreadManager(),
+      CapturingThreadManager(thread, captures, tmp_path / "events.jsonl"),
       SpawnRequest(resolved_backend="claude-opus", resolved_model="claude-opus-4-8"),
   )
 
@@ -883,17 +831,6 @@ async def test_create_repoless_worker_prepends_verify_preamble(
   )
   captures: dict[str, Any] = {}
 
-  class FakeThreadManager(JudgmentShim):
-
-    def thread_dir(self, session_id: str, thread_id: str) -> Path:
-      return cfg.sessions_dir / session_id / "threads" / thread_id
-
-    async def save_metadata(self, meta: ThreadMetadata) -> None:
-      captures["saved_thread"] = meta
-
-    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
-      return tmp_path / "events.jsonl"
-
   monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
 
   await spawner._create_repoless_process(
@@ -901,7 +838,7 @@ async def test_create_repoless_worker_prepends_verify_preamble(
       thread,
       "Check claim A at /tmp/repo/file.py:10",
       cfg,
-      FakeThreadManager(),
+      CapturingThreadManager(thread, captures, tmp_path / "events.jsonl", cfg.sessions_dir),
       SpawnRequest(resolved_backend="codex-o3", resolved_model="o3", task_type=TaskType.VERIFY),
   )
 
@@ -985,32 +922,6 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
     async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
       captures["broadcast_event"] = event
 
-  class FakeThreadManager(JudgmentShim):
-
-    def thread_dir(self, session_id: str, thread_id: str) -> Path:
-      return cfg.sessions_dir / session_id / "threads" / thread_id
-
-    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
-      return thread
-
-    async def save_metadata(self, meta: ThreadMetadata) -> None:
-      captures["saved_thread"] = meta
-
-    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
-      return events_log
-
-    async def update_status(
-        self,
-        session_id: str,
-        thread_id: str,
-        status: Any,
-        pid: int | None = None,
-        exit_code: int | None = None,
-        completed_at: Any = None,
-    ) -> None:
-      captures["status"] = status
-      captures["exit_code"] = exit_code
-
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner_launch, "Worker", _capturing_worker(captures))
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
@@ -1021,7 +932,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
       thread_id="thread-1",
       cfg=cfg,
       session_mgr=FakeSessionManager(),
-      thread_mgr=FakeThreadManager(),
+      thread_mgr=CapturingThreadManager(thread, captures, events_log, cfg.sessions_dir),
       request=SpawnRequest(
           resolved_backend="codex-o3",
           resolved_model="o3-pro",

@@ -609,3 +609,55 @@ class JudgmentShim:
 
   def thread_dir(self, session_id: str, thread_id: str) -> Path:
     return Path("/nonexistent-thread-dir") / session_id / thread_id
+
+
+class CapturingThreadManager(JudgmentShim):
+  """ThreadManager double recording spawn/finalize-path calls into a captures dict.
+
+  Callers pass the test's fixed thread and captures dict and rely on get_thread
+  answering that thread, on update_status recording the ``status``/``exit_code``
+  keys, on save_metadata recording ``saved_thread``, and on get_events_log_path
+  answering the constructor's events_log (spawner._finalize_worker and the
+  spawner_launch process builders). Sites whose production path reads the
+  thread dir off the manager pass thread_root to override the JudgmentShim
+  default.
+  """
+
+  def __init__(
+      self,
+      thread: models.ThreadMetadata | None,
+      captures: dict[str, Any],
+      events_log: Path | None = None,
+      thread_root: Path | None = None,
+  ) -> None:
+    self._thread = thread
+    self._captures = captures
+    self._events_log = events_log
+    self._thread_root = thread_root
+
+  def thread_dir(self, session_id: str, thread_id: str) -> Path:
+    if self._thread_root is None:
+      return super().thread_dir(session_id, thread_id)
+    return self._thread_root / session_id / "threads" / thread_id
+
+  async def get_thread(self, session_id: str, thread_id: str) -> models.ThreadMetadata | None:
+    return self._thread
+
+  async def save_metadata(self, meta: models.ThreadMetadata) -> None:
+    self._captures["saved_thread"] = meta
+
+  async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
+    assert self._events_log is not None, f"CapturingThreadManager built without events_log ({session_id}/{thread_id})"
+    return self._events_log
+
+  async def update_status(
+      self,
+      session_id: str,
+      thread_id: str,
+      status: Any,
+      pid: int | None = None,
+      exit_code: int | None = None,
+      completed_at: Any = None,
+  ) -> None:
+    self._captures["status"] = status
+    self._captures["exit_code"] = exit_code

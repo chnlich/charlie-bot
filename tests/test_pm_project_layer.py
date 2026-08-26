@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 import yaml
-from conftest import build_scheduler_cfg, make_cron_client
+from conftest import build_scheduler_cfg, close_create_logged_task, make_cron_client
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -186,7 +186,7 @@ async def test_master_task_fire_reuses_live_session_across_fires(
   task_cfg = _master_task()
 
   monkeypatch.setattr("src.core.scheduler.load_config", lambda: cfg)
-  monkeypatch.setattr("src.core.scheduler.create_logged_task", lambda coro, name=None: coro.close())
+  monkeypatch.setattr("src.core.scheduler.create_logged_task", close_create_logged_task)
   monkeypatch.setattr("src.core.scheduler.trigger_master", lambda *args, **kwargs: _noop())
 
   first = await scheduler._execute_task(task_cfg)
@@ -206,7 +206,7 @@ async def test_master_task_backend_rotation_carries_role_and_group(
   scheduler = Scheduler(cfg, session_mgr)
 
   monkeypatch.setattr("src.core.scheduler.load_config", lambda: cfg)
-  monkeypatch.setattr("src.core.scheduler.create_logged_task", lambda coro, name=None: coro.close())
+  monkeypatch.setattr("src.core.scheduler.create_logged_task", close_create_logged_task)
   monkeypatch.setattr("src.core.scheduler.trigger_master", lambda *args, **kwargs: _noop())
 
   first = await scheduler._execute_task(_master_task())

@@ -12,6 +12,7 @@ import yaml
 from conftest import (
   FakeThreadManager,
   build_scheduler_cfg,
+  close_create_logged_task,
   make_cron_client,
 )
 
@@ -71,13 +72,10 @@ async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
     spawn_request = kwargs["request"]
     return _noop()
 
-  def fake_create_logged_task(coro: Coroutine[Any, Any, None], name: str | None = None) -> None:
-    coro.close()
-
   monkeypatch.setattr("src.core.scheduler.ThreadManager", lambda _cfg: fake_thread_mgr)
   monkeypatch.setattr("src.core.scheduler.resolve_requested_subagent_backend_model", resolve_backend)
   monkeypatch.setattr("src.core.scheduler.spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr("src.core.scheduler.create_logged_task", fake_create_logged_task)
+  monkeypatch.setattr("src.core.scheduler.create_logged_task", close_create_logged_task)
 
   result = await scheduler._spawn_scheduled_worker(
       session,
@@ -116,13 +114,10 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
   def fake_spawn_worker(**_kwargs: Any) -> Coroutine[Any, Any, None]:
     return _noop()
 
-  def fake_create_logged_task(coro: Coroutine[Any, Any, None], name: str | None = None) -> None:
-    coro.close()
-
   monkeypatch.setattr("src.core.scheduler.ThreadManager", lambda _cfg: fake_thread_mgr)
   monkeypatch.setattr("src.core.scheduler.resolve_requested_subagent_backend_model", resolve_backend)
   monkeypatch.setattr("src.core.scheduler.spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr("src.core.scheduler.create_logged_task", fake_create_logged_task)
+  monkeypatch.setattr("src.core.scheduler.create_logged_task", close_create_logged_task)
 
   await scheduler._spawn_scheduled_worker(
       session,

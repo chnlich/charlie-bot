@@ -819,6 +819,11 @@ async def fake_spawn_worker(
   return None
 
 
+def close_create_logged_task(coro: Any, *, name: str | None = None) -> None:
+  """create_logged_task stand-in: closes the coroutine instead of scheduling it as a task."""
+  coro.close()
+
+
 def capture_create_logged_task(captured: dict[str, Any]) -> Callable[..., Any]:
   """Return a create_logged_task stand-in that captures the spawn coroutine's locals."""
 

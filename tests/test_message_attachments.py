@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import close_create_logged_task
 from fastapi import UploadFile
 
 from src.api.chat import send_message, upload_file
@@ -15,10 +16,6 @@ from src.core.models import SendMessageRequest, SessionMetadata, UploadedFileRef
 from src.core.slash_commands import SlashDispatchResult
 
 VOICE_KEY = "is_" + "voice"
-
-
-def _close_scheduled_task(coro) -> None:
-  coro.close()
 
 
 @pytest.mark.asyncio
@@ -116,7 +113,7 @@ async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path
 
   with (
       patch("src.api.chat.run_and_finalize", new=AsyncMock()) as mock_run,
-      patch("src.api.chat.create_logged_task", side_effect=_close_scheduled_task),
+      patch("src.api.chat.create_logged_task", side_effect=close_create_logged_task),
   ):
     response = await send_message(
         meta.id,
@@ -153,7 +150,7 @@ async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_p
   with (
       patch("src.api.slash.dispatch_slash_command", new=AsyncMock(return_value=dispatch)),
       patch("src.api.chat.run_and_finalize", new=AsyncMock()) as mock_run,
-      patch("src.api.chat.create_logged_task", side_effect=_close_scheduled_task),
+      patch("src.api.chat.create_logged_task", side_effect=close_create_logged_task),
   ):
     response = await execute_command(
         request=request,

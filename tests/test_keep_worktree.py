@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import CODEX_BACKEND_OPTION, JudgmentShim, recording_notify_completion
+from conftest import (
+  CODEX_BACKEND_OPTION,
+  CapturingThreadManager,
+  JudgmentShim,
+  recording_notify_completion,
+)
 
 from src.core import review, spawner, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
@@ -98,24 +103,6 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
 
   captures: dict[str, Any] = {}
 
-  class FakeThreadManager(JudgmentShim):
-
-    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata:
-      del session_id, thread_id
-      return thread
-
-    async def update_status(
-        self,
-        session_id: str,
-        thread_id: str,
-        status: Any,
-        pid: int | None = None,
-        exit_code: int | None = None,
-        completed_at: Any = None,
-    ) -> None:
-      captures["status"] = status
-      captures["exit_code"] = exit_code
-
   async def fail_git_worktree_remove(*args: Any, **kwargs: Any) -> bool:
     raise AssertionError("git_worktree_remove must not be called when keep_worktree=True")
 
@@ -127,7 +114,7 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
       description="slurm benchmark",
       thread=thread,
       outcome=spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""),
-      thread_mgr=FakeThreadManager(),
+      thread_mgr=CapturingThreadManager(thread, captures),
       session_mgr=object(),
       cfg=cfg,
       skip_notify=False,
@@ -245,28 +232,6 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
     async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
       captures.setdefault("broadcasts", []).append(event)
 
-  class FakeThreadManager(JudgmentShim):
-
-    async def get_thread(self, session_id: str, thread_id: str) -> ThreadMetadata | None:
-      return thread
-
-    async def save_metadata(self, meta: ThreadMetadata) -> None:
-      captures["saved_thread"] = meta
-
-    async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
-      return events_log
-
-    async def update_status(
-        self,
-        session_id: str,
-        thread_id: str,
-        status: Any,
-        pid: int | None = None,
-        exit_code: int | None = None,
-        completed_at: Any = None,
-    ) -> None:
-      captures["status"] = status
-
   async def fake_git_create_worktree(repo: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
     wt_path.mkdir(parents=True, exist_ok=True)
     return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
@@ -302,7 +267,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
       thread_id="thread-1",
       cfg=cfg,
       session_mgr=FakeSessionManager(),
-      thread_mgr=FakeThreadManager(),
+      thread_mgr=CapturingThreadManager(thread, captures, events_log),
       request=SpawnRequest(
           repo_path=str(repo_path),
           base_branch="main",

@@ -88,11 +88,13 @@ Known-alive symbols:
   `requests.Response` stand-ins; `Response.json()` reads `self._content` when the fake
   response is consumed. Nothing in the repo reads the name back, so vulture flags the writes
   as unused attributes.
-- `art` (four sites in `tests/core/test_plan_gates.py`) — second parameter of the
-  lambda/`measure` stubs installed for `plans._measure_page_height(chrome_bin, artifact)` via
-  `monkeypatch.setattr`; the replaced signature fixes the arity, so deleting the parameter
-  makes the stub raise TypeError when the gate calls it. Vulture flags each unused parameter
-  at 100% confidence as an unused variable.
+- `art` (`tests/core/test_artifact_check.py:331`, the lambda in `_patch_height`) — second
+  parameter of the stub installed for `artifact_check._measure_page_height(chrome_bin,
+  artifact)` via `monkeypatch.setattr`; the replaced signature fixes the arity, so deleting
+  the parameter makes the stub raise TypeError when the gate calls it. Vulture flags the
+  unused parameter at 100% confidence as an unused variable. (The four earlier sites in
+  `tests/core/test_plan_gates.py` were folded into this one helper when the page gates
+  merged into the artifact-check entry point.)
 - The `if False: yield {}` lines in `tests/test_chat_cancel.py`, `tests/test_master_cc_consumer.py`,
   `tests/test_master_cc_voice.py`, and `tests/test_worker_diagnostics.py` are flagged as
   100%-confidence unsatisfiable `if` conditions; the unreachable branch is what keeps each fake
@@ -129,3 +131,11 @@ Known-alive symbols:
   the repo, so vulture flags the stub's attribute write as an unused variable; the sibling
   stub attributes (`title`, `message`, `type`) go unflagged only because those names are
   attribute-read elsewhere.
+- `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data` (`_TreeBuilder`
+  in `src/core/artifact_check.py`) — template-method overrides of stdlib
+  `html.parser.HTMLParser`: `feed()` drives the base class's scanner, which invokes these
+  on `self` under their contract-fixed names while `_parse_dom` builds the DOM. Nothing in
+  the repo calls them, each name has exactly zero whole-repo matches outside its own
+  definition, and vulture flags each as an unused method. Same class as the
+  `do_GET`/`do_POST`/`log_message` `BaseHTTPRequestHandler` entry above, with base-class
+  virtual dispatch in place of stdlib string dispatch.

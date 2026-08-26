@@ -10,180 +10,21 @@ consume the tolerant read in ``read_plans_tolerant`` — the single authority fo
 """
 
 import asyncio
-import html
 import json
 import os
 import posixpath
-import re
-import subprocess
-import uuid
 from enum import IntEnum
 from pathlib import Path
 
 import structlog
 
 from src.core import plan_paths
+from src.core.artifact_check import run_assertions
 from src.core.config import CharlieBotConfig
 from src.core.models import utc_now
 from src.core.sessions import SessionManager
 
 log = structlog.get_logger()
-
-# ---------------------------------------------------------------------------
-# Goal budget — registration-time gate on the artifact's Problem / Goal section
-# ---------------------------------------------------------------------------
-
-GOAL_WEIGHTED_BUDGET = 240
-
-_GOAL_SECTION_RE = re.compile(r"Problem / Goal</h2>(.*?)</section>", re.DOTALL)
-_TAG_RE = re.compile(r"<[^>]+>")
-# CJK ideographs, CJK punctuation, and fullwidth forms count double, so the same
-# information density spends the same budget in Chinese and English.
-_CJK_RANGES = ((0x3000, 0x303F), (0x4E00, 0x9FFF), (0xFF00, 0xFFEF))
-
-
-def _weighted_goal_length(text: str) -> int:
-  return len(text) + sum(1 for c in text if any(lo <= ord(c) <= hi for lo, hi in _CJK_RANGES))
-
-
-def _measure_goal_weighted(artifact: Path) -> int:
-  """Weighted length of the artifact's Problem / Goal section; a missing section raises."""
-  section = _GOAL_SECTION_RE.search(artifact.read_text(encoding="utf-8"))
-  if section is None:
-    raise ValueError(f"artifact {artifact.name!r} has no 'Problem / Goal' section")
-  text = html.unescape(_TAG_RE.sub("", section.group(1)))
-  return _weighted_goal_length(re.sub(r"\s+", " ", text).strip())
-
-
-def _check_goal_budget(artifact: Path) -> None:
-  """Reject registration when the Problem / Goal section exceeds the weighted budget.
-
-  Fail-loud like the other verb validations; a missing section is a defect, not a pass.
-  Runs only at present/amend — registered plans are never re-checked.
-  """
-  weighted = _measure_goal_weighted(artifact)
-  if weighted > GOAL_WEIGHTED_BUDGET:
-    raise ValueError(
-        f"plan goal is {weighted} weighted chars (budget {GOAL_WEIGHTED_BUDGET}): keep the goal "
-        "and non-goals; demote diagnosis, thresholds, paths, and justifications to Context or 4.1")
-
-
-# ---------------------------------------------------------------------------
-# Page budget — registration-time gate on the artifact's opening rendered height
-# ---------------------------------------------------------------------------
-
-PAGE_HEIGHT_BUDGET = 1600
-
-_PAGE_PROBE_WIDTH_PX = 1280
-_RENDER_TIMEOUT_S = 60
-_HEIGHT_MARKER_RE = re.compile(r'<pre id="page-height">(\d+)</pre>')
-
-# The probe loads the artifact in a fixed-width iframe over file://, hides the revision
-# marks (revision badges and revnotes ride outside the budget, per the plan template's
-# Page budget rule), leaves details elements in their default collapsed state, then
-# writes the artifact's measured height into its own DOM so --dump-dom hands it back.
-_PAGE_PROBE_TEMPLATE = """<!doctype html>
-<html><head><meta charset="utf-8">
-<style>html,body{{margin:0;padding:0}}iframe{{width:{width}px;border:0;display:block}}</style>
-</head><body>
-<iframe id="artifact" src="{src}"></iframe>
-<script>
-  const frame = document.getElementById('artifact');
-  frame.addEventListener('load', () => {{
-    const doc = frame.contentDocument;
-    for (const mark of doc.querySelectorAll('.revbadge,.revnote')) mark.style.display = 'none';
-    const marker = document.createElement('pre');
-    marker.id = 'page-height';
-    marker.textContent = String(doc.documentElement.scrollHeight);
-    document.body.appendChild(marker);
-  }});
-</script>
-</body></html>
-"""
-
-
-def _measure_page_height(chrome_bin: Path, artifact: Path) -> int:
-  """Render *artifact* headlessly through a session-unique probe page; return its scroll height."""
-  probe = artifact.parent / f".page-height-probe-{uuid.uuid4().hex}.html"
-  probe.write_text(
-      _PAGE_PROBE_TEMPLATE.format(width=_PAGE_PROBE_WIDTH_PX, src=artifact.resolve().as_uri()),
-      encoding="utf-8")
-  try:
-    try:
-      proc = subprocess.run(
-          [
-              str(chrome_bin),
-              "--headless",
-              "--disable-gpu",
-              "--no-sandbox",
-              "--allow-file-access-from-files",
-              "--virtual-time-budget=8000",
-              "--dump-dom",
-              probe.as_uri(),
-          ],
-          capture_output=True,
-          timeout=_RENDER_TIMEOUT_S,
-      )
-    except subprocess.TimeoutExpired:
-      raise ValueError(
-          f"headless renderer timed out after {_RENDER_TIMEOUT_S}s while measuring the plan page height")
-    except OSError as e:
-      raise ValueError(f"headless renderer could not be launched: {chrome_bin} ({e})") from e
-    if proc.returncode != 0:
-      stderr = proc.stderr.decode("utf-8", errors="replace").strip()
-      tail = stderr[-400:] if stderr else "no stderr output"
-      raise ValueError(f"headless renderer exited {proc.returncode} while measuring the plan page height: {tail}")
-    match = _HEIGHT_MARKER_RE.search(proc.stdout.decode("utf-8", errors="replace"))
-    if match is None:
-      raise ValueError("headless renderer output carried no page-height marker; cannot measure the plan page")
-    return int(match.group(1))
-  finally:
-    probe.unlink()
-
-
-def _require_chrome_bin(cfg: CharlieBotConfig) -> Path:
-  """Return the configured headless renderer path; raise when unset or unusable."""
-  chrome_bin = cfg.headless_chrome_bin
-  if not chrome_bin:
-    raise ValueError(
-        "headless_chrome_bin is required for plan registration: set it in the host config.yaml "
-        "to the absolute path of a headless-chromium-compatible binary")
-  chrome = Path(chrome_bin)
-  if not chrome.exists():
-    raise ValueError(
-        "headless_chrome_bin is required for plan registration but the configured path "
-        f"does not exist: {chrome}")
-  return chrome
-
-
-def _check_page_height(cfg: CharlieBotConfig, artifact: Path) -> None:
-  """Reject registration when the artifact's opening page exceeds the height budget.
-
-  Fail-loud like the goal gate: a missing or unusable renderer rejects with the reason
-  instead of skipping the check. Runs only at present/amend — registered plans are
-  never re-checked.
-  """
-  height = _measure_page_height(_require_chrome_bin(cfg), artifact)
-  if height > PAGE_HEIGHT_BUDGET:
-    raise ValueError(
-        f"plan page measures {height} px as it opens: {height - PAGE_HEIGHT_BUDGET} px over the "
-        f"{PAGE_HEIGHT_BUDGET} px budget. Recover headroom by folding, per the page-budget rules "
-        "in the BLOCK KIT comment of prompts/plan_template.html. Measure locally with: "
-        "charliebot plan check --file <artifact.html>")
-
-
-def measure_plan_gates(cfg: CharlieBotConfig, artifact: Path) -> tuple[int, int]:
-  """Measure both registration gates on a local artifact; return (page height px, goal weighted).
-
-  The local dry run behind ``charliebot plan check``: it measures exactly what present/amend
-  gate on and returns the numbers for the caller to judge against the budgets. Raises
-  ValueError for non-budget failures (missing Problem / Goal section, missing or unusable
-  renderer) — measurement failure is a defect, not a gate outcome.
-  """
-  goal_weighted = _measure_goal_weighted(artifact)
-  page_height = _measure_page_height(_require_chrome_bin(cfg), artifact)
-  return page_height, goal_weighted
-
 
 # ---------------------------------------------------------------------------
 # DerivedState — internal enum (0 = UNKNOWN reserved); API use strings
@@ -423,14 +264,22 @@ class PlanRegistryManager:
   def _validate_new_version_file(self, session_id: str, file: str, data: dict) -> str:
     """Validate *file* as a new plan version's binding and return its session-relative path.
 
-    The file must live inside the session directory, pass the goal-budget and page-height
-    gates, and not already back an existing plan version. Callers hold the session lock and
-    pass the freshly loaded registry *data*.
+    The file must live inside the session directory, pass the plan assertion set
+    (exactly what ``charliebot artifact check --genre plan`` enforces), and not already back
+    an existing plan version. Callers hold the session lock and pass the freshly loaded
+    registry *data*.
     """
     file = posixpath.normpath(file)
     file_relative = self._validate_file_in_session_dir(session_id, file)
-    _check_goal_budget(self._cfg.sessions_dir / session_id / file_relative)
-    _check_page_height(self._cfg, self._cfg.sessions_dir / session_id / file_relative)
+    artifact = self._cfg.sessions_dir / session_id / file_relative
+    failures = [o for o in run_assertions("plan", artifact, self._cfg) if not o.passed]
+    if failures:
+      reasons = "; ".join(f"{o.name}: {o.detail}" for o in failures)
+      raise ValueError(
+          f"plan artifact fails {len(failures)} check assertion(s): {reasons}. "
+          "Recover headroom by folding, per the page-budget rules in the BLOCK KIT comment of "
+          "prompts/plan_template.html. Measure locally with: "
+          "charliebot artifact check <artifact.html> --genre plan")
     existing_file = self._find_binding_by_file(session_id, data, file_relative)
     if existing_file is not None:
       raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")

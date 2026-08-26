@@ -79,31 +79,25 @@ Generated HTML artifacts (reports, plans, dashboards) must satisfy:
 
 Applied one step before delivery for sitrep, debugging, and explain pages.
 
-Cold-read gate: one zero-context model pass reads the file alone and answers (1) the
-problem, (2) the conclusion and its epistemic state, (3) what is asked of the reader,
-(4) the section where the problem first became clear, (5) up to five re-read points,
-and (6) whether the page answers the chat message that triggered it, quoted verbatim
-in the probe prompt. Ship when answers (1) through (3) match the author's intent, (4)
-names the first content section, the epistemic state in (2) matches the page's own
-labels, and (6) is a yes on every part of the trigger message; otherwise revise and
-re-run. Judge on these signals alone.
+Cold-read gate: the page first passes its genre's mechanical DOM assertions, then one
+zero-context model pass reads the file alone and answers (1) the problem, (2) the
+conclusion and its epistemic state, (3) what is asked of the reader, (4) the section
+where the problem first became clear, (5) up to five re-read points, and (6) whether
+the page answers the chat message that triggered it, quoted verbatim in the probe
+prompt. Ship when answers (1) through (3) match the author's intent, (4) names the
+first content section, the epistemic state in (2) matches the page's own labels, and
+(6) is a yes on every part of the trigger message; a re-read point in (5) naming
+section 1's forks, or a jump between a fork and another section, also means revise
+and re-run. Judge on these signals alone.
 
-Probe recipe:
+Invocation (the genre's assertions run first; the probe only fires once every one of
+them passed):
 
 ```bash
-cat <page-file> | claude -p --model claude-sonnet-5 "<six-question prompt below>"
+charliebot artifact check <page-file> --genre <sitrep|debug|explain> --trigger "<trigger message verbatim>"
 ```
 
-Six-question prompt template, passed as the recipe's `<six-question prompt below>`:
-
-```text
-You are reading one HTML page cold: the page source is the piped input, and you have no
-context beyond the file itself. Answer six questions, each in one or two sentences and in
-the page's own language: (1) Whose problem does this page describe, and what is the
-problem? (2) What is the page's conclusion, and what epistemic state does the page itself
-claim for it (confirmed, hypothesis, refuted, or a stated mix)? (3) What does the page ask
-of the reader, if anything? (4) In which numbered section did you first become clear on
-what the problem is? (5) Name up to five points you had to re-read to follow the page.
-(6) The chat message that triggered this page was: "<trigger message verbatim>".
-Does the page answer that message, every part of it?
-```
+The six-question prompt, the backend order, and the timeout live in
+`src/core/artifact_check.py`; the command prints each tried backend's failure, then the
+answering backend's id and the six answers verbatim. Exit 0 means every assertion
+passed; judging the answers stays with the reader of this gate.

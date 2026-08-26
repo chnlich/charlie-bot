@@ -582,11 +582,6 @@ def cron_path(name: str) -> Path:
   return cron_dir() / f"{name}.yaml"
 
 
-def _cron_d_dir() -> Path:
-  """Alias for the canonical cron_dir, kept for the loader's existing call sites."""
-  return cron_dir()
-
-
 def _legacy_cron_file() -> Path:
   """Path of the legacy single-file cron config (a tripwire, never a fallback)."""
   return charliebot_home_dir() / "config.d" / "cron.yaml"
@@ -688,7 +683,7 @@ def _reload_cron_snapshot() -> _CronSnapshot:
   """Recompute the snapshot by loading every ``cron.d`` file independently."""
   global _cron_snapshot
   repo = get_config().charlie_bot_repo
-  cron_d = _cron_d_dir()
+  cron_d = cron_dir()
   legacy_file = _legacy_cron_file()
 
   tasks: list[ScheduledTaskConfig] = []
@@ -846,7 +841,7 @@ def _cron_fingerprint(prompt_mtimes: dict[Path, float]):
   surfaces instead of a stale cached body), and whether the legacy
   ``config.d/cron.yaml`` exists.
   """
-  cron_d = _cron_d_dir()
+  cron_d = cron_dir()
   legacy_file = _legacy_cron_file()
   files: list[tuple[str, float]] = []
   if cron_d.is_dir():

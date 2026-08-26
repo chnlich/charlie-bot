@@ -18,8 +18,9 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, NoReturn
+from typing import Any, NoReturn
 
 import requests
 

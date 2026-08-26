@@ -7,8 +7,9 @@ spawner gate code itself stays untouched (the exclusion is by type, like
 ``scheduled_trigger``).
 """
 
+from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any, Coroutine
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest

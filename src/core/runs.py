@@ -22,11 +22,11 @@ This module owns the pure/queryable parts of that contract:
 import json
 import os
 import stat
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Iterable
 
 import structlog
 

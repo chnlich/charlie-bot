@@ -14,6 +14,7 @@ from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION
 from conftest import append_events as _append_events
 from conftest import make_parent as _make_parent
 from conftest import make_sessions_client as _build_client
+from conftest import session_dir_names as _session_dir_names
 
 from src.core.config import (
   CharlieBotConfig,
@@ -41,13 +42,6 @@ from src.core.triggers import TriggerManager
 # window suppresses the tick, while a missing one makes the never-run branch
 # reach back over that same window and fire immediately.
 _CADENCE_CRON = "* * * * *"
-
-
-def _session_dir_names(cfg: CharlieBotConfig) -> set[str]:
-  """Snapshot the names of session directories on disk (existence, not content)."""
-  if not cfg.sessions_dir.exists():
-    return set()
-  return {d.name for d in cfg.sessions_dir.iterdir() if d.is_dir()}
 
 
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:

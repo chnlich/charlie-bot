@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION
 from conftest import make_sessions_client as _build_client
+from conftest import session_dir_names as _session_dir_names
 
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest
@@ -21,13 +22,6 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
           CODEX_BACKEND_OPTION,
       ],
   )
-
-
-def _session_dir_names(cfg: CharlieBotConfig) -> set[str]:
-  """Snapshot the names of session directories on disk (existence, not content)."""
-  if not cfg.sessions_dir.exists():
-    return set()
-  return {d.name for d in cfg.sessions_dir.iterdir() if d.is_dir()}
 
 
 async def _seed_parent(session_mgr: SessionManager, *, backend: str = "claude-opus-4.6") -> str:

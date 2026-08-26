@@ -87,7 +87,7 @@ exit 0
 
 # Attempt 1 of a VERIFY quota-retry pair: emits a rate_limit_event the way Claude
 # Code does on a rejected quota check, then dies -- the exact shape Worker._process_event
-# (src/agents/worker.py:286-294) turns into QuotaExhaustedException.
+# (src/agents/worker.py) turns into QuotaExhaustedException.
 QUOTA_SHIM = """#!/bin/sh
 cat >/dev/null
 echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ATTEMPT-1-MARKER"}]}}'
@@ -458,7 +458,7 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
   review-needing thread and assert the finalize effects — terminal worker_summary,
   master wake, reviewer thread, and the reviewer's commits reaching origin — each
   land exactly once (per ONE reviewer run), not once per reconcile. The server
-  tracks no merge state of its own (src/core/review.py:401-403), so the commit
+  tracks no merge state of its own (src/core/review.py::spawn_review_worker), so the commit
   count must come from the origin repo itself, not a server-side proxy.
   """
   home = tmp_path / "home"
@@ -519,8 +519,8 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
   # --- keep the shared worktree alive across every reconcile round: the real
   # finalize_review_chain removes it once a review lands, which would make rounds
   # 2 and 3 exit at validate_review_prerequisites' worktree-exists check before ever
-  # reaching the reviewer_thread_exists judgment (src/core/review.py:405,
-  # src/core/init.py:755) — masking whether that judgment actually works. Neutering
+  # reaching the reviewer_thread_exists judgment (src/core/review.py::spawn_review_worker,
+  # src/core/init_worker_recovery.py::_maybe_respawn) — masking whether that judgment actually works. Neutering
   # only the worktree-removal step (a test-side no-op) lets every round walk the
   # judgment for real. ---
   async def fake_finalize_review_chain(*args, **kwargs) -> None:
@@ -588,7 +588,7 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
 @pytest.mark.asyncio
 async def test_fresh_spawn_rotates_stale_raw_log_so_verify_retry_quota_not_replayed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The VERIFY quota-retry fallback (src/core/spawner.py:1031-1048) respawns a
+  """The VERIFY quota-retry fallback (src/core/spawner_lifecycle.py::spawn_worker) respawns a
   fresh Worker into the SAME thread data dir. Without rotation, the fresh
   spawn's tail-follow (always start_offset=0) would replay attempt 1's entire
   raw stream first -- ending in the very quota event that killed attempt 1 --

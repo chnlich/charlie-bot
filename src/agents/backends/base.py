@@ -621,16 +621,9 @@ class AgentBackend(ABC):
       stdin_error = e
     return stdin_error
 
-  async def _wait_for_exit_and_cleanup(self, timeout: float, stderr_path: Path) -> None:
-    """Raw-transport cleanup: finish stdin, wait for process exit, escalate on hang.
-
-    Companion to the tail-follow read loop: stdout/stderr are file-descriptor
-    redirected, so there is no stream reader to drain — the process may simply
-    outlive us, hence the diagnostics + SIGKILL escalation on a hang, and
-    ``stderr_text`` comes back from the stderr log file's tail.
-    """
+  async def _wait_for_proc_exit(self, timeout: float) -> None:
+    """Wait for the subprocess to exit; on a hang capture diagnostics and escalate to SIGKILL."""
     assert self._proc is not None
-    stdin_error = await self._finish_stdin_task(timeout)
     try:
       await asyncio.wait_for(self._proc.wait(), timeout=timeout)
     except asyncio.TimeoutError:
@@ -641,6 +634,18 @@ class AgentBackend(ABC):
           timeout_log_event="backend_sigkill_after_result",
           wait_even_if_sigterm_not_sent=True,
       )
+
+  async def _wait_for_exit_and_cleanup(self, timeout: float, stderr_path: Path) -> None:
+    """Raw-transport cleanup: finish stdin, wait for process exit, escalate on hang.
+
+    Companion to the tail-follow read loop: stdout/stderr are file-descriptor
+    redirected, so there is no stream reader to drain — the process may simply
+    outlive us, hence the diagnostics + SIGKILL escalation on a hang, and
+    ``stderr_text`` comes back from the stderr log file's tail.
+    """
+    assert self._proc is not None
+    stdin_error = await self._finish_stdin_task(timeout)
+    await self._wait_for_proc_exit(timeout)
     self.exit_code = self._proc.returncode or 0
     self.stderr_text = _read_stderr_tail(stderr_path)
     if stdin_error is not None:
@@ -655,16 +660,7 @@ class AgentBackend(ABC):
         await asyncio.wait_for(asyncio.shield(self._stderr_task), timeout=timeout)
       except asyncio.TimeoutError:
         log.debug("backend_stderr_stream_timeout", pid=self._proc.pid, timeout=timeout)
-    try:
-      await asyncio.wait_for(self._proc.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
-      log.warning("backend_wait_timeout_after_result", pid=self._proc.pid)
-      self.hang_diagnostics = await _capture_proc_diagnostics(self._proc.pid)
-      await self._graceful_shutdown(
-          timeout,
-          timeout_log_event="backend_sigkill_after_result",
-          wait_even_if_sigterm_not_sent=True,
-      )
+    await self._wait_for_proc_exit(timeout)
     if self._stderr_task is not None and not self._stderr_task.done():
       self._stderr_task.cancel()
       try:

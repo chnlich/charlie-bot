@@ -697,6 +697,13 @@ def capturing_worker(captures: dict[str, Any]) -> type:
   return CapturingWorker
 
 
+def make_one_shot_backend(one_shot: AsyncMock) -> MagicMock:
+  """A stand-in backend whose one_shot_text is the given AsyncMock."""
+  backend = MagicMock()
+  backend.one_shot_text = one_shot
+  return backend
+
+
 class JudgmentShim:
   """Default finalize-judgment reads for test fakes: no prior effects recorded.
 

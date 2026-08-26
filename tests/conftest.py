@@ -29,6 +29,7 @@ from src.api.deps import get_session_manager  # noqa: E402
 from src.api.sessions import router as sessions_router  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
 from src.core import models  # noqa: E402
+from src.core import review  # noqa: E402
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402
 from src.core.plans import PlanRegistryManager  # noqa: E402
 from src.core.sessions import SessionManager  # noqa: E402
@@ -661,3 +662,92 @@ class CapturingThreadManager(JudgmentShim):
   ) -> None:
     self._captures["status"] = status
     self._captures["exit_code"] = exit_code
+
+
+class ReviewSpawnSessionManager(JudgmentShim):
+  """SessionManager double for spawn_review_worker tests: one fixed session for any id.
+
+  Callers rely on get_session answering a claude-backed SessionMetadata carrying the
+  constructor's session name; spawn_review_worker only None-checks the result and
+  hands it to the thread manager.
+  """
+
+  def __init__(self, session_name: str) -> None:
+    self._session_name = session_name
+
+  async def get_session(self, session_id: str) -> models.SessionMetadata:
+    return models.SessionMetadata(id=session_id, name=self._session_name, backend="claude-opus-4.6")
+
+
+class ReviewSpawnThreadManager(JudgmentShim):
+  """ThreadManager double for spawn_review_worker tests: builds and records the review thread.
+
+  Callers rely on create_thread answering a thread with id review-thread-id and on
+  save_metadata appending to .saved; the no-reviewer-exists list_threads default comes
+  from JudgmentShim.
+  """
+
+  def __init__(self) -> None:
+    self.saved: list[models.ThreadMetadata] = []
+
+  async def create_thread(
+      self,
+      session_meta: models.SessionMetadata,
+      description: str,
+      branch_name: str | None = None,
+      review_of: str | None = None,
+      require_review: bool = True,
+  ) -> models.ThreadMetadata:
+    return models.ThreadMetadata(
+        id="review-thread-id",
+        session_id=session_meta.id,
+        description=description,
+        branch_name=branch_name,
+        review_of=review_of,
+    )
+
+  async def save_metadata(self, meta: models.ThreadMetadata) -> None:
+    self.saved.append(meta)
+
+
+async def fake_git_current_branch(repo_path: Path) -> str:
+  """git_current_branch stand-in answering main; the signature mirrors src.core.git."""
+  return "main"
+
+
+async def fake_spawn_worker(
+    session_id: str,
+    description: str,
+    thread_id: str,
+    cfg: CharlieBotConfig,
+    session_mgr: Any,
+    thread_mgr: Any,
+    request: models.SpawnRequest | None = None,
+) -> None:
+  """spawn_worker stand-in that never forks a backend; the signature mirrors the review.py call."""
+  return None
+
+
+def capture_create_logged_task(captured: dict[str, Any]) -> Callable[..., Any]:
+  """Return a create_logged_task stand-in that captures the spawn coroutine's locals."""
+
+  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> Any:
+    if coro.cr_frame is not None:
+      captured.update(coro.cr_frame.f_locals)
+    coro.close()
+
+    class DummyTask:
+
+      def add_done_callback(self, cb: Any) -> None:
+        pass
+
+    return DummyTask()
+
+  return fake_create_logged_task
+
+
+def patch_review_spawn_path(monkeypatch: pytest.MonkeyPatch, captured: dict[str, Any]) -> None:
+  """Patch all three spawn-path seams; an unpatched one shells out to git or forks a backend."""
+  monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
+  monkeypatch.setattr(spawner, "spawn_worker", fake_spawn_worker)
+  monkeypatch.setattr(review, "create_logged_task", capture_create_logged_task(captured))

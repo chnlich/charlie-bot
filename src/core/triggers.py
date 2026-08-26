@@ -7,6 +7,7 @@ import random
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import aiofiles
 import structlog
@@ -174,6 +175,58 @@ _SACCT_AVAILABLE = shutil.which("sacct") is not None
 
 
 # ---------------------------------------------------------------------------
+# Probe subprocess plumbing (remote probes go over ssh; local sacct does not)
+# ---------------------------------------------------------------------------
+def _ssh_cmd(host: str, remote_cmd: str) -> list[str]:
+  """Wrap a remote command in the batch-mode ssh invocation every remote probe uses."""
+  return [
+      "ssh",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      f"ConnectTimeout={_SSH_CONNECT_TIMEOUT}",
+      host,
+      remote_cmd,
+  ]
+
+
+async def _run_probe_cmd(
+    cmd: list[str],
+    *,
+    timeout: float | None,
+    kill_wait_log_event: str,
+    **kill_wait_ctx: Any,
+) -> tuple[bytes, bytes, int | None] | str:
+  """Spawn ``cmd`` capturing stdout/stderr; return ``(stdout, stderr, returncode)``, or an error string.
+
+  ``timeout=None`` waits without a deadline (local probes only); a timed-out
+  probe is killed and awaited so no half-hung ssh is left behind.
+  """
+  try:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+  except OSError as e:
+    return f"spawn failed: {e}"
+
+  if timeout is None:
+    stdout_b, stderr_b = await proc.communicate()
+  else:
+    try:
+      stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+      proc.kill()
+      try:
+        await proc.wait()
+      except Exception as e:
+        log.debug(kill_wait_log_event, error=str(e), **kill_wait_ctx)
+      return f"ssh timeout after {timeout}s"
+  return stdout_b, stderr_b, proc.returncode
+
+
+# ---------------------------------------------------------------------------
 # Remote probe via ssh
 # ---------------------------------------------------------------------------
 async def _ssh_probe_pid(host: str, pid: int) -> tuple[str, str]:
@@ -184,33 +237,16 @@ async def _ssh_probe_pid(host: str, pid: int) -> tuple[str, str]:
     - "DEAD": pid does not exist on host
     - "ERROR": ssh failed / timed out / unexpected output (transient)
   """
-  cmd = [
-      "ssh",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      f"ConnectTimeout={_SSH_CONNECT_TIMEOUT}",
-      host,
-      f"kill -0 {pid} 2>&1 && echo ALIVE || echo DEAD",
-  ]
-  try:
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-  except OSError as e:
-    return "ERROR", f"spawn failed: {e}"
-
-  try:
-    stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=_SSH_OVERALL_TIMEOUT)
-  except asyncio.TimeoutError:
-    proc.kill()
-    try:
-      await proc.wait()
-    except Exception as e:
-      log.debug("ssh_probe_wait_after_kill_failed", host=host, pid=pid, error=str(e))
-    return "ERROR", f"ssh timeout after {_SSH_OVERALL_TIMEOUT}s"
+  run = await _run_probe_cmd(
+      _ssh_cmd(host, f"kill -0 {pid} 2>&1 && echo ALIVE || echo DEAD"),
+      timeout=_SSH_OVERALL_TIMEOUT,
+      kill_wait_log_event="ssh_probe_wait_after_kill_failed",
+      host=host,
+      pid=pid,
+  )
+  if isinstance(run, str):
+    return "ERROR", run
+  stdout_b, stderr_b, returncode = run
 
   stdout = stdout_b.decode("utf-8", errors="replace")
   stderr = stderr_b.decode("utf-8", errors="replace")
@@ -220,7 +256,7 @@ async def _ssh_probe_pid(host: str, pid: int) -> tuple[str, str]:
     return "ALIVE", raw
   if last_line == "DEAD":
     return "DEAD", raw
-  combined = (stdout + stderr).strip() or f"ssh exit {proc.returncode}"
+  combined = (stdout + stderr).strip() or f"ssh exit {returncode}"
   return "ERROR", combined
 
 
@@ -279,51 +315,37 @@ async def _probe_sacct(
   """
   ids = ",".join(str(j) for j in job_ids)
   sacct_args = ["sacct", "-j", ids, "-X", "-n", "-P", "--format=JobID,State,ExitCode"]
+  # Remote probes get a deadline: ssh to a dead host would otherwise hang
+  # forever. A local sacct goes bare; a wedged local slurmdbd is not a failure
+  # mode this watcher bounds.
   if host is None:
     cmd = sacct_args
+    timeout = None
   else:
-    cmd = [
-        "ssh",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        f"ConnectTimeout={_SSH_CONNECT_TIMEOUT}",
-        host,
-        " ".join(sacct_args),
-    ]
+    cmd = _ssh_cmd(host, " ".join(sacct_args))
+    timeout = _SSH_OVERALL_TIMEOUT
 
-  try:
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-  except OSError as e:
-    return {}, f"spawn failed: {e}"
+  run = await _run_probe_cmd(
+      cmd,
+      timeout=timeout,
+      kill_wait_log_event="sacct_probe_wait_after_kill_failed",
+      trigger_id=trigger_id,
+      host=host,
+  )
+  if isinstance(run, str):
+    return {}, run
+  stdout_b, stderr_b, returncode = run
 
-  if host is None:
-    stdout_b, stderr_b = await proc.communicate()
-  else:
-    try:
-      stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=_SSH_OVERALL_TIMEOUT)
-    except asyncio.TimeoutError:
-      proc.kill()
-      try:
-        await proc.wait()
-      except Exception as e:
-        log.debug("sacct_probe_wait_after_kill_failed", trigger_id=trigger_id, host=host, error=str(e))
-      return {}, f"ssh timeout after {_SSH_OVERALL_TIMEOUT}s"
-
-  if proc.returncode != 0:
+  if returncode != 0:
     stderr = stderr_b.decode("utf-8", errors="replace").strip()
     log.warning(
         "sacct_probe_nonzero",
         trigger_id=trigger_id,
         host=host,
-        returncode=proc.returncode,
+        returncode=returncode,
         stderr=stderr,
     )
-    return {}, f"sacct exit {proc.returncode}: {stderr}"
+    return {}, f"sacct exit {returncode}: {stderr}"
 
   states: dict[int, tuple[str, str]] = {}
   for line in stdout_b.decode("utf-8", errors="replace").splitlines():

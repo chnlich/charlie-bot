@@ -31,6 +31,7 @@ from src.core import event_types as ET  # noqa: E402
 from src.core import models  # noqa: E402
 from src.core import review  # noqa: E402
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402
+from src.core.git import BaseResolution  # noqa: E402
 from src.core.plans import PlanRegistryManager  # noqa: E402
 from src.core.sessions import SessionManager  # noqa: E402
 from src.core import spawner  # noqa: E402
@@ -606,6 +607,34 @@ def make_fake_run_tmux(calls: list[tuple[str, ...]]) -> Callable[..., Awaitable[
     return 0, ""
 
   return fake_run_tmux
+
+
+def make_fake_git_create_worktree(
+    *, mkdir: bool = False, captures: dict[str, Any] | None = None
+) -> Callable[..., Awaitable[BaseResolution]]:
+  """A `git_create_worktree` stand-in returning a `detail="fake"` BaseResolution.
+
+  The signature mirrors src.core.git.git_create_worktree so the monkeypatched attribute
+  stays a drop-in replacement. mkdir=True creates the worktree dir for flows that write
+  into it after creation; captures records the call under "git_create_worktree" with the
+  repo/base_branch/branch_name/wt_path key set the spawn-driving tests assert on.
+  """
+
+  async def fake_git_create_worktree(
+      repo_path: Path, base_branch: str, branch_name: str, wt_path: Path
+  ) -> BaseResolution:
+    if captures is not None:
+      captures["git_create_worktree"] = {
+          "repo": repo_path,
+          "base_branch": base_branch,
+          "branch_name": branch_name,
+          "wt_path": wt_path,
+      }
+    if mkdir:
+      wt_path.mkdir(parents=True, exist_ok=True)
+    return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
+
+  return fake_git_create_worktree
 
 
 def build_worker_prompt(

@@ -1,26 +1,16 @@
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_OPTION
+from conftest import build_sessions_cfg
 from conftest import make_sessions_client as _build_client
 
-from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SessionStatus
 from src.core.sessions import SessionManager
 
 
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-      ],
-  )
-
-
 @pytest.mark.asyncio
 async def test_archive_empty_session_permanently_deletes_it(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="Empty"), backend="claude-opus-4.6")
   session_dir = cfg.sessions_dir / meta.id
@@ -39,7 +29,7 @@ async def test_archive_empty_session_permanently_deletes_it(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_archive_non_empty_session_keeps_files_and_marks_archived(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
+  cfg = build_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="Non-empty"), backend="claude-opus-4.6")
   await session_mgr.save_chat_event(meta.id, {"type": "user", "content": "hello"})

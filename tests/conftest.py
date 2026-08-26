@@ -278,6 +278,28 @@ def build_scheduler_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
+def build_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig for sessions tests: the .charliebot home lives under tmp_path so each test owns its own
+  tree, and the backend list registers opus only."""
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[
+          OPUS_BACKEND_OPTION,
+      ],
+  )
+
+
+def build_slack_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig for slack tests: the home dir lives under tmp_path so each test owns its own tree, and the
+  test tokens plus the single allowed user id wire the delivery and listener paths under src.core.slack_listener."""
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / "home",
+      slack_bot_token="test-bot-token",
+      slack_app_token="test-app-token",
+      slack_allowed_user_ids=["U_ALLOWED"],
+  )
+
+
 def build_tui_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig for sessions-API TUI tests: the .charliebot home lives under tmp_path and the backend list
   registers opus plus the claude-tui terminal backend the TUI handlers resolve a session against."""

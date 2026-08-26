@@ -23,17 +23,6 @@ import src.core.config as cm
 
 
 @pytest.fixture
-def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-  """Point HOME at a temp dir and reset the config/cron module-level caches."""
-  monkeypatch.delenv("CHARLIEBOT_HOME", raising=False)
-  monkeypatch.setenv("HOME", str(tmp_path))
-  cm._config = None
-  cm._config_mtime = 0.0
-  cm._cron_snapshot = cm._CronSnapshot()
-  return tmp_path
-
-
-@pytest.fixture
 def sent(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   """Replace Telegram delivery with a recording stub."""
   messages: list[str] = []

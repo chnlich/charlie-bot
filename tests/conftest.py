@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
   sys.path.insert(0, str(ROOT))
 
 # Imports must follow the sys.path bootstrap above.
+import src.core.config as core_config  # noqa: E402,I001
 from src.agents import master_cc_queue, master_cc_run, master_cc_state  # noqa: E402,I001
 from src.agents.backends import base as backend_base  # noqa: E402
 from src.api.cron import router as cron_router  # noqa: E402
@@ -421,6 +422,22 @@ def dump_yaml(body: Any) -> str:
   """Block-style ``yaml.safe_dump`` with the dict's insertion key order kept; callers write the result
   into cron host files whose key order should read like a hand-written file."""
   return yaml.safe_dump(body, default_flow_style=False, sort_keys=False)
+
+
+@pytest.fixture
+def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+  """Point HOME at a temp dir and reset the config/cron module-level caches.
+
+  ``CHARLIEBOT_HOME`` wins over ``HOME`` in ``src.core.config.charliebot_home_dir`` when both
+  are set, so the fixture deletes it: a shell exported with a real profile must not leak that
+  profile's config.d into a test run.
+  """
+  monkeypatch.delenv("CHARLIEBOT_HOME", raising=False)
+  monkeypatch.setenv("HOME", str(tmp_path))
+  core_config._config = None
+  core_config._config_mtime = 0.0
+  core_config._cron_snapshot = core_config._CronSnapshot()
+  return tmp_path
 
 
 def cron_d_dir(home: Path) -> Path:

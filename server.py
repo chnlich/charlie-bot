@@ -5,7 +5,6 @@ import hmac
 import json
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import Optional
 
 import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -101,7 +100,7 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context) -> 
     log.info(f"{log_label}_closed", reason=str(e), **log_context)
 
 
-async def _run_crash_recovery(cfg, boot_time, identity: Optional[asyncio.Task] = None) -> None:
+async def _run_crash_recovery(cfg, boot_time, identity: asyncio.Task | None = None) -> None:
   """Background startup recovery; logs completion and never swallows failures.
 
   Wraps init.run_crash_recovery so an exception surfaces loudly instead of

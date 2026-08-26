@@ -7,7 +7,7 @@ process-wide instance's cache — keep serving the pre-cron history.
 
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -62,7 +62,7 @@ async def test_scheduled_prompt_task_hands_injected_session_manager_to_worker(
   async def _noop() -> None:
     return None
 
-  def fake_create_logged_task(coro: Coroutine[Any, Any, None], name: Optional[str] = None) -> None:
+  def fake_create_logged_task(coro: Coroutine[Any, Any, None], name: str | None = None) -> None:
     coro.close()
 
   monkeypatch.setattr("src.core.scheduler.load_config", lambda: cfg)

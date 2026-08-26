@@ -6,7 +6,6 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -108,9 +107,9 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
   cfg = _make_consumer_cfg(tmp_path)
   monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
 
-  entries: list[Optional[datetime]] = []
+  entries: list[datetime | None] = []
   injected = False
-  injected_task: Optional[asyncio.Task] = None
+  injected_task: asyncio.Task | None = None
   real_persist = AsyncMock()
 
   async def _inject_once() -> None:

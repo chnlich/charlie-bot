@@ -80,22 +80,7 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypa
   task_spec = task_spec_file.read_text()
 
   with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--session",
-          "s1",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--backend",
-          "codex-o3",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+      cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "codex-o3", session="s1")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1", "description": "do work"}
     main()
 
@@ -124,21 +109,7 @@ def test_main_prints_async_wake_up_hint_to_stderr(
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--session",
-          "s1",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, session="s1")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1", "description": "do work"}
     main()
 
@@ -154,22 +125,7 @@ def test_main_task_type_lands_in_payload(tmp_path: Path, monkeypatch: pytest.Mon
   task_spec_file = _write_task_spec(tmp_path)
 
   with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--session",
-          "s1",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-          "--task-type",
-          task_type,
-      ]) as post_mock:
+      cfg, _repo_argv(str(tmp_path), task_spec_file, "--task-type", task_type, session="s1")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t2", "description": "task"}
     main()
 
@@ -299,21 +255,7 @@ def test_main_rejects_relative_repo_path(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path)
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--session",
-          "s1",
-          "--repo",
-          "meshy-research",
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+  with _patched_main(cfg, _repo_argv("meshy-research", task_spec_file, session="s1")) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -330,21 +272,7 @@ def test_main_rejects_nonexistent_repo_path(
   task_spec_file = _write_task_spec(tmp_path)
   nonexistent = str(tmp_path / "nonexistent")
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--session",
-          "s1",
-          "--repo",
-          nonexistent,
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+  with _patched_main(cfg, _repo_argv(nonexistent, task_spec_file, session="s1")) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -386,21 +314,9 @@ def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch
 
   with _patched_main(
       cfg,
-      [
-          "delegate",
-          "--session",
-          "s1",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--reviewer-context-file",
-          str(reviewer_context_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+      _repo_argv(
+          str(tmp_path), task_spec_file, "--reviewer-context-file", str(reviewer_context_file),
+          session="s1")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t3"}
     main()
 
@@ -437,22 +353,7 @@ def test_main_rejects_legacy_description_argparse(
   task_spec_file = _write_task_spec(tmp_path)
 
   with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--session",
-          "s1",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--description",
-          "task",
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+      cfg, _repo_argv(str(tmp_path), task_spec_file, "--description", "task", session="s1")) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -469,22 +370,7 @@ def test_main_rejects_legacy_context_argparse(
   task_spec_file = _write_task_spec(tmp_path)
 
   with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--session",
-          "s1",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--context",
-          "review hint",
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+      cfg, _repo_argv(str(tmp_path), task_spec_file, "--context", "review hint", session="s1")) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -500,23 +386,7 @@ def test_main_rejects_invalid_task_type(
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--session",
-          "s1",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-          "--task-type",
-          "bogus",
-      ]):
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, "--task-type", "bogus", session="s1")):
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -531,23 +401,7 @@ def test_main_rejects_legacy_require_review_flag(
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--session",
-          "s1",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-          "--require-review",
-          "0",
-      ]):
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, "--require-review", "0", session="s1")):
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -569,22 +423,7 @@ def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytes
       self.response.json.return_value = {"detail": "requested backend 'missing' is not in backend_options"}
 
   with _patched_main(
-      cfg,
-      [
-          "delegate",
-          "--session",
-          "s1",
-          "--repo",
-          str(tmp_path),
-          "--base-branch",
-          "main",
-          "--backend",
-          "missing",
-          "--task-spec-file",
-          str(task_spec_file),
-          "--keep-worktree",
-          "0",
-      ]) as post_mock:
+      cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "missing", session="s1")) as post_mock:
     post_mock.side_effect = FakeRequestException()
     with pytest.raises(SystemExit) as exc_info:
       main()

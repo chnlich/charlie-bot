@@ -33,6 +33,17 @@ def _cc_cfg() -> CharlieBotConfig:
   )
 
 
+def _fallback_chain_cfg() -> CharlieBotConfig:
+  """Config whose model_preference chains a cc-claude first backend onto a codex second backend."""
+  return CharlieBotConfig(
+      backend_options=[
+          BackendOption(id="first-backend", label="First", type="cc-claude", model="haiku"),
+          BackendOption(id="second-backend", label="Second", type="codex", model="gpt-x"),
+      ],
+      model_preference=["first-backend", "second-backend"],
+  )
+
+
 def _mock_backend(one_shot: AsyncMock) -> MagicMock:
   """A stand-in backend whose one_shot_text is the given AsyncMock."""
   backend = MagicMock()
@@ -197,13 +208,7 @@ async def test_maybe_auto_name_keeps_chinese_title_verbatim() -> None:
 
 @pytest.mark.asyncio
 async def test_maybe_auto_name_falls_back_after_first_backend_failure() -> None:
-  cfg = CharlieBotConfig(
-      backend_options=[
-          BackendOption(id="first-backend", label="First", type="cc-claude", model="haiku"),
-          BackendOption(id="second-backend", label="Second", type="codex", model="gpt-x"),
-      ],
-      model_preference=["first-backend", "second-backend"],
-  )
+  cfg = _fallback_chain_cfg()
   session_meta = SessionMetadata(id="session-backend-failure", name="Session 10", backend="first-backend")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-backend-failure", name="Session 10", group=None)
@@ -233,13 +238,7 @@ async def test_maybe_auto_name_falls_back_after_first_backend_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_maybe_auto_name_keeps_default_name_when_all_first_responses_are_unusable() -> None:
-  cfg = CharlieBotConfig(
-      backend_options=[
-          BackendOption(id="first-backend", label="First", type="cc-claude", model="haiku"),
-          BackendOption(id="second-backend", label="Second", type="codex", model="gpt-x"),
-      ],
-      model_preference=["first-backend", "second-backend"],
-  )
+  cfg = _fallback_chain_cfg()
   session_meta = SessionMetadata(id="session-exhausted", name="Session 11", backend="first-backend")
   session_mgr = AsyncMock()
   first_one_shot = AsyncMock(return_value="")
@@ -267,13 +266,7 @@ async def test_maybe_auto_name_keeps_default_name_when_all_first_responses_are_u
 
 @pytest.mark.asyncio
 async def test_maybe_auto_name_falls_back_to_next_backend_on_non_json_response() -> None:
-  cfg = CharlieBotConfig(
-      backend_options=[
-          BackendOption(id="first-backend", label="First", type="cc-claude", model="haiku"),
-          BackendOption(id="second-backend", label="Second", type="codex", model="gpt-x"),
-      ],
-      model_preference=["first-backend", "second-backend"],
-  )
+  cfg = _fallback_chain_cfg()
   session_meta = SessionMetadata(id="session-fallback", name="Session 9", backend="first-backend")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-fallback", name="Session 9")
@@ -299,13 +292,7 @@ async def test_maybe_auto_name_falls_back_to_next_backend_on_non_json_response()
 
 @pytest.mark.asyncio
 async def test_maybe_auto_name_falls_back_to_next_backend_when_name_too_long() -> None:
-  cfg = CharlieBotConfig(
-      backend_options=[
-          BackendOption(id="first-backend", label="First", type="cc-claude", model="haiku"),
-          BackendOption(id="second-backend", label="Second", type="codex", model="gpt-x"),
-      ],
-      model_preference=["first-backend", "second-backend"],
-  )
+  cfg = _fallback_chain_cfg()
   session_meta = SessionMetadata(id="session-long", name="Session 10", backend="first-backend")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-long", name="Session 10")

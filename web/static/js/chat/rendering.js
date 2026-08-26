@@ -34,8 +34,7 @@ function renderToolActivity(tools) {
     if (limit > 0 && text.length > limit) {
       var sid = 'ts-' + Math.random().toString(36).slice(2);
       summaryHtml = escapeHtml(text.substring(0, limit))
-        + '<span id="' + sid + '-short">… <button onclick="document.getElementById(\'' + sid + '-short\').style.display=\'none\';document.getElementById(\'' + sid + '-full\').style.display=\'inline\'" class="text-blue-400 hover:underline">Show more</button></span>'
-        + '<span id="' + sid + '-full" style="display:none">' + escapeHtml(text.substring(limit)) + '</span>';
+        + showMoreToggleHtml(sid, escapeHtml(text.substring(limit)));
     } else {
       summaryHtml = escapeHtml(text);
     }
@@ -47,8 +46,7 @@ function renderToolActivity(tools) {
         var oid = 'to-' + Math.random().toString(36).slice(2);
         outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-all">'
           + escapeHtml(outText.substring(0, 500))
-          + '<span id="' + oid + '-short">… <button onclick="document.getElementById(\'' + oid + '-short\').style.display=\'none\';document.getElementById(\'' + oid + '-full\').style.display=\'inline\'" class="text-blue-400 hover:underline">Show more</button></span>'
-          + '<span id="' + oid + '-full" style="display:none">' + escapeHtml(outText.substring(500)) + '</span>'
+          + showMoreToggleHtml(oid, escapeHtml(outText.substring(500)))
           + '</pre>';
       } else {
         outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-all">' + escapeHtml(outText) + '</pre>';

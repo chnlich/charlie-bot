@@ -5,7 +5,6 @@ the worktree directory must remain on disk after both _cleanup_worker_directory
 (post-worker) and finalize_review_chain (post-reviewer merge).
 """
 
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +14,7 @@ from conftest import (
   CapturingThreadManager,
   JudgmentShim,
   build_worker_prompt,
+  capturing_worker,
   recording_notify_completion,
 )
 
@@ -22,7 +22,6 @@ from src.core import review, spawner, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
 from src.core.git import BaseResolution
 from src.core.models import (
-  BackendOption,
   SessionMetadata,
   SpawnRequest,
   TaskType,
@@ -209,29 +208,9 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
     wt_path.mkdir(parents=True, exist_ok=True)
     return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
 
-  class FakeWorker:
-
-    def __init__(
-        self,
-        thread_metadata: ThreadMetadata,
-        working_dir: Path,
-        events_log_path: Path,
-        task_description: str,
-        worker_cfg: CharlieBotConfig,
-        backend_option: BackendOption | None = None,
-        on_spawned: Callable | None = None,
-    ) -> None:
-      captures["prompt"] = task_description
-
-    async def run(self) -> int:
-      return 0
-
-    async def terminate(self) -> None:
-      return None
-
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner_launch, "git_create_worktree", fake_git_create_worktree)
-  monkeypatch.setattr(spawner_launch, "Worker", FakeWorker)
+  monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 
   await spawner.spawn_worker(
@@ -252,7 +231,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
   monkeypatch.undo()
 
   assert thread.keep_worktree is True
-  assert "This worktree will persist after the reviewer merges." in captures["prompt"]
+  assert "This worktree will persist after the reviewer merges." in captures["task_description"]
   wt_path = Path(thread.worktree_path)
   assert wt_path.exists()
   assert captures["notify_thread"].keep_worktree is True

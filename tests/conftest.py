@@ -637,6 +637,40 @@ def recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Await
   return fake_notify_completion
 
 
+def capturing_worker(captures: dict[str, Any]) -> type:
+  """A spawner_launch.Worker stand-in recording its constructor args into ``captures``.
+
+  The signature mirrors the production call in spawner._construct_worker, and the
+  fixed worker_dir/worker_backend/task_description key set is the shared contract
+  the spawn-driving tests assert on; thread_metadata, events_log_path, worker_cfg,
+  and on_spawned go unrecorded because no test reads them back off the worker.
+  """
+
+  class CapturingWorker:
+
+    def __init__(
+        self,
+        thread_metadata: models.ThreadMetadata,
+        working_dir: Path,
+        events_log_path: Path,
+        task_description: str,
+        worker_cfg: CharlieBotConfig,
+        backend_option: models.BackendOption | None = None,
+        on_spawned: Callable | None = None,
+    ) -> None:
+      captures["worker_dir"] = working_dir
+      captures["worker_backend"] = backend_option
+      captures["task_description"] = task_description
+
+    async def run(self) -> int:
+      return 0
+
+    async def terminate(self) -> None:
+      return None
+
+  return CapturingWorker
+
+
 class JudgmentShim:
   """Default finalize-judgment reads for test fakes: no prior effects recorded.
 

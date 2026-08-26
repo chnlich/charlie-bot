@@ -327,6 +327,19 @@ def build_slack_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
+def build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig for cross-backend tests: the .charliebot home lives under tmp_path so each test owns its
+  own tree, and the backend list registers the opus-then-codex pair that pin-resolution and fallback-ordering
+  cases exercise."""
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[
+          OPUS_BACKEND_OPTION,
+          CODEX_BACKEND_OPTION,
+      ],
+  )
+
+
 def build_tui_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig for sessions-API TUI tests: the .charliebot home lives under tmp_path and the backend list
   registers opus plus the claude-tui terminal backend the TUI handlers resolve a session against."""

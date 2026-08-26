@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-  CODEX_BACKEND_OPTION,
   OPUS_BACKEND_OPTION,
   FakeBackend,
+  build_two_backend_cfg,
   patch_instructions_content,
 )
 
@@ -123,13 +123,7 @@ async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_ze
     tmp_path: Path, monkeypatch) -> None:
   """replay_user_message never passes backend_option — the only caller that
   doesn't. A resolvable pin that isn't backend_options[0] must still win."""
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          CODEX_BACKEND_OPTION,
-      ],
-  )
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-o3")
   assert session.backend != cfg.backend_options[0].id
@@ -150,13 +144,7 @@ async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_ze
 async def test_replay_unresolvable_pin_hard_fails_not_substituted(tmp_path: Path, monkeypatch) -> None:
   """Replay of an unresolvable pin must reach the hard fail, same as the
   message and wake paths — never a substitution onto backend_options[0]."""
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          CODEX_BACKEND_OPTION,
-      ],
-  )
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
 
@@ -180,13 +168,7 @@ async def test_replay_unresolvable_pin_hard_fails_not_substituted(tmp_path: Path
 async def test_empty_pin_no_option_rejects_not_backend_options_zero(tmp_path: Path, monkeypatch) -> None:
   """No pin at all and no explicit option must hard-fail, not fall back to
   backend_options[0] (the wake-path fallback was removed)."""
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          CODEX_BACKEND_OPTION,
-      ],
-  )
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"))
   session.backend = ""

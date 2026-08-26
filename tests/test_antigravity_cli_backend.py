@@ -23,6 +23,14 @@ def _write_fake_agy(tmp_path: Path, body: str) -> Path:
   return fake_agy
 
 
+def _install_fake_agy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str) -> None:
+  fake_agy = _write_fake_agy(tmp_path, body)
+  monkeypatch.setattr(
+      "src.agents.backends.antigravity_cli.resolve_binary",
+      lambda name, fallback: str(fake_agy),
+  )
+
+
 async def _consume(backend: AntigravityCliBackend, cwd: Path) -> list[dict]:
   events: list[dict] = []
   async for event in backend.run("hello from CharlieBot", str(cwd), {"PATH": "/usr/bin:/bin"}):
@@ -109,17 +117,14 @@ def test_build_command_never_uses_continue_flag(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_run_translates_envelope_into_session_text_and_result_events(monkeypatch, tmp_path: Path) -> None:
-  fake_agy = _write_fake_agy(
+  _install_fake_agy(
+      monkeypatch,
       tmp_path,
       """
 cat <<'JSON'
 {"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"the answer","usage":{"input_tokens":10,"output_tokens":12,"thinking_tokens":11,"cache_read_tokens":3}}
 JSON
 """,
-  )
-  monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
-      lambda name, fallback: str(fake_agy),
   )
   log_dir = tmp_path / "logs"
   backend = AntigravityCliBackend(log_dir=log_dir)
@@ -156,16 +161,13 @@ JSON
 
 @pytest.mark.asyncio
 async def test_run_emits_nonzero_stdout_as_error(monkeypatch, tmp_path: Path) -> None:
-  fake_agy = _write_fake_agy(
+  _install_fake_agy(
+      monkeypatch,
       tmp_path,
       """
 printf 'fatal from agy\\n'
 exit 7
 """,
-  )
-  monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
-      lambda name, fallback: str(fake_agy),
   )
   backend = AntigravityCliBackend()
 
@@ -220,15 +222,12 @@ def test_registry_builds_antigravity_backend(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_envelope_error_status_yields_error_event(monkeypatch, tmp_path: Path) -> None:
-  fake_agy = _write_fake_agy(
+  _install_fake_agy(
+      monkeypatch,
       tmp_path,
       """
 printf '%s' '{"status":"ERROR","error":"rate limited"}'
 """,
-  )
-  monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
-      lambda name, fallback: str(fake_agy),
   )
   backend = AntigravityCliBackend()
 
@@ -243,15 +242,12 @@ printf '%s' '{"status":"ERROR","error":"rate limited"}'
 
 @pytest.mark.asyncio
 async def test_success_envelope_missing_conversation_id_triggers_guard(monkeypatch, tmp_path: Path) -> None:
-  fake_agy = _write_fake_agy(
+  _install_fake_agy(
+      monkeypatch,
       tmp_path,
       """
 printf '%s' '{"status":"SUCCESS","response":"hi"}'
 """,
-  )
-  monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
-      lambda name, fallback: str(fake_agy),
   )
   backend = AntigravityCliBackend()
 
@@ -265,15 +261,12 @@ printf '%s' '{"status":"SUCCESS","response":"hi"}'
 
 @pytest.mark.asyncio
 async def test_resume_envelope_id_mismatch_triggers_guard(monkeypatch, tmp_path: Path) -> None:
-  fake_agy = _write_fake_agy(
+  _install_fake_agy(
+      monkeypatch,
       tmp_path,
       """
 printf '%s' '{"status":"SUCCESS","conversation_id":"fresh-id","response":"hi","usage":{}}'
 """,
-  )
-  monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
-      lambda name, fallback: str(fake_agy),
   )
   backend = AntigravityCliBackend(resume_session_id="anchor-id")
 
@@ -287,15 +280,12 @@ printf '%s' '{"status":"SUCCESS","conversation_id":"fresh-id","response":"hi","u
 
 @pytest.mark.asyncio
 async def test_non_envelope_stdout_exit_zero_triggers_guard(monkeypatch, tmp_path: Path) -> None:
-  fake_agy = _write_fake_agy(
+  _install_fake_agy(
+      monkeypatch,
       tmp_path,
       """
 printf 'plain text, not json'
 """,
-  )
-  monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
-      lambda name, fallback: str(fake_agy),
   )
   backend = AntigravityCliBackend()
 
@@ -309,15 +299,12 @@ printf 'plain text, not json'
 
 @pytest.mark.asyncio
 async def test_json_object_without_status_exit_zero_triggers_guard(monkeypatch, tmp_path: Path) -> None:
-  fake_agy = _write_fake_agy(
+  _install_fake_agy(
+      monkeypatch,
       tmp_path,
       """
 printf '%s' '{"response":"not an envelope"}'
 """,
-  )
-  monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
-      lambda name, fallback: str(fake_agy),
   )
   backend = AntigravityCliBackend()
 
@@ -333,15 +320,12 @@ printf '%s' '{"response":"not an envelope"}'
 async def test_bare_session_id_event_is_adopted_as_anchor_by_handle_event(
     monkeypatch, tmp_path: Path
 ) -> None:
-  fake_agy = _write_fake_agy(
+  _install_fake_agy(
+      monkeypatch,
       tmp_path,
       """
 printf '%s' '{"status":"SUCCESS","conversation_id":"conv-abc","response":"hi","usage":{}}'
 """,
-  )
-  monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
-      lambda name, fallback: str(fake_agy),
   )
   backend = AntigravityCliBackend()
 

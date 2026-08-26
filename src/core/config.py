@@ -19,10 +19,18 @@ log = structlog.get_logger()
 
 CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 
-# Every Python consumer imports this; the web UI re-pins the value in three literals
-# (templates/index.html, two fallbacks in sidebar/modals.js) that cannot import from
-# Python — a change moves those three sites.
-DEFAULT_TIMEZONE = "America/Los_Angeles"
+# Fixed house wall clock pinned by chart timestamps (src/api/pages.py), Slack timestamp
+# prefixes (src/core/slack_listener.py), worker-summary timestamps
+# (src/core/spawner_events.py), and the Saturday-1AM weekly-recycle anchor
+# (src/core/master_trigger.py). Distinct from DEFAULT_TIMEZONE below, a per-task default
+# overridable via ``timezone: local`` or any IANA key, so retargeting the cron default
+# cannot shift these pins.
+HOUSE_TIMEZONE = "America/Los_Angeles"
+
+# The API request model TaskCreate (src/api/cron.py) shares this default; the web UI
+# re-pins the value in three literals (templates/index.html, two fallbacks in
+# sidebar/modals.js) that cannot import from Python — a change moves all four sites.
+DEFAULT_TIMEZONE = HOUSE_TIMEZONE
 
 
 def default_charliebot_home() -> Path:

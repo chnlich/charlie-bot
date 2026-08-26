@@ -6,14 +6,14 @@ from zoneinfo import ZoneInfo
 
 from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
-from src.core.config import DEFAULT_TIMEZONE
+from src.core.config import HOUSE_TIMEZONE
 from src.core.models import ThreadMetadata
 from src.core.ndjson import parse_ndjson_file
 from src.core.threads import ThreadManager
 
 
 def _worker_summary_timestamp() -> str:
-  return datetime.now(ZoneInfo(DEFAULT_TIMEZONE)).strftime('%Y-%m-%d %H:%M %Z')
+  return datetime.now(ZoneInfo(HOUSE_TIMEZONE)).strftime('%Y-%m-%d %H:%M %Z')
 
 
 def _worker_locator_summary(thread_id: str, status: str, timestamp: str) -> str:

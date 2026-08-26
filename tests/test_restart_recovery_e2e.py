@@ -36,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from conftest import build_recovery_cfg
 
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
@@ -848,14 +849,7 @@ async def test_restart_finalizes_uncovered_transport_with_explicit_reason(
   so the thread fails with resolve_run's reason — the module constant, not a
   retyped literal — in the worker_summary the master reads."""
   home = tmp_path / "home"
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[
-          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
-          BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
-      ],
-  )
+  cfg = build_recovery_cfg(home)
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
   session_meta = await session_mgr.create_session(CreateSessionRequest(name="uncovered"))
@@ -910,14 +904,7 @@ async def test_restart_recovery_summary_invariant_to_backend_binary_presence(
           "src.agents.backends.opencode.resolve_binary", lambda name, fallback: binary)
       home = tmp_path / "home-present"
 
-    cfg = CharlieBotConfig(
-        charliebot_home=home,
-        worktree_dir=str(home / "worktrees"),
-        backend_options=[
-            BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
-            BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
-        ],
-    )
+    cfg = build_recovery_cfg(home)
     session_mgr = SessionManager(cfg)
     thread_mgr = ThreadManager(cfg)
     session_meta = await session_mgr.create_session(CreateSessionRequest(name="invariance"))

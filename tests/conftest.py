@@ -312,6 +312,20 @@ def build_tui_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
+def build_recovery_cfg(home: Path) -> CharlieBotConfig:
+  """CharlieBotConfig for restart-recovery tests: the home dir is caller-chosen (the install-invariance test
+  runs its two arms under different homes), the worktrees dir lives under it, and the backend list registers
+  the cc-claude fake plus the opencode fake-oc whose uncovered transport the recovery legs exercise."""
+  return CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(home / "worktrees"),
+      backend_options=[
+          models.BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
+          models.BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
+      ],
+  )
+
+
 def write_plan_artifact(
     cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html", content: str = PLAN_GOAL_OK_HTML
 ) -> str:

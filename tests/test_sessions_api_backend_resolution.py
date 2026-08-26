@@ -5,23 +5,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION, close_create_logged_task
+from conftest import build_two_backend_cfg, close_create_logged_task
 from conftest import make_sessions_client as _build_client
 from conftest import session_dir_names as _session_dir_names
 
-from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
-
-
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          CODEX_BACKEND_OPTION,
-      ],
-  )
 
 
 async def _seed_parent(session_mgr: SessionManager, *, backend: str = "claude-opus-4.6") -> str:
@@ -76,7 +65,7 @@ async def test_fork_route_inherits_parent_backend_when_backend_omitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   _stub_bootstrap(monkeypatch)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
 
@@ -90,7 +79,7 @@ async def test_fork_route_inherits_parent_backend_when_backend_omitted(
 @pytest.mark.asyncio
 async def test_fork_route_resolves_codex_family_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _stub_bootstrap(monkeypatch)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
 
@@ -110,7 +99,7 @@ async def test_fork_route_resolves_codex_family_override(tmp_path: Path, monkeyp
 @pytest.mark.asyncio
 async def test_elone_route_accepts_valid_backend_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _stub_bootstrap(monkeypatch)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
 
@@ -133,7 +122,7 @@ async def test_elone_route_rejects_unresolvable_explicit_backend_and_persists_no
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   _stub_bootstrap(monkeypatch)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="codex-o3")
   before = _session_dir_names(cfg)
@@ -154,7 +143,7 @@ async def test_elone_route_rejects_unresolvable_explicit_backend_and_persists_no
 @pytest.mark.asyncio
 async def test_fork_route_bootstrap_points_at_reference_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   calls = _capture_bootstrap(monkeypatch)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
 
@@ -176,7 +165,7 @@ async def test_fork_route_bootstrap_points_at_reference_file(tmp_path: Path, mon
 @pytest.mark.asyncio
 async def test_elone_route_bootstrap_points_at_reference_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   calls = _capture_bootstrap(monkeypatch)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
 
@@ -204,7 +193,7 @@ async def test_create_route_rejects_unresolvable_backend_and_persists_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   _stub_bootstrap(monkeypatch)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   before = _session_dir_names(cfg)
 
@@ -221,7 +210,7 @@ async def test_fork_route_rejects_unresolvable_explicit_backend_and_persists_not
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   _stub_bootstrap(monkeypatch)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
   before = _session_dir_names(cfg)
@@ -248,7 +237,7 @@ async def test_fork_route_rejects_unresolvable_inherited_backend_and_persists_no
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   _stub_bootstrap(monkeypatch)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="missing-backend")
   before = _session_dir_names(cfg)
@@ -267,7 +256,7 @@ async def test_elone_route_rejects_unresolvable_inherited_backend_and_leaves_par
 ) -> None:
   """Failure must precede the parent archive/thumbs-down side effect."""
   _stub_bootstrap(monkeypatch)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent_id = await _seed_parent(session_mgr, backend="missing-backend")
   parent_before = await session_mgr.get_session(parent_id)
@@ -292,7 +281,7 @@ async def test_persisted_backend_stays_within_backend_options_across_mixed_calls
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   _stub_bootstrap(monkeypatch)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   valid_ids = {opt.id for opt in cfg.backend_options}
   fork_parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
@@ -349,7 +338,7 @@ async def test_create_route_defaults_to_first_backend_option_when_omitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   _stub_bootstrap(monkeypatch)
-  cfg = _build_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
 
   with _build_client(cfg, session_mgr) as client:

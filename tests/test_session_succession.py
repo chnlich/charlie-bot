@@ -10,8 +10,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
-from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION, build_sessions_cfg
 from conftest import append_events as _append_events
+from conftest import build_sessions_cfg, build_two_backend_cfg
 from conftest import make_parent as _make_parent
 from conftest import make_sessions_client as _build_client
 from conftest import session_dir_names as _session_dir_names
@@ -42,17 +42,6 @@ from src.core.triggers import TriggerManager
 # window suppresses the tick, while a missing one makes the never-run branch
 # reach back over that same window and fire immediately.
 _CADENCE_CRON = "* * * * *"
-
-
-def _build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:
-  """Config with two backend options, so a succession can cross backends."""
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          CODEX_BACKEND_OPTION,
-      ],
-  )
 
 
 def _seed_scheduled_task(
@@ -179,7 +168,7 @@ async def test_elone_of_scheduler_owned_session_succeeds_with_full_inheritance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_two_backend_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   mgr = SessionManager(cfg)
   yaml_path = _seed_scheduled_task(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr, role=PROJECT_ROLE, group="proj-a")
@@ -223,7 +212,7 @@ async def test_second_elone_of_scheduler_owned_parent_refuses_and_mutates_nothin
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_two_backend_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   mgr = SessionManager(cfg)
   _seed_scheduled_task(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr)
@@ -518,7 +507,7 @@ async def test_alignment_scan_is_noop_at_every_succession_transition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   """At each transition state the backend alignment scan has no rotation work to do."""
-  cfg = _build_two_backend_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   mgr = SessionManager(cfg)
   _seed_scheduled_task(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr)
@@ -565,7 +554,7 @@ async def test_succession_keeps_scheduler_chain_intact_for_tick_and_triggers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_two_backend_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   mgr = SessionManager(cfg)
   yaml_path = _seed_scheduled_task(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr)
@@ -609,7 +598,7 @@ async def test_handoff_reference_holds_exact_parent_prefix_and_parent_pointer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_two_backend_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   mgr = SessionManager(cfg)
   _seed_scheduled_task(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr, events=3)
@@ -628,7 +617,7 @@ async def test_busy_scheduler_owned_elone_raises_the_rotation_exception_type(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_two_backend_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   mgr = SessionManager(cfg)
   _seed_scheduled_task(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr)
@@ -655,7 +644,7 @@ async def test_busy_scheduler_owned_elone_endpoint_maps_to_409(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_two_backend_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   mgr = SessionManager(cfg)
   _seed_scheduled_task(tmp_path, monkeypatch)
   client = _build_client(cfg, mgr)
@@ -677,7 +666,7 @@ async def test_failed_write_back_rolls_back_the_succession(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_two_backend_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   mgr = SessionManager(cfg)
   yaml_path = _seed_scheduled_task(tmp_path, monkeypatch)
   parent = await _make_scheduled_parent(mgr)
@@ -728,7 +717,7 @@ async def test_cadence_continuity_tick_does_not_refire_after_succession(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_two_backend_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   mgr = SessionManager(cfg)
   _seed_scheduled_task(tmp_path, monkeypatch, cron=_CADENCE_CRON)
   parent = await _make_recently_run_cadence_parent(mgr)
@@ -750,7 +739,7 @@ async def test_cadence_canary_without_bookkeeping_migration_the_tick_refires(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   """Companion canary: with the bookkeeping migration removed, the same tick fires."""
-  cfg = _build_two_backend_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   mgr = SessionManager(cfg)
   _seed_scheduled_task(tmp_path, monkeypatch, cron=_CADENCE_CRON)
   parent = await _make_recently_run_cadence_parent(mgr)

@@ -44,14 +44,6 @@ def _read_git_sha() -> str:
   return proc.stdout.decode().strip() or "unknown"
 
 
-def get_sha() -> str:
-  return _sha
-
-
-def get_started_at() -> str:
-  return _started_at
-
-
 def build_info() -> dict:
   """Return the captured build info as ``{"sha": ..., "started_at": ...}``."""
   return {"sha": _sha, "started_at": _started_at}

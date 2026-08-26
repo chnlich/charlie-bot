@@ -36,6 +36,17 @@ async def _noop() -> None:
   return None
 
 
+def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: Path) -> None:
+  """Redirect the cron API's host-file IO at *cron_dir*.
+
+  src.api.cron binds cron_dir and cron_path as separate module globals, so
+  both must move; patching cron_dir alone leaves cron_path resolving the real
+  profile directory through src.core.config.
+  """
+  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
+  monkeypatch.setattr(cron_api, "cron_path", lambda name: cron_dir / f"{name}.yaml")
+
+
 @pytest.mark.asyncio
 async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
     tmp_path: Path,
@@ -252,7 +263,7 @@ def test_cron_api_persists_and_clears_backend(
 ) -> None:
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
-  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
+  _patch_cron_d(monkeypatch, cron_dir)
   cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   nightly_path = cron_dir / "nightly.yaml"
@@ -297,7 +308,7 @@ def test_cron_api_rejects_invalid_backend_on_create(
 ) -> None:
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
-  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
+  _patch_cron_d(monkeypatch, cron_dir)
   cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   prompt_path = tmp_path / "prompts" / "nightly.md"
@@ -332,7 +343,7 @@ def test_cron_api_rejects_invalid_backend_on_update(
   (cron_dir / "nightly.yaml").write_text(
       yaml.safe_dump({"cron": "0 2 * * *", "prompt_file": str(prompt_path), "backend": "codex-o3"}),
       encoding="utf-8")
-  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
+  _patch_cron_d(monkeypatch, cron_dir)
   cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
 
@@ -359,7 +370,7 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
   (cron_dir / "nightly.yaml").write_text(
       yaml.safe_dump({"cron": "0 2 * * *", "prompt_file": str(prompt_path), "backend": "claude-opus-4.6"}),
       encoding="utf-8")
-  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
+  _patch_cron_d(monkeypatch, cron_dir)
   cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(
@@ -427,7 +438,7 @@ def test_cron_api_put_updates_backend_on_prompt_file_host_file(
   exactly the backend key/value, and the persisted file still reloads."""
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
-  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
+  _patch_cron_d(monkeypatch, cron_dir)
   cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   yaml_path, _md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path)

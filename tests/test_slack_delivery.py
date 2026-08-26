@@ -8,11 +8,11 @@ from typing import Callable, Optional
 from unittest.mock import patch
 
 import pytest
+from conftest import build_slack_cfg
 from structlog.testing import capture_logs
 
 from src.core import event_types as ET
 from src.core import tasks as tasks_module
-from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, MasterRunRecord, SlackOrigin, utc_now
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
@@ -67,15 +67,6 @@ class _FakeSlackClient:
     return {"ok": True}
 
 
-def _cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "home",
-      slack_bot_token="test-bot-token",
-      slack_app_token="test-app-token",
-      slack_allowed_user_ids=["U_ALLOWED"],
-  )
-
-
 async def _slack_session(session_mgr: SessionManager, *, thread_ts: str = _THREAD) -> str:
   """Create a Slack-born session and return its id."""
   meta = await session_mgr.create_session(
@@ -120,7 +111,7 @@ def _done(input_event_id: Optional[str], exit_code: int = 0) -> dict:
 @pytest.mark.asyncio
 async def test_slack_round_posts_its_answer_to_the_paired_thread(tmp_path: Path) -> None:
   """The master_done funnel itself starts delivery, and it posts exactly once."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -148,7 +139,7 @@ async def test_slack_round_posts_its_answer_to_the_paired_thread(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_browser_typed_round_in_the_same_session_posts_nothing(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -165,7 +156,7 @@ async def test_browser_typed_round_in_the_same_session_posts_nothing(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_guard_path_done_without_input_event_id_posts_nothing(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -184,7 +175,7 @@ async def test_guard_path_done_without_input_event_id_posts_nothing(tmp_path: Pa
 @pytest.mark.parametrize("exit_code", [0, -1])
 async def test_duplicate_done_for_one_summon_posts_once(tmp_path: Path, exit_code: int) -> None:
   """A replayed round repeats the done; the input_event_id, not the exit code, discriminates."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -204,7 +195,7 @@ async def test_duplicate_done_for_one_summon_posts_once(tmp_path: Path, exit_cod
 @pytest.mark.asyncio
 async def test_summon_queued_behind_another_round_posts_only_its_own_text(tmp_path: Path) -> None:
   """The window is the previous done → this done, not the summon → this done."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -224,7 +215,7 @@ async def test_summon_queued_behind_another_round_posts_only_its_own_text(tmp_pa
 
 @pytest.mark.asyncio
 async def test_round_without_assistant_text_posts_the_failure_notice(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -243,7 +234,7 @@ async def test_round_without_assistant_text_posts_the_failure_notice(tmp_path: P
 @pytest.mark.asyncio
 async def test_over_length_answer_posts_ordered_chunks_without_any_link(tmp_path: Path) -> None:
   """A reply past Slack's hard limit splits at a blank line into ordered replies under the cap."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -270,7 +261,7 @@ async def test_over_length_answer_posts_ordered_chunks_without_any_link(tmp_path
 @pytest.mark.asyncio
 async def test_longest_observed_reply_is_one_chunk_and_one_post(tmp_path: Path) -> None:
   """The 4929-char reply — the longest seen in real sessions — is one message, not two."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -296,7 +287,7 @@ async def test_longest_observed_reply_is_one_chunk_and_one_post(tmp_path: Path) 
 async def test_delivery_log_carries_over_budget_and_budget(
     tmp_path: Path, text: str, expect_over_budget: bool) -> None:
   """slack_delivery_done records the reply against the 500-char budget."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -322,7 +313,7 @@ async def test_delivery_log_carries_over_budget_and_budget(
 @pytest.mark.asyncio
 async def test_round_posts_only_the_final_composed_assistant_message(tmp_path: Path) -> None:
   """Middle assistant messages are work narration; only the last one is the reply."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -342,7 +333,7 @@ async def test_round_posts_only_the_final_composed_assistant_message(tmp_path: P
 @pytest.mark.parametrize("trailing", ["", "  \n "])
 async def test_trailing_empty_assistant_message_defers_to_the_last_non_empty(
     tmp_path: Path, trailing: str) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -366,7 +357,7 @@ async def test_trailing_empty_assistant_message_defers_to_the_last_non_empty(
 @pytest.mark.asyncio
 async def test_marked_reply_posts_only_the_reply_and_clears_the_eye(tmp_path: Path) -> None:
   """Operator text above the marker stays in the session; only the reply goes out."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   client.reactions[_THREAD] = {"eyes"}  # lit at the summon
@@ -392,7 +383,7 @@ async def test_marked_reply_posts_only_the_reply_and_clears_the_eye(tmp_path: Pa
 @pytest.mark.asyncio
 async def test_round_without_a_marker_posts_nothing_and_keeps_the_eye(tmp_path: Path) -> None:
   """Zero marker lines: no post, no ack clear, and a distinct missing log."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   client.reactions[_THREAD] = {"eyes"}
@@ -421,7 +412,7 @@ async def test_round_without_a_marker_posts_nothing_and_keeps_the_eye(tmp_path: 
 @pytest.mark.asyncio
 async def test_two_markers_post_nothing_and_log_ambiguous_with_count(tmp_path: Path) -> None:
   """Two marker lines are ambiguity, not a guess at the reply boundary."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   client.reactions[_THREAD] = {"eyes"}
@@ -452,7 +443,7 @@ async def test_two_markers_post_nothing_and_log_ambiguous_with_count(tmp_path: P
 @pytest.mark.asyncio
 async def test_marker_with_only_blank_lines_posts_nothing_and_logs_empty(tmp_path: Path) -> None:
   """Operator text plus a marker plus blank lines is a contract failure, not an empty post."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   client.reactions[_THREAD] = {"eyes"}
@@ -483,7 +474,7 @@ async def test_marker_with_only_blank_lines_posts_nothing_and_logs_empty(tmp_pat
 async def test_single_character_marked_reply_still_posts_once_and_clears_the_eye(
     tmp_path: Path) -> None:
   """The empty check does not swallow a short (single-char) reply."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   client.reactions[_THREAD] = {"eyes"}
@@ -508,7 +499,7 @@ async def test_single_character_marked_reply_still_posts_once_and_clears_the_eye
 @pytest.mark.asyncio
 async def test_long_reply_after_the_marker_posts_ordered_chunks(tmp_path: Path) -> None:
   """The extracted reply, not the whole message, is what splits past the post cap."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -533,7 +524,7 @@ async def test_long_reply_after_the_marker_posts_ordered_chunks(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_inline_marker_mention_is_not_a_marker_line(tmp_path: Path) -> None:
   """A mention of the marker inside a sentence is zero marker lines, not one."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   client.reactions[_THREAD] = {"eyes"}
@@ -582,7 +573,7 @@ def test_extract_marker_reply_normalizes_wrapped_marker_lines() -> None:
 @pytest.mark.asyncio
 async def test_empty_round_notice_still_posts_and_clears_the_eye(tmp_path: Path) -> None:
   """The empty-round notice path is untouched by the marker contract."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   client.reactions[_THREAD] = {"eyes"}
@@ -646,7 +637,7 @@ def test_chunk_text_preserves_the_content_losslessly_and_in_order() -> None:
 
 @pytest.mark.asyncio
 async def test_done_on_a_session_without_slack_origin_posts_nothing(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   meta = await session_mgr.create_session(CreateSessionRequest(name="browser session"))
@@ -668,7 +659,7 @@ async def test_done_on_a_session_without_slack_origin_posts_nothing(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_lost_summon_gets_one_notice_and_one_error_and_no_master_done(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -691,7 +682,7 @@ async def test_lost_summon_gets_one_notice_and_one_error_and_no_master_done(tmp_
 
 @pytest.mark.asyncio
 async def test_backfill_run_twice_posts_once(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -710,7 +701,7 @@ async def test_backfill_run_twice_posts_once(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exclusion", ["answered", "queued", "master_run"])
 async def test_each_live_round_exclusion_suppresses_the_notice(tmp_path: Path, exclusion: str) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -740,7 +731,7 @@ async def test_each_live_round_exclusion_suppresses_the_notice(tmp_path: Path, e
 
 @pytest.mark.asyncio
 async def test_backfill_never_touches_a_session_without_slack_origin(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   meta = await session_mgr.create_session(CreateSessionRequest(name="browser session"))
@@ -758,7 +749,7 @@ async def test_backfill_never_touches_a_session_without_slack_origin(tmp_path: P
 @pytest.mark.asyncio
 async def test_backfill_reports_an_archived_session_thread(tmp_path: Path) -> None:
   """Archived sessions are scanned too: the thread is still waiting on an answer."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   sid = await _slack_session(session_mgr)
@@ -812,7 +803,7 @@ class _StubSlackHttp:
 
 @pytest.mark.asyncio
 async def test_delivered_round_clears_the_summons_eye(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   client.reactions[_THREAD] = {"eyes"}  # lit at the summon
@@ -838,7 +829,7 @@ async def test_delivered_round_clears_the_summons_eye(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_failed_post_still_clears_the_eye_and_still_logs_the_delivery(tmp_path: Path) -> None:
   """A chunk that gave up leaves posted=False on the log, not a lingering eye."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient(fail_posts=True)
   client.reactions[_THREAD] = {"eyes"}
@@ -867,7 +858,7 @@ async def test_failed_post_still_clears_the_eye_and_still_logs_the_delivery(tmp_
 
 @pytest.mark.asyncio
 async def test_summon_without_mention_ts_posts_normally_and_clears_nothing(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   client.reactions[_THREAD] = {"eyes"}
@@ -912,7 +903,7 @@ async def test_remove_reaction_treats_no_reaction_as_the_end_state() -> None:
 
 @pytest.mark.asyncio
 async def test_backfill_posting_a_lost_summon_clears_its_eye(tmp_path: Path) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   client.reactions[_THREAD] = {"eyes"}
@@ -935,7 +926,7 @@ async def test_backfill_posting_a_lost_summon_clears_its_eye(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_remove_failure_leaves_a_stale_eye_and_stays_in_the_ack_task(tmp_path: Path) -> None:
   """missing_scope on the remove: delivery result and its log are unaffected."""
-  cfg = _cfg(tmp_path)
+  cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient(fail_remove=True)
   client.reactions[_THREAD] = {"eyes"}

@@ -183,7 +183,7 @@ function renderThreadEvents(threadId, events) {
       const hasMore = text.length > 300;
       const id = 'evt-more-' + Math.random().toString(36).slice(2);
       return `<div class="py-2 px-3 my-1 bg-slate-700/50 rounded-lg">
-        <div class="text-sm text-slate-300">${escapeHtml(short)}${hasMore ? `<span id="${id}-short">… <button onclick="document.getElementById('${id}-short').style.display='none';document.getElementById('${id}-full').style.display='inline'" class="text-blue-400 hover:underline text-xs">Show more</button></span><span id="${id}-full" style="display:none">${escapeHtml(text.substring(300))}</span>` : ''}</div>
+        <div class="text-sm text-slate-300">${escapeHtml(short)}${hasMore ? showMoreToggleHtml(id, escapeHtml(text.substring(300))) : ''}</div>
         ${tsHtml}
       </div>`;
     }
@@ -196,7 +196,7 @@ function renderThreadEvents(threadId, events) {
       let summaryHtml;
       if (hasMore) {
         const id = 'tu-' + Math.random().toString(36).slice(2);
-        summaryHtml = `${escapeHtml(short)}<span id="${id}-short">… <button onclick="document.getElementById('${id}-short').style.display='none';document.getElementById('${id}-full').style.display='inline'" class="text-blue-400 hover:underline">Show more</button></span><span id="${id}-full" style="display:none">${escapeHtml(text.substring(limit))}</span>`;
+        summaryHtml = escapeHtml(short) + showMoreToggleHtml(id, escapeHtml(text.substring(limit)));
       } else {
         summaryHtml = escapeHtml(short);
       }
@@ -213,7 +213,7 @@ function renderThreadEvents(threadId, events) {
       const hasMore = text.length > 500;
       const id = 'tr-more-' + Math.random().toString(36).slice(2);
       return `<div class="py-1 px-3 ml-6 my-0.5 border-l-2 border-slate-700">
-        <pre class="text-xs text-slate-500 whitespace-pre-wrap break-all">${escapeHtml(short)}${hasMore ? `<span id="${id}-short">… <button onclick="document.getElementById('${id}-short').style.display='none';document.getElementById('${id}-full').style.display='inline'" class="text-blue-400 hover:underline">Show more</button></span><span id="${id}-full" style="display:none">${escapeHtml(text.substring(500))}</span>` : ''}</pre>
+        <pre class="text-xs text-slate-500 whitespace-pre-wrap break-all">${escapeHtml(short)}${hasMore ? showMoreToggleHtml(id, escapeHtml(text.substring(500))) : ''}</pre>
       </div>`;
     }
 

@@ -45,7 +45,7 @@ async def test_atomic_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
     replaced_targets.append(str(dst))
     return _REAL_REPLACE(src, dst)
 
-  with patch("src.core.sessions.os.replace", side_effect=_capture_replace):
+  with patch("src.core.json_utils.os.replace", side_effect=_capture_replace):
     updated = meta.model_copy()
     updated.name = "changed"
     await mgr.save_metadata(updated)
@@ -72,7 +72,7 @@ async def test_atomic_read_observes_previous_document_at_swap(tmp_path: Path) ->
     read_at_swap.append(target.read_text(encoding="utf-8"))
     return _REAL_REPLACE(src, dst)
 
-  with patch("src.core.sessions.os.replace", side_effect=_read_then_replace):
+  with patch("src.core.json_utils.os.replace", side_effect=_read_then_replace):
     updated = meta.model_copy()
     updated.name = "after"
     await mgr.save_metadata(updated)
@@ -133,7 +133,7 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
   def _coordinated_replace(src: str, dst: str) -> None:
     return harness.replace(src, dst)
 
-  with patch("src.core.sessions.os.replace", side_effect=_coordinated_replace):
+  with patch("src.core.json_utils.os.replace", side_effect=_coordinated_replace):
     results = await asyncio.gather(
         mgr.save_metadata(first),
         mgr.save_metadata(second),

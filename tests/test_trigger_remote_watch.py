@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import requests
 from conftest import (
+  TRIGGER_MASTER_PATCH_TARGET,
   FakeAsyncProcess,
   assert_trigger_fired_completed,
   patch_trigger_fire,
@@ -68,7 +69,7 @@ async def test_remote_create_alive_persists(tmp_path: Path) -> None:
 
   with (
       patch("src.core.triggers.asyncio.create_subprocess_exec", new=_mk_subprocess_mock(scripted)),
-      patch("src.core.triggers.trigger_master", new=AsyncMock()),
+      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()),
       patch.object(TriggerManager, "_start_task", lambda self, t: None),
   ):
     trigger = await trigger_mgr.create_trigger(

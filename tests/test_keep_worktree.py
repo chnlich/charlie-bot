@@ -12,7 +12,7 @@ import pytest
 from conftest import (
   CODEX_BACKEND_OPTION,
   CapturingThreadManager,
-  JudgmentShim,
+  SpawnFlowSessionManager,
   build_worker_prompt,
   capturing_worker,
   make_fake_git_create_worktree,
@@ -22,7 +22,6 @@ from conftest import (
 from src.core import review, spawner, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  SessionMetadata,
   SpawnRequest,
   TaskType,
   ThreadMetadata,
@@ -196,14 +195,6 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
   )
   captures: dict[str, Any] = {}
 
-  class FakeSessionManager(JudgmentShim):
-
-    async def get_session(self, session_id: str) -> SessionMetadata:
-      return SessionMetadata(id=session_id, name="Bench Session")
-
-    async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
-      captures.setdefault("broadcasts", []).append(event)
-
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner_launch, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
   monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
@@ -214,7 +205,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
       description="Run SLURM benchmark",
       thread_id="thread-1",
       cfg=cfg,
-      session_mgr=FakeSessionManager(),
+      session_mgr=SpawnFlowSessionManager(),
       thread_mgr=CapturingThreadManager(thread, captures, events_log),
       request=SpawnRequest(
           repo_path=str(repo_path),

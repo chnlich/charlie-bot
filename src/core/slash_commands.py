@@ -98,7 +98,7 @@ async def execute_shell_command(
 
   try:
     stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-  except asyncio.TimeoutError:
+  except TimeoutError:
     log.warning('slash_shell_timeout', cmd=cmd, timeout=timeout)
     kill_process_group(proc.pid, signal.SIGKILL)
     return {'stdout': '', 'stderr': 'Command timed out', 'exit_code': -1}

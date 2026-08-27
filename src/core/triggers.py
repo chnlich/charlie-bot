@@ -216,7 +216,7 @@ async def _run_probe_cmd(
   else:
     try:
       stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
       proc.kill()
       try:
         await proc.wait()
@@ -724,7 +724,7 @@ class TriggerManager:
     remaining = (trigger.fire_at - now).total_seconds()
     try:
       await asyncio.wait_for(done.wait(), timeout=max(0.0, remaining))
-    except asyncio.TimeoutError:
+    except TimeoutError:
       pass
     finally:
       # Cleanup any remaining fds (e.g. timeout case, or cancellation)

@@ -215,7 +215,7 @@ class ClaudeCodeBackend(AgentBackend):
     )
     try:
       stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
       kill_process_group(proc.pid, signal.SIGKILL)
       raise
     if proc.returncode != 0:

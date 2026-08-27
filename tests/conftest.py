@@ -291,9 +291,11 @@ SYNTHETIC_MODEL = "synthetic-provider/nvidia/Synthetic-Model"
 # each backend's build-command test asserts the string reaches the CLI as prompt payload only.
 FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 
-# Import-path patch target shared by every test that silences or spies on streaming broadcasts;
-# src/core/sessions.py imports streaming_manager into its own namespace, so the patches bind
-# through that module and a move of the import updates this one string.
+# Import-path patch target shared by every test that silences or spies on streaming broadcasts.
+# Mock resolves the route through the src.core.sessions namespace (src/core/sessions.py:43 imports
+# the streaming_manager singleton) and setattr's broadcast on that shared object; a move of the
+# sessions-side import updates this one string. src.core.autonamer and src.agents.worker import
+# the same singleton, so their routes reach the same attribute.
 BROADCAST_PATCH_TARGET = "src.core.sessions.streaming_manager.broadcast"
 
 

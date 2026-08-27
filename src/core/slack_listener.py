@@ -36,13 +36,19 @@ from zoneinfo import ZoneInfo
 import httpx
 import structlog
 import websockets
+from websockets.asyncio.client import ClientConnection
 
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
 from src.core.http import get_http_client
 from src.core.master_trigger import trigger_master
-from src.core.models import CreateSessionRequest, SessionStatus, SlackOrigin
+from src.core.models import (
+  CreateSessionRequest,
+  SessionMetadata,
+  SessionStatus,
+  SlackOrigin,
+)
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 
@@ -270,7 +276,9 @@ async def ensure_slack_group(session_mgr: SessionManager, sid: str, label: str) 
     logger.warning("slack_group_assignment_failed", session=sid, label=label, error=str(e))
 
 
-async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient) -> str | None:
+async def handle_app_mention(
+    event: dict, cfg: CharlieBotConfig, session_mgr: SessionManager, client: SlackClient
+) -> str | None:
   """Accept or drop one app_mention. Returns the session id when accepted, else None.
 
   The summon's channel label is resolved exactly once here, before
@@ -457,7 +465,7 @@ class SlackReplyError(Exception):
     self.detail = detail
 
 
-def _bound_summon(events: list[dict], meta) -> tuple[str, dict] | None:
+def _bound_summon(events: list[dict], meta: SessionMetadata) -> tuple[str, dict] | None:
   """``(summon_id, slack block)`` of the summon the running round answers, or None.
 
   The running round's input is ``master_run.user_event_id``; only an input that
@@ -701,7 +709,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
   return reported
 
 
-async def _expect_hello(ws) -> None:
+async def _expect_hello(ws: ClientConnection) -> None:
   """Consume the Socket Mode connection's ``hello`` frame."""
   raw = await ws.recv()
   envelope = json.loads(raw)

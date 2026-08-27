@@ -31,6 +31,7 @@ from pathlib import Path
 import structlog
 
 from src.core import event_types as ET
+from src.core.config import CharlieBotConfig
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 
 log = structlog.get_logger()
@@ -67,7 +68,7 @@ IMPROVE_ITERATION_PREFIX = "Iterative improvement — iteration"
 _NEVER_KILL_PIDS = frozenset({0, 1})
 
 
-def backend_type(cfg, backend_id: str | None) -> str | None:
+def backend_type(cfg: CharlieBotConfig, backend_id: str | None) -> str | None:
   """The configured transport type of ``backend_id``; None when unset or unknown."""
   if not backend_id:
     return None

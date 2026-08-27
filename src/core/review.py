@@ -347,7 +347,7 @@ class ReviewSpawnContext:
 
 
 async def _resolve_review_spawn_context(
-    original_thread,
+    original_thread: ThreadMetadata,
     cfg: CharlieBotConfig,
     session_id: str,
     tried_backends: list[str] | None,
@@ -400,7 +400,7 @@ def _short_desc(description: str) -> str:
 
 async def spawn_review_worker(
     session_id: str,
-    original_thread,
+    original_thread: ThreadMetadata,
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
@@ -528,7 +528,7 @@ async def _retry_failed_reviewer(
 
 async def maybe_spawn_reviewer(
     session_id: str,
-    thread,
+    thread: ThreadMetadata,
     exit_code: int,
     events_summary: str,
     full_summary: str,

@@ -3,7 +3,7 @@
 import hmac
 import json
 
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
@@ -99,7 +99,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
   pass through).
   """
 
-  async def dispatch(self, request: Request, call_next) -> Response:
+  async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
     cfg = get_config()
     key = cfg.charliebot_access_key
     if not key:

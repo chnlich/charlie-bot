@@ -4,6 +4,7 @@ import asyncio
 import hmac
 import json
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime
 from pathlib import Path
 
 import structlog
@@ -43,7 +44,7 @@ from src.core.init import (
   run_crash_recovery,
 )
 from src.core.message_aggregator import MessageAggregator
-from src.core.models import utc_now
+from src.core.models import SessionMetadata, utc_now
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
@@ -100,7 +101,9 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context) -> 
     log.info(f"{log_label}_closed", reason=str(e), **log_context)
 
 
-async def _run_crash_recovery(cfg, boot_time, identity: asyncio.Task | None = None) -> None:
+async def _run_crash_recovery(
+    cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task | None = None
+) -> None:
   """Background startup recovery; logs completion and never swallows failures.
 
   Wraps init.run_crash_recovery so an exception surfaces loudly instead of
@@ -325,10 +328,10 @@ async def voice_websocket(websocket: WebSocket, session_id: str):
 
 async def _send_session_catchup(
     websocket: WebSocket,
-    session_mgr,
+    session_mgr: SessionManager,
     session_id: str,
     cursor: int,
-    meta,
+    meta: SessionMetadata,
 ) -> tuple[int, int]:
   """Send catchup frames, fast-skipping replay when the client cursor is current."""
   event_index_offset = meta.archive_offset if meta else 0

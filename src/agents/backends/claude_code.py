@@ -147,12 +147,12 @@ class ClaudeCodeBackend(AgentBackend):
   def __init__(
       self,
       *,
-      model=None,
-      effort=None,
-      cli_binary=None,
-      fast_mode=False,
-      claude_session_id=None,
-      claude_config_dir=None,
+      model: str | None = None,
+      effort: str | None = None,
+      cli_binary: str | None = None,
+      fast_mode: bool = False,
+      claude_session_id: str | None = None,
+      claude_config_dir: str | None = None,
       **kwargs):
     super().__init__(model=model, **kwargs)
     self._effort = effort

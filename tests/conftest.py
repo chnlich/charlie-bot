@@ -298,6 +298,15 @@ FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 # the same singleton, so their routes reach the same attribute.
 BROADCAST_PATCH_TARGET = "src.core.sessions.streaming_manager.broadcast"
 
+# Import-path patch target shared by every test that silences or spies on the master wake a
+# trigger fires. src/core/triggers.py binds the name with `from src.core.master_trigger import
+# trigger_master`, so mock resolves the route to the src.core.triggers namespace and setattr's
+# the AsyncMock on that module attribute; _wait_and_fire's own call site then reaches the
+# stand-in. src.core.review, src.core.scheduler, src.core.slack_listener, and
+# src.core.improve_command bind the same function in their own namespaces, so their wakes keep
+# their own routes.
+TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
+
 
 def plan_page_html(goal_body: str = "Ship the fix.") -> str:
   """Minimal plan page passing the plan assertion set: the shipped template's <style> block
@@ -642,7 +651,7 @@ def patch_trigger_fire(
   if sleep_mock is not None:
     patches.append(patch("src.core.triggers.asyncio.sleep", new=sleep_mock))
   patches.append(patch(BROADCAST_PATCH_TARGET, new=AsyncMock()))
-  master_patch = patch("src.core.triggers.trigger_master", new=AsyncMock())
+  master_patch = patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock())
   with contextlib.ExitStack() as stack:
     for p in patches:
       stack.enter_context(p)

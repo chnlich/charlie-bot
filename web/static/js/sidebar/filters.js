@@ -48,15 +48,6 @@ function renderSidebarFilterPills() {
   if (addBtn) container.appendChild(addBtn);
 }
 
-function markSessionRead(id) {
-  // Optimistically hide the unread dot
-  const dot = document.getElementById('unread-' + id);
-  if (dot) dot.classList.add('hidden');
-  // Fire-and-forget API call
-  fetch(`/api/sessions/${id}/read`, { method: 'POST' }).catch(err => console.error('Mark read failed:', err));
-}
-
-
 function getCurrentSidebarViewRequest() {
   const searchInput = document.getElementById('sidebar-search');
   const query = searchInput ? searchInput.value.trim() : '';
@@ -327,7 +318,6 @@ Object.assign(Sidebar, {
   getSidebarFilter,
   getRestorableSidebarFilters,
   renderSidebarFilterPills,
-  markSessionRead,
   getCurrentSidebarViewRequest,
   fetchSidebarSessionsForCurrentView,
   refreshSidebarAfterSessionRemoval,
@@ -353,7 +343,6 @@ Sidebar.Filters = {
   all: () => sidebarFilters.slice(),
 };
 Sidebar.expose([
-  'markSessionRead',
   'getCurrentSidebarViewRequest',
   'fetchSidebarSessionsForCurrentView',
   'refreshSidebarAfterSessionRemoval',

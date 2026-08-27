@@ -48,7 +48,6 @@ function buildContext(sessionId) {
         uploadedFiles: msg.uploaded_files || [],
       });
     },
-    setSessionSpinner: () => {},
     addWorkerCard: () => {},
     updateWorkerStatus: () => {},
     updateSpinner: () => {},

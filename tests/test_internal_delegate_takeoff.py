@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import THREE_BACKEND_OPTIONS as VERIFY_BACKEND_OPTIONS
-from conftest import FakeSessionManager
+from conftest import FakeSessionManager, capture_create_logged_task
 from fastapi import HTTPException
 
 from src.api import internal
@@ -51,6 +51,45 @@ def _scheduled_trigger_event(content: str, timestamp: str | None = None) -> dict
   if timestamp is not None:
     event["timestamp"] = timestamp
   return event
+
+
+def _patch_delegate_spawn_rig(
+    monkeypatch: pytest.MonkeyPatch,
+    req: DelegateRequest,
+    session_mgr: Any,
+    thread_mgr: Any,
+    captured: dict[str, Any],
+) -> None:
+  """Install the resolve/spawn/create_logged_task/get_config fakes shared by the delegate_task
+  flow tests: the resolve fake asserts the session and requested backend, the spawn fake asserts
+  the managers it receives, and create_logged_task records the SpawnRequest locals for assertions."""
+  async def fake_resolve_requested_subagent_backend_model(
+      session_id: str,
+      cfg: Any,
+      mgr: Any,
+      requested_backend: str | None = None,
+  ) -> tuple[str, str]:
+    assert session_id == req.session_id
+    assert mgr is session_mgr
+    assert requested_backend == "codex-o3"
+    return "codex-o3", "o3"
+
+  async def fake_spawn_worker(
+      session_id: str,
+      description: str,
+      thread_id: str,
+      cfg: Any,
+      mgr: Any,
+      t_mgr: Any,
+      request: SpawnRequest | None = None,
+  ) -> None:
+    assert mgr is session_mgr
+    assert t_mgr is thread_mgr
+
+  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve_requested_subagent_backend_model)
+  monkeypatch.setattr(internal, "spawn_worker", fake_spawn_worker)
+  monkeypatch.setattr(internal, "create_logged_task", capture_create_logged_task(captured))
+  monkeypatch.setattr(internal, "get_config", lambda: object())
 
 
 def test_takeoff_gate_blocks_takeoff_followed_by_ordinary_user_message() -> None:
@@ -362,41 +401,8 @@ async def test_delegate_task_verify_skips_takeoff_gate_and_spawns_repoless(monke
   def fail_if_gate_runs(session_id: str) -> list[dict[str, Any]]:
     raise AssertionError(f"takeoff gate should not run for verify: {session_id}")
 
-  async def fake_resolve_requested_subagent_backend_model(
-      session_id: str,
-      cfg: Any,
-      mgr: Any,
-      requested_backend: str | None = None,
-  ) -> tuple[str, str]:
-    assert session_id == req.session_id
-    assert mgr is session_mgr
-    assert requested_backend == "codex-o3"
-    return "codex-o3", "o3"
-
-  async def fake_spawn_worker(
-      session_id: str,
-      description: str,
-      thread_id: str,
-      cfg: Any,
-      mgr: Any,
-      t_mgr: Any,
-      request: SpawnRequest | None = None,
-  ) -> None:
-    assert mgr is session_mgr
-    assert t_mgr is thread_mgr
-
-  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> Any:
-    del name
-    if coro.cr_frame is not None:
-      captured.update(coro.cr_frame.f_locals)
-    coro.close()
-    return object()
-
   session_mgr.load_chat_events_sync = fail_if_gate_runs  # type: ignore[method-assign]
-  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve_requested_subagent_backend_model)
-  monkeypatch.setattr(internal, "spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr(internal, "create_logged_task", fake_create_logged_task)
-  monkeypatch.setattr(internal, "get_config", lambda: object())
+  _patch_delegate_spawn_rig(monkeypatch, req, session_mgr, thread_mgr, captured)
 
   result = await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 
@@ -461,41 +467,8 @@ async def test_delegate_task_does_not_pass_takeoff_gate_to_spawn_worker(monkeypa
     assert session_id == req.session_id
     assert mgr is session_mgr
 
-  async def fake_resolve_requested_subagent_backend_model(
-      session_id: str,
-      cfg: Any,
-      mgr: Any,
-      requested_backend: str | None = None,
-  ) -> tuple[str, str]:
-    assert session_id == req.session_id
-    assert mgr is session_mgr
-    assert requested_backend == "codex-o3"
-    return "codex-o3", "o3"
-
-  async def fake_spawn_worker(
-      session_id: str,
-      description: str,
-      thread_id: str,
-      cfg: Any,
-      mgr: Any,
-      t_mgr: Any,
-      request: SpawnRequest | None = None,
-  ) -> None:
-    assert mgr is session_mgr
-    assert t_mgr is thread_mgr
-
-  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> Any:
-    del name
-    if coro.cr_frame is not None:
-      captured.update(coro.cr_frame.f_locals)
-    coro.close()
-    return object()
-
   monkeypatch.setattr(internal, "check_takeoff_gate", fake_takeoff_gate)
-  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve_requested_subagent_backend_model)
-  monkeypatch.setattr(internal, "spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr(internal, "create_logged_task", fake_create_logged_task)
-  monkeypatch.setattr(internal, "get_config", lambda: object())
+  _patch_delegate_spawn_rig(monkeypatch, req, session_mgr, thread_mgr, captured)
 
   result = await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 

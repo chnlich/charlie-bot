@@ -7,6 +7,7 @@ import pytest
 from conftest import (
   build_plan_cfg as _build_cfg,
 )
+from conftest import capture_create_logged_task
 from conftest import (
   make_plan_setup as _setup,
 )
@@ -314,19 +315,12 @@ async def test_delegate_sets_task_type_on_thread(tmp_path: Path, monkeypatch: py
   async def fake_spawn_worker(*args: Any, **kwargs: Any) -> None:
     return None
 
-  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> Any:
-    del name
-    if coro.cr_frame is not None:
-      captured_thread.update(coro.cr_frame.f_locals)
-    coro.close()
-    return object()
-
   async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
     return "claude-opus-4.6", "claude-opus-4-6"
 
   monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
   monkeypatch.setattr(internal, "spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr(internal, "create_logged_task", fake_create_logged_task)
+  monkeypatch.setattr(internal, "create_logged_task", capture_create_logged_task(captured_thread))
   monkeypatch.setattr(internal, "get_config", lambda: cfg)
   monkeypatch.setattr(internal, "check_takeoff_gate", lambda *a, **k: None)
 

@@ -181,11 +181,6 @@ class CharlieBotConfig(BaseModel):
   # Server
   server_port: int = 18498
 
-  # Externally reachable base URL of this server (e.g. "https://bot.example.com"),
-  # used to build file links for readers outside the host. Host-local: unset by
-  # default, and ``server_base_url`` (localhost) is no substitute for a remote reader.
-  public_base_url: str | None = None
-
   # Paths — resolved per instantiation so CHARLIEBOT_HOME selects the profile
   charliebot_home: Path = Field(default_factory=charliebot_home_dir)
 

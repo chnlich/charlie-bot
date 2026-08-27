@@ -35,11 +35,13 @@ from src.core.models import (
   SessionMessageRequest,
   SessionMetadata,
   SessionStatus,
+  SlackReplyRequest,
   SpawnRequest,
   TaskType,
   WatchKind,
 )
 from src.core.sessions import SessionManager
+from src.core.slack_listener import SlackReplyError, post_reply
 from src.core.spawner import (
   resolve_requested_subagent_backend_model,
   select_verify_backend,
@@ -351,6 +353,27 @@ async def session_message(
       content_chars=len(req.content),
   )
   return {"status": "accepted"}
+
+
+@router.post("/slack/reply")
+async def slack_reply(
+    req: SlackReplyRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
+):
+  """Post the calling session's reply to its own Slack thread and return the readback.
+
+  The in-process boundary behind ``charliebot slack reply``: the session's
+  ``slack_origin`` names the thread, the running round's input names the summon
+  the reply answers, and the readback (chars, chunks, over_budget, answers) is
+  what the CLI prints. Refusals map SlackReplyError's status (404 unknown
+  session, 409 no Slack thread, 422 blank text, 502 Slack rejected the post
+  after retries); nothing is persisted on a refusal.
+  """
+  try:
+    return await post_reply(req.session_id, req.text, cfg, session_mgr)
+  except SlackReplyError as exc:
+    raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shlex
 import shutil
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -12,6 +13,8 @@ import pytest
 from conftest import build_slack_cfg
 from conftest import cfg_with_repo as _cfg_with_repo
 
+from src.cli import slack as slack_cli
+from src.cli.main import _COMMANDS
 from src.core import event_types as ET
 from src.core.models import CreateSessionRequest, SlackOrigin
 from src.core.sessions import SessionManager
@@ -19,7 +22,6 @@ from src.core.slack_listener import (
   CITATION_BOUNDARY,
   SlackClient,
   _build_summon_prompt,
-  _extract_marker_reply,
   ensure_slack_group,
   handle_app_mention,
   summon_session_id,
@@ -174,22 +176,25 @@ def test_build_summon_prompt_appends_both_notices_after_the_citation_boundary(tm
   assert prompt.endswith(f"{CITATION_BOUNDARY}\n{_RED_LINE}\n{_REPLY_FORMAT}")
 
 
-def test_marker_round_trip_between_prompt_and_parser(tmp_path: Path) -> None:
-  """The marker line the contract states is the line the parser recognizes.
+def test_reply_command_round_trip_between_prompt_and_cli(tmp_path: Path) -> None:
+  """The command the contract names is the command the CLI dispatches.
 
-  The round trip breaks when the contract document and the parser ever disagree
-  on the marker: a contract edit drops the token the parser expects, and a
-  parser edit stops recognizing the token the contract states.
+  The round trip breaks when the contract document and the CLI ever disagree:
+  a contract edit names a verb the dispatcher lacks, or a CLI edit renames the
+  verb or its flag while the prompt still states the old form.
   """
   prompt = _build_summon_prompt(
       "https://fake.slack.test/archives/C_TEST/p1700000000.000100", build_slack_cfg(tmp_path))
-  marker_match = re.search(r"line that reads exactly `([^`]+)`", prompt)
-  assert marker_match is not None
-  marker_line = marker_match.group(1)
-  known_reply = "the known reply body"
-  extracted, marker_count = _extract_marker_reply(f"{marker_line}\n{known_reply}")
-  assert marker_count is None
-  assert extracted == known_reply
+  command_match = re.search(r"`(charliebot slack reply [^`]+)`", prompt)
+  assert command_match is not None
+  reply_file = tmp_path / "reply.md"
+  reply_file.write_text("the known reply body", encoding="utf-8")
+  tokens = shlex.split(command_match.group(1).replace("<path>", str(reply_file)))
+  assert tokens[0] == "charliebot"
+  assert _COMMANDS[tokens[1]] == slack_cli.__name__
+  args = slack_cli._build_parser().parse_args(tokens[2:])
+  assert args.slack_command == "reply"
+  assert slack_cli._read_reply_text(args.file) == "the known reply body"
 
 
 def test_build_summon_prompt_rereads_the_docs_on_every_call(tmp_path: Path) -> None:

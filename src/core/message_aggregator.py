@@ -204,6 +204,11 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
             "from_session": ev.get("from_session", ""),
             "from_session_name": ev.get("from_session_name", ""),
         },
+    ET.SLACK_REPLY:
+        lambda ev: {
+            "role": "system",
+            "content": f"Posted to Slack: {ev.get('content', '')}",
+        },
     ET.BACKEND_SWITCHED:
         _backend_switched_msg,
     ET.BACKEND_OVERLAY_INACTIVE:

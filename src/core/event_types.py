@@ -35,6 +35,12 @@ SCHEDULED_RUN_SKIPPED = "scheduled_run_skipped"
 # never a real user message (the authorization gate excludes it by type).
 AGENT_MESSAGE = "agent_message"
 
+# -- Slack -------------------------------------------------------------------
+# A reply the master posted to its session's Slack thread through
+# ``charliebot slack reply``; its ``slack_reply`` payload names the summon it
+# answers, which the round-end audit reads (src/core/slack_listener.py).
+SLACK_REPLY = "slack_reply"
+
 # -- Context -----------------------------------------------------------------
 CONTEXT_COMPACTED = "context_compacted"
 CONTEXT_COMPACT_FAILED = "context_compact_failed"

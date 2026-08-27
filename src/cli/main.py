@@ -7,6 +7,7 @@ Canonical invocations:
   charliebot schedule-trigger ...
   charliebot remote-launch ...
   charliebot session ...
+  charliebot slack reply --file <path>
 
 The legacy ``python -m src.cli.<command>`` entrypoints remain owned by their
 individual modules.
@@ -28,6 +29,7 @@ _COMMANDS = {
     "plan": "src.cli.plan",
     "memory": "src.cli.memory",
     "session": "src.cli.session",
+    "slack": "src.cli.slack",
 }
 
 

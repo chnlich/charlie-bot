@@ -4,20 +4,24 @@ Summon path: an allowed ``app_mention`` resolves/creates a per-thread session,
 persists the thread permalink as an agent message, and starts a master round
 via ``trigger_master`` (without awaiting it).
 
-Delivery path: ``deliver_done`` hangs off the round's terminal ``master_done``
+Reply path: the master posts to its session's thread itself, through
+``charliebot slack reply`` -> ``POST /api/internal/slack/reply`` -> ``post_reply``
+here, and reads the outcome back in the same call. The posted text is persisted
+as a ``slack_reply`` event whose ``answers`` names the summon the running round
+was answering (None for a round no summon started); a reply that answers a
+summon clears the summon's eyes ack.
+
+Round-end audit: ``deliver_done`` hangs off the round's terminal ``master_done``
 event (called from ``SessionManager.persist_and_broadcast``), not off a waiting
-coroutine — that is what makes delivery survive a server restart, since a
-re-attached round still emits its done through the same funnel. The reply is
-the marked reply block of the round's final composed assistant message: the
-text after a lone ``SLACK REPLY:`` marker line, posted in full — one round posts
-one message for any reply within Slack's per-message limit, and only a reply
-past that hard limit is split into ordered paragraph-bounded replies.
-``backfill_lost_summons`` closes the remaining hole at boot: a summon that was
-still queued when the process died is answered by nothing, so it gets a notice
-rather than vanishing.
-The eyes ack reaction tracks the round in flight: lit at the summon, cleared
-once the round's delivery attempt (normal or backfill) ends, whatever the post
-outcome.
+coroutine, so it survives a server restart. A summon round that ended without
+a reply wakes the master once through a nudge event (the summon's ``slack``
+block plus ``nudge_of``); a nudge round that still posted nothing gets a
+one-line notice in the thread. Every predicate reads the event log, so a
+replayed done is a no-op. ``backfill_lost_summons`` runs the same audit over
+every finished round at boot, after reporting the summons that were still
+queued when the process died.
+The eyes ack reaction tracks the open question: lit at the summon, cleared when
+a reply answering it lands, or when the notice or the lost-summon report closes it.
 """
 
 import asyncio
@@ -38,11 +42,9 @@ from src.core import event_types as ET
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
 from src.core.http import get_http_client
 from src.core.master_trigger import trigger_master
-from src.core.message_aggregator import extract_text_from_message
 from src.core.models import CreateSessionRequest, SessionStatus, SlackOrigin
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
-from src.core.verify_trailer import _normalize_line
 
 logger = structlog.get_logger()
 
@@ -71,11 +73,11 @@ _MAX_POST_CHARS = 40000
 # This is the single measurement point for that budget.
 _REPLY_BUDGET_CHARS = 500
 
-# The single authority for the marker line that starts a round's reply: the
-# reply-format contract (prompts/slack_reply_format.md) states the same string,
-# and the parser below treats a line as the marker only when its normalized form
-# equals this exactly.
-SLACK_REPLY_MARKER = "SLACK REPLY:"
+# The command the reply-format contract (prompts/slack_reply_format.md) names
+# for posting a reply. A summon prompt embeds that contract, so a summon whose
+# content names the command was issued under it; the round-end audit enforces
+# only that contract and leaves rounds issued under the earlier one alone.
+_REPLY_COMMAND = "charliebot slack reply"
 
 # Waits between the retries of one Slack call; the answer stays readable in the
 # session log either way, so exhausting them logs an error rather than raising.
@@ -85,6 +87,21 @@ _LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处
 
 _LOST_SUMMON_CONTENT = (
     "这条 Slack 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。")
+
+# Nudge event content: the summon round ended without a reply, so the master is
+# asked once whether the thread should hear something.
+_NUDGE_TEMPLATE = (
+    "Slack thread {link}: the round answering this mention ended without posting a reply\n"
+    "(no `charliebot slack reply` call). Decide now: when the thread should hear something, post it with\n"
+    "`charliebot slack reply --file <path>`; when there is nothing to say, end this round and the thread\n"
+    "gets a one-line notice pointing to this session.")
+
+# Thread-visible end state after a summon round and its nudge round both posted nothing.
+_NO_REPLY_NOTICE = ("No reply was posted for this mention; the details are in the session log. "
+                    "Mention me again for a thread answer.")
+
+# Session-log content of the notice marker; its ``slack_notice`` payload names the summon it closes.
+_NO_REPLY_CONTENT = "This Slack mention got no reply from its round or the nudge round; the thread was told so."
 
 
 def summon_session_id(team_id: str, channel_id: str, thread_ts: str) -> str:
@@ -320,12 +337,12 @@ async def handle_app_mention(event: dict, cfg, session_mgr, client: SlackClient)
 
 
 # ---------------------------------------------------------------------------
-# Reply delivery
+# Shared Slack plumbing
 # ---------------------------------------------------------------------------
 
 
 def _bot_client(cfg: CharlieBotConfig) -> SlackClient:
-  """The client every outbound path (delivery, backfill) posts through."""
+  """The client every outbound path (reply, notice, backfill) posts through."""
   return SlackClient(get_http_client(), bot_token=cfg.slack_bot_token, app_token=cfg.slack_app_token)
 
 
@@ -334,8 +351,8 @@ async def _post_with_retry(client: SlackClient, channel: str, thread_ts: str, te
   """Post one thread reply, retrying on failure; True when Slack accepted it.
 
   Exhausting the retries logs an error and returns False instead of raising:
-  the answer is readable in the session log either way, and delivery must never
-  break the caller (the event funnel, or the rest of a backfill pass).
+  the caller decides what a failed post means (a 502 to the CLI, a notice
+  left for the boot audit), and the event funnel is never broken by one.
   """
   attempts = len(_RETRY_DELAYS) + 1
   for attempt in range(attempts):
@@ -353,10 +370,10 @@ async def _post_with_retry(client: SlackClient, channel: str, thread_ts: str, te
 
 
 def _ack_clear(client: SlackClient, slack_block: dict, session_id: str) -> None:
-  """Clear the summon eye once its round's delivery attempt has ended.
+  """Clear the summon eye once its question is closed (reply landed, notice posted, or lost).
 
   Fires the remove as its own logged task — a failure there only leaves one
-  stale eye plus a background_task_failed log and never touches the delivery
+  stale eye plus a background_task_failed log and never touches the caller's
   result. Skipped when the persisted slack block carries no mention_ts.
   """
   mention_ts = slack_block.get("mention_ts")
@@ -365,82 +382,6 @@ def _ack_clear(client: SlackClient, slack_block: dict, session_id: str) -> None:
   create_logged_task(
       client.remove_reaction(slack_block["channel_id"], _ACCEPTANCE_REACTION, mention_ts),
       name=f"slack-ack-clear-{session_id}")
-
-
-def _slack_target(events: list[dict], input_event_id: str) -> dict | None:
-  """The ``slack`` block of the event this round answers, or None when it has none.
-
-  None covers both "no such event" and "a message the user typed into this same
-  session from the browser": neither is a Slack injection, so neither delivers.
-  """
-  for ev in events:
-    if ev.get("id") == input_event_id:
-      return ev.get("slack")
-  return None
-
-
-def _already_answered(events: list[dict], done_idx: int, input_event_id: str) -> bool:
-  """True when an earlier master_done in the log already answered *input_event_id*.
-
-  The window between the done persist and the master_run clear
-  (src/agents/master_cc.py) can replay a round, and a resumed failed round
-  carries ``exit_code = -1``, so exit code cannot be the discriminator.
-  """
-  return any(
-      ev.get("type") == ET.MASTER_DONE and ev.get("input_event_id") == input_event_id
-      for ev in events[:done_idx])
-
-
-def _round_text(events: list[dict], done_idx: int) -> str:
-  """The window's last assistant message carrying content: the round's composed reply.
-
-  Middle assistant messages are work narration ("let me look at…"); the reply
-  to the summoner is composed in the last one, per the reply-format notice in
-  the summon prompt, so only that one is posted. Empty or whitespace-only
-  messages don't qualify. The window still starts after the previous
-  master_done: slicing from the summon instead would sweep in a previous
-  round's answer when the summon queued behind another round.
-  """
-  start = 0
-  for idx in range(done_idx - 1, -1, -1):
-    if events[idx].get("type") == ET.MASTER_DONE:
-      start = idx + 1
-      break
-  for idx in range(done_idx - 1, start - 1, -1):
-    if events[idx].get("type") != ET.ASSISTANT:
-      continue
-    text = extract_text_from_message(events[idx].get("message"))
-    if text.strip():
-      return text
-  return ""
-
-
-def _extract_marker_reply(text: str) -> tuple[str, int | None]:
-  """The text after the marker line, or a failure count when it is not unique.
-
-  Returns ``(reply, None)`` for exactly one marker line, ``("", n)`` for n !=
-  1 marker lines. A marker line is a whole normalized line equal to
-  ``SLACK_REPLY_MARKER``; an occurrence inside a sentence is not one. The reply
-  keeps the text after the marker verbatim, minus leading blank lines. Zero and
-  many marker lines are reported apart so the caller can log them differently.
-  """
-  count = 0
-  marker_end = 0
-  offset = 0
-  for raw_line in text.splitlines(keepends=True):
-    if _normalize_line(raw_line) == SLACK_REPLY_MARKER:
-      count += 1
-      marker_end = offset + len(raw_line)
-    offset += len(raw_line)
-  if count != 1:
-    return "", count
-  reply = text[marker_end:]
-  leading = 0
-  for line in reply.splitlines(keepends=True):
-    if line.strip():
-      break
-    leading += len(line)
-  return reply[leading:], None
 
 
 def _chunk_text(text: str, limit: int = _MAX_POST_CHARS) -> list[str]:
@@ -480,78 +421,206 @@ def _chunk_text(text: str, limit: int = _MAX_POST_CHARS) -> list[str]:
   return [c for c in chunks if c.strip()] or chunks
 
 
+def _event_by_id(events: list[dict], event_id: str) -> dict | None:
+  for ev in events:
+    if ev.get("id") == event_id:
+      return ev
+  return None
+
+
+def _slack_target(events: list[dict], input_event_id: str) -> dict | None:
+  """The ``slack`` block of the event a round answers, or None when it has none.
+
+  None covers both "no such event" and "a message the user typed into this same
+  session from the browser": neither is a Slack injection, so neither is audited.
+  """
+  ev = _event_by_id(events, input_event_id)
+  return ev.get("slack") if ev is not None else None
+
+
+def _summon_of(slack_block: dict, event_id: str) -> str:
+  """The summon a round with this slack block answers: the block's ``nudge_of`` for a nudge, else the event itself."""
+  return slack_block.get("nudge_of") or event_id
+
+
+# ---------------------------------------------------------------------------
+# Reply: the master posts to its own thread
+# ---------------------------------------------------------------------------
+
+
+class SlackReplyError(Exception):
+  """A reply the endpoint refuses or Slack did not accept; ``status`` is the HTTP status it maps to."""
+
+  def __init__(self, status: int, detail: str) -> None:
+    super().__init__(detail)
+    self.status = status
+    self.detail = detail
+
+
+def _bound_summon(events: list[dict], meta) -> tuple[str, dict] | None:
+  """``(summon_id, slack block)`` of the summon the running round answers, or None.
+
+  The running round's input is ``master_run.user_event_id``; only an input that
+  carries a slack block (a summon or its nudge) binds the reply to a summon. A
+  browser-typed message, a trigger wake, or no recorded run binds nothing.
+  """
+  run = meta.master_run
+  if run is None or run.user_event_id is None:
+    return None
+  ev = _event_by_id(events, run.user_event_id)
+  block = ev.get("slack") if ev is not None else None
+  if block is None:
+    return None
+  return _summon_of(block, ev["id"]), block
+
+
+async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig,
+                     session_mgr: SessionManager) -> dict:
+  """Post *text* to the session's Slack thread and return the readback the CLI prints.
+
+  Refusals raise ``SlackReplyError``: 404 unknown session, 409 no Slack thread,
+  422 blank text, 502 when a chunk exhausted its retries (nothing is persisted
+  then, so the caller can retry). On success the ``slack_reply`` event records
+  the text, the summon it answers, and the chunk count; a reply that answers a
+  summon clears that summon's eyes.
+  """
+  meta = await session_mgr.get_session(session_id)
+  if meta is None:
+    raise SlackReplyError(404, "Session not found")
+  if meta.slack_origin is None:
+    raise SlackReplyError(409, "Session has no Slack thread")
+  if not text.strip():
+    raise SlackReplyError(422, "Reply text is empty")
+
+  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+  bound = _bound_summon(events, meta)
+  answers = bound[0] if bound is not None else None
+  origin = meta.slack_origin
+  client = _bot_client(cfg)
+  bodies = _chunk_text(text)
+  for index, body in enumerate(bodies, start=1):
+    ok = await _post_with_retry(client, origin.channel_id, origin.thread_ts, body, session_id=session_id)
+    if not ok:
+      raise SlackReplyError(
+          502, f"Slack did not accept chunk {index} of {len(bodies)} after {len(_RETRY_DELAYS) + 1} "
+          "attempts; nothing was persisted")
+
+  await session_mgr.persist_and_broadcast(session_id, {
+      "type": ET.SLACK_REPLY,
+      "content": text,
+      "slack_reply": {"answers": answers, "chars": len(text), "chunks": len(bodies)},
+  })
+  if bound is not None:
+    _ack_clear(client, bound[1], session_id)
+  over_budget = len(text) > _REPLY_BUDGET_CHARS
+  logger.info("slack_reply_posted", session=session_id, channel=origin.channel_id,
+              thread_ts=origin.thread_ts, chars=len(text), chunks=len(bodies), over_budget=over_budget,
+              budget=_REPLY_BUDGET_CHARS, answers=answers)
+  return {"posted": True, "chars": len(text), "chunks": len(bodies), "over_budget": over_budget,
+          "answers": answers}
+
+
+# ---------------------------------------------------------------------------
+# Round-end audit
+# ---------------------------------------------------------------------------
+
+
+def _replied(events: list[dict], summon_id: str) -> bool:
+  return any(
+      ev.get("type") == ET.SLACK_REPLY and (ev.get("slack_reply") or {}).get("answers") == summon_id
+      for ev in events)
+
+
+def _nudged(events: list[dict], summon_id: str) -> bool:
+  return any(
+      ev.get("type") == ET.AGENT_MESSAGE and (ev.get("slack") or {}).get("nudge_of") == summon_id
+      for ev in events)
+
+
+def _noticed(events: list[dict], summon_id: str) -> bool:
+  return any((ev.get("slack_notice") or {}).get("input_event_id") == summon_id for ev in events)
+
+
+def _thread_link(summon: dict | None, slack_block: dict) -> str:
+  """The thread permalink as the summon prompt states it; channel and thread ids when it has none."""
+  match = re.search(r"https?://\S+", (summon or {}).get("content") or "")
+  if match is not None:
+    return match.group(0)
+  return f"(channel {slack_block['channel_id']}, thread {slack_block['thread_ts']})"
+
+
+async def _audit_round(session_id: str, events: list[dict], target: dict, input_event_id: str,
+                       cfg: CharlieBotConfig, session_mgr: SessionManager, client: SlackClient) -> bool:
+  """Act on one finished round whose input carried a slack block; True when it acted.
+
+  Reads the log for the round's summon: a reply answering it ends the audit. A
+  summon round without one gets a nudge (once: a second done for the same
+  summon finds the nudge event); a nudge round without one gets the thread
+  notice (once: the ``slack_notice`` marker, persisted only after the post
+  succeeded, so a failed post leaves the boot audit a retry). A summon issued
+  under the marker contract (its prompt names no reply command) is outside
+  this audit.
+  """
+  summon_id = _summon_of(target, input_event_id)
+  summon = _event_by_id(events, summon_id)
+  if _REPLY_COMMAND not in ((summon or {}).get("content") or ""):
+    return False
+  if _replied(events, summon_id):
+    return False
+
+  if "nudge_of" not in target:
+    if _nudged(events, summon_id):
+      return False
+    content = _NUDGE_TEMPLATE.format(link=_thread_link(summon, target))
+    nudge = build_agent_message_event(content, from_session=session_id, from_session_name="Slack")
+    nudge["slack"] = {key: target[key] for key in ("channel_id", "thread_ts", "mention_ts") if key in target}
+    nudge["slack"]["nudge_of"] = summon_id
+    await session_mgr.persist_and_broadcast(session_id, nudge)
+    create_logged_task(
+        trigger_master(session_id, content, cfg, session_mgr, user_event_id=nudge["id"]),
+        name=f"slack-nudge-{session_id}")
+    logger.info("slack_reply_nudge", session=session_id, channel=target["channel_id"],
+                thread_ts=target["thread_ts"], summon_id=summon_id, nudge_id=nudge["id"])
+    return True
+
+  if _noticed(events, summon_id):
+    return False
+  ok = await _post_with_retry(
+      client, target["channel_id"], target["thread_ts"], _NO_REPLY_NOTICE, session_id=session_id)
+  if not ok:
+    return False  # slack_post_gave_up is logged; no marker, so the boot audit posts it later
+  await session_mgr.persist_and_broadcast(session_id, {
+      "type": ET.ASSISTANT_ERROR,
+      "content": _NO_REPLY_CONTENT,
+      "slack_notice": {"input_event_id": summon_id},
+  })
+  _ack_clear(client, target, session_id)
+  logger.info("slack_reply_notice", session=session_id, channel=target["channel_id"],
+              thread_ts=target["thread_ts"], summon_id=summon_id)
+  return True
+
+
 async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
                        session_mgr: SessionManager) -> bool:
-  """Post one finished round's answer back to the Slack thread it was summoned from.
+  """Round-end audit for one finished round; True when it nudged or posted the notice.
 
   Called as a fire-and-forget task from ``persist_and_broadcast`` for every
-  ``master_done``; returns False without posting unless the round belongs to a
-  Slack injection that no earlier done already answered. When the round's last
-  message carries exactly one marker line, only the marked reply block is
-  posted, split into ordered thread replies when it exceeds one post's budget;
-  a missing or ambiguous marker posts nothing and keeps the ack reaction.
-  Returns True when every reply of the round reached Slack.
+  ``master_done``; returns False without acting unless the round belongs to a
+  Slack session and answered a summon or a nudge. Guard-path dones
+  (src/api/chat.py) carry no input_event_id and browser-typed rounds carry no
+  slack block, so both leave the thread alone.
   """
   meta = await session_mgr.get_session(session_id)
   if meta is None or meta.slack_origin is None:
     return False
-
   input_event_id = done.get("input_event_id")
   if input_event_id is None:
-    return False  # guard-path dones (src/api/chat.py) answer no recorded event
-
+    return False
   events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
   target = _slack_target(events, input_event_id)
   if target is None:
     return False
-
-  done_id = done["id"]
-  done_idx = next((i for i in range(len(events) - 1, -1, -1) if events[i].get("id") == done_id), None)
-  if done_idx is None:
-    raise RuntimeError(f"master_done {done_id} missing from session {session_id} log")
-  if _already_answered(events, done_idx, input_event_id):
-    logger.info("slack_delivery_duplicate_done", session=session_id, input_event_id=input_event_id,
-                exit_code=done.get("exit_code"))
-    return False
-
-  thread_ts = target["thread_ts"]
-  text = _round_text(events, done_idx)
-  if not text:
-    bodies = [f"这一轮没有产生任何回复内容（exit_code={done.get('exit_code')}），请到会话里查看详情。"]
-    measured = text  # the empty-round notice reports the empty round text itself
-  else:
-    reply, marker_count = _extract_marker_reply(text)
-    if marker_count is None:
-      if not reply.strip():
-        logger.error("slack_reply_marker_empty", session=session_id,
-                     input_event_id=input_event_id)
-        return False
-      bodies = _chunk_text(reply)
-      measured = reply
-    elif marker_count == 0:
-      logger.error("slack_reply_marker_missing", session=session_id,
-                   input_event_id=input_event_id)
-      return False
-    else:
-      logger.error("slack_reply_marker_ambiguous", session=session_id,
-                   input_event_id=input_event_id, marker_count=marker_count)
-      return False
-
-  # A chunk that exhausts its retries is already logged by _post_with_retry;
-  # keep posting the rest: the full text lives in the session log regardless,
-  # and partial delivery beats none.
-  posted = True
-  client = _bot_client(cfg)
-  for body in bodies:
-    ok = await _post_with_retry(client, target["channel_id"], thread_ts, body, session_id=session_id)
-    posted = posted and ok
-  logger.info("slack_delivery_done", session=session_id, channel=target["channel_id"],
-              thread_ts=thread_ts, input_event_id=input_event_id, chars=len(measured),
-              chunks=len(bodies), posted=posted, over_budget=len(measured) > _REPLY_BUDGET_CHARS,
-              budget=_REPLY_BUDGET_CHARS)
-  # The delivery attempt ended: the eye goes out whether or not it posted.
-  _ack_clear(client, target, session_id)
-  return posted
+  return await _audit_round(session_id, events, target, input_event_id, cfg, session_mgr, _bot_client(cfg))
 
 
 # ---------------------------------------------------------------------------
@@ -562,10 +631,11 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
 def _lost_summons(events: list[dict], *, owned: set[str], running: str | None) -> list[dict]:
   """The Slack injections in one session's log that nothing will ever answer.
 
-  A summon is lost when no master_done names it, this process does not already
-  own it (queued or running), the session's master_run record does not name it
-  (alive but not followable), and no earlier backfill marked it. The marker is
-  the ``slack_backfill`` payload, never a synthetic master_done: that event is
+  A summon (or a nudge: it carries the same slack block) is lost when no
+  master_done names it, this process does not already own it (queued or
+  running), the session's master_run record does not name it (alive but not
+  followable), and no earlier backfill marked it. The marker is the
+  ``slack_backfill`` payload, never a synthetic master_done: that event is
   the cut point replay uses to decide which user messages are still unanswered.
   """
   answered = {ev.get("input_event_id") for ev in events if ev.get("type") == ET.MASTER_DONE}
@@ -578,10 +648,14 @@ def _lost_summons(events: list[dict], *, owned: set[str], running: str | None) -
 
 
 async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManager) -> int:
-  """Report every Slack summon lost while queued; returns how many were reported.
+  """Boot pass over every Slack session; returns how many notices and nudges it produced.
 
-  The startup replay covers ``ET.USER`` only (src/core/init.py), so a Slack
-  injection sitting in the queue when the process died is picked up by nothing.
+  First the summons lost while queued: the startup replay covers ``ET.USER``
+  only (src/core/init.py), so a Slack injection sitting in the queue when the
+  process died is picked up by nothing else and gets the lost-summon notice.
+  Then the round-end audit over every finished round, which closes the crash
+  windows between a done and its nudge, and between a nudge round's done and
+  its notice. Every predicate reads the log, so a second pass finds nothing.
   Runs once per boot, after re-attach and replay have had their chance.
   """
   from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
@@ -612,6 +686,18 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
       reported += 1
       logger.info("slack_backfill_lost_summon", session=meta.id, channel=slack["channel_id"],
                   thread_ts=slack["thread_ts"], input_event_id=ev["id"])
+    if lost:
+      events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
+
+    dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and ev.get("input_event_id")]
+    for done in dones:
+      target = _slack_target(events, done["input_event_id"])
+      if target is None:
+        continue
+      if await _audit_round(meta.id, events, target, done["input_event_id"], cfg, session_mgr, client):
+        reported += 1
+        # The action appended an event the next done's predicates must see.
+        events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
   return reported
 
 

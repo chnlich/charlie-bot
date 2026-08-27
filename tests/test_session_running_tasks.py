@@ -14,12 +14,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import make_home_session
 
 from src.core import init as init_module
 from src.core import init_worker_recovery as worker_recovery_module
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, utc_now
-from src.core.sessions import SessionManager
+from src.core.models import utc_now
 
 
 def _write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Path:
@@ -32,9 +32,7 @@ def _write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Pa
 
 @pytest.mark.asyncio
 async def test_has_running_tasks_true_for_recent_running_thread(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Live"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="Live")
   _write_thread_meta(cfg, session.id, {"id": "t1", "status": "running"})
 
   assert await mgr._has_running_tasks(session.id) is True
@@ -43,9 +41,7 @@ async def test_has_running_tasks_true_for_recent_running_thread(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_has_running_tasks_false_for_stale_running_thread_without_reading_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Stale"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="Stale")
   stale = _write_thread_meta(cfg, session.id, {"id": "t1", "status": "running"})
   # Age the metadata mtime past the window: an old 'running' is a crashed orphan.
   old_ts = (utc_now() - init_module.RUNNING_SCAN_WINDOW - timedelta(days=1)).timestamp()
@@ -67,8 +63,6 @@ async def test_has_running_tasks_false_for_stale_running_thread_without_reading_
 
 @pytest.mark.asyncio
 async def test_has_running_tasks_false_when_no_threads(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Empty"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="Empty")
 
   assert await mgr._has_running_tasks(session.id) is False

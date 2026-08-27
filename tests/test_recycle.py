@@ -8,16 +8,14 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET
+from conftest import BROADCAST_PATCH_TARGET, make_home_session
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
 
 from src.api.message_utils import build_session_bootstrap_data, build_session_view_data
 from src.api.sessions import get_session_events_page
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, ThreadMetadata, ThreadStatus
-from src.core.sessions import SessionManager
+from src.core.models import ThreadMetadata, ThreadStatus
 
 
 def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, completed_at: datetime | None) -> None:
@@ -37,9 +35,7 @@ def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, compl
 
 @pytest.mark.asyncio
 async def test_recycle_deletes_only_old_terminal_threads(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
   threads_dir = cfg.sessions_dir / session.id / "threads"
 
   now = datetime.now(timezone.utc)
@@ -73,9 +69,7 @@ async def test_recycle_deletes_only_old_terminal_threads(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   cutoff, events = _archive_cutoff_events()
   live_path = mgr.get_chat_events_path(session.id)
@@ -117,9 +111,7 @@ async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_recycle_noop_when_nothing_old(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   cutoff = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
   events = [
@@ -146,9 +138,7 @@ async def test_recycle_noop_when_nothing_old(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_load_chat_events_range_spans_archive_and_live(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   cutoff, events = _archive_cutoff_events()
   live_path = mgr.get_chat_events_path(session.id)
@@ -173,9 +163,7 @@ async def test_load_chat_events_range_spans_archive_and_live(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   cutoff, events = _archive_cutoff_events()
   _append_events(mgr.get_chat_events_path(session.id), events)
@@ -199,9 +187,7 @@ async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_session_bootstrap_uses_tail_without_thread_or_usage_load(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
   # Turns of (user, separator) so tail(2) returns exactly the last turn.
   events = []
   for i in range(4):
@@ -222,9 +208,7 @@ async def test_session_bootstrap_uses_tail_without_thread_or_usage_load(tmp_path
 
 @pytest.mark.asyncio
 async def test_events_page_returns_raw_next_before_for_aggregated_messages(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
   events = [
       {
           "type": ET.TOOL_USE,

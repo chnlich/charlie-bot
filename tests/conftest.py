@@ -216,6 +216,19 @@ def make_session_mgr(tmp_path: Path) -> SessionManager:
   return SessionManager(cfg)
 
 
+async def make_home_session(
+    tmp_path: Path, *, name: str, backend: str | None = None
+) -> tuple[CharlieBotConfig, SessionManager, models.SessionMetadata]:
+  """(cfg, SessionManager, one created session) over a CharlieBotConfig rooted at tmp_path/"home";
+  backend=None takes create_session's default (the first registered backend). A test needing more
+  sessions calls mgr.create_session directly; a test needing no session builds the cfg/mgr pair
+  inline."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  session = await mgr.create_session(models.CreateSessionRequest(name=name), backend=backend)
+  return cfg, mgr, session
+
+
 def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
   """TestClient mounting the sessions router with cfg/session_mgr as dependency overrides; a test needing
   extra routers or overrides builds its own FastAPI app."""

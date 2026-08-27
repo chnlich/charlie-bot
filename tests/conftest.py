@@ -971,6 +971,22 @@ class ReviewSpawnSessionManager(JudgmentShim):
     return models.SessionMetadata(id=session_id, name=self._session_name, backend="claude-opus-4.6")
 
 
+class SpawnFlowSessionManager(JudgmentShim):
+  """SessionManager double for spawner spawn/finalize flow tests.
+
+  Callers rely on get_session answering a bare SessionMetadata for any id and on
+  persist_and_broadcast absorbing broadcast events: JudgmentShim's
+  deliver_to_successor default, which the finalize chain's delivery paths call,
+  routes into it.
+  """
+
+  async def get_session(self, session_id: str) -> models.SessionMetadata:
+    return models.SessionMetadata(id=session_id, name="Test Session")
+
+  async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
+    pass
+
+
 class ReviewSpawnThreadManager(JudgmentShim):
   """ThreadManager double for spawn_review_worker tests: builds and records the review thread.
 

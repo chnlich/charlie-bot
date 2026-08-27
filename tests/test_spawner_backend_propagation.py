@@ -8,6 +8,7 @@ from conftest import (
   JudgmentShim,
   ReviewSpawnSessionManager,
   ReviewSpawnThreadManager,
+  SpawnFlowSessionManager,
   build_worker_prompt,
   capturing_worker,
   make_fake_git_create_worktree,
@@ -330,17 +331,6 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
   )
   captures: dict[str, Any] = {}
 
-  class FakeSessionManager(JudgmentShim):
-
-    async def get_session(self, session_id: str) -> Any:
-      return SessionMetadata(id=session_id, name="Test Session")
-
-    async def save_chat_event(self, session_id: str, event: dict[str, Any]) -> None:
-      captures["chat_event"] = event
-
-    async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
-      captures["broadcast_event"] = event
-
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(
       spawner_launch, "git_create_worktree", make_fake_git_create_worktree(captures=captures))
@@ -352,7 +342,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
       description="Do work",
       thread_id="thread-1",
       cfg=cfg,
-      session_mgr=FakeSessionManager(),
+      session_mgr=SpawnFlowSessionManager(),
       thread_mgr=CapturingThreadManager(thread, captures, events_log),
       request=SpawnRequest(
           repo_path=str(repo_path),
@@ -703,17 +693,6 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
   )
   captures: dict[str, Any] = {}
 
-  class FakeSessionManager(JudgmentShim):
-
-    async def get_session(self, session_id: str) -> Any:
-      return SessionMetadata(id=session_id, name="Test Session")
-
-    async def save_chat_event(self, session_id: str, event: dict[str, Any]) -> None:
-      captures["chat_event"] = event
-
-    async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
-      captures["broadcast_event"] = event
-
   monkeypatch = pytest.MonkeyPatch()
   monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
@@ -723,7 +702,7 @@ async def test_spawn_worker_repoless_disables_review_and_uses_thread_dir(tmp_pat
       description="Prompt task",
       thread_id="thread-1",
       cfg=cfg,
-      session_mgr=FakeSessionManager(),
+      session_mgr=SpawnFlowSessionManager(),
       thread_mgr=CapturingThreadManager(thread, captures, events_log, cfg.sessions_dir),
       request=SpawnRequest(
           resolved_backend="codex-o3",

@@ -37,6 +37,7 @@ from src.cli.claude_sub_bridge import (
   PromptDelivery,
 )
 from src.core.config import charliebot_home_dir
+from src.core.json_utils import write_json_atomically
 from src.core.process import kill_process_group
 
 _MIN_CLAUDE_VERSION = (2, 1, 210)
@@ -308,9 +309,7 @@ def _read_marker(session_id: str) -> SessionMarkerState | None:
 def _write_marker(session_id: str, state: SessionMarkerState) -> None:
   path = _marker_path(session_id)
   path.parent.mkdir(parents=True, exist_ok=True)
-  temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-  temporary.write_text(json.dumps({"state": state.value}, separators=(",", ":")) + "\n", encoding="utf-8")
-  os.replace(temporary, path)
+  write_json_atomically(path, {"state": state.value}, newline=True)
 
 
 def _claude_user_config_paths() -> tuple[Path, Path, Path, Path]:
@@ -335,10 +334,7 @@ def _session_config_dir(session_id: str) -> Path:
 
 
 def _write_json_atomically(path: Path, value: dict[str, Any]) -> None:
-  temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-  temporary.write_text(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
-  os.chmod(temporary, 0o600)
-  os.replace(temporary, path)
+  write_json_atomically(path, value, newline=True, private=True)
 
 
 def _read_json_object(path: Path, description: str) -> dict[str, Any]:

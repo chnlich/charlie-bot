@@ -176,11 +176,7 @@ class ClaudeCodeBackend(AgentBackend):
 
   def _prepare_cwd(self, cwd: str) -> None:
     """Write CLAUDE.md into the cwd so Claude Code auto-detects it."""
-    if not self._instructions_content:
-      return
-    claude_md = Path(cwd) / "CLAUDE.md"
-    claude_md.write_text(self._instructions_content, encoding="utf-8")
-    log.debug("claude_code_wrote_claude_md", path=str(claude_md))
+    self._write_instructions_file(cwd, "CLAUDE.md", "claude_code_wrote_claude_md")
 
   def _prepare_env(self, env: dict) -> dict:
     out = {**env, **headless_claude_env()}

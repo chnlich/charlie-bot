@@ -50,11 +50,7 @@ class CodexBackend(AgentBackend):
 
   def _prepare_cwd(self, cwd: str) -> None:
     """Write AGENTS.md into the cwd so Codex auto-detects it."""
-    if not self._instructions_content:
-      return
-    agents_md = Path(cwd) / 'AGENTS.md'
-    agents_md.write_text(self._instructions_content, encoding='utf-8')
-    log.debug('codex_wrote_agents_md', path=str(agents_md))
+    self._write_instructions_file(cwd, 'AGENTS.md', 'codex_wrote_agents_md')
 
   def _model_config_args(self) -> list[str]:
     args = ["--config", f'model_reasoning_effort="{self._model_reasoning_effort}"']

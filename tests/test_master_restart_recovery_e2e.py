@@ -35,7 +35,6 @@ Scenarios:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import select
@@ -50,7 +49,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from conftest import patch_instructions_content
+from conftest import (
+  MASTER_RECOVERY_TASK_PREFIXES,
+  await_recovery_tasks,
+  patch_instructions_content,
+)
 from structlog.testing import capture_logs
 from test_restart_recovery_e2e import _wait_for
 
@@ -278,16 +281,7 @@ def _shim_prompt(state: Path, n: int) -> str:
 
 
 async def _await_recovery_tasks() -> None:
-  prefixes = ("resume-", "respawn-", "recomplete-", "master-resume-", "master-replay-", "master-consumer-")
-  current = asyncio.current_task()
-  while True:
-    pending = [
-        t for t in asyncio.all_tasks()
-        if t is not current and not t.done() and t.get_name().startswith(prefixes)
-    ]
-    if not pending:
-      return
-    await asyncio.gather(*pending)
+  await await_recovery_tasks(MASTER_RECOVERY_TASK_PREFIXES)
 
 
 def _install_shim(tmp_path: Path) -> tuple[Path, Path]:

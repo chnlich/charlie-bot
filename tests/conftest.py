@@ -1064,3 +1064,29 @@ def patch_review_spawn_path(monkeypatch: pytest.MonkeyPatch, captured: dict[str,
   monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
   monkeypatch.setattr(spawner, "spawn_worker", fake_spawn_worker)
   monkeypatch.setattr(review, "create_logged_task", capture_create_logged_task(captured))
+
+
+# Crash-recovery follow-ups are dispatched through create_logged_task under fixed name
+# prefixes: resume-drain/resume-follow/respawn-worker/recomplete-finalize in
+# src/core/init_worker_recovery.py, master-resume/master-replay in
+# src/core/init_master_recovery.py, master-consumer in src/agents/master_cc_queue.py.
+# A recovery test must drain those tasks before asserting on rewritten metadata.
+RECOVERY_TASK_PREFIXES = ("resume-", "respawn-", "recomplete-")
+MASTER_RECOVERY_TASK_PREFIXES = RECOVERY_TASK_PREFIXES + ("master-resume-", "master-replay-", "master-consumer-")
+
+
+async def await_recovery_tasks(prefixes: tuple[str, ...]) -> None:
+  """Gather every unfinished named recovery task, repeating until none is left.
+
+  A drained task may itself dispatch another named recovery task, so one gather
+  pass can still leave work pending.
+  """
+  current = asyncio.current_task()
+  while True:
+    pending = [
+        t for t in asyncio.all_tasks()
+        if t is not current and not t.done() and t.get_name().startswith(prefixes)
+    ]
+    if not pending:
+      return
+    await asyncio.gather(*pending)

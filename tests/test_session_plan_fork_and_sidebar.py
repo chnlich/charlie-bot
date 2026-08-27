@@ -21,6 +21,10 @@ from src.core.models import CreateSessionRequest, SessionStatus
 from src.core.sessions import SessionManager
 
 
+_PLAN_V1_REL = "artifacts/plan_01.html"
+_PLAN_V2_REL = "artifacts/plan_02.html"
+
+
 def _make_plan(
     plan_id: int,
     versions: list[dict],
@@ -76,12 +80,12 @@ async def test_fork_copies_plans_json_and_referenced_artifacts(tmp_path: Path) -
   parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
-  _write_artifact(cfg, parent.id, "artifacts/plan_01.html", "<html>v1</html>")
-  _write_artifact(cfg, parent.id, "artifacts/plan_02.html", "<html>v2</html>")
+  _write_artifact(cfg, parent.id, _PLAN_V1_REL, "<html>v1</html>")
+  _write_artifact(cfg, parent.id, _PLAN_V2_REL, "<html>v2</html>")
   _write_plans(cfg, parent.id, {"plans": [
       _make_plan(1, [
-          _make_version(1, "artifacts/plan_01.html", "clean"),
-          _make_version(2, "artifacts/plan_02.html", "pending"),
+          _make_version(1, _PLAN_V1_REL, "clean"),
+          _make_version(2, _PLAN_V2_REL, "pending"),
       ], title="My Plan"),
   ]})
 
@@ -93,9 +97,9 @@ async def test_fork_copies_plans_json_and_referenced_artifacts(tmp_path: Path) -
   parent_plans = json.loads((cfg.sessions_dir / parent.id / "plans.json").read_text(encoding="utf-8"))
   assert child_plans == parent_plans, "relative registry paths and all other fields carry over"
 
-  assert (cfg.sessions_dir / child.id / "artifacts/plan_01.html").exists()
-  assert (cfg.sessions_dir / child.id / "artifacts/plan_02.html").exists()
-  assert (cfg.sessions_dir / child.id / "artifacts/plan_01.html").read_text(encoding="utf-8") == "<html>v1</html>"
+  assert (cfg.sessions_dir / child.id / _PLAN_V1_REL).exists()
+  assert (cfg.sessions_dir / child.id / _PLAN_V2_REL).exists()
+  assert (cfg.sessions_dir / child.id / _PLAN_V1_REL).read_text(encoding="utf-8") == "<html>v1</html>"
 
 
 @pytest.mark.asyncio
@@ -105,7 +109,7 @@ async def test_fork_normalizes_absolute_in_session_paths_and_copies_distinct_fil
   parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
-  artifact_rel = "artifacts/plan_01.html"
+  artifact_rel = _PLAN_V1_REL
   artifact = _write_artifact(cfg, parent.id, artifact_rel, "<html>absolute</html>")
   parent_plans = _write_plans(cfg, parent.id, {"plans": [
       _make_plan(1, [_make_version(1, str(artifact.resolve()), "clean")], title="Absolute"),
@@ -133,8 +137,8 @@ async def test_fork_normalizes_mixed_absolute_and_relative_paths(tmp_path: Path)
   parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
-  first_rel = "artifacts/plan_01.html"
-  second_rel = "artifacts/plan_02.html"
+  first_rel = _PLAN_V1_REL
+  second_rel = _PLAN_V2_REL
   first = _write_artifact(cfg, parent.id, first_rel, "<html>v1</html>")
   _write_artifact(cfg, parent.id, second_rel, "<html>v2</html>")
   _write_plans(cfg, parent.id, {"plans": [
@@ -159,12 +163,12 @@ async def test_fork_missing_artifact_logs_warning_and_does_not_abort(tmp_path: P
   parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
-  _write_artifact(cfg, parent.id, "artifacts/plan_01.html", "<html>present</html>")
+  _write_artifact(cfg, parent.id, _PLAN_V1_REL, "<html>present</html>")
   # plan_02.html is referenced but intentionally NOT created on disk.
   _write_plans(cfg, parent.id, {"plans": [
       _make_plan(1, [
-          _make_version(1, "artifacts/plan_01.html", "clean"),
-          _make_version(2, "artifacts/plan_02.html", "pending"),
+          _make_version(1, _PLAN_V1_REL, "clean"),
+          _make_version(2, _PLAN_V2_REL, "pending"),
       ]),
   ]})
 
@@ -173,11 +177,11 @@ async def test_fork_missing_artifact_logs_warning_and_does_not_abort(tmp_path: P
 
   # Fork succeeds; the existing artifact is copied; the missing one is skipped.
   assert (cfg.sessions_dir / child.id / "plans.json").exists()
-  assert (cfg.sessions_dir / child.id / "artifacts/plan_01.html").exists()
-  assert not (cfg.sessions_dir / child.id / "artifacts/plan_02.html").exists()
+  assert (cfg.sessions_dir / child.id / _PLAN_V1_REL).exists()
+  assert not (cfg.sessions_dir / child.id / _PLAN_V2_REL).exists()
   child_plans = json.loads((cfg.sessions_dir / child.id / "plans.json").read_text(encoding="utf-8"))
   assert [ver["file"] for ver in child_plans["plans"][0]["versions"]] == [
-      "artifacts/plan_01.html", "artifacts/plan_02.html"
+      _PLAN_V1_REL, _PLAN_V2_REL
   ]
 
   # A visible warning was logged for the missing file.
@@ -269,15 +273,15 @@ async def test_elone_also_copies_plans_and_artifacts(tmp_path: Path) -> None:
   parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
-  _write_artifact(cfg, parent.id, "artifacts/plan_01.html", "<html>v1</html>")
+  _write_artifact(cfg, parent.id, _PLAN_V1_REL, "<html>v1</html>")
   _write_plans(cfg, parent.id, {"plans": [
-      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")]),
+      _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")]),
   ]})
 
   child = await mgr.elone_session(parent.id, event_index=0)
 
   assert (cfg.sessions_dir / child.id / "plans.json").exists()
-  assert (cfg.sessions_dir / child.id / "artifacts/plan_01.html").exists()
+  assert (cfg.sessions_dir / child.id / _PLAN_V1_REL).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +297,7 @@ async def test_all_sessions_status_pending_plan_approval_awaiting_approval(tmp_p
 
   # not closed, no takeoff, latest verify_state clean -> derived "awaiting approval"
   _write_plans(cfg, session.id, {"plans": [
-      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")]),
+      _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")]),
   ]})
 
   status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
@@ -308,7 +312,7 @@ async def test_all_sessions_status_pending_plan_approval_approved_is_unset(tmp_p
 
   # takeoff set + verify_state clean -> derived "approved"
   _write_plans(cfg, session.id, {"plans": [
-      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")],
+      _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")],
                  takeoff={"v": 1, "at": "2026-07-20T00:00:00+00:00"}),
   ]})
 
@@ -323,7 +327,7 @@ async def test_all_sessions_status_pending_plan_approval_closed_is_unset(tmp_pat
   session = await mgr.create_session(CreateSessionRequest(name="Closed"))
 
   _write_plans(cfg, session.id, {"plans": [
-      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")],
+      _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")],
                  closed={"as": "superseded", "at": "2026-07-20T00:00:00+00:00"}),
   ]})
 
@@ -349,9 +353,9 @@ async def test_all_sessions_status_pending_plan_approval_mixed_lineages(tmp_path
 
   # One approved lineage + one awaiting-approval lineage -> flag set (at least one awaiting).
   _write_plans(cfg, session.id, {"plans": [
-      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")],
+      _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")],
                  takeoff={"v": 1, "at": "2026-07-20T00:00:00+00:00"}),
-      _make_plan(2, [_make_version(1, "artifacts/plan_02.html", "clean")]),
+      _make_plan(2, [_make_version(1, _PLAN_V2_REL, "clean")]),
   ]})
 
   status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
@@ -365,7 +369,7 @@ async def test_pending_plan_approval_not_persisted_to_metadata(tmp_path: Path) -
   session = await mgr.create_session(CreateSessionRequest(name="Awaiting"))
 
   _write_plans(cfg, session.id, {"plans": [
-      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")]),
+      _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")]),
   ]})
 
   status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
@@ -382,7 +386,7 @@ async def test_pending_plan_approval_archived_session_is_unset(tmp_path: Path) -
   session = await mgr.create_session(CreateSessionRequest(name="ArchivedAwaiting"))
 
   _write_plans(cfg, session.id, {"plans": [
-      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")]),
+      _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")]),
   ]})
 
   meta = await mgr.get_session(session.id)
@@ -431,7 +435,7 @@ async def test_status_endpoint_survives_corrupt_plans_json_other_sessions_unaffe
 
   # good has an awaiting-approval lineage; bad has a corrupt plans.json.
   _write_plans(cfg, good.id, {"plans": [
-      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")]),
+      _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")]),
   ]})
   bad_plans = cfg.sessions_dir / bad.id / "plans.json"
   bad_plans.parent.mkdir(parents=True, exist_ok=True)
@@ -476,7 +480,7 @@ async def test_probe_partial_degradation_still_reports_pending_approval_true(tmp
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="Mixed"))
   _write_plans(cfg, session.id, {"plans": [
-      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")]),
+      _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")]),
       {"id": 2, "title": "Bad", "versions": [], "takeoff": None, "closed": None},
   ]})
 
@@ -495,7 +499,7 @@ async def test_list_sessions_endpoint_includes_pending_plan_approval_true(tmp_pa
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="Awaiting"))
   _write_plans(cfg, session.id, {"plans": [
-      _make_plan(1, [_make_version(1, "artifacts/plan_01.html", "clean")]),
+      _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")]),
   ]})
 
   app = _build_sessions_app(mgr)

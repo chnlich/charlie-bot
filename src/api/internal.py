@@ -100,7 +100,7 @@ async def _authorize_spawn_request(
     try:
       await asyncio.to_thread(check_takeoff_gate, req.session_id, session_mgr)
     except DelegationBlockedError as e:
-      raise HTTPException(status_code=403, detail=str(e))
+      raise HTTPException(status_code=403, detail=str(e)) from e
 
   cfg = get_config()
   try:

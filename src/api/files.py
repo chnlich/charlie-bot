@@ -78,8 +78,8 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
               "size": stat.st_size,
               "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
           })
-  except PermissionError:
-    raise HTTPException(status_code=403, detail="Permission denied")
+  except PermissionError as e:
+    raise HTTPException(status_code=403, detail="Permission denied") from e
 
   rows = ""
   # Parent directory link (unless at root)
@@ -155,5 +155,5 @@ async def serve_file(path: str, request: Request):
   media_type, _ = mimetypes.guess_type(str(fs_path))
   try:
     return FileResponse(str(fs_path), media_type=media_type)
-  except PermissionError:
-    raise HTTPException(status_code=403, detail="Permission denied")
+  except PermissionError as e:
+    raise HTTPException(status_code=403, detail="Permission denied") from e

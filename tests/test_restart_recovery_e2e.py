@@ -36,7 +36,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from conftest import build_recovery_cfg
+from conftest import RECOVERY_TASK_PREFIXES, await_recovery_tasks, build_recovery_cfg
 
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
@@ -172,14 +172,7 @@ def _read_events(home: Path, session_id: str, thread_id: str) -> list[dict]:
 
 
 async def _await_recovery_tasks() -> None:
-  current = asyncio.current_task()
-  pending = [
-      t for t in asyncio.all_tasks()
-      if t is not current and not t.done()
-      and t.get_name().startswith(("resume-", "respawn-", "recomplete-"))
-  ]
-  if pending:
-    await asyncio.gather(*pending)
+  await await_recovery_tasks(RECOVERY_TASK_PREFIXES)
 
 
 def _install_shim(tmp_path: Path) -> Path:

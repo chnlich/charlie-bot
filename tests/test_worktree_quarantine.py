@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import RECOVERY_TASK_PREFIXES, await_recovery_tasks
 
 from src.core import git as git_module
 from src.core import init as init_module
@@ -433,22 +434,7 @@ def _write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Pa
 
 
 async def _await_recovery_tasks() -> None:
-  """Let the background reconcile drain/respawn/recomplete tasks run to completion.
-
-  Reconciliation dispatches its recovery actions as named asyncio tasks
-  (create_logged_task), so a full run_crash_recovery test must await them
-  before asserting on rewritten thread metadata.
-  """
-  import asyncio
-
-  current = asyncio.current_task()
-  pending = [
-      t for t in asyncio.all_tasks()
-      if t is not current and not t.done()
-      and t.get_name().startswith(("resume-", "respawn-", "recomplete-"))
-  ]
-  if pending:
-    await asyncio.gather(*pending)
+  await await_recovery_tasks(RECOVERY_TASK_PREFIXES)
 
 
 @pytest.mark.asyncio

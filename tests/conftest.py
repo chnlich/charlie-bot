@@ -282,6 +282,12 @@ THREE_BACKEND_OPTIONS = [
 
 PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
 
+# Synthetic catalog model id shared by the opencode-backend, autonamer, and session-usage tests;
+# the fake /config/providers payloads in test_opencode_backend.py split it into provider id and
+# model id on the first "/", so a rename keeps the provider/... shape.
+SYNTHETIC_MODEL = "synthetic-provider/nvidia/Synthetic-Model"
+
+
 def plan_page_html(goal_body: str = "Ship the fix.") -> str:
   """Minimal plan page passing the plan assertion set: the shipped template's <style> block
   verbatim (style-verbatim compares after whitespace collapse), six numbered sections, and a footer,

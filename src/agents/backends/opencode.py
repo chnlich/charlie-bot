@@ -428,7 +428,7 @@ class OpenCodeBackend(AgentBackend):
         event = await asyncio.wait_for(anext(events_iter), timeout=deadline - loop.time())
       except StopAsyncIteration:
         return
-      except asyncio.TimeoutError:
+      except asyncio.TimeoutError as e:
         silent_seconds = loop.time() - last_progress_at
         log.error(
             "opencode_sse_silence_timeout",
@@ -437,7 +437,7 @@ class OpenCodeBackend(AgentBackend):
             heartbeat_count=silent_heartbeats)
         raise OpenCodeSseSilenceError(
             f"OpenCode SSE stream carried no session progress for {silent_seconds:.1f} s "
-            f"(heartbeats during silence: {silent_heartbeats})")
+            f"(heartbeats during silence: {silent_heartbeats})") from e
       if event.get("type") == "server.heartbeat":
         silent_heartbeats += 1
       if self._event_carries_session_id(event):

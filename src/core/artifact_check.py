@@ -112,9 +112,9 @@ def _measure_page_height(chrome_bin: Path, artifact: Path) -> int:
           capture_output=True,
           timeout=_RENDER_TIMEOUT_S,
       )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
       raise ValueError(
-          f"headless renderer timed out after {_RENDER_TIMEOUT_S}s while measuring the plan page height")
+          f"headless renderer timed out after {_RENDER_TIMEOUT_S}s while measuring the plan page height") from e
     except OSError as e:
       raise ValueError(f"headless renderer could not be launched: {chrome_bin} ({e})") from e
     if proc.returncode != 0:

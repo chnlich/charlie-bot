@@ -564,10 +564,10 @@ async def fork_session(
         event_index=body.event_index if body else None,
         backend=backend,
     )
-  except FileNotFoundError:
-    raise HTTPException(status_code=404, detail="Session not found")
+  except FileNotFoundError as e:
+    raise HTTPException(status_code=404, detail="Session not found") from e
   except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e))
+    raise HTTPException(status_code=400, detail=str(e)) from e
 
   reference_path = session_mgr.parent_reference_path(meta.id)
   bootstrap_prompt = (
@@ -596,14 +596,14 @@ async def elone_session(
   backend = _resolve_requested_backend(body.backend, cfg, fallback_backend=parent.backend)
   try:
     meta = await session_mgr.elone_session(session_id, body.event_index, backend=backend)
-  except FileNotFoundError:
-    raise HTTPException(status_code=404, detail="Session not found")
+  except FileNotFoundError as e:
+    raise HTTPException(status_code=404, detail="Session not found") from e
   except ScheduledSessionBusyError as e:
-    raise HTTPException(status_code=409, detail=str(e))
+    raise HTTPException(status_code=409, detail=str(e)) from e
   except SuccessionRefused as e:
-    raise HTTPException(status_code=409, detail=str(e))
+    raise HTTPException(status_code=409, detail=str(e)) from e
   except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e))
+    raise HTTPException(status_code=400, detail=str(e)) from e
 
   reference_path = session_mgr.parent_reference_path(meta.id)
   bootstrap_prompt = (

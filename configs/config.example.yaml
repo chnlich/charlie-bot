@@ -50,10 +50,6 @@ backlog_repos: []
 # uncomment it here, or put it in ~/.charliebot/config.d/<topic>.yaml — see the
 # fragments note above.
 
-# Externally reachable base URL of this server, no trailing slash (e.g. https://bot.example.com).
-# Used to build file links for readers outside the host (Slack replies). Empty = no link is built.
-# public_base_url: ""
-
 # Slack summon entrypoint.
 # Slack app bot token (xoxb-…); requires chat:write + reactions:write + history scopes.
 # slack_bot_token: ""

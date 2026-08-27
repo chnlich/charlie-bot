@@ -1,7 +1,7 @@
 """Backlog API routes — read/write project backlog.yaml and history.yaml."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
@@ -123,7 +123,7 @@ class BacklogPatch(BaseModel):
 def _apply_status_transition(item: dict, patch: BacklogPatch) -> None:
   """Mutate *item* to reflect transition to *patch.status* (timestamps, reasons, counters)."""
   item['status'] = patch.status
-  now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+  now = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S')
   if patch.status == 'rejected':
     item['rejected_at'] = now
     if patch.rejected_reason:

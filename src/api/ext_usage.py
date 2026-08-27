@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -332,7 +332,7 @@ def _extract_latest_codex_usage(
     account: str = "",
 ) -> dict[str, Any] | None:
   """Parse the latest Codex token_count event from a session JSONL file."""
-  effective_fetched_at = fetched_at or datetime.now(timezone.utc).isoformat()
+  effective_fetched_at = fetched_at or datetime.now(UTC).isoformat()
 
   # Scan lines in reverse for the latest token_count event
   for line in reversed(lines):
@@ -359,7 +359,7 @@ def _parse_codex_timestamp(timestamp: Any) -> datetime:
   parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
   if parsed.tzinfo is None:
     raise ValueError(f"Codex timestamp is missing timezone: {timestamp}")
-  return parsed.astimezone(timezone.utc)
+  return parsed.astimezone(UTC)
 
 
 def _new_token_usage_bucket() -> dict[str, int]:
@@ -402,10 +402,10 @@ def _compute_codex_spend_windows(
     now: datetime | None = None,
 ) -> dict[str, float]:
   """Compute rolling Codex spend by summing per-turn token usage from rollout logs."""
-  effective_now = now or datetime.now(timezone.utc)
+  effective_now = now or datetime.now(UTC)
   if effective_now.tzinfo is None:
     raise ValueError("now must be timezone-aware")
-  effective_now = effective_now.astimezone(timezone.utc)
+  effective_now = effective_now.astimezone(UTC)
   one_day_ago = effective_now - timedelta(days=1)
   seven_days_ago = effective_now - timedelta(days=7)
   min_mtime = seven_days_ago.timestamp()
@@ -540,7 +540,7 @@ def _codex_windows(rate_limits: dict[str, Any], *, account: str) -> list[dict[st
         "window_minutes": window_minutes,
         "utilization": utilization,
         "resets_at":
-            datetime.fromtimestamp(resets_at, tz=timezone.utc).isoformat()
+            datetime.fromtimestamp(resets_at, tz=UTC).isoformat()
             if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool) else "",
     })
   windows.sort(key=lambda w: w["window_minutes"])
@@ -711,7 +711,7 @@ def _transform_response(raw: dict[str, Any], *, account: str = "") -> dict[str, 
   Claude reports its two windows under fixed field names, so their lengths are
   known here; everything downstream still reads them off ``window_minutes``.
   """
-  now = datetime.now(timezone.utc).isoformat()
+  now = datetime.now(UTC).isoformat()
 
   windows: list[dict[str, Any]] = []
   for camel, snake, window_minutes in CLAUDE_WINDOW_FIELDS:

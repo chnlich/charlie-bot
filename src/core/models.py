@@ -3,7 +3,7 @@
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Annotated, Literal
 
@@ -15,7 +15,7 @@ def ensure_utc(v: datetime | str) -> datetime:
   if isinstance(v, str):
     v = datetime.fromisoformat(v.replace("Z", "+00:00"))
   if isinstance(v, datetime) and v.tzinfo is None:
-    return v.replace(tzinfo=timezone.utc)
+    return v.replace(tzinfo=UTC)
   return v
 
 
@@ -26,7 +26,7 @@ def parse_utc_datetime(v: str) -> datetime:
 
 def utc_now() -> datetime:
   """Return the current UTC datetime as a tz-aware value."""
-  return datetime.now(timezone.utc)
+  return datetime.now(UTC)
 
 
 UtcDatetime = Annotated[datetime, BeforeValidator(ensure_utc)]

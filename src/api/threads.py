@@ -4,7 +4,7 @@ import asyncio
 import os
 import shlex
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -199,7 +199,7 @@ async def get_thread_events(
   events: list[WorkerEvent] = []
   tool_id_to_name: dict[str, str] = {}
   for data in raw_events:
-    event_timestamp = data.get("timestamp") or datetime.now(timezone.utc)
+    event_timestamp = data.get("timestamp") or datetime.now(UTC)
     event_type = data.get('type', '')
     if event_type == 'assistant' and isinstance(data.get('message'), dict):
       text = extract_text_from_message(data['message'])

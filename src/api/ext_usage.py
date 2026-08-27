@@ -308,7 +308,7 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
     log.warning("ext_usage_credentials_not_found", path=str(credentials_path))
     return None
 
-  data = json.loads(credentials_path.read_text())
+  data = json.loads(credentials_path.read_text(encoding="utf-8"))
   oauth = data.get("claudeAiOauth", {})
   access_token = oauth.get("accessToken")
   refresh_token = oauth.get("refreshToken")
@@ -641,7 +641,7 @@ async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> s
     log.warning("ext_usage_renewal_without_expiry", path=str(credentials_path))
 
   def _update_creds() -> None:
-    creds_data = json.loads(credentials_path.read_text())
+    creds_data = json.loads(credentials_path.read_text(encoding="utf-8"))
     creds_data["claudeAiOauth"]["accessToken"] = new_access
     creds_data["claudeAiOauth"]["refreshToken"] = new_refresh
     if new_expires is not None:

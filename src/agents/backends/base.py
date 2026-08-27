@@ -27,7 +27,10 @@ import structlog
 from src.core import event_types as ET
 from src.core import runs
 from src.core.process import kill_process_group
-from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
+from src.core.timeouts import (
+  NO_OUTPUT_REPORT_THRESHOLD,
+  SUBPROCESS_DIAG_CAPTURE_TIMEOUT,
+)
 
 log = structlog.get_logger()
 
@@ -55,7 +58,7 @@ async def _capture_proc_diagnostics(pid: int) -> dict:
   ]:
     try:
       r = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-      data, _ = await asyncio.wait_for(r.communicate(), timeout=2.0)
+      data, _ = await asyncio.wait_for(r.communicate(), timeout=SUBPROCESS_DIAG_CAPTURE_TIMEOUT)
       out[key] = data.decode("utf-8", errors="replace")
     except Exception as e:
       out[key] = f"<capture failed: {e}>"

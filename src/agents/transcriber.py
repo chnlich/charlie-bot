@@ -16,6 +16,7 @@ import numpy as np
 import structlog
 
 from src.core.config import CharlieBotConfig
+from src.core.timeouts import HTTP_MODEL_DOWNLOAD_TIMEOUT
 
 log = structlog.get_logger()
 
@@ -175,7 +176,7 @@ def _ensure_artifact(path: Path, url: str, expected_sha256: str) -> None:
 
   tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
   try:
-    with urllib.request.urlopen(url, timeout=60) as response:
+    with urllib.request.urlopen(url, timeout=HTTP_MODEL_DOWNLOAD_TIMEOUT) as response:
       status = getattr(response, "status", 200)
       if status != 200:
         raise RuntimeError(f"model download failed for {url}: HTTP {status}")

@@ -1,7 +1,6 @@
 """Chat event persistence for CharlieBot sessions."""
 
 import json
-import os
 import uuid
 from collections.abc import Callable
 from datetime import datetime
@@ -9,6 +8,7 @@ from pathlib import Path
 
 import structlog
 
+from src.core.json_utils import atomic_write_text
 from src.core.models import SessionMetadata, parse_utc_datetime, utc_now
 from src.core.ndjson import (
   append_ndjson,
@@ -231,11 +231,7 @@ class ChatEventStore:
       for raw in archived_raw:
         f.write(raw + "\n")
 
-    tmp_path = live_path.with_suffix(live_path.suffix + ".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-      for raw in kept_raw:
-        f.write(raw + "\n")
-    os.replace(tmp_path, live_path)
+    atomic_write_text(live_path, "".join(raw + "\n" for raw in kept_raw))
 
     return {
         "events_archived": len(archived_raw),

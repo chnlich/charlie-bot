@@ -261,7 +261,7 @@ async def _run_pty_relay(websocket: WebSocket, attachment: PtyAttachment, *, pum
     while True:
       try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=_WS_RECV_TIMEOUT)
-      except asyncio.TimeoutError:
+      except TimeoutError:
         try:
           await websocket.send_json({"type": "ping"})
         except Exception as e:

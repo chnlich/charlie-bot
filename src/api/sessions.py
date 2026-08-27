@@ -55,7 +55,6 @@ from src.core.sessions import (
   SuccessionRefused,
 )
 from src.core.threads import ThreadManager
-from src.core.triggers import TriggerManager
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -630,7 +629,6 @@ async def switch_session_backend(
     body: SwitchBackendRequest,
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-    trigger_mgr: TriggerManager = Depends(get_trigger_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Switch a session's backend, in place or via write-through rotation.

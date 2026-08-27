@@ -128,7 +128,7 @@ def start_model_provisioning(cfg: CharlieBotConfig):
   return asyncio.create_task(_run(), name="speech-model-provisioning")
 
 
-def get_ready_model_paths(cfg: CharlieBotConfig) -> VoiceModelPaths:
+def get_ready_model_paths() -> VoiceModelPaths:
   with _state_lock:
     paths = _ready_paths
     error = _provisioning_error
@@ -160,8 +160,8 @@ def models_are_cached(cfg: CharlieBotConfig) -> bool:
   return all(path.is_file() for path in _qwen3_model_files(paths)) and paths.silero_vad.is_file()
 
 
-def create_transcription_session(cfg: CharlieBotConfig) -> "SimulatedStreamingTranscriptionSession":
-  paths = get_ready_model_paths(cfg)
+def create_transcription_session() -> "SimulatedStreamingTranscriptionSession":
+  paths = get_ready_model_paths()
   bundle = _get_model_bundle(paths)
   return SimulatedStreamingTranscriptionSession(bundle)
 

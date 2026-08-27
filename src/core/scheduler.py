@@ -2,7 +2,7 @@
 
 import asyncio
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -160,7 +160,7 @@ class Scheduler:
       log.info("scheduler_cron_changed", task=task_cfg.name, old=session.last_scheduled_cron, new=task_cfg.cron)
       session.last_scheduled_run = now.isoformat()
       session.last_scheduled_cron = task_cfg.cron
-      session.updated_at = datetime.now(timezone.utc)
+      session.updated_at = datetime.now(UTC)
       await session_mgr.save_metadata(session)
       return
 
@@ -180,7 +180,7 @@ class Scheduler:
       if handle is not None and not handle.done():
         session.last_scheduled_run = now.isoformat()
         session.last_run_status = "skipped"
-        session.updated_at = datetime.now(timezone.utc)
+        session.updated_at = datetime.now(UTC)
         await session_mgr.save_metadata(session)
         event = {
             'type': ET.SCHEDULED_RUN_SKIPPED,
@@ -220,7 +220,7 @@ class Scheduler:
     session.last_scheduled_cron = task_cfg.cron
     if initial_status:
       session.last_run_status = initial_status
-    session.updated_at = datetime.now(timezone.utc)
+    session.updated_at = datetime.now(UTC)
     await session_mgr.save_metadata(session)
     return cfg, session_mgr, session
 
@@ -261,7 +261,7 @@ class Scheduler:
     if record_handle:
       self._handles[task_cfg.name] = handle
     session.last_run_status = "success"
-    session.updated_at = datetime.now(timezone.utc)
+    session.updated_at = datetime.now(UTC)
     await session_mgr.save_metadata(session)
     log.info("master_task_fired", task=task_cfg.name, session=session.id)
     return {"session_id": session.id, "thread_id": None}
@@ -291,7 +291,7 @@ class Scheduler:
           'message': str(e),
       }
       session.last_run_status = "failed"
-    session.updated_at = datetime.now(timezone.utc)
+    session.updated_at = datetime.now(UTC)
     await session_mgr.save_metadata(session)
     await session_mgr.persist_and_broadcast(session.id, event)
     return {'session_id': session.id, 'thread_id': None}

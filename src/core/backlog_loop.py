@@ -1,7 +1,7 @@
 """Improvement-loop lifecycle — determines the next action from a backlog YAML."""
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
@@ -93,7 +93,7 @@ def _check_revision(items: list[dict], backlog_path: Path) -> str | None:
 
 async def _handle_stale(items: list[dict], backlog_path: Path, cfg: ImprovementLoopConfig, repo_path: Path) -> bool:
   """Step 1: reset stale in_progress items. Returns True if any were reset."""
-  now = datetime.now(timezone.utc)
+  now = datetime.now(UTC)
   modified = False
   for item in items:
     if item.get('status') != 'in_progress':
@@ -112,7 +112,7 @@ async def _handle_stale(items: list[dict], backlog_path: Path, cfg: ImprovementL
     else:
       continue
     if started_dt.tzinfo is None:
-      started_dt = started_dt.replace(tzinfo=timezone.utc)
+      started_dt = started_dt.replace(tzinfo=UTC)
     elapsed_hours = (now - started_dt).total_seconds() / 3600
     if elapsed_hours > cfg.stale_timeout_hours:
       item['status'] = 'failed'

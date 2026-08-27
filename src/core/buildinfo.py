@@ -5,7 +5,7 @@ server's build identity without re-running git on every request.
 """
 
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Repo root: src/core/buildinfo.py -> parents[2] == repo root (where pyproject.toml lives).
@@ -25,7 +25,7 @@ def init_build_info() -> None:
   """
   global _sha, _started_at
   _sha = _read_git_sha()
-  _started_at = datetime.now(timezone.utc).isoformat()
+  _started_at = datetime.now(UTC).isoformat()
 
 
 def _read_git_sha() -> str:

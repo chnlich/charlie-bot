@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import wave
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -130,7 +130,7 @@ async def _finish_voice_stream(
 
 
 def _persist_voice_dump(cfg: CharlieBotConfig, session_id: str, audio_bytes: bytes, transcription: str) -> Path:
-  ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"
+  ts = datetime.now(UTC).strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"
   stem = f"{ts}_{uuid4().hex[:8]}"
   audio_path = cfg.sessions_dir / session_id / "voice" / f"{stem}.wav"
   text_path = cfg.sessions_dir / session_id / "voice" / f"{stem}.txt"

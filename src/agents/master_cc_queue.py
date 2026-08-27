@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
@@ -158,7 +158,7 @@ async def _session_consumer(session_id: str) -> None:
         if not still_thinking:
           busy_start = busy_since(session_id)
           if busy_start is not None:
-            thinking_seconds = int((datetime.now(timezone.utc) - busy_start).total_seconds())
+            thinking_seconds = int((datetime.now(UTC) - busy_start).total_seconds())
 
         done_event = {"type": ET.MASTER_DONE, "exit_code": exit_code, "still_thinking": still_thinking}
         if item.user_event_id:
@@ -278,14 +278,14 @@ async def run_message(
     user_event = {
         "type": ET.USER,
         "content": user_content if display_content is None else display_content,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "is_voice": is_voice,
     }
     if uploaded_files:
       user_event["uploaded_files"] = uploaded_files
     await callbacks.persist_and_broadcast(session_meta.id, user_event)
     user_event_id = user_event.get("id")
-    session_meta.updated_at = datetime.now(timezone.utc)
+    session_meta.updated_at = datetime.now(UTC)
     await callbacks.update_thinking_state(session_meta.id, updated_at=session_meta.updated_at)
 
   # Create a future for the caller to await.

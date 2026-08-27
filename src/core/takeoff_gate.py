@@ -7,7 +7,7 @@ gate — phrase matching, timestamp parsing, and the blocking exception —
 extracted from src.core.spawner, which consumes none of it.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
@@ -65,7 +65,7 @@ def _parse_pre_takeoff_timestamp(event: dict, session_id: str) -> datetime | Non
         timestamp=timestamp,
     )
     return None
-  return issued_at.astimezone(timezone.utc)
+  return issued_at.astimezone(UTC)
 
 
 def check_takeoff_gate(
@@ -74,10 +74,10 @@ def check_takeoff_gate(
     now: datetime | None = None,
 ) -> None:
   """Verify an active pre-takeoff or ordinary takeoff authorization window."""
-  effective_now = now if now is not None else datetime.now(timezone.utc)
+  effective_now = now if now is not None else datetime.now(UTC)
   if effective_now.tzinfo is None:
     raise ValueError("authorization check time must be timezone-aware")
-  effective_now = effective_now.astimezone(timezone.utc)
+  effective_now = effective_now.astimezone(UTC)
 
   events = session_mgr.load_chat_events_sync(session_id)
   latest_user_has_takeoff = False

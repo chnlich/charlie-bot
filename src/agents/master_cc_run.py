@@ -4,7 +4,7 @@ import asyncio
 import os
 import time
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
@@ -612,7 +612,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   # Per-turn transport dir: the backend pins its raw NDJSON log, stderr log,
   # and read cursor here so a restarted server can re-attach to this exact
   # turn from the persisted master_run record.
-  started_at = datetime.now(timezone.utc)
+  started_at = datetime.now(UTC)
   log_dir = cfg.sessions_dir / session_meta.id / "data" / "master_runs" / started_at.isoformat()
   raw_log = str(log_dir / runs.RAW_LOG_NAME)
 

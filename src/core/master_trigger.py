@@ -1,7 +1,7 @@
 """Master-agent triggering subsystem — wake the master CC to process results."""
 
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -138,8 +138,8 @@ async def trigger_master(
       # Most recent Saturday 1:00 AM PT
       days_since_sat = (now_pt.weekday() - 5) % 7
       last_sat_1am_pt = now_pt.replace(hour=1, minute=0, second=0, microsecond=0) - timedelta(days=days_since_sat)
-      last_sat_1am_utc = last_sat_1am_pt.astimezone(timezone.utc)
-      if session_meta.cc_session_started_at < last_sat_1am_utc < datetime.now(timezone.utc):
+      last_sat_1am_utc = last_sat_1am_pt.astimezone(UTC)
+      if session_meta.cc_session_started_at < last_sat_1am_utc < datetime.now(UTC):
         log.info('scheduled_cc_session_expired', session=resolved.id, started_at=str(session_meta.cc_session_started_at))
         session_meta.cc_session_id = None
         session_meta.cc_session_started_at = None

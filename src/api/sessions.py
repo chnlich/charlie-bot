@@ -1,7 +1,7 @@
 """Session management API routes."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -754,7 +754,7 @@ async def rate_round(
     meta.round_ratings.pop(round_id, None)
   else:
     meta.round_ratings[round_id] = req.rating
-  meta.updated_at = datetime.now(timezone.utc)
+  meta.updated_at = datetime.now(UTC)
   await session_mgr.save_metadata(meta)
   log.info("round_rated", session_id=session_id, round_id=round_id, rating=req.rating)
   return meta

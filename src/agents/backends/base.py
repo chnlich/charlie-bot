@@ -18,7 +18,7 @@ import tempfile
 import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiofiles
@@ -44,7 +44,7 @@ _TAIL_POLL_INTERVAL = 0.15
 
 async def _capture_proc_diagnostics(pid: int) -> dict:
   """Best-effort snapshot of a hung subprocess: pgid, ps tree, /proc state, fds, children."""
-  out: dict = {"captured_at": datetime.now(timezone.utc).isoformat(), "pid": pid}
+  out: dict = {"captured_at": datetime.now(UTC).isoformat(), "pid": pid}
   try:
     out["pgid"] = os.getpgid(pid)
   except Exception as e:
@@ -155,8 +155,8 @@ def _clamp_event_timestamp(translated: dict, mtime: float) -> None:
   """
   if translated.get("timestamp"):
     return
-  now = datetime.now(timezone.utc)
-  mtime_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
+  now = datetime.now(UTC)
+  mtime_dt = datetime.fromtimestamp(mtime, tz=UTC)
   translated["timestamp"] = min(now, mtime_dt).isoformat()
 
 

@@ -5,7 +5,7 @@ import json
 import os
 import random
 import shutil
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -435,7 +435,7 @@ class TriggerManager:
       if probe_out is not None:
         probe_out.update(observed)
 
-    fire_at = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+    fire_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
     trigger = PendingTrigger(
         session_id=session_id,
         fire_at=fire_at,
@@ -600,7 +600,7 @@ class TriggerManager:
       still_alive = [label for _, group_alive in results for label in group_alive]
       reason = "timeout" if still_alive else "completed"
     else:
-      now = datetime.now(timezone.utc)
+      now = datetime.now(UTC)
       remaining = (trigger.fire_at - now).total_seconds()
       if remaining > 0:
         await asyncio.sleep(remaining)
@@ -662,7 +662,7 @@ class TriggerManager:
     )
 
     fresh.status = TriggerStatus.FIRED
-    fresh.fired_at = datetime.now(timezone.utc)
+    fresh.fired_at = datetime.now(UTC)
     fresh.fire_reason = reason
     await self._save_trigger(fresh)
     self._tasks.pop(trigger.id, None)
@@ -720,7 +720,7 @@ class TriggerManager:
     for fd in list(pidfds):
       loop.add_reader(fd, on_ready, fd)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     remaining = (trigger.fire_at - now).total_seconds()
     try:
       await asyncio.wait_for(done.wait(), timeout=max(0.0, remaining))
@@ -759,7 +759,7 @@ class TriggerManager:
     step = 0
 
     while True:
-      now = datetime.now(timezone.utc)
+      now = datetime.now(UTC)
       time_to_fire = (trigger.fire_at - now).total_seconds()
       if time_to_fire <= 0:
         break
@@ -768,7 +768,7 @@ class TriggerManager:
       sleep_for = base + random.uniform(0, _REMOTE_PROBE_NOISE_MAX)
       await asyncio.sleep(min(sleep_for, time_to_fire))
 
-      now = datetime.now(timezone.utc)
+      now = datetime.now(UTC)
       if (trigger.fire_at - now).total_seconds() <= 0:
         break
 
@@ -822,21 +822,21 @@ class TriggerManager:
 
     if host is None and not _SACCT_AVAILABLE:
       log.warning("slurm_watch_no_sacct_skip", trigger_id=trigger.id, job_ids=sorted(remaining))
-      time_to_fire = (trigger.fire_at - datetime.now(timezone.utc)).total_seconds()
+      time_to_fire = (trigger.fire_at - datetime.now(UTC)).total_seconds()
       if time_to_fire > 0:
         await asyncio.sleep(time_to_fire)
       return [], [_slurm_label(host, j) for j in sorted(remaining)]
 
     finished: list[str] = []
     step = 0
-    last_success = datetime.now(timezone.utc)
+    last_success = datetime.now(UTC)
     while True:
       states, error = await _probe_sacct(sorted(remaining), trigger.id, host=host)
       if error is None:
-        last_success = datetime.now(timezone.utc)
+        last_success = datetime.now(UTC)
       else:
         log.debug("sacct_probe_transient_error", trigger_id=trigger.id, host=host, error=error)
-        dark_for = (datetime.now(timezone.utc) - last_success).total_seconds()
+        dark_for = (datetime.now(UTC) - last_success).total_seconds()
         if host is not None and dark_for >= _REMOTE_SACCT_UNREACHABLE_GRACE:
           log.warning(
               "slurm_watch_host_unreachable",
@@ -867,7 +867,7 @@ class TriggerManager:
 
       if not remaining:
         break
-      time_to_fire = (trigger.fire_at - datetime.now(timezone.utc)).total_seconds()
+      time_to_fire = (trigger.fire_at - datetime.now(UTC)).total_seconds()
       if time_to_fire <= 0:
         break
       if host is None:

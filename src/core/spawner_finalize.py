@@ -1,7 +1,7 @@
 """Run outcome and the finalize chain — status write, worktree cleanup, completion notify."""
 
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -56,7 +56,7 @@ async def _stream_worker_events(
 ) -> _WorkerRunOutcome:
   """Mark worker running, broadcast start event, run worker, and report its outcome."""
   thread.status = ThreadStatus.RUNNING
-  thread.started_at = datetime.now(timezone.utc)
+  thread.started_at = datetime.now(UTC)
   await thread_mgr.save_metadata(thread)
   log.info("worker_running", thread_id=thread.id, session=session_id)
 
@@ -438,7 +438,7 @@ async def _notify_completion(
     session_meta = await session_mgr.get_session(session_id)
     if session_meta is not None and session_meta.scheduled_task:
       session_meta.last_run_status = "success" if outcome.exit_code == 0 else "failed"
-      session_meta.updated_at = datetime.now(timezone.utc)
+      session_meta.updated_at = datetime.now(UTC)
       await session_mgr.save_metadata(session_meta)
       scheduled_task_name = session_meta.scheduled_task
     events_summary, full_summary = await _broadcast_completion(

@@ -24,7 +24,7 @@ import os
 import stat
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 
@@ -131,7 +131,7 @@ def read_host_boot_time() -> datetime:
   with open("/proc/stat", "r", encoding="utf-8") as f:
     for line in f:
       if line.startswith("btime "):
-        return datetime.fromtimestamp(int(line.split()[1]), tz=timezone.utc)
+        return datetime.fromtimestamp(int(line.split()[1]), tz=UTC)
   raise RuntimeError("/proc/stat missing btime line")
 
 
@@ -179,7 +179,7 @@ def is_run_alive(
     return False
   if started_at.tzinfo is None:
     raise ValueError("started_at must be timezone-aware")
-  return started_at.astimezone(timezone.utc) > host_boot_time
+  return started_at.astimezone(UTC) > host_boot_time
 
 
 def run_alive_probe(
@@ -324,7 +324,7 @@ def raw_completion_time(raw_path: Path) -> datetime | None:
     st = raw_path.stat()
   except OSError:
     return None
-  return datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+  return datetime.fromtimestamp(st.st_mtime, tz=UTC)
 
 
 def read_raw_cursor(cursor: Path) -> int:
@@ -390,7 +390,7 @@ def resolve_run(
   descendants are attached to the resolution (the outcome itself still comes
   from the other rows).
   """
-  now = now or datetime.now(timezone.utc)
+  now = now or datetime.now(UTC)
   raw_exists = raw_path.is_file()
 
   if not raw_exists and pid is None:

@@ -2,7 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
@@ -73,7 +73,7 @@ def build_user_event(content: str, uploaded_files: list[dict] | None = None) -> 
   event = {
       "type": ET.USER,
       "content": content,
-      "timestamp": datetime.now(timezone.utc).isoformat(),
+      "timestamp": datetime.now(UTC).isoformat(),
   }
   if uploaded_files:
     event["uploaded_files"] = uploaded_files
@@ -90,7 +90,7 @@ def build_scheduled_trigger_event(content: str) -> dict:
   return {
       "type": ET.SCHEDULED_TRIGGER,
       "content": content,
-      "timestamp": datetime.now(timezone.utc).isoformat(),
+      "timestamp": datetime.now(UTC).isoformat(),
   }
 
 
@@ -107,7 +107,7 @@ def build_agent_message_event(content: str, *, from_session: str, from_session_n
       "content": content,
       "from_session": from_session,
       "from_session_name": from_session_name,
-      "timestamp": datetime.now(timezone.utc).isoformat(),
+      "timestamp": datetime.now(UTC).isoformat(),
   }
 
 

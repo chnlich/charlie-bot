@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 import time
-import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -15,6 +14,7 @@ from fastapi import APIRouter
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import get_config
 from src.core.http import get_http_client
+from src.core.json_utils import write_json_atomically
 from src.core.streaming import streaming_manager
 from src.core.timeouts import EXT_USAGE_ROUND_GAP_SECONDS, HTTP_OAUTH_TIMEOUT
 
@@ -308,7 +308,7 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
     log.warning("ext_usage_credentials_not_found", path=str(credentials_path))
     return None
 
-  data = json.loads(credentials_path.read_text())
+  data = json.loads(credentials_path.read_text(encoding="utf-8"))
   oauth = data.get("claudeAiOauth", {})
   access_token = oauth.get("accessToken")
   refresh_token = oauth.get("refreshToken")
@@ -599,10 +599,7 @@ def _expires_at_ms(token_data: dict[str, Any]) -> int | None:
 
 def _write_credentials_atomically(path: Path, value: dict[str, Any]) -> None:
   """Replace a credentials file in one step, never exposing a half-written token."""
-  temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-  temporary.write_text(json.dumps(value, indent=2))
-  os.chmod(temporary, 0o600)
-  os.replace(temporary, path)
+  write_json_atomically(path, value, indent=2, private=True)
 
 
 async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> str | None:
@@ -644,7 +641,7 @@ async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> s
     log.warning("ext_usage_renewal_without_expiry", path=str(credentials_path))
 
   def _update_creds() -> None:
-    creds_data = json.loads(credentials_path.read_text())
+    creds_data = json.loads(credentials_path.read_text(encoding="utf-8"))
     creds_data["claudeAiOauth"]["accessToken"] = new_access
     creds_data["claudeAiOauth"]["refreshToken"] = new_refresh
     if new_expires is not None:

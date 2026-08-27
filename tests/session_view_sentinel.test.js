@@ -209,7 +209,6 @@ function buildContext(overrides = {}) {
     autoResize: () => {},
     startThinking: () => {},
     stopThinking: () => {},
-    setSessionSpinner: () => {},
     relativeTime: (txt) => txt,
     updateRelativeTimes: () => {},
     formatTokens: (n) => `${Math.round(n / 1000)}k`,

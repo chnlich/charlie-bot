@@ -139,3 +139,10 @@ Known-alive symbols:
   definition, and vulture flags each as an unused method. Same class as the
   `do_GET`/`do_POST`/`log_message` `BaseHTTPRequestHandler` entry above, with base-class
   virtual dispatch in place of stdlib string dispatch.
+- `t_mgr` (`tests/test_internal_delegate_takeoff.py`, parameter of the `fake_spawn_worker`
+  stub installed for `internal.spawn_worker` via `monkeypatch.setattr`) — the real
+  `spawn_worker` (src/core/spawner_lifecycle.py) is called with six positional arguments,
+  so the stub's replaced signature fixes the arity and `t_mgr` must stay to receive
+  `thread_mgr`; deleting the parameter makes the stub raise TypeError. Vulture flags it
+  at 100% confidence as an unused variable. Same class as the `art` stub-parameter entry
+  above.

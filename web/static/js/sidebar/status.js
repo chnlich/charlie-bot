@@ -187,10 +187,6 @@ function setSessionIndicator(sid, state) {
   if (dot) dot.classList.toggle('hidden', state !== 'idle' || !sessionUnread[sid]);
 }
 
-function setSessionSpinner(sid, visible) {
-  return refreshSessionStatusNow();
-}
-
 function setSessionPendingTriggerIndicator(sid, status) {
   const icon = document.getElementById('pending-trigger-' + sid);
   if (!icon) return;
@@ -384,7 +380,6 @@ Object.assign(Sidebar, {
   renderPendingPlanApprovalIndicator,
   updateSidebarHighlight,
   setSessionIndicator,
-  setSessionSpinner,
   setSessionPendingTriggerIndicator,
   setSessionPendingPlanApprovalIndicator,
   updateSpinner,
@@ -417,7 +412,6 @@ Sidebar.expose([
   'renderPendingPlanApprovalIndicator',
   'updateSidebarHighlight',
   'setSessionIndicator',
-  'setSessionSpinner',
   'setSessionPendingTriggerIndicator',
   'setSessionPendingPlanApprovalIndicator',
   'updateSpinner',

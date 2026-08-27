@@ -31,20 +31,12 @@ function setSwitchableBackends(backendIds) {
   switchableBackends = Array.isArray(backendIds) ? backendIds : [];
 }
 
-function getSwitchableBackends() {
-  return switchableBackends;
-}
-
 // True when this session is a cron-dedicated PM session whose backend switch
 // writes through to the task yaml and rotates to a fresh session.
 let backendSwitchRotates = false;
 
 function setBackendSwitchRotates(value) {
   backendSwitchRotates = !!value;
-}
-
-function getBackendSwitchRotates() {
-  return backendSwitchRotates;
 }
 
 // POST to switch this session's backend, then sync the header. On a rotating
@@ -705,9 +697,7 @@ Object.assign(Sidebar, {
   getActiveBackendId,
   setActiveBackendId,
   setSwitchableBackends,
-  getSwitchableBackends,
   setBackendSwitchRotates,
-  getBackendSwitchRotates,
   updateActiveBackendBadges,
   switchBackend,
   scheduleIdleTask,
@@ -727,9 +717,7 @@ Sidebar.expose([
   'getActiveBackendId',
   'setActiveBackendId',
   'setSwitchableBackends',
-  'getSwitchableBackends',
   'setBackendSwitchRotates',
-  'getBackendSwitchRotates',
   'updateActiveBackendBadges',
   'switchBackend',
   'scheduleIdleTask',

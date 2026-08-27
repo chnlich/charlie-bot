@@ -721,36 +721,12 @@ function appendMessage(role, content, isVoice, timestamp, uploadedFiles) {
   return msg;
 }
 
-function appendSeparator(seconds, eventIndex) {
-  var msg = {
-    role: "separator",
-    thinking_seconds: seconds,
-    event_index: eventIndex,
-  };
-  if (!ingestLiveMessage(msg, SESSION_ID, false)) {
-    _appendRenderedMessage(globalThis.renderMessage(msg, SESSION_ID));
-  }
-}
-
-function appendCloneBanner(parentName, parentSessionId) {
-  var msg = {
-    role: "clone_start",
-    content: parentName,
-    parent_session_id: parentSessionId,
-  };
-  if (!ingestLiveMessage(msg, SESSION_ID, false)) {
-    _appendRenderedMessage(globalThis.renderMessage(msg, SESSION_ID));
-  }
-}
-
 Chat.renderMessage = renderMessage;
 Chat.renderMessagesIntoContainer = renderMessagesIntoContainer;
 Chat.postProcessRenderedMessages = postProcessRenderedMessages;
 Chat.renderMessagesToDetachedContainer = renderMessagesToDetachedContainer;
 Chat.appendMessageObject = appendMessageObject;
 Chat.appendMessage = appendMessage;
-Chat.appendSeparator = appendSeparator;
-Chat.appendCloneBanner = appendCloneBanner;
 Chat.applyTurnOutline = applyTurnOutline;
 Chat.setPageDepth = setPageDepth;
 Chat.toggleTurnFold = toggleTurnFold;
@@ -767,8 +743,6 @@ Chat.expose([
   'renderMessagesToDetachedContainer',
   'appendMessageObject',
   'appendMessage',
-  'appendSeparator',
-  'appendCloneBanner',
   'applyTurnOutline',
   'setPageDepth',
   'toggleTurnFold',

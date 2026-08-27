@@ -140,7 +140,7 @@ async def test_finalize_review_chain_returns_error_when_remove_fails(
     return False
 
   monkeypatch.setattr(review, "git_worktree_remove", fake_remove)
-  error = await review.finalize_review_chain("s", original, thread_mgr=object(), worktree_parent=tmp_path / "worktrees")
+  error = await review.finalize_review_chain("s", original, worktree_parent=tmp_path / "worktrees")
   assert error is not None and "cleanup failed" in error.lower()
   assert wt.exists()
 

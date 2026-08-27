@@ -24,14 +24,13 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.templating import Jinja2Templates
 
 from src.api.code_server import is_code_server_available
-from src.api.deps import get_session_manager, get_thread_manager
+from src.api.deps import get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig, get_config
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
 from src.core.sessions import SessionManager
-from src.core.threads import ThreadManager
 from src.core.timeouts import SUBPROCESS_GIT_VERSION_TIMEOUT
 from src.core.token_tally import TokenTally, collect_token_usage
 from src.core.trace_merge import merge_traces
@@ -625,7 +624,6 @@ async def index(
     request: Request,
     session: str | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   """Render the full page with only critical active-session data."""

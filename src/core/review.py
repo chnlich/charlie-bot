@@ -58,7 +58,6 @@ async def _trigger_master_judged(
 async def finalize_review_chain(
     session_id: str,
     original_thread: ThreadMetadata,
-    thread_mgr: ThreadManager,
     worktree_parent: Path,
 ) -> str | None:
   """Idempotently remove the worktree shared by the original worker + its reviewer(s).
@@ -565,7 +564,7 @@ async def maybe_spawn_reviewer(
     combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
     await _trigger_master_judged(session_id, combined, thread_meta.id, cfg, session_mgr)
     if exit_code == 0 and original_thread:
-      cleanup_error = await finalize_review_chain(session_id, original_thread, thread_mgr, Path(cfg.worktree_dir))
+      cleanup_error = await finalize_review_chain(session_id, original_thread, Path(cfg.worktree_dir))
       if cleanup_error:
         await session_mgr.deliver_to_successor(session_id, {"type": ET.ERROR, "content": cleanup_error})
     return

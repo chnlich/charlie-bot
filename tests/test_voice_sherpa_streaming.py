@@ -85,7 +85,7 @@ def test_sherpa_simulated_streaming_acceptance_baseline() -> None:
   cfg = CharlieBotConfig()
   _require_voice_assets(cfg)
 
-  session = transcriber.create_transcription_session(cfg)
+  session = transcriber.create_transcription_session()
   started = time.perf_counter()
   for chunk in _pcm_chunks(SAMPLE_WAV):
     session.accept_pcm(chunk)

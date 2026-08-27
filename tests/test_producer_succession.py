@@ -224,8 +224,8 @@ async def test_improve_final_summary_no_successor_writes_into_itself_without_ori
 
 
 def _patch_review_reviewer_chain(monkeypatch: pytest.MonkeyPatch, *, cleanup_error: str) -> None:
-  async def fake_finalize_review_chain(session_id, original_thread, thread_mgr, worktree_parent) -> str:
-    del session_id, original_thread, thread_mgr, worktree_parent
+  async def fake_finalize_review_chain(session_id, original_thread, worktree_parent) -> str:
+    del session_id, original_thread, worktree_parent
     return cleanup_error
 
   monkeypatch.setattr(review, "finalize_review_chain", fake_finalize_review_chain)

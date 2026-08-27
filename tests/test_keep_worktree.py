@@ -127,7 +127,7 @@ async def test_finalize_review_chain_skips_when_keep_worktree(
   monkeypatch.setattr(review, "git_worktree_remove", fail_git_worktree_remove)
 
   await review.finalize_review_chain(
-      "session-id", original, thread_mgr=object(), worktree_parent=tmp_path / "worktrees")
+      "session-id", original, worktree_parent=tmp_path / "worktrees")
 
   assert wt_dir.exists()
   assert (wt_dir / "slurm.sh").exists()
@@ -173,7 +173,7 @@ async def test_finalize_review_chain_removes_worktree_by_default(
   monkeypatch.setattr(review, "git_worktree_prune", fake_git_worktree_prune)
 
   await review.finalize_review_chain(
-      "session-id", original, thread_mgr=object(), worktree_parent=tmp_path / "worktrees")
+      "session-id", original, worktree_parent=tmp_path / "worktrees")
 
   assert len(remove_calls) == 1
   assert remove_calls[0][1] == wt_dir

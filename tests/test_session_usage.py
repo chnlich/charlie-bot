@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import SYNTHETIC_MODEL
 
 from src.agents.backends.claude_code import (
   CLAUDE_COMPACT_CONTEXT_RESERVE,
@@ -519,7 +520,7 @@ async def test_snapshot_tier_full_and_point_for_limit_with_input(tmp_path: Path)
       _result_event(
           0.5,
           context_snapshot=_snapshot(
-              "synthetic-provider/nvidia/Synthetic-Model",
+              SYNTHETIC_MODEL,
               {"input": 100_000, "output": 5_000, "reasoning": 2_000,
                "cache_read": 30_000, "cache_write": 10_000},
               {"context": 409_600, "input": 270_000, "output": 131_072})),
@@ -532,7 +533,7 @@ async def test_snapshot_tier_full_and_point_for_limit_with_input(tmp_path: Path)
   assert usage["context_full"] == 270_000
   assert usage["context_compact_at"] == 250_000
   assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
-  assert usage["model"] == "synthetic-provider/nvidia/Synthetic-Model"
+  assert usage["model"] == SYNTHETIC_MODEL
 
 
 @pytest.mark.asyncio
@@ -544,7 +545,7 @@ async def test_snapshot_tier_full_for_limit_without_input(tmp_path: Path) -> Non
       _result_event(
           0.5,
           context_snapshot=_snapshot(
-              "synthetic-provider/nvidia/Synthetic-Model",
+              SYNTHETIC_MODEL,
               {"input": 100_000, "output": 5_000, "reasoning": 2_000,
                "cache_read": 30_000, "cache_write": 10_000},
               {"context": 409_600, "input": None, "output": 131_072})),
@@ -568,7 +569,7 @@ async def test_snapshot_tier_with_none_limit_yields_all_none_context(tmp_path: P
       _result_event(
           0.5,
           context_snapshot=_snapshot(
-              "synthetic-provider/nvidia/Synthetic-Model",
+              SYNTHETIC_MODEL,
               {"input": 100_000, "output": 5_000, "reasoning": 2_000,
                "cache_read": 30_000, "cache_write": 10_000},
               None)),
@@ -581,7 +582,7 @@ async def test_snapshot_tier_with_none_limit_yields_all_none_context(tmp_path: P
   assert usage["context_compact_at"] is None
   # context_tokens still resolved from the snapshot's token sum.
   assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
-  assert usage["model"] == "synthetic-provider/nvidia/Synthetic-Model"
+  assert usage["model"] == SYNTHETIC_MODEL
 
 
 @pytest.mark.asyncio
@@ -637,7 +638,7 @@ async def test_snapshot_tier_compact_at_ignores_claude_constants_but_claude_tier
       _result_event(
           0.5,
           context_snapshot=_snapshot(
-              "synthetic-provider/nvidia/Synthetic-Model",
+              SYNTHETIC_MODEL,
               {"input": 100_000, "output": 5_000, "reasoning": 2_000,
                "cache_read": 30_000, "cache_write": 10_000},
               {"context": 409_600, "input": 270_000, "output": 131_072})),
@@ -680,7 +681,7 @@ async def test_snapshot_tier_with_non_int_output_degrades_to_none(tmp_path: Path
       _result_event(
           0.5,
           context_snapshot=_snapshot(
-              "synthetic-provider/nvidia/Synthetic-Model",
+              SYNTHETIC_MODEL,
               {"input": 100_000, "output": 5_000, "reasoning": 2_000,
                "cache_read": 30_000, "cache_write": 10_000},
               {"context": 409_600, "input": 270_000, "output": None})),
@@ -694,7 +695,7 @@ async def test_snapshot_tier_with_non_int_output_degrades_to_none(tmp_path: Path
   assert usage["context_full"] is None
   assert usage["context_compact_at"] is None
   assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
-  assert usage["model"] == "synthetic-provider/nvidia/Synthetic-Model"
+  assert usage["model"] == SYNTHETIC_MODEL
 
 
 # ---------------------------------------------------------------------------

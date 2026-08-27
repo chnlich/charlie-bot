@@ -302,9 +302,8 @@ BROADCAST_PATCH_TARGET = "src.core.sessions.streaming_manager.broadcast"
 # trigger fires. src/core/triggers.py binds the name with `from src.core.master_trigger import
 # trigger_master`, so mock resolves the route to the src.core.triggers namespace and setattr's
 # the AsyncMock on that module attribute; _wait_and_fire's own call site then reaches the
-# stand-in. src.core.review, src.core.scheduler, src.core.slack_listener, and
-# src.core.improve_command bind the same function in their own namespaces, so their wakes keep
-# their own routes.
+# stand-in. Other modules bind the same function in their own namespaces, so their wakes keep
+# their own routes; grep `from src.core.master_trigger import trigger_master` for the full set.
 TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
 
 

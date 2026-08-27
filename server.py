@@ -331,7 +331,7 @@ async def _send_session_catchup(
     session_mgr: SessionManager,
     session_id: str,
     cursor: int,
-    meta: SessionMetadata,
+    meta: SessionMetadata | None,
 ) -> tuple[int, int]:
   """Send catchup frames, fast-skipping replay when the client cursor is current."""
   event_index_offset = meta.archive_offset if meta else 0

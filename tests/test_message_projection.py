@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import BROADCAST_PATCH_TARGET
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
 from conftest import assistant_event as _assistant_event
@@ -457,7 +458,7 @@ async def test_projection_equals_reference_after_every_append(tmp_path: Path) ->
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
   for i, event in enumerate(_COMMITTING_EVENT_SEQUENCE):
-    with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+    with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
       await mgr.persist_and_broadcast(session.id, dict(event))
     # Read the projection between every append, so a stale cache would be served.
     projection = mgr.get_message_projection(session.id)
@@ -476,7 +477,7 @@ async def test_first_paint_surfaces_are_disjoint(tmp_path: Path) -> None:
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.persist_and_broadcast(session.id, {"type": ET.USER, "content": "q1", "timestamp": "t1"})
     await mgr.persist_and_broadcast(session.id, _assistant_event("reply1", "a1"))
     await mgr.persist_and_broadcast(session.id, {"type": ET.MASTER_DONE, "thinking_seconds": 1, "timestamp": "t2"})
@@ -508,7 +509,7 @@ async def test_event_count_is_the_snapshot_the_projection_consumed(tmp_path: Pat
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
   for n in range(1, 5):
-    with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+    with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
       await mgr.persist_and_broadcast(session.id, _assistant_event(f"chunk {n}", f"a{n}"))
     projection = mgr.get_message_projection(session.id)
     assert projection is not None
@@ -676,7 +677,7 @@ async def test_lru_eviction_cannot_serve_stale_after_dirty_mark(tmp_path: Path) 
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "first", "timestamp": "t1"})
     await mgr.persist_and_broadcast(
         session.id,
@@ -697,7 +698,7 @@ async def test_lru_eviction_cannot_serve_stale_after_dirty_mark(tmp_path: Path) 
   assert projection.pending_draft is not None
 
   # Dirty-mark via master_done.
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.persist_and_broadcast(session.id, {"type": "master_done", "thinking_seconds": 1, "timestamp": "t3"})
 
   # Evict by filling the cache with other sessions.
@@ -779,11 +780,11 @@ async def test_worker_summary_delivered_to_successor_projects_origin_and_thread(
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
   parent = await mgr.create_session(CreateSessionRequest(name="parent"), backend="claude-opus-4.6")
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.persist_and_broadcast(parent.id, {"type": "user", "content": "q", "timestamp": "t0"})
   child = await mgr.elone_session(parent.id, event_index=0)
 
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     delivered = await mgr.deliver_to_successor(
         parent.id, _worker_summary_event(thread_id="th-e2e"))
 

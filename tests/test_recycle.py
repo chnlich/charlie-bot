@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import BROADCAST_PATCH_TARGET
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
 
@@ -99,7 +100,7 @@ async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: Pa
   assert meta.archive_offset == 5
 
   # Subsequent persist_and_broadcast must continue the global numbering.
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock:
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(
         session.id,
         {

@@ -291,6 +291,13 @@ SYNTHETIC_MODEL = "synthetic-provider/nvidia/Synthetic-Model"
 # each backend's build-command test asserts the string reaches the CLI as prompt payload only.
 FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 
+# Import-path patch target shared by every test that silences or spies on streaming broadcasts.
+# Mock resolves the route through the src.core.sessions namespace (src/core/sessions.py:43 imports
+# the streaming_manager singleton) and setattr's broadcast on that shared object; a move of the
+# sessions-side import updates this one string. src.core.autonamer and src.agents.worker import
+# the same singleton, so their routes reach the same attribute.
+BROADCAST_PATCH_TARGET = "src.core.sessions.streaming_manager.broadcast"
+
 
 def plan_page_html(goal_body: str = "Ship the fix.") -> str:
   """Minimal plan page passing the plan assertion set: the shipped template's <style> block
@@ -634,7 +641,7 @@ def patch_trigger_fire(
   patches.append(patch("src.core.triggers.asyncio.create_subprocess_exec", new=subprocess_mock))
   if sleep_mock is not None:
     patches.append(patch("src.core.triggers.asyncio.sleep", new=sleep_mock))
-  patches.append(patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()))
+  patches.append(patch(BROADCAST_PATCH_TARGET, new=AsyncMock()))
   master_patch = patch("src.core.triggers.trigger_master", new=AsyncMock())
   with contextlib.ExitStack() as stack:
     for p in patches:

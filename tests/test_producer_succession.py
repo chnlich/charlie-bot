@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import BROADCAST_PATCH_TARGET
 from conftest import make_parent as _make_parent
 
 from src.core import event_types as ET
@@ -31,7 +32,7 @@ def _make_cfg(tmp_path: Path) -> CharlieBotConfig:
 
 
 def _broadcast_patch():
-  return patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock())
+  return patch(BROADCAST_PATCH_TARGET, new=AsyncMock())
 
 
 async def _elone(mgr: SessionManager, parent_id: str) -> str:

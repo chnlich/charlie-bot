@@ -51,6 +51,30 @@ def _enqueue_work_item(session_id: str, work_item: master_cc_state._WorkItem) ->
   return thinking_since, created
 
 
+async def _broadcast_running_changed(
+    session_id: str,
+    *,
+    has_running_tasks: bool,
+    thinking_since: datetime | None,
+    auto_trigger: bool,
+) -> None:
+  """Notify the sidebar of a busy-state change.
+
+  Single construction site for the RUNNING_CHANGED payload keys;
+  web/static/js/websocket.js reads them off the event verbatim.
+  """
+  await streaming_manager.broadcast(
+      "sidebar",
+      {
+          "type": ET.RUNNING_CHANGED,
+          "session_id": session_id,
+          "has_running_tasks": has_running_tasks,
+          "thinking_since": thinking_since.isoformat() if thinking_since else None,
+          "auto_trigger": auto_trigger,
+      },
+  )
+
+
 async def _session_consumer(session_id: str) -> None:
   """Drain the per-session queue sequentially, one CC run at a time."""
   queue = master_cc_state._session_queues[session_id]
@@ -181,14 +205,12 @@ async def _session_consumer(session_id: str) -> None:
       # Check if workers are still running before declaring idle.
       from src.core.sessions import SessionManager
       workers_running = await SessionManager(teardown_cfg)._has_running_tasks(session_id)
-      await streaming_manager.broadcast(
-          "sidebar", {
-              "type": ET.RUNNING_CHANGED,
-              "session_id": session_id,
-              "has_running_tasks": workers_running,
-              "thinking_since": None,
-              "auto_trigger": teardown_auto_trigger,
-          })
+      await _broadcast_running_changed(
+          session_id,
+          has_running_tasks=workers_running,
+          thinking_since=None,
+          auto_trigger=teardown_auto_trigger,
+      )
 
 
 async def run_message(
@@ -294,14 +316,12 @@ async def run_message(
   # Notify only when this call opened a new busy interval; the broadcast is a
   # pure notification — correctness comes from readers deriving the state.
   if created:
-    await streaming_manager.broadcast(
-        'sidebar', {
-            'type': ET.RUNNING_CHANGED,
-            'session_id': session_meta.id,
-            'has_running_tasks': True,
-            'thinking_since': thinking_since.isoformat(),
-            'auto_trigger': auto_trigger,
-        })
+    await _broadcast_running_changed(
+        session_meta.id,
+        has_running_tasks=True,
+        thinking_since=thinking_since,
+        auto_trigger=auto_trigger,
+    )
 
   # Await until this specific work item completes.
   return await future
@@ -388,14 +408,12 @@ async def enqueue_master_resume(
   # notification — correctness comes from readers deriving the state.
   thinking_since, created = _enqueue_work_item(session_meta.id, work_item)
   if created:
-    await streaming_manager.broadcast(
-        'sidebar', {
-            'type': ET.RUNNING_CHANGED,
-            'session_id': session_meta.id,
-            'has_running_tasks': True,
-            'thinking_since': thinking_since.isoformat(),
-            'auto_trigger': False,
-        })
+    await _broadcast_running_changed(
+        session_meta.id,
+        has_running_tasks=True,
+        thinking_since=thinking_since,
+        auto_trigger=False,
+    )
   return future
 
 

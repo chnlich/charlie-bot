@@ -356,15 +356,12 @@ async def cancel_master(
   record = meta.master_run if meta is not None else None
   if record is not None and session_mgr is not None:
     host_boot = await asyncio.to_thread(runs.read_host_boot_time)
-
-    def _alive() -> bool:
-      return runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot)
-
-    if _alive() and record.pid is not None:
+    alive = runs.run_alive_probe(record.pid, record.pid_start, record.started_at, host_boot)
+    if alive() and record.pid is not None:
       # Detached turn still running: the record's own liveness proof authorized
       # this kill.
       log.info("master_cancel_killing_detached_run", session=session_id, pid=record.pid)
-      await kill_group_escalating(record.pid, _alive)
+      await kill_group_escalating(record.pid, alive)
       await session_mgr.persist_master_run(session_id, None)
       log.info("master_cancel_succeeded", session=session_id)
       return True

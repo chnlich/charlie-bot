@@ -182,6 +182,20 @@ def is_run_alive(
   return started_at.astimezone(timezone.utc) > host_boot_time
 
 
+def run_alive_probe(
+    pid: int | None,
+    pid_start: str | None,
+    started_at: datetime | None,
+    host_boot_time: datetime,
+) -> Callable[[], bool]:
+  """The re-evaluable form of ``is_run_alive``: each call re-runs the judgment.
+
+  kill_group_escalating re-probes between signals, so kill authorization needs
+  the recorded-identity judgment as a callable, not a one-shot boolean.
+  """
+  return lambda: is_run_alive(pid, pid_start, started_at, host_boot_time)
+
+
 # ---------------------------------------------------------------------------
 # Descendant discovery (diagnostic only — never a liveness input)
 # ---------------------------------------------------------------------------

@@ -832,13 +832,10 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
     # which must never authorize a kill.
     if record.pid is not None:
       host_boot = await asyncio.to_thread(runs.read_host_boot_time)
-
-      def record_alive() -> bool:
-        return runs.is_run_alive(record.pid, record.pid_start, record.started_at, host_boot)
-
-      if record_alive():
+      alive = runs.run_alive_probe(record.pid, record.pid_start, record.started_at, host_boot)
+      if alive():
         log.warning("master_cc_resumed_run_hung_after_result", session=session_meta.id, pid=record.pid)
-        await kill_group_escalating(record.pid, record_alive)
+        await kill_group_escalating(record.pid, alive)
 
   except asyncio.CancelledError:
     log.warning("master_cc_resume_cancelled", session=session_meta.id)

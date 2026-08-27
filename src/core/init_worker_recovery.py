@@ -210,7 +210,7 @@ def _liveness_probe(
   """
   if pid is None or pid_start is None or started_at is None:
     return lambda: True
-  return lambda: runs.is_run_alive(pid, pid_start, started_at, host_boot)
+  return runs.run_alive_probe(pid, pid_start, started_at, host_boot)
 
 
 async def _reconcile_one(

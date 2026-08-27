@@ -30,6 +30,7 @@ from src.api.cron import router as cron_router  # noqa: E402
 from src.api.deps import get_session_manager  # noqa: E402
 from src.api.sessions import router as sessions_router  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
+from src.core import improve_command  # noqa: E402
 from src.core import models  # noqa: E402
 from src.core import review  # noqa: E402
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402
@@ -737,6 +738,42 @@ def make_fake_git_create_worktree(
     return BaseResolution(canonical=base_branch, start_point=base_branch, detail="fake")
 
   return fake_git_create_worktree
+
+
+def patch_improve_git_ops(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Install the pass-through git fakes on src.core.improve_command.
+
+  A run_improve_loop test without a real repo relies on the loop running to completion:
+  create_worktree reuses make_fake_git_create_worktree(mkdir=True), push_branch succeeds,
+  and the finally-cleanup remove removes the empty worktree dir and reports success so
+  prune runs. The fakes mirror the src.core.git signatures so the patched attributes stay
+  drop-in replacements.
+  """
+
+  async def fake_git_push_branch(repo_path: Path, branch_name: str) -> tuple[bool, str]:
+    del repo_path, branch_name
+    return True, ""
+
+  async def fake_git_worktree_remove(
+      repo_path: str,
+      wt_path: Path,
+      session: str,
+      *,
+      allowed_parent: Path,
+      expected_residue_name: str,
+  ) -> bool:
+    del repo_path, session, allowed_parent, expected_residue_name
+    if wt_path.exists():
+      wt_path.rmdir()
+    return True
+
+  async def fake_git_worktree_prune(repo_path: str, session: str) -> None:
+    del repo_path, session
+
+  monkeypatch.setattr(improve_command, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
+  monkeypatch.setattr(improve_command, "git_push_branch", fake_git_push_branch)
+  monkeypatch.setattr(improve_command, "git_worktree_remove", fake_git_worktree_remove)
+  monkeypatch.setattr(improve_command, "git_worktree_prune", fake_git_worktree_prune)
 
 
 def build_worker_prompt(

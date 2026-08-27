@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET
+from conftest import BROADCAST_PATCH_TARGET, patch_improve_git_ops
 from conftest import make_parent as _make_parent
 
 from src.core import event_types as ET
@@ -119,36 +119,13 @@ async def test_crash_recovery_report_no_successor_writes_into_itself_without_ori
 # ---------------------------------------------------------------------------
 
 
-def _patch_improve_git(monkeypatch: pytest.MonkeyPatch) -> None:
-  async def fake_create_worktree(repo_path: Path, base_branch: str, branch_name: str, wt_path: Path):
-    del repo_path, branch_name
-    wt_path.mkdir(parents=True, exist_ok=True)
-    return MagicMock(canonical=base_branch)
-
-  async def fake_push_branch(repo_path: Path, branch_name: str) -> tuple[bool, str]:
-    del repo_path, branch_name
-    return True, ""
-
-  async def fake_worktree_remove(*args, **kwargs) -> bool:
-    del args, kwargs
-    return True
-
-  async def fake_worktree_prune(repo_path: Path, session: str) -> None:
-    del repo_path, session
-
-  monkeypatch.setattr(improve_command, "git_create_worktree", fake_create_worktree)
-  monkeypatch.setattr(improve_command, "git_push_branch", fake_push_branch)
-  monkeypatch.setattr(improve_command, "git_worktree_remove", fake_worktree_remove)
-  monkeypatch.setattr(improve_command, "git_worktree_prune", fake_worktree_prune)
-
-
 @pytest.mark.asyncio
 async def test_improve_final_summary_lands_in_successor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   mgr = SessionManager(_make_cfg(tmp_path))
   parent_id = await _make_parent(mgr)
   child_id = await _elone(mgr, parent_id)
 
-  _patch_improve_git(monkeypatch)
+  patch_improve_git_ops(monkeypatch)
   monkeypatch.setattr(improve_command, "trigger_master", AsyncMock())
 
   with _broadcast_patch():
@@ -214,7 +191,7 @@ async def test_improve_final_summary_no_successor_writes_into_itself_without_ori
   mgr = SessionManager(_make_cfg(tmp_path))
   session_id = await _make_parent(mgr)
 
-  _patch_improve_git(monkeypatch)
+  patch_improve_git_ops(monkeypatch)
   monkeypatch.setattr(improve_command, "trigger_master", AsyncMock())
 
   with _broadcast_patch():

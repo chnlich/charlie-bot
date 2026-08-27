@@ -8,7 +8,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import make_fake_git_create_worktree
+from conftest import patch_improve_git_ops
 
 from src.core import improve_command
 from src.core.improve_command import (
@@ -401,32 +401,9 @@ def _patch_improve_loop_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[SpawnR
     del session, _cfg, _session_mgr
     triggered_payloads.append(json.loads(summary))
 
-  async def fake_git_push_branch(repo_path: Path, branch_name: str) -> tuple[bool, str]:
-    del repo_path, branch_name
-    return True, ""
-
-  async def fake_git_worktree_remove(
-      repo_path: str,
-      wt_path: Path,
-      session: str,
-      *,
-      allowed_parent: Path,
-      expected_residue_name: str,
-  ) -> bool:
-    del repo_path, session, allowed_parent, expected_residue_name
-    if wt_path.exists():
-      wt_path.rmdir()
-    return True
-
-  async def fake_git_worktree_prune(repo_path: str, session: str) -> None:
-    del repo_path, session
-
   monkeypatch.setattr("src.core.spawner.spawn_worker", fake_spawn_worker)
   monkeypatch.setattr(improve_command, "trigger_master", fake_trigger_master)
-  monkeypatch.setattr(improve_command, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
-  monkeypatch.setattr(improve_command, "git_push_branch", fake_git_push_branch)
-  monkeypatch.setattr(improve_command, "git_worktree_remove", fake_git_worktree_remove)
-  monkeypatch.setattr(improve_command, "git_worktree_prune", fake_git_worktree_prune)
+  patch_improve_git_ops(monkeypatch)
   return spawn_requests, triggered_payloads
 
 
@@ -689,33 +666,9 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
   async def fake_trigger_master(session: str, summary: str, _cfg, _session_mgr) -> None:
     del session, summary, _cfg, _session_mgr
 
-  async def fake_git_push_branch(repo_path: Path, branch_name: str) -> tuple[bool, str]:
-    del repo_path, branch_name
-    return True, ""
-
-  async def fake_git_worktree_remove(
-      repo_path: str,
-      wt_path: Path,
-      session: str,
-      *,
-      allowed_parent: Path,
-      expected_residue_name: str,
-  ) -> bool:
-    del allowed_parent, expected_residue_name
-    del repo_path, session
-    if wt_path.exists():
-      wt_path.rmdir()
-    return True
-
-  async def fake_git_worktree_prune(repo_path: str, session: str) -> None:
-    del repo_path, session
-
   monkeypatch.setattr("src.core.spawner.spawn_worker", fake_spawn_worker)
   monkeypatch.setattr("src.core.improve_command.trigger_master", fake_trigger_master)
-  monkeypatch.setattr(improve_command, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
-  monkeypatch.setattr(improve_command, "git_push_branch", fake_git_push_branch)
-  monkeypatch.setattr(improve_command, "git_worktree_remove", fake_git_worktree_remove)
-  monkeypatch.setattr(improve_command, "git_worktree_prune", fake_git_worktree_prune)
+  patch_improve_git_ops(monkeypatch)
   monkeypatch.setattr("src.core.ndjson.parse_ndjson_file", lambda path: [{"type": "result", "result": "ok"}])
 
   await _run_loop(

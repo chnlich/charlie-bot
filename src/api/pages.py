@@ -148,11 +148,11 @@ async def events_viewer(
   """Render the JSONL events viewer page for a session."""
   try:
     session = await session_mgr.get_session(session_id)
-  except (KeyError, FileNotFoundError):
-    raise HTTPException(status_code=404, detail="Session not found")
-  except Exception:
+  except (KeyError, FileNotFoundError) as e:
+    raise HTTPException(status_code=404, detail="Session not found") from e
+  except Exception as e:
     log.exception("get_session_failed", session_id=session_id)
-    raise HTTPException(status_code=500, detail="Failed to load session")
+    raise HTTPException(status_code=500, detail="Failed to load session") from e
 
   if not session:
     raise HTTPException(status_code=404, detail="Session not found")

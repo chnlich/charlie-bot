@@ -38,9 +38,9 @@ async def git_current_branch(repo_path: Path) -> str:
   )
   try:
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
-  except asyncio.TimeoutError:
+  except asyncio.TimeoutError as e:
     proc.kill()
-    raise RuntimeError(f'git rev-parse timed out after {SUBPROCESS_GIT_READ_TIMEOUT_ASYNC}s in {repo_path}')
+    raise RuntimeError(f'git rev-parse timed out after {SUBPROCESS_GIT_READ_TIMEOUT_ASYNC}s in {repo_path}') from e
   if proc.returncode != 0:
     err_msg = stderr.decode().strip()
     if 'unknown revision' in err_msg:
@@ -266,9 +266,9 @@ async def git_create_worktree(repo_path: Path, base_branch: str, branch_name: st
   )
   try:
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_WRITE_TIMEOUT)
-  except asyncio.TimeoutError:
+  except asyncio.TimeoutError as e:
     proc.kill()
-    raise RuntimeError(f'git worktree add timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s for {branch_name}')
+    raise RuntimeError(f'git worktree add timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s for {branch_name}') from e
   if proc.returncode != 0:
     out = stdout.decode().strip()
     err = stderr.decode().strip()

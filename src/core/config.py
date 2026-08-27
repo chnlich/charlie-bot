@@ -77,6 +77,16 @@ class ImprovementLoopConfig(BaseModel):
   extra_rules: list[str] = []  # module-specific rules appended to prompt
 
 
+# Single home of the mode:'master' project invariant: the cron create route
+# reports the violation as a 400 while the model validator raises it, so the
+# condition and message must not be restated per layer.
+def master_task_project_error(mode: str | None, project: str | None) -> str | None:
+  """Return the error text when a mode: master task lacks a project, else None."""
+  if mode == 'master' and not project:
+    return "mode 'master' requires 'project' (the group the PM session is bound to)"
+  return None
+
+
 class ScheduledTaskConfig(BaseModel):
   """Configuration for a single scheduled (cron-like) task.
 
@@ -124,8 +134,8 @@ class ScheduledTaskConfig(BaseModel):
       raise ValueError("mode 'master' requires a prompt source ('prompt' or 'prompt_file')")
     if self.notify and self.notify != 'telegram':
       raise ValueError(f"notify must be 'telegram' or None, got '{self.notify}'")
-    if self.mode == 'master' and not self.project:
-      raise ValueError("mode 'master' requires 'project' (the group the PM session is bound to)")
+    if project_error := master_task_project_error(self.mode, self.project):
+      raise ValueError(project_error)
     return self
 
 

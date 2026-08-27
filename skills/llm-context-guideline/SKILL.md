@@ -38,7 +38,8 @@ kinds of entry, and only these:
 3. A host, cluster, or account level pointer that cannot be guessed and has no owning document.
 
 Everything else stays out by default; when in doubt, reject and name the candidate in the
-report.
+report. Knowledge the model derives with no context (general engineering or statistical
+reasoning) is never admitted: the cheapest home is the model itself (user ruling 2026-08-26).
 
 Every admit and every revise carries three proof lines in the report, each headed by the
 question it answers; a question that finds no answer is the signal to rethink whether the
@@ -50,7 +51,9 @@ entry belongs in the store at all, and such a candidate is rejected:
 - **"Why is the store the cheapest home?"** (the Home line): answered by checking the others:
   repo-scoped knowledge lives in that repo's own CLAUDE.md or docs; charlie-bot behavior lives
   in the master prompt, a skill, config, or the source; incidents and event history live in
-  `LESSONS.md`; run results, live state, and receipts live in the run dir or owning session.
+  `LESSONS.md`; run results, live state, and receipts live in the run dir or owning session; a
+  project's experiment verdicts live in its tracker (Linear), not the store (user ruling
+  2026-08-26).
   A project-scoped finding lives under that project's topic or its repo docs; a cluster or host
   entry holds only what binds every project there. The Home line also names the reader and the
   delivery path that reaches them at the moment the entry changes their action. A reader who

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from conftest import SYNTHETIC_MODEL
 
 from src.agents.backends.opencode import OpenCodeBackend, OpenCodeSseSilenceError
 from src.core import event_types as ET
@@ -549,7 +550,7 @@ def _step_finish_part(input_t, output_t, reasoning_t, cache_read_t, cache_write_
 
 
 def test_make_accumulated_result_snapshot_carries_last_step_tokens_not_sum(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="synthetic-provider/nvidia/Synthetic-Model")
+  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   backend._model_limit = {"context": 409600, "input": 270000, "output": 131072}
   backend._accumulate_step_finish(
       _step_finish_part(100, 10, 5, 20, 30, 0.1))
@@ -572,12 +573,12 @@ def test_make_accumulated_result_snapshot_carries_last_step_tokens_not_sum(monke
   assert snapshot["tokens"]["reasoning"] == 8
   # cost still accumulates.
   assert result["total_cost_usd"] == pytest.approx(0.3)
-  assert snapshot["model"] == "synthetic-provider/nvidia/Synthetic-Model"
+  assert snapshot["model"] == SYNTHETIC_MODEL
   assert snapshot["limit"] == {"context": 409600, "input": 270000, "output": 131072}
 
 
 def test_make_accumulated_result_omits_snapshot_when_no_step_finish(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="synthetic-provider/nvidia/Synthetic-Model")
+  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   backend._model_limit = {"context": 409600, "input": 270000, "output": 131072}
 
   result = backend._make_accumulated_result()
@@ -586,7 +587,7 @@ def test_make_accumulated_result_omits_snapshot_when_no_step_finish(monkeypatch)
 
 
 def test_make_accumulated_result_snapshot_limit_none_when_catalog_unavailable(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="synthetic-provider/nvidia/Synthetic-Model")
+  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   backend._model_limit = None  # catalog unavailable -> limit stays None
   backend._accumulate_step_finish(_step_finish_part(100, 10, 0, 0, 0, 0.1))
 
@@ -599,7 +600,7 @@ def test_make_accumulated_result_snapshot_limit_none_when_catalog_unavailable(mo
 
 
 def test_reset_run_state_clears_model_limit_and_last_step_tokens(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="synthetic-provider/nvidia/Synthetic-Model")
+  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   backend._model_limit = {"context": 409600, "input": 270000, "output": 131072}
   backend._accumulate_step_finish(_step_finish_part(100, 10, 0, 0, 0, 0.1))
   assert backend._last_step_tokens is not None
@@ -642,7 +643,7 @@ class _FakeConfigClient:
 
 @pytest.mark.asyncio
 async def test_fetch_model_limit_returns_limit_from_recorded_providers(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="synthetic-provider/nvidia/Synthetic-Model")
+  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   # Recorded /config/providers payload: top-level {"providers": [...]}, each
   # provider's models is a dict keyed by model id.
   providers = {
@@ -683,7 +684,7 @@ async def test_fetch_model_limit_accepts_bare_list_and_list_models(monkeypatch) 
 
 @pytest.mark.asyncio
 async def test_fetch_model_limit_returns_none_and_warns_on_request_error(monkeypatch, capsys) -> None:
-  backend = _build_backend(monkeypatch, model="synthetic-provider/nvidia/Synthetic-Model")
+  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   client = _FakeConfigClient(exc=httpx.ConnectError("connection refused"))
 
   limit = await backend._fetch_model_limit(client)
@@ -696,7 +697,7 @@ async def test_fetch_model_limit_returns_none_and_warns_on_request_error(monkeyp
 
 @pytest.mark.asyncio
 async def test_fetch_model_limit_returns_none_and_warns_when_provider_absent(monkeypatch, capsys) -> None:
-  backend = _build_backend(monkeypatch, model="synthetic-provider/nvidia/Synthetic-Model")
+  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   providers = {"providers": [{"id": "other-provider", "models": {}}]}
   client = _FakeConfigClient(response=_FakeConfigResponse(payload=providers))
 
@@ -709,7 +710,7 @@ async def test_fetch_model_limit_returns_none_and_warns_when_provider_absent(mon
 
 @pytest.mark.asyncio
 async def test_fetch_model_limit_returns_none_and_warns_when_model_absent(monkeypatch, capsys) -> None:
-  backend = _build_backend(monkeypatch, model="synthetic-provider/nvidia/Synthetic-Model")
+  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   providers = {"providers": [{"id": "synthetic-provider", "models": {"other-model": {"id": "other-model"}}}]}
   client = _FakeConfigClient(response=_FakeConfigResponse(payload=providers))
 
@@ -722,7 +723,7 @@ async def test_fetch_model_limit_returns_none_and_warns_when_model_absent(monkey
 
 @pytest.mark.asyncio
 async def test_fetch_model_limit_returns_none_and_warns_on_malformed_payload(monkeypatch, capsys) -> None:
-  backend = _build_backend(monkeypatch, model="synthetic-provider/nvidia/Synthetic-Model")
+  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   # Not a recognised shape (no "providers" key, not a list).
   client = _FakeConfigClient(response=_FakeConfigResponse(payload={"random": "shape"}))
 
@@ -749,7 +750,7 @@ async def test_consume_sse_events_emits_snapshot_with_last_step_tokens(monkeypat
   context_snapshot carries the last step's tokens while the usage block carries
   the turn's accumulated sum; the catalog failure (limit None) does not fail the
   turn."""
-  backend = _build_backend(monkeypatch, model="synthetic-provider/nvidia/Synthetic-Model")
+  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   backend._session_id = "parent-session"
   backend._model_limit = None  # catalog unavailable
 
@@ -781,7 +782,7 @@ async def test_consume_sse_events_emits_snapshot_with_last_step_tokens(monkeypat
   assert snapshot["tokens"]["reasoning"] == 8
   # Catalog unavailable -> limit None, but the turn still completed.
   assert snapshot["limit"] is None
-  assert snapshot["model"] == "synthetic-provider/nvidia/Synthetic-Model"
+  assert snapshot["model"] == SYNTHETIC_MODEL
 
 
 # ---------------------------------------------------------------------------

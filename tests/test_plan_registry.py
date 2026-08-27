@@ -360,12 +360,8 @@ async def test_missing_plans_json_is_empty_registry(tmp_path: Path) -> None:
   assert listing == {"plans": [], "errors": []}
 
 
-@pytest.mark.asyncio
-async def test_old_plans_json_with_verify_keys_loads_and_list_omits_them(tmp_path: Path) -> None:
-  """Migration: an old plans.json with verify_thread/verify_state keys loads fine, and list_plans
-  output (and any later save) drops those legacy keys since the registry projects to the current schema."""
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  plans_path = cfg.sessions_dir / meta.id / "plans.json"
+def _write_legacy_verify_plans(plans_path: Path) -> None:
+  """Write plans.json in the legacy shape: verify_thread/verify_state version keys the current schema drops."""
   plans_path.parent.mkdir(parents=True, exist_ok=True)
   old_shape = {
       "plans":
@@ -391,6 +387,15 @@ async def test_old_plans_json_with_verify_keys_loads_and_list_omits_them(tmp_pat
           ]
   }
   plans_path.write_text(json.dumps(old_shape, indent=2), encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_old_plans_json_with_verify_keys_loads_and_list_omits_them(tmp_path: Path) -> None:
+  """Migration: an old plans.json with verify_thread/verify_state keys loads fine, and list_plans
+  output (and any later save) drops those legacy keys since the registry projects to the current schema."""
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  plans_path = cfg.sessions_dir / meta.id / "plans.json"
+  _write_legacy_verify_plans(plans_path)
 
   listing = await plan_mgr.list_plans(meta.id)
   assert len(listing["plans"]) == 1
@@ -409,31 +414,7 @@ async def test_save_drops_legacy_verify_keys(tmp_path: Path) -> None:
   """A mutation-triggered save rewrites the file with only the current schema fields."""
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   plans_path = cfg.sessions_dir / meta.id / "plans.json"
-  plans_path.parent.mkdir(parents=True, exist_ok=True)
-  old_shape = {
-      "plans":
-          [
-              {
-                  "id": 1,
-                  "title": "Legacy",
-                  "versions":
-                      [
-                          {
-                              "v": 1,
-                              "file": "artifacts/plan_01.html",
-                              "created_at": "2026-07-20T00:00:00+00:00",
-                              "trigger": "initial",
-                              "verify_thread": "t1",
-                              "verify_state": "clean",
-                              "base": None,
-                          }
-                      ],
-                  "takeoff": None,
-                  "closed": None,
-              }
-          ]
-  }
-  plans_path.write_text(json.dumps(old_shape, indent=2), encoding="utf-8")
+  _write_legacy_verify_plans(plans_path)
 
   # Trigger a save by approving the legacy plan.
   await plan_mgr.approve(meta.id, plan_id=1)

@@ -103,15 +103,24 @@ class SlackClient:
     # In-process channel-name cache, keyed by channel id; failures cache as None.
     self._channel_name_cache: dict[str, str | None] = {}
 
+  @staticmethod
+  def _checked_payload(resp: httpx.Response, method: str) -> dict[str, Any]:
+    """Slack Web API envelope rule for the raise-on-failure methods: HTTP errors
+    raise through httpx; an ok=false payload raises RuntimeError naming the
+    Slack method. get_channel_name folds failures into its None cache instead,
+    and remove_reaction adds its no_reaction exemption on top.
+    """
+    resp.raise_for_status()
+    payload = resp.json()
+    if not payload.get("ok"):
+      raise RuntimeError(f"{method} failed: {payload}")
+    return payload
+
   async def open_connection(self) -> str:
     """POST apps.connections.open and return the wss: socket url."""
     resp = await self._http.post(
         "https://slack.com/api/apps.connections.open", headers=self._app_headers)
-    resp.raise_for_status()
-    payload = resp.json()
-    if not payload.get("ok"):
-      raise RuntimeError(f"apps.connections.open failed: {payload}")
-    return payload["url"]
+    return self._checked_payload(resp, "apps.connections.open")["url"]
 
   async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
     """POST chat.postMessage; returns the API payload."""
@@ -120,22 +129,14 @@ class SlackClient:
       body["thread_ts"] = thread_ts
     resp = await self._http.post(
         "https://slack.com/api/chat.postMessage", headers=self._bot_headers, json=body)
-    resp.raise_for_status()
-    payload = resp.json()
-    if not payload.get("ok"):
-      raise RuntimeError(f"chat.postMessage failed: {payload}")
-    return payload
+    return self._checked_payload(resp, "chat.postMessage")
 
   async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
     """Add one emoji reaction to a message; returns the API payload."""
     body: dict[str, Any] = {"channel": channel, "name": name, "timestamp": ts}
     resp = await self._http.post(
         "https://slack.com/api/reactions.add", headers=self._bot_headers, json=body)
-    resp.raise_for_status()
-    payload = resp.json()
-    if not payload.get("ok"):
-      raise RuntimeError(f"reactions.add failed: {payload}")
-    return payload
+    return self._checked_payload(resp, "reactions.add")
 
   async def remove_reaction(self, channel: str, name: str, ts: str) -> dict:
     """Remove one emoji reaction from a message; returns the API payload.
@@ -159,11 +160,7 @@ class SlackClient:
         headers=self._bot_headers,
         params={"channel": channel, "message_ts": ts},
     )
-    resp.raise_for_status()
-    payload = resp.json()
-    if not payload.get("ok"):
-      raise RuntimeError(f"chat.getPermalink failed: {payload}")
-    return payload["permalink"]
+    return self._checked_payload(resp, "chat.getPermalink")["permalink"]
 
   async def get_channel_name(self, channel_id: str) -> str | None:
     """Resolve a channel id to its display name via conversations.info.

@@ -54,6 +54,48 @@ def _codex_turn_context(model: str) -> dict:
   }
 
 
+def _codex_token_count_event(
+    *, timestamp: str, total_input: int, total_cached: int, total_output: int,
+    last_input: int, last_cached: int, last_output: int, last_total: int) -> dict:
+  """Build one codex token_count event_msg; every fixture sets window 258400."""
+  return {
+      "timestamp": timestamp,
+      "type": "event_msg",
+      "payload": {
+          "type": "token_count",
+          "info": {
+              "total_token_usage": {
+                  "input_tokens": total_input,
+                  "cached_input_tokens": total_cached,
+                  "output_tokens": total_output,
+              },
+              "last_token_usage": {
+                  "input_tokens": last_input,
+                  "cached_input_tokens": last_cached,
+                  "output_tokens": last_output,
+                  "total_tokens": last_total,
+              },
+              "model_context_window": 258400,
+          },
+      },
+  }
+
+
+def _seed_codex_session(
+    session_mgr: SessionManager, *, session_id: str, name: str, backend: str,
+    native_thread_id: str, codex_home: Path, turn_model: str, token_event: dict) -> SessionMetadata:
+  """Write the session metadata, a filler user event, and a one-turn codex rollout."""
+  meta = SessionMetadata(id=session_id, name=name, backend=backend, cc_session_id=native_thread_id)
+  _write_session(session_mgr, meta, [
+      {"type": "user", "content": "hello", "timestamp": "2026-03-31T20:42:52Z"},
+  ])
+  _write_codex_rollout(codex_home, native_thread_id, [
+      _codex_turn_context(turn_model),
+      token_event,
+  ])
+  return meta
+
+
 def _assistant_event(model: str, input_tokens: int, cache_creation: int = 0, cache_read: int = 0,
                      parent_tool_use_id: str | None = None) -> dict:
   return {
@@ -719,40 +761,21 @@ async def test_codex_rollout_resolves_via_other_backend_when_session_backend_abs
       ],
   )
   session_mgr = SessionManager(cfg)
-  native_thread_id = "019d45a2-836d-7552-a54f-3c6c5511e502"
-  meta = SessionMetadata(
-      id="session-codex-old",
+  # "codex-old" is absent from config but starts with "codex", so is_codex_backend
+  # admits it via the prefix fallback while rollout lookup walks the other backend's tree.
+  meta = _seed_codex_session(
+      session_mgr,
+      session_id="session-codex-old",
       name="Codex Old Backend",
-      backend="codex-old",  # absent from config, but starts with "codex"
-      cc_session_id=native_thread_id,
+      backend="codex-old",
+      native_thread_id="019d45a2-836d-7552-a54f-3c6c5511e502",
+      codex_home=tmp_path / "codex-tree",
+      turn_model="gpt-5.5",
+      token_event=_codex_token_count_event(
+          timestamp="2026-03-31T20:43:12.454Z",
+          total_input=1_431_555, total_cached=1_126_656, total_output=16_521,
+          last_input=179_319, last_cached=176_640, last_output=1_732, last_total=181_051),
   )
-  _write_session(session_mgr, meta, [
-      {"type": "user", "content": "hello", "timestamp": "2026-03-31T20:42:52Z"},
-  ])
-  _write_codex_rollout(tmp_path / "codex-tree", native_thread_id, [
-      _codex_turn_context("gpt-5.5"),
-      {
-          "timestamp": "2026-03-31T20:43:12.454Z",
-          "type": "event_msg",
-          "payload": {
-              "type": "token_count",
-              "info": {
-                  "total_token_usage": {
-                      "input_tokens": 1431555,
-                      "cached_input_tokens": 1126656,
-                      "output_tokens": 16521,
-                  },
-                  "last_token_usage": {
-                      "input_tokens": 179319,
-                      "cached_input_tokens": 176640,
-                      "output_tokens": 1732,
-                      "total_tokens": 181051,
-                  },
-                  "model_context_window": 258400,
-              },
-          },
-      },
-  ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -773,40 +796,19 @@ async def test_codex_unconfigured_compaction_logs_no_warning(tmp_path: Path, cap
   cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"))
   # _build_cfg creates the codex backend WITHOUT model_auto_compact_token_limit.
   session_mgr = SessionManager(cfg)
-  native_thread_id = "019d45a2-836d-7552-a54f-3c6c5511e5ee"
-  meta = SessionMetadata(
-      id="session-codex-unconfigured",
+  meta = _seed_codex_session(
+      session_mgr,
+      session_id="session-codex-unconfigured",
       name="Codex Unconfigured",
       backend="codex-test",
-      cc_session_id=native_thread_id,
+      native_thread_id="019d45a2-836d-7552-a54f-3c6c5511e5ee",
+      codex_home=tmp_path / "codex-tree",
+      turn_model="gpt-5.5",
+      token_event=_codex_token_count_event(
+          timestamp="2026-03-31T20:43:12.454Z",
+          total_input=1_431_555, total_cached=1_126_656, total_output=16_521,
+          last_input=179_319, last_cached=176_640, last_output=1_732, last_total=181_051),
   )
-  _write_session(session_mgr, meta, [
-      {"type": "user", "content": "hello", "timestamp": "2026-03-31T20:42:52Z"},
-  ])
-  _write_codex_rollout(tmp_path / "codex-tree", native_thread_id, [
-      _codex_turn_context("gpt-5.5"),
-      {
-          "timestamp": "2026-03-31T20:43:12.454Z",
-          "type": "event_msg",
-          "payload": {
-              "type": "token_count",
-              "info": {
-                  "total_token_usage": {
-                      "input_tokens": 1431555,
-                      "cached_input_tokens": 1126656,
-                      "output_tokens": 16521,
-                  },
-                  "last_token_usage": {
-                      "input_tokens": 179319,
-                      "cached_input_tokens": 176640,
-                      "output_tokens": 1732,
-                      "total_tokens": 181051,
-                  },
-                  "model_context_window": 258400,
-              },
-          },
-      },
-  ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -828,40 +830,19 @@ async def test_codex_context_compact_at_uses_auto_compact_limit_when_configured(
   cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"),
                   model_auto_compact_token_limit=180_000)
   session_mgr = SessionManager(cfg)
-  native_thread_id = "019d26e4-be1c-7171-a3fd-6f1ab10662de"
-  meta = SessionMetadata(
-      id="session-autocompact",
+  meta = _seed_codex_session(
+      session_mgr,
+      session_id="session-autocompact",
       name="Auto Compact",
       backend="codex-test",
-      cc_session_id=native_thread_id,
+      native_thread_id="019d26e4-be1c-7171-a3fd-6f1ab10662de",
+      codex_home=tmp_path / "codex-tree",
+      turn_model="gpt-5.5",
+      token_event=_codex_token_count_event(
+          timestamp="2026-03-25T21:32:09.989Z",
+          total_input=1_099_429, total_cached=1_001_472, total_output=15_186,
+          last_input=176_028, last_cached=168_832, last_output=782, last_total=176_810),
   )
-  _write_session(session_mgr, meta, [
-      {"type": "user", "content": "hello", "timestamp": "2026-03-25T21:26:57Z"},
-  ])
-  _write_codex_rollout(tmp_path / "codex-tree", native_thread_id, [
-      _codex_turn_context("gpt-5.5"),
-      {
-          "timestamp": "2026-03-25T21:32:09.989Z",
-          "type": "event_msg",
-          "payload": {
-              "type": "token_count",
-              "info": {
-                  "total_token_usage": {
-                      "input_tokens": 1099429,
-                      "cached_input_tokens": 1001472,
-                      "output_tokens": 15186,
-                  },
-                  "last_token_usage": {
-                      "input_tokens": 176028,
-                      "cached_input_tokens": 168832,
-                      "output_tokens": 782,
-                      "total_tokens": 176810,
-                  },
-                  "model_context_window": 258400,
-              },
-          },
-      },
-  ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -879,27 +860,10 @@ async def test_codex_context_compact_at_uses_auto_compact_limit_when_configured(
 
 def test_extract_codex_rollout_usage_event_uses_last_input_tokens() -> None:
   usage = _extract_codex_rollout_usage_event(
-      {
-          "timestamp": "2026-03-25T17:50:36.349Z",
-          "type": "event_msg",
-          "payload": {
-              "type": "token_count",
-              "info": {
-                  "total_token_usage": {
-                      "input_tokens": 1252236,
-                      "cached_input_tokens": 950016,
-                      "output_tokens": 14789,
-                  },
-                  "last_token_usage": {
-                      "input_tokens": 176028,
-                      "cached_input_tokens": 168832,
-                      "output_tokens": 782,
-                      "total_tokens": 176810,
-                  },
-                  "model_context_window": 258400,
-              },
-          },
-      }
+      _codex_token_count_event(
+          timestamp="2026-03-25T17:50:36.349Z",
+          total_input=1_252_236, total_cached=950_016, total_output=14_789,
+          last_input=176_028, last_cached=168_832, last_output=782, last_total=176_810)
   )
 
   assert usage == {
@@ -917,40 +881,19 @@ def test_extract_codex_rollout_usage_event_uses_last_input_tokens() -> None:
 async def test_codex_native_cost_sums_cumulative_tokens(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"))
   session_mgr = SessionManager(cfg)
-  native_thread_id = "019d9f9e-5d7a-7f44-81a8-e9cb8261a51d"
-  meta = SessionMetadata(
-      id="session-codex-cost",
+  meta = _seed_codex_session(
+      session_mgr,
+      session_id="session-codex-cost",
       name="Codex Cost Session",
       backend="codex-test",
-      cc_session_id=native_thread_id,
+      native_thread_id="019d9f9e-5d7a-7f44-81a8-e9cb8261a51d",
+      codex_home=tmp_path / "codex-tree",
+      turn_model="gpt-5.5",
+      token_event=_codex_token_count_event(
+          timestamp="2026-03-31T20:43:12.454Z",
+          total_input=1_951_892, total_cached=1_858_304, total_output=15_209,
+          last_input=179_319, last_cached=176_640, last_output=1_732, last_total=181_051),
   )
-  _write_session(session_mgr, meta, [
-      {"type": "user", "content": "hello", "timestamp": "2026-03-31T20:42:52Z"},
-  ])
-  _write_codex_rollout(tmp_path / "codex-tree", native_thread_id, [
-      _codex_turn_context("gpt-5.5"),
-      {
-          "timestamp": "2026-03-31T20:43:12.454Z",
-          "type": "event_msg",
-          "payload": {
-              "type": "token_count",
-              "info": {
-                  "total_token_usage": {
-                      "input_tokens": 1951892,
-                      "cached_input_tokens": 1858304,
-                      "output_tokens": 15209,
-                  },
-                  "last_token_usage": {
-                      "input_tokens": 179319,
-                      "cached_input_tokens": 176640,
-                      "output_tokens": 1732,
-                      "total_tokens": 181051,
-                  },
-                  "model_context_window": 258400,
-              },
-          },
-      },
-  ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -963,40 +906,19 @@ async def test_codex_native_cost_sums_cumulative_tokens(tmp_path: Path) -> None:
 async def test_codex_native_cost_is_none_for_unknown_model(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"))
   session_mgr = SessionManager(cfg)
-  native_thread_id = "019d9fb0-c3f8-72ec-9d8d-0ed32d404b30"
-  meta = SessionMetadata(
-      id="session-codex-unknown-cost",
+  meta = _seed_codex_session(
+      session_mgr,
+      session_id="session-codex-unknown-cost",
       name="Codex Unknown Cost Session",
       backend="codex-test",
-      cc_session_id=native_thread_id,
+      native_thread_id="019d9fb0-c3f8-72ec-9d8d-0ed32d404b30",
+      codex_home=tmp_path / "codex-tree",
+      turn_model="gpt-unknown",
+      token_event=_codex_token_count_event(
+          timestamp="2026-03-31T20:43:12.454Z",
+          total_input=1_951_892, total_cached=1_858_304, total_output=15_209,
+          last_input=179_319, last_cached=176_640, last_output=1_732, last_total=181_051),
   )
-  _write_session(session_mgr, meta, [
-      {"type": "user", "content": "hello", "timestamp": "2026-03-31T20:42:52Z"},
-  ])
-  _write_codex_rollout(tmp_path / "codex-tree", native_thread_id, [
-      _codex_turn_context("gpt-unknown"),
-      {
-          "timestamp": "2026-03-31T20:43:12.454Z",
-          "type": "event_msg",
-          "payload": {
-              "type": "token_count",
-              "info": {
-                  "total_token_usage": {
-                      "input_tokens": 1951892,
-                      "cached_input_tokens": 1858304,
-                      "output_tokens": 15209,
-                  },
-                  "last_token_usage": {
-                      "input_tokens": 179319,
-                      "cached_input_tokens": 176640,
-                      "output_tokens": 1732,
-                      "total_tokens": 181051,
-                  },
-                  "model_context_window": 258400,
-              },
-          },
-      },
-  ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 

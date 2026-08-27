@@ -13,7 +13,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from conftest import make_plan_setup, plan_page_html, write_plan_artifact, write_stub_chrome
+from conftest import (
+  make_plan_setup,
+  plan_page_html,
+  write_plan_artifact,
+  write_stub_chrome,
+)
 
 from src.cli.artifact import main as artifact_main
 from src.core import artifact_check

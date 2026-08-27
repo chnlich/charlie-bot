@@ -525,7 +525,9 @@ def test_paging_path_does_not_call_parse_ndjson_range(monkeypatch: pytest.Monkey
     raise AssertionError("parse_ndjson_range must not be called on the paging path")
 
   monkeypatch.setattr(ndjson, "parse_ndjson_range", _boom)
-  monkeypatch.setattr("src.api.message_utils.parse_ndjson_range", _boom, raising=False)
+  # chat_events binds parse_ndjson_range via from-import, so the ndjson-home patch
+  # cannot reach the read path; each production binding needs its own patch.
+  monkeypatch.setattr("src.core.chat_events.parse_ndjson_range", _boom)
 
   events = _many_messages_events(100)
   projection = MessageProjection(events)

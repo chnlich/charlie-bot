@@ -19,6 +19,7 @@ from src.core.models import (
   SessionCallbacks,
   SessionMetadata,
 )
+from src.core.process import kill_group_escalating
 from src.core.streaming import streaming_manager
 from src.core.thinking_state import busy_since, clear_busy, mark_busy
 
@@ -363,7 +364,7 @@ async def cancel_master(
       # Detached turn still running: the record's own liveness proof authorized
       # this kill.
       log.info("master_cancel_killing_detached_run", session=session_id, pid=record.pid)
-      await master_cc_run._kill_run_group_escalating(record.pid, _alive)
+      await kill_group_escalating(record.pid, _alive)
       await session_mgr.persist_master_run(session_id, None)
       log.info("master_cancel_succeeded", session=session_id)
       return True

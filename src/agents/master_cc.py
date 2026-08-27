@@ -28,7 +28,6 @@ from src.agents.master_cc_run import (  # noqa: F401  # re-export: facade import
   _cc_transcript_exists,
   _handle_event,
   _is_manual_compact_boundary,
-  _kill_run_group_escalating,
   _resolve_resume_id,
   _resolve_resume_option,
   _resume_cc,

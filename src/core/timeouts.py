@@ -161,6 +161,16 @@ OPENCODE_STDOUT_DRAIN_TIMEOUT = 5.0  # seconds
 OPENCODE_SSE_PROGRESS_TIMEOUT = 3600.0  # seconds
 
 # ---------------------------------------------------------------------------
+# Process-group kill escalation
+# ---------------------------------------------------------------------------
+
+# SIGTERM grace before a still-alive process group is SIGKILLed (kill_group_escalating
+# in src/core/process.py). The poll interval bounds only how late past the grace the
+# escalation can fire; it does not shorten the grace.
+KILL_ESCALATION_GRACE_SECONDS = 5.0  # seconds between SIGTERM and the SIGKILL decision
+KILL_ESCALATION_POLL_SECONDS = 0.2  # seconds between liveness probes during the grace
+
+# ---------------------------------------------------------------------------
 # Master-run identity barrier (boot)
 # ---------------------------------------------------------------------------
 

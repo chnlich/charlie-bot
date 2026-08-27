@@ -3,8 +3,6 @@
 import asyncio
 import json
 import os
-import signal
-import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,7 +24,7 @@ from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, ThreadMetadata
 from src.core.ndjson import append_ndjson
-from src.core.process import kill_process_group
+from src.core.process import kill_group_escalating
 from src.core.streaming import handle_compaction_events, streaming_manager
 
 log = structlog.get_logger()
@@ -217,7 +215,8 @@ class Worker:
     hang_diagnostics = None
     if is_alive():
       hang_diagnostics = await _capture_proc_diagnostics(self._thread.pid)
-      await self._kill_detached_run(is_alive)
+      if self._thread.pid is not None:
+        await kill_group_escalating(self._thread.pid, is_alive)
 
     completion = runs.raw_completion_time(raw_path)
     await self._emit_terminal_events(
@@ -228,17 +227,6 @@ class Worker:
     )
     log.info("worker_resume_finished", thread=self._thread.id, exit_code=exit_code)
     return exit_code
-
-  async def _kill_detached_run(self, is_alive: Callable[[], bool]) -> None:
-    """SIGTERM a detached (re-attached) run's process group; escalate to SIGKILL."""
-    if self._thread.pid is None:
-      return
-    kill_process_group(self._thread.pid, signal.SIGTERM)
-    deadline = time.monotonic() + 5.0
-    while is_alive() and time.monotonic() < deadline:
-      await asyncio.sleep(0.2)
-    if is_alive():
-      kill_process_group(self._thread.pid, signal.SIGKILL)
 
   def _raw_log_path(self) -> Path:
     # The events log lives in <thread>/data/, which is also the backend's

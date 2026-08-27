@@ -1,9 +1,9 @@
 """Initialize ~/.charliebot/ directory structure on first run.
 
-Facade over the ``init_<part>`` modules: every pre-split top-level def/class
-keeps resolving at its original ``src.core.init.<name>`` path, so existing
-import sites and monkeypatch targets on this module stay valid. The parts hold
-the implementation and must never import this module — that would close an
+Facade over the ``init_<part>`` modules: the re-export list carries exactly the
+names call sites still reach through ``src.core.init.<name>``, so existing
+import sites and monkeypatch targets on this module keep resolving. The parts
+hold the implementation and must never import this module — that would close an
 import cycle.
 
 The three assignments at the bottom serve module-level names that tests reach
@@ -15,37 +15,21 @@ is bound by reference: the code and the tests must mutate one shared set.
 
 import src.core.init_worker_recovery as _init_worker_recovery
 from src.core.init_master_recovery import (  # noqa: F401  # re-export: facade import list (see module docstring)
-  _await_reattach,
-  _master_alive_unfollowable_message,
-  _MasterScanFailed,
-  _reconcile_master_runs,
-  _replay_unanswered_user_messages,
   reconcile_master_identity,
   run_crash_recovery,
   unanswered_user_events,
 )
 from src.core.init_seed import (  # noqa: F401  # re-export: facade import list (see module docstring)
-  _default_config_yaml,
-  _seed_if_missing,
-  _seed_memory_scaffold,
   init_charliebot_home,
   seed_default_cron_tasks,
 )
 from src.core.init_worker_recovery import (  # noqa: F401  # re-export: facade import list (see module docstring)
-  _complete_finalize_effects,
-  _effects_maybe_missing,
   _follow_silence_recheck,
   _InterruptedRun,
-  _liveness_probe,
   _maybe_respawn,
-  _parse_started_at,
   _quarantine_stale_failed_worktrees,
-  _reconcile_interrupted_runs,
-  _reconcile_one,
   _report_recovery_event,
   _scan_interrupted_runs,
-  _started_before_boot,
-  _translate_for_thread,
   iter_recent_thread_metas,
 )
 

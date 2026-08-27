@@ -17,6 +17,8 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const {createFakeWebSocketClass} = require('./fake_websocket');
+
 const WEBSOCKET_JS = fs.readFileSync(
   path.join(__dirname, '..', 'web', 'static', 'js', 'websocket.js'),
   'utf8'
@@ -25,25 +27,7 @@ const WEBSOCKET_JS = fs.readFileSync(
 function buildClient() {
   const bubbles = [];
   const preview = {visible: false, content: ''};
-
-  class FakeWebSocket {
-    static instances = [];
-    constructor(url) {
-      this.url = url;
-      this.sent = [];
-      this.closed = false;
-      this.onopen = null;
-      this.onmessage = null;
-      this.onclose = null;
-      this.onerror = null;
-      FakeWebSocket.instances.push(this);
-    }
-    send(payload) { this.sent.push(payload); }
-    close() { this.closed = true; }
-    emitOpen() { if (this.onopen) this.onopen(); }
-    emitClose() { if (this.onclose) this.onclose(); }
-    emitMessage(data) { if (this.onmessage) this.onmessage({data: JSON.stringify(data)}); }
-  }
+  const FakeWebSocket = createFakeWebSocketClass();
 
   const context = {
     SESSION_ID: 's1',

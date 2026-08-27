@@ -4,10 +4,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET
+from conftest import BROADCAST_PATCH_TARGET, make_home_session
 
-from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
 
 
@@ -17,9 +15,7 @@ def _broadcast_calls(mock: AsyncMock) -> list[dict]:
 
 @pytest.mark.asyncio
 async def test_persist_user_event_broadcasts_message_delta_only(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "hi", "timestamp": "ts"})
@@ -33,9 +29,7 @@ async def test_persist_user_event_broadcasts_message_delta_only(tmp_path: Path) 
 
 @pytest.mark.asyncio
 async def test_persist_assistant_text_broadcasts_stream_then_message_on_master_done(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(session.id, {
@@ -62,9 +56,7 @@ async def test_persist_assistant_text_broadcasts_stream_then_message_on_master_d
 
 @pytest.mark.asyncio
 async def test_persist_handler_result_broadcasts_message_delta_and_raw_event(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(session.id, {
@@ -84,9 +76,7 @@ async def test_persist_handler_result_broadcasts_message_delta_and_raw_event(tmp
 @pytest.mark.asyncio
 async def test_aggregator_state_persists_across_calls(tmp_path: Path) -> None:
   """Tools attached in one event surface in the eventual flush message."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(session.id, {
@@ -122,9 +112,7 @@ async def test_aggregator_state_persists_across_calls(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_lazy_init_aggregator_after_restart_does_not_replay_history(tmp_path: Path) -> None:
   """A new SessionManager (simulating restart) must not re-broadcast historical deltas."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="t"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "hi", "timestamp": "t1"})

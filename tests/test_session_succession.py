@@ -15,6 +15,7 @@ from conftest import (
   TRIGGER_MASTER_PATCH_TARGET,
   build_sessions_cfg,
   build_two_backend_cfg,
+  make_home_session,
 )
 from conftest import append_events as _append_events
 from conftest import make_parent as _make_parent
@@ -333,9 +334,7 @@ async def test_resolve_successor_chain_returns_none_for_missing_session(tmp_path
 
 @pytest.mark.asyncio
 async def test_resolve_successor_chain_raises_runtime_error_on_cycle(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  a = await mgr.create_session(CreateSessionRequest(name="A"), backend="claude-opus-4.6")
+  cfg, mgr, a = await make_home_session(tmp_path, name="A", backend="claude-opus-4.6")
   b = await mgr.create_session(CreateSessionRequest(name="B"), backend="claude-opus-4.6")
   a_meta = await mgr.read_metadata_fresh(a.id)
   b_meta = await mgr.read_metadata_fresh(b.id)
@@ -449,9 +448,7 @@ async def test_deliver_to_successor_leaves_origin_absent_for_no_successor(tmp_pa
 async def test_deliver_to_successor_returns_none_and_writes_nothing_when_chain_end_dir_removed(
     tmp_path: Path,
 ) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Gone"), backend="claude-opus-4.6")
+  cfg, mgr, session = await make_home_session(tmp_path, name="Gone", backend="claude-opus-4.6")
 
   # Remove the whole session directory, including metadata.json, exactly as a
   # permanent delete does. append_ndjson would recreate the dir — assert it does not.

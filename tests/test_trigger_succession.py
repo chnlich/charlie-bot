@@ -7,12 +7,16 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, TRIGGER_MASTER_PATCH_TARGET
+from conftest import (
+  BROADCAST_PATCH_TARGET,
+  TRIGGER_MASTER_PATCH_TARGET,
+  make_home_session,
+)
 from conftest import make_parent as _make_parent
 
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import trigger_master
-from src.core.models import CreateSessionRequest, TriggerStatus
+from src.core.models import TriggerStatus
 from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager
 
@@ -37,9 +41,7 @@ async def test_trigger_master_runs_successor_when_requested_session_eloned(tmp_p
 
 @pytest.mark.asyncio
 async def test_trigger_master_skips_archived_without_successor(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Archived"), backend="claude-opus-4.6")
+  cfg, mgr, session = await make_home_session(tmp_path, name="Archived", backend="claude-opus-4.6")
   await mgr.archive_session(session.id)
 
   with patch(
@@ -87,9 +89,7 @@ async def test_firing_trigger_eloned_delivers_into_successor_and_wakes(tmp_path:
 
 @pytest.mark.asyncio
 async def test_firing_trigger_archived_by_hand_without_successor_still_cancels(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Archived"), backend="claude-opus-4.6")
+  cfg, mgr, session = await make_home_session(tmp_path, name="Archived", backend="claude-opus-4.6")
   await mgr.archive_session(session.id)
   trigger_mgr = TriggerManager(cfg, mgr)
 

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from conftest import append_events as _append_events
+from conftest import make_home_session
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
@@ -19,7 +20,6 @@ from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SessionStatus
 from src.core.sessions import SessionManager
-
 
 _PLAN_V1_REL = "artifacts/plan_01.html"
 _PLAN_V2_REL = "artifacts/plan_02.html"
@@ -75,9 +75,7 @@ def _write_artifact(cfg: CharlieBotConfig, session_id: str, file: str, content: 
 
 @pytest.mark.asyncio
 async def test_fork_copies_plans_json_and_referenced_artifacts(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   _write_artifact(cfg, parent.id, _PLAN_V1_REL, "<html>v1</html>")
@@ -104,9 +102,7 @@ async def test_fork_copies_plans_json_and_referenced_artifacts(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_fork_normalizes_absolute_in_session_paths_and_copies_distinct_files(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   artifact_rel = _PLAN_V1_REL
@@ -132,9 +128,7 @@ async def test_fork_normalizes_absolute_in_session_paths_and_copies_distinct_fil
 
 @pytest.mark.asyncio
 async def test_fork_normalizes_mixed_absolute_and_relative_paths(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   first_rel = _PLAN_V1_REL
@@ -158,9 +152,7 @@ async def test_fork_normalizes_mixed_absolute_and_relative_paths(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_fork_missing_artifact_logs_warning_and_does_not_abort(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   _write_artifact(cfg, parent.id, _PLAN_V1_REL, "<html>present</html>")
@@ -192,9 +184,7 @@ async def test_fork_missing_artifact_logs_warning_and_does_not_abort(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_fork_outside_parent_artifact_logs_warning_and_keeps_version(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
   other = await mgr.create_session(CreateSessionRequest(name="Other"), backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
@@ -220,9 +210,7 @@ async def test_fork_outside_parent_artifact_logs_warning_and_keeps_version(tmp_p
 
 @pytest.mark.asyncio
 async def test_fork_outside_parent_artifact_does_not_alias_copied_artifact(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
   other = await mgr.create_session(CreateSessionRequest(name="Other"), backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
@@ -256,9 +244,7 @@ async def test_fork_outside_parent_artifact_does_not_alias_copied_artifact(tmp_p
 
 @pytest.mark.asyncio
 async def test_fork_without_plans_json_copies_nothing(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   child = await mgr.fork_session(parent.id)
@@ -268,9 +254,7 @@ async def test_fork_without_plans_json_copies_nothing(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_elone_also_copies_plans_and_artifacts(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   _write_artifact(cfg, parent.id, _PLAN_V1_REL, "<html>v1</html>")
@@ -291,9 +275,7 @@ async def test_elone_also_copies_plans_and_artifacts(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_all_sessions_status_pending_plan_approval_awaiting_approval(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Awaiting"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="Awaiting")
 
   # not closed, no takeoff, latest verify_state clean -> derived "awaiting approval"
   _write_plans(cfg, session.id, {"plans": [
@@ -306,9 +288,7 @@ async def test_all_sessions_status_pending_plan_approval_awaiting_approval(tmp_p
 
 @pytest.mark.asyncio
 async def test_all_sessions_status_pending_plan_approval_approved_is_unset(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Approved"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="Approved")
 
   # takeoff set + verify_state clean -> derived "approved"
   _write_plans(cfg, session.id, {"plans": [
@@ -322,9 +302,7 @@ async def test_all_sessions_status_pending_plan_approval_approved_is_unset(tmp_p
 
 @pytest.mark.asyncio
 async def test_all_sessions_status_pending_plan_approval_closed_is_unset(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Closed"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="Closed")
 
   _write_plans(cfg, session.id, {"plans": [
       _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")],
@@ -337,9 +315,7 @@ async def test_all_sessions_status_pending_plan_approval_closed_is_unset(tmp_pat
 
 @pytest.mark.asyncio
 async def test_all_sessions_status_pending_plan_approval_no_plans_json_is_unset(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="NoPlans"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="NoPlans")
 
   status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
   assert status[session.id]["has_pending_plan_approval"] is False
@@ -347,9 +323,7 @@ async def test_all_sessions_status_pending_plan_approval_no_plans_json_is_unset(
 
 @pytest.mark.asyncio
 async def test_all_sessions_status_pending_plan_approval_mixed_lineages(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Mixed"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="Mixed")
 
   # One approved lineage + one awaiting-approval lineage -> flag set (at least one awaiting).
   _write_plans(cfg, session.id, {"plans": [
@@ -364,9 +338,7 @@ async def test_all_sessions_status_pending_plan_approval_mixed_lineages(tmp_path
 
 @pytest.mark.asyncio
 async def test_pending_plan_approval_not_persisted_to_metadata(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Awaiting"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="Awaiting")
 
   _write_plans(cfg, session.id, {"plans": [
       _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")]),
@@ -381,9 +353,7 @@ async def test_pending_plan_approval_not_persisted_to_metadata(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_pending_plan_approval_archived_session_is_unset(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="ArchivedAwaiting"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="ArchivedAwaiting")
 
   _write_plans(cfg, session.id, {"plans": [
       _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")]),
@@ -400,9 +370,7 @@ async def test_pending_plan_approval_archived_session_is_unset(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_pending_plan_approval_no_parse_cost_without_plans_json(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="ShortCircuit"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="ShortCircuit")
 
   # The existence check short-circuits sessions without plans.json: the sync
   # helper returns False without parsing, and the status payload reflects it.
@@ -428,9 +396,7 @@ def _build_sessions_app(session_mgr: SessionManager) -> FastAPI:
 @pytest.mark.asyncio
 async def test_status_endpoint_survives_corrupt_plans_json_other_sessions_unaffected(tmp_path: Path) -> None:
   """Acceptance #1: corrupt plans.json on one session must not 5xx the sidebar poll."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  good = await mgr.create_session(CreateSessionRequest(name="Good"))
+  cfg, mgr, good = await make_home_session(tmp_path, name="Good")
   bad = await mgr.create_session(CreateSessionRequest(name="Bad"))
 
   # good has an awaiting-approval lineage; bad has a corrupt plans.json.
@@ -454,9 +420,7 @@ async def test_status_endpoint_survives_corrupt_plans_json_other_sessions_unaffe
 @pytest.mark.asyncio
 async def test_corrupt_plans_json_logs_plan_registry_read_failed_warning(tmp_path: Path) -> None:
   """Reviewer A1: the probe logs plan_registry_read_failed with session_id and error."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Bad"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="Bad")
   plans_path = cfg.sessions_dir / session.id / "plans.json"
   plans_path.parent.mkdir(parents=True, exist_ok=True)
   plans_path.write_text("{not valid json", encoding="utf-8")
@@ -476,9 +440,7 @@ async def test_corrupt_plans_json_logs_plan_registry_read_failed_warning(tmp_pat
 @pytest.mark.asyncio
 async def test_probe_partial_degradation_still_reports_pending_approval_true(tmp_path: Path) -> None:
   """Acceptance #2: one valid awaiting plan + one bad plan → probe still True (valid plan counts)."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Mixed"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="Mixed")
   _write_plans(cfg, session.id, {"plans": [
       _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")]),
       {"id": 2, "title": "Bad", "versions": [], "takeoff": None, "closed": None},
@@ -495,9 +457,7 @@ async def test_probe_partial_degradation_still_reports_pending_approval_true(tmp
 @pytest.mark.asyncio
 async def test_list_sessions_endpoint_includes_pending_plan_approval_true(tmp_path: Path) -> None:
   """Acceptance #7: GET /api/sessions/ items include has_pending_plan_approval: true."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="Awaiting"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="Awaiting")
   _write_plans(cfg, session.id, {"plans": [
       _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")]),
   ]})
@@ -515,9 +475,7 @@ async def test_list_sessions_endpoint_includes_pending_plan_approval_true(tmp_pa
 @pytest.mark.asyncio
 async def test_list_sessions_endpoint_pending_plan_approval_false_without_plans_json(tmp_path: Path) -> None:
   """Sanity: a session with no plans.json reports has_pending_plan_approval: false on GET /."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="NoPlans"))
+  cfg, mgr, session = await make_home_session(tmp_path, name="NoPlans")
 
   app = _build_sessions_app(mgr)
   with TestClient(app) as client:

@@ -362,32 +362,26 @@ function cancelTrigger(triggerId, sessionId) {
 
 
 Object.assign(Sidebar, {
-  formatTriggerTimeLabel,
   renderWorkersTab,
   renderWorkersTabUnknown,
-  renderWorkersListItems,
   restartWorkersPolling,
   ensureWorkersLoadedForActiveSession,
   pollWorkers,
   updateWorkersTabBadge,
   updateWorkerStatus,
   addWorkerCard,
-  addTriggerCard,
   updateTriggerStatus,
   cancelTrigger,
 });
 Sidebar.expose([
-  'formatTriggerTimeLabel',
   'renderWorkersTab',
   'renderWorkersTabUnknown',
-  'renderWorkersListItems',
   'restartWorkersPolling',
   'ensureWorkersLoadedForActiveSession',
   'pollWorkers',
   'updateWorkersTabBadge',
   'updateWorkerStatus',
   'addWorkerCard',
-  'addTriggerCard',
   'updateTriggerStatus',
   'cancelTrigger',
 ]);

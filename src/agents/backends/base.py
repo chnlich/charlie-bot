@@ -419,6 +419,17 @@ class AgentBackend(ABC):
   def _prepare_cwd(self, cwd: str) -> None:
     """Hook to prepare the working directory before subprocess spawn. No-op default."""
 
+  def _write_instructions_file(self, cwd: str, filename: str, log_event: str) -> None:
+    """Write _instructions_content into <cwd>/<filename> as UTF-8, or no-op when none is set.
+
+    log_event stays caller-chosen so each backend keeps its own structured-log event name.
+    """
+    if not self._instructions_content:
+      return
+    path = Path(cwd) / filename
+    path.write_text(self._instructions_content, encoding="utf-8")
+    log.debug(log_event, path=str(path))
+
   def _prepare_env(self, env: dict) -> dict:
     """Hook to modify the environment before subprocess spawn. Identity default."""
     return env

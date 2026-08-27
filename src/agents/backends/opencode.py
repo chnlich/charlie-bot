@@ -76,12 +76,8 @@ class OpenCodeBackend(AgentBackend):
     self._failed = False
 
   def _prepare_cwd(self, cwd: str) -> None:
-    """Write AGENTS.md instruction file when provided."""
-    if self._instructions_content:
-      agents_md = os.path.join(cwd, 'AGENTS.md')
-      with open(agents_md, 'w', encoding='utf-8') as f:
-        f.write(self._instructions_content)
-      log.debug('opencode_wrote_agents_md', path=agents_md)
+    """Write AGENTS.md into the cwd so opencode auto-detects it."""
+    self._write_instructions_file(cwd, 'AGENTS.md', 'opencode_wrote_agents_md')
 
   def _build_command(self, prompt: str) -> list[str]:
     del prompt

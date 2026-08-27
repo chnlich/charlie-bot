@@ -40,6 +40,7 @@ from src.core.models import (
   TaskType,
   WatchKind,
 )
+from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
 from src.core.slack_listener import SlackReplyError, post_reply
 from src.core.spawner import (
@@ -397,7 +398,7 @@ async def _authorize_plan_session(session_id: str, session_mgr: SessionManager) 
 async def plan_present(
     req: PlanPresentRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-    plan_mgr=Depends(get_plan_manager),
+    plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
 ):
   """Register a new plan lineage (v1, trigger=initial)."""
   await _authorize_plan_session(req.session_id, session_mgr)
@@ -416,7 +417,7 @@ async def plan_present(
 async def plan_amend(
     req: PlanAmendRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-    plan_mgr=Depends(get_plan_manager),
+    plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
 ):
   """Append the next version to a plan lineage."""
   await _authorize_plan_session(req.session_id, session_mgr)
@@ -436,7 +437,7 @@ async def plan_amend(
 async def plan_approve(
     req: PlanApproveRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-    plan_mgr=Depends(get_plan_manager),
+    plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
 ):
   """Record a takeoff against the latest version of a plan lineage."""
   await _authorize_plan_session(req.session_id, session_mgr)
@@ -450,7 +451,7 @@ async def plan_approve(
 async def plan_close(
     req: PlanCloseRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-    plan_mgr=Depends(get_plan_manager),
+    plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
 ):
   """Terminate a plan lineage as superseded, abandoned, or completed."""
   await _authorize_plan_session(req.session_id, session_mgr)

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import aiofiles
 import structlog
+from aiofiles.threadpool.text import AsyncTextIOWrapper
 
 from src.agents.backends.base import (
     AgentBackend,
@@ -302,7 +303,7 @@ class Worker:
     if self._backend is not None:
       self._backend.detach()
 
-  async def _process_event(self, event_data: dict, log_file) -> None:
+  async def _process_event(self, event_data: dict, log_file: AsyncTextIOWrapper) -> None:
     """Write event to disk log and broadcast to WebSocket subscribers."""
     # Detect quota exhaustion errors
     event_type = event_data.get("type", "")

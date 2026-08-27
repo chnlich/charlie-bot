@@ -1,13 +1,22 @@
 """Master-side crash recovery plus the crash-recovery orchestrator."""
 
+from __future__ import annotations
+
 import asyncio
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
 
 from src.core import event_types as ET
 from src.core import runs
+
+if TYPE_CHECKING:
+  from src.core.config import CharlieBotConfig
+  from src.core.sessions import SessionManager
+  from src.core.threads import ThreadManager
+
 from src.core.init_worker_recovery import (
   _liveness_probe,
   _quarantine_stale_failed_worktrees,
@@ -21,10 +30,10 @@ log = structlog.get_logger()
 
 
 async def run_crash_recovery(
-    cfg,
+    cfg: CharlieBotConfig,
     boot_time: datetime,
-    session_mgr=None,
-    thread_mgr=None,
+    session_mgr: SessionManager | None = None,
+    thread_mgr: ThreadManager | None = None,
     *,
     master_identity: asyncio.Task | None = None,
 ) -> int:
@@ -140,7 +149,9 @@ def _master_alive_unfollowable_message(reason: str) -> str:
       "again on the next restart.")
 
 
-async def reconcile_master_identity(cfg, session_mgr, boot_time: datetime) -> dict[str, set[str]]:
+async def reconcile_master_identity(
+    cfg: CharlieBotConfig, session_mgr: SessionManager, boot_time: datetime
+) -> dict[str, set[str]]:
   """Resolve each active session's recorded master turn; return the replay exclusion set.
 
   master_run is a single slot per session that a new turn's _on_spawn
@@ -280,7 +291,9 @@ async def reconcile_master_identity(cfg, session_mgr, boot_time: datetime) -> di
   return excluded
 
 
-async def _replay_unanswered_user_messages(cfg, session_mgr, excluded: dict[str, set[str]]) -> None:
+async def _replay_unanswered_user_messages(
+    cfg: CharlieBotConfig, session_mgr: SessionManager, excluded: dict[str, set[str]]
+) -> None:
   """Replay every real user message the identity pass left unanswered.
 
   Every real user event after the last MASTER_DONE, minus the identity
@@ -306,7 +319,9 @@ async def _replay_unanswered_user_messages(cfg, session_mgr, excluded: dict[str,
       log.exception("master_replay_dispatch_failed", session=meta.id)
 
 
-async def _reconcile_master_runs(cfg, session_mgr, boot_time: datetime) -> None:
+async def _reconcile_master_runs(
+    cfg: CharlieBotConfig, session_mgr: SessionManager, boot_time: datetime
+) -> None:
   """Thin wrapper kept for existing callers: identity pass, then replay pass.
 
   New code should run :func:`reconcile_master_identity` once (before any door

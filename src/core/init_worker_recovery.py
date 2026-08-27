@@ -1,5 +1,7 @@
 """Worker-side crash recovery: pre-boot thread scan, reconcile, and worktree quarantine."""
 
+from __future__ import annotations
+
 import asyncio
 import os
 import signal
@@ -7,8 +9,15 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 import structlog
+
+if TYPE_CHECKING:
+  from src.core.config import CharlieBotConfig
+  from src.core.sessions import SessionManager
+  from src.core.threads import ThreadManager
 
 from src.core import finalize_effects, runs
 from src.core.git import git_quarantine_worktree, git_worktree_dir_name
@@ -99,7 +108,7 @@ class _InterruptedRun:
 
 
 
-def _scan_interrupted_runs(cfg, boot_time: datetime) -> tuple[list[_InterruptedRun], list[dict]]:
+def _scan_interrupted_runs(cfg: CharlieBotConfig, boot_time: datetime) -> tuple[list[_InterruptedRun], list[dict]]:
   """Collect pre-boot threads (any status) plus the full in-window metadata list.
 
   Only threads whose ``metadata.json`` mtime falls within ``RUNNING_SCAN_WINDOW``
@@ -126,7 +135,7 @@ def _scan_interrupted_runs(cfg, boot_time: datetime) -> tuple[list[_InterruptedR
   return interrupted, threads
 
 
-def _translate_for_thread(cfg, meta: dict):
+def _translate_for_thread(cfg: CharlieBotConfig, meta: dict):
   """A fresh translate_event callable for resolving a run's raw log.
 
   Stateful translates (codex text buffering, gemini) require one instance per
@@ -145,7 +154,12 @@ def _translate_for_thread(cfg, meta: dict):
   return lambda event: [event]
 
 
-async def _reconcile_interrupted_runs(cfg, session_mgr, thread_mgr, interrupted: list[_InterruptedRun]) -> int:
+async def _reconcile_interrupted_runs(
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+    interrupted: list[_InterruptedRun],
+) -> int:
   """Resolve each pre-boot thread's run truth and dispatch its recovery action."""
   if not interrupted:
     return 0
@@ -183,7 +197,9 @@ async def _reconcile_interrupted_runs(cfg, session_mgr, thread_mgr, interrupted:
   return recovered
 
 
-def _liveness_probe(pid, pid_start, started_at, host_boot: datetime) -> Callable[[], bool]:
+def _liveness_probe(
+    pid: int | None, pid_start: str | None, started_at: datetime | None, host_boot: datetime
+) -> Callable[[], bool]:
   """The liveness probe a boot re-attach mounts with, by input completeness.
 
   A missing input (pid/pid_start/started_at) makes death unprovable, so the
@@ -198,10 +214,10 @@ def _liveness_probe(pid, pid_start, started_at, host_boot: datetime) -> Callable
 
 
 async def _reconcile_one(
-    cfg,
-    session_mgr,
-    thread_mgr,
-    spawner,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+    spawner: ModuleType,
     item: _InterruptedRun,
     *,
     host_boot: datetime,
@@ -326,7 +342,7 @@ def _parse_started_at(meta: dict) -> datetime | None:
     return None
 
 
-async def _report_recovery_event(session_mgr, session_id: str, content: str) -> None:
+async def _report_recovery_event(session_mgr: SessionManager, session_id: str, content: str) -> None:
   """Persist a user-visible recovery report to the session chat stream."""
   try:
     await session_mgr.deliver_to_successor(
@@ -340,7 +356,7 @@ async def _report_recovery_event(session_mgr, session_id: str, content: str) -> 
     log.warning("recovery_report_failed", session=session_id, error=str(e))
 
 
-async def _follow_silence_recheck(session_mgr, session_id: str, thread_id: str) -> None:
+async def _follow_silence_recheck(session_mgr: SessionManager, session_id: str, thread_id: str) -> None:
   """Emit this thread's one-per-boot silence report from a mounted follow.
 
   Same text shape as the boot STALLED report, and shares its once-key:
@@ -359,10 +375,10 @@ async def _follow_silence_recheck(session_mgr, session_id: str, thread_id: str) 
 
 
 async def _maybe_respawn(
-    cfg,
-    session_mgr,
-    thread_mgr,
-    spawner,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+    spawner: ModuleType,
     item: _InterruptedRun,
     *,
     chat_events: list[dict],
@@ -425,10 +441,10 @@ async def _maybe_respawn(
 
 
 async def _complete_finalize_effects(
-    cfg,
-    session_mgr,
-    thread_mgr,
-    spawner,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+    spawner: ModuleType,
     item: _InterruptedRun,
     *,
     chat_events: list[dict],
@@ -506,7 +522,7 @@ def _started_before_boot(meta: dict, thread_dir: Path, boot_time: datetime) -> b
   return ctime < boot_time
 
 
-async def _quarantine_stale_failed_worktrees(cfg, threads: list[dict]) -> None:
+async def _quarantine_stale_failed_worktrees(cfg: CharlieBotConfig, threads: list[dict]) -> None:
   """Move worktrees of long-failed threads into the trash dir. Best-effort, never raises.
 
   Driven purely by thread metadata (the trash dir is never re-scanned as worktrees).

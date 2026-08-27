@@ -291,7 +291,7 @@ def shutdown_merge_executor() -> None:
     instance.shutdown(wait=False, cancel_futures=True)
 
 
-async def _await_shared_merge(cache_key: str, build_fn) -> Path:
+async def _await_shared_merge(cache_key: str, build_fn: Callable[[], Awaitable[Path]]) -> Path:
   """Return the cached product for *cache_key*, sharing any in-flight build for it.
 
   The shared build is awaited through ``asyncio.shield`` so a client that disconnects

@@ -13,7 +13,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import FakeSessionManager
+from conftest import FakeSessionManager, make_json_response
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -211,16 +211,9 @@ def _mock_cli_config(tmp_path: Path) -> MagicMock:
   return cfg
 
 
-def _ok_response(payload: dict[str, Any]) -> MagicMock:
-  resp = MagicMock()
-  resp.json.return_value = payload
-  resp.raise_for_status = MagicMock()
-  return resp
-
-
 def test_cli_session_create_posts_metadata_only_payload(tmp_path: Path) -> None:
   cfg = _mock_cli_config(tmp_path)
-  resp = _ok_response({"id": "new-id", "name": "task-a"})
+  resp = make_json_response({"id": "new-id", "name": "task-a"})
 
   with patch("sys.argv", ["session", "create", "--name", "task-a", "--backend", "codex-o3", "--role", "project"]), \
        patch("src.cli.common.get_config", return_value=cfg), \
@@ -235,8 +228,8 @@ def test_cli_session_create_posts_metadata_only_payload(tmp_path: Path) -> None:
 
 def test_cli_session_create_group_triggers_second_group_call(tmp_path: Path) -> None:
   cfg = _mock_cli_config(tmp_path)
-  create_resp = _ok_response({"id": "new-id", "name": "task-a"})
-  group_resp = _ok_response({"id": "new-id", "name": "task-a", "group": "bp-eval"})
+  create_resp = make_json_response({"id": "new-id", "name": "task-a"})
+  group_resp = make_json_response({"id": "new-id", "name": "task-a", "group": "bp-eval"})
 
   with patch("sys.argv", ["session", "create", "--name", "task-a", "--group", "bp-eval"]), \
        patch("src.cli.common.get_config", return_value=cfg), \
@@ -253,7 +246,7 @@ def test_cli_session_create_group_triggers_second_group_call(tmp_path: Path) -> 
 
 def test_cli_session_send_relays_message(tmp_path: Path) -> None:
   cfg = _mock_cli_config(tmp_path)
-  resp = _ok_response({"status": "accepted"})
+  resp = make_json_response({"status": "accepted"})
 
   with patch("sys.argv", ["session", "send", "target-id", "--message", "relay this", "--session", "caller-id"]), \
        patch("src.cli.common.get_config", return_value=cfg), \
@@ -274,7 +267,7 @@ def test_cli_session_send_reads_message_file(tmp_path: Path) -> None:
   cfg = _mock_cli_config(tmp_path)
   msg_file = tmp_path / "msg.txt"
   msg_file.write_text("file content relay")
-  resp = _ok_response({"status": "accepted"})
+  resp = make_json_response({"status": "accepted"})
 
   with patch("sys.argv", ["session", "send", "target-id", "--file", str(msg_file), "--session", "caller-id"]), \
        patch("src.cli.common.get_config", return_value=cfg), \

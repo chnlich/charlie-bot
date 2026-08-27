@@ -30,6 +30,7 @@ from src.agents.backends.pty_common import (
   _tmux_client_env,
   tmux_session_name,
 )
+from src.agents.backends.tui import mark_project_trusted
 from src.cli.claude_sub_bridge import (
   HookBridge,
   HookTurnState,
@@ -377,16 +378,9 @@ def _prepare_session_config(session_id: str, cwd: Path) -> Path:
     global_settings = _read_json_object(global_target, "session-only Claude global state")
   # Seed folder trust for this turn's cwd so the interactive TUI does not park on
   # the trust dialog (which would stall hooks until the submission-confirmation
-  # timeout).  Mirror the shape of _ensure_claude_project_trusted in
-  # src/agents/backends/tui.py, but write only this overlay file through
-  # _write_json_atomically (never the user's ~/.claude.json).
-  project = global_settings.setdefault("projects", {}).setdefault(str(cwd), {})
-  trust_changed = (
-      project.get("hasTrustDialogAccepted") is not True
-      or "projectOnboardingSeenCount" not in project
-  )
-  project["hasTrustDialogAccepted"] = True
-  project.setdefault("projectOnboardingSeenCount", 1)
+  # timeout).  Only this session overlay changes; the user's ~/.claude.json stays
+  # untouched.
+  trust_changed = mark_project_trusted(global_settings, str(cwd))
   # Claude 2.1.211/2.1.212 reads this notification setting from global state rather
   # than the --settings flag.  Keep the override in this session-only copy so the
   # idle hook remains prompt without modifying ~/.claude.json.  Combine the trust

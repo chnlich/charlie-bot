@@ -13,6 +13,7 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 import structlog
 from fastapi import WebSocket
@@ -85,6 +86,22 @@ def _claude_config_path() -> Path:
   return Path.home() / ".claude.json"
 
 
+def mark_project_trusted(config: dict[str, Any], project_path: str) -> bool:
+  """Mark *project_path* trusted in a ``.claude.json``-shaped *config* dict.
+
+  *config* maps project path strings under ``"projects"`` to per-project entries.
+  The entry gains ``hasTrustDialogAccepted: true`` and, when absent,
+  ``projectOnboardingSeenCount: 1``; Claude Code skips its interactive workspace-trust
+  dialog only when both are present. Returns True when the entry changed, so the caller
+  writes the file only then.
+  """
+  project = config.setdefault("projects", {}).setdefault(project_path, {})
+  changed = project.get("hasTrustDialogAccepted") is not True or "projectOnboardingSeenCount" not in project
+  project["hasTrustDialogAccepted"] = True
+  project.setdefault("projectOnboardingSeenCount", 1)
+  return changed
+
+
 def _ensure_claude_project_trusted(working_dir: Path) -> None:
   """Mark CharlieBot's generated Claude TUI cwd trusted before interactive startup."""
   project_path = str(working_dir.resolve())
@@ -93,11 +110,7 @@ def _ensure_claude_project_trusted(working_dir: Path) -> None:
     config = json.loads(config_path.read_text(encoding="utf-8"))
   else:
     config = {}
-  project = config.setdefault("projects", {}).setdefault(project_path, {})
-  changed = project.get("hasTrustDialogAccepted") is not True or "projectOnboardingSeenCount" not in project
-  project["hasTrustDialogAccepted"] = True
-  project.setdefault("projectOnboardingSeenCount", 1)
-  if not changed:
+  if not mark_project_trusted(config, project_path):
     return
   config_path.parent.mkdir(parents=True, exist_ok=True)
   config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")

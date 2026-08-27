@@ -6,21 +6,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
+from conftest import make_json_response
 from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.plan import _PLAN_REMINDER, main
 
 
-def _mock_response(payload: dict) -> MagicMock:
-  resp = MagicMock()
-  resp.json.return_value = payload
-  resp.raise_for_status = MagicMock()
-  return resp
-
-
 def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 1, "v": 1, "state": "awaiting approval"})
+  resp = make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
   with patch("sys.argv", [
       "plan", "present",
       "--file", "artifacts/plan_01.html",
@@ -42,7 +36,7 @@ def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pyt
 
 def test_plan_present_passes_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 1, "v": 1, "state": "awaiting approval"})
+  resp = make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
   with patch("sys.argv", [
       "plan", "present",
       "--file", "artifacts/plan_01.html",
@@ -64,7 +58,7 @@ def test_plan_present_passes_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 def test_plan_amend_posts_with_default_trigger(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 1, "v": 2, "state": "awaiting approval"})
+  resp = make_json_response({"plan": 1, "v": 2, "state": "awaiting approval"})
   with patch("sys.argv", [
       "plan", "amend",
       "--file", "artifacts/plan_02.html",
@@ -86,7 +80,7 @@ def test_plan_amend_posts_with_default_trigger(
 
 def test_plan_amend_passes_plan_and_trigger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 2, "v": 3, "state": "awaiting approval"})
+  resp = make_json_response({"plan": 2, "v": 3, "state": "awaiting approval"})
   with patch("sys.argv", [
       "plan", "amend",
       "--file", "artifacts/plan_03.html",
@@ -105,7 +99,7 @@ def test_plan_amend_passes_plan_and_trigger(tmp_path: Path, monkeypatch: pytest.
 def test_plan_approve_posts_plan_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 1, "v": 1, "state": "approved"})
+  resp = make_json_response({"plan": 1, "v": 1, "state": "approved"})
   with patch("sys.argv", ["plan", "approve", "--plan", "1"]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp) as post_mock:
@@ -120,7 +114,7 @@ def test_plan_approve_posts_plan_id(
 
 def test_plan_close_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 1, "state": "superseded"})
+  resp = make_json_response({"plan": 1, "state": "superseded"})
   with patch("sys.argv", [
       "plan", "close",
       "--plan", "1",
@@ -136,7 +130,7 @@ def test_plan_close_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_plan_close_posts_completed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 1, "state": "completed"})
+  resp = make_json_response({"plan": 1, "state": "completed"})
   with patch("sys.argv", [
       "plan", "close",
       "--plan", "1",
@@ -153,7 +147,7 @@ def test_plan_close_posts_completed(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_plan_list_uses_get_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plans": []})
+  resp = make_json_response({"plans": []})
   with patch("sys.argv", ["plan", "list"]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.get", return_value=resp) as get_mock:
@@ -177,7 +171,7 @@ def test_plan_list_corrupt_registry_prints_errors_and_exits_0(
           "error": "Expecting value: line 1 column 1 (char 0)"
       }],
   }
-  resp = _mock_response(payload)
+  resp = make_json_response(payload)
   with patch("sys.argv", ["plan", "list"]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.get", return_value=resp):
@@ -195,7 +189,7 @@ def test_plan_list_corrupt_registry_prints_errors_and_exits_0(
 def test_plan_present_stdout_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plan": 1, "v": 1, "state": "awaiting approval"})
+  resp = make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
   with patch("sys.argv", [
       "plan", "present",
       "--file", "artifacts/plan_01.html",
@@ -241,7 +235,7 @@ def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(
 
 def test_plan_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = _mock_response({"plans": []})
+  resp = make_json_response({"plans": []})
   with patch("sys.argv", ["plan", "list"]), \
        patch("src.cli.common.get_config", return_value=cfg), \
        patch("src.cli.common.requests.get", return_value=resp) as get_mock:

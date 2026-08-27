@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import make_json_response
 from conftest import setup_session_cwd as _setup_session_cwd
 from pydantic import ValidationError
 
@@ -38,9 +39,7 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
   goal_file = tmp_path / "goal.md"
   goal_file.write_text("optimize")
 
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"status": "started", "session_id": "s1", "iterations": 2}
-  resp_mock.raise_for_status = MagicMock()
+  resp_mock = make_json_response({"status": "started", "session_id": "s1", "iterations": 2})
 
   with patch(
       "sys.argv",
@@ -75,9 +74,7 @@ def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.
   plan_file = tmp_path / "plan.md"
   plan_file.write_text("1. largest lever")
 
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"status": "started", "session_id": "s1", "iterations": 2}
-  resp_mock.raise_for_status = MagicMock()
+  resp_mock = make_json_response({"status": "started", "session_id": "s1", "iterations": 2})
 
   with patch(
       "sys.argv",
@@ -116,9 +113,7 @@ def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.Monke
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   goal_file = tmp_path / "goal.md"
   goal_file.write_text("fix")
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"status": "started"}
-  resp_mock.raise_for_status = MagicMock()
+  resp_mock = make_json_response({"status": "started"})
 
   with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file)), \
        patch("src.cli.common.get_config", return_value=cfg), \
@@ -133,9 +128,7 @@ def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   goal_file = tmp_path / "goal.md"
   goal_file.write_text("fix")
-  resp_mock = MagicMock()
-  resp_mock.json.return_value = {"status": "started"}
-  resp_mock.raise_for_status = MagicMock()
+  resp_mock = make_json_response({"status": "started"})
 
   with patch("sys.argv", _improve_argv("abc", str(tmp_path), goal_file)), \
        patch("src.cli.common.get_config", return_value=cfg), \

@@ -132,6 +132,15 @@ def assistant_event(content: str, event_id: str = "assistant") -> dict:
   }
 
 
+def make_json_response(payload: dict[str, Any]) -> MagicMock:
+  """A `requests.Response` stand-in for patched CLI `requests.post` calls: `.json()` returns payload,
+  `raise_for_status()` is a configured no-op so the CLI's success path runs straight through."""
+  resp = MagicMock()
+  resp.json.return_value = payload
+  resp.raise_for_status.return_value = None
+  return resp
+
+
 def archive_cutoff_events() -> tuple[datetime, list[dict]]:
   """(cutoff, events) where five `e{i}` events predate and three `f{i}` events follow the cutoff; the 5/3
   split is what recycle tests assert on (events_archived == 5, archive_offset == 5, live f0..f2)."""

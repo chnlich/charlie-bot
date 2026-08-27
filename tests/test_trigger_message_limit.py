@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET
+from conftest import BROADCAST_PATCH_TARGET, TRIGGER_MASTER_PATCH_TARGET
 from pydantic import ValidationError
 
 from src.cli import schedule_trigger as cli_module
@@ -142,7 +142,7 @@ async def test_persisted_over_limit_message_fires_verbatim(tmp_path: Path) -> No
 
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_master,
+      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
   ):
     trigger = await trigger_mgr._load_trigger(session.id, trigger_id)
     await trigger_mgr._wait_and_fire(trigger)

@@ -10,7 +10,12 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
-from conftest import BROADCAST_PATCH_TARGET, build_sessions_cfg, build_two_backend_cfg
+from conftest import (
+  BROADCAST_PATCH_TARGET,
+  TRIGGER_MASTER_PATCH_TARGET,
+  build_sessions_cfg,
+  build_two_backend_cfg,
+)
 from conftest import append_events as _append_events
 from conftest import make_parent as _make_parent
 from conftest import make_sessions_client as _build_client
@@ -563,7 +568,7 @@ async def test_succession_keeps_scheduler_chain_intact_for_tick_and_triggers(
 
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_master,
+      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
       patch("src.core.triggers.get_config", return_value=cfg),
   ):
     # A trigger stays pending on the parent across the succession.

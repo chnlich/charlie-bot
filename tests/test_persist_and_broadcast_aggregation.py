@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import BROADCAST_PATCH_TARGET
 
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest
@@ -20,7 +21,7 @@ async def test_persist_user_event_broadcasts_message_delta_only(tmp_path: Path) 
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock:
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "hi", "timestamp": "ts"})
 
   payloads = _broadcast_calls(mock)
@@ -36,7 +37,7 @@ async def test_persist_assistant_text_broadcasts_stream_then_message_on_master_d
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock:
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(session.id, {
         "type": "assistant",
         "message": {"content": [{"type": "text", "text": "Working"}]},
@@ -65,7 +66,7 @@ async def test_persist_handler_result_broadcasts_message_delta_and_raw_event(tmp
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock:
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(session.id, {
         "type": "handler_result",
         "task": "Lint",
@@ -87,7 +88,7 @@ async def test_aggregator_state_persists_across_calls(tmp_path: Path) -> None:
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock:
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(session.id, {
         "type": "assistant",
         "message": {"content": [
@@ -125,7 +126,7 @@ async def test_lazy_init_aggregator_after_restart_does_not_replay_history(tmp_pa
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="t"))
 
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "hi", "timestamp": "t1"})
     await mgr.persist_and_broadcast(session.id, {
         "type": "assistant",
@@ -140,7 +141,7 @@ async def test_lazy_init_aggregator_after_restart_does_not_replay_history(tmp_pa
 
   # Simulate process restart: brand-new SessionManager with same on-disk state.
   mgr2 = SessionManager(cfg)
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock:
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr2.persist_and_broadcast(session.id, {
         "type": "user",
         "content": "next",

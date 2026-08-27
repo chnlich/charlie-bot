@@ -10,8 +10,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import yaml
+from conftest import BROADCAST_PATCH_TARGET, build_sessions_cfg, build_two_backend_cfg
 from conftest import append_events as _append_events
-from conftest import build_sessions_cfg, build_two_backend_cfg
 from conftest import make_parent as _make_parent
 from conftest import make_sessions_client as _build_client
 from conftest import session_dir_names as _session_dir_names
@@ -155,7 +155,7 @@ async def test_second_elone_of_ordinary_parent_overwrites_successor_and_leaves_f
   assert resolved.id == second_child.id
 
   event = {"type": "user", "content": "delivered to newest"}
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     delivered = await mgr.deliver_to_successor(parent_id, event)
 
   assert delivered == second_child.id
@@ -418,7 +418,7 @@ async def test_deliver_to_successor_writes_into_chain_end_and_stamps_origin(tmp_
   gen2 = await mgr.elone_session(gen1.id, event_index=0)
 
   event = {"type": "user", "content": "delivered"}
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     delivered = await mgr.deliver_to_successor(gen0, event)
 
   assert delivered == gen2.id
@@ -432,7 +432,7 @@ async def test_deliver_to_successor_leaves_origin_absent_for_no_successor(tmp_pa
   gen0 = await _make_parent(mgr)
 
   event = {"type": "user", "content": "no redirect"}
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     delivered = await mgr.deliver_to_successor(gen0, event)
 
   assert delivered == gen0
@@ -454,7 +454,7 @@ async def test_deliver_to_successor_returns_none_and_writes_nothing_when_chain_e
   assert not mgr._session_dir(session.id).exists()
 
   event = {"type": "user", "content": "must not land"}
-  with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     delivered = await mgr.deliver_to_successor(session.id, event)
 
   assert delivered is None
@@ -486,7 +486,7 @@ async def test_deliver_to_successor_reresolves_when_successor_appears_between_re
 
   event = {"type": "user", "content": "lands in newest tail"}
   with (
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
+      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
       patch.object(mgr, "read_metadata_fresh", side_effect=flaky_read),
   ):
     delivered = await mgr.deliver_to_successor(gen0, event)
@@ -562,7 +562,7 @@ async def test_succession_keeps_scheduler_chain_intact_for_tick_and_triggers(
   scheduler = Scheduler(cfg, mgr)
 
   with (
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
+      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
       patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_master,
       patch("src.core.triggers.get_config", return_value=cfg),
   ):

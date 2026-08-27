@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import BROADCAST_PATCH_TARGET
 from conftest import make_parent as _make_parent
 
 from src.core.config import CharlieBotConfig
@@ -61,7 +62,7 @@ async def test_firing_trigger_eloned_delivers_into_successor_and_wakes(tmp_path:
   trigger_mgr = TriggerManager(cfg, mgr)
 
   with (
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
+      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
       patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_master,
       patch("src.core.triggers.get_config", return_value=cfg),
   ):
@@ -93,7 +94,7 @@ async def test_firing_trigger_archived_by_hand_without_successor_still_cancels(t
   trigger_mgr = TriggerManager(cfg, mgr)
 
   with (
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
+      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
       patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_master,
   ):
     trigger = await trigger_mgr.create_trigger(session.id, delay_seconds=0, message="hand archived")

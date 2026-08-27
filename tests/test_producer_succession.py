@@ -28,7 +28,9 @@ from src.core.spawner_finalize import _persist_worker_summary_once
 
 
 def _make_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(charliebot_home=tmp_path / "home")
+  # worktree_dir must stay under tmp_path: the improve-loop fakes create and remove
+  # wt_path, and the default (~/worktrees) would touch real worktrees on the host.
+  return CharlieBotConfig(charliebot_home=tmp_path / "home", worktree_dir=str(tmp_path / "worktrees"))
 
 
 def _broadcast_patch():

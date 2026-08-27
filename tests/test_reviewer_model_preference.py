@@ -151,138 +151,57 @@ async def test_spawn_review_worker_replaces_failed_reviewer_via_exclusion(monkey
   assert captured["request"].resolved_backend == "kimi-k2.5"
 
 
+_AGY_OPTION = BackendOption(id="agy", label="Antigravity", type="antigravity")
+
+# One model_preference selection rule per case. Row shape: (extra backend option,
+# model_preference, worker backend/model, expected reviewer backend/model).
+_PREFERENCE_CASES = [
+    pytest.param(None, [], ("codex-o3", "o3"), ("codex-o3", "o3"),
+                 id="empty-preference-uses-worker-backend"),
+    pytest.param(None, ["kimi-k2.5", "claude-opus-4.6"], ("codex-o3", "o3"), ("kimi-k2.5", "kimi-k2.5"),
+                 id="selects-first-non-matching-entry"),
+    pytest.param(_AGY_OPTION, ["agy"], ("codex-o3", "o3"), ("agy", None),
+                 id="selects-antigravity-entry-without-model"),
+    pytest.param(None, ["codex-o3", "claude-opus-4.6"], ("codex-o3", "o3"), ("claude-opus-4.6", "claude-opus-4-6"),
+                 id="skips-entry-matching-worker-backend"),
+    pytest.param(None, ["nonexistent-1", "nonexistent-2"], ("codex-o3", "o3"), ("codex-o3", "o3"),
+                 id="invalid-entries-fall-back-to-worker-backend"),
+    pytest.param(None, ["codex-o3"], ("codex-o3", "o3"), ("codex-o3", "o3"),
+                 id="all-entries-matching-worker-fall-back"),
+    pytest.param(_AGY_OPTION, [], ("agy", None), ("agy", None),
+                 id="antigravity-worker-missing-model-keeps-backend"),
+    pytest.param(None, ["nonexistent", "kimi-k2.5"], ("codex-o3", "o3"), ("kimi-k2.5", "kimi-k2.5"),
+                 id="skips-invalid-entry-selects-next-valid"),
+]
+
+
 @pytest.mark.asyncio
-async def test_empty_preference_uses_worker_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Empty model_preference -> reviewer uses same backend as worker."""
-  cfg = _build_cfg(model_preference=[])
+@pytest.mark.parametrize("extra_option, model_preference, worker, expected", _PREFERENCE_CASES)
+async def test_spawn_review_worker_resolves_preference(
+    monkeypatch: pytest.MonkeyPatch,
+    extra_option: BackendOption | None,
+    model_preference: list[str],
+    worker: tuple[str, str | None],
+    expected: tuple[str, str | None],
+) -> None:
+  """spawn_review_worker resolves the reviewer backend/model from model_preference."""
+  overrides: dict[str, Any] = {"model_preference": model_preference}
+  if extra_option is not None:
+    overrides["backend_options"] = BACKEND_OPTIONS + [extra_option]
+  cfg = _build_cfg(**overrides)
   captured: dict[str, Any] = {}
 
   patch_review_spawn_path(monkeypatch, captured)
 
   await review.spawn_review_worker(
-      "session-id", _make_original_thread(), cfg, ReviewSpawnSessionManager("Test"), ReviewSpawnThreadManager())
-
-  assert captured["request"].resolved_backend == "codex-o3"
-  assert captured["request"].resolved_model == "o3"
-
-
-@pytest.mark.asyncio
-async def test_preference_selects_different_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-  """First non-matching preference entry is selected for the reviewer."""
-  cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
-  captured: dict[str, Any] = {}
-
-  patch_review_spawn_path(monkeypatch, captured)
-
-  await review.spawn_review_worker(
-      "session-id", _make_original_thread(backend="codex-o3", model="o3"), cfg, ReviewSpawnSessionManager("Test"),
+      "session-id",
+      _make_original_thread(backend=worker[0], model=worker[1]),
+      cfg,
+      ReviewSpawnSessionManager("Test"),
       ReviewSpawnThreadManager())
 
-  assert captured["request"].resolved_backend == "kimi-k2.5"
-  assert captured["request"].resolved_model == "kimi-k2.5"
-
-
-@pytest.mark.asyncio
-async def test_preference_selects_antigravity_missing_model(monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _build_cfg(
-      backend_options=BACKEND_OPTIONS + [
-          BackendOption(id="agy", label="Antigravity", type="antigravity"),
-      ],
-      model_preference=["agy"],
-  )
-  captured: dict[str, Any] = {}
-
-  patch_review_spawn_path(monkeypatch, captured)
-
-  await review.spawn_review_worker(
-      "session-id", _make_original_thread(backend="codex-o3", model="o3"), cfg, ReviewSpawnSessionManager("Test"),
-      ReviewSpawnThreadManager())
-
-  assert captured["request"].resolved_backend == "agy"
-  assert captured["request"].resolved_model is None
-
-
-@pytest.mark.asyncio
-async def test_preference_skips_same_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Entry matching the worker's backend is skipped; next entry is used."""
-  cfg = _build_cfg(model_preference=["codex-o3", "claude-opus-4.6"])
-  captured: dict[str, Any] = {}
-
-  patch_review_spawn_path(monkeypatch, captured)
-
-  await review.spawn_review_worker(
-      "session-id", _make_original_thread(backend="codex-o3", model="o3"), cfg, ReviewSpawnSessionManager("Test"),
-      ReviewSpawnThreadManager())
-
-  assert captured["request"].resolved_backend == "claude-opus-4.6"
-  assert captured["request"].resolved_model == "claude-opus-4-6"
-
-
-@pytest.mark.asyncio
-async def test_preference_skips_invalid_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Invalid preference entries are skipped; falls back to worker backend."""
-  cfg = _build_cfg(model_preference=["nonexistent-1", "nonexistent-2"])
-  captured: dict[str, Any] = {}
-
-  patch_review_spawn_path(monkeypatch, captured)
-
-  await review.spawn_review_worker(
-      "session-id", _make_original_thread(), cfg, ReviewSpawnSessionManager("Test"), ReviewSpawnThreadManager())
-
-  assert captured["request"].resolved_backend == "codex-o3"
-  assert captured["request"].resolved_model == "o3"
-
-
-@pytest.mark.asyncio
-async def test_preference_all_same_as_worker_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-  """All preference entries match worker backend -> falls back."""
-  cfg = _build_cfg(model_preference=["codex-o3"])
-  captured: dict[str, Any] = {}
-
-  patch_review_spawn_path(monkeypatch, captured)
-
-  await review.spawn_review_worker(
-      "session-id", _make_original_thread(backend="codex-o3", model="o3"), cfg, ReviewSpawnSessionManager("Test"),
-      ReviewSpawnThreadManager())
-
-  assert captured["request"].resolved_backend == "codex-o3"
-  assert captured["request"].resolved_model == "o3"
-
-
-@pytest.mark.asyncio
-async def test_antigravity_worker_missing_model_falls_back_to_same_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _build_cfg(
-      backend_options=BACKEND_OPTIONS + [
-          BackendOption(id="agy", label="Antigravity", type="antigravity"),
-      ],
-      model_preference=[],
-  )
-  captured: dict[str, Any] = {}
-
-  patch_review_spawn_path(monkeypatch, captured)
-
-  await review.spawn_review_worker(
-      "session-id", _make_original_thread(backend="agy", model=None), cfg, ReviewSpawnSessionManager("Test"),
-      ReviewSpawnThreadManager())
-
-  assert captured["request"].resolved_backend == "agy"
-  assert captured["request"].resolved_model is None
-
-
-@pytest.mark.asyncio
-async def test_preference_skips_invalid_then_selects_valid(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Invalid entry skipped, next valid entry selected."""
-  cfg = _build_cfg(model_preference=["nonexistent", "kimi-k2.5"])
-  captured: dict[str, Any] = {}
-
-  patch_review_spawn_path(monkeypatch, captured)
-
-  await review.spawn_review_worker(
-      "session-id", _make_original_thread(backend="codex-o3", model="o3"), cfg, ReviewSpawnSessionManager("Test"),
-      ReviewSpawnThreadManager())
-
-  assert captured["request"].resolved_backend == "kimi-k2.5"
-  assert captured["request"].resolved_model == "kimi-k2.5"
+  assert captured["request"].resolved_backend == expected[0]
+  assert captured["request"].resolved_model == expected[1]
 
 
 @pytest.mark.asyncio

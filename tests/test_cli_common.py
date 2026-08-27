@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import make_json_response
 
 from src.cli import common
 
@@ -106,13 +107,6 @@ def test_resolve_session_id_requires_source_outside_session_dir(
   assert "--session required" in error
 
 
-def _mock_response(payload: dict) -> MagicMock:
-  resp = MagicMock()
-  resp.json.return_value = payload
-  resp.raise_for_status.return_value = None
-  return resp
-
-
 @pytest.mark.parametrize(
     ("access_key", "expect_header"),
     [("secret", True), ("", False)],
@@ -123,7 +117,7 @@ def test_post_internal_api_bearer_header(access_key: str, expect_header: bool) -
   cfg.charliebot_access_key = access_key
 
   with patch("src.cli.common.get_config", return_value=cfg):
-    with patch("src.cli.common.requests.post", return_value=_mock_response({"ok": True})) as mock_post:
+    with patch("src.cli.common.requests.post", return_value=make_json_response({"ok": True})) as mock_post:
       assert common.post_internal_api("/api/internal/x", {"a": 1}) == {"ok": True}
 
   headers = mock_post.call_args.kwargs["headers"]

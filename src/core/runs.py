@@ -96,8 +96,6 @@ class RunResolution:
   """Result of resolving an interrupted run from on-disk facts."""
   outcome: RunOutcome
   reason: str = ""
-  # COMPLETED only: success per the trailing result event.
-  success: bool | None = None
   # Raw log's final mtime — the run's true completion time, independent of
   # downtime. Present whenever the raw log exists.
   completed_at: datetime | None = None
@@ -416,7 +414,6 @@ def resolve_run(
   if result is not None:
     return RunResolution(
         outcome=RunOutcome.COMPLETED,
-        success=result_success(result),
         completed_at=completed_at,
         leftover_holders=leftovers,
     )

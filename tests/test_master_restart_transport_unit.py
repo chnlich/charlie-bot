@@ -32,15 +32,16 @@ from conftest import make_work_item, patch_instructions_content, run_session_con
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import init as init_module
+from src.core import process as core_process
 from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-    BackendOption,
-    CreateSessionRequest,
-    MasterRunRecord,
-    SessionCallbacks,
-    SessionMetadata,
-    utc_now,
+  BackendOption,
+  CreateSessionRequest,
+  MasterRunRecord,
+  SessionCallbacks,
+  SessionMetadata,
+  utc_now,
 )
 from src.core.sessions import SessionManager
 
@@ -361,7 +362,7 @@ async def test_cancel_master_kills_a_live_detached_record(monkeypatch: pytest.Mo
   # Alive at the judgment, gone after the SIGTERM: the SIGKILL never goes out.
   alive = iter([True, False, False])
   monkeypatch.setattr(master_cc_queue.runs, "is_run_alive", lambda *args: next(alive))
-  monkeypatch.setattr(master_cc_run, "kill_process_group", kill)
+  monkeypatch.setattr(core_process, "kill_process_group", kill)
   master_cc_state._active_procs.pop(session_id, None)
 
   result = await master_cc.cancel_master(session_id, meta=meta, session_mgr=session_mgr)
@@ -389,7 +390,7 @@ async def test_cancel_master_never_signals_an_unprovable_record(monkeypatch: pyt
   meta = SessionMetadata(id=session_id, name="t", master_run=record)
   session_mgr = AsyncMock()
   kill = MagicMock()
-  monkeypatch.setattr(master_cc_run, "kill_process_group", kill)
+  monkeypatch.setattr(core_process, "kill_process_group", kill)
 
   result = await master_cc.cancel_master(session_id, meta=meta, session_mgr=session_mgr)
 

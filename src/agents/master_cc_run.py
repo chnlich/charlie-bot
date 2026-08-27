@@ -2,7 +2,6 @@
 
 import asyncio
 import os
-import signal
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
@@ -29,7 +28,7 @@ from src.core.models import (
   SessionMetadata,
   backend_type_allows_missing_model,
 )
-from src.core.process import kill_process_group
+from src.core.process import kill_group_escalating
 from src.core.streaming import handle_compaction_events
 
 log = structlog.get_logger()
@@ -759,16 +758,6 @@ def _build_fresh_translate(cfg: CharlieBotConfig, option: BackendOption | None) 
     return lambda event: [event]
 
 
-async def _kill_run_group_escalating(pid: int, is_alive: Callable[[], bool]) -> None:
-  """SIGTERM the run's process group; escalate to SIGKILL when it outlives the 5 s grace."""
-  kill_process_group(pid, signal.SIGTERM)
-  deadline = time.monotonic() + 5.0
-  while is_alive() and time.monotonic() < deadline:
-    await asyncio.sleep(0.2)
-  if is_alive():
-    kill_process_group(pid, signal.SIGKILL)
-
-
 async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
   """Re-attach to a recorded live master turn: follow its raw log to the end.
 
@@ -849,7 +838,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
 
       if record_alive():
         log.warning("master_cc_resumed_run_hung_after_result", session=session_meta.id, pid=record.pid)
-        await _kill_run_group_escalating(record.pid, record_alive)
+        await kill_group_escalating(record.pid, record_alive)
 
   except asyncio.CancelledError:
     log.warning("master_cc_resume_cancelled", session=session_meta.id)

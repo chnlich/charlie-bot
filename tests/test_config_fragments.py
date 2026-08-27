@@ -100,14 +100,13 @@ def test_split_equivalence(profile_home: Path, partition: Callable[[list[str]], 
   assert actual.charliebot_home == profile_home
 
 
-# The first real split use case: the Slack summon keys plus public_base_url.
-# These live outside the example mapping (the template ships them commented
-# out), so the partition property above cannot cover them.
+# The first real split use case: the Slack summon keys. These live outside the
+# example mapping (the template ships them commented out), so the partition
+# property above cannot cover them.
 _SLACK_VALUES = {
     "slack_bot_token": "xoxb-example",
     "slack_app_token": "xapp-example",
     "slack_allowed_user_ids": ["U01", "U02"],
-    "public_base_url": "https://bot.example.com",
 }
 
 
@@ -115,8 +114,8 @@ def _example_path() -> Path:
   return Path(__file__).resolve().parents[1] / "configs" / "config.example.yaml"
 
 
-def test_slack_four_split_equivalence(profile_home: Path) -> None:
-  """The Slack keys + public_base_url load identically from config.yaml or a fragment."""
+def test_slack_split_equivalence(profile_home: Path) -> None:
+  """The Slack keys load identically from config.yaml or a fragment."""
   save_yaml(profile_home / "config.yaml", dict(_SLACK_VALUES))
   reference = core_config.load_config()
 
@@ -131,7 +130,7 @@ def test_slack_four_split_equivalence(profile_home: Path) -> None:
 def test_seeded_template_plus_slack_fragment_loads(profile_home: Path) -> None:
   """A config seeded from the template must not collide with config.d/slack.yaml.
 
-  Regression for the template change: when the four keys were live empty keys
+  Regression for the template change: when these keys were live empty keys
   in the template, every seeded host hit the key-in-two-files error as soon as
   a fragment set them.
   """
@@ -142,11 +141,10 @@ def test_seeded_template_plus_slack_fragment_loads(profile_home: Path) -> None:
   assert cfg.slack_bot_token == _SLACK_VALUES["slack_bot_token"]
   assert cfg.slack_app_token == _SLACK_VALUES["slack_app_token"]
   assert cfg.slack_allowed_user_ids == _SLACK_VALUES["slack_allowed_user_ids"]
-  assert cfg.public_base_url == _SLACK_VALUES["public_base_url"]
 
 
 def test_example_yaml_keeps_optional_keys_commented_out() -> None:
-  """The four keys are absent from the parsed mapping but present as comments."""
+  """These keys are absent from the parsed mapping but present as comments."""
   text = _example_path().read_text(encoding="utf-8")
   mapping = load_yaml(_example_path())
   assert isinstance(mapping, dict)
@@ -175,12 +173,12 @@ def test_key_in_two_fragments_raises(profile_home: Path) -> None:
   save_yaml(profile_home / "config.yaml", {"charliebot_access_key": "x"})
   config_d = profile_home / "config.d"
   config_d.mkdir()
-  save_yaml(config_d / "a.yaml", {"public_base_url": "https://a.example.com"})
-  save_yaml(config_d / "b.yaml", {"public_base_url": "https://b.example.com"})
+  save_yaml(config_d / "a.yaml", {"headless_chrome_bin": "/chrome/a"})
+  save_yaml(config_d / "b.yaml", {"headless_chrome_bin": "/chrome/b"})
   with pytest.raises(ValueError) as exc_info:
     core_config.load_config()
   message = str(exc_info.value)
-  assert "public_base_url" in message
+  assert "headless_chrome_bin" in message
   assert str(config_d / "a.yaml") in message
   assert str(config_d / "b.yaml") in message
 
@@ -293,7 +291,7 @@ def test_without_fragments_matches_plain_config_yaml(profile_home: Path, with_em
     (profile_home / "config.d").mkdir()
   mapping = {
       "server_port": 19999,
-      "public_base_url": "https://bot.example.com",
+      "headless_chrome_bin": "/usr/bin/chromium",
       "slack_allowed_user_ids": ["U1", "U2"],
       "workspace_dirs": ["~/elsewhere"],
   }

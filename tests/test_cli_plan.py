@@ -276,81 +276,32 @@ def test_plan_no_session_outside_session_dir(
   assert "--session required" in err or "session dir" in err
 
 
-def test_plan_present_requires_file(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["plan", "present", "--title", "P1"]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
-  assert exc_info.value.code != 0
+REJECTION_CASES = [
+    pytest.param(["plan", "present", "--title", "P1"], id="present-requires-file"),
+    pytest.param(["plan", "present", "--file", "f.html"], id="present-requires-title"),
+    pytest.param(["plan", "close", "--as", "superseded"], id="close-requires-plan"),
+    pytest.param(["plan", "close", "--plan", "1"], id="close-requires-as"),
+    pytest.param(["plan", "close", "--plan", "1", "--as", "weird"], id="close-rejects-invalid-as"),
+    pytest.param(
+        ["plan", "amend", "--file", "f.html", "--trigger", "initial"],
+        id="amend-rejects-invalid-trigger"),
+    pytest.param(
+        ["plan", "reverify", "--verify-thread", "t2", "--plan", "1"],
+        id="reverify-subcommand-removed"),
+    pytest.param(
+        ["plan", "present", "--file", "f.html", "--verify-thread", "t1", "--title", "P1"],
+        id="present-rejects-verify-thread"),
+    pytest.param(
+        ["plan", "amend", "--file", "f.html", "--verify-thread", "t1"],
+        id="amend-rejects-verify-thread"),
+    pytest.param(["plan"], id="requires-verb"),
+]
 
 
-def test_plan_present_requires_title(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["plan", "present", "--file", "f.html"]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
-  assert exc_info.value.code != 0
-
-
-def test_plan_close_requires_plan(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["plan", "close", "--as", "superseded"]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
-  assert exc_info.value.code != 0
-
-
-def test_plan_close_requires_as(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["plan", "close", "--plan", "1"]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
-  assert exc_info.value.code != 0
-
-
-def test_plan_close_rejects_invalid_as(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["plan", "close", "--plan", "1", "--as", "weird"]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
-  assert exc_info.value.code != 0
-
-
-def test_plan_amend_rejects_invalid_trigger(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", [
-      "plan",
-      "amend",
-      "--file",
-      "f.html",
-      "--trigger",
-      "initial",
-  ]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
-  assert exc_info.value.code != 0
-
-
-def test_plan_reverify_subcommand_removed(capsys: pytest.CaptureFixture[str]) -> None:
-  """The reverify subcommand is gone; argparse rejects it with exit code 2."""
-  with patch("sys.argv", ["plan", "reverify", "--verify-thread", "t2", "--plan", "1"]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
-  assert exc_info.value.code != 0
-
-
-def test_plan_present_rejects_verify_thread_arg(capsys: pytest.CaptureFixture[str]) -> None:
-  """--verify-thread is no longer a recognized argument on present."""
-  with patch("sys.argv", ["plan", "present", "--file", "f.html", "--verify-thread", "t1", "--title", "P1"]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
-  assert exc_info.value.code != 0
-
-
-def test_plan_amend_rejects_verify_thread_arg(capsys: pytest.CaptureFixture[str]) -> None:
-  """--verify-thread is no longer a recognized argument on amend."""
-  with patch("sys.argv", ["plan", "amend", "--file", "f.html", "--verify-thread", "t1"]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
-  assert exc_info.value.code != 0
-
-
-def test_plan_requires_verb(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["plan"]):
+@pytest.mark.parametrize("argv", REJECTION_CASES)
+def test_plan_argparse_rejects_argv(argv: list[str]) -> None:
+  """Each malformed invocation dies in argparse with a nonzero exit code."""
+  with patch("sys.argv", argv):
     with pytest.raises(SystemExit) as exc_info:
       main()
   assert exc_info.value.code != 0

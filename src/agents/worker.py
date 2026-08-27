@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiofiles
@@ -49,7 +49,7 @@ def _clamp_ts(clamp_to: datetime | None) -> str:
   is the raw log's final mtime; capping synthesized events at that mtime makes
   the invariant hold even when finalization runs long after the run ended.
   """
-  now = datetime.now(timezone.utc)
+  now = datetime.now(UTC)
   if clamp_to is not None and clamp_to < now:
     return clamp_to.isoformat()
   return now.isoformat()
@@ -300,7 +300,7 @@ class Worker:
 
     # Ensure all persisted events carry a stable event-time.
     if not event_data.get("timestamp"):
-      event_data["timestamp"] = datetime.now(timezone.utc).isoformat()
+      event_data["timestamp"] = datetime.now(UTC).isoformat()
 
     # Detect rate-limit rejections from Claude Code (type=ET.RATE_LIMIT_EVENT)
     if event_type == ET.RATE_LIMIT_EVENT:

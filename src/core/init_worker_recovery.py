@@ -7,7 +7,7 @@ import os
 import signal
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING
@@ -516,7 +516,7 @@ def _started_before_boot(meta: dict, thread_dir: Path, boot_time: datetime) -> b
     except (ValueError, TypeError):
       log.warning("recover_unparseable_started_at", thread=meta.get("id"), started_at=started_at)
   try:
-    ctime = datetime.fromtimestamp(thread_dir.stat().st_ctime, tz=timezone.utc)
+    ctime = datetime.fromtimestamp(thread_dir.stat().st_ctime, tz=UTC)
   except OSError:
     return True
   return ctime < boot_time

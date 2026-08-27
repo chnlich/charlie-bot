@@ -11,7 +11,7 @@ Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
 import argparse
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.core import memory
@@ -100,7 +100,7 @@ def _cmd_add(args: argparse.Namespace) -> None:
   slug = _slugify(title) or "capture"
   cfg = get_config()
   sess8 = _session_slug8(cfg)
-  ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+  ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
   filename = f"{ts}-{sess8}-{slug}.md"
   staging_dir = cfg.memory_dir / "staging"
   staging_dir.mkdir(parents=True, exist_ok=True)

@@ -4,7 +4,7 @@ import asyncio
 import html
 import json
 import mimetypes
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -76,7 +76,7 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
               "name": child.name,
               "is_dir": child.is_dir(),
               "size": stat.st_size,
-              "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+              "mtime": datetime.fromtimestamp(stat.st_mtime, tz=UTC),
           })
   except PermissionError as e:
     raise HTTPException(status_code=403, detail="Permission denied") from e

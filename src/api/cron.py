@@ -21,6 +21,7 @@ from src.core.config import (
   get_config,
   get_scheduled_task_errors,
   get_scheduled_tasks,
+  master_task_project_error,
 )
 from src.core.models import PROJECT_ROLE, SessionMetadata
 from src.core.scheduler import effective_scheduled_task_backend
@@ -221,8 +222,8 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   if not _CRON_NAME_RE.fullmatch(req.name):
     raise HTTPException(status_code=400, detail=f'invalid cron name: {req.name!r}')
   _validate_backend_id(req.backend, cfg)
-  if req.mode == 'master' and not req.project:
-    raise HTTPException(status_code=400, detail="mode 'master' requires 'project' (the group the PM session is bound to)")
+  if project_error := master_task_project_error(req.mode, req.project):
+    raise HTTPException(status_code=400, detail=project_error)
   _check_master_project_unique(req.name, req.mode, req.project)
   path = cron_path(req.name)
   if path.exists():

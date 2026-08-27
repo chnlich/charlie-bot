@@ -23,7 +23,12 @@ from src.agents.backends.base import (
 )
 from src.core import event_types as ET
 from src.core.process import kill_process_group
-from src.core.timeouts import OPENCODE_SSE_PROGRESS_TIMEOUT
+from src.core.timeouts import (
+    OPENCODE_ABORT_TIMEOUT,
+    OPENCODE_HTTP_API_TIMEOUT,
+    OPENCODE_SSE_PROGRESS_TIMEOUT,
+    OPENCODE_STDOUT_DRAIN_TIMEOUT,
+)
 
 log = structlog.get_logger()
 
@@ -146,7 +151,7 @@ class OpenCodeBackend(AgentBackend):
       self._server_url = await self._read_server_url(stdout_log_path)
       self._stdout_task = asyncio.create_task(self._stream_stdout(stdout_log_path))
 
-      async with httpx.AsyncClient(base_url=self._server_url, timeout=30.0) as client:
+      async with httpx.AsyncClient(base_url=self._server_url, timeout=OPENCODE_HTTP_API_TIMEOUT) as client:
         await self._check_health(client)
         self._model_limit = await self._fetch_model_limit(client)
         self._session_id = self._resume_session_id or await self._create_session(client)
@@ -627,7 +632,7 @@ class OpenCodeBackend(AgentBackend):
     if self._server_url is None or self._session_id is None:
       return
     try:
-      async with httpx.AsyncClient(base_url=self._server_url, timeout=5.0) as client:
+      async with httpx.AsyncClient(base_url=self._server_url, timeout=OPENCODE_ABORT_TIMEOUT) as client:
         response = await client.post(f"/session/{self._session_id}/abort")
         response.raise_for_status()
     except Exception as e:
@@ -637,7 +642,7 @@ class OpenCodeBackend(AgentBackend):
     if self._stdout_task is None:
       return
     try:
-      await asyncio.wait_for(asyncio.shield(self._stdout_task), timeout=5.0)
+      await asyncio.wait_for(asyncio.shield(self._stdout_task), timeout=OPENCODE_STDOUT_DRAIN_TIMEOUT)
     except asyncio.TimeoutError:
       self._stdout_task.cancel()
       try:

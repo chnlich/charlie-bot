@@ -274,7 +274,7 @@ async def session_websocket(websocket: WebSocket, session_id: str):
 
   cursor = 0
   try:
-    raw = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+    raw = await asyncio.wait_for(websocket.receive_text(), timeout=timeouts.SESSION_WS_CURSOR_TIMEOUT)
     msg = json.loads(raw)
     if msg.get("type") == "cursor":
       cursor = int(msg.get("index", 0))

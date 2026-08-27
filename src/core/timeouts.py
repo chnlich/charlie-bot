@@ -72,6 +72,37 @@ HTTP_INTERNAL_API_TIMEOUT = 30  # seconds — local loopback, generous for cold 
 HTTP_VERSION_SKEW_TIMEOUT = 2.0  # seconds
 SUBPROCESS_VERSION_SKEW_TIMEOUT = 2.0  # seconds
 
+# sherpa-onnx speech-model artifact download via urllib; a one-shot per host,
+# but the tarball is large.
+HTTP_MODEL_DOWNLOAD_TIMEOUT = 60  # seconds
+
+# ---------------------------------------------------------------------------
+# CLI remote launch (ssh + setsid)
+# ---------------------------------------------------------------------------
+
+# Whole ssh wrapper run: connect (ssh's own ConnectTimeout applies inside) plus
+# the remote mkdir/setsid/pid-print sequence. The failure message prints this
+# value, so budget and message cannot drift.
+SSH_LAUNCH_TIMEOUT = 30  # seconds
+
+# ---------------------------------------------------------------------------
+# Session websocket (browser push channel)
+# ---------------------------------------------------------------------------
+
+# First message of cursor negotiation on /ws/sessions: the browser must send its
+# {"type": "cursor"} replay point within this window or the subscription starts
+# from event 0. Expiry is logged as a parse failure, not fatal.
+SESSION_WS_CURSOR_TIMEOUT = 5.0  # seconds
+
+# ---------------------------------------------------------------------------
+# Hung-subprocess diagnostics capture
+# ---------------------------------------------------------------------------
+
+# One probe in _capture_proc_diagnostics (ps tree, fds, /proc status, children).
+# The snapshot is best-effort by contract: each probe failure is recorded in
+# the returned dict, never raised.
+SUBPROCESS_DIAG_CAPTURE_TIMEOUT = 2.0  # seconds
+
 # ---------------------------------------------------------------------------
 # Slash commands
 # ---------------------------------------------------------------------------
@@ -103,8 +134,22 @@ NO_OUTPUT_REPORT_THRESHOLD = 2 * 3600  # seconds
 CLI_CONNECT_TOTAL_TIMEOUT = 60  # seconds
 
 # ---------------------------------------------------------------------------
-# OpenCode backend SSE progress watchdog
+# OpenCode backend
 # ---------------------------------------------------------------------------
+
+# httpx client for the per-run control API: health probe, model limit, session
+# create, prompt send. The long-lived SSE stream overrides this with
+# timeout=None (its liveness is the watchdog constant below).
+OPENCODE_HTTP_API_TIMEOUT = 30.0  # seconds
+
+# POST to /session/{id}/abort when a turn is cancelled. Best-effort: a failure
+# is logged and cleanup proceeds without it.
+OPENCODE_ABORT_TIMEOUT = 5.0  # seconds
+
+# Grace wait for the stdout log-tail task to reach EOF after the run ends; past
+# it the task is cancelled. The tail loop polls on a sub-second interval, so EOF
+# arrives within milliseconds of the process exiting.
+OPENCODE_STDOUT_DRAIN_TIMEOUT = 5.0  # seconds
 
 # An opencode /event SSE stream carrying no session-id-bearing event for longer
 # than this is declared dead: the turn fails loudly through the normal backend

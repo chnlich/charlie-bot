@@ -25,6 +25,7 @@ import sys
 from src.cli.common import add_session_arg, resolve_session_id
 from src.core.config import get_config
 from src.core.models import utc_now
+from src.core.timeouts import SSH_LAUNCH_TIMEOUT
 
 
 def _ssh_launch_remote(host: str, cwd: str, cmd: str, launch_id: str) -> int:
@@ -48,11 +49,11 @@ def _ssh_launch_remote(host: str, cwd: str, cmd: str, launch_id: str) -> int:
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=SSH_LAUNCH_TIMEOUT,
     )
   except subprocess.TimeoutExpired as exc:
     stderr = exc.stderr or ""
-    print(f"ssh to {host} timed out after 30s: {stderr.strip()}", file=sys.stderr)
+    print(f"ssh to {host} timed out after {SSH_LAUNCH_TIMEOUT}s: {stderr.strip()}", file=sys.stderr)
     sys.exit(2)
   if proc.returncode != 0:
     print(f"ssh to {host} failed (rc={proc.returncode}): {proc.stderr.strip()}", file=sys.stderr)

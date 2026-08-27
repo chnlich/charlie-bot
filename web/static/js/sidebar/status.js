@@ -364,10 +364,6 @@ async function cancelMaster() {
 
 Object.assign(Sidebar, {
   sidebarSessionIds,
-  statusRequestUrls,
-  fetchScopedStatus,
-  sessionBackendType,
-  isTuiSession,
   renderTuiStatusDot,
   fetchTuiStatus,
   refreshTuiDots,
@@ -375,7 +371,6 @@ Object.assign(Sidebar, {
   updateBackendHeaderControls,
   updateSidebarSessionName,
   getSessionIndicatorState,
-  pendingTriggerTitle,
   renderPendingTriggerIndicator,
   renderPendingPlanApprovalIndicator,
   updateSidebarHighlight,
@@ -386,7 +381,6 @@ Object.assign(Sidebar, {
   stopActiveSessionViewPolling,
   ensureActiveSessionViewPolling,
   pollActiveSessionView,
-  applySessionStatus,
   refreshSessionStatusNow,
   pollSessionStatus,
   startThinking,
@@ -396,10 +390,6 @@ Object.assign(Sidebar, {
 });
 Sidebar.expose([
   'sidebarSessionIds',
-  'statusRequestUrls',
-  'fetchScopedStatus',
-  'sessionBackendType',
-  'isTuiSession',
   'renderTuiStatusDot',
   'fetchTuiStatus',
   'refreshTuiDots',
@@ -407,7 +397,6 @@ Sidebar.expose([
   'updateBackendHeaderControls',
   'updateSidebarSessionName',
   'getSessionIndicatorState',
-  'pendingTriggerTitle',
   'renderPendingTriggerIndicator',
   'renderPendingPlanApprovalIndicator',
   'updateSidebarHighlight',
@@ -418,7 +407,6 @@ Sidebar.expose([
   'stopActiveSessionViewPolling',
   'ensureActiveSessionViewPolling',
   'pollActiveSessionView',
-  'applySessionStatus',
   'refreshSessionStatusNow',
   'pollSessionStatus',
   'startThinking',

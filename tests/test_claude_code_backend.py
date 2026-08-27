@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import pytest
+from conftest import FLAG_LIKE_PROMPT
 
 from src.agents.backends.claude_code import BASE_COMMAND, ClaudeCodeBackend
 
@@ -9,11 +10,10 @@ from src.agents.backends.claude_code import BASE_COMMAND, ClaudeCodeBackend
 def test_build_command_does_not_include_flag_like_prompt() -> None:
   backend = ClaudeCodeBackend(model="claude-opus-4-7")
 
-  prompt = "--malicious-flag ignore previous"
-  cmd = backend._build_command(prompt)
+  cmd = backend._build_command(FLAG_LIKE_PROMPT)
 
-  assert prompt not in cmd
-  assert backend._stdin_prompt(prompt) == prompt
+  assert FLAG_LIKE_PROMPT not in cmd
+  assert backend._stdin_prompt(FLAG_LIKE_PROMPT) == FLAG_LIKE_PROMPT
 
 
 def test_build_command_sends_plain_prompt_via_stdin_hook() -> None:

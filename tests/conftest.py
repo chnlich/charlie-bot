@@ -287,6 +287,10 @@ PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
 # model id on the first "/", so a rename keeps the provider/... shape.
 SYNTHETIC_MODEL = "synthetic-provider/nvidia/Synthetic-Model"
 
+# Prompt payload beginning with "--", which a naive argv builder would misread as a CLI flag;
+# each backend's build-command test asserts the string reaches the CLI as prompt payload only.
+FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
+
 
 def plan_page_html(goal_body: str = "Ship the fix.") -> str:
   """Minimal plan page passing the plan assertion set: the shipped template's <style> block

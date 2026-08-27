@@ -69,5 +69,3 @@ Focus on:
 Follow the methodology in improve-worker and <domain-skill> strictly.
 Zero progress is acceptable — record what was tried and metrics.
 ```
-
-For a concrete CUDA optimization example, see `cuda-block-improve/example_improve_prompt.md`.

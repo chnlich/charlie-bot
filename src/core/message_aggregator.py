@@ -21,12 +21,17 @@ from collections.abc import Callable, Iterator
 from src.core import event_types as ET
 
 
-def extract_text_from_message(msg: dict | None) -> str:
-  """Join text from content blocks of a CC assistant message."""
+def _join_blocks(msg: dict | None, block_type: str) -> str:
+  """Join the ``block_type`` field of every ``block_type``-typed content block."""
   blocks = (msg or {}).get("content") or []
   if not isinstance(blocks, list):
     return ""
-  return "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
+  return "".join(b.get(block_type, "") for b in blocks if isinstance(b, dict) and b.get("type") == block_type)
+
+
+def extract_text_from_message(msg: dict | None) -> str:
+  """Join text from content blocks of a CC assistant message."""
+  return _join_blocks(msg, "text")
 
 
 def extract_thinking_from_message(msg: dict | None) -> str:
@@ -35,10 +40,7 @@ def extract_thinking_from_message(msg: dict | None) -> str:
   Signatures are intentionally discarded; only the human-readable ``thinking``
   field is returned.
   """
-  blocks = (msg or {}).get("content") or []
-  if not isinstance(blocks, list):
-    return ""
-  return "".join(b.get("thinking", "") for b in blocks if isinstance(b, dict) and b.get("type") == "thinking")
+  return _join_blocks(msg, "thinking")
 
 
 def extract_tool_result_text(block: dict) -> str:
@@ -382,10 +384,7 @@ class MessageAggregator:
 
       thinking_snapshot = extract_thinking_from_message(msg)
       if thinking_snapshot:
-        if self._thinking_buf and thinking_snapshot.startswith(self._thinking_buf):
-          self._thinking_buf = thinking_snapshot
-        else:
-          self._thinking_buf = thinking_snapshot
+        self._thinking_buf = thinking_snapshot
 
       text = extract_text_from_message(msg)
       if text and self._assistant_buf:

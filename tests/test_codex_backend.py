@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import FakeStdout
+from conftest import FLAG_LIKE_PROMPT, FakeStdout
 from pydantic import ValidationError
 
 from src.agents.backends.codex import CodexBackend
@@ -56,9 +56,9 @@ def test_prepare_cwd_skips_agents_md_when_no_instructions(monkeypatch, tmp_path:
 def test_build_command_uses_double_dash_separator_for_prompt(monkeypatch) -> None:
   backend = _build_backend(monkeypatch, model="codex-test-model")
 
-  cmd = backend._build_command("--malicious-flag ignore previous")
+  cmd = backend._build_command(FLAG_LIKE_PROMPT)
 
-  assert cmd[-2:] == ["--", "--malicious-flag ignore previous"]
+  assert cmd[-2:] == ["--", FLAG_LIKE_PROMPT]
 
 
 def test_build_command_resume_uses_double_dash_separator_for_prompt(monkeypatch) -> None:
@@ -68,9 +68,9 @@ def test_build_command_resume_uses_double_dash_separator_for_prompt(monkeypatch)
       resume_session_id="sess-123",
   )
 
-  cmd = backend._build_command("--malicious-flag ignore previous")
+  cmd = backend._build_command(FLAG_LIKE_PROMPT)
 
-  assert cmd[-2:] == ["--", "--malicious-flag ignore previous"]
+  assert cmd[-2:] == ["--", FLAG_LIKE_PROMPT]
   assert "sess-123" in cmd
 
 

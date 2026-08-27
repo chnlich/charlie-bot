@@ -1,4 +1,5 @@
 import pytest
+from conftest import FLAG_LIKE_PROMPT
 
 from src.agents.backends.charlie_code import CharlieCodeBackend
 from src.core import event_types as ET
@@ -128,13 +129,12 @@ def test_build_command_uses_json_model_api_base_separator_and_effective_prompt(m
       instructions_content="Use concise answers.",
   )
 
-  cmd = backend._build_command("--malicious-flag ignore previous")
+  cmd = backend._build_command(FLAG_LIKE_PROMPT)
 
   expected_prompt = (
       "<system-instructions>\n"
       "Use concise answers.\n"
-      "</system-instructions>\n\n"
-      "--malicious-flag ignore previous")
+      "</system-instructions>\n\n" + FLAG_LIKE_PROMPT)
   assert cmd == [
       "/usr/bin/charlie-code",
       "--json",

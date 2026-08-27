@@ -183,14 +183,12 @@ async def test_index_uses_pinned_runtime_git_version(monkeypatch: pytest.MonkeyP
       request=make_page_request("/"),
       session=None,
       session_mgr=FakeSessionManager(),
-      thread_mgr=object(),
       cfg=cfg,
   )
   response_two = await pages.index(
       request=make_page_request("/"),
       session=None,
       session_mgr=FakeSessionManager(),
-      thread_mgr=object(),
       cfg=cfg,
   )
 
@@ -208,7 +206,6 @@ async def test_index_versions_local_static_assets(monkeypatch: pytest.MonkeyPatc
       request=make_page_request("/"),
       session=None,
       session_mgr=FakeSessionManager(),
-      thread_mgr=object(),
       cfg=cfg,
   )
 
@@ -265,7 +262,6 @@ async def test_index_embeds_initial_sessions_for_client_sidebar_render(
       request=make_page_request("/"),
       session=session.id,
       session_mgr=PendingTriggerSessionManager(session),
-      thread_mgr=object(),
       cfg=cfg,
   )
 

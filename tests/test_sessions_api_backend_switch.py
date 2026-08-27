@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.agents import master_cc
-from src.api.deps import get_session_manager, get_trigger_manager
+from src.api.deps import get_session_manager
 from src.api.sessions import _active_backend_payload, _same_backend_domain
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig, get_config
@@ -28,7 +28,6 @@ from src.core.models import (
   SessionStatus,
 )
 from src.core.sessions import SessionManager
-from src.core.triggers import TriggerManager
 
 
 def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path, Path]:
@@ -52,17 +51,11 @@ def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path, Path]:
   return cfg, config_a, config_b
 
 
-def _build_client(
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
-    trigger_mgr: TriggerManager | None = None,
-) -> TestClient:
+def _build_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
   app = FastAPI()
   app.include_router(sessions_router, prefix="/api/sessions")
   app.dependency_overrides[get_config] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  if trigger_mgr is not None:
-    app.dependency_overrides[get_trigger_manager] = lambda: trigger_mgr
   return TestClient(app)
 
 
@@ -227,10 +220,9 @@ async def test_switch_same_domain_role_session_stays_in_place(tmp_path: Path) ->
   """A non-cron role session switches in place via the ordinary same-domain path."""
   cfg, _config_a, _config_b = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  trigger_mgr = TriggerManager(cfg, session_mgr)
   role_session = await _seed_role(session_mgr, backend="claude-opus-5")
 
-  with _build_client(cfg, session_mgr, trigger_mgr) as client:
+  with _build_client(cfg, session_mgr) as client:
     response = client.post(
         f"/api/sessions/{role_session.id}/backend",
         json={"backend": "claude-fable-5"},

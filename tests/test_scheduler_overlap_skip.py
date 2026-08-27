@@ -136,6 +136,24 @@ def _skip_events_since(session_mgr, since: int) -> int:
   return count
 
 
+def _pending_rig(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[_Clock, Scheduler, SessionMetadata, AsyncMock, _PendingRound, ScheduledTaskConfig]:
+  """Rig for the scheduled-path tests: clock parked at 2026-06-01 00:00 UTC, one
+  pending in-flight round, session anchored at that instant, one-minute-cadence task."""
+  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc))
+  _install_clock(monkeypatch, clock)
+  scheduler = Scheduler(_cfg(tmp_path), AsyncMock())
+  session = SessionMetadata(id="session-1", name="Scheduled: code-health")
+  session.last_scheduled_run = clock.now().isoformat()  # 00:00
+  monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
+  session_mgr = AsyncMock()
+  pending = _PendingRound(session)
+  install_pending_executor(scheduler, clock, pending)
+  task_cfg = _task()
+  return clock, scheduler, session, session_mgr, pending, task_cfg
+
+
 # ---------------------------------------------------------------------------
 # 1. At most one round in flight
 # ---------------------------------------------------------------------------
@@ -146,16 +164,7 @@ async def test_at_most_one_round_in_flight(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc))
-  _install_clock(monkeypatch, clock)
-  scheduler = Scheduler(_cfg(tmp_path), AsyncMock())
-  session = SessionMetadata(id="session-1", name="Scheduled: code-health")
-  session.last_scheduled_run = clock.now().isoformat()
-  monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
-  session_mgr = AsyncMock()
-  pending = _PendingRound(session)
-  install_pending_executor(scheduler, clock, pending)
-  task_cfg = _task()
+  clock, scheduler, session, session_mgr, pending, task_cfg = _pending_rig(monkeypatch, tmp_path)
 
   await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)
   await asyncio.sleep(0)  # let the birthed round become the in-flight handle
@@ -180,16 +189,7 @@ async def test_one_skip_per_due_tick_normal_cadence(
     tmp_path: Path,
 ) -> None:
   """Normal one-minute tick cadence: one skip record per due occurrence."""
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc))
-  _install_clock(monkeypatch, clock)
-  scheduler = Scheduler(_cfg(tmp_path), AsyncMock())
-  session = SessionMetadata(id="session-1", name="Scheduled: code-health")
-  session.last_scheduled_run = clock.now().isoformat()
-  monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
-  session_mgr = AsyncMock()
-  pending = _PendingRound(session)
-  install_pending_executor(scheduler, clock, pending)
-  task_cfg = _task()
+  clock, scheduler, session, session_mgr, pending, task_cfg = _pending_rig(monkeypatch, tmp_path)
 
   # Tick 1 fires the only round. Ticks 2..4 are each a due tick while pending.
   await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)
@@ -212,16 +212,7 @@ async def test_one_skip_consuming_delayed_occurrences(
     tmp_path: Path,
 ) -> None:
   """A tick delayed past several occurrences yields one record that consumes them."""
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc))
-  _install_clock(monkeypatch, clock)
-  scheduler = Scheduler(_cfg(tmp_path), AsyncMock())
-  session = SessionMetadata(id="session-1", name="Scheduled: code-health")
-  session.last_scheduled_run = clock.now().isoformat()  # 00:00
-  monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
-  session_mgr = AsyncMock()
-  pending = _PendingRound(session)
-  install_pending_executor(scheduler, clock, pending)
-  task_cfg = _task()
+  clock, scheduler, session, session_mgr, pending, task_cfg = _pending_rig(monkeypatch, tmp_path)
 
   # One fire births the round; then a single delayed tick arrives at 00:04.
   await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)
@@ -249,16 +240,7 @@ async def test_no_fire_on_completion_moment(
   """After the pending round finishes, further fires land on the cron grid, never
   at the completion moment. Failing the skip or firing on completion makes the
   mid-minute tick below birth a round, which this asserts does not happen."""
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc))
-  _install_clock(monkeypatch, clock)
-  scheduler = Scheduler(_cfg(tmp_path), AsyncMock())
-  session = SessionMetadata(id="session-1", name="Scheduled: code-health")
-  session.last_scheduled_run = clock.now().isoformat()  # 00:00
-  monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
-  session_mgr = AsyncMock()
-  pending = _PendingRound(session)
-  install_pending_executor(scheduler, clock, pending)
-  task_cfg = _task()
+  clock, scheduler, session, session_mgr, pending, task_cfg = _pending_rig(monkeypatch, tmp_path)
 
   await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)  # birth the round
   await _tick(scheduler, task_cfg, session_mgr, clock, minute=2)  # skip while pending

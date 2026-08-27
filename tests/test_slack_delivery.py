@@ -484,14 +484,6 @@ def test_slack_reply_event_projects_as_a_system_message() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _audit_patches(client: _FakeSlackClient, tasks: list[asyncio.Task], trigger: AsyncMock):
-  return (
-      patch("src.core.slack_listener._bot_client", return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=_spawner(tasks)),
-      patch("src.core.slack_listener.trigger_master", trigger),
-  )
-
-
 @pytest.mark.asyncio
 async def test_summon_round_with_a_reply_is_left_alone(tmp_path: Path) -> None:
   cfg, session_mgr, client = _rig(tmp_path)

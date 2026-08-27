@@ -474,6 +474,18 @@ def dump_yaml(body: Any) -> str:
   return yaml.safe_dump(body, default_flow_style=False, sort_keys=False)
 
 
+def reset_config_caches() -> None:
+  """Clear src.core.config's module-level caches so the next read reloads from disk.
+
+  The config cache and the cron snapshot both key freshness on a fingerprint,
+  so an instance cached under an earlier test's profile would answer for the
+  wrong one.
+  """
+  core_config._config = None
+  core_config._config_mtime = 0.0
+  core_config._cron_snapshot = core_config._CronSnapshot()
+
+
 @pytest.fixture
 def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   """Point HOME at a temp dir and reset the config/cron module-level caches.
@@ -484,9 +496,7 @@ def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   """
   monkeypatch.delenv("CHARLIEBOT_HOME", raising=False)
   monkeypatch.setenv("HOME", str(tmp_path))
-  core_config._config = None
-  core_config._config_mtime = 0.0
-  core_config._cron_snapshot = core_config._CronSnapshot()
+  reset_config_caches()
   return tmp_path
 
 

@@ -11,6 +11,7 @@ import asyncio
 import pathlib
 
 import pytest
+from conftest import reset_config_caches
 
 from src.core import config as core_config
 
@@ -22,14 +23,9 @@ def _reset_config_caches():
   Both are keyed on nothing but their own mtimes, so a cached instance from an
   earlier test would answer with the wrong profile.
   """
-  def _clear():
-    core_config._config = None
-    core_config._config_mtime = 0.0
-    core_config._cron_snapshot = core_config._CronSnapshot()
-
-  _clear()
+  reset_config_caches()
   yield
-  _clear()
+  reset_config_caches()
 
 
 def test_unset_env_gives_the_default_home(monkeypatch, tmp_path):

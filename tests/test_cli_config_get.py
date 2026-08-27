@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from conftest import reset_config_caches
 
 import src.cli.config as cli
 from src.core import config as core_config
@@ -18,20 +19,10 @@ from src.core.yaml_utils import save_yaml
 @pytest.fixture(autouse=True)
 def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
   """Point the profile at a fresh tmp dir and clear the module config caches."""
-
-  def _clear() -> None:
-    core_config._config = None
-    core_config._config_mtime = None
-
   monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(tmp_path))
-  _clear()
+  reset_config_caches()
   yield tmp_path
-  _clear()
-
-
-def _clear_config_cache() -> None:
-  core_config._config = None
-  core_config._config_mtime = None
+  reset_config_caches()
 
 
 def _run_get(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], key: str) -> tuple[int, str, str]:
@@ -57,7 +48,7 @@ def test_same_stdout_from_config_yaml_and_fragment(
   fragment = profile_home / "config.d" / "auth.yaml"
   fragment.parent.mkdir()
   save_yaml(fragment, {"charliebot_access_key": "top-secret-token"})
-  _clear_config_cache()
+  reset_config_caches()
   code, out_frag, err_frag = _run_get(monkeypatch, capsys, "charliebot_access_key")
   assert code == 0
   assert err_frag == ""

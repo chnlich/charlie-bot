@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 from conftest import dump_yaml as _dump
+from conftest import reset_config_caches
 from conftest import write_cron_task as _write_task_text
 
 import src.core.config as cm
@@ -58,9 +59,7 @@ def test_alert_fires_once_on_transition_recovers_once_and_repeats_nothing(
 
   # The identical set stays silent — including across a simulated restart
   # (fresh in-memory caches; only the persisted fingerprint survives).
-  cm._config = None
-  cm._config_mtime = 0.0
-  cm._cron_snapshot = cm._CronSnapshot()
+  reset_config_caches()
   _fire(["alpha", "beta"])
   assert sent == ["⚠️ cron 任务加载失败: alpha, beta"]
 

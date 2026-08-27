@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from conftest import reset_config_caches
 
 from src.core import config as core_config
 from src.core.config import CharlieBotConfig
@@ -24,15 +25,10 @@ def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
   ``get_config()`` caches process-wide on a fingerprint, so an instance from an
   earlier test would answer with the wrong profile.
   """
-  def _clear() -> None:
-    core_config._config = None
-    core_config._config_mtime = None
-    core_config._cron_snapshot = core_config._CronSnapshot()
-
   monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(tmp_path))
-  _clear()
+  reset_config_caches()
   yield tmp_path
-  _clear()
+  reset_config_caches()
 
 
 def _example_mapping() -> dict:

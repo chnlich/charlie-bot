@@ -61,8 +61,9 @@ def _patch_delegate_spawn_rig(
     captured: dict[str, Any],
 ) -> None:
   """Install the resolve/spawn/create_logged_task/get_config fakes shared by the delegate_task
-  flow tests: the resolve fake asserts the session and requested backend, the spawn fake asserts
-  the managers it receives, and create_logged_task records the SpawnRequest locals for assertions."""
+  flow tests. The resolve fake is awaited directly, so its body asserts the session and requested
+  backend at call time. The spawn fake is never awaited — create_logged_task's capture stub closes
+  the coroutine — so the capture (not this body) is what pins its bound arguments for assertions."""
   async def fake_resolve_requested_subagent_backend_model(
       session_id: str,
       cfg: Any,
@@ -83,8 +84,7 @@ def _patch_delegate_spawn_rig(
       t_mgr: Any,
       request: SpawnRequest | None = None,
   ) -> None:
-    assert mgr is session_mgr
-    assert t_mgr is thread_mgr
+    return None
 
   monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve_requested_subagent_backend_model)
   monkeypatch.setattr(internal, "spawn_worker", fake_spawn_worker)

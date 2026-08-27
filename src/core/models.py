@@ -437,6 +437,14 @@ class SessionMessageRequest(BaseModel):
   content: str
 
 
+class SlackReplyRequest(BaseModel):
+  """Request body for the internal slack/reply endpoint: the calling session posts *text* to its own thread."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  text: str
+
+
 # ---------------------------------------------------------------------------
 # Plan Registry Request Models
 # ---------------------------------------------------------------------------

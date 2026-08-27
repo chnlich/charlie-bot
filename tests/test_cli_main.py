@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-from src.cli import delegate, improve, remote_launch, schedule_trigger
+from src.cli import delegate, improve, remote_launch, schedule_trigger, slack
 from src.cli import main as cli_main
 
 
@@ -15,6 +15,7 @@ from src.cli import main as cli_main
         ("improve", improve),
         ("schedule-trigger", schedule_trigger),
         ("remote-launch", remote_launch),
+        ("slack", slack),
     ],
 )
 def test_dispatcher_delegates_to_supported_subcommands(

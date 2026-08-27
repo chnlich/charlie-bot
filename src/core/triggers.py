@@ -86,10 +86,10 @@ def _detect_pidfd():
   """
   if hasattr(os, "pidfd_open") and hasattr(os, "P_PIDFD"):
 
-    def _stdlib_pidfd_open(pid, flags=0):
+    def _stdlib_pidfd_open(pid: int, flags: int = 0) -> int:
       return os.pidfd_open(pid, flags)
 
-    def _stdlib_waitid_pidfd(fd, options):
+    def _stdlib_waitid_pidfd(fd: int, options: int):
       return os.waitid(os.P_PIDFD, fd, options)
 
     return _stdlib_pidfd_open, _stdlib_waitid_pidfd
@@ -119,7 +119,7 @@ def _detect_pidfd():
     return None, None
   os.close(probe_fd)
 
-  def _ctypes_pidfd_open(pid, flags=0):
+  def _ctypes_pidfd_open(pid: int, flags: int = 0) -> int:
     ctypes.set_errno(0)
     fd = libc.syscall(syscall_no, pid, flags)
     if fd < 0:
@@ -142,7 +142,7 @@ def _detect_pidfd():
 
   class _WaitidResult:
 
-    def __init__(self, si):
+    def __init__(self, si: _Siginfo):
       self.si_pid = si.si_pid
       self.si_uid = si.si_uid
       self.si_signo = si.si_signo
@@ -151,7 +151,7 @@ def _detect_pidfd():
 
   P_PIDFD_CONST = 3
 
-  def _ctypes_waitid_pidfd(fd, options):
+  def _ctypes_waitid_pidfd(fd: int, options: int):
     si = _Siginfo()
     ctypes.set_errno(0)
     rc = libc.waitid(P_PIDFD_CONST, fd, ctypes.byref(si), options)

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.core import memory
-from src.core.config import get_config
+from src.core.config import CharlieBotConfig, get_config
 
 
 def main() -> None:
@@ -126,7 +126,7 @@ def _slugify(text: str) -> str:
   return s.strip("-")
 
 
-def _session_slug8(cfg) -> str:
+def _session_slug8(cfg: CharlieBotConfig) -> str:
   """First 8 chars of the CharlieBot session id derived from cwd, else 'nosess'."""
   cwd = Path.cwd().resolve()
   sessions_dir = cfg.sessions_dir.resolve()

@@ -4,7 +4,7 @@ import asyncio
 import os
 import signal
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -224,7 +224,7 @@ async def _salvage_silent_turn(
     tracker: _RunTimingTracker,
     error_msg: str | None,
     session_id: str,
-    persist_and_broadcast,
+    persist_and_broadcast: Callable[[str, dict], Awaitable[None]],
 ) -> None:
   """Emit accumulated thinking as a visible assistant text event on a silent turn.
 
@@ -420,7 +420,7 @@ async def _handle_event(
     event: dict,
     session_id: str,
     cc_session_id: str | None,
-    persist_and_broadcast,
+    persist_and_broadcast: Callable[[str, dict], Awaitable[None]],
 ) -> str | None:
   """Process a single backend event: persist, broadcast, and handle compaction events.
 

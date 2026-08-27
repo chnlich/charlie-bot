@@ -48,6 +48,7 @@ from src.core.models import (
   SwitchBackendRequest,
   ThreadMetadata,
 )
+from src.core.plans import PlanRegistryManager
 from src.core.sessions import (
   ScheduledSessionBusyError,
   SessionManager,
@@ -805,7 +806,7 @@ async def list_threads(session_id: str, thread_mgr: ThreadManager = Depends(get_
 async def list_plans(
     session_id: str,
     _meta: SessionMetadata = Depends(require_session),
-    plan_mgr=Depends(get_plan_manager),
+    plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
 ):
   """Return the plan registry for a session with derived states and read errors.
 

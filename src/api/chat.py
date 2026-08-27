@@ -153,7 +153,7 @@ async def cancel_master_agent(
 
 async def run_and_finalize(
     cfg: CharlieBotConfig,
-    meta,
+    meta: SessionMetadata,
     content: str,
     session_mgr: SessionManager,
     *,
@@ -223,7 +223,7 @@ def launch_prompt_dispatch(
 
 async def _auto_name(
     cfg: CharlieBotConfig,
-    session_meta,
+    session_meta: SessionMetadata,
     user_message: str,
     session_mgr: SessionManager,
 ) -> None:

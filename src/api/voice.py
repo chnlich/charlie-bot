@@ -14,6 +14,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from src.agents.transcriber import (
   SAMPLE_RATE,
+  SimulatedStreamingTranscriptionSession,
   SpeechModelsNotReady,
   create_transcription_session,
 )
@@ -104,7 +105,12 @@ def _is_stop_frame(text: str) -> bool:
   return data == {"type": "stop"}
 
 
-async def _finish_voice_stream(websocket: WebSocket, cfg: CharlieBotConfig, session_id: str, session) -> bool:
+async def _finish_voice_stream(
+    websocket: WebSocket,
+    cfg: CharlieBotConfig,
+    session_id: str,
+    session: SimulatedStreamingTranscriptionSession,
+) -> bool:
   final_text = await asyncio.to_thread(session.finish)
   audio_path = await asyncio.to_thread(_persist_voice_dump, cfg, session_id, session.audio_bytes, final_text)
   log.info(

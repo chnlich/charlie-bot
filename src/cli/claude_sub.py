@@ -789,7 +789,7 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
 
         try:
           event = await asyncio.wait_for(bridge.events.get(), timeout=_POLL_SECONDS)
-        except asyncio.TimeoutError:
+        except TimeoutError:
           continue
         _emit(event)
     except Exception as error:

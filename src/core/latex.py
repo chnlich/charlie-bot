@@ -102,7 +102,7 @@ async def get_git_info() -> dict | None:
     )
     try:
       root_out, _ = await asyncio.wait_for(root_proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
-    except asyncio.TimeoutError:
+    except TimeoutError:
       root_proc.kill()
       log.warning('get_git_info_timeout', cmd='rev-parse --show-toplevel')
       return None
@@ -122,7 +122,7 @@ async def get_git_info() -> dict | None:
     )
     try:
       branch_out, _ = await asyncio.wait_for(branch_proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
-    except asyncio.TimeoutError:
+    except TimeoutError:
       branch_proc.kill()
       log.warning('get_git_info_timeout', cmd='rev-parse --abbrev-ref HEAD')
       return None
@@ -155,7 +155,7 @@ async def compile_latex() -> dict:
     else:
       log.info('latex_compile_done')
     return {'ok': ok, 'log': output}
-  except asyncio.TimeoutError:
+  except TimeoutError:
     kill_process_group(proc.pid, signal.SIGKILL)
     log.warning('latex_compile_timeout')
     return {'ok': False, 'log': f'Compilation timed out after {LATEX_COMPILE_TIMEOUT}s'}

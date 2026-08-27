@@ -259,7 +259,7 @@ class OpenCodeBackend(AgentBackend):
         raise TimeoutError("OpenCode serve did not print its server URL")
       try:
         raw_line = await asyncio.wait_for(self._proc.stdout.readline(), timeout=remaining)
-      except asyncio.TimeoutError as e:
+      except TimeoutError as e:
         raise TimeoutError("OpenCode serve did not print its server URL") from e
       if not raw_line:
         raise RuntimeError("OpenCode serve exited before printing its server URL")
@@ -433,7 +433,7 @@ class OpenCodeBackend(AgentBackend):
         event = await asyncio.wait_for(anext(events_iter), timeout=deadline - loop.time())
       except StopAsyncIteration:
         return
-      except asyncio.TimeoutError as e:
+      except TimeoutError as e:
         silent_seconds = loop.time() - last_progress_at
         log.error(
             "opencode_sse_silence_timeout",
@@ -643,7 +643,7 @@ class OpenCodeBackend(AgentBackend):
       return
     try:
       await asyncio.wait_for(asyncio.shield(self._stdout_task), timeout=OPENCODE_STDOUT_DRAIN_TIMEOUT)
-    except asyncio.TimeoutError:
+    except TimeoutError:
       self._stdout_task.cancel()
       try:
         await self._stdout_task
@@ -791,7 +791,7 @@ class OpenCodeBackend(AgentBackend):
     stderr_task = asyncio.create_task(proc.stderr.read())
     try:
       return await asyncio.wait_for(_collect(), timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
       kill_process_group(proc.pid, signal.SIGKILL)
       raise
     finally:

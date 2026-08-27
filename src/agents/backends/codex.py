@@ -189,7 +189,7 @@ class CodexBackend(AgentBackend):
         detail = f": {stderr_text}" if stderr_text else ""
         raise RuntimeError(f"Codex one-shot returned no assistant text{detail}")
       return text
-    except asyncio.TimeoutError:
+    except TimeoutError:
       kill_process_group(proc.pid, signal.SIGKILL)
       raise
     finally:

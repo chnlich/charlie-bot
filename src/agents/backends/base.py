@@ -587,7 +587,7 @@ class AgentBackend(ABC):
       return
     try:
       await asyncio.wait_for(self._proc.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
       log.warning(timeout_log_event, pid=self._proc.pid)
       kill_process_group(self._proc.pid, signal.SIGKILL)
 
@@ -620,7 +620,7 @@ class AgentBackend(ABC):
     stdin_error: Exception | None = None
     try:
       await asyncio.wait_for(asyncio.shield(self._stdin_task), timeout=timeout)
-    except asyncio.TimeoutError as e:
+    except TimeoutError as e:
       stdin_error = e
       log.warning("backend_stdin_write_timeout", pid=self._proc.pid, timeout=timeout)
       self._stdin_task.cancel()
@@ -639,7 +639,7 @@ class AgentBackend(ABC):
     assert self._proc is not None
     try:
       await asyncio.wait_for(self._proc.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
       log.warning("backend_wait_timeout_after_result", pid=self._proc.pid)
       self.hang_diagnostics = await _capture_proc_diagnostics(self._proc.pid)
       await self._graceful_shutdown(
@@ -671,7 +671,7 @@ class AgentBackend(ABC):
     if self._stderr_task is not None:
       try:
         await asyncio.wait_for(asyncio.shield(self._stderr_task), timeout=timeout)
-      except asyncio.TimeoutError:
+      except TimeoutError:
         log.debug("backend_stderr_stream_timeout", pid=self._proc.pid, timeout=timeout)
     await self._wait_for_proc_exit(timeout)
     if self._stderr_task is not None and not self._stderr_task.done():
@@ -716,7 +716,7 @@ class AgentBackend(ABC):
 
     try:
       return await asyncio.wait_for(_collect(), timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
       await self.terminate()
       raise
     finally:

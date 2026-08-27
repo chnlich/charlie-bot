@@ -632,7 +632,7 @@ async def test_one_shot_text_kills_process_group_on_timeout(monkeypatch) -> None
       patch("src.agents.backends.codex.kill_process_group") as mock_kill,
   ):
     backend = _build_backend(monkeypatch)
-    with pytest.raises(asyncio.TimeoutError):
+    with pytest.raises(TimeoutError):
       await backend.one_shot_text("prompt", "system", timeout=0.01)
 
   mock_kill.assert_called_once_with(9000, signal.SIGKILL)

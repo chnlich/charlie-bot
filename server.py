@@ -93,7 +93,7 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context) -> 
     while True:
       try:
         await asyncio.wait_for(websocket.receive_text(), timeout=_WS_KEEPALIVE_TIMEOUT)
-      except asyncio.TimeoutError:
+      except TimeoutError:
         await websocket.send_json({"type": "ping"})
   except WebSocketDisconnect:
     pass
@@ -168,7 +168,7 @@ async def lifespan(app: FastAPI):
   identity = asyncio.create_task(reconcile_master_identity(cfg, session_mgr, boot_time))
   try:
     await asyncio.wait_for(asyncio.shield(identity), timeout=timeouts.MASTER_IDENTITY_BARRIER_TIMEOUT)
-  except asyncio.TimeoutError:
+  except TimeoutError:
     log.warning("master_identity_barrier_timeout", timeout_s=timeouts.MASTER_IDENTITY_BARRIER_TIMEOUT)
   except Exception:
     pass  # reported where the task is awaited: crash recovery logs it loudly
@@ -281,7 +281,7 @@ async def session_websocket(websocket: WebSocket, session_id: str):
   except WebSocketDisconnect:
     log.debug("session_ws_early_disconnect", session_id=session_id)
     return
-  except (asyncio.TimeoutError, json.JSONDecodeError, ValueError, TypeError) as e:
+  except (TimeoutError, json.JSONDecodeError, ValueError, TypeError) as e:
     log.debug("session_ws_cursor_parse_failed", session_id=session_id, error=str(e))
 
   # Subscribe BEFORE catchup so no events are lost between catchup and subscribe.

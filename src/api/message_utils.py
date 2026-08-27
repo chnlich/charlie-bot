@@ -204,6 +204,24 @@ class SessionViewData:
   has_more: bool = False
 
 
+def _projection_page(
+    session_mgr: 'SessionManager',
+    session_id: str,
+    message_limit: int,
+) -> tuple[list[dict], dict | None, int, int, bool] | None:
+  """Read one turn-aligned page off the session's memoized message projection.
+
+  Returns (messages, pending_draft, event_count, oldest_ordinal, has_more), or
+  None when no projection is available and the caller must take the legacy
+  tail-events path.
+  """
+  projection = session_mgr.get_message_projection(session_id)
+  if projection is None:
+    return None
+  messages, oldest_ordinal, has_more = projection.tail(message_limit)
+  return messages, projection.pending_draft, projection.event_count, oldest_ordinal, has_more
+
+
 async def _mark_read_best_effort(session_mgr: 'SessionManager', session_id: str) -> 'SessionMetadata | None':
   """mark_read whose failure degrades to a logged warning.
 
@@ -236,16 +254,7 @@ async def build_session_bootstrap_data(
     raise ValueError(f"session '{session_id}' metadata missing during bootstrap build")
 
   if session_meta.archive_offset == 0:
-
-    def _from_projection():
-      projection = session_mgr.get_message_projection(session_id)
-      if projection is None:
-        return None
-      messages, oldest_ordinal, has_more = projection.tail(message_limit)
-      total_event_count = projection.event_count
-      return messages, projection.pending_draft, total_event_count, oldest_ordinal, has_more
-
-    result = await asyncio.to_thread(_from_projection)
+    result = await asyncio.to_thread(_projection_page, session_mgr, session_id, message_limit)
     if result is not None:
       messages, pending_draft, total_event_count, oldest_ordinal, has_more = result
       read_meta = await _mark_read_best_effort(session_mgr, session_id)
@@ -306,19 +315,10 @@ async def build_session_view_data(
     raise ValueError(f"session '{session_id}' metadata missing during view build")
 
   if message_limit is not None and session_meta.archive_offset == 0:
-
-    def _from_projection():
-      projection = session_mgr.get_message_projection(session_id)
-      if projection is None:
-        return None
-      messages, oldest_ordinal, has_more = projection.tail(message_limit)
-      total_event_count = projection.event_count
-      events = session_mgr.load_chat_events_sync(session_id)
-      return messages, projection.pending_draft, total_event_count, oldest_ordinal, has_more, events
-
-    result = await asyncio.to_thread(_from_projection)
+    result = await asyncio.to_thread(_projection_page, session_mgr, session_id, message_limit)
     if result is not None:
-      messages, pending_draft, total_event_count, oldest_ordinal, has_more, events = result
+      messages, pending_draft, total_event_count, oldest_ordinal, has_more = result
+      events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
       usage = await session_mgr.resolve_session_usage(session_id, session_meta)
       await _mark_read_best_effort(session_mgr, session_id)
       return SessionViewData(
@@ -369,6 +369,15 @@ async def build_session_view_data(
   )
 
 
+def _committed_messages(agg: MessageAggregator, events: list[dict]) -> list[dict]:
+  """Feed events through the aggregator and collect the committed message deltas."""
+  messages: list[dict] = []
+  for delta in agg.feed_indexed(_stable_history_projection(events)):
+    if delta["type"] == "message":
+      messages.append(delta["message"])
+  return messages
+
+
 def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[dict]:
   """Convert raw chat_events.jsonl entries into a flat list of displayable messages.
 
@@ -376,10 +385,7 @@ def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[
   (paginated older events). For the live-render entrypoint, see ``events_to_view``.
   """
   agg = MessageAggregator(event_index_offset=event_index_offset)
-  messages: list[dict] = []
-  for delta in agg.feed_indexed(_stable_history_projection(events)):
-    if delta["type"] == "message":
-      messages.append(delta["message"])
+  messages = _committed_messages(agg, events)
   for delta in agg.flush_pending():
     messages.append(delta["message"])
   return messages
@@ -394,8 +400,4 @@ def events_to_view(events: list[dict], event_index_offset: int = 0) -> tuple[lis
   events extend the draft rather than producing a duplicate bubble.
   """
   agg = MessageAggregator(event_index_offset=event_index_offset)
-  messages: list[dict] = []
-  for delta in agg.feed_indexed(_stable_history_projection(events)):
-    if delta["type"] == "message":
-      messages.append(delta["message"])
-  return messages, agg.pending_draft_message()
+  return _committed_messages(agg, events), agg.pending_draft_message()

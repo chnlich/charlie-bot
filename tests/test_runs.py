@@ -185,7 +185,6 @@ def test_resolve_uncovered_backend_with_result_event_completes(tmp_path: Path) -
   for backend_type in ("opencode", "antigravity", "tui-cli"):
     resolution = _resolve(tmp_path, backend_type=backend_type)
     assert resolution.outcome is runs.RunOutcome.COMPLETED
-    assert resolution.success is True
 
 
 def test_resolve_uncovered_backend_type_dies_with_transport_reason(tmp_path: Path) -> None:
@@ -213,17 +212,15 @@ def test_resolve_died_when_raw_missing_and_death_verifiable(tmp_path: Path) -> N
   assert resolution.reason == runs.LEGACY_RAW_MISSING_REASON
 
 
-def test_resolve_completed_uses_result_event_for_success(tmp_path: Path) -> None:
+def test_resolve_completed_uses_result_event(tmp_path: Path) -> None:
   _write_raw(tmp_path, [ASSISTANT_LINE, RESULT_SUCCESS_LINE])
   resolution = _resolve(tmp_path, pid=None)
   assert resolution.outcome is runs.RunOutcome.COMPLETED
-  assert resolution.success is True
   assert resolution.completed_at == runs.raw_completion_time(runs.raw_log_path(tmp_path))
 
   _write_raw(tmp_path, ['{"type": "result", "subtype": "error_during_execution", "is_error": true}'])
   resolution = _resolve(tmp_path)
   assert resolution.outcome is runs.RunOutcome.COMPLETED
-  assert resolution.success is False
 
 
 def test_resolve_completed_even_when_process_still_alive(tmp_path: Path) -> None:

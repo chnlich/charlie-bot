@@ -1,4 +1,4 @@
-"""Shared JSON read/write helpers for consistent encoding and error handling."""
+"""Shared JSON read/write helpers and the single home of the atomic file-write rule."""
 
 import json
 import os
@@ -26,33 +26,18 @@ def load_json_meta(
     return None
 
 
-def write_json_atomically(
-    path: Path,
-    value: object,
-    *,
-    indent: int | None = None,
-    newline: bool = False,
-    private: bool = False,
-) -> None:
-  """Serialize *value* as JSON and swap it into *path* in one step.
+def atomic_write_text(path: Path, text: str, *, private: bool = False) -> None:
+  """Write *text* to *path* atomically: a uniquely named tmp sibling swapped in by ``os.replace``.
 
-  The payload lands in a uniquely named tmp sibling first — the uuid suffix keeps
-  concurrent writers of one path from interleaving their bytes — and
-  ``os.replace`` publishes it whole, so a crash mid-write leaves the previous
-  content intact and no half-written tmp behind. ``private=True`` marks the file
-  0600, so a secret never appears at its final path readable by anyone but the
-  owner.
+  The uuid suffix keeps concurrent writers of one path from interleaving their
+  bytes, and ``os.replace`` publishes the payload whole, so a crash mid-write
+  leaves the previous content intact and no half-written tmp behind.
+  ``private=True`` marks the file 0600, so a secret never appears at its final
+  path readable by anyone but the owner.
+
+  The swap must stay an ``os.replace`` attribute lookup on this module's ``os``:
+  tests hook the swap by patching ``os.replace`` here.
   """
-  text = json.dumps(
-      value,
-      ensure_ascii=False,
-      indent=indent,
-      # indent=None must stay compact: json's default (", ", ": ") padding
-      # would whitespace-inflate every compact caller's file.
-      separators=(",", ":") if indent is None else None,
-  )
-  if newline:
-    text += "\n"
   temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
   try:
     if private:
@@ -67,3 +52,28 @@ def write_json_atomically(
     except OSError:
       pass
     raise
+
+
+def write_json_atomically(
+    path: Path,
+    value: object,
+    *,
+    indent: int | None = None,
+    newline: bool = False,
+    private: bool = False,
+) -> None:
+  """Serialize *value* as JSON and swap it into *path* in one step.
+
+  ``private=True`` marks the file 0600 (see :func:`atomic_write_text`).
+  """
+  text = json.dumps(
+      value,
+      ensure_ascii=False,
+      indent=indent,
+      # indent=None must stay compact: json's default (", ", ": ") padding
+      # would whitespace-inflate every compact caller's file.
+      separators=(",", ":") if indent is None else None,
+  )
+  if newline:
+    text += "\n"
+  atomic_write_text(path, text, private=private)

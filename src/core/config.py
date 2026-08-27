@@ -254,9 +254,6 @@ class CharlieBotConfig(BaseModel):
       values.pop("project_dirs")
     # Remove deprecated fields silently
     values.pop("max_concurrent_workers", None)
-    # The Slack artifact-link path that read public_base_url is gone (replies
-    # post in full, chunked); pre-cleanup host fragments may still set the key.
-    values.pop("public_base_url", None)
     # Expand ~ in workspace_dirs and worktree_dir
     ws = values.get("workspace_dirs", ["~/workspace"])
     values["workspace_dirs"] = [os.path.expanduser(p) for p in ws]

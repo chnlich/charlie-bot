@@ -7,7 +7,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import FakeBackend, make_work_item, patch_instructions_content
+from conftest import (
+  BROADCAST_PATCH_TARGET,
+  FakeBackend,
+  make_work_item,
+  patch_instructions_content,
+)
 
 from src.agents import master_cc
 from src.agents.backends import registry
@@ -166,7 +171,7 @@ async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_pa
       backend_options=[models.BackendOption(id="added-later", label="New", type="cc-claude", model="m")],
   )
   with (
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()),
+      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
       patch("src.core.triggers.trigger_master", new=AsyncMock()) as mock_master,
       patch("src.core.triggers.get_config", return_value=current),
   ):

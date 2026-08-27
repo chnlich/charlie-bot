@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
+  BROADCAST_PATCH_TARGET,
   make_work_item,
   mock_session_callbacks,
   patch_instructions_content,
@@ -337,7 +338,7 @@ async def test_every_metadata_return_path_overwrites_stamp(tmp_path: Path, monke
   mgr = SessionManager(cfg)
   sentinel = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
   monkeypatch.setattr("src.core.sessions.busy_since", lambda _sid: sentinel)
-  monkeypatch.setattr("src.core.sessions.streaming_manager.broadcast", AsyncMock())
+  monkeypatch.setattr(BROADCAST_PATCH_TARGET, AsyncMock())
 
   created = await mgr.create_session(CreateSessionRequest(name="walk"))
   assert created.thinking_since == sentinel
@@ -403,7 +404,7 @@ async def test_stamp_recovers_after_unrelated_save_resets_cached_object(
   the live busy value (no 30s bounded None window)."""
   cfg = _make_consumer_cfg(tmp_path)
   mgr = SessionManager(cfg)
-  monkeypatch.setattr("src.core.sessions.streaming_manager.broadcast", AsyncMock())
+  monkeypatch.setattr(BROADCAST_PATCH_TARGET, AsyncMock())
   session = await mgr.create_session(CreateSessionRequest(name="t5-cache"))
   started_at, _created = thinking_state.mark_busy(session.id)
   try:

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import BROADCAST_PATCH_TARGET
 from conftest import make_session_mgr as _make_session_mgr
 
 from src.core import event_types as ET
@@ -37,7 +38,7 @@ async def test_set_group_broadcasts_sidebar_event() -> None:
 
   with (
       patch.object(session_mgr, "_update_field", new=AsyncMock(return_value=updated)) as mock_update,
-      patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
+      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
   ):
     result = await session_mgr.set_group("session-1", "Work")
 
@@ -177,7 +178,7 @@ async def test_mark_unread_and_update_thinking_state_do_not_clobber(tmp_path: Pa
 
   updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=timezone.utc)
   with patch.object(mgr, "save_metadata", side_effect=yielding_save):
-    with patch("src.core.sessions.streaming_manager.broadcast", new=AsyncMock()):
+    with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
       await asyncio.gather(
           mgr.mark_unread(meta.id),
           mgr.update_thinking_state(meta.id, updated_at=updated_at),

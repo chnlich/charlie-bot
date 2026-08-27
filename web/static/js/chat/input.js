@@ -130,7 +130,6 @@ Chat.postChatMessage = postChatMessage;
 Chat.sendMessage = sendMessage;
 Chat.compactContext = compactContext;
 Chat.expose([
-  'setVoiceContributed',
   'bumpCurrentSessionToTop',
   'postChatMessage',
   'sendMessage',

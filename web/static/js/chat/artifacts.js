@@ -917,7 +917,6 @@ Chat.lookupRegisteredPlanVersion = lookupRegisteredPlanVersion;
 Chat.decidePlanCardRender = decidePlanCardRender;
 Chat.lookupPlanVersionState = lookupPlanVersionState;
 Chat.buildPlanCompactCardHtml = buildPlanCompactCardHtml;
-Chat.buildSessionDir = buildSessionDir;
 Chat.updatePlanCardBadges = updatePlanCardBadges;
 Chat.openPlanFromCard = openPlanFromCard;
 Chat._planStateLabel = _planStateLabel;
@@ -933,7 +932,6 @@ Chat.expose([
   'decidePlanCardRender',
   'lookupPlanVersionState',
   'buildPlanCompactCardHtml',
-  'buildSessionDir',
   'updatePlanCardBadges',
   'openPlanFromCard',
   '_planStateLabel',

@@ -88,7 +88,7 @@ Known-alive symbols:
   `requests.Response` stand-ins; `Response.json()` reads `self._content` when the fake
   response is consumed. Nothing in the repo reads the name back, so vulture flags the writes
   as unused attributes.
-- `art` (`tests/core/test_artifact_check.py:331`, the lambda in `_patch_height`) — second
+- `art` (`tests/core/test_artifact_check.py`, the lambda in `_patch_height`) — second
   parameter of the stub installed for `artifact_check._measure_page_height(chrome_bin,
   artifact)` via `monkeypatch.setattr`; the replaced signature fixes the arity, so deleting
   the parameter makes the stub raise TypeError when the gate calls it. Vulture flags the

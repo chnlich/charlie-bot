@@ -11,7 +11,6 @@ consume the tolerant read in ``read_plans_tolerant`` — the single authority fo
 
 import asyncio
 import json
-import os
 import posixpath
 from enum import IntEnum
 from pathlib import Path
@@ -21,6 +20,7 @@ import structlog
 from src.core import plan_paths
 from src.core.artifact_check import run_assertions
 from src.core.config import CharlieBotConfig
+from src.core.json_utils import write_json_atomically
 from src.core.models import utc_now
 from src.core.sessions import SessionManager
 
@@ -219,16 +219,11 @@ class PlanRegistryManager:
     return json.loads(raw)
 
   async def _save(self, session_id: str, data: dict) -> None:
-    path = self._plans_path(session_id)
-    content = json.dumps(_project_registry(data), indent=2)
-    await asyncio.to_thread(self._atomic_write, path, content)
-
-  @staticmethod
-  def _atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)
+    # Every save path first reads plans.json or a bound artifact out of the
+    # session dir, so the dir exists; no mkdir here — a deleted dir must fail
+    # this write, not resurrect.
+    await asyncio.to_thread(
+        write_json_atomically, self._plans_path(session_id), _project_registry(data), indent=2)
 
   async def _broadcast(self, session_id: str, plan_id: int) -> None:
     await self._session_mgr.broadcast_only(

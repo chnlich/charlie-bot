@@ -12,10 +12,10 @@ import structlog
 from aiofiles.threadpool.text import AsyncTextIOWrapper
 
 from src.agents.backends.base import (
-  AgentBackend,
-  _capture_proc_diagnostics,
-  _read_stderr_tail,
-  tail_follow_events,
+    AgentBackend,
+    _capture_proc_diagnostics,
+    _read_stderr_tail,
+    tail_follow_events,
 )
 from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.agents.backends.registry import build_backend

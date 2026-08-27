@@ -7,13 +7,13 @@ import pytest
 from conftest import (
   make_plan_setup as _setup,
 )
+from conftest import plan_page_html
 from conftest import (
   write_plan_artifact as _write_artifact,
 )
 from conftest import (
   write_stub_chrome as _write_stub_chrome,
 )
-from conftest import plan_page_html
 
 from src.core.plans import (
   PlanRegistryManager,

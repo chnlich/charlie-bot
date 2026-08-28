@@ -62,7 +62,7 @@ def _thread_status(home: Path, session_id: str, thread_id: str) -> str:
   return json.loads(meta_path.read_text(encoding="utf-8"))["status"]
 
 
-@pytest.fixture()
+@pytest.fixture
 def _no_master_wake(monkeypatch: pytest.MonkeyPatch) -> None:
   async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
     pass

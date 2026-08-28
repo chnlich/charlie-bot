@@ -284,7 +284,7 @@ def test_resolve_drops_torn_final_line_from_the_result_scan(tmp_path: Path) -> N
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def sleep_holding_stdout(tmp_path: Path):
   """A live process whose fd 1 points at a real file; cleaned up after the test."""
   target = tmp_path / "held.log"

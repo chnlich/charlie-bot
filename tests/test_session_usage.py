@@ -447,13 +447,15 @@ def _clean_ceiling_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(name, raising=False)
 
 
-def test_declared_window_subtracts_reserves_from_declared_window(_clean_ceiling_env, monkeypatch) -> None:
+@pytest.mark.usefixtures("_clean_ceiling_env")
+def test_declared_window_subtracts_reserves_from_declared_window(monkeypatch) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
   expected_point = 500_000 - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
   assert headless_claude_declared_window() == (500_000, expected_point)
 
 
-def test_declared_window_follows_host_export_of_different_window(_clean_ceiling_env, monkeypatch) -> None:
+@pytest.mark.usefixtures("_clean_ceiling_env")
+def test_declared_window_follows_host_export_of_different_window(monkeypatch) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "1000000")
   expected_point = 1_000_000 - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
   assert headless_claude_declared_window() == (1_000_000, expected_point)
@@ -464,8 +466,9 @@ def test_declared_window_follows_host_export_of_different_window(_clean_ceiling_
     "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
 ])
+@pytest.mark.usefixtures("_clean_ceiling_env")
 def test_declared_window_returns_none_compact_point_when_override_present_and_warns(
-    _clean_ceiling_env, monkeypatch, capsys, override_var) -> None:
+    monkeypatch, capsys, override_var) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "500000")
   monkeypatch.setenv(override_var, "1")
   result = headless_claude_declared_window()
@@ -475,8 +478,9 @@ def test_declared_window_returns_none_compact_point_when_override_present_and_wa
   assert "declared_window" in out.lower()
 
 
+@pytest.mark.usefixtures("_clean_ceiling_env")
 def test_declared_window_returns_default_when_window_unparseable_and_warns(
-    _clean_ceiling_env, monkeypatch, capsys) -> None:
+    monkeypatch, capsys) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "not-a-number")
   default_window = int(HEADLESS_CLAUDE_DEFAULT_ENV["CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
   expected_point = default_window - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
@@ -493,7 +497,8 @@ def test_declared_window_returns_default_when_window_unparseable_and_warns(
 
 
 @pytest.mark.asyncio
-async def test_claude_tier_full_and_point_for_1m_window_model(tmp_path: Path, _clean_ceiling_env) -> None:
+@pytest.mark.usefixtures("_clean_ceiling_env")
+async def test_claude_tier_full_and_point_for_1m_window_model(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-1m", name="1M Window", backend="claude-opus-4.6")
@@ -511,7 +516,8 @@ async def test_claude_tier_full_and_point_for_1m_window_model(tmp_path: Path, _c
 
 
 @pytest.mark.asyncio
-async def test_claude_tier_full_and_point_for_200k_window_model(tmp_path: Path, _clean_ceiling_env) -> None:
+@pytest.mark.usefixtures("_clean_ceiling_env")
+async def test_claude_tier_full_and_point_for_200k_window_model(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-200k", name="200k Window", backend="claude-opus-4.6")
@@ -529,8 +535,9 @@ async def test_claude_tier_full_and_point_for_200k_window_model(tmp_path: Path, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_clean_ceiling_env")
 async def test_claude_tier_point_none_under_forwarded_unmodelled_override(
-    tmp_path: Path, _clean_ceiling_env, monkeypatch) -> None:
+    tmp_path: Path, monkeypatch) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "433000")
   monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "1")
   cfg = _build_cfg(tmp_path)
@@ -663,8 +670,9 @@ async def test_snapshot_tier_uses_newest_result_event_carrying_snapshot(tmp_path
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_clean_ceiling_env")
 async def test_snapshot_tier_compact_at_ignores_claude_constants_but_claude_tier_follows_them(
-    tmp_path: Path, _clean_ceiling_env, monkeypatch) -> None:
+    tmp_path: Path, monkeypatch) -> None:
   # Move Claude Code's reserves to a value clearly different from their defaults
   # (20000 / 13000); the snapshot tier must not move, the claude tier must.
   monkeypatch.setattr("src.core.session_usage.CLAUDE_COMPACT_OUTPUT_RESERVE", 50_000)

@@ -12,6 +12,8 @@ Known-alive symbols:
   raise, so the import line carries no `# noqa`.
 - `_no_master_wake` — pytest fixture in `tests/test_spawner_finalize_liveness_gate.py`, reached by
   string via `@pytest.mark.usefixtures("_no_master_wake")`; invisible to static dead-code tools.
+- `_clean_ceiling_env` — pytest fixture in `tests/test_session_usage.py`, reached by string via
+  `@pytest.mark.usefixtures("_clean_ceiling_env")`; invisible to static dead-code tools.
 - `_handle_agent_message`, `_handle_reasoning`, `_handle_command_execution`, `_handle_file_change`,
   `_handle_mcp_tool_call`, `_handle_web_search`, `_handle_todo_list`, `_handle_error` — Codex backend
   item-event handlers in `src/agents/backends/codex.py`, reached by string via the `_ITEM_HANDLERS`
@@ -35,10 +37,9 @@ Known-alive symbols:
   `_worktree_paths` (`tests/test_reviewer_model_preference.py`) — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
   definitions, so vulture flags them as unused functions. Vulture also flags
-  `_clean_ceiling_env` (`tests/test_session_usage.py`) and `pidfd_open_available`
-  (`tests/test_trigger_pid_watch.py`, `tests/test_trigger_slurm_watch.py`), but those fixtures are
-  named in the parameter lists of the tests that use them, so the Step 3 grep already finds their
-  references; no list entries needed.
+  `pidfd_open_available` (`tests/test_trigger_pid_watch.py`,
+  `tests/test_trigger_slurm_watch.py`), but it is named in the parameter lists of the tests that
+  use it, so the Step 3 grep already finds its references; no list entry needed.
 - `session_websocket`, `voice_websocket` — `@app.websocket` handlers in `server.py`
   (`/ws/sessions/{session_id}`, `/ws/voice/{session_id}`), reached by URL string:
   `web/static/js/websocket.js` dials `/ws/sessions/${SESSION_ID}` and `web/static/js/voice-input.js`

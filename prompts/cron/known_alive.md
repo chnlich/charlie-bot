@@ -146,3 +146,11 @@ Known-alive symbols:
   `thread_mgr`; deleting the parameter makes the stub raise TypeError. Vulture flags it
   at 100% confidence as an unused variable. Same class as the `art` stub-parameter entry
   above.
+- `identity` (`tests/test_master_restart_transport_unit.py`, parameter of the
+  `fake_recovery` stub installed for `server._run_crash_recovery` via
+  `monkeypatch.setattr`) — the real `_run_crash_recovery` is called with three positional
+  arguments in the root `server.py` lifespan (`_run_crash_recovery(cfg, boot_time,
+  identity)`), so the stub's replaced signature fixes the arity and `identity` must stay
+  to receive the identity task; deleting the parameter makes the stub raise TypeError.
+  Vulture flags it at 100% confidence as an unused variable. Same class as the `art`
+  stub-parameter entry above.

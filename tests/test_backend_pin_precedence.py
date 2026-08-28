@@ -52,7 +52,7 @@ async def test_message_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, mo
 
   await run_and_finalize(cfg, session, "hello", session_mgr)
 
-  assert spawned == []
+  assert not spawned
   errors = _assistant_errors(session_mgr, session.id)
   assert errors
   assert any("codex-ghost-9" in e["content"] for e in errors)
@@ -77,7 +77,7 @@ async def test_wake_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monke
 
   await trigger_master(session.id, "worker summary", cfg, session_mgr)
 
-  assert spawned == []
+  assert not spawned
   errors = _assistant_errors(session_mgr, session.id)
   assert errors
   assert any("codex-ghost-9" in e["content"] for e in errors)
@@ -108,7 +108,7 @@ async def test_unresolvable_codex_pin_lands_on_none_of_several_codex_options(tmp
 
   await run_and_finalize(cfg, session, "hello", session_mgr)
 
-  assert spawned_option_ids == []
+  assert not spawned_option_ids
   assert "codex-alpha" not in spawned_option_ids
   assert "codex-beta" not in spawned_option_ids
   errors = _assistant_errors(session_mgr, session.id)
@@ -156,7 +156,7 @@ async def test_replay_unresolvable_pin_hard_fails_not_substituted(tmp_path: Path
   user_event = {"id": "u1", "type": "user", "content": "unanswered message"}
   await master_cc.replay_user_message(cfg, session, user_event, session_mgr.callbacks())
 
-  assert spawned == []
+  assert not spawned
   errors = _assistant_errors(session_mgr, session.id)
   assert any("codex-ghost-9" in e["content"] for e in errors)
 
@@ -181,7 +181,7 @@ async def test_empty_pin_no_option_rejects_not_backend_options_zero(tmp_path: Pa
 
   await run_and_finalize(cfg, session, "hello", session_mgr)
 
-  assert spawned == []
+  assert not spawned
   errors = _assistant_errors(session_mgr, session.id)
   assert errors
   assert any("no backend option" in e["content"] for e in errors)

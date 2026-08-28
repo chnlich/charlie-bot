@@ -155,7 +155,7 @@ async def test_uncovered_effective_alive_run_reported_not_attached(
   assert recovered == 1
   assert outcomes == [runs.RunOutcome.RUNNING]
   # Report-only分流: no follow was ever mounted for this thread.
-  assert alive_at_reattach == []
+  assert not alive_at_reattach
   meta = _read_meta(home, ids["session"], ids["thread"])
   assert meta["status"] == "running"
   reports = _recovery_reports(home, ids["session"])

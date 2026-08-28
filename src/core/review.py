@@ -84,13 +84,12 @@ async def finalize_review_chain(
         expected_residue_name=git_worktree_dir_name(original_thread.branch_name),
     )
   except Exception as e:
-    log.error(
+    log.exception(
         "review_chain_cleanup_failed",
         session=session_id,
         thread_id=original_thread.id,
         worktree=str(wt),
-        error=str(e),
-        exc_info=True)
+        error=str(e))
     return f"Review worktree cleanup failed for {wt}: {e}"
   if not removed:
     log.error("review_chain_cleanup_remove_failed", session=session_id, thread_id=original_thread.id, worktree=str(wt))

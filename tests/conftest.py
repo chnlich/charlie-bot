@@ -428,6 +428,19 @@ def build_tui_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
+def build_codex_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig for spawner worktree-launch tests: the charliebot-home and worktrees dirs live
+  under tmp_path so each test owns its own tree, and the backend list registers the codex option the
+  launch paths resolve."""
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      worktree_dir=str(tmp_path / "worktrees"),
+      backend_options=[
+          CODEX_BACKEND_OPTION,
+      ],
+  )
+
+
 def build_recovery_cfg(home: Path) -> CharlieBotConfig:
   """CharlieBotConfig for restart-recovery tests: the home dir is caller-chosen (the install-invariance test
   runs its two arms under different homes), the worktrees dir lives under it, and the backend list registers

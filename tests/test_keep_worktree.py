@@ -10,9 +10,9 @@ from typing import Any
 
 import pytest
 from conftest import (
-  CODEX_BACKEND_OPTION,
   CapturingThreadManager,
   SpawnFlowSessionManager,
+  build_codex_worktree_cfg,
   build_worker_prompt,
   capturing_worker,
   make_fake_git_create_worktree,
@@ -20,7 +20,6 @@ from conftest import (
 )
 
 from src.core import review, spawner, spawner_finalize, spawner_launch
-from src.core.config import CharlieBotConfig
 from src.core.models import (
   SpawnRequest,
   TaskType,
@@ -29,24 +28,14 @@ from src.core.models import (
 )
 
 
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          CODEX_BACKEND_OPTION,
-      ],
-  )
-
-
 def test_build_worker_prompt_includes_keep_worktree_note(tmp_path: Path) -> None:
-  prompt = build_worker_prompt("Run SLURM benchmark", cfg=_build_cfg(tmp_path), keep_worktree=True)
+  prompt = build_worker_prompt("Run SLURM benchmark", cfg=build_codex_worktree_cfg(tmp_path), keep_worktree=True)
   assert "This worktree will persist after the reviewer merges." in prompt
   assert "SLURM" in prompt
 
 
 def test_build_worker_prompt_omits_keep_worktree_note_by_default(tmp_path: Path) -> None:
-  prompt = build_worker_prompt("Run SLURM benchmark", cfg=_build_cfg(tmp_path), keep_worktree=False)
+  prompt = build_worker_prompt("Run SLURM benchmark", cfg=build_codex_worktree_cfg(tmp_path), keep_worktree=False)
   assert "This worktree will persist after the reviewer merges." not in prompt
 
 
@@ -56,7 +45,7 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   """_finalize_worker must leave the worktree intact when thread.keep_worktree is True."""
-  cfg = _build_cfg(tmp_path)
+  cfg = build_codex_worktree_cfg(tmp_path)
   wt_dir = tmp_path / "worktrees" / "charliebot-task-kept"
   wt_dir.mkdir(parents=True)
   (wt_dir / "marker.txt").write_text("still-here", encoding="utf-8")
@@ -184,7 +173,7 @@ async def test_finalize_review_chain_removes_worktree_by_default(
 @pytest.mark.asyncio
 async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> None:
   """End-to-end-ish: SpawnRequest(keep_worktree=True) propagates to ThreadMetadata."""
-  cfg = _build_cfg(tmp_path)
+  cfg = build_codex_worktree_cfg(tmp_path)
   repo_path = (tmp_path / "repo").resolve()
   repo_path.mkdir(parents=True, exist_ok=True)
   events_log = tmp_path / "events.jsonl"

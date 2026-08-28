@@ -28,10 +28,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import CODEX_BACKEND_OPTION
+from conftest import build_codex_worktree_cfg
 
 from src.core import spawner, spawner_launch
-from src.core.config import CharlieBotConfig
 from src.core.git import (
     BaseBranchResolutionError,
     BaseResolution,
@@ -393,16 +392,6 @@ class _SpawnThreadManager:
     return self._events_log
 
 
-def _spawn_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          CODEX_BACKEND_OPTION,
-      ],
-  )
-
-
 async def _run_spawn_request(
     clone: Path,
     tmp_path: Path,
@@ -428,7 +417,7 @@ async def _run_spawn_request(
       "session-id",
       thread,
       "Do work",
-      _spawn_cfg(tmp_path),
+      build_codex_worktree_cfg(tmp_path),
       _SpawnSessionManager(),
       _SpawnThreadManager(tmp_path / f"events-{thread_id}.jsonl"),
       clone,

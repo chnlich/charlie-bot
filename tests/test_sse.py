@@ -177,7 +177,7 @@ async def test_iter_sse_lines_byte_chunkings_including_mid_multibyte() -> None:
 @pytest.mark.asyncio
 async def test_iter_sse_lines_replaces_invalid_utf8_like_httpx_text_decoder() -> None:
   lines = [line async for line in iter_sse_lines(_FakeBytesResponse([b"data: {\xff}\n\n"]))]
-  assert lines == ["data: {\ufffd}"]
+  assert lines == ["data: {\ufffd}", ""]
 
 
 @pytest.mark.asyncio

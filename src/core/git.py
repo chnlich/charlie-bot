@@ -334,7 +334,7 @@ def _assert_safe_worktree_cleanup_target(
 
 def _contains_git_marker(path: Path) -> bool:
   """Return True if path contains any .git marker without following symlinks."""
-  for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
+  for _dirpath, dirnames, filenames in os.walk(path, followlinks=False):
     if ".git" in filenames or ".git" in dirnames:
       return True
   return False

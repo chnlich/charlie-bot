@@ -370,7 +370,7 @@ async def tui_status_all(
       meta.id: {
           "running": running,
           "busy": _claude_jsonl_busy(meta.id) if running else False
-      } for meta, running in zip(tui_sessions, statuses)
+      } for meta, running in zip(tui_sessions, statuses, strict=True)
   }
 
 

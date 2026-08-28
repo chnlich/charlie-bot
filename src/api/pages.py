@@ -607,7 +607,7 @@ async def home_page(request: Request, cfg: CharlieBotConfig = Depends(get_config
           "url": service.url,
           "status": "up" if up else "down",
       }
-      for service, up in zip(cfg.home_services, statuses)
+      for service, up in zip(cfg.home_services, statuses, strict=True)
   ]
   return templates.TemplateResponse(
       request,

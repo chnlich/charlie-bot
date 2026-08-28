@@ -124,7 +124,7 @@ async def test_spawn_review_worker_skips_when_reviewer_already_exists(monkeypatc
       "session-id", original, cfg, ReviewSpawnSessionManager("Test"), ThreadMgrWithReviewer())
 
   assert spawned is True
-  assert captured == {}  # no spawn task was scheduled
+  assert not captured  # no spawn task was scheduled
 
 
 @pytest.mark.asyncio
@@ -436,7 +436,7 @@ async def test_notify_reviewer_failure_triggers_retry(monkeypatch: pytest.Monkey
 
   assert len(spawn_calls) == 1
   assert spawn_calls[0]["tried_backends"] == ["kimi-k2.5"]
-  assert len(trigger_calls) == 0
+  assert not trigger_calls
 
 
 @pytest.mark.asyncio
@@ -462,7 +462,7 @@ async def test_notify_reviewer_success_no_retry(monkeypatch: pytest.MonkeyPatch)
   await review.maybe_spawn_reviewer(
       "session-id", review_thread, 0, "(events summary)", "(full summary)", thread_mgr, NotifyFakeSessionManager(), cfg)
 
-  assert len(spawn_calls) == 0
+  assert not spawn_calls
   assert len(trigger_calls) == 1
 
 
@@ -528,7 +528,7 @@ async def test_require_review_false_skips_reviewer_triggers_master(monkeypatch: 
       "session-id", worker_thread, 0, "(events summary)", "(full summary)", thread_mgr, NotifyFakeSessionManager(), cfg)
 
   # No reviewer spawned
-  assert len(spawn_calls) == 0
+  assert not spawn_calls
   # Master triggered directly
   assert len(trigger_calls) == 1
 
@@ -567,4 +567,4 @@ async def test_require_review_true_spawns_reviewer(monkeypatch: pytest.MonkeyPat
   # Reviewer spawned
   assert len(spawn_calls) == 1
   # Master NOT triggered directly (reviewer handles that)
-  assert len(trigger_calls) == 0
+  assert not trigger_calls

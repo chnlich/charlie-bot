@@ -959,7 +959,7 @@ async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monk
     assert "message A" in replays[0]["content"]
     assert replays[0]["user_event_id"] == user_event_id
   else:
-    assert replays == []
+    assert not replays
   assert not (state / "inv-1.argv").exists(), "recovery must not spawn any agent for this row"
 
 
@@ -1016,7 +1016,7 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(tmp_pat
     assert len(reports) == 1
     assert runs.UNCOVERED_ALIVE_REASON in reports[0]["content"]
     assert _session_meta(home, meta.id)["master_run"] is not None
-    assert replays == []
+    assert not replays
     assert not (state / "inv-1.argv").exists(), "a report-only row must not spawn any agent"
   finally:
     live_shim.kill()

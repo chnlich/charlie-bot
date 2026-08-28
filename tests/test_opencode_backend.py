@@ -167,7 +167,7 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
   events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
 
   error_events = [event for event in events if event.get("type") == ET.ERROR]
-  assert error_events == []
+  assert not error_events
   text_events = [event for event in events if event.get("type") == ET.ASSISTANT]
   assert text_events == [{
       "type": ET.ASSISTANT,
@@ -184,7 +184,7 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
 def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  assert backend._translate_sse_event(
+  assert not backend._translate_sse_event(
       {
           "type": "message.part.updated",
           "properties": {
@@ -195,8 +195,8 @@ def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch) 
                   "text": "Hello",
               }
           },
-      }) == []
-  assert backend._translate_sse_event(
+      })
+  assert not backend._translate_sse_event(
       {
           "type": "message.part.updated",
           "properties": {
@@ -207,7 +207,7 @@ def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch) 
                   "text": "Hello world",
               }
           },
-      }) == []
+      })
 
   translated = backend._translate_sse_event(
       {
@@ -245,7 +245,7 @@ def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch) 
 def test_translate_sse_event_discards_buffered_non_assistant_parts(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  assert backend._translate_sse_event(
+  assert not backend._translate_sse_event(
       {
           "type": "message.part.updated",
           "properties": {
@@ -256,7 +256,7 @@ def test_translate_sse_event_discards_buffered_non_assistant_parts(monkeypatch) 
                   "text": "Hello",
               }
           },
-      }) == []
+      })
 
   translated = backend._translate_sse_event(
       {
@@ -269,8 +269,8 @@ def test_translate_sse_event_discards_buffered_non_assistant_parts(monkeypatch) 
           },
       })
 
-  assert translated == []
-  assert backend._pending_parts == {}
+  assert not translated
+  assert not backend._pending_parts
 
 
 def test_prepare_env_sets_charliebot_opencode_config(monkeypatch) -> None:
@@ -580,7 +580,7 @@ def test_is_cancellation_disconnect_false_without_terminate(monkeypatch) -> None
 def test_translate_sse_event_reasoning_part_emits_thinking_delta(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  assert backend._translate_sse_event({
+  assert not backend._translate_sse_event({
       "type": "message.part.updated",
       "properties": {
           "part": {
@@ -590,8 +590,8 @@ def test_translate_sse_event_reasoning_part_emits_thinking_delta(monkeypatch) ->
               "text": "I need",
           }
       },
-  }) == []
-  assert backend._translate_sse_event({
+  })
+  assert not backend._translate_sse_event({
       "type": "message.part.updated",
       "properties": {
           "part": {
@@ -601,7 +601,7 @@ def test_translate_sse_event_reasoning_part_emits_thinking_delta(monkeypatch) ->
               "text": "I need to think",
           }
       },
-  }) == []
+  })
 
   translated = backend._translate_sse_event({
       "type": "message.updated",
@@ -976,7 +976,7 @@ def test_compaction_message_adversarial_buffered_order_emits_no_chat_content(mon
 
   assert not any(event["type"] == ET.ASSISTANT for event in translated)
   assert not any(event["type"] == ET.THINKING for event in translated)
-  assert backend._pending_parts == {}
+  assert not backend._pending_parts
 
 
 def test_compaction_step_finish_usage_is_conserved(monkeypatch) -> None:

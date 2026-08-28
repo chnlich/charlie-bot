@@ -121,7 +121,7 @@ def test_session_message_404_when_caller_missing() -> None:
     resp = client.post("/api/internal/session-message", json=_payload())
   assert resp.status_code == 404
   assert resp.json()["detail"] == "Session not found"
-  assert session_mgr.persisted == []
+  assert not session_mgr.persisted
 
 
 def test_session_message_404_when_target_missing() -> None:
@@ -130,7 +130,7 @@ def test_session_message_404_when_target_missing() -> None:
     resp = client.post("/api/internal/session-message", json=_payload())
   assert resp.status_code == 404
   assert resp.json()["detail"] == "Target session not found"
-  assert session_mgr.persisted == []
+  assert not session_mgr.persisted
 
 
 def test_session_message_409_when_target_archived() -> None:
@@ -142,7 +142,7 @@ def test_session_message_409_when_target_archived() -> None:
     resp = client.post("/api/internal/session-message", json=_payload())
   assert resp.status_code == 409
   assert "archived" in resp.json()["detail"]
-  assert session_mgr.persisted == []
+  assert not session_mgr.persisted
 
 
 def test_session_message_relay_persists_event_and_wakes_master(

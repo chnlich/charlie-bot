@@ -51,7 +51,7 @@ def test_gc_trash_yes_hard_deletes(
   assert not (trash / "charliebot-task-a").exists()
   assert not (trash / "charliebot-task-b").exists()
   # Trash dir itself remains; it is just empty now.
-  assert list(trash.iterdir()) == []
+  assert not list(trash.iterdir())
 
 
 def test_gc_trash_empty_reports_and_returns(

@@ -168,7 +168,7 @@ async def test_scheduler_rotates_scheduled_session_backend_and_copies_bookkeepin
   assert new_session.last_run_status == old_session.last_run_status
   assert new_session.cc_session_id is None
   assert new_session.cc_session_started_at is None
-  assert await thread_mgr.list_threads(new_session.id) == []
+  assert not await thread_mgr.list_threads(new_session.id)
   assert [thread.id for thread in await thread_mgr.list_threads(old_session.id)] == [old_thread.id]
   archived_old = await session_mgr.get_session(old_session.id)
   assert archived_old is not None
@@ -445,7 +445,7 @@ def test_cron_api_put_updates_backend_on_prompt_file_host_file(
   assert response.status_code == 200
   persisted = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
   assert set(persisted.items()) - set(original.items()) == {("backend", "codex-o3")}
-  assert set(original.items()) - set(persisted.items()) == set()
+  assert not set(original.items()) - set(persisted.items())
 
   loaded, _ = _load_cron_file(yaml_path, cfg.charlie_bot_repo, "nightly")
   assert loaded.backend == "codex-o3"

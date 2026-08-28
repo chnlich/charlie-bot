@@ -316,7 +316,7 @@ async def test_terminal_websocket_rejects_failed_ws_auth(monkeypatch: pytest.Mon
   await terminal_websocket(ws)
 
   assert ws.accepted is False
-  assert attached == []
+  assert not attached
 
 
 def test_pty_client_can_push_clipboard_to_the_browser(monkeypatch: pytest.MonkeyPatch) -> None:

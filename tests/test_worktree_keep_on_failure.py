@@ -121,7 +121,7 @@ async def test_retry_failed_reviewer_keeps_worktree_when_exhausted(monkeypatch: 
   result = await review._retry_failed_reviewer("s", thread_meta, original, cfg, object(), object())
 
   assert result is False
-  assert finalize_called == []  # worktree kept; chain not finalized
+  assert not finalize_called  # worktree kept; chain not finalized
 
 
 @pytest.mark.asyncio
@@ -205,6 +205,6 @@ async def test_improve_loop_keeps_worktree_on_failure(tmp_path: Path, monkeypatc
 
   wt_path = Path(cfg.worktree_dir) / "improve-test"
   assert wt_path.exists()  # kept on failure
-  assert remove_calls == []  # cleanup never attempted
+  assert not remove_calls  # cleanup never attempted
   state = await load_loop_state("s", 1, cfg)
   assert state is not None and state.status == "failed"

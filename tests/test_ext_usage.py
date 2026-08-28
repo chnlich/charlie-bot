@@ -1158,7 +1158,7 @@ async def test_claude_fetch_yields_to_a_concurrent_renewal_without_rotating(monk
 
   assert result is not None
   # Someone else already renewed, so nothing was rotated out from under them.
-  assert fake.posts == []
+  assert not fake.posts
   assert fake.gets[1]["headers"]["Authorization"] == "Bearer tok-from-cli"
 
 
@@ -1184,7 +1184,7 @@ async def test_claude_fetch_does_not_renew_on_a_long_past_stored_expiry(monkeypa
 
   assert await provider.fetch() is not None
   # No clock-driven renewal survives: a stale expiresAt alone changes nothing.
-  assert fake.posts == []
+  assert not fake.posts
   assert len(fake.gets) == 1
 
 

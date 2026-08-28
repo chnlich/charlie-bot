@@ -74,7 +74,7 @@ async def test_status_success_emits_nothing() -> None:
 
   await handle_compaction_events(event, lambda ev: _record(persisted, ev), {"session": "s1"})
 
-  assert persisted == []
+  assert not persisted
 
 
 @pytest.mark.asyncio
@@ -87,7 +87,7 @@ async def test_status_event_with_no_compact_result_emits_nothing() -> None:
 
   await handle_compaction_events(event, lambda ev: _record(persisted, ev), {"session": "s1"})
 
-  assert persisted == []
+  assert not persisted
 
 
 @pytest.mark.asyncio
@@ -101,4 +101,4 @@ async def test_non_system_event_emits_nothing() -> None:
 
   await handle_compaction_events(event, lambda ev: _record(persisted, ev), {"session": "s1"})
 
-  assert persisted == []
+  assert not persisted

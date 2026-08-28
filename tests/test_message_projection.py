@@ -376,7 +376,7 @@ def test_separator_free_history_is_one_documented_page() -> None:
   """A history with no separator at all snaps to 0: the whole history is one page."""
   projection = MessageProjection(_many_messages_events(25))
   total = len(projection.committed)
-  assert projection.separator_ordinals == []
+  assert not projection.separator_ordinals
 
   page, start, has_more = projection.tail(5)
   assert (len(page), start, has_more) == (total, 0, False)

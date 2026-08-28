@@ -195,7 +195,7 @@ async def test_reply_in_a_summon_round_posts_persists_and_clears_the_eye(tmp_pat
   assert replies[0]["content"] == "the answer"
   assert replies[0]["slack_reply"] == {"answers": summon["id"], "chars": 10, "chunks": 1}
   assert client.remove_calls == [{"channel": _CHANNEL, "name": "eyes", "ts": _THREAD}]
-  assert client.reactions[_THREAD] == set()
+  assert not client.reactions[_THREAD]
 
 
 @pytest.mark.asyncio
@@ -224,7 +224,7 @@ async def test_reply_from_a_round_no_summon_started_posts_with_null_answers_and_
   assert result["answers"] is None
   assert [p["text"] for p in client.posts] == ["fresh device code"]
   assert _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)[0]["slack_reply"]["answers"] is None
-  assert client.remove_calls == []
+  assert not client.remove_calls
   assert client.reactions[_THREAD] == {"eyes"}
 
 
@@ -247,7 +247,7 @@ async def test_reply_in_a_nudge_round_answers_the_original_summon_and_clears_its
     await asyncio.gather(*ack_tasks)
 
   assert result["answers"] == summon["id"]
-  assert client.reactions[_THREAD] == set()
+  assert not client.reactions[_THREAD]
 
 
 @pytest.mark.asyncio
@@ -260,8 +260,8 @@ async def test_reply_for_a_session_without_a_slack_thread_is_refused_409(tmp_pat
       await post_reply(meta.id, "hello", cfg, session_mgr)
 
   assert excinfo.value.status == 409
-  assert client.posts == []
-  assert _of_type(session_mgr.load_chat_events_sync(meta.id), ET.SLACK_REPLY) == []
+  assert not client.posts
+  assert not _of_type(session_mgr.load_chat_events_sync(meta.id), ET.SLACK_REPLY)
 
 
 @pytest.mark.asyncio
@@ -271,7 +271,7 @@ async def test_unknown_session_is_refused_404(tmp_path: Path) -> None:
     with pytest.raises(SlackReplyError) as excinfo:
       await post_reply("no-such-session", "hello", cfg, session_mgr)
   assert excinfo.value.status == 404
-  assert client.posts == []
+  assert not client.posts
 
 
 @pytest.mark.asyncio
@@ -283,8 +283,8 @@ async def test_blank_reply_is_refused_422_before_any_post(tmp_path: Path, text: 
     with pytest.raises(SlackReplyError) as excinfo:
       await post_reply(sid, text, cfg, session_mgr)
   assert excinfo.value.status == 422
-  assert client.posts == []
-  assert _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY) == []
+  assert not client.posts
+  assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
 
 
 @pytest.mark.asyncio
@@ -306,8 +306,8 @@ async def test_slack_rejecting_the_post_is_502_and_persists_nothing(tmp_path: Pa
 
   assert excinfo.value.status == 502
   assert "nothing was persisted" in excinfo.value.detail
-  assert client.posts == []
-  assert _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY) == []
+  assert not client.posts
+  assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
   assert client.reactions[_THREAD] == {"eyes"}
   assert any(ev["event"] == "slack_post_gave_up" for ev in logs)
   assert not any(ev["event"] == "slack_reply_posted" for ev in logs)
@@ -427,8 +427,8 @@ def test_route_maps_refusals_to_status_codes_and_persists_nothing(
 
   assert resp.status_code == status
   assert detail_fragment in resp.json()["detail"]
-  assert client.posts == []
-  assert session_mgr.persisted == []
+  assert not client.posts
+  assert not session_mgr.persisted
 
 
 def test_route_maps_a_rejected_post_to_502() -> None:
@@ -442,7 +442,7 @@ def test_route_maps_a_rejected_post_to_502() -> None:
     resp = http.post("/api/internal/slack/reply", json={"session_id": "s1", "text": "hi"})
 
   assert resp.status_code == 502
-  assert session_mgr.persisted == []
+  assert not session_mgr.persisted
 
 
 def test_route_rejects_extra_fields() -> None:
@@ -450,7 +450,7 @@ def test_route_rejects_extra_fields() -> None:
   with _route_client(session_mgr) as http:
     resp = http.post("/api/internal/slack/reply", json={"session_id": "s1", "text": "hi", "channel": "C_X"})
   assert resp.status_code == 422
-  assert session_mgr.persisted == []
+  assert not session_mgr.persisted
 
 
 def test_slack_reply_event_projects_as_a_system_message() -> None:
@@ -485,7 +485,7 @@ async def test_summon_round_with_a_reply_is_left_alone(tmp_path: Path) -> None:
   with patch.multiple("src.core.slack_listener", _bot_client=lambda cfg: client, trigger_master=trigger):
     assert await deliver_done(sid, done, cfg, session_mgr) is False
 
-  assert client.posts == []
+  assert not client.posts
   assert trigger.await_count == 0
   assert len(session_mgr.load_chat_events_sync(sid)) == before
 
@@ -522,7 +522,7 @@ async def test_summon_round_without_a_reply_wakes_the_master_once_with_a_nudge(t
   assert trigger.await_args.args[:2] == (sid, nudge["content"])
   assert trigger.await_args.kwargs["user_event_id"] == nudge["id"]
   assert [t.get_name() for t in tasks] == [f"slack-nudge-{sid}"]
-  assert client.posts == []
+  assert not client.posts
   assert client.reactions[_THREAD] == {"eyes"}  # the question is still open
   assert next(ev for ev in logs if ev["event"] == "slack_reply_nudge")["summon_id"] == summon["id"]
 
@@ -586,7 +586,7 @@ async def test_nudge_round_without_a_reply_posts_the_notice_once_and_clears_the_
   assert len(_nudges(events)) == 1
   assert trigger.await_count == 0
   assert [t.get_name() for t in tasks] == [f"slack-ack-clear-{sid}"]
-  assert client.reactions[_THREAD] == set()
+  assert not client.reactions[_THREAD]
 
 
 @pytest.mark.asyncio
@@ -602,8 +602,8 @@ async def test_nudge_round_with_a_reply_posts_no_notice(tmp_path: Path) -> None:
   with patch("src.core.slack_listener._bot_client", return_value=client):
     assert await deliver_done(sid, done, cfg, session_mgr) is False
 
-  assert client.posts == []
-  assert _notices(session_mgr.load_chat_events_sync(sid)) == []
+  assert not client.posts
+  assert not _notices(session_mgr.load_chat_events_sync(sid))
 
 
 @pytest.mark.asyncio
@@ -626,8 +626,8 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
   ):
     assert await deliver_done(sid, done, cfg, session_mgr) is False
 
-  assert client.posts == []
-  assert _notices(session_mgr.load_chat_events_sync(sid)) == []
+  assert not client.posts
+  assert not _notices(session_mgr.load_chat_events_sync(sid))
   assert client.reactions[_THREAD] == {"eyes"}
   assert any(ev["event"] == "slack_post_gave_up" for ev in logs)
 
@@ -642,7 +642,7 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
 
   assert [p["text"] for p in client.posts] == [_NO_REPLY_NOTICE]
   assert len(_notices(session_mgr.load_chat_events_sync(sid))) == 1
-  assert client.reactions[_THREAD] == set()
+  assert not client.reactions[_THREAD]
 
 
 @pytest.mark.asyncio
@@ -667,7 +667,7 @@ async def test_rounds_outside_a_summon_are_not_audited(tmp_path: Path, kind: str
   with patch.multiple("src.core.slack_listener", _bot_client=lambda cfg: client, trigger_master=trigger):
     assert await deliver_done(sid, done, cfg, session_mgr) is False
 
-  assert client.posts == []
+  assert not client.posts
   assert trigger.await_count == 0
   assert len(session_mgr.load_chat_events_sync(sid)) == before
 
@@ -687,9 +687,9 @@ async def test_summon_issued_under_the_marker_contract_is_outside_the_audit(tmp_
     with patch("src.agents.master_cc.queued_user_event_ids", return_value=set()):
       assert await backfill_lost_summons(cfg, session_mgr) == 0
 
-  assert client.posts == []
+  assert not client.posts
   assert trigger.await_count == 0
-  assert _nudges(session_mgr.load_chat_events_sync(sid)) == []
+  assert not _nudges(session_mgr.load_chat_events_sync(sid))
 
 
 @pytest.mark.asyncio
@@ -780,7 +780,7 @@ async def test_lost_summon_gets_one_notice_and_one_error_and_no_master_done(tmp_
   assert len(errors) == 1
   assert errors[0]["slack_backfill"] == {"input_event_id": summon["id"]}
   assert errors[0]["content"]
-  assert _of_type(events, ET.MASTER_DONE) == []
+  assert not _of_type(events, ET.MASTER_DONE)
 
 
 @pytest.mark.asyncio
@@ -796,7 +796,7 @@ async def test_backfill_run_twice_posts_once(tmp_path: Path) -> None:
   assert len(client.posts) == 1
   events = session_mgr.load_chat_events_sync(sid)
   assert len(_of_type(events, ET.ASSISTANT_ERROR)) == 1
-  assert _of_type(events, ET.MASTER_DONE) == []
+  assert not _of_type(events, ET.MASTER_DONE)
 
 
 @pytest.mark.asyncio
@@ -818,9 +818,9 @@ async def test_each_live_round_exclusion_suppresses_the_notice(tmp_path: Path, e
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 0
 
-  assert client.posts == []
+  assert not client.posts
   events = session_mgr.load_chat_events_sync(sid)
-  assert _of_type(events, ET.ASSISTANT_ERROR) == []
+  assert not _of_type(events, ET.ASSISTANT_ERROR)
 
 
 @pytest.mark.asyncio
@@ -837,8 +837,8 @@ async def test_answered_summon_is_not_lost_and_its_reply_settles_the_audit(tmp_p
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 0
 
-  assert client.posts == []
-  assert _of_type(session_mgr.load_chat_events_sync(sid), ET.ASSISTANT_ERROR) == []
+  assert not client.posts
+  assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.ASSISTANT_ERROR)
 
 
 @pytest.mark.asyncio
@@ -851,9 +851,9 @@ async def test_backfill_never_touches_a_session_without_slack_origin(tmp_path: P
   with patch("src.core.slack_listener._bot_client", return_value=client):
     assert await backfill_lost_summons(cfg, session_mgr) == 0
 
-  assert client.posts == []
+  assert not client.posts
   events = session_mgr.load_chat_events_sync(meta.id)
-  assert _of_type(events, ET.ASSISTANT_ERROR) == []
+  assert not _of_type(events, ET.ASSISTANT_ERROR)
 
 
 @pytest.mark.asyncio
@@ -903,7 +903,7 @@ async def test_boot_audit_nudges_a_summon_round_left_without_a_reply_once(tmp_pa
   assert nudges[0]["slack"]["nudge_of"] == summon["id"]
   assert len(_nudges(session_mgr.load_chat_events_sync(sid))) == 1
   assert trigger.await_count == 1
-  assert client.posts == []
+  assert not client.posts
 
 
 @pytest.mark.asyncio
@@ -933,7 +933,7 @@ async def test_boot_audit_posts_the_notice_for_a_nudge_round_left_without_a_repl
   assert len(_notices(events)) == 1
   assert len(_nudges(events)) == 1
   assert trigger.await_count == 0
-  assert client.reactions[_THREAD] == set()
+  assert not client.reactions[_THREAD]
 
 
 @pytest.mark.asyncio
@@ -961,10 +961,10 @@ async def test_lost_nudge_gets_the_lost_summon_report_and_no_second_action(tmp_p
   assert client.posts[0]["text"] != _NO_REPLY_NOTICE  # the lost-summon report, not the no-reply notice
   events = session_mgr.load_chat_events_sync(sid)
   assert [ev["slack_backfill"] for ev in events if "slack_backfill" in ev] == [{"input_event_id": nudge["id"]}]
-  assert _notices(events) == []
+  assert not _notices(events)
   assert len(_nudges(events)) == 1
   assert trigger.await_count == 0
-  assert client.reactions[_THREAD] == set()
+  assert not client.reactions[_THREAD]
 
 
 # ---------------------------------------------------------------------------
@@ -1014,8 +1014,8 @@ async def test_reply_to_a_summon_without_mention_ts_posts_normally_and_clears_no
     await asyncio.gather(*ack_tasks)
 
   assert result["answers"] == summon["id"]
-  assert ack_tasks == []
-  assert client.remove_calls == []
+  assert not ack_tasks
+  assert not client.remove_calls
   assert client.reactions[_THREAD] == {"eyes"}
   assert [p["text"] for p in client.posts] == ["the answer"]
 
@@ -1053,7 +1053,7 @@ async def test_backfill_posting_a_lost_summon_clears_its_eye(tmp_path: Path) -> 
     await asyncio.gather(*ack_tasks)
 
   assert [t.get_name() for t in ack_tasks] == [f"slack-ack-clear-{sid}"]
-  assert client.reactions[_THREAD] == set()
+  assert not client.reactions[_THREAD]
   assert len(client.posts) == 1
 
 

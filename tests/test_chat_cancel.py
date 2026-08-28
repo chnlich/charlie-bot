@@ -220,7 +220,7 @@ async def test_normal_turn_untouched(tmp_path, monkeypatch) -> None:
           {"type": ET.RESULT, "result": {}},
       ],
   )
-  assert _synthesized_notice_events(callbacks) == []
+  assert not _synthesized_notice_events(callbacks)
 
 
 @pytest.mark.asyncio
@@ -231,7 +231,7 @@ async def test_stream_cut_before_settlement_not_salvaged(tmp_path, monkeypatch) 
           {"type": ET.THINKING, "content": "thinking but no result"},
       ],
   )
-  assert _synthesized_notice_events(callbacks) == []
+  assert not _synthesized_notice_events(callbacks)
 
 
 @pytest.mark.asyncio

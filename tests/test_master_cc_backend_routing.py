@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import FakeBackend, make_work_item, patch_instructions_content
+from conftest import BUILD_BACKEND_PATCH_TARGET, FakeBackend, make_work_item, patch_instructions_content
 from conftest import make_transcript as _make_transcript
 from structlog.testing import capture_logs
 
@@ -78,7 +78,7 @@ async def test_run_cc_routes_antigravity_native_resume_id(
     captures["kwargs"] = kwargs
     return FakeBackend()
 
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, backend_option)
@@ -136,7 +136,7 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
     backend_instances.append(instance)
     return instance
 
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
 
   fresh_meta = models.SessionMetadata(id="session-id", name="Antigravity", backend="agy")
   item1 = make_work_item(cfg, fresh_meta, cfg.backend_options[0])
@@ -169,9 +169,7 @@ async def test_run_cc_guard_round_fails_with_guard_reason(
   session_meta = models.SessionMetadata(
       id="session-id", name="Antigravity", backend="agy", cc_session_id="anchor-id")
 
-  monkeypatch.setattr(
-      "src.agents.backends.registry.build_backend",
-      lambda option, cfg, **kw: _AnchorMismatchBackend())
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **kw: _AnchorMismatchBackend())
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, cfg.backend_options[0])
@@ -202,7 +200,7 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
     captures["kwargs"] = kwargs
     return FakeBackend()
 
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, backend_option)
@@ -231,9 +229,7 @@ async def _run_cc_starting_entry(
     backend_option: models.BackendOption,
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict:
-  monkeypatch.setattr(
-      "src.agents.backends.registry.build_backend",
-      lambda option, cfg, **kw: FakeBackend())
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **kw: FakeBackend())
   patch_instructions_content(monkeypatch)
   item = make_work_item(cfg, session_meta, backend_option)
   with capture_logs() as logs:

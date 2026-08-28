@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+  BUILD_BACKEND_PATCH_TARGET,
   OPUS_BACKEND_OPTION,
   FakeBackend,
   build_two_backend_cfg,
@@ -46,8 +47,7 @@ async def test_message_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, mo
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
 
   spawned: list[object] = []
-  monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda *a, **k: spawned.append(1) or FakeBackend())
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   await run_and_finalize(cfg, session, "hello", session_mgr)
@@ -71,8 +71,7 @@ async def test_wake_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monke
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
 
   spawned: list[object] = []
-  monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda *a, **k: spawned.append(1) or FakeBackend())
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   await trigger_master(session.id, "worker summary", cfg, session_mgr)
@@ -102,8 +101,7 @@ async def test_unresolvable_codex_pin_lands_on_none_of_several_codex_options(tmp
 
   spawned_option_ids: list[str] = []
   monkeypatch.setattr(
-      "src.agents.backends.registry.build_backend",
-      lambda option, cfg, **k: spawned_option_ids.append(option.id) or FakeBackend())
+      BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **k: spawned_option_ids.append(option.id) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   await run_and_finalize(cfg, session, "hello", session_mgr)
@@ -130,8 +128,7 @@ async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_ze
 
   captured: dict[str, object] = {}
   monkeypatch.setattr(
-      "src.agents.backends.registry.build_backend",
-      lambda option, cfg, **k: captured.update(option=option) or FakeBackend())
+      BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **k: captured.update(option=option) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   user_event = {"id": "u1", "type": "user", "content": "unanswered message"}
@@ -149,8 +146,7 @@ async def test_replay_unresolvable_pin_hard_fails_not_substituted(tmp_path: Path
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
 
   spawned: list[object] = []
-  monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda *a, **k: spawned.append(1) or FakeBackend())
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   user_event = {"id": "u1", "type": "user", "content": "unanswered message"}
@@ -174,9 +170,7 @@ async def test_empty_pin_no_option_rejects_not_backend_options_zero(tmp_path: Pa
   session.backend = ""
 
   spawned: list[object] = []
-  monkeypatch.setattr(
-      "src.agents.backends.registry.build_backend",
-      lambda *a, **k: spawned.append(1) or FakeBackend())
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   await run_and_finalize(cfg, session, "hello", session_mgr)

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import (
   BROADCAST_PATCH_TARGET,
+  BUILD_BACKEND_PATCH_TARGET,
   TRIGGER_MASTER_PATCH_TARGET,
   FakeBackend,
   make_work_item,
@@ -194,8 +195,7 @@ async def test_run_cc_refuses_to_substitute_an_unknown_pinned_backend(tmp_path: 
   session_meta = models.SessionMetadata(id="session-id", name="S", backend="deleted-id",
                                         cc_session_id="conv-1")
   spawned: list[object] = []
-  monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda *a, **k: spawned.append(1) or FakeBackend())
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, None)
@@ -220,8 +220,7 @@ async def test_run_cc_refuses_no_option_and_no_pin(tmp_path: Path, monkeypatch) 
   )
   session_meta = models.SessionMetadata(id="session-id", name="S", backend="")
   spawned: list[object] = []
-  monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda *a, **k: spawned.append(1) or FakeBackend())
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, None)
@@ -293,8 +292,7 @@ async def test_run_cc_drops_resume_when_transcript_is_in_another_account_dir(
   )
   session_meta = models.SessionMetadata(id="session-id", name="S", backend="cc", cc_session_id="conv-1")
   captures: dict[str, object] = {}
-  monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda option, cfg, **k: captures.update(kwargs=k) or FakeBackend())
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **k: captures.update(kwargs=k) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, cfg.backend_options[0])
@@ -320,8 +318,7 @@ async def test_run_cc_keeps_resume_when_transcript_is_present(tmp_path: Path, mo
   )
   session_meta = models.SessionMetadata(id="session-id", name="S", backend="cc", cc_session_id="conv-1")
   captures: dict[str, object] = {}
-  monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda option, cfg, **k: captures.update(kwargs=k) or FakeBackend())
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **k: captures.update(kwargs=k) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, cfg.backend_options[0])

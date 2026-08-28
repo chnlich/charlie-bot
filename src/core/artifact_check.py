@@ -155,7 +155,7 @@ _VOID_TAGS = frozenset(
 class _Element:
   """DOM element: tag, class tokens, ordered children (elements and text chunks), parent link."""
 
-  __slots__ = ("tag", "classes", "children", "parent")
+  __slots__ = ("children", "classes", "parent", "tag")
 
   def __init__(self, tag: str, attrs: dict, parent: "_Element | None") -> None:
     self.tag = tag

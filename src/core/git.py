@@ -600,7 +600,7 @@ async def git_add_commit_push(
   """
 
   def _run() -> None:
-    subprocess.run(['git', 'add'] + files, cwd=repo_path, check=True, capture_output=True, timeout=timeout)
+    subprocess.run(['git', 'add', *files], cwd=repo_path, check=True, capture_output=True, timeout=timeout)
     subprocess.run(['git', 'commit', '-m', message], cwd=repo_path, check=True, capture_output=True, timeout=timeout)
     subprocess.run(['git', 'push'], cwd=repo_path, check=True, capture_output=True, timeout=timeout)
 

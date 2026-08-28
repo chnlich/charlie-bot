@@ -187,7 +187,7 @@ async def test_spawn_review_worker_resolves_preference(
   """spawn_review_worker resolves the reviewer backend/model from model_preference."""
   overrides: dict[str, Any] = {"model_preference": model_preference}
   if extra_option is not None:
-    overrides["backend_options"] = BACKEND_OPTIONS + [extra_option]
+    overrides["backend_options"] = [*BACKEND_OPTIONS, extra_option]
   cfg = _build_cfg(**overrides)
   captured: dict[str, Any] = {}
 

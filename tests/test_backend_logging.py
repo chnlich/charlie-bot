@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -103,10 +104,8 @@ async def test_stderr_streams_live(tmp_path: Path) -> None:
   poll_task = asyncio.create_task(_poll_mtime())
   await _consume(backend, tmp_path)
   poll_task.cancel()
-  try:
+  with contextlib.suppress(asyncio.CancelledError):
     await poll_task
-  except asyncio.CancelledError:
-    pass
 
   assert stderr_log.exists()
   contents = stderr_log.read_text(encoding="utf-8")

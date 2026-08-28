@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import fcntl
 import json
 import os
@@ -185,20 +186,14 @@ class PtyAttachment:
       return
     self._closed = True
     if self.fd >= 0:
-      try:
+      with contextlib.suppress(OSError):
         os.close(self.fd)
-      except OSError:
-        pass
       self.fd = -1
     if self.pid > 0:
-      try:
+      with contextlib.suppress(ProcessLookupError):
         os.kill(self.pid, signal.SIGTERM)
-      except ProcessLookupError:
-        pass
-      try:
+      with contextlib.suppress(ChildProcessError):
         os.waitpid(self.pid, os.WNOHANG)
-      except ChildProcessError:
-        pass
 
 
 async def _pump_pty_to_ws(attachment: PtyAttachment, websocket: WebSocket) -> None:

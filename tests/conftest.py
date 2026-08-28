@@ -494,6 +494,14 @@ async def no_sleep(_seconds: float) -> None:
   return
 
 
+def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
+  """Point the CLI HTTP layer at a fake config so tests never touch a real server."""
+  monkeypatch.setattr(
+      "src.cli.common.get_config",
+      lambda: SimpleNamespace(
+          server_base_url="https://server", charliebot_access_key="", sessions_dir=sessions_dir))
+
+
 def make_task_spawner(tasks: list[asyncio.Task]) -> Callable[..., asyncio.Task]:
   """A create_logged_task substitute that spawns eagerly and captures every task."""
 

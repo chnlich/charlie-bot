@@ -12,8 +12,7 @@ from src.core.review import extract_review_context
 def _write_jsonl(path: Path, events: list[dict]) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   with open(path, "w", encoding="utf-8") as f:
-    for ev in events:
-      f.write(json.dumps(ev) + "\n")
+    f.writelines(json.dumps(ev) + "\n" for ev in events)
 
 
 def _setup_paths(tmp_path: Path, session_id: str, thread_id: str) -> tuple[Path, Path]:

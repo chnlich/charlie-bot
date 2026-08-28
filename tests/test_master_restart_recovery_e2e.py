@@ -368,7 +368,7 @@ def _turn_finished_on_disk(home: Path, session_id: str, marker: str) -> bool:
   record = _session_meta(home, session_id)["master_run"]
   if record is None:
     return False
-  started_at = datetime.fromisoformat(record["started_at"].replace("Z", "+00:00"))
+  started_at = datetime.fromisoformat(record["started_at"])
   return not runs.is_run_alive(record["pid"], record["pid_start"], started_at, runs.read_host_boot_time())
 
 
@@ -471,7 +471,7 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   meta = json.loads(meta_path.read_text(encoding="utf-8"))
   rec = meta["master_run"]
   assert rec is not None
-  rec_started = datetime.fromisoformat(rec["started_at"].replace("Z", "+00:00"))
+  rec_started = datetime.fromisoformat(rec["started_at"])
   backdated = rec_started - timedelta(seconds=600)
   rec["started_at"] = backdated.isoformat()
   meta_path.write_text(json.dumps(meta), encoding="utf-8")

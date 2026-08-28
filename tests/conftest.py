@@ -114,8 +114,7 @@ def append_events(path: Path, events: list[dict]) -> None:
   """Append seed chat events as JSONL; append (not truncate) is what lets a test stage history first."""
   path.parent.mkdir(parents=True, exist_ok=True)
   with open(path, "a", encoding="utf-8") as f:
-    for event in events:
-      f.write(json.dumps(event) + "\n")
+    f.writelines(json.dumps(event) + "\n" for event in events)
 
 
 def assistant_event(content: str, event_id: str = "assistant") -> dict:

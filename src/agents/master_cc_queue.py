@@ -114,7 +114,7 @@ async def _session_consumer(session_id: str) -> None:
         # both run paths' teardown.
         if finish_extras.get("zero_output"):
           if not _error_msg:
-            resume_ref = cc_session_id if cc_session_id else "fresh session"
+            resume_ref = cc_session_id or "fresh session"
             zero_err = make_error_event(
                 f"Master run produced zero model output (cc_session_id={resume_ref}): "
                 f"the turn settled with an all-zero usage result and no assistant text, "

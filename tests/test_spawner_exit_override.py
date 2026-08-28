@@ -15,8 +15,7 @@ from src.core.models import ThreadMetadata
 
 def _write_events(path: Path, events: list[dict]) -> None:
   with open(path, "w", encoding="utf-8") as f:
-    for ev in events:
-      f.write(json.dumps(ev) + "\n")
+    f.writelines(json.dumps(ev) + "\n" for ev in events)
 
 
 class _FakeThreadManager:

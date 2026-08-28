@@ -62,12 +62,10 @@ def _account_label(provider: str, expanded_path: str) -> str:
   caller, not by this function.
   """
   name = os.path.basename(expanded_path)
-  if name.startswith("."):
-    name = name[1:]
+  name = name.removeprefix(".")
   if name.startswith(provider):
     name = name[len(provider):]
-    if name.startswith("-"):
-      name = name[1:]
+    name = name.removeprefix("-")
   return name
 
 
@@ -357,7 +355,7 @@ def _extract_latest_codex_usage(
 def _parse_codex_timestamp(timestamp: Any) -> datetime:
   if not isinstance(timestamp, str):
     raise ValueError(f"expected string timestamp, got {type(timestamp).__name__}")
-  parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+  parsed = datetime.fromisoformat(timestamp)
   if parsed.tzinfo is None:
     raise ValueError(f"Codex timestamp is missing timezone: {timestamp}")
   return parsed.astimezone(UTC)

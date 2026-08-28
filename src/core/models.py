@@ -13,7 +13,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 def ensure_utc(v: datetime | str) -> datetime:
   """Coerce naive datetimes to UTC; pass aware datetimes through unchanged."""
   if isinstance(v, str):
-    v = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    v = datetime.fromisoformat(v)
   if isinstance(v, datetime) and v.tzinfo is None:
     return v.replace(tzinfo=UTC)
   return v

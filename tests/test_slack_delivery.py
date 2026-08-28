@@ -8,7 +8,12 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import build_slack_cfg, make_task_spawner
+from conftest import (
+  SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
+  SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
+  build_slack_cfg,
+  make_task_spawner,
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
@@ -184,7 +189,7 @@ async def test_reply_in_a_summon_round_posts_persists_and_clears_the_eye(tmp_pat
   ack_tasks: list[asyncio.Task] = []
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(ack_tasks)),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(ack_tasks)),
   ):
     result = await post_reply(sid, "the answer", cfg, session_mgr)
     await asyncio.gather(*ack_tasks)
@@ -217,7 +222,7 @@ async def test_reply_from_a_round_no_summon_started_posts_with_null_answers_and_
 
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner([])),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner([])),
   ):
     result = await post_reply(sid, "fresh device code", cfg, session_mgr)
 
@@ -242,7 +247,7 @@ async def test_reply_in_a_nudge_round_answers_the_original_summon_and_clears_its
   ack_tasks: list[asyncio.Task] = []
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(ack_tasks)),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(ack_tasks)),
   ):
     result = await post_reply(sid, "late answer", cfg, session_mgr)
     await asyncio.gather(*ack_tasks)
@@ -505,8 +510,8 @@ async def test_summon_round_without_a_reply_wakes_the_master_once_with_a_nudge(t
 
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
-      patch("src.core.slack_listener.trigger_master", trigger),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, trigger),
       capture_logs() as logs,
   ):
     assert await deliver_done(sid, done, cfg, session_mgr) is True
@@ -542,8 +547,8 @@ async def test_replayed_done_for_the_summon_round_adds_no_second_nudge(tmp_path:
 
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
-      patch("src.core.slack_listener.trigger_master", trigger),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, trigger),
   ):
     assert await deliver_done(sid, first, cfg, session_mgr) is True
     assert await deliver_done(sid, second, cfg, session_mgr) is False
@@ -570,8 +575,8 @@ async def test_nudge_round_without_a_reply_posts_the_notice_once_and_clears_the_
 
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
-      patch("src.core.slack_listener.trigger_master", trigger),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, trigger),
   ):
     assert await deliver_done(sid, done, cfg, session_mgr) is True
     assert await deliver_done(sid, replay, cfg, session_mgr) is False
@@ -621,7 +626,7 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
 
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
       patch("src.core.slack_listener._RETRY_DELAYS", (0.0, 0.0)),
       capture_logs() as logs,
   ):
@@ -635,7 +640,7 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
   client.fail_posts = False  # Slack is back at the next boot
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
       patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
@@ -706,8 +711,8 @@ async def test_the_master_done_funnel_itself_starts_the_audit(tmp_path: Path) ->
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.sessions.create_logged_task", side_effect=make_task_spawner(funnel_tasks)),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(audit_tasks)),
-      patch("src.core.slack_listener.trigger_master", trigger),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(audit_tasks)),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, trigger),
   ):
     await session_mgr.persist_and_broadcast(sid, _done(summon["id"]))
     await asyncio.gather(*funnel_tasks)
@@ -888,8 +893,8 @@ async def test_boot_audit_nudges_a_summon_round_left_without_a_reply_once(tmp_pa
 
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
-      patch("src.core.slack_listener.trigger_master", trigger),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, trigger),
       patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
@@ -921,8 +926,8 @@ async def test_boot_audit_posts_the_notice_for_a_nudge_round_left_without_a_repl
 
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
-      patch("src.core.slack_listener.trigger_master", trigger),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, trigger),
       patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
@@ -951,8 +956,8 @@ async def test_lost_nudge_gets_the_lost_summon_report_and_no_second_action(tmp_p
 
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
-      patch("src.core.slack_listener.trigger_master", trigger),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, trigger),
       patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
@@ -1009,7 +1014,7 @@ async def test_reply_to_a_summon_without_mention_ts_posts_normally_and_clears_no
 
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(ack_tasks)),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(ack_tasks)),
   ):
     result = await post_reply(sid, "the answer", cfg, session_mgr)
     await asyncio.gather(*ack_tasks)
@@ -1048,7 +1053,7 @@ async def test_backfill_posting_a_lost_summon_clears_its_eye(tmp_path: Path) -> 
   ack_tasks: list[asyncio.Task] = []
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(ack_tasks)),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(ack_tasks)),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
     await asyncio.gather(*ack_tasks)

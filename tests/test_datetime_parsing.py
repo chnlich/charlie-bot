@@ -52,7 +52,7 @@ async def test_handle_stale_accepts_z_timestamp(
 
   assert modified is True
   assert items[0]["status"] == "failed"
-  assert "Timed out after 1.0 hour(s)" == items[0]["failed_reason"]
+  assert items[0]["failed_reason"] == "Timed out after 1.0 hour(s)"
   assert yaml.safe_load(backlog_path.read_text(encoding="utf-8"))[0]["status"] == "failed"
   commit_mock.assert_awaited_once()
 

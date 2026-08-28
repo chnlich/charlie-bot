@@ -279,7 +279,7 @@ def openai_chat_response_to_anthropic(response: dict, requested_model: str) -> d
 
 
 def _sse_event(event: str, data: dict) -> bytes:
-  return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n".encode("utf-8")
+  return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n".encode()
 
 
 class OpenAIChatStreamToAnthropic:

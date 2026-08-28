@@ -13,7 +13,11 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import FakeSessionManager, make_json_response
+from conftest import (
+  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+  FakeSessionManager,
+  make_json_response,
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -216,7 +220,7 @@ def test_cli_session_create_posts_metadata_only_payload(tmp_path: Path) -> None:
   resp = make_json_response({"id": "new-id", "name": "task-a"})
 
   with patch("sys.argv", ["session", "create", "--name", "task-a", "--backend", "codex-o3", "--role", "project"]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp) as post_mock:
     session_cli_main()
 
@@ -232,7 +236,7 @@ def test_cli_session_create_group_triggers_second_group_call(tmp_path: Path) -> 
   group_resp = make_json_response({"id": "new-id", "name": "task-a", "group": "bp-eval"})
 
   with patch("sys.argv", ["session", "create", "--name", "task-a", "--group", "bp-eval"]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", side_effect=[create_resp, group_resp]) as post_mock:
     session_cli_main()
 
@@ -249,7 +253,7 @@ def test_cli_session_send_relays_message(tmp_path: Path) -> None:
   resp = make_json_response({"status": "accepted"})
 
   with patch("sys.argv", ["session", "send", "target-id", "--message", "relay this", "--session", "caller-id"]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp) as post_mock:
     session_cli_main()
 
@@ -270,7 +274,7 @@ def test_cli_session_send_reads_message_file(tmp_path: Path) -> None:
   resp = make_json_response({"status": "accepted"})
 
   with patch("sys.argv", ["session", "send", "target-id", "--file", str(msg_file), "--session", "caller-id"]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp) as post_mock:
     session_cli_main()
 
@@ -294,7 +298,7 @@ def test_cli_session_send_requires_a_message_source() -> None:
 def test_cli_session_send_missing_file_is_usage_error(tmp_path: Path) -> None:
   cfg = _mock_cli_config(tmp_path)
   with patch("sys.argv", ["session", "send", "target-id", "--file", str(tmp_path / "nope.txt"), "--session", "caller"]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        pytest.raises(SystemExit) as exc_info:
     session_cli_main()
   assert exc_info.value.code == 2

@@ -369,6 +369,11 @@ BROADCAST_PATCH_TARGET = "src.core.sessions.streaming_manager.broadcast"
 # their own routes; grep `from src.core.master_trigger import trigger_master` for the full set.
 TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
 
+# Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py binds the
+# name with `from src.core.config import get_config`, so mock setattrs the stand-in on the
+# src.cli.common module attribute and every helper defined there reads it at call time.
+CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
+
 
 def plan_page_html(goal_body: str = "Ship the fix.") -> str:
   """Minimal plan page passing the plan assertion set: the shipped template's <style> block
@@ -547,7 +552,7 @@ async def no_sleep(_seconds: float) -> None:
 def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
   """Point the CLI HTTP layer at a fake config so tests never touch a real server."""
   monkeypatch.setattr(
-      "src.cli.common.get_config",
+      CLI_COMMON_GET_CONFIG_PATCH_TARGET,
       lambda: SimpleNamespace(
           server_base_url="https://server", charliebot_access_key="", sessions_dir=sessions_dir))
 

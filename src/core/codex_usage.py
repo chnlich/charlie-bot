@@ -214,7 +214,7 @@ class CodexUsageResolver:
     if not path.exists():
       return None
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
       for raw_line in f:
         line = raw_line.strip()
         if not line:

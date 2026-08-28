@@ -895,7 +895,7 @@ class TriggerManager:
 
   async def _load_trigger(self, session_id: str, trigger_id: str) -> PendingTrigger:
     path = self._trigger_path(session_id, trigger_id)
-    async with aiofiles.open(path, "r") as f:
+    async with aiofiles.open(path) as f:
       raw = await f.read()
     trigger, _ = _migrate_legacy_watch_pids(raw)
     return trigger

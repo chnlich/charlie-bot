@@ -125,8 +125,8 @@ def _real_session_events() -> list[tuple[str, list[dict]]]:
       continue
     events: list[dict] = []
     try:
-      for line in events_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+      for raw_line in events_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
         if line:
           events.append(json.loads(line))
     except (OSError, json.JSONDecodeError):

@@ -608,7 +608,8 @@ class SessionManager:
         if normalized_rel is not None:
           reserved_relative_paths.add(normalized_rel.as_posix())
 
-    for plan, ver, candidate, normalized_rel in resolved:
+    for plan, ver, candidate, resolved_rel in resolved:
+      normalized_rel = resolved_rel
       inside_parent = normalized_rel is not None
       if normalized_rel is None:
         fallback_rel = plan_paths.fallback_relative_path(parent_dir, candidate)

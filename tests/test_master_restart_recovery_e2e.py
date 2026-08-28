@@ -45,7 +45,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -484,7 +484,7 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   patch_instructions_content(monkeypatch)
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
   monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
+  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
   await _await_recovery_tasks()
 
   # The decisive re-attach proof: exactly one shim invocation ever happened —
@@ -527,7 +527,7 @@ async def test_master_replay_when_master_killed_with_server(tmp_path: Path, monk
   patch_instructions_content(monkeypatch)
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
+  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
   await _await_recovery_tasks()
 
   # The replay spawned exactly one new agent, with the replay marker + the
@@ -560,7 +560,7 @@ async def test_queued_message_answered_after_restart(tmp_path: Path, monkeypatch
   patch_instructions_content(monkeypatch)
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
+  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
   await _await_recovery_tasks()
 
   # A: re-attached, prompt unmarked. B: one new spawn, marked, only after A.
@@ -620,7 +620,7 @@ async def test_replayed_delegate_readback_lands_on_existing_thread(tmp_path: Pat
     monkeypatch.setenv("SHIM_DELEGATE_SPEC", str(spec_file))
     monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
     monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
-    await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
+    await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
     await _await_recovery_tasks()
   finally:
     black_hole.close()
@@ -670,7 +670,7 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
   monkeypatch.setenv("SHIM_STATE", str(state))
   cfg = _cfg(home, shim)
-  await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  await init_module.run_crash_recovery(cfg, datetime.now(UTC))
   await _await_recovery_tasks()
 
   # Exactly one answer: MASTER_DONE landed once, and the user message was NOT
@@ -698,7 +698,7 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
   # Idempotent: re-running recovery over the same on-disk state is a no-op.
   chat_path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
   before = chat_path.read_bytes()
-  await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  await init_module.run_crash_recovery(cfg, datetime.now(UTC))
   await _await_recovery_tasks()
   assert chat_path.read_bytes() == before
   assert _session_meta(home, session_id)["master_run"] is None
@@ -738,7 +738,7 @@ async def test_missing_pid_start_turn_reattached_after_server_kill(tmp_path: Pat
   # With a constant-true probe the follow ends on the post-result timeout;
   # keep it fast.
   monkeypatch.setattr("src.agents.backends.base.AgentBackend._POST_RESULT_TIMEOUT", 1.0)
-  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
+  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
 
   # Mid-state (the shim is still sleeping toward its result): re-attached via
   # the RUNNING channel — the record is kept, no replay was dispatched, and
@@ -785,7 +785,7 @@ async def test_completed_delegate_wake_drained_after_server_kill(tmp_path: Path,
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
   cfg = _cfg(home, shim)
-  await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  await init_module.run_crash_recovery(cfg, datetime.now(UTC))
   await _await_recovery_tasks()
 
   # Exactly one answer, delivered by the drain; the replay pass had nothing
@@ -806,7 +806,7 @@ async def test_completed_delegate_wake_drained_after_server_kill(tmp_path: Path,
 
   chat_path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
   before = chat_path.read_bytes()
-  await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  await init_module.run_crash_recovery(cfg, datetime.now(UTC))
   await _await_recovery_tasks()
   assert chat_path.read_bytes() == before
 
@@ -833,7 +833,7 @@ async def test_stalled_turn_reattached_after_server_kill(tmp_path: Path, monkeyp
   patch_instructions_content(monkeypatch)
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
+  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
 
   # Re-attached, not cleared: the record is still filed (a clear happens
   # synchronously inside recovery), and no replay was dispatched.
@@ -877,7 +877,7 @@ async def test_midrun_death_delegate_wake_drained_as_failure(tmp_path: Path,
   patch_instructions_content(monkeypatch)
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
+  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
   await _await_recovery_tasks()
 
   assert not (state / "inv-2.argv").exists(), "a mid-run-dead wake must not spawn a new agent"
@@ -922,7 +922,7 @@ async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monk
   record = MasterRunRecord(
       pid=999999,
       pid_start="1",
-      started_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+      started_at=datetime.now(UTC) - timedelta(seconds=5),
       raw_log=str(home / "sessions" / meta.id / "data" / "master_runs" / "gone" / runs.RAW_LOG_NAME),
       user_event_id=user_event_id,
   )
@@ -939,7 +939,7 @@ async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monk
   patch_instructions_content(monkeypatch)
 
   with capture_logs() as logs:
-    await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+    await init_module.run_crash_recovery(cfg, datetime.now(UTC))
   await _await_recovery_tasks()
 
   # Provable death, not liveness limbo: DIED carrying the transport reason —
@@ -994,7 +994,7 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(tmp_pat
     record = MasterRunRecord(
         pid=live_shim.pid,
         pid_start=stat_pair[0],
-        started_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+        started_at=datetime.now(UTC) - timedelta(seconds=5),
         raw_log=str(home / "sessions" / meta.id / "data" / "master_runs" / "live" / runs.RAW_LOG_NAME),
         user_event_id=user_event["id"],
     )
@@ -1008,7 +1008,7 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(tmp_pat
     monkeypatch.setattr(master_cc_queue, "run_message", _capture_run_message)
     patch_instructions_content(monkeypatch)
 
-    await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+    await init_module.run_crash_recovery(cfg, datetime.now(UTC))
     await _await_recovery_tasks()
 
     events = _chat_events(home, meta.id)
@@ -1044,7 +1044,7 @@ async def test_undrainable_dead_turn_replayed_with_marker(tmp_path: Path, monkey
   record = MasterRunRecord(
       pid=pid,
       pid_start=pid_start,
-      started_at=datetime.now(timezone.utc) - timedelta(seconds=5),
+      started_at=datetime.now(UTC) - timedelta(seconds=5),
       raw_log=str(home / "sessions" / meta.id / "data" / "master_runs" / "gone" / runs.RAW_LOG_NAME),
       user_event_id=user_event["id"],
   )
@@ -1053,7 +1053,7 @@ async def test_undrainable_dead_turn_replayed_with_marker(tmp_path: Path, monkey
   patch_instructions_content(monkeypatch)
   monkeypatch.setenv("SHIM_MODE", "immediate")
   monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  await init_module.run_crash_recovery(cfg, datetime.now(UTC))
   await _await_recovery_tasks()
 
   # Exactly one answer: one new agent, carrying the marker + the original
@@ -1096,7 +1096,7 @@ async def test_graceful_teardown_detached_turn_reattached_and_answered_once(
   patch_instructions_content(monkeypatch)
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
   monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(timezone.utc))
+  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
   await _await_recovery_tasks()
 
   assert not (state / "inv-2.argv").exists(), "a second master process was spawned"

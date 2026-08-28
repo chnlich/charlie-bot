@@ -1,7 +1,7 @@
 """Tests for scheduled task backend overrides."""
 
 from collections.abc import Coroutine
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -145,7 +145,7 @@ async def test_scheduler_rotates_scheduled_session_backend_and_copies_bookkeepin
   old_session.last_scheduled_cron = "0 2 * * *"
   old_session.last_run_status = "success"
   old_session.cc_session_id = "old-backend-conversation"
-  old_session.cc_session_started_at = datetime(2026, 6, 7, 9, 0, tzinfo=timezone.utc)
+  old_session.cc_session_started_at = datetime(2026, 6, 7, 9, 0, tzinfo=UTC)
   await session_mgr.save_metadata(old_session)
   thread_mgr = ThreadManager(cfg)
   old_thread = await thread_mgr.create_thread(old_session, "old backend thread")

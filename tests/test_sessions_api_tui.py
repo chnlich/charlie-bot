@@ -97,7 +97,7 @@ async def test_tui_status_returns_running_busy_dict_for_tui_sessions_only(
   monkeypatch.setattr("src.agents.backends.tui._claude_jsonl_busy", fake_claude_jsonl_busy)
 
   with _build_client(cfg, session_mgr) as client:
-    ids = ",".join([cc_meta.id, running_tui_meta.id, stopped_tui_meta.id])
+    ids = f"{cc_meta.id},{running_tui_meta.id},{stopped_tui_meta.id}"
     response = client.get(f"/api/sessions/tui/status?ids={ids}")
 
   assert response.status_code == 200

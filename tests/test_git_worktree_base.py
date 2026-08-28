@@ -23,7 +23,6 @@ Plus the launch path's base-less fallback (spawner._create_worktree_and_process)
 """
 
 import subprocess
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +61,7 @@ def _commit(cwd: Path, filename: str, content: str, message: str) -> str:
 
 
 @pytest.fixture
-def repo_setup(tmp_path: Path) -> Iterator[dict[str, Path]]:
+def repo_setup(tmp_path: Path) -> dict[str, Path]:
   """Create a bare 'origin' repo plus a 'main_checkout' clone with one shared commit.
 
   Both sides start with the same single commit on branch 'feature'. Tests then
@@ -88,7 +87,7 @@ def repo_setup(tmp_path: Path) -> Iterator[dict[str, Path]]:
   _git(main_checkout, "config", "user.email", "test@example.com")
   _git(main_checkout, "config", "user.name", "Test")
 
-  yield {
+  return {
       "origin": origin,
       "seed": seed,
       "main_checkout": main_checkout,
@@ -282,7 +281,7 @@ async def test_garbage_input_raises(repo_setup: dict[str, Path], raw: str) -> No
 
 
 @pytest.fixture
-def remote_default_repo(tmp_path: Path) -> Iterator[dict[str, Path]]:
+def remote_default_repo(tmp_path: Path) -> dict[str, Path]:
   """Bare origin whose HEAD points at main, plus a clone of it.
 
   The clone's refs/remotes/origin/HEAD symref is written once at clone time and
@@ -307,7 +306,7 @@ def remote_default_repo(tmp_path: Path) -> Iterator[dict[str, Path]]:
   _git(clone, "config", "user.email", "test@example.com")
   _git(clone, "config", "user.name", "Test")
 
-  yield {
+  return {
       "origin": origin,
       "seed": seed,
       "clone": clone,

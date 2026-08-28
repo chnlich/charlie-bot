@@ -899,7 +899,7 @@ async def run_improve_loop(
     await session_mgr.deliver_to_successor(session_id, {"type": ET.IMPROVE_CANCELLED, "goal": goal})
     raise
   except Exception as exc:
-    log.error("improve_loop_failed", session=session_id, exc_info=True)
+    log.exception("improve_loop_failed", session=session_id)
     state = await load_loop_state(session_id, loop_id, cfg)
     if state:
       state.status = 'failed'
@@ -917,11 +917,10 @@ async def run_improve_loop(
         final_payload = {**failure_payload, 'instructions': instructions}
         await trigger_master(session_id, json.dumps(final_payload, indent=2), cfg, session_mgr)
       except Exception as notify_error:
-        log.error(
+        log.exception(
             "improve_loop_failure_notify_failed",
             session=session_id,
             error=str(notify_error),
-            exc_info=True,
         )
   finally:
     await clear_active_loop_lock(session_id, cfg)
@@ -940,7 +939,7 @@ async def run_improve_loop(
             expected_residue_name=git_worktree_dir_name(work_branch),
         )
       except Exception as e:
-        log.error("improve_loop_cleanup_failed", session=session_id, worktree=str(wt_path), error=str(e), exc_info=True)
+        log.exception("improve_loop_cleanup_failed", session=session_id, worktree=str(wt_path), error=str(e))
         await session_mgr.deliver_to_successor(
             session_id, {
                 "type": ET.ERROR,

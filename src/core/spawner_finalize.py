@@ -134,7 +134,7 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool, 
         expected_residue_name=git_worktree_dir_name(thread.branch_name),
     )
   except Exception as wt_err:
-    log.error("worktree_cleanup_error", thread_id=thread.id, worktree=str(wt), error=str(wt_err), exc_info=True)
+    log.exception("worktree_cleanup_error", thread_id=thread.id, worktree=str(wt), error=str(wt_err))
     return f"Worktree cleanup failed for {wt}: {wt_err}"
   if not removed:
     log.error("worktree_cleanup_remove_failed", thread_id=thread.id, worktree=str(wt))

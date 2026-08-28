@@ -137,9 +137,8 @@ def _switchable_backend_ids(
   active_domain = _backend_domain_for(active_backend, cfg)
   if active_domain is None:
     return []
-  ids = [opt.id for opt in cfg.backend_options if opt.type == "cc-claude"
-         and str(claude_config_dir(opt)) == active_domain]
-  return ids
+  return [opt.id for opt in cfg.backend_options if opt.type == "cc-claude"
+          and str(claude_config_dir(opt)) == active_domain]
 
 
 def _backend_domain_for(backend_id: str, cfg: CharlieBotConfig) -> str | None:
@@ -256,8 +255,7 @@ async def list_starred_sessions(session_mgr: SessionManager = Depends(get_sessio
 async def list_groups(session_mgr: SessionManager = Depends(get_session_manager)):
   """Return sorted distinct group names across all sessions."""
   sessions = await session_mgr.list_sessions()
-  groups = sorted({s.group for s in sessions if s.group})
-  return groups
+  return sorted({s.group for s in sessions if s.group})
 
 
 @router.post("/groups/rename")

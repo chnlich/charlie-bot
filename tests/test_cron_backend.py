@@ -11,6 +11,9 @@ import pytest
 import yaml
 from conftest import (
   SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
+  SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
+  SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
+  SCHEDULER_THREAD_MANAGER_PATCH_TARGET,
   FakeThreadManager,
   build_scheduler_cfg,
   close_create_logged_task,
@@ -73,9 +76,9 @@ async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
     spawn_request = kwargs["request"]
     return _noop()
 
-  monkeypatch.setattr("src.core.scheduler.ThreadManager", lambda _cfg: fake_thread_mgr)
-  monkeypatch.setattr("src.core.scheduler.resolve_requested_subagent_backend_model", resolve_backend)
-  monkeypatch.setattr("src.core.scheduler.spawn_worker", fake_spawn_worker)
+  monkeypatch.setattr(SCHEDULER_THREAD_MANAGER_PATCH_TARGET, lambda _cfg: fake_thread_mgr)
+  monkeypatch.setattr(SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, resolve_backend)
+  monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)
   monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
 
   result = await scheduler._spawn_scheduled_worker(
@@ -115,9 +118,9 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
   def fake_spawn_worker(**_kwargs: Any) -> Coroutine[Any, Any, None]:
     return _noop()
 
-  monkeypatch.setattr("src.core.scheduler.ThreadManager", lambda _cfg: fake_thread_mgr)
-  monkeypatch.setattr("src.core.scheduler.resolve_requested_subagent_backend_model", resolve_backend)
-  monkeypatch.setattr("src.core.scheduler.spawn_worker", fake_spawn_worker)
+  monkeypatch.setattr(SCHEDULER_THREAD_MANAGER_PATCH_TARGET, lambda _cfg: fake_thread_mgr)
+  monkeypatch.setattr(SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, resolve_backend)
+  monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)
   monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
 
   await scheduler._spawn_scheduled_worker(

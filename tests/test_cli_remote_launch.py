@@ -16,6 +16,16 @@ from conftest import CLI_COMMON_GET_CONFIG_PATCH_TARGET
 
 from src.cli.remote_launch import main
 
+# Import-path patch targets for the remote_launch seams. src/cli/remote_launch.py binds
+# get_config at import scope (`from src.core.config import get_config`) and reaches
+# subprocess.run through its module-scope `import subprocess`, so patch() lands each
+# stand-in on the src.cli.remote_launch module attribute and main() reads them at call
+# time; the src.cli.common helpers bind get_config in their own namespace
+# (CLI_COMMON_GET_CONFIG_PATCH_TARGET), and a drifted string copy of either route would
+# patch a name nothing reads.
+_GET_CONFIG_PATCH_TARGET = "src.cli.remote_launch.get_config"
+_SUBPROCESS_RUN_PATCH_TARGET = "src.cli.remote_launch.subprocess.run"
+
 
 def _has_ssh_localhost() -> bool:
   """Return True if ssh to localhost works without password (BatchMode)."""
@@ -65,7 +75,7 @@ def _run_e2e(tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str):
               "sleep 2; echo hi",
           ]),
       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
-      patch("src.cli.remote_launch.get_config", return_value=cfg),
+      patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ]
   for p in patches:
     p.start()
@@ -128,7 +138,7 @@ def test_ssh_failure_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str])
       "--cmd",
       "echo hi",
   ]), patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.remote_launch.get_config", return_value=cfg):
+       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg):
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -153,8 +163,8 @@ def test_missing_session_dir_exits_4(tmp_path: Path, capsys: pytest.CaptureFixtu
       "--cmd", "echo hi",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.remote_launch.get_config", return_value=cfg), \
-       patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc):
+       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
+       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc):
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -178,8 +188,8 @@ def test_pid_parse_failure_exits_3(tmp_path: Path, capsys: pytest.CaptureFixture
       "--cmd", "echo hi",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.remote_launch.get_config", return_value=cfg), \
-       patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc):
+       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
+       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc):
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -201,8 +211,8 @@ def test_ssh_timeout_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str])
       "--cmd", "echo hi",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.remote_launch.get_config", return_value=cfg), \
-       patch("src.cli.remote_launch.subprocess.run", side_effect=timeout):
+       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
+       patch(_SUBPROCESS_RUN_PATCH_TARGET, side_effect=timeout):
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -230,8 +240,8 @@ def test_success_path_with_mocked_ssh(tmp_path: Path, capsys: pytest.CaptureFixt
       "--cmd", cmd,
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.remote_launch.get_config", return_value=cfg), \
-       patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc) as mock_run:
+       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
+       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc) as mock_run:
     main()
 
   stdout = capsys.readouterr().out.strip()
@@ -284,8 +294,8 @@ def test_success_path_derives_session_from_cwd(
       "--cmd", "echo hi",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.remote_launch.get_config", return_value=cfg), \
-       patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc):
+       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
+       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc):
     main()
 
   meta = json.loads(capsys.readouterr().out.strip())
@@ -311,7 +321,7 @@ def test_session_env_is_not_a_remote_launch_session_source(
       "--cmd", "echo hi",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.remote_launch.subprocess.run") as mock_run:
+       patch(_SUBPROCESS_RUN_PATCH_TARGET) as mock_run:
     with pytest.raises(SystemExit) as exc_info:
       main()
 

@@ -14,7 +14,7 @@ from src.core.models import BackendOption
 
 _PROXY_PREFIX = "/api/anthropic-proxy"
 _BACKEND_ID = "cc-glm52"
-_PROXY_BASE_URL = f"http://localhost:8000{_PROXY_PREFIX}/openai-compatible/{_BACKEND_ID}"
+_DIRECT_PROXY_BASE_URL = f"http://localhost:8000{_PROXY_PREFIX}/openai-compatible/{_BACKEND_ID}"
 _MESSAGES_PATH = f"{_PROXY_PREFIX}/openai-compatible/{_BACKEND_ID}/v1/messages"
 _PROXY_MODEL = "nvidia/GLM-5.2-NVFP4"
 _UPSTREAM_BASE = "http://upstream.example/v1"
@@ -43,7 +43,7 @@ def _cfg(option: BackendOption | None = None, **overrides) -> CharlieBotConfig:
 
 def test_prepare_env_sets_proxy_endpoint_and_model() -> None:
   backend = OpenAICompatibleClaudeBackend(
-      proxy_base_url=_PROXY_BASE_URL,
+      proxy_base_url=_DIRECT_PROXY_BASE_URL,
       auth_token=_AUTH_TOKEN,
       model=_PROXY_MODEL,
   )
@@ -52,7 +52,7 @@ def test_prepare_env_sets_proxy_endpoint_and_model() -> None:
 
   assert prepared["PATH"] == "/usr/bin"
   assert prepared["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
-  assert prepared["ANTHROPIC_BASE_URL"] == _PROXY_BASE_URL
+  assert prepared["ANTHROPIC_BASE_URL"] == _DIRECT_PROXY_BASE_URL
   assert prepared["ANTHROPIC_AUTH_TOKEN"] == _AUTH_TOKEN
   assert prepared["ANTHROPIC_MODEL"] == _PROXY_MODEL
   assert prepared["ANTHROPIC_DEFAULT_OPUS_MODEL"] == _PROXY_MODEL
@@ -63,7 +63,7 @@ def test_prepare_env_sets_proxy_endpoint_and_model() -> None:
 
 def test_build_command_does_not_pass_model_flag() -> None:
   backend = OpenAICompatibleClaudeBackend(
-      proxy_base_url=_PROXY_BASE_URL,
+      proxy_base_url=_DIRECT_PROXY_BASE_URL,
       auth_token=_AUTH_TOKEN,
       model=_PROXY_MODEL,
   )

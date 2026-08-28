@@ -212,7 +212,7 @@ async def test_index_versions_local_static_assets(monkeypatch: pytest.MonkeyPatc
   body = response.body.decode("utf-8")
   assert response.context["static_asset_version"] == "abc1234-03-24"
   assert 'href="/static/css/styles.css?v=abc1234-03-24"' in body
-  assert 'src="/static/js/sidebar.js?v=abc1234-03-24"' in body
+  assert 'src="/static/js/sidebar/namespace.js?v=abc1234-03-24"' in body
   assert 'src="/static/js/app.js?v=abc1234-03-24"' in body
 
 

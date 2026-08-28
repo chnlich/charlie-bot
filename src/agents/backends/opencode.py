@@ -1,11 +1,9 @@
 """OpenCodeBackend wrapping the `opencode serve` HTTP/SSE API."""
 
 import asyncio
-import contextlib
 import json
 import os
 import re
-import signal
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -22,7 +20,7 @@ from src.agents.backends.base import (
   resolve_binary,
 )
 from src.core import event_types as ET
-from src.core.process import kill_process_group
+from src.core.process import wait_or_kill_group
 from src.core.sse import iter_sse_lines
 from src.core.timeouts import (
     OPENCODE_ABORT_TIMEOUT,
@@ -790,12 +788,4 @@ class OpenCodeBackend(AgentBackend):
       return "".join(parts).strip()
 
     stderr_task = asyncio.create_task(proc.stderr.read())
-    try:
-      return await asyncio.wait_for(_collect(), timeout)
-    except TimeoutError:
-      kill_process_group(proc.pid, signal.SIGKILL)
-      raise
-    finally:
-      stderr_task.cancel()
-      with contextlib.suppress(asyncio.CancelledError):
-        await stderr_task
+    return await wait_or_kill_group(_collect(), timeout, proc.pid, stderr_task)

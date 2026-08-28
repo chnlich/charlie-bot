@@ -13,8 +13,7 @@ Known-alive symbols:
 - `_no_master_wake` — pytest fixture in `tests/test_spawner_finalize_liveness_gate.py`, reached by
   string via `@pytest.mark.usefixtures("_no_master_wake")`; invisible to static dead-code tools.
 - `_clean_ceiling_env` — pytest fixture in `tests/test_session_usage.py`, reached by string via
-  `@pytest.mark.usefixtures("_clean_ceiling_env")` on the declared-window tests; invisible to
-  static dead-code tools.
+  `@pytest.mark.usefixtures("_clean_ceiling_env")`; invisible to static dead-code tools.
 - `_handle_agent_message`, `_handle_reasoning`, `_handle_command_execution`, `_handle_file_change`,
   `_handle_mcp_tool_call`, `_handle_web_search`, `_handle_todo_list`, `_handle_error` — Codex backend
   item-event handlers in `src/agents/backends/codex.py`, reached by string via the `_ITEM_HANDLERS`

@@ -88,7 +88,7 @@ async def test_load_corrupted_loop_state_raises(tmp_path: Path):
   state_path.parent.mkdir(parents=True, exist_ok=True)
   state_path.write_text("not valid json{{{")
 
-  with pytest.raises(ValueError):
+  with pytest.raises(ValueError, match="Invalid JSON"):
     await load_loop_state(session_id, 1, cfg)
 
 

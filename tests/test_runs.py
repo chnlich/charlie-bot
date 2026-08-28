@@ -66,7 +66,7 @@ def test_is_run_alive_requires_full_identity() -> None:
   pre_boot = HOST_BOOT - timedelta(minutes=1)
   assert runs.is_run_alive(pid, pid_start, pre_boot, HOST_BOOT) is False
   # Naive started_at is a caller bug, not "dead".
-  with pytest.raises(ValueError):
+  with pytest.raises(ValueError, match="must be timezone-aware"):
     runs.is_run_alive(pid, pid_start, datetime(2026, 1, 1), HOST_BOOT)
 
 

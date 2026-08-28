@@ -68,13 +68,9 @@ def test_missing_worker_prompt_file_raises_with_path_and_cause(tmp_path: Path) -
   cfg = _cfg_with_repo(tmp_path)
   missing_path = tmp_path / "prompts" / "worker.md"
 
-  with pytest.raises(FileNotFoundError, match="predates the worker-prompt extraction commit"):
+  with pytest.raises(FileNotFoundError, match="predates the worker-prompt extraction commit") as exc_info:
     spawner.load_worker_prompt_sections(cfg)
-
-  try:
-    spawner.load_worker_prompt_sections(cfg)
-  except FileNotFoundError as e:
-    assert str(missing_path) in str(e)
+  assert str(missing_path) in str(exc_info.value)
 
 
 def test_missing_required_section_raises(tmp_path: Path) -> None:

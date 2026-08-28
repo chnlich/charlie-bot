@@ -1,6 +1,5 @@
 """Core backup/restore logic for a CharlieBot profile's state directory."""
 
-import sys
 import tarfile
 from datetime import datetime
 from pathlib import Path
@@ -37,18 +36,7 @@ _MONTHLY_THRESHOLD = 90
 
 def _safe_extractall(tar: tarfile.TarFile, target: Path) -> None:
   """Extract tar members safely, preventing path-traversal attacks (CVE-2007-4559)."""
-  if sys.version_info >= (3, 12):
-    tar.extractall(path=target, filter='data')
-    return
-  resolved_target = target.resolve()
-  safe_members = []
-  for member in tar.getmembers():
-    member_path = (resolved_target / member.name).resolve()
-    if not member_path.is_relative_to(resolved_target):
-      log.warning('backup_extract_skip_traversal', member=member.name)
-      continue
-    safe_members.append(member)
-  tar.extractall(path=target, members=safe_members)
+  tar.extractall(path=target, filter='data')
 
 
 def _should_exclude(arcname: str) -> bool:

@@ -1,10 +1,12 @@
 """Process management utilities."""
 
 import asyncio
+import contextlib
 import os
 import signal
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+from typing import Any, TypeVar
 
 import structlog
 
@@ -14,6 +16,8 @@ from src.core.timeouts import (
 )
 
 log = structlog.get_logger()
+
+T = TypeVar("T")
 
 
 def kill_process_group(pid: int, sig: signal.Signals = signal.SIGTERM) -> bool:
@@ -45,3 +49,23 @@ async def kill_group_escalating(pid: int, is_alive: Callable[[], bool]) -> None:
     await asyncio.sleep(KILL_ESCALATION_POLL_SECONDS)
   if is_alive():
     kill_process_group(pid, signal.SIGKILL)
+
+
+async def wait_or_kill_group(
+    coro: Coroutine[Any, Any, T], timeout: float, pid: int, stderr_task: asyncio.Task[bytes]
+) -> T:
+  """Await *coro* for at most *timeout* seconds; cancel and drain *stderr_task* on every exit.
+
+  On timeout the process group of *pid* is SIGKILLed before the TimeoutError
+  propagates. The drain (cancel, then await while suppressing CancelledError)
+  guarantees the stderr task never outlives the caller.
+  """
+  try:
+    return await asyncio.wait_for(coro, timeout)
+  except TimeoutError:
+    kill_process_group(pid, signal.SIGKILL)
+    raise
+  finally:
+    stderr_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+      await stderr_task

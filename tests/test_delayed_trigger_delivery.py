@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -27,7 +27,7 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
   trigger = PendingTrigger(
       id="trigger-1",
       session_id=session.id,
-      fire_at=datetime.now(timezone.utc),
+      fire_at=datetime.now(UTC),
       message="Check PID 12345",
   )
   await trigger_mgr._save_trigger(trigger)
@@ -94,7 +94,7 @@ async def test_invalid_session_trigger_is_cancelled_without_waking_master(
   trigger = PendingTrigger(
       id="invalid-session-trigger",
       session_id=session.id,
-      fire_at=datetime.now(timezone.utc),
+      fire_at=datetime.now(UTC),
       message="must not wake",
   )
   await trigger_mgr._save_trigger(trigger)

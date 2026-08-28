@@ -1,6 +1,6 @@
 """Regression tests for /api/internal/delegate takeoff gate behavior."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -203,7 +203,7 @@ def test_takeoff_gate_allows_repeated_ordinary_takeoff_after_task_delegated_even
 
 
 def test_pre_takeoff_window_survives_real_user_messages_and_expires_at_12_hours() -> None:
-  issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+  issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
   session_mgr = FakeSessionManager([
       _user_event("PRE\n\t TAKE   OFF", issued_at.isoformat()),
       _user_event("A later real user message"),
@@ -219,8 +219,8 @@ def test_pre_takeoff_window_survives_real_user_messages_and_expires_at_12_hours(
 
 
 def test_new_pre_takeoff_starts_a_new_window() -> None:
-  first_issued_at = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
-  second_issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
+  first_issued_at = datetime(2026, 7, 17, 12, 0, tzinfo=UTC)
+  second_issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
   session_mgr = FakeSessionManager([
       _user_event("pre take off", first_issued_at.isoformat()),
       _user_event("normal follow-up"),
@@ -240,7 +240,7 @@ def test_ordinary_takeoff_matching_is_independent_from_pre_matching() -> None:
 def test_ordinary_takeoff_needs_no_timestamp_and_is_not_expiring() -> None:
   session_mgr = FakeSessionManager([_user_event("take\n off")])
 
-  check_takeoff_gate("session-id", session_mgr, now=datetime(2099, 1, 1, tzinfo=timezone.utc))
+  check_takeoff_gate("session-id", session_mgr, now=datetime(2099, 1, 1, tzinfo=UTC))
 
 
 @pytest.mark.parametrize("timestamp", [None, "not-a-timestamp"])
@@ -360,7 +360,7 @@ async def test_all_nonverify_delegate_types_can_reuse_ordinary_takeoff(
 
 @pytest.mark.asyncio
 async def test_improve_uses_the_same_pre_takeoff_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-  issued_at = datetime.now(timezone.utc) - timedelta(hours=1)
+  issued_at = datetime.now(UTC) - timedelta(hours=1)
   req = internal.ImproveRequest(
       session_id="session-id",
       repo_path="/tmp/repo",

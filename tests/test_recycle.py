@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -38,7 +38,7 @@ async def test_recycle_deletes_only_old_terminal_threads(tmp_path: Path) -> None
   cfg, mgr, session = await make_home_session(tmp_path, name="t")
   threads_dir = cfg.sessions_dir / session.id / "threads"
 
-  now = datetime.now(timezone.utc)
+  now = datetime.now(UTC)
   cutoff = now - timedelta(days=7)
   old = cutoff - timedelta(days=1)
   recent = cutoff + timedelta(days=1)
@@ -113,7 +113,7 @@ async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: Pa
 async def test_recycle_noop_when_nothing_old(tmp_path: Path) -> None:
   cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
-  cutoff = datetime(2026, 5, 10, 0, 0, 0, tzinfo=timezone.utc)
+  cutoff = datetime(2026, 5, 10, 0, 0, 0, tzinfo=UTC)
   events = [
       {
           "type": "user",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -14,7 +14,7 @@ from src.core import event_types as ET
 from src.core import finalize_effects, runs
 
 HOST_BOOT = runs.read_host_boot_time()
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
 def _identity(event: dict) -> list[dict]:
@@ -137,7 +137,7 @@ def test_raw_completion_time_missing_and_present(tmp_path: Path) -> None:
   # Fresh clock: a module-level "now" goes stale when the full suite runs first.
   assert completion is not None
   assert completion.tzinfo is not None
-  assert abs((datetime.now(timezone.utc) - completion).total_seconds() - 60) < 5
+  assert abs((datetime.now(UTC) - completion).total_seconds() - 60) < 5
 
 
 def test_raw_cursor_roundtrip_and_fallbacks(tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -16,10 +16,10 @@ from src.core.scheduler import Scheduler
 
 def test_parse_utc_datetime_accepts_z_and_normalizes_naive() -> None:
   parsed_z = parse_utc_datetime("2026-04-17T12:34:56Z")
-  assert parsed_z == datetime(2026, 4, 17, 12, 34, 56, tzinfo=timezone.utc)
+  assert parsed_z == datetime(2026, 4, 17, 12, 34, 56, tzinfo=UTC)
 
   parsed_naive = parse_utc_datetime("2026-04-17T12:34:56")
-  assert parsed_naive == datetime(2026, 4, 17, 12, 34, 56, tzinfo=timezone.utc)
+  assert parsed_naive == datetime(2026, 4, 17, 12, 34, 56, tzinfo=UTC)
 
 
 @pytest.mark.asyncio
@@ -67,7 +67,7 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
   session = SessionMetadata(name="Backup session")
   # Base is in the future so croniter's next fire is always after now, removing the minute-boundary
   # race a past base had: with cron "* * * * *" it fired whenever the test ran just after a boundary.
-  session.last_scheduled_run = (datetime.now(timezone.utc) + timedelta(minutes=5)).replace(tzinfo=None).isoformat()
+  session.last_scheduled_run = (datetime.now(UTC) + timedelta(minutes=5)).replace(tzinfo=None).isoformat()
   task_cfg = ScheduledTaskConfig(
       name="backup",
       cron="* * * * *",

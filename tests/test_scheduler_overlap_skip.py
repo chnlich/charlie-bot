@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -115,14 +115,14 @@ def install_pending_executor(scheduler, clock, pending: _PendingRound):
     if record_handle:
       scheduler._handles[task_cfg.name] = handle
     session = pending.session
-    session.last_scheduled_run = clock.now(timezone.utc).isoformat()
+    session.last_scheduled_run = clock.now(UTC).isoformat()
     return {"session_id": session.id, "thread_id": None}
 
   scheduler._execute_task = _execute
 
 
 async def _tick(scheduler, task_cfg, session_mgr, clock, minute: int, second: int = 0) -> None:
-  clock.set(datetime(2026, 6, 1, 0, minute, second, tzinfo=timezone.utc))
+  clock.set(datetime(2026, 6, 1, 0, minute, second, tzinfo=UTC))
   await scheduler._maybe_run(task_cfg, session_mgr, {}, None)
 
 
@@ -141,7 +141,7 @@ def _pending_rig(
 ) -> tuple[_Clock, Scheduler, SessionMetadata, AsyncMock, _PendingRound, ScheduledTaskConfig]:
   """Rig for the scheduled-path tests: clock parked at 2026-06-01 00:00 UTC, one
   pending in-flight round, session anchored at that instant, one-minute-cadence task."""
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc))
+  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
   _install_clock(monkeypatch, clock)
   scheduler = Scheduler(_cfg(tmp_path), AsyncMock())
   session = SessionMetadata(id="session-1", name="Scheduled: code-health")
@@ -201,7 +201,7 @@ async def test_one_skip_per_due_tick_normal_cadence(
 
   # The final skip (00:04) left the anchor at its own occurrence, nothing behind.
   assert parse_utc_datetime(session.last_scheduled_run) == datetime(
-      2026, 6, 1, 0, 4, 0, tzinfo=timezone.utc)
+      2026, 6, 1, 0, 4, 0, tzinfo=UTC)
   pending.complete.set()
   await asyncio.sleep(0)
 
@@ -222,7 +222,7 @@ async def test_one_skip_consuming_delayed_occurrences(
   # Exactly one record consumed occurrences 00:02, 00:03 and 00:04.
   assert _skip_events_since(session_mgr, cursor) == 1
   assert parse_utc_datetime(session.last_scheduled_run) == datetime(
-      2026, 6, 1, 0, 4, 0, tzinfo=timezone.utc)
+      2026, 6, 1, 0, 4, 0, tzinfo=UTC)
   pending.complete.set()
   await asyncio.sleep(0)
 
@@ -263,7 +263,7 @@ async def test_no_fire_on_completion_moment(
   await asyncio.sleep(0)  # let the birthed round count its start
   assert pending.fires == fires_at_completion + 1
   assert parse_utc_datetime(session.last_scheduled_run) == datetime(
-      2026, 6, 1, 0, 3, 0, tzinfo=timezone.utc)
+      2026, 6, 1, 0, 3, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +280,7 @@ async def test_fire_ignores_stuck_running_disk_state(
   longer exists, and whose last_run_status is stuck at 'running', still fires
   when no in-flight handle exists. Any implementation consulting either on-disk
   signal would stall this fire."""
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc))
+  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
   _install_clock(monkeypatch, clock)
   cfg = _cfg(tmp_path)
   scheduler = Scheduler(cfg, AsyncMock())
@@ -324,7 +324,7 @@ async def test_manual_run_is_outside_and_leaves_handle_unchanged(
 ) -> None:
   """run_task_now executes while a handle is in flight and leaves the recorded
   handle untouched (manual rounds neither block nor are blocked)."""
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc))
+  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
   _install_clock(monkeypatch, clock)
   cfg = _cfg(tmp_path)
   scheduler = Scheduler(cfg, AsyncMock())
@@ -359,7 +359,7 @@ async def test_master_mode_skips_rather_than_queuing_a_second_wake(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc))
+  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
   _install_clock(monkeypatch, clock)
   cfg = _cfg(tmp_path)
   scheduler = Scheduler(cfg, AsyncMock())

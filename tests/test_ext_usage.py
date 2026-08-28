@@ -4,7 +4,7 @@ import os
 import time
 import types
 from collections.abc import Callable
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -97,12 +97,12 @@ def test_extract_latest_codex_usage_adds_token_count_observed_at() -> None:
       {
         "window_minutes": 300,
         "utilization": 8.0,
-        "resets_at": datetime.fromtimestamp(1774653423, tz=timezone.utc).isoformat(),
+        "resets_at": datetime.fromtimestamp(1774653423, tz=UTC).isoformat(),
       },
       {
         "window_minutes": 10080,
         "utilization": 2.0,
-        "resets_at": datetime.fromtimestamp(1775240223, tz=timezone.utc).isoformat(),
+        "resets_at": datetime.fromtimestamp(1775240223, tz=UTC).isoformat(),
       },
     ],
     "fetched_at": fetched_at,
@@ -198,7 +198,7 @@ def test_extract_latest_codex_usage_does_not_assume_business_state_without_metad
 
 
 def test_compute_codex_spend_windows_prices_recent_turns_by_model(tmp_path) -> None:
-  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
   rollout_dir = tmp_path / "2026" / "06" / "01"
   rollout_dir.mkdir(parents=True)
   rollout_path = rollout_dir / "rollout-recent.jsonl"
@@ -251,7 +251,7 @@ async def test_codex_provider_fetch_keeps_quota_when_historical_spend_row_is_mal
   # that subtree and constructs the instance with home_dir pointing at tmp_path.
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   today = date.today()
-  now = datetime.now(timezone.utc)
+  now = datetime.now(UTC)
   sessions_dir = tmp_path / "sessions"
   rollout_dir = sessions_dir / f"{today.year:04d}" / f"{today.month:02d}" / f"{today.day:02d}"
   rollout_dir.mkdir(parents=True)
@@ -290,7 +290,7 @@ async def test_codex_provider_fetch_returns_quota_when_spend_aggregations_raises
 ) -> None:
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   today = date.today()
-  now = datetime.now(timezone.utc)
+  now = datetime.now(UTC)
   sessions_dir = tmp_path / "sessions"
   rollout_dir = sessions_dir / f"{today.year:04d}" / f"{today.month:02d}" / f"{today.day:02d}"
   rollout_dir.mkdir(parents=True)
@@ -320,7 +320,7 @@ async def test_codex_provider_fetch_returns_quota_when_spend_aggregations_raises
 
 
 def test_compute_codex_spend_windows_skips_bad_rows_without_poisoning_totals(tmp_path) -> None:
-  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
   rollout_dir = tmp_path / "2026" / "06" / "01"
   rollout_dir.mkdir(parents=True)
   rollout_path = rollout_dir / "rollout-mixed.jsonl"
@@ -362,7 +362,7 @@ def test_compute_codex_spend_windows_skips_bad_rows_without_poisoning_totals(tmp
 
 
 def test_compute_codex_spend_windows_skips_unreadable_file(tmp_path) -> None:
-  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
   rollout_dir = tmp_path / "2026" / "06" / "01"
   rollout_dir.mkdir(parents=True)
 
@@ -792,7 +792,7 @@ def test_extract_latest_codex_usage_reports_weekly_only_shape() -> None:
   assert usage["windows"] == [{
       "window_minutes": 10080,
       "utilization": 96.0,
-      "resets_at": datetime.fromtimestamp(1785016000, tz=timezone.utc).isoformat(),
+      "resets_at": datetime.fromtimestamp(1785016000, tz=UTC).isoformat(),
   }]
   assert "rate_limits_state" not in usage
 
@@ -835,7 +835,7 @@ def test_extract_latest_codex_usage_marks_missing_percentage_unknown() -> None:
   assert usage["windows"] == [{
       "window_minutes": 10080,
       "utilization": None,
-      "resets_at": datetime.fromtimestamp(1785016000, tz=timezone.utc).isoformat(),
+      "resets_at": datetime.fromtimestamp(1785016000, tz=UTC).isoformat(),
   }]
 
 
@@ -961,7 +961,7 @@ async def test_codex_provider_fetch_reads_newest_rollout_beyond_three_days(tmp_p
   is; its age is reported rather than used to hide it.
   """
   provider = CodexUsageProvider(label="personal", home_dir=str(tmp_path))
-  now = datetime.now(timezone.utc)
+  now = datetime.now(UTC)
   old_day = now - timedelta(days=9)
   rollout_dir = (tmp_path / "sessions" / f"{old_day.year:04d}" / f"{old_day.month:02d}" /
                  f"{old_day.day:02d}")
@@ -994,7 +994,7 @@ async def test_codex_provider_fetch_reports_no_sessions_for_empty_home(tmp_path)
 
 def test_compute_codex_spend_windows_accepts_a_prebuilt_file_list(tmp_path) -> None:
   """The usage scrape and the spend aggregation share one directory walk."""
-  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
   rollout_dir = tmp_path / "2026" / "06" / "01"
   rollout_dir.mkdir(parents=True)
   rollout_path = rollout_dir / "rollout-shared.jsonl"

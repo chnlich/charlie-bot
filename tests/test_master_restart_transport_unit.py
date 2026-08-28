@@ -23,7 +23,7 @@ import asyncio
 import json
 import signal
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -417,7 +417,7 @@ async def test_identity_unresolved_option_keeps_live_record_clears_dead_one(
   dead_user = {"type": "user", "content": "dead msg"}
   await session_mgr.save_chat_event(live_meta.id, live_user)
   await session_mgr.save_chat_event(dead_meta.id, dead_user)
-  started_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+  started_at = datetime.now(UTC) - timedelta(seconds=60)
   await session_mgr.persist_master_run(
       live_meta.id,
       MasterRunRecord(
@@ -441,7 +441,7 @@ async def test_identity_unresolved_option_keeps_live_record_clears_dead_one(
       runs, "is_run_alive",
       lambda pid, pid_start, started_at, host_boot: (pid, pid_start) == (1111, "9.0"))
 
-  excluded = await init_module.reconcile_master_identity(cfg, session_mgr, datetime.now(timezone.utc))
+  excluded = await init_module.reconcile_master_identity(cfg, session_mgr, datetime.now(UTC))
 
   assert excluded == {live_meta.id: {live_user["id"]}}, (
       "the live turn's message is its owner's alone; the dead turn's message stays replayable")

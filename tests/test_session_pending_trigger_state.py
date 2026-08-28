@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -28,7 +28,7 @@ async def test_pending_trigger_state_is_derived_without_persisting_metadata(tmp_
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Wake later"))
 
-  now = datetime.now(timezone.utc)
+  now = datetime.now(UTC)
   triggers_dir = cfg.sessions_dir / session.id / "triggers"
   _write_trigger(
       triggers_dir / "pending-late.json",
@@ -99,7 +99,7 @@ async def test_all_sessions_status_includes_pending_trigger_fields(tmp_path: Pat
   meta.has_unread = True
   await session_mgr.save_metadata(meta)
 
-  now = datetime.now(timezone.utc)
+  now = datetime.now(UTC)
   trigger = PendingTrigger(
       id="pending-status",
       session_id=session.id,
@@ -130,7 +130,7 @@ async def test_all_sessions_status_includes_archived_sessions(tmp_path: Path) ->
   trigger = PendingTrigger(
       id="pending-archived",
       session_id=session.id,
-      fire_at=datetime.now(timezone.utc) + timedelta(minutes=2),
+      fire_at=datetime.now(UTC) + timedelta(minutes=2),
       message="archived status",
   )
   _write_trigger(cfg.sessions_dir / session.id / "triggers" / "pending-archived.json", trigger)
@@ -159,7 +159,7 @@ async def test_populate_sidebar_state_skips_archived_sessions(tmp_path: Path) ->
   archived_meta.status = SessionStatus.ARCHIVED
   await session_mgr.save_metadata(archived_meta)
 
-  now = datetime.now(timezone.utc)
+  now = datetime.now(UTC)
   _write_trigger(
       cfg.sessions_dir / active.id / "triggers" / "pending-active.json",
       PendingTrigger(

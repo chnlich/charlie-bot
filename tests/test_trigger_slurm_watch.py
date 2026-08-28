@@ -5,7 +5,7 @@ import asyncio
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -261,7 +261,7 @@ async def test_recovery_no_sacct_skips_without_spinning(tmp_path: Path) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
   trigger = PendingTrigger(
       session_id=session_id,
-      fire_at=datetime.now(timezone.utc),  # already due — return immediately
+      fire_at=datetime.now(UTC),  # already due — return immediately
       message="recovered slurm",
       watch_targets=[SlurmJob(job_id=12345)],
   )

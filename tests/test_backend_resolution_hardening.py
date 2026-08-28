@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -162,7 +162,7 @@ async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_pa
   trigger = PendingTrigger(
       id="trigger-1",
       session_id=session.id,
-      fire_at=datetime.now(timezone.utc),
+      fire_at=datetime.now(UTC),
       message="wake",
   )
   await trigger_mgr._save_trigger(trigger)

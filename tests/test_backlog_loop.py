@@ -12,15 +12,15 @@ from src.core.config import ImprovementLoopConfig
 
 
 def _make_cfg(**overrides) -> ImprovementLoopConfig:
-  defaults = dict(
-      backlog='backlog/backlog.yaml',
-      role='test agent',
-      scope_files=['src/'],
-      id_prefix='',
-      language='en',
-      max_pending=10,
-      stale_timeout_hours=1.0,
-  )
+  defaults = {
+      'backlog': 'backlog/backlog.yaml',
+      'role': 'test agent',
+      'scope_files': ['src/'],
+      'id_prefix': '',
+      'language': 'en',
+      'max_pending': 10,
+      'stale_timeout_hours': 1.0,
+  }
   defaults.update(overrides)
   return ImprovementLoopConfig(**defaults)
 

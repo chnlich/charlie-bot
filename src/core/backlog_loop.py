@@ -46,12 +46,11 @@ def _next_id(items: list[dict], prefix: str) -> str:
       if m:
         max_num = max(max_num, int(m.group(1)))
     return f'{prefix}-{max_num + 1:03d}'
-  else:
-    for item in items:
-      raw = str(item.get('id', ''))
-      if raw.isdigit():
-        max_num = max(max_num, int(raw))
-    return f'{max_num + 1:03d}'
+  for item in items:
+    raw = str(item.get('id', ''))
+    if raw.isdigit():
+      max_num = max(max_num, int(raw))
+  return f'{max_num + 1:03d}'
 
 
 def _language_rule(language: str) -> str:

@@ -103,7 +103,7 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
         f'</tr>\n')
 
   display_path = html.escape("/" + dir_path.as_posix().lstrip("/"))
-  page = f"""<!DOCTYPE html>
+  return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Index of {display_path}</title>
 <style>
@@ -122,7 +122,6 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
 </table>
 </body>
 </html>"""
-  return page
 
 
 @router.api_route("/{path:path}", methods=["GET", "HEAD"])

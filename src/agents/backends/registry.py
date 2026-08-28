@@ -45,12 +45,12 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
         fast_mode=option.fast_mode,
         claude_config_dir=option.claude_config_dir,
         **kwargs)
-  elif option.type == "cc-kimi":
+  if option.type == "cc-kimi":
     model = _require_model(option)
     if not cfg.moonshot_api_key:
       raise ValueError("moonshot_api_key not set in config")
     return KimiBackend(api_key=cfg.moonshot_api_key, model=model, **kwargs)
-  elif option.type == "cc-openai-compatible":
+  if option.type == "cc-openai-compatible":
     model = _require_model(option)
     if not cfg.charliebot_access_key:
       raise ValueError("charliebot_access_key not set in config")
@@ -61,21 +61,21 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
         model=model,
         **kwargs,
     )
-  elif option.type == "codex":
+  if option.type == "codex":
     return CodexBackend(
         model=_require_model(option),
         codex_home=option.codex_home,
         model_reasoning_effort=option.model_reasoning_effort,
         model_auto_compact_token_limit=option.model_auto_compact_token_limit,
         **kwargs)
-  elif option.type == "charlie-code":
+  if option.type == "charlie-code":
     return CharlieCodeBackend(model=_require_model(option), api_base=option.api_base, **kwargs)
-  elif option.type == "gemini":
+  if option.type == "gemini":
     return GeminiCliBackend(model=_require_model(option), **kwargs)
-  elif option.type == "opencode":
+  if option.type == "opencode":
     return OpenCodeBackend(model=_require_model(option), opencode_proxy_url=option.opencode_proxy_url, **kwargs)
-  elif option.type == "antigravity":
+  if option.type == "antigravity":
     return AntigravityCliBackend(**kwargs)
-  elif option.type == "tui-cli":
+  if option.type == "tui-cli":
     return TuiBackend(**kwargs)
   raise ValueError(f"Unknown backend type: {option.type}")

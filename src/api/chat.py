@@ -98,7 +98,7 @@ async def send_message(
         launch_prompt_dispatch(cfg, meta, dispatch, session_mgr, req.content, uploaded_files)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
-      elif dispatch.kind == 'error':
+      if dispatch.kind == 'error':
         error_text = dispatch.error or f'Failed to dispatch /{name}'
         asst_event = {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": error_text}]}}
         await session_mgr.persist_and_broadcast(session_id, asst_event)
@@ -106,7 +106,7 @@ async def send_message(
         await session_mgr.persist_and_broadcast(session_id, done_event)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
-      elif dispatch.kind == 'shell_result':
+      if dispatch.kind == 'shell_result':
         result = dispatch.shell_result
         out = result['stderr'] if result['exit_code'] != 0 and result['stderr'] else (
             result['stdout'] or result['stderr'] or '(no output)')

@@ -479,7 +479,7 @@ async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionM
 
 async def no_sleep(_seconds: float) -> None:
   """asyncio.sleep stand-in for watch-loop tests: returns immediately so poll iterations skip wall-clock waits."""
-  return None
+  return
 
 
 def make_task_spawner(tasks: list[asyncio.Task]) -> Callable[..., asyncio.Task]:
@@ -1044,7 +1044,7 @@ async def fake_spawn_worker(
     request: models.SpawnRequest | None = None,
 ) -> None:
   """spawn_worker stand-in that never forks a backend; the signature mirrors the review.py call."""
-  return None
+  return
 
 
 def close_create_logged_task(coro: Any, *, name: str | None = None) -> None:

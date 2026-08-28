@@ -23,8 +23,7 @@ REQUIRED_FIELDS = ('id', 'title', 'status')
 @pytest.fixture(scope='module')
 def backlog_items() -> list[dict]:
   text = BACKLOG_PATH.read_text(encoding='utf-8')
-  data = yaml.safe_load(text)
-  return data
+  return yaml.safe_load(text)
 
 
 def test_parses_without_error(backlog_items: list[dict]) -> None:

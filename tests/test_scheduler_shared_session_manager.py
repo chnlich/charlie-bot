@@ -14,6 +14,10 @@ import pytest
 from conftest import (
   OPUS_BACKEND_OPTION,
   SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
+  SCHEDULER_LOAD_CONFIG_PATCH_TARGET,
+  SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
+  SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
+  SCHEDULER_THREAD_MANAGER_PATCH_TARGET,
   FakeThreadManager,
   close_create_logged_task,
 )
@@ -67,13 +71,13 @@ async def test_scheduled_prompt_task_hands_injected_session_manager_to_worker(
   async def _noop() -> None:
     return None
 
-  monkeypatch.setattr("src.core.scheduler.load_config", lambda: cfg)
-  monkeypatch.setattr("src.core.scheduler.ThreadManager", lambda _cfg: FakeThreadManager())
+  monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_THREAD_MANAGER_PATCH_TARGET, lambda _cfg: FakeThreadManager())
   monkeypatch.setattr(
-      "src.core.scheduler.resolve_requested_subagent_backend_model",
+      SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
       AsyncMock(return_value=("claude-opus-4.6", "claude-opus-4-6")),
   )
-  monkeypatch.setattr("src.core.scheduler.spawn_worker", fake_spawn_worker)
+  monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)
   monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
 
   await scheduler._execute_task(task_cfg)
@@ -98,7 +102,7 @@ async def test_scheduled_round_events_reach_shared_read_cache(
   assert not session_mgr.load_chat_events_sync(meta.id)
 
   scheduler = Scheduler(cfg, session_mgr)
-  monkeypatch.setattr("src.core.scheduler.load_config", lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setitem(TASK_HANDLERS, "probe", AsyncMock(return_value="done"))
   task_cfg = ScheduledTaskConfig(name="probe", cron="* * * * *", handler="probe")
 

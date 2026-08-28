@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.core.config import CharlieBotConfig, get_config
 from src.core.http import get_http_client
+from src.core.sse import iter_sse_lines
 
 log = structlog.get_logger()
 
@@ -455,7 +456,7 @@ async def _iter_anthropic_sse(upstream: httpx.Response, model: str) -> AsyncIter
     for event, data in translator.start_events():
       yield _sse_event(event, data)
 
-    async for line in upstream.aiter_lines():
+    async for line in iter_sse_lines(upstream):
       if not line.startswith("data:"):
         continue
       raw = line[len("data:"):].strip()

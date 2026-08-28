@@ -23,6 +23,7 @@ from src.agents.backends.base import (
 )
 from src.core import event_types as ET
 from src.core.process import kill_process_group
+from src.core.sse import iter_sse_lines
 from src.core.timeouts import (
     OPENCODE_ABORT_TIMEOUT,
     OPENCODE_HTTP_API_TIMEOUT,
@@ -390,7 +391,7 @@ class OpenCodeBackend(AgentBackend):
 
   async def _iter_sse_events(self, response: httpx.Response) -> AsyncIterator[dict]:
     data_lines: list[str] = []
-    async for line in response.aiter_lines():
+    async for line in iter_sse_lines(response):
       if line == "":
         if not data_lines:
           continue

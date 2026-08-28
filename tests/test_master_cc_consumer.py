@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from conftest import (
   BROADCAST_PATCH_TARGET,
+  BUILD_BACKEND_PATCH_TARGET,
   make_work_item,
   mock_session_callbacks,
   patch_instructions_content,
@@ -496,8 +497,7 @@ async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
   assert meta is not None
   assert meta.cc_session_id is None
 
-  monkeypatch.setattr("src.agents.backends.registry.build_backend",
-                      lambda *a, **k: _NoopBackend())
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: _NoopBackend())
   patch_instructions_content(monkeypatch)
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
@@ -650,7 +650,7 @@ async def _run_stream_consumer(
   cb = mock_session_callbacks()
   backend = _EventsBackend(events, exit_code=exit_code, stderr_text=stderr_text)
 
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **k: backend)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backend)
   patch_instructions_content(monkeypatch)
   monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())

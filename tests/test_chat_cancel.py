@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import make_work_item, mock_session_callbacks, patch_instructions_content
+from conftest import BUILD_BACKEND_PATCH_TARGET, make_work_item, mock_session_callbacks, patch_instructions_content
 from fastapi import HTTPException
 
 from src.agents import master_cc, master_cc_run
@@ -55,7 +55,7 @@ async def _run_cc_with_stderr_backend(
   def fake_build_backend(option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs):
     return backend
 
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, cfg.backend_options[0], user_content="stop", callbacks=callbacks)
@@ -167,7 +167,7 @@ async def _run_cc_with_scripted_events(
   def fake_build_backend(option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs):
     return backend
 
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", fake_build_backend)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, cfg.backend_options[0], user_content="hi", callbacks=callbacks)

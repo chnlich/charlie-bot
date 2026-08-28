@@ -5,7 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Coroutine, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -485,7 +485,7 @@ async def no_sleep(_seconds: float) -> None:
 def make_task_spawner(tasks: list[asyncio.Task]) -> Callable[..., asyncio.Task]:
   """A create_logged_task substitute that spawns eagerly and captures every task."""
 
-  def _spawn(coro, *, name=None):
+  def _spawn(coro: Coroutine, *, name: str | None = None) -> asyncio.Task:
     task = asyncio.get_running_loop().create_task(coro, name=name)
     tasks.append(task)
     return task

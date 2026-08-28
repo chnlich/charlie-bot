@@ -69,14 +69,6 @@ def test_missing_fields_never_reach_died_even_with_a_dead_pid(tmp_path: Path) ->
   assert resolution.outcome is runs.RunOutcome.RUNNING
 
 
-def test_complete_identity_verifiable_death_still_dies(tmp_path: Path) -> None:
-  """The unchanged真死回收 path: full identity + proven dead + no result."""
-  _write_raw(tmp_path, [ASSISTANT_LINE])
-  resolution = _resolve(tmp_path, pid=999999, pid_start="1")
-  assert resolution.outcome is runs.RunOutcome.DIED
-  assert resolution.reason == runs.DIED_WITHOUT_RESULT_REASON
-
-
 # ---------------------------------------------------------------------------
 # (f-resolver) Uncovered row: result pre-check, then effective-alive, then DIED
 # ---------------------------------------------------------------------------

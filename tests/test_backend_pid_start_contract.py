@@ -183,7 +183,7 @@ HarnessFn = Callable[[type[AgentBackend], pytest.MonkeyPatch, Path], Awaitable[N
 # inherited base.run(); opencode and antigravity each drive their own run().
 # This map is the ONLY opt-in — enumeration does not consult it.
 HARNESSES: dict[type[AgentBackend], HarnessFn] = {
-    **{cls: _drive_base_path for cls in _BASE_PATH_CLASSES},
+    **dict.fromkeys(_BASE_PATH_CLASSES, _drive_base_path),
     OpenCodeBackend: _drive_opencode,
     AntigravityCliBackend: _drive_antigravity,
 }

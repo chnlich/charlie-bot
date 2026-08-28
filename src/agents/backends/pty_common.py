@@ -200,7 +200,7 @@ async def _pump_pty_to_ws(attachment: PtyAttachment, websocket: WebSocket) -> No
   """Forward bytes from the PTY to the WebSocket as base64 `pty_output` events."""
   loop = asyncio.get_running_loop()
   q: asyncio.Queue = asyncio.Queue()
-  _EOF = object()
+  _eof = object()
   fd = attachment.fd
 
   def _on_readable() -> None:
@@ -210,10 +210,10 @@ async def _pump_pty_to_ws(attachment: PtyAttachment, websocket: WebSocket) -> No
       return
     except OSError as e:
       log.debug("tui_pty_read_oserror", session_id=attachment.session_id, error=str(e))
-      q.put_nowait(_EOF)
+      q.put_nowait(_eof)
       return
     if not chunk:
-      q.put_nowait(_EOF)
+      q.put_nowait(_eof)
       return
     q.put_nowait(chunk)
 
@@ -221,7 +221,7 @@ async def _pump_pty_to_ws(attachment: PtyAttachment, websocket: WebSocket) -> No
   try:
     while True:
       item = await q.get()
-      if item is _EOF:
+      if item is _eof:
         break
       try:
         await websocket.send_json({

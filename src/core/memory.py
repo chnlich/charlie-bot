@@ -64,7 +64,7 @@ _AUDIENCE_ELEMENTS = frozenset({"master", "worker"})
 
 # Header line prepended to the index lines by both spawn assemblers.
 INDEX_HEADER = (
-    "# Memory index — full text via `charliebot memory query --topic <topic>` (topic = segment before \"/\", e.g. "
+    '# Memory index — full text via `charliebot memory query --topic <topic>` (topic = segment before "/", e.g. '
     "`--topic integrations`)")
 
 

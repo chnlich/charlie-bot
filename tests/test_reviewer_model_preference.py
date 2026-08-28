@@ -366,7 +366,7 @@ async def _fake_read_events_summary(
   return "(test events)"
 
 
-def _make_review_thread(tried_backends: list[str] | None = None,) -> ThreadMetadata:
+def _make_review_thread(tried_backends: list[str] | None = None) -> ThreadMetadata:
   return ThreadMetadata(
       id="review-thread-id",
       session_id="session-id",

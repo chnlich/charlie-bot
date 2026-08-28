@@ -150,12 +150,12 @@ def _detect_pidfd():
       self.si_status = si.si_status
       self.si_code = si.si_code
 
-  P_PIDFD_CONST = 3
+  p_pidfd_const = 3
 
   def _ctypes_waitid_pidfd(fd: int, options: int):
     si = _Siginfo()
     ctypes.set_errno(0)
-    rc = libc.waitid(P_PIDFD_CONST, fd, ctypes.byref(si), options)
+    rc = libc.waitid(p_pidfd_const, fd, ctypes.byref(si), options)
     if rc < 0:
       errno = ctypes.get_errno()
       if errno == 10:

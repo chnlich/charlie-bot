@@ -374,6 +374,15 @@ TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
 # src.cli.common module attribute and every helper defined there reads it at call time.
 CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
 
+# Import-path patch targets for the master wake a Slack message fires. src/core/slack_listener.py
+# binds both names at import scope (`from src.core.master_trigger import trigger_master`,
+# `from src.core.tasks import create_logged_task`), so mock setattrs the stand-ins on the
+# src.core.slack_listener module attributes and the listener's handlers read them at call time;
+# sibling modules binding the same functions (e.g. TRIGGER_MASTER_PATCH_TARGET's route) keep
+# their own namespaces.
+SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET = "src.core.slack_listener.trigger_master"
+SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.slack_listener.create_logged_task"
+
 # Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py binds the
 # library with module-scope `import requests`, and its helpers read requests.get at call time
 # and pick requests.post inside call_internal_api's `request_fn = requests.post if ... else

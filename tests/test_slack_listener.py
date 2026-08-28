@@ -10,7 +10,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import build_slack_cfg, make_task_spawner
+from conftest import (
+  SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
+  SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
+  build_slack_cfg,
+  make_task_spawner,
+)
 from conftest import cfg_with_repo as _cfg_with_repo
 
 from src.cli import slack as slack_cli
@@ -115,8 +120,8 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
   tasks = _spawn_round_tasks()
 
   with (
-      patch("src.core.slack_listener.trigger_master", new=AsyncMock()) as trigger,
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as trigger,
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
   ):
     sid = await handle_app_mention(event, cfg, session_mgr, client)
     await asyncio.gather(*tasks)
@@ -245,7 +250,7 @@ async def test_same_thread_twice_reuses_the_session(tmp_path: Path) -> None:
   client = _FakeSlackClient()
   event = _make_event()
 
-  with patch("src.core.slack_listener.trigger_master", new=AsyncMock()):
+  with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
     first = await handle_app_mention(event, cfg, session_mgr, client)
     second = await handle_app_mention(event, cfg, session_mgr, client)
 
@@ -262,7 +267,7 @@ async def test_disallowed_user_drops_with_no_side_effects(tmp_path: Path) -> Non
   client = _FakeSlackClient()
   event = _make_event(user="U_OTHER")
 
-  with patch("src.core.slack_listener.trigger_master", new=AsyncMock()):
+  with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
     result = await handle_app_mention(event, cfg, session_mgr, client)
 
   assert result is None
@@ -277,7 +282,7 @@ async def test_non_app_mention_message_drops_with_no_side_effects(tmp_path: Path
   client = _FakeSlackClient()
   event = _make_event(type="message")
 
-  with patch("src.core.slack_listener.trigger_master", new=AsyncMock()):
+  with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
     result = await handle_app_mention(event, cfg, session_mgr, client)
 
   assert result is None
@@ -294,8 +299,8 @@ async def test_top_level_mention_uses_own_ts(tmp_path: Path) -> None:
   tasks = _spawn_round_tasks()
 
   with (
-      patch("src.core.slack_listener.trigger_master", new=AsyncMock()),
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()),
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
   ):
     sid = await handle_app_mention(event, cfg, session_mgr, client)
     await asyncio.gather(*tasks)
@@ -322,8 +327,8 @@ async def test_reactions_add_failure_still_spawns_the_round(tmp_path: Path) -> N
   tasks = _spawn_round_tasks()
 
   with (
-      patch("src.core.slack_listener.trigger_master", new=AsyncMock()) as trigger,
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as trigger,
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
   ):
     sid = await handle_app_mention(event, cfg, session_mgr, client)
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -353,7 +358,7 @@ async def test_archived_session_is_unarchived_not_duplicated(tmp_path: Path) -> 
   assert (await session_mgr.get_session(sid)).status == "archived"
 
   client = _FakeSlackClient()
-  with patch("src.core.slack_listener.trigger_master", new=AsyncMock()):
+  with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
     result = await handle_app_mention(event, cfg, session_mgr, client)
 
   assert result == sid
@@ -372,7 +377,7 @@ async def test_new_summon_session_is_grouped_by_channel_name(tmp_path: Path) -> 
   client = _FakeSlackClient()
   event = _make_event()
 
-  with patch("src.core.slack_listener.trigger_master", new=AsyncMock()):
+  with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
     sid = await handle_app_mention(event, cfg, session_mgr, client)
 
   assert sid == _sid(event)
@@ -399,8 +404,8 @@ async def test_unresolvable_channel_name_groups_by_channel_id(tmp_path: Path) ->
   tasks = _spawn_round_tasks()
 
   with (
-      patch("src.core.slack_listener.trigger_master", new=AsyncMock()) as trigger,
-      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as trigger,
+      patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
   ):
     sid = await handle_app_mention(event, cfg, session_mgr, client)
     await asyncio.gather(*tasks)
@@ -429,7 +434,7 @@ async def test_existing_group_is_never_overwritten(tmp_path: Path) -> None:
 
   client = _FakeSlackClient()
   with (
-      patch("src.core.slack_listener.trigger_master", new=AsyncMock()),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()),
       patch.object(session_mgr, "set_group", new=AsyncMock()) as set_group,
   ):
     result = await handle_app_mention(event, cfg, session_mgr, client)
@@ -451,7 +456,7 @@ async def test_unarchived_session_with_empty_group_is_grouped(tmp_path: Path) ->
   await session_mgr.archive_session(sid)
 
   client = _FakeSlackClient()
-  with patch("src.core.slack_listener.trigger_master", new=AsyncMock()):
+  with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
     result = await handle_app_mention(event, cfg, session_mgr, client)
 
   assert result == sid
@@ -470,7 +475,7 @@ async def test_set_group_failure_does_not_break_handle_app_mention(tmp_path: Pat
   event = _make_event()
 
   with (
-      patch("src.core.slack_listener.trigger_master", new=AsyncMock()),
+      patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()),
       patch.object(
           session_mgr, "set_group", new=AsyncMock(side_effect=RuntimeError("disk full"))),
   ):

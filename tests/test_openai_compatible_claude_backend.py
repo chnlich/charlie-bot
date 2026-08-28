@@ -13,13 +13,17 @@ from src.core.config import CharlieBotConfig, get_config
 from src.core.models import BackendOption
 
 _PROXY_PREFIX = "/api/anthropic-proxy"
+_BACKEND_ID = "cc-glm52"
+_DIRECT_PROXY_BASE_URL = f"http://localhost:8000{_PROXY_PREFIX}/openai-compatible/{_BACKEND_ID}"
+_MESSAGES_PATH = f"{_PROXY_PREFIX}/openai-compatible/{_BACKEND_ID}/v1/messages"
 _PROXY_MODEL = "nvidia/GLM-5.2-NVFP4"
 _UPSTREAM_BASE = "http://upstream.example/v1"
+_AUTH_TOKEN = "charliebot-key"
 
 
 def _option(**overrides) -> BackendOption:
   base: dict[str, Any] = {
-      "id": "cc-glm52",
+      "id": _BACKEND_ID,
       "label": "CC GLM-5.2",
       "type": "cc-openai-compatible",
       "model": _PROXY_MODEL,
@@ -32,15 +36,15 @@ def _option(**overrides) -> BackendOption:
 def _cfg(option: BackendOption | None = None, **overrides) -> CharlieBotConfig:
   return CharlieBotConfig(
       server_port=8123,
-      charliebot_access_key=overrides.pop("charliebot_access_key", "charliebot-key"),
+      charliebot_access_key=overrides.pop("charliebot_access_key", _AUTH_TOKEN),
       backend_options=[option or _option()],
   )
 
 
 def test_prepare_env_sets_proxy_endpoint_and_model() -> None:
   backend = OpenAICompatibleClaudeBackend(
-      proxy_base_url="http://localhost:8000/api/anthropic-proxy/openai-compatible/cc-glm52",
-      auth_token="charliebot-key",
+      proxy_base_url=_DIRECT_PROXY_BASE_URL,
+      auth_token=_AUTH_TOKEN,
       model=_PROXY_MODEL,
   )
 
@@ -48,8 +52,8 @@ def test_prepare_env_sets_proxy_endpoint_and_model() -> None:
 
   assert prepared["PATH"] == "/usr/bin"
   assert prepared["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
-  assert prepared["ANTHROPIC_BASE_URL"] == "http://localhost:8000/api/anthropic-proxy/openai-compatible/cc-glm52"
-  assert prepared["ANTHROPIC_AUTH_TOKEN"] == "charliebot-key"
+  assert prepared["ANTHROPIC_BASE_URL"] == _DIRECT_PROXY_BASE_URL
+  assert prepared["ANTHROPIC_AUTH_TOKEN"] == _AUTH_TOKEN
   assert prepared["ANTHROPIC_MODEL"] == _PROXY_MODEL
   assert prepared["ANTHROPIC_DEFAULT_OPUS_MODEL"] == _PROXY_MODEL
   assert prepared["ANTHROPIC_DEFAULT_SONNET_MODEL"] == _PROXY_MODEL
@@ -59,8 +63,8 @@ def test_prepare_env_sets_proxy_endpoint_and_model() -> None:
 
 def test_build_command_does_not_pass_model_flag() -> None:
   backend = OpenAICompatibleClaudeBackend(
-      proxy_base_url="http://localhost:8000/api/anthropic-proxy/openai-compatible/cc-glm52",
-      auth_token="charliebot-key",
+      proxy_base_url=_DIRECT_PROXY_BASE_URL,
+      auth_token=_AUTH_TOKEN,
       model=_PROXY_MODEL,
   )
 
@@ -88,15 +92,15 @@ def test_registry_builds_openai_compatible_backend() -> None:
 
   assert isinstance(backend, OpenAICompatibleClaudeBackend)
   prepared = backend._prepare_env({})
-  assert prepared["ANTHROPIC_BASE_URL"] == "http://localhost:8123/api/anthropic-proxy/openai-compatible/cc-glm52"
-  assert prepared["ANTHROPIC_AUTH_TOKEN"] == "charliebot-key"
+  assert prepared["ANTHROPIC_BASE_URL"] == f"http://localhost:8123{_PROXY_PREFIX}/openai-compatible/{_BACKEND_ID}"
+  assert prepared["ANTHROPIC_AUTH_TOKEN"] == _AUTH_TOKEN
   assert prepared["ANTHROPIC_MODEL"] == _PROXY_MODEL
 
 
 def test_registry_requires_model_and_access_key() -> None:
   option_no_model = _option(model=None)
   with pytest.raises(ValueError, match="no default model"):
-    build_backend(option_no_model, _cfg(option_no_model, charliebot_access_key="charliebot-key"))
+    build_backend(option_no_model, _cfg(option_no_model, charliebot_access_key=_AUTH_TOKEN))
 
   option_with_model = _option()
   with pytest.raises(ValueError, match="charliebot_access_key"):
@@ -168,7 +172,7 @@ def test_route_forwards_upstream_model_and_bearer_auth_and_translates_response(
 
   with _build_client(cfg) as client:
     response = client.post(
-        f"{_PROXY_PREFIX}/openai-compatible/cc-glm52/v1/messages",
+        _MESSAGES_PATH,
         json=_anthropic_payload(),
     )
 
@@ -194,7 +198,7 @@ def test_route_omits_authorization_when_api_key_env_absent(monkeypatch: pytest.M
 
   with _build_client(cfg) as client:
     response = client.post(
-        f"{_PROXY_PREFIX}/openai-compatible/cc-glm52/v1/messages",
+        _MESSAGES_PATH,
         json=_anthropic_payload(),
     )
 
@@ -208,7 +212,7 @@ def test_route_fails_loud_when_api_key_env_missing(monkeypatch: pytest.MonkeyPat
 
   with _build_client(cfg) as client:
     response = client.post(
-        f"{_PROXY_PREFIX}/openai-compatible/cc-glm52/v1/messages",
+        _MESSAGES_PATH,
         json=_anthropic_payload(),
     )
 
@@ -253,7 +257,7 @@ def test_route_requires_api_base() -> None:
 
   with _build_client(cfg) as client:
     response = client.post(
-        f"{_PROXY_PREFIX}/openai-compatible/cc-glm52/v1/messages",
+        _MESSAGES_PATH,
         json=_anthropic_payload(),
     )
 
@@ -266,7 +270,7 @@ def test_route_requires_model() -> None:
 
   with _build_client(cfg) as client:
     response = client.post(
-        f"{_PROXY_PREFIX}/openai-compatible/cc-glm52/v1/messages",
+        _MESSAGES_PATH,
         json=_anthropic_payload(),
     )
 

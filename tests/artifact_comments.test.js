@@ -11,6 +11,9 @@ const ARTIFACT_COMMENTS_JS = fs.readFileSync(
   'utf8'
 );
 
+const SESSION_270_PLAN_PATH = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
+const PATH_SESSION_PLAN_PATH = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+
 function makeTextNode(text) {
   return {nodeType: 3, textContent: text};
 }
@@ -160,7 +163,7 @@ test('resolveSessionId returns null with no injected id and no hash, ignoring th
 });
 
 test('resolveSessionId prefers a valid cbsession hash over the injected server session id', () => {
-  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const pathName = PATH_SESSION_PLAN_PATH;
   const {window} = loadArtifactCommentsScript(pathName, false, {
     hash: '#cbsession=view-session',
     serverSessionId: 'path-session',
@@ -183,7 +186,7 @@ test('resolveSessionId falls back to the injected id for malformed cbsession has
 
 test('batch tray labels and POST target use the hash session when it resolves', async () => {
   const calls = [];
-  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const pathName = PATH_SESSION_PLAN_PATH;
   const {body} = loadArtifactCommentsScript(pathName, false, {
     hash: '#cbsession=view-session',
     fetch: async (url, options = {}) => {
@@ -216,7 +219,7 @@ test('batch tray labels and POST target use the hash session when it resolves', 
 
 test('hash session name 404 falls back to the injected server session id', async () => {
   const calls = [];
-  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const pathName = PATH_SESSION_PLAN_PATH;
   const {body} = loadArtifactCommentsScript(pathName, false, {
     hash: '#cbsession=missing-session',
     serverSessionId: 'server-session',
@@ -255,7 +258,7 @@ test('hash session name 404 falls back to the injected server session id', async
 
 test('artifact comments script stays inert inside frames', () => {
   const {window, head, listeners} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html',
+    SESSION_270_PLAN_PATH,
     true
   );
 
@@ -270,7 +273,7 @@ test('artifact comments script stays inert inside frames', () => {
 
 test('buildBatchMessage combines pending comments into one numbered message', () => {
   const {window} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+    SESSION_270_PLAN_PATH
   );
 
   const buildBatchMessage = window.__cbcBuildBatchMessage;
@@ -292,7 +295,7 @@ test('buildBatchMessage combines pending comments into one numbered message', ()
 });
 
 test('buildBatchMessage preserves newline quote and comment content', () => {
-  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
+  const artifactPath = SESSION_270_PLAN_PATH;
   const {window} = loadArtifactCommentsScript(artifactPath);
   const buildBatchMessage = window.__cbcBuildBatchMessage;
   const entries = [
@@ -331,7 +334,7 @@ test('buildBatchMessage preserves newline quote and comment content', () => {
 });
 
 test('buildBatchMessage renders no-quote Improve entries with context only', () => {
-  const artifactPath = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
+  const artifactPath = SESSION_270_PLAN_PATH;
   const {window} = loadArtifactCommentsScript(artifactPath);
   const buildBatchMessage = window.__cbcBuildBatchMessage;
   const entries = [
@@ -358,7 +361,7 @@ test('buildBatchMessage renders no-quote Improve entries with context only', () 
 
 test('comment trigger avoids overlapping artifact shortcut controls', () => {
   const {window, body, listeners} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+    SESSION_270_PLAN_PATH
   );
   const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
   assert.ok(shortcuts, 'shortcut controls are installed');
@@ -391,7 +394,7 @@ test('comment trigger avoids overlapping artifact shortcut controls', () => {
 
 test('dock owns the corner coordinates for the shortcut column and the tray', () => {
   const {head, body} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+    SESSION_270_PLAN_PATH
   );
 
   const dock = dockOf(body);
@@ -429,7 +432,7 @@ test('dock owns the corner coordinates for the shortcut column and the tray', ()
 
 function loadFindBlock() {
   const {window} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+    SESSION_270_PLAN_PATH
   );
   assert.equal(typeof window.__cbcFindBlock, 'function');
   return window.__cbcFindBlock;
@@ -494,7 +497,7 @@ test('findBlock still returns pre and li blocks that own text', () => {
 
 test('resolveEntryDraft returns default comment lines when no draft override', () => {
   const {window} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+    SESSION_270_PLAN_PATH
   );
 
   const resolveEntryDraft = window.__cbcResolveEntryDraft;
@@ -517,7 +520,7 @@ function cssRule(styleText, selector) {
 
 test('tray item layout keeps controls in normal flow beside bounded preview text', () => {
   const {window, head} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+    SESSION_270_PLAN_PATH
   );
   const buildTrayItem = window.__cbcBuildTrayItem;
   assert.equal(typeof buildTrayItem, 'function');
@@ -567,7 +570,7 @@ test('tray item layout keeps controls in normal flow beside bounded preview text
 
 test('tray item rule refuses to shrink so cards keep natural height and the list scrolls', () => {
   const {head} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+    SESSION_270_PLAN_PATH
   );
   const styleText = head.children[0].textContent;
   const itemRule = cssRule(styleText, '.__cbc-tray-item');
@@ -579,7 +582,7 @@ test('tray item rule refuses to shrink so cards keep natural height and the list
 
 test('popover and tray edit windows are widened and share a single width source', () => {
   const {head} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+    SESSION_270_PLAN_PATH
   );
   const styleText = head.children[0].textContent;
 
@@ -619,7 +622,7 @@ test('popover and tray edit windows are widened and share a single width source'
 
 test('comment tray activates inside a framed page when the fragment carries the panel marker', () => {
   const {window, head, listeners} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html',
+    SESSION_270_PLAN_PATH,
     true,
     {hash: '#cbsession=session-270&cbpanel=1'}
   );
@@ -636,7 +639,7 @@ test('comment tray activates inside a framed page when the fragment carries the 
 
 test('comment tray stays inactive inside a framed page without the panel marker', () => {
   const {window, head, listeners} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html',
+    SESSION_270_PLAN_PATH,
     true,
     {hash: '#cbsession=session-270'}
   );
@@ -650,7 +653,7 @@ test('comment tray stays inactive inside a framed page without the panel marker'
 
 test('comment tray is active when not framed regardless of marker (unchanged)', () => {
   const {window, head} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html',
+    SESSION_270_PLAN_PATH,
     false
   );
 
@@ -661,7 +664,7 @@ test('comment tray is active when not framed regardless of marker (unchanged)', 
 });
 
 test('resolveSessionId extracts the session from a fragment with the panel marker', () => {
-  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const pathName = PATH_SESSION_PLAN_PATH;
   const {window} = loadArtifactCommentsScript(pathName, false, {
     hash: '#cbsession=marker-session&cbpanel=1',
   });
@@ -671,7 +674,7 @@ test('resolveSessionId extracts the session from a fragment with the panel marke
 });
 
 test('resolveSessionId still extracts the session from a plain cbsession fragment without marker', () => {
-  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const pathName = PATH_SESSION_PLAN_PATH;
   const {window} = loadArtifactCommentsScript(pathName);
   const resolve = window.__cbcResolveSessionId;
 
@@ -698,7 +701,7 @@ function pendingTrayParts(body) {
 
 test('framed tray POSTs to the live parent session when it differs from the artifact-URL session', async () => {
   const calls = [];
-  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const pathName = PATH_SESSION_PLAN_PATH;
   const {body} = loadArtifactCommentsScript(pathName, true, {
     hash: '#cbsession=path-session&cbpanel=1',
     parent: {planPanel: {currentSessionId: () => 'live-session'}},
@@ -728,7 +731,7 @@ test('framed tray POSTs to the live parent session when it differs from the arti
 
 test('framed tray falls back to the artifact session when window.parent.planPanel is absent', async () => {
   const calls = [];
-  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const pathName = PATH_SESSION_PLAN_PATH;
   const {body} = loadArtifactCommentsScript(pathName, true, {
     hash: '#cbsession=path-session&cbpanel=1',
     // No opts.parent → window.parent is the bare {} from the harness default.
@@ -756,7 +759,7 @@ test('framed tray falls back to the artifact session when window.parent.planPane
 
 test('framed tray falls back to the artifact session when currentSessionId throws', async () => {
   const calls = [];
-  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const pathName = PATH_SESSION_PLAN_PATH;
   const {body} = loadArtifactCommentsScript(pathName, true, {
     hash: '#cbsession=path-session&cbpanel=1',
     parent: {planPanel: {currentSessionId: () => { throw new Error('cross-window boom'); }}},
@@ -785,7 +788,7 @@ test('framed tray falls back to the artifact session when currentSessionId throw
 
 test('framed tray falls back to the artifact session when currentSessionId returns a falsy value', async () => {
   const calls = [];
-  const pathName = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  const pathName = PATH_SESSION_PLAN_PATH;
   const {body} = loadArtifactCommentsScript(pathName, true, {
     hash: '#cbsession=path-session&cbpanel=1',
     parent: {planPanel: {currentSessionId: () => null}},
@@ -815,10 +818,8 @@ test('framed tray falls back to the artifact session when currentSessionId retur
 // Shortcut buttons: one per SHORTCUTS entry, each deduped on its own kind
 // ---------------------------------------------------------------------------
 
-const SHORTCUT_PATH = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
-
 function loadWithShortcuts(width = 1024) {
-  return loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+  return loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     innerWidth: width,
     serverSessionId: 'session-270',
     console: {warn() {}, error() {}},
@@ -885,7 +886,7 @@ function mulberry32(seed) {
 
 function loadStackCards() {
   const {window} = loadArtifactCommentsScript(
-    '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html'
+    SESSION_270_PLAN_PATH
   );
   assert.equal(typeof window.__cbcStackCards, 'function', 'stackCards is exported');
   return window.__cbcStackCards;
@@ -988,7 +989,7 @@ test('stackCards places an uncontested card exactly at its anchor', () => {
 // ---------------------------------------------------------------------------
 
 function loadFitColumnAndChooseWidth() {
-  const {window} = loadArtifactCommentsScript(SHORTCUT_PATH);
+  const {window} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH);
   assert.equal(typeof window.__cbcStackCards, 'function', 'stackCards is exported');
   assert.equal(typeof window.__cbcFitColumn, 'function', 'fitColumn is exported');
   assert.equal(typeof window.__cbcChooseWidth, 'function', 'chooseWidth is exported');
@@ -1131,7 +1132,7 @@ test('gutter cards are positioned by the stackCards pure function (render glue)'
     b.getBoundingClientRect = () => ({left: 0, top: t, right: 640, bottom: t + 50, width: 640, height: 50});
     return b;
   });
-  const {window, head, body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+  const {window, head, body, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     bodyChildren: blocks,
     serverSessionId: 'session-270',
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
@@ -1168,7 +1169,7 @@ test('gutter mode never writes the artifact\'s own layout', async () => {
   // entry, which is where the old code reserved 316px of padding.
   const block = makeBlock('anchored section');
   block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
-  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     bodyChildren: [block],
     serverSessionId: 'session-270',
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
@@ -1226,7 +1227,7 @@ test('gutter mode aligns the dock to the column and restores its prior inline va
   // exit every inline value returns to what was there before entry.
   const block = makeBlock('anchored section');
   block.getBoundingClientRect = () => ({left: 0, top: 200, right: 640, bottom: 250, width: 640, height: 50});
-  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     bodyChildren: [block],
     serverSessionId: 'session-270',
     fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
@@ -1284,7 +1285,7 @@ test('gutter mode never relocates the action bar as window width changes', async
   // artifact.
   const block = makeBlock('anchored section');
   block.getBoundingClientRect = () => ({left: 0, top: 200, right: 700, bottom: 250, width: 700, height: 50});
-  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+  const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     bodyChildren: [block],
     innerWidth: 1400,
     serverSessionId: 'session-270',
@@ -1333,7 +1334,6 @@ test('gutter mode never relocates the action bar as window width changes', async
 // Re-anchor, hover, and click affordances (comment-gutter part 2b)
 // ---------------------------------------------------------------------------
 
-const REANCHOR_PATH = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
 const FETCH_OK = async () => ({ok: true, status: 200, json: async () => ({name: 'S'})});
 
 // A 640px-wide article column at the default 1024px viewport keeps the one-band
@@ -1346,10 +1346,10 @@ function rectAt(top) {
 test('re-anchor hit: restores el and marks the block when quote matches', () => {
   const block = makeBlock('Unique commentable text for reanchor hit');
   block.getBoundingClientRect = rectAt(200);
-  const storage = seedDraft(REANCHOR_PATH, [
+  const storage = seedDraft(SESSION_270_PLAN_PATH, [
     {kind: 'block', quote: 'Unique commentable text for reanchor hit', context: '', comment: 'test comment'},
   ]);
-  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     sessionStorage: storage,
     bodyChildren: [block],
     fetch: FETCH_OK,
@@ -1362,10 +1362,10 @@ test('re-anchor hit: restores el and marks the block when quote matches', () => 
 
 test('re-anchor miss: entry stays unanchored, no block is marked, nothing throws', () => {
   const block = makeBlock('some commentable text');
-  const storage = seedDraft(REANCHOR_PATH, [
+  const storage = seedDraft(SESSION_270_PLAN_PATH, [
     {kind: 'block', quote: 'quote that matches no block', context: '', comment: 'no match'},
   ]);
-  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     sessionStorage: storage,
     bodyChildren: [block],
     fetch: FETCH_OK,
@@ -1380,10 +1380,10 @@ test('re-anchor never mis-anchors to a prefix-sharing block', () => {
   blockLong.getBoundingClientRect = rectAt(200);
   const blockShort = makeBlock('common prefix text');
   blockShort.getBoundingClientRect = rectAt(400);
-  const storage = seedDraft(REANCHOR_PATH, [
+  const storage = seedDraft(SESSION_270_PLAN_PATH, [
     {kind: 'block', quote: 'common prefix text', context: '', comment: 'should anchor to exact match'},
   ]);
-  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     sessionStorage: storage,
     bodyChildren: [blockLong, blockShort],
     fetch: FETCH_OK,
@@ -1395,10 +1395,10 @@ test('re-anchor never mis-anchors to a prefix-sharing block', () => {
 test('re-anchor is idempotent: running twice does not change anchors or marks', () => {
   const block = makeBlock('idempotent reanchor text');
   block.getBoundingClientRect = rectAt(200);
-  const storage = seedDraft(REANCHOR_PATH, [
+  const storage = seedDraft(SESSION_270_PLAN_PATH, [
     {kind: 'block', quote: 'idempotent reanchor text', context: '', comment: 'test idempotence'},
   ]);
-  const {window, body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+  const {window, body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     sessionStorage: storage,
     bodyChildren: [block],
     fetch: FETCH_OK,
@@ -1419,13 +1419,13 @@ test('gutter mode routes anchored entries to the gutter and unanchored entries t
   blockA.getBoundingClientRect = rectAt(200);
   const blockB = makeBlock('anchored block B for routing');
   blockB.getBoundingClientRect = rectAt(400);
-  const storage = seedDraft(REANCHOR_PATH, [
+  const storage = seedDraft(SESSION_270_PLAN_PATH, [
     {kind: 'block', quote: 'anchored block A for routing', context: '', comment: 'matched A'},
     {kind: 'block', quote: 'nonexistent quote one matching nothing', context: '', comment: 'unmatched A'},
     {kind: 'block', quote: 'anchored block B for routing', context: '', comment: 'matched B'},
     {kind: 'block', quote: 'nonexistent quote two matching nothing', context: '', comment: 'unmatched B'},
   ]);
-  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     sessionStorage: storage,
     bodyChildren: [blockA, blockB],
     fetch: FETCH_OK,
@@ -1447,12 +1447,12 @@ test('gutter mode writes only stackCards tops to gutter children (single writer)
     b.getBoundingClientRect = () => ({left: 0, top: t, right: 640, bottom: t + 50, width: 640, height: 50});
     return b;
   });
-  const storage = seedDraft(REANCHOR_PATH, [
+  const storage = seedDraft(SESSION_270_PLAN_PATH, [
     ...tops.map((t) => ({kind: 'block', quote: 'single writer anchor ' + t, context: '', comment: 'anchored ' + t})),
     {kind: 'block', quote: 'single writer unanchored one', context: '', comment: 'unanchored one'},
     {kind: 'block', quote: 'single writer unanchored two', context: '', comment: 'unanchored two'},
   ]);
-  const {window, body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+  const {window, body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     sessionStorage: storage,
     bodyChildren: blocks,
     fetch: FETCH_OK,
@@ -1482,10 +1482,10 @@ test('gutter mode writes only stackCards tops to gutter children (single writer)
 test('hover affordance: hovering a card highlights its anchor block with a distinct class', () => {
   const block = makeBlock('hover affordance target block');
   block.getBoundingClientRect = rectAt(200);
-  const storage = seedDraft(REANCHOR_PATH, [
+  const storage = seedDraft(SESSION_270_PLAN_PATH, [
     {kind: 'block', quote: 'hover affordance target block', context: '', comment: 'hover test'},
   ]);
-  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     sessionStorage: storage,
     bodyChildren: [block],
     fetch: FETCH_OK,
@@ -1509,10 +1509,10 @@ test('click affordance: clicking a card scrolls its anchor block into view', () 
   block.getBoundingClientRect = rectAt(200);
   let scrollCalls = 0;
   block.scrollIntoView = () => { scrollCalls++; };
-  const storage = seedDraft(REANCHOR_PATH, [
+  const storage = seedDraft(SESSION_270_PLAN_PATH, [
     {kind: 'block', quote: 'click affordance target block', context: '', comment: 'click test'},
   ]);
-  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     sessionStorage: storage,
     bodyChildren: [block],
     fetch: FETCH_OK,
@@ -1538,10 +1538,10 @@ test('click affordance: clicking an unanchored card is a no-op for scroll but st
   const block = makeBlock('some block text');
   let scrollCalls = 0;
   block.scrollIntoView = () => { scrollCalls++; };
-  const storage = seedDraft(REANCHOR_PATH, [
+  const storage = seedDraft(SESSION_270_PLAN_PATH, [
     {kind: 'block', quote: 'nonexistent quote', context: '', comment: 'unanchored'},
   ]);
-  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     sessionStorage: storage,
     bodyChildren: [block],
     fetch: FETCH_OK,
@@ -1565,10 +1565,10 @@ test('click affordance: clicking an unanchored card is a no-op for scroll but st
 test('card click does not break the x button', () => {
   const block = makeBlock('block for remove test');
   block.getBoundingClientRect = rectAt(200);
-  const storage = seedDraft(REANCHOR_PATH, [
+  const storage = seedDraft(SESSION_270_PLAN_PATH, [
     {kind: 'block', quote: 'block for remove test', context: '', comment: 'remove test'},
   ]);
-  const {body} = loadArtifactCommentsScript(REANCHOR_PATH, false, {
+  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     sessionStorage: storage,
     bodyChildren: [block],
     fetch: FETCH_OK,
@@ -1599,7 +1599,7 @@ test('every injected body child carries the __cbc-ui marker even after trigger a
   // paths are exercised, mirroring the gutter-mode fixtures above.
   const block = makeBlock('seeded artifact content');
   block.getBoundingClientRect = rectAt(200);
-  const {body, listeners} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+  const {body, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     bodyChildren: [block],
     innerWidth: 1400,
     serverSessionId: 'session-270',
@@ -1624,7 +1624,7 @@ test('every injected body child carries the __cbc-ui marker even after trigger a
 });
 
 test('findBlock returns null for a block node planted inside the review layer', () => {
-  const {window, body} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
+  const {window, body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     fetch: FETCH_OK,
   });
   const dock = dockOf(body);
@@ -1637,8 +1637,8 @@ test('findBlock returns null for a block node planted inside the review layer', 
 
 test('re-anchor never marks a layer node, even when its text matches a draft quote', () => {
   const block = makeBlock('some artifact text');
-  const {window, body} = loadArtifactCommentsScript(SHORTCUT_PATH, false, {
-    sessionStorage: seedDraft(SHORTCUT_PATH, [
+  const {window, body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
+    sessionStorage: seedDraft(SESSION_270_PLAN_PATH, [
       {kind: 'block', quote: '<some text>', context: '', comment: 'quote targets the planted node'},
     ]),
     bodyChildren: [block],

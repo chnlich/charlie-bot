@@ -281,7 +281,7 @@ async def test_sweep_skips_keep_worktree(tmp_path: Path, monkeypatch: pytest.Mon
   await init_module._quarantine_stale_failed_worktrees(
       cfg, [_thread(thread_id="t1", status="failed", worktree_path=wt, age_days=99.0, keep_worktree=True)])
 
-  assert quarantined == []
+  assert not quarantined
   assert wt.exists()
 
 
@@ -312,7 +312,7 @@ async def test_sweep_skips_missing_and_unparseable_completed_at(
       ],
   )
 
-  assert quarantined == []
+  assert not quarantined
   assert no_ts.exists()
   assert bad_ts.exists()
 
@@ -364,7 +364,7 @@ async def test_sweep_skips_when_running_thread_references_worktree(
       ],
   )
 
-  assert quarantined == []
+  assert not quarantined
   assert wt.exists()
 
 
@@ -551,7 +551,7 @@ def test_scan_skips_post_boot_running_thread(tmp_path: Path) -> None:
 
   interrupted, threads = init_module._scan_interrupted_runs(cfg, boot_time)
 
-  assert interrupted == []
+  assert not interrupted
   assert [m["id"] for m in threads] == ["post-boot"]
   # The scan writes nothing: the thread stays running.
   assert json.loads(meta_path.read_text(encoding="utf-8"))["status"] == "running"
@@ -587,7 +587,7 @@ async def test_reconcile_pre_boot_run_without_raw_log_kept_alive_when_death_unve
   await _await_recovery_tasks()
 
   assert recovered == 1
-  assert killed == []
+  assert not killed
   meta = json.loads(meta_path.read_text(encoding="utf-8"))
   assert meta["status"] == "running"
   chat_path = cfg.sessions_dir / "s1" / "data" / "chat_events.jsonl"
@@ -627,7 +627,7 @@ async def test_reconcile_pre_boot_run_without_raw_log_and_verifiable_death_drain
   await _await_recovery_tasks()
 
   assert recovered == 1
-  assert killed == []
+  assert not killed
   meta = json.loads(meta_path.read_text(encoding="utf-8"))
   assert meta["status"] == "failed"
   assert meta["exit_code"] == -1
@@ -690,7 +690,7 @@ async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
 
     assert recovered == 1
     assert resume_calls == [True]  # re-attached, following a genuinely alive process
-    assert killed == []  # never signaled
+    assert not killed  # never signaled
     assert proc.poll() is None  # still alive after the reconcile returns
 
     meta = json.loads(meta_path.read_text(encoding="utf-8"))

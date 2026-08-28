@@ -43,6 +43,7 @@ from src.core.slack_listener import (
 _CHANNEL = "C_TEST"
 _THREAD = "1700000000.000100"
 _TEAM = "T_TEST"
+_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
 _PERMALINK = "https://fake.slack.test/archives/C_TEST/p1700000000000100"
 # A summon prompt embeds prompts/slack_reply_format.md, which names the reply
 # command; the audit reads that name off the summon to know its contract.
@@ -182,7 +183,7 @@ async def test_reply_in_a_summon_round_posts_persists_and_clears_the_eye(tmp_pat
 
   ack_tasks: list[asyncio.Task] = []
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(ack_tasks)),
   ):
     result = await post_reply(sid, "the answer", cfg, session_mgr)
@@ -215,7 +216,7 @@ async def test_reply_from_a_round_no_summon_started_posts_with_null_answers_and_
     await _run_record(session_mgr, sid, wake["id"], tmp_path)
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner([])),
   ):
     result = await post_reply(sid, "fresh device code", cfg, session_mgr)
@@ -240,7 +241,7 @@ async def test_reply_in_a_nudge_round_answers_the_original_summon_and_clears_its
 
   ack_tasks: list[asyncio.Task] = []
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(ack_tasks)),
   ):
     result = await post_reply(sid, "late answer", cfg, session_mgr)
@@ -255,7 +256,7 @@ async def test_reply_for_a_session_without_a_slack_thread_is_refused_409(tmp_pat
   cfg, session_mgr, client = _rig(tmp_path)
   meta = await session_mgr.create_session(CreateSessionRequest(name="browser session"))
 
-  with patch("src.core.slack_listener._bot_client", return_value=client):
+  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client):
     with pytest.raises(SlackReplyError) as excinfo:
       await post_reply(meta.id, "hello", cfg, session_mgr)
 
@@ -267,7 +268,7 @@ async def test_reply_for_a_session_without_a_slack_thread_is_refused_409(tmp_pat
 @pytest.mark.asyncio
 async def test_unknown_session_is_refused_404(tmp_path: Path) -> None:
   cfg, session_mgr, client = _rig(tmp_path)
-  with patch("src.core.slack_listener._bot_client", return_value=client):
+  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client):
     with pytest.raises(SlackReplyError) as excinfo:
       await post_reply("no-such-session", "hello", cfg, session_mgr)
   assert excinfo.value.status == 404
@@ -279,7 +280,7 @@ async def test_unknown_session_is_refused_404(tmp_path: Path) -> None:
 async def test_blank_reply_is_refused_422_before_any_post(tmp_path: Path, text: str) -> None:
   cfg, session_mgr, client = _rig(tmp_path)
   sid = await _slack_session(session_mgr)
-  with patch("src.core.slack_listener._bot_client", return_value=client):
+  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client):
     with pytest.raises(SlackReplyError) as excinfo:
       await post_reply(sid, text, cfg, session_mgr)
   assert excinfo.value.status == 422
@@ -297,7 +298,7 @@ async def test_slack_rejecting_the_post_is_502_and_persists_nothing(tmp_path: Pa
   await _run_record(session_mgr, sid, summon["id"], tmp_path)
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener._RETRY_DELAYS", (0.0, 0.0)),
       capture_logs() as logs,
   ):
@@ -320,7 +321,7 @@ async def test_reply_past_the_post_cap_posts_ordered_chunks_and_counts_them(tmp_
   long_text = "a" * 25000 + "\n\n" + "b" * 14999
   assert len(long_text) == 40001
 
-  with patch("src.core.slack_listener._bot_client", return_value=client):
+  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client):
     result = await post_reply(sid, long_text, cfg, session_mgr)
 
   texts = [p["text"] for p in client.posts]
@@ -347,7 +348,7 @@ async def test_readback_and_log_measure_the_reply_against_the_budget(
   sid = await _slack_session(session_mgr)
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       capture_logs() as logs,
   ):
     result = await post_reply(sid, text, cfg, session_mgr)
@@ -401,7 +402,7 @@ def _slack_meta() -> SessionMetadata:
 def test_route_returns_the_readback_json() -> None:
   session_mgr = _RouteSessions(_slack_meta())
   client = _FakeSlackClient()
-  with patch("src.core.slack_listener._bot_client", return_value=client), _route_client(session_mgr) as http:
+  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client), _route_client(session_mgr) as http:
     resp = http.post("/api/internal/slack/reply", json={"session_id": "s1", "text": "hi"})
 
   assert resp.status_code == 200
@@ -422,7 +423,7 @@ def test_route_maps_refusals_to_status_codes_and_persists_nothing(
     meta: SessionMetadata | None, session_id: str, text: str, status: int, detail_fragment: str) -> None:
   session_mgr = _RouteSessions(meta)
   client = _FakeSlackClient()
-  with patch("src.core.slack_listener._bot_client", return_value=client), _route_client(session_mgr) as http:
+  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client), _route_client(session_mgr) as http:
     resp = http.post("/api/internal/slack/reply", json={"session_id": session_id, "text": text})
 
   assert resp.status_code == status
@@ -435,7 +436,7 @@ def test_route_maps_a_rejected_post_to_502() -> None:
   session_mgr = _RouteSessions(_slack_meta())
   client = _FakeSlackClient(fail_posts=True)
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener._RETRY_DELAYS", (0.0, 0.0)),
       _route_client(session_mgr) as http,
   ):
@@ -503,7 +504,7 @@ async def test_summon_round_without_a_reply_wakes_the_master_once_with_a_nudge(t
   trigger = AsyncMock()
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch("src.core.slack_listener.trigger_master", trigger),
       capture_logs() as logs,
@@ -540,7 +541,7 @@ async def test_replayed_done_for_the_summon_round_adds_no_second_nudge(tmp_path:
   trigger = AsyncMock()
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch("src.core.slack_listener.trigger_master", trigger),
   ):
@@ -568,7 +569,7 @@ async def test_nudge_round_without_a_reply_posts_the_notice_once_and_clears_the_
   trigger = AsyncMock()
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch("src.core.slack_listener.trigger_master", trigger),
   ):
@@ -599,7 +600,7 @@ async def test_nudge_round_with_a_reply_posts_no_notice(tmp_path: Path) -> None:
   await _append(session_mgr, sid, _reply(summon["id"], "late answer"))
   done = await _append(session_mgr, sid, _done(nudge["id"]))
 
-  with patch("src.core.slack_listener._bot_client", return_value=client):
+  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client):
     assert await deliver_done(sid, done, cfg, session_mgr) is False
 
   assert not client.posts
@@ -619,7 +620,7 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
   tasks: list[asyncio.Task] = []
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch("src.core.slack_listener._RETRY_DELAYS", (0.0, 0.0)),
       capture_logs() as logs,
@@ -633,7 +634,7 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
 
   client.fail_posts = False  # Slack is back at the next boot
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
   ):
@@ -703,7 +704,7 @@ async def test_the_master_done_funnel_itself_starts_the_audit(tmp_path: Path) ->
   trigger = AsyncMock()
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.sessions.create_logged_task", side_effect=make_task_spawner(funnel_tasks)),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(audit_tasks)),
       patch("src.core.slack_listener.trigger_master", trigger),
@@ -768,7 +769,7 @@ async def test_lost_summon_gets_one_notice_and_one_error_and_no_master_done(tmp_
   sid = await _slack_session(session_mgr)
   summon = await _append(session_mgr, sid, _summon())
 
-  with patch("src.core.slack_listener._bot_client", return_value=client):
+  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
 
   assert len(client.posts) == 1
@@ -789,7 +790,7 @@ async def test_backfill_run_twice_posts_once(tmp_path: Path) -> None:
   sid = await _slack_session(session_mgr)
   await _append(session_mgr, sid, _summon())
 
-  with patch("src.core.slack_listener._bot_client", return_value=client):
+  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
     assert await backfill_lost_summons(cfg, session_mgr) == 0
 
@@ -813,7 +814,7 @@ async def test_each_live_round_exclusion_suppresses_the_notice(tmp_path: Path, e
     await _run_record(session_mgr, sid, summon["id"], tmp_path)
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.agents.master_cc.queued_user_event_ids", return_value=queued),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 0
@@ -832,7 +833,7 @@ async def test_answered_summon_is_not_lost_and_its_reply_settles_the_audit(tmp_p
   await _append(session_mgr, sid, _done(summon["id"]))
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 0
@@ -848,7 +849,7 @@ async def test_backfill_never_touches_a_session_without_slack_origin(tmp_path: P
   # Same shape as a lost summon, but the session was never summoned from Slack.
   await _append(session_mgr, meta.id, _summon())
 
-  with patch("src.core.slack_listener._bot_client", return_value=client):
+  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client):
     assert await backfill_lost_summons(cfg, session_mgr) == 0
 
   assert not client.posts
@@ -864,7 +865,7 @@ async def test_backfill_reports_an_archived_session_thread(tmp_path: Path) -> No
   await _append(session_mgr, sid, _summon())
   await session_mgr.archive_session(sid)
 
-  with patch("src.core.slack_listener._bot_client", return_value=client):
+  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
 
   assert len(client.posts) == 1
@@ -886,7 +887,7 @@ async def test_boot_audit_nudges_a_summon_round_left_without_a_reply_once(tmp_pa
   trigger = AsyncMock()
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch("src.core.slack_listener.trigger_master", trigger),
       patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
@@ -919,7 +920,7 @@ async def test_boot_audit_posts_the_notice_for_a_nudge_round_left_without_a_repl
   trigger = AsyncMock()
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch("src.core.slack_listener.trigger_master", trigger),
       patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
@@ -949,7 +950,7 @@ async def test_lost_nudge_gets_the_lost_summon_report_and_no_second_action(tmp_p
   trigger = AsyncMock()
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch("src.core.slack_listener.trigger_master", trigger),
       patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
@@ -1007,7 +1008,7 @@ async def test_reply_to_a_summon_without_mention_ts_posts_normally_and_clears_no
   ack_tasks: list[asyncio.Task] = []
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(ack_tasks)),
   ):
     result = await post_reply(sid, "the answer", cfg, session_mgr)
@@ -1046,7 +1047,7 @@ async def test_backfill_posting_a_lost_summon_clears_its_eye(tmp_path: Path) -> 
 
   ack_tasks: list[asyncio.Task] = []
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(ack_tasks)),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
@@ -1067,7 +1068,7 @@ async def test_remove_failure_leaves_a_stale_eye_and_stays_in_the_ack_task(tmp_p
   await _run_record(session_mgr, sid, summon["id"], tmp_path)
 
   with (
-      patch("src.core.slack_listener._bot_client", return_value=client),
+      patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       capture_logs() as logs,
   ):
     result = await post_reply(sid, "the answer", cfg, session_mgr)

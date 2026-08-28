@@ -1143,7 +1143,7 @@ async def test_diffstat_empty_when_zero_commits(tmp_path: Path, monkeypatch: pyt
 async def test_fallback_report_write_carries_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A missing worker report gets a fallback write prefixed by the marker and a missing verdict."""
   cfg = _make_cfg(tmp_path)
-  _cfg, session_mgr, triggered_payloads, _descriptions = await _gate_loop(
+  _cfg, _session_mgr, triggered_payloads, _descriptions = await _gate_loop(
       tmp_path, monkeypatch, iterations=1, reports={1: None}, count="1")
 
   marker = "<!-- runner fallback: worker wrote no report -->"

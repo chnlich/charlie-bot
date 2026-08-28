@@ -176,7 +176,7 @@ async def test_run_cc_guard_round_fails_with_guard_reason(
 
   item = make_work_item(cfg, session_meta, cfg.backend_options[0])
 
-  cc_session_id, exit_code, error_msg, _finish_extras = await master_cc._run_cc(item)
+  _cc_session_id, exit_code, error_msg, _finish_extras = await master_cc._run_cc(item)
 
   assert exit_code != 0
   assert error_msg is not None

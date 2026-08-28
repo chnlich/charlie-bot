@@ -1014,7 +1014,7 @@ def _iter_trigger(payloads: list[dict], iteration: int) -> dict:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "report,count,expected_valid,expected_reason",
+    ("report", "count", "expected_valid", "expected_reason"),
     [
         (None, "1", False, "missing_report"),
         ("no heading here at all\n", "1", False, "malformed_report"),

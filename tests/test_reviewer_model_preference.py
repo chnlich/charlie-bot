@@ -176,7 +176,7 @@ _PREFERENCE_CASES = [
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("extra_option, model_preference, worker, expected", _PREFERENCE_CASES)
+@pytest.mark.parametrize(("extra_option", "model_preference", "worker", "expected"), _PREFERENCE_CASES)
 async def test_spawn_review_worker_resolves_preference(
     monkeypatch: pytest.MonkeyPatch,
     extra_option: BackendOption | None,

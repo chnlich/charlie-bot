@@ -129,21 +129,20 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
   raw_frame = ("data: " + payload + "\n\n").encode("utf-8")
   cut_nel = raw_frame.index(nel.encode("utf-8")) + 1
   cut_ls = raw_frame.index(ls.encode("utf-8"))
+  frame_chunks = [raw_frame[:cut_nel], raw_frame[cut_nel:cut_ls], raw_frame[cut_ls:]]
   chunks = [
       b'data: {"type": "server.connected", "properties": {}}\n',
       b"\n",
       b'data: {"type": "message.updated", "properties": {"sessionID": "session-1", '
       b'"info": {"id": "m1", "role": "assistant"}}}\n',
       b"\n",
-      raw_frame[:cut_nel],
-      raw_frame[cut_nel:cut_ls],
-      raw_frame[cut_ls:],
+      *frame_chunks,
       b'data: {"type": "session.idle", "properties": {"sessionID": "session-1"}}\n',
       b"\n",
   ]
 
   parsed = [
-      event async for event in backend._iter_sse_events(_FakeRawChunksResponse(chunks))
+      event async for event in backend._iter_sse_events(_FakeRawChunksResponse(frame_chunks))
   ]
   assert parsed == [json.loads(payload)]
   assert parsed[0]["properties"]["part"]["text"] == part_text

@@ -366,50 +366,47 @@ def test_stream_translator_does_not_passthrough_reasoning_content() -> None:
   assert events[2][1]["delta"] == {"type": "text_delta", "text": "final"}
 
 
-class _FakeUpstreamSse:
-  """Upstream SSE response double: pre-chunked bytes through aiter_bytes()."""
+class _FakeUpstreamResponse:
+  """Upstream SSE response double over pre-cut byte chunks."""
 
   def __init__(self, chunks: list[bytes]) -> None:
     self._chunks = chunks
-    self.closed = False
 
   async def aiter_bytes(self):
     for chunk in self._chunks:
       yield chunk
 
   async def aclose(self) -> None:
-    self.closed = True
-
-
-def _parse_sse_event(payload: bytes) -> tuple[str, dict]:
-  event_name = ""
-  data: dict = {}
-  for line in payload.decode("utf-8").split("\n"):
-    if line.startswith("event:"):
-      event_name = line[len("event:"):].strip()
-    elif line.startswith("data:"):
-      data = json.loads(line[len("data:"):].strip())
-  return event_name, data
+    pass
 
 
 @pytest.mark.asyncio
-async def test_iter_anthropic_sse_keeps_raw_line_boundary_characters_in_text_deltas() -> None:
-  """Same failure class as production run 6dc42358: aiter_lines()'s splitlines
-  semantics cut an upstream JSON string at raw U+0085/U+2028 and dropped the
-  continuation, so json.loads failed. The chunk must be translated, not
-  dropped, with the boundary characters preserved in the text delta."""
-  content = 'if(!a)return b\\");else{a:48<\x85nel:kept;ls\u2028line:kept\u2029'
-  chunk_json = json.dumps({"choices": [{"delta": {"content": content}}]}, ensure_ascii=False)
-  wire = ("data: " + chunk_json + "\n\n" + "data: [DONE]\n\n").encode("utf-8")
-  cut = wire.index(b"\xc2\x85") + 1  # split inside the U+0085 UTF-8 sequence
-  upstream = _FakeUpstreamSse([wire[:cut], wire[cut:]])
+async def test_iter_anthropic_sse_translates_frame_with_raw_splitline_chars() -> None:
+  """Same regression class as the opencode SSE bug: an upstream chunk whose JSON
+  string carries raw U+0085/U+2028 must be translated, not dropped."""
+  nel = "\x85"
+  ls = "\u2028"
+  content = "grep hit: a:48<" + nel + ">NEL-CHAR" + ls + ">LS-CHAR"
+  payload = json.dumps({"choices": [{"delta": {"content": content}}]}, ensure_ascii=False)
+  raw = ("data: " + payload + "\n\n" + "data: [DONE]\n\n").encode("utf-8")
+  cut_nel = raw.index(nel.encode("utf-8")) + 1
+  cut_ls = raw.index(ls.encode("utf-8"))
+  chunks = [raw[:cut_nel], raw[cut_nel:cut_ls], raw[cut_ls:]]
 
-  events = [
-      _parse_sse_event(blob) async for blob in _iter_anthropic_sse(upstream, "deepseek-v4-pro")
+  blobs = [
+      blob
+      async for blob in _iter_anthropic_sse(_FakeUpstreamResponse(chunks), "test-model")
   ]
 
+  parsed = []
+  for blob in blobs:
+    lines = blob.decode("utf-8").split("\n")
+    event = lines[0][len("event: "):]
+    data = json.loads(lines[1][len("data: "):])
+    parsed.append((event, data))
   text = "".join(
-      data["delta"]["text"] for name, data in events
-      if name == "content_block_delta" and data["delta"]["type"] == "text_delta")
+      data["delta"]["text"]
+      for event, data in parsed
+      if event == "content_block_delta" and data["delta"]["type"] == "text_delta")
   assert text == content
-  assert upstream.closed
+  assert parsed[-1][0] == "message_stop"

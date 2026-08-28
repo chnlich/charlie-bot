@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import json
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -18,6 +19,12 @@ from src.agents.backends.base import (
 )
 
 _PRINT_TIMEOUT = "24h"
+
+_SYSTEM_MESSAGE_BLOCK_RE = re.compile(r"<SYSTEM_MESSAGE>.*?</SYSTEM_MESSAGE>\s*", re.DOTALL)
+
+
+def _strip_platform_notifications(text: str) -> str:
+  return _SYSTEM_MESSAGE_BLOCK_RE.sub("", text)
 
 
 class AgentGuard(ValueError):
@@ -131,7 +138,7 @@ class AntigravityCliBackend(AgentBackend):
     # Bare session_id event first so the master adopts it as the frozen anchor,
     # then assistant text, then usage.
     yield {"session_id": conversation_id}
-    yield make_text_event(envelope.get("response", ""))
+    yield make_text_event(_strip_platform_notifications(envelope.get("response", "")))
     usage = envelope.get("usage", {}) or {}
     yield make_result_event(
         input_tokens=usage.get("input_tokens", 0),

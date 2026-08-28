@@ -160,6 +160,82 @@ JSON
 
 
 @pytest.mark.asyncio
+async def test_run_strips_leading_paired_system_message_blocks(monkeypatch, tmp_path: Path) -> None:
+  _install_fake_agy(
+      monkeypatch,
+      tmp_path,
+      """
+cat <<'JSON'
+{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"<SYSTEM_MESSAGE>\\nblock A\\n</SYSTEM_MESSAGE>\\n<SYSTEM_MESSAGE>\\nblock B\\n</SYSTEM_MESSAGE>\\n\\nthe answer"}
+JSON
+""",
+  )
+  backend = AntigravityCliBackend()
+
+  events = await _consume(backend, tmp_path)
+
+  assert [e.get("type") for e in events] == [None, "assistant", "result"]
+  assert events[1]["message"]["content"][0]["text"] == "the answer"
+
+
+@pytest.mark.asyncio
+async def test_run_blocks_only_response_yields_empty_assistant_text(monkeypatch, tmp_path: Path) -> None:
+  _install_fake_agy(
+      monkeypatch,
+      tmp_path,
+      """
+cat <<'JSON'
+{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"<SYSTEM_MESSAGE>block A</SYSTEM_MESSAGE><SYSTEM_MESSAGE>block B</SYSTEM_MESSAGE>"}
+JSON
+""",
+  )
+  backend = AntigravityCliBackend()
+
+  events = await _consume(backend, tmp_path)
+
+  assert [e.get("type") for e in events] == [None, "assistant", "result"]
+  assert events[1]["message"]["content"][0]["text"] == ""
+
+
+@pytest.mark.asyncio
+async def test_run_unpaired_system_message_tag_passes_through_unchanged(monkeypatch, tmp_path: Path) -> None:
+  _install_fake_agy(
+      monkeypatch,
+      tmp_path,
+      """
+cat <<'JSON'
+{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"<SYSTEM_MESSAGE>\\npartial"}
+JSON
+""",
+  )
+  backend = AntigravityCliBackend()
+
+  events = await _consume(backend, tmp_path)
+
+  assert [e.get("type") for e in events] == [None, "assistant", "result"]
+  assert events[1]["message"]["content"][0]["text"] == "<SYSTEM_MESSAGE>\npartial"
+
+
+@pytest.mark.asyncio
+async def test_run_strips_mid_text_system_message_block(monkeypatch, tmp_path: Path) -> None:
+  _install_fake_agy(
+      monkeypatch,
+      tmp_path,
+      """
+cat <<'JSON'
+{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"para1\\n<SYSTEM_MESSAGE>x</SYSTEM_MESSAGE>\\npara2"}
+JSON
+""",
+  )
+  backend = AntigravityCliBackend()
+
+  events = await _consume(backend, tmp_path)
+
+  assert [e.get("type") for e in events] == [None, "assistant", "result"]
+  assert events[1]["message"]["content"][0]["text"] == "para1\npara2"
+
+
+@pytest.mark.asyncio
 async def test_run_emits_nonzero_stdout_as_error(monkeypatch, tmp_path: Path) -> None:
   _install_fake_agy(
       monkeypatch,

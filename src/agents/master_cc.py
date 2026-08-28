@@ -1,8 +1,8 @@
 """Master CC — spawns a Claude Code subprocess for the master agent.
 
-Facade over the ``master_cc_<part>`` modules: every pre-split top-level def/class
-keeps resolving at its original ``src.agents.master_cc.<name>`` path, so existing
-import sites and direct calls stay valid. A monkeypatch target must name the
+Facade over the ``master_cc_<part>`` modules: the re-export list carries exactly
+the names call sites still reach through ``src.agents.master_cc.<name>``, so
+existing import sites and direct calls stay valid. A monkeypatch target must name the
 module whose body looks the name up — a part's own bare-name references resolve
 in that part (patch ``master_cc_run._run_cc``, not ``master_cc._run_cc``);
 only callers that read this module's attribute at call time (e.g. init.py's
@@ -26,10 +26,7 @@ from src.agents.master_cc_run import (  # noqa: F401  # re-export: facade import
   _build_master_env,
   _build_prompt,
   _cc_transcript_exists,
-  _handle_event,
-  _is_manual_compact_boundary,
   _resolve_resume_id,
-  _resolve_resume_option,
   _resume_cc,
   _route_resume_session,
   _run_cc,

@@ -704,9 +704,10 @@ class TriggerManager:
         return
       with contextlib.suppress(Exception):
         loop.remove_reader(fd)
-      # A non-child raises ChildProcessError from waitid; there is nothing to reap.
+      # Reaps only when the watched pid is our child; waitid on a non-child
+      # raises ChildProcessError and there is nothing to reap.
       with contextlib.suppress(ChildProcessError, OSError):
-        _waitid_pidfd(fd, os.WEXITED | os.WNOHANG)  # reap if it is our child
+        _waitid_pidfd(fd, os.WEXITED | os.WNOHANG)
       with contextlib.suppress(OSError):
         os.close(fd)
       finished.append(str(pid))

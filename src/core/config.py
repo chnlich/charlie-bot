@@ -417,7 +417,7 @@ def load_config() -> CharlieBotConfig:
   config_path = home / "config.yaml"
 
   yaml_data: dict = load_yaml(config_path, default={})
-  key_origin: dict[str, Path] = {key: config_path for key in yaml_data}
+  key_origin: dict[str, Path] = dict.fromkeys(yaml_data, config_path)
   for fragment in _config_fragments(home):
     fragment_data: dict = load_yaml(fragment, default={})
     if not isinstance(fragment_data, dict):

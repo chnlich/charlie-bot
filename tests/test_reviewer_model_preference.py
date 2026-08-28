@@ -39,11 +39,11 @@ def _worktree_paths(tmp_path_factory: pytest.TempPathFactory) -> None:
 
 
 def _build_cfg(**overrides: Any) -> CharlieBotConfig:
-  defaults = dict(
-      charliebot_home=Path("/tmp/charliebot-test"),
-      worktree_dir=_WORKTREE_DIR,
-      backend_options=BACKEND_OPTIONS,
-  )
+  defaults = {
+      'charliebot_home': Path("/tmp/charliebot-test"),
+      'worktree_dir': _WORKTREE_DIR,
+      'backend_options': BACKEND_OPTIONS,
+  }
   defaults.update(overrides)
   return CharlieBotConfig(**defaults)
 

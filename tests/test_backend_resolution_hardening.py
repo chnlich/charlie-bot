@@ -11,6 +11,7 @@ from conftest import (
   BROADCAST_PATCH_TARGET,
   BUILD_BACKEND_PATCH_TARGET,
   TRIGGER_MASTER_PATCH_TARGET,
+  TRIGGERS_GET_CONFIG_PATCH_TARGET,
   FakeBackend,
   make_work_item,
   patch_instructions_content,
@@ -175,7 +176,7 @@ async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_pa
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
       patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
-      patch("src.core.triggers.get_config", return_value=current),
+      patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=current),
   ):
     await trigger_mgr._wait_and_fire(trigger)
 

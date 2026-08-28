@@ -13,6 +13,7 @@ Every failure output stays a JSON object on stderr with exit code 1, now with
 """
 
 import argparse
+import contextlib
 import json
 import re
 import subprocess
@@ -228,10 +229,8 @@ def _exit_server_rejection(
 ) -> NoReturn:
   """Handle a server that explicitly answered with an error status."""
   msg = str(exc)
-  try:
+  with contextlib.suppress(ValueError, KeyError):
     msg = exc.response.json()["detail"]  # type: ignore[union-attr]
-  except (ValueError, KeyError):
-    pass
   error_obj: dict[str, Any] = {"error": msg, "code": "server_error", "effect": "none"}
   hint = _maybe_version_skew_hint(cfg)
   if hint is not None:

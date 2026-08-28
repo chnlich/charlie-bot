@@ -83,10 +83,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
 
 
 def _cmd_add(args: argparse.Namespace) -> None:
-  if args.file:
-    body = Path(args.file).read_text(encoding="utf-8")
-  else:
-    body = sys.stdin.read()
+  body = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
   lines = body.split("\n")
   if not lines or not lines[0].startswith("# "):
     print("error: body must start with '# <title>'", file=sys.stderr)

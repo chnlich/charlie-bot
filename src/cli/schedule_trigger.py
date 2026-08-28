@@ -137,9 +137,7 @@ def _target_matches(stored: dict, requested: dict) -> bool:
   requested_host = requested.get("host")
   if requested_host is not None and stored.get("host") != requested_host:
     return False
-  if requested_host is None and stored.get("host") is not None:
-    return False
-  return True
+  return requested_host is not None or stored.get("host") is None
 
 
 def _readback_trigger(session_id: str, message: str, watch_targets: list[dict] | None) -> dict | None:

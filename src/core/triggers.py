@@ -1,6 +1,7 @@
 """Delayed trigger (session self-wake) manager."""
 
 import asyncio
+import contextlib
 import json
 import os
 import random
@@ -701,18 +702,14 @@ class TriggerManager:
       pid = pidfds.pop(fd, None)
       if pid is None:
         return
-      try:
+      with contextlib.suppress(Exception):
         loop.remove_reader(fd)
-      except Exception:
-        pass
-      try:
-        _waitid_pidfd(fd, os.WEXITED | os.WNOHANG)  # reap if it is our child
-      except (ChildProcessError, OSError):
-        pass  # non-child; nothing to reap
-      try:
+      # Reaps only when the watched pid is our child; waitid on a non-child
+      # raises ChildProcessError and there is nothing to reap.
+      with contextlib.suppress(ChildProcessError, OSError):
+        _waitid_pidfd(fd, os.WEXITED | os.WNOHANG)
+      with contextlib.suppress(OSError):
         os.close(fd)
-      except OSError:
-        pass
       finished.append(str(pid))
       if not pidfds:
         done.set()
@@ -729,14 +726,10 @@ class TriggerManager:
     finally:
       # Cleanup any remaining fds (e.g. timeout case, or cancellation)
       for fd in list(pidfds):
-        try:
+        with contextlib.suppress(Exception):
           loop.remove_reader(fd)
-        except Exception:
-          pass
-        try:
+        with contextlib.suppress(OSError):
           os.close(fd)
-        except OSError:
-          pass
 
     still_alive = [str(p) for p in pidfds.values()]
     return finished, still_alive

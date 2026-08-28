@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -336,7 +336,7 @@ async def test_every_metadata_return_path_overwrites_stamp(tmp_path: Path, monke
   including fresh-construction returns that bypass a read of a stored session."""
   cfg = _make_consumer_cfg(tmp_path)
   mgr = SessionManager(cfg)
-  sentinel = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+  sentinel = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
   monkeypatch.setattr("src.core.sessions.busy_since", lambda _sid: sentinel)
   monkeypatch.setattr(BROADCAST_PATCH_TARGET, AsyncMock())
 
@@ -548,7 +548,7 @@ async def test_resume_reattach_uses_persisted_interval_start(
   record's started_at (600s in the past here), not from now(). Deterministic:
   _resume_cc is parked on an asyncio.Event so nothing races the asserts.
   """
-  started_at = datetime.now(timezone.utc) - timedelta(seconds=600)
+  started_at = datetime.now(UTC) - timedelta(seconds=600)
   record = MasterRunRecord(
       pid=1234,
       pid_start="100",
@@ -720,7 +720,7 @@ async def test_zero_output_guard_skips_missing_result(tmp_path: Path, monkeypatc
 async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The guard fires on the resume (re-attach) outcome, not just fresh runs."""
   session_id = "zero-resume"
-  started_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+  started_at = datetime.now(UTC) - timedelta(seconds=60)
   record = MasterRunRecord(pid=1234, pid_start="100", started_at=started_at, raw_log="<fake>")
 
   cfg = _make_consumer_cfg(tmp_path)
@@ -830,7 +830,7 @@ async def test_zero_output_guard_resume_exempts_manual_compact(
   record = MasterRunRecord(
       pid=None,
       pid_start=None,
-      started_at=datetime.now(timezone.utc) - timedelta(seconds=60),
+      started_at=datetime.now(UTC) - timedelta(seconds=60),
       raw_log=str(raw_path),
   )
 

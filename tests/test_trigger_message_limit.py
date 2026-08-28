@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -119,8 +119,8 @@ async def test_persisted_over_limit_message_fires_verbatim(tmp_path: Path) -> No
   trigger_mgr = TriggerManager(cfg, session_mgr)
 
   trigger_id = "over-limit-1"
-  fire_at = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
-  now = datetime.now(timezone.utc).isoformat()
+  fire_at = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+  now = datetime.now(UTC).isoformat()
   long_message = "y" * 201
   triggers_dir = cfg.sessions_dir / session.id / "triggers"
   triggers_dir.mkdir(parents=True)

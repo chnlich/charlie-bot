@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -147,7 +147,7 @@ async def test_update_thinking_state_preserves_newer_group_from_disk(tmp_path: P
   concurrent_meta.group = "Research"
   await concurrent_mgr.save_metadata(concurrent_meta)
 
-  updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=timezone.utc)
+  updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=UTC)
   await mgr.update_thinking_state(meta.id, updated_at=updated_at)
 
   updated = await verify_mgr.get_session(meta.id)
@@ -176,7 +176,7 @@ async def test_mark_unread_and_update_thinking_state_do_not_clobber(tmp_path: Pa
     await asyncio.sleep(0)
     await real_save(m)
 
-  updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=timezone.utc)
+  updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=UTC)
   with patch.object(mgr, "save_metadata", side_effect=yielding_save):
     with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
       await asyncio.gather(

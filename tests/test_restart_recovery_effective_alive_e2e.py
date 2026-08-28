@@ -21,7 +21,7 @@ chat-event readers) is shared by import from that module — edit it there.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -74,7 +74,7 @@ async def _recover(
   monkeypatch.setattr("src.core.runs.resolve_run", spy_resolve)
 
   cfg = cfg or _cfg(home)
-  recovered = await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  recovered = await init_module.run_crash_recovery(cfg, datetime.now(UTC))
   await _await_recovery_tasks()
   return recovered, alive_at_reattach, master_wakes, outcomes
 

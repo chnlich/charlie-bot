@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
@@ -583,7 +583,7 @@ async def test_succession_keeps_scheduler_chain_intact_for_tick_and_triggers(
 
     # The pending trigger fires through the successor chain into the child.
     stored = await trigger_mgr._load_trigger(parent.id, trigger.id)
-    stored.fire_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    stored.fire_at = datetime.now(UTC) - timedelta(seconds=1)
     await trigger_mgr._save_trigger(stored)
     await trigger_mgr._wait_and_fire(stored)
 

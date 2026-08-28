@@ -1,6 +1,6 @@
 """Tests for the improvement-loop lifecycle module."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -82,7 +82,7 @@ async def test_revision_requested_picked_first(tmp_path: Path) -> None:
 async def test_stale_in_progress_reset(tmp_path: Path) -> None:
   """Stale in_progress items get reset to failed, YAML updated."""
   backlog = tmp_path / 'backlog.yaml'
-  old_time = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+  old_time = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
   items = [
       {
           'id': '001',

@@ -32,7 +32,7 @@ import subprocess
 import sys
 import time
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -242,7 +242,7 @@ async def _recover(
   monkeypatch.setattr("src.core.review.trigger_master", fake_trigger_master)
 
   cfg = cfg or _cfg(home)
-  recovered = await init_module.run_crash_recovery(cfg, datetime.now(timezone.utc))
+  recovered = await init_module.run_crash_recovery(cfg, datetime.now(UTC))
   await _await_recovery_tasks()
   return recovered, alive_at_reattach, master_wakes
 

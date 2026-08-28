@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -326,7 +326,7 @@ async def test_recover_pending_rewrites_legacy_file(tmp_path: Path) -> None:
   triggers_dir = cfg.sessions_dir / session_id / "triggers"
   triggers_dir.mkdir(parents=True, exist_ok=True)
 
-  far_future = (datetime.now(timezone.utc) + timedelta(days=365)).isoformat()
+  far_future = (datetime.now(UTC) + timedelta(days=365)).isoformat()
   legacy_path = triggers_dir / "legacy-x.json"
   legacy_path.write_text(
       json.dumps(

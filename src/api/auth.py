@@ -24,9 +24,7 @@ def request_has_access_key(request: Request, key: str) -> bool:
   auth_header = request.headers.get("authorization", "")
   bearer = auth_header[7:] if auth_header.startswith("Bearer ") else ""
   cookie = request.cookies.get("charliebot_access_key", "")
-  if (bearer and hmac.compare_digest(bearer, key)) or (cookie and hmac.compare_digest(cookie, key)):
-    return True
-  return False
+  return bool(bearer and hmac.compare_digest(bearer, key)) or bool(cookie and hmac.compare_digest(cookie, key))
 
 
 # Paths that are always public (no auth required). The viewer routes only render

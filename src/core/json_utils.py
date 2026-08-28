@@ -1,5 +1,6 @@
 """Shared JSON read/write helpers and the single home of the atomic file-write rule."""
 
+import contextlib
 import json
 import os
 import uuid
@@ -47,10 +48,8 @@ def atomic_write_text(path: Path, text: str, *, private: bool = False) -> None:
     temporary.write_text(text, encoding="utf-8")
     os.replace(temporary, path)
   except BaseException:
-    try:
+    with contextlib.suppress(OSError):
       temporary.unlink()
-    except OSError:
-      pass
     raise
 
 

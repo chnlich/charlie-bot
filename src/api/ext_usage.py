@@ -1,6 +1,7 @@
 """External tool usage poller and API route (Claude Code, Codex)."""
 
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -861,8 +862,6 @@ async def stop_poller() -> None:
   if task is not None:
     _poller_task = None
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
       await task
-    except asyncio.CancelledError:
-      pass
     log.info("ext_usage_poller_stopped")

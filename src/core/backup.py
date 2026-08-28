@@ -46,9 +46,7 @@ def _should_exclude(arcname: str) -> bool:
     if part in ('.git', '.claude', 'credentials', '__pycache__') or part.endswith('.pyc'):
       return True
   # Exclude sessions/*/threads and everything under it
-  if len(parts) >= 3 and parts[0] == 'sessions' and parts[2] == 'threads':
-    return True
-  return False
+  return len(parts) >= 3 and parts[0] == 'sessions' and parts[2] == 'threads'
 
 
 def _parse_backup_date(name: str) -> datetime | None:

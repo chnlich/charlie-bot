@@ -9,6 +9,7 @@ terminal. Multiple browsers attaching the same session is tmux-native.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -175,10 +176,8 @@ async def run_tui_attachment(websocket: WebSocket, session_id: str, sessions_dir
     await ensure_tmux_session(session_id, sessions_dir / session_id)
   except Exception as e:  # surface to client
     log.exception("tui_ensure_session_failed", session_id=session_id)
-    try:
+    with contextlib.suppress(Exception):
       await websocket.send_json({"type": PTY_EXIT, "error": str(e)})
-    except Exception:
-      pass
     return
 
   attachment = PtyAttachment(session_id)
@@ -186,10 +185,8 @@ async def run_tui_attachment(websocket: WebSocket, session_id: str, sessions_dir
     attachment.spawn()
   except Exception as e:
     log.exception("tui_pty_spawn_failed", session_id=session_id)
-    try:
+    with contextlib.suppress(Exception):
       await websocket.send_json({"type": PTY_EXIT, "error": str(e)})
-    except Exception:
-      pass
     return
 
   try:

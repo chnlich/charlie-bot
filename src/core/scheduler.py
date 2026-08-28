@@ -1,6 +1,7 @@
 """Scheduler — runs cron-like tasks that produce results in dedicated sessions."""
 
 import asyncio
+import contextlib
 import traceback
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -84,10 +85,8 @@ class Scheduler:
   async def stop(self) -> None:
     if self._task and not self._task.done():
       self._task.cancel()
-      try:
+      with contextlib.suppress(asyncio.CancelledError):
         await self._task
-      except asyncio.CancelledError:
-        pass
     log.info("scheduler_stopped")
 
   async def run_task_now(self, task_name: str) -> dict:

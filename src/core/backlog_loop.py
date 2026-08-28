@@ -75,6 +75,30 @@ def _extra_rules_text(extra_rules: list[str]) -> str:
   return ' '.join(extra_rules)
 
 
+def _prompt_header(cfg: ImprovementLoopConfig) -> list[str]:
+  """Role sentence plus the configured scan prompt, when any."""
+  parts = [f'You are the {cfg.role}.']
+  if cfg.scan_prompt:
+    parts.append(cfg.scan_prompt)
+  return parts
+
+
+def _join_prompt(parts: list[str], cfg: ImprovementLoopConfig) -> str:
+  """Append extra_rules when set and join; the shared tail of every loop prompt."""
+  extra = _extra_rules_text(cfg.extra_rules)
+  if extra:
+    parts.append(extra)
+  return ' '.join(parts)
+
+
+def _append_backlog_rules(parts: list[str], cfg: ImprovementLoopConfig) -> str:
+  """Append the description/language/commit rules shared by the generate and scan prompts."""
+  parts.append(_BACKLOG_DESCRIPTION_RULE)
+  parts.append(_language_rule(cfg.language))
+  parts.append('Commit and push.')
+  return _join_prompt(parts, cfg)
+
+
 def _check_revision(items: list[dict], backlog_path: Path) -> str | None:
   """Step 0: address revision feedback."""
   for item in items:
@@ -147,53 +171,30 @@ def _build_implement_prompt(item: dict, cfg: ImprovementLoopConfig, backlog_path
       f'IMPORTANT: Before starting work, update {backlog_path}: set item {item["id"]} status to '
       f'in_progress and add field in_progress_at with the current UTC time in ISO 8601 format. '
       f'Commit and push.')
-  extra = _extra_rules_text(cfg.extra_rules)
-  if extra:
-    parts.append(extra)
-  return ' '.join(parts)
+  return _join_prompt(parts, cfg)
 
 
 def _build_generate_prompt(items: list[dict], cfg: ImprovementLoopConfig, backlog_path: Path) -> str:
   """Step 3: build prompt for generating one new idea."""
   next_id = _next_id(items, cfg.id_prefix)
   id_format = f'{cfg.id_prefix}-NNN' if cfg.id_prefix else 'NNN (zero-padded)'
-  parts = [
-      f'You are the {cfg.role}.',
-  ]
-  if cfg.scan_prompt:
-    parts.append(cfg.scan_prompt)
+  parts = _prompt_header(cfg)
   if cfg.idea_prompt:
     parts.append(cfg.idea_prompt)
   parts.append(
       f'Generate exactly ONE new improvement idea not already in the backlog. '
       f'Append to {backlog_path} with fields: id (use {next_id}, format: {id_format}), '
       f'title, description (PURPOSE first, then HOW), status: pending, created (ISO 8601), priority.')
-  parts.append(_BACKLOG_DESCRIPTION_RULE)
-  parts.append(_language_rule(cfg.language))
-  parts.append('Commit and push.')
-  extra = _extra_rules_text(cfg.extra_rules)
-  if extra:
-    parts.append(extra)
-  return ' '.join(parts)
+  return _append_backlog_rules(parts, cfg)
 
 
 def _build_scan_prompt(cfg: ImprovementLoopConfig, backlog_path: Path) -> str:
   """Step 4: build fallback scan prompt."""
-  parts = [
-      f'You are the {cfg.role}.',
-  ]
-  if cfg.scan_prompt:
-    parts.append(cfg.scan_prompt)
+  parts = _prompt_header(cfg)
   parts.append(
       f'If issues found, create ONE backlog item in {backlog_path} (status: pending). '
       f'If clean, do nothing.')
-  parts.append(_BACKLOG_DESCRIPTION_RULE)
-  parts.append(_language_rule(cfg.language))
-  parts.append('Commit and push.')
-  extra = _extra_rules_text(cfg.extra_rules)
-  if extra:
-    parts.append(extra)
-  return ' '.join(parts)
+  return _append_backlog_rules(parts, cfg)
 
 
 async def determine_action(backlog_path: Path, loop_cfg: ImprovementLoopConfig,

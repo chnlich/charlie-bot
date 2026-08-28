@@ -15,68 +15,31 @@ Same two-process A/B protocol as test_restart_recovery_e2e.py: a driver
 subprocess spawns a worker with a fake `claude` shim and is SIGKILLed; this
 test process then runs startup crash recovery against the truth on disk. The
 protocol's scaffolding (shim, driver template, launcher, killer, waits,
-chat-event readers) is shared by import from that module — edit it there.
+chat-event readers, the _recover helper) is shared by import from that
+module — edit it there.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from conftest import build_recovery_cfg
 from test_restart_recovery_e2e import (
-  _await_recovery_tasks,
-  _cfg,
   _kill_driver_mid_run,
   _launch_driver,
   _read_meta,
+  _recover,
   _recovery_reports,
   _terminal_summaries,
 )
 
 from src.agents.backends.base import AgentBackend
-from src.core import init as init_module
 from src.core import runs
-from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, ThreadStatus, utc_now
 from src.core.sessions import SessionManager
-from src.core.spawner import resume_worker as _real_resume_worker
 from src.core.threads import ThreadManager
-
-
-async def _recover(
-    monkeypatch: pytest.MonkeyPatch, home: Path, cfg: CharlieBotConfig | None = None
-) -> tuple[int, list[bool], list[str], list[runs.RunOutcome]]:
-  """Run startup crash recovery as process B; record reattach mode, master
-  wakes, and the resolve outcome each interrupted run received."""
-  alive_at_reattach: list[bool] = []
-  master_wakes: list[str] = []
-  outcomes: list[runs.RunOutcome] = []
-
-  async def spy_resume(*args, **kwargs):
-    alive_at_reattach.append(bool(kwargs["is_alive"]()))
-    await _real_resume_worker(*args, **kwargs)
-
-  async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
-    master_wakes.append(summary)
-
-  real_resolve = runs.resolve_run
-
-  def spy_resolve(**kwargs):
-    resolution = real_resolve(**kwargs)
-    outcomes.append(resolution.outcome)
-    return resolution
-
-  monkeypatch.setattr("src.core.spawner.resume_worker", spy_resume)
-  monkeypatch.setattr("src.core.review.trigger_master", fake_trigger_master)
-  monkeypatch.setattr("src.core.runs.resolve_run", spy_resolve)
-
-  cfg = cfg or _cfg(home)
-  recovered = await init_module.run_crash_recovery(cfg, datetime.now(UTC))
-  await _await_recovery_tasks()
-  return recovered, alive_at_reattach, master_wakes, outcomes
 
 
 @pytest.mark.asyncio

@@ -226,10 +226,12 @@ def _kill_driver_mid_run(proc: subprocess.Popen, home: Path, ids: dict) -> None:
 
 async def _recover(
     monkeypatch: pytest.MonkeyPatch, home: Path, cfg: CharlieBotConfig | None = None
-) -> tuple[int, list[bool], list[str]]:
-  """Run startup crash recovery as process B; record reattach mode + master wakes."""
+) -> tuple[int, list[bool], list[str], list[runs.RunOutcome]]:
+  """Run startup crash recovery as process B; record reattach mode, master
+  wakes, and the resolve outcome each interrupted run received."""
   alive_at_reattach: list[bool] = []
   master_wakes: list[str] = []
+  outcomes: list[runs.RunOutcome] = []
 
   async def spy_resume(*args, **kwargs):
     alive_at_reattach.append(bool(kwargs["is_alive"]()))
@@ -238,13 +240,21 @@ async def _recover(
   async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
     master_wakes.append(summary)
 
+  real_resolve = runs.resolve_run
+
+  def spy_resolve(**kwargs):
+    resolution = real_resolve(**kwargs)
+    outcomes.append(resolution.outcome)
+    return resolution
+
   monkeypatch.setattr("src.core.spawner.resume_worker", spy_resume)
   monkeypatch.setattr("src.core.review.trigger_master", fake_trigger_master)
+  monkeypatch.setattr("src.core.runs.resolve_run", spy_resolve)
 
   cfg = cfg or _cfg(home)
   recovered = await init_module.run_crash_recovery(cfg, datetime.now(UTC))
   await _await_recovery_tasks()
-  return recovered, alive_at_reattach, master_wakes
+  return recovered, alive_at_reattach, master_wakes, outcomes
 
 
 def _assert_run_converged(home: Path, ids: dict) -> dict:
@@ -316,7 +326,7 @@ async def test_restart_recovers_completed_run(tmp_path: Path, monkeypatch: pytes
   )
   time.sleep(0.5)
 
-  recovered, alive_at_reattach, master_wakes = await _recover(monkeypatch, home)
+  recovered, alive_at_reattach, master_wakes, _outcomes = await _recover(monkeypatch, home)
 
   assert recovered == 1
   # The run finished during downtime: drained (dead at reattach), not followed.
@@ -334,7 +344,7 @@ async def test_restart_reattaches_running_run(tmp_path: Path, monkeypatch: pytes
 
   # The agent is still alive for ~3s; recovery must judge the run ALIVE and
   # re-attach (is_alive consulted inside resume), then stream its remainder.
-  recovered, alive_at_reattach, master_wakes = await _recover(monkeypatch, home)
+  recovered, alive_at_reattach, master_wakes, _outcomes = await _recover(monkeypatch, home)
 
   assert recovered == 1
   assert alive_at_reattach == [True]
@@ -380,7 +390,7 @@ async def test_projection_exact_equality_at_deterministic_line_boundary(
   # Confirm nothing raced in after the snapshot: no growth past the boundary.
   assert raw.stat().st_size == boundary_offset
 
-  recovered, alive_at_reattach, _master_wakes = await _recover(monkeypatch, home)
+  recovered, alive_at_reattach, _master_wakes, _outcomes = await _recover(monkeypatch, home)
 
   assert recovered == 1
   assert alive_at_reattach == [False]
@@ -774,7 +784,7 @@ async def test_graceful_shutdown_lets_covered_run_survive_and_reattach(
   assert _pid_alive(meta["pid"])  # the agent process outlived the server
   assert not _terminal_summaries(home, ids)  # finalize was skipped entirely
 
-  recovered, alive_at_reattach, master_wakes = await _recover(monkeypatch, home)
+  recovered, alive_at_reattach, master_wakes, _outcomes = await _recover(monkeypatch, home)
 
   assert recovered == 1
   assert alive_at_reattach == [True]
@@ -817,16 +827,7 @@ async def test_graceful_shutdown_in_setup_phase_reaches_never_started_row(
   assert meta.get("exit_code") is None
   assert not _terminal_summaries(home, ids)
 
-  outcomes: list[runs.RunOutcome] = []
-  real_resolve = runs.resolve_run
-
-  def spy_resolve(**kwargs):
-    resolution = real_resolve(**kwargs)
-    outcomes.append(resolution.outcome)
-    return resolution
-
-  monkeypatch.setattr("src.core.runs.resolve_run", spy_resolve)
-  recovered, alive_at_reattach, _master_wakes = await _recover(monkeypatch, home)
+  recovered, alive_at_reattach, _master_wakes, outcomes = await _recover(monkeypatch, home)
 
   assert recovered == 1
   assert outcomes == [runs.RunOutcome.NEVER_STARTED]
@@ -858,7 +859,7 @@ async def test_restart_finalizes_uncovered_transport_with_explicit_reason(
   await thread_mgr.save_metadata(thread)
   ids = {"session": session_meta.id, "thread": thread.id}
 
-  recovered, alive_at_reattach, master_wakes = await _recover(monkeypatch, home, cfg=cfg)
+  recovered, alive_at_reattach, master_wakes, _outcomes = await _recover(monkeypatch, home, cfg=cfg)
 
   assert recovered == 1
   assert alive_at_reattach == [False]
@@ -921,7 +922,7 @@ async def test_restart_recovery_summary_invariant_to_backend_binary_presence(
     (thread_dir / "data").mkdir(parents=True, exist_ok=True)
     await thread_mgr.save_metadata(thread)
 
-    recovered, alive_at_reattach, _master_wakes = await _recover(monkeypatch, home, cfg=cfg)
+    recovered, alive_at_reattach, _master_wakes, _outcomes = await _recover(monkeypatch, home, cfg=cfg)
 
     assert recovered == 1
     assert alive_at_reattach == [False]  # judged dead: drained, never re-attached
@@ -952,7 +953,7 @@ async def test_graceful_shutdown_winds_down_improve_iteration_with_reason(
   # ...but the iteration's process was terminated along with its loop.
   _wait_for(lambda: not _pid_alive(meta["pid"]), timeout=10.0, what="improve iteration outlived shutdown")
 
-  recovered, alive_at_reattach, _master_wakes = await _recover(monkeypatch, home)
+  recovered, alive_at_reattach, _master_wakes, _outcomes = await _recover(monkeypatch, home)
 
   assert recovered == 1
   assert alive_at_reattach == [False]  # judged dead: drained, never re-attached

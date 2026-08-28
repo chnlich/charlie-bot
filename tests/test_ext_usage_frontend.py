@@ -1,17 +1,12 @@
-import shutil
-import subprocess
+from __future__ import annotations
+
 from pathlib import Path
 
-import pytest
+from conftest import run_node_js_test
+
+ROOT = Path(__file__).resolve().parents[1]
+NODE_TEST = ROOT / 'tests' / 'ext_usage_render.test.mjs'
 
 
 def test_ext_usage_frontend_rendering() -> None:
-  node = shutil.which("node")
-  if node is None:
-    pytest.skip("node is required for ext usage frontend tests")
-  repo_root = Path(__file__).resolve().parent.parent
-  subprocess.run(
-      [node, "--test", "tests/ext_usage_render.test.mjs"],
-      check=True,
-      cwd=repo_root,
-  )
+  run_node_js_test(NODE_TEST, 'node is required for ext usage frontend tests')

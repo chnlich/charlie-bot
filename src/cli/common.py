@@ -157,6 +157,7 @@ def _read_local_repo_sha() -> str | None:
         ["git", "rev-parse", "--short", "HEAD"],
         cwd=str(_REPO_ROOT),
         capture_output=True,
+        check=False,
         timeout=SUBPROCESS_VERSION_SKEW_TIMEOUT,
     )
   except (OSError, subprocess.SubprocessError):

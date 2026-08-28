@@ -23,6 +23,7 @@ def _has_ssh_localhost() -> bool:
     proc = subprocess.run(
         ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "localhost", "true"],
         capture_output=True,
+        check=False,
         timeout=10,
     )
     return proc.returncode == 0

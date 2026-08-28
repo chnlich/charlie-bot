@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import make_json_response
+from conftest import CLI_COMMON_GET_CONFIG_PATCH_TARGET, make_json_response
 
 from src.cli import common
 
@@ -52,7 +52,7 @@ def test_resolve_session_id_sources(
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "ignored-env-session")
 
-  with patch("src.cli.common.get_config", return_value=_mock_config(sessions_dir)):
+  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
     assert common.resolve_session_id(arg_session) == expected
 
 
@@ -74,7 +74,7 @@ def test_resolve_session_id_rejects_mismatches(
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "ignored-env-session")
 
-  with patch("src.cli.common.get_config", return_value=_mock_config(sessions_dir)):
+  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
     with pytest.raises(SystemExit) as exc_info:
       common.resolve_session_id(arg_session)
 
@@ -98,7 +98,7 @@ def test_resolve_session_id_requires_source_outside_session_dir(
   _set_cwd(tmp_path, monkeypatch, sessions_dir, None)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "ignored-env-session")
 
-  with patch("src.cli.common.get_config", return_value=_mock_config(sessions_dir)):
+  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
     with pytest.raises(SystemExit) as exc_info:
       common.resolve_session_id(None)
 
@@ -116,7 +116,7 @@ def test_post_internal_api_bearer_header(access_key: str, expect_header: bool) -
   cfg.server_base_url = "https://server"
   cfg.charliebot_access_key = access_key
 
-  with patch("src.cli.common.get_config", return_value=cfg):
+  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg):
     with patch("src.cli.common.requests.post", return_value=make_json_response({"ok": True})) as mock_post:
       assert common.post_internal_api("/api/internal/x", {"a": 1}) == {"ok": True}
 
@@ -138,7 +138,7 @@ def test_resolve_session_id_only_derives_direct_session_child(
   monkeypatch.chdir(nested_dir)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "ignored-env-session")
 
-  with patch("src.cli.common.get_config", return_value=_mock_config(sessions_dir)):
+  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
     with pytest.raises(SystemExit) as exc_info:
       common.resolve_session_id(None)
 

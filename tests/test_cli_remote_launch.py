@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import CLI_COMMON_GET_CONFIG_PATCH_TARGET
 
 from src.cli.remote_launch import main
 
@@ -62,7 +63,7 @@ def _run_e2e(tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str):
               "--cmd",
               "sleep 2; echo hi",
           ]),
-      patch("src.cli.common.get_config", return_value=cfg),
+      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
       patch("src.cli.remote_launch.get_config", return_value=cfg),
   ]
   for p in patches:
@@ -125,7 +126,7 @@ def test_ssh_failure_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str])
       str(tmp_path),
       "--cmd",
       "echo hi",
-  ]), patch("src.cli.common.get_config", return_value=cfg), \
+  ]), patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.remote_launch.get_config", return_value=cfg):
     with pytest.raises(SystemExit) as exc_info:
       main()
@@ -150,7 +151,7 @@ def test_missing_session_dir_exits_4(tmp_path: Path, capsys: pytest.CaptureFixtu
       "--cwd", str(tmp_path),
       "--cmd", "echo hi",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.remote_launch.get_config", return_value=cfg), \
        patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc):
     with pytest.raises(SystemExit) as exc_info:
@@ -175,7 +176,7 @@ def test_pid_parse_failure_exits_3(tmp_path: Path, capsys: pytest.CaptureFixture
       "--cwd", str(tmp_path),
       "--cmd", "echo hi",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.remote_launch.get_config", return_value=cfg), \
        patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc):
     with pytest.raises(SystemExit) as exc_info:
@@ -198,7 +199,7 @@ def test_ssh_timeout_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str])
       "--cwd", str(tmp_path),
       "--cmd", "echo hi",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.remote_launch.get_config", return_value=cfg), \
        patch("src.cli.remote_launch.subprocess.run", side_effect=timeout):
     with pytest.raises(SystemExit) as exc_info:
@@ -227,7 +228,7 @@ def test_success_path_with_mocked_ssh(tmp_path: Path, capsys: pytest.CaptureFixt
       "--cwd", cwd,
       "--cmd", cmd,
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.remote_launch.get_config", return_value=cfg), \
        patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc) as mock_run:
     main()
@@ -281,7 +282,7 @@ def test_success_path_derives_session_from_cwd(
       "--cwd", str(tmp_path),
       "--cmd", "echo hi",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.remote_launch.get_config", return_value=cfg), \
        patch("src.cli.remote_launch.subprocess.run", return_value=fake_proc):
     main()
@@ -308,7 +309,7 @@ def test_session_env_is_not_a_remote_launch_session_source(
       "--cwd", str(tmp_path),
       "--cmd", "echo hi",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.remote_launch.subprocess.run") as mock_run:
     with pytest.raises(SystemExit) as exc_info:
       main()

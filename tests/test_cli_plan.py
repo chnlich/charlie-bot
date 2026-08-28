@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-from conftest import make_json_response
+from conftest import CLI_COMMON_GET_CONFIG_PATCH_TARGET, make_json_response
 from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.plan import _PLAN_REMINDER, main
@@ -20,7 +20,7 @@ def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pyt
       "--file", "artifacts/plan_01.html",
       "--title", "P1",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp) as post_mock:
     main()
 
@@ -45,7 +45,7 @@ def test_plan_present_passes_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
       "--base-branch", "b",
       "--base-sha", "s",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp) as post_mock:
     main()
 
@@ -63,7 +63,7 @@ def test_plan_amend_posts_with_default_trigger(
       "plan", "amend",
       "--file", "artifacts/plan_02.html",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp) as post_mock:
     main()
 
@@ -87,7 +87,7 @@ def test_plan_amend_passes_plan_and_trigger(tmp_path: Path, monkeypatch: pytest.
       "--plan", "2",
       "--trigger", "auto_amend",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp) as post_mock:
     main()
 
@@ -101,7 +101,7 @@ def test_plan_approve_posts_plan_id(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "v": 1, "state": "approved"})
   with patch("sys.argv", ["plan", "approve", "--plan", "1"]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp) as post_mock:
     main()
 
@@ -120,7 +120,7 @@ def test_plan_close_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
       "--plan", "1",
       "--as", "superseded",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp) as post_mock:
     main()
 
@@ -136,7 +136,7 @@ def test_plan_close_posts_completed(tmp_path: Path, monkeypatch: pytest.MonkeyPa
       "--plan", "1",
       "--as", "completed",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp) as post_mock:
     main()
 
@@ -149,7 +149,7 @@ def test_plan_list_uses_get_endpoint(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plans": []})
   with patch("sys.argv", ["plan", "list"]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.get", return_value=resp) as get_mock:
     main()
 
@@ -173,7 +173,7 @@ def test_plan_list_corrupt_registry_prints_errors_and_exits_0(
   }
   resp = make_json_response(payload)
   with patch("sys.argv", ["plan", "list"]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.get", return_value=resp):
     main()  # no SystemExit — exits 0
 
@@ -195,7 +195,7 @@ def test_plan_present_stdout_json(
       "--file", "artifacts/plan_01.html",
       "--title", "P1",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", return_value=resp):
     main()
 
@@ -222,7 +222,7 @@ def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(
       "--file", "artifacts/missing.html",
       "--title", "P1",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post", side_effect=FakeRequestException()):
     with pytest.raises(SystemExit) as exc_info:
       main()
@@ -237,7 +237,7 @@ def test_plan_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plans": []})
   with patch("sys.argv", ["plan", "list"]), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.get", return_value=resp) as get_mock:
     main()
 
@@ -250,7 +250,7 @@ def test_plan_session_mismatch_rejected(
   with patch("sys.argv", [
       "plan", "list", "--session", "xyz",
   ]), \
-       patch("src.cli.common.get_config", return_value=cfg):
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg):
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -267,7 +267,7 @@ def test_plan_no_session_outside_session_dir(
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   monkeypatch.chdir(tmp_path)
   with patch("sys.argv", ["plan", "list"]), \
-       patch("src.cli.common.get_config", return_value=cfg):
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg):
     with pytest.raises(SystemExit) as exc_info:
       main()
 

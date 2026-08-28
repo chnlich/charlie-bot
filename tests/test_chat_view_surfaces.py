@@ -43,7 +43,8 @@ def _plain_turn() -> list[dict]:
 
 
 def _second_turn_in_flight() -> list[dict]:
-  return _plain_turn() + [
+  return [
+      *_plain_turn(),
       {"id": "u2", "type": ET.USER, "content": "q2"},
       _assistant("IN PROGRESS", "a2"),
   ]

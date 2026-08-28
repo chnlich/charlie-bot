@@ -157,7 +157,7 @@ class ScheduledTaskError(BaseModel):
 class _CronSnapshot:
   """Module-level cache of the last cron.d load, invalidated by any fingerprint change."""
 
-  __slots__ = ('tasks', 'errors', 'prompt_mtimes', 'fingerprint')
+  __slots__ = ('errors', 'fingerprint', 'prompt_mtimes', 'tasks')
 
   def __init__(self) -> None:
     self.tasks: list[ScheduledTaskConfig] = []

@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import contextlib
 import json
 import os
 import select
@@ -362,10 +363,8 @@ def test_pty_client_can_push_clipboard_to_the_browser(monkeypatch: pytest.Monkey
     while time.monotonic() < deadline and b"\x1b]52" not in seen:
       ready, _, _ = select.select([attachment.fd], [], [], 0.2)
       if ready:
-        try:
+        with contextlib.suppress(BlockingIOError, OSError):
           seen += os.read(attachment.fd, 65536)
-        except (BlockingIOError, OSError):
-          pass
     assert b"\x1b]52" in seen, "tmux never pushed OSC 52 to the browser-facing PTY"
     assert base64.b64encode(b"CLIPBOARD-PROBE") in seen
   finally:

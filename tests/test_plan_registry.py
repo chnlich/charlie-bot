@@ -81,7 +81,7 @@ def test_derive_state_str_truth_table(closed, takeoff, expected) -> None:
 
 
 def test_derive_state_str_unknown_closed_as_raises() -> None:
-  with pytest.raises(ValueError, match="unknown closed.as"):
+  with pytest.raises(ValueError, match=r"unknown closed\.as"):
     derive_state_str(_plan(closed={"as": "weird", "at": "x"}))
 
 
@@ -323,7 +323,7 @@ async def test_close_rejects_invalid_close_as(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   f1 = _write_artifact(cfg, meta.id, "plan_01.html")
   await plan_mgr.present(meta.id, file=f1, title="P1")
-  with pytest.raises(ValueError, match="--as must be superseded|abandoned|completed"):
+  with pytest.raises(ValueError, match=r"--as must be superseded|abandoned|completed"):
     await plan_mgr.close(meta.id, plan_id=1, close_as="weird")
 
 
@@ -694,7 +694,7 @@ async def test_amend_rejects_initial_trigger(tmp_path: Path) -> None:
   f1 = _write_artifact(cfg, meta.id, "plan_01.html")
   await plan_mgr.present(meta.id, file=f1, title="P1")
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
-  with pytest.raises(ValueError, match="trigger must be one of auto_amend|feedback"):
+  with pytest.raises(ValueError, match=r"trigger must be one of auto_amend|feedback"):
     await plan_mgr.amend(meta.id, file=f2, plan_id=1, trigger="initial")
 
 

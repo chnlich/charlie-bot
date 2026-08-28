@@ -30,7 +30,8 @@ def _repo_argv(repo: str, task_spec_file: Path, *extra: str, session: str | None
   argv = ["delegate"]
   if session is not None:
     argv += ["--session", session]
-  return argv + [
+  return [
+      *argv,
       "--repo",
       repo,
       "--base-branch",

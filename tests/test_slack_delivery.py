@@ -1033,7 +1033,7 @@ async def test_remove_reaction_treats_no_reaction_as_the_end_state() -> None:
 
   raising = SlackClient(
       _StubSlackHttp({"ok": False, "error": "missing_scope"}), bot_token="b", app_token="a")
-  with pytest.raises(RuntimeError, match="reactions.remove failed"):
+  with pytest.raises(RuntimeError, match=r"reactions\.remove failed"):
     await raising.remove_reaction("C_TEST", "eyes", _THREAD)
 
 

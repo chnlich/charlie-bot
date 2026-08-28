@@ -1095,7 +1095,7 @@ def patch_review_spawn_path(monkeypatch: pytest.MonkeyPatch, captured: dict[str,
 # src/core/init_master_recovery.py, master-consumer in src/agents/master_cc_queue.py.
 # A recovery test must drain those tasks before asserting on rewritten metadata.
 RECOVERY_TASK_PREFIXES = ("resume-", "respawn-", "recomplete-")
-MASTER_RECOVERY_TASK_PREFIXES = RECOVERY_TASK_PREFIXES + ("master-resume-", "master-replay-", "master-consumer-")
+MASTER_RECOVERY_TASK_PREFIXES = (*RECOVERY_TASK_PREFIXES, "master-resume-", "master-replay-", "master-consumer-")
 
 
 async def await_recovery_tasks(prefixes: tuple[str, ...]) -> None:

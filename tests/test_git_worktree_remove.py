@@ -132,7 +132,7 @@ async def test_git_worktree_remove_refuses_residue_with_git_marker(
 
   monkeypatch.setattr(git_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
-  with pytest.raises(RuntimeError, match="with .git marker"):
+  with pytest.raises(RuntimeError, match=r"with \.git marker"):
     await git_module.git_worktree_remove(
         str(tmp_path / "repo"),
         wt_path,

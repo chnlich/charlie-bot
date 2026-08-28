@@ -191,3 +191,43 @@ Known-alive symbols:
   `fake_run_tmux` factory docstring states that drop-in contract, and `format` mirrors the
   stdlib `BaseHTTPRequestHandler.log_message(self, format, *args)` signature). Vulture flags
   each at 100% confidence as an unused variable.
+- `bundle` (`tests/test_transcriber_sampling.py:83` and `:105`, first parameter of the two
+  `fake_decode` stubs installed for `transcriber._decode_samples` via `monkeypatch.setattr`)
+  — the real `_decode_samples` (src/agents/transcriber.py:274) is called with two positional
+  arguments from `_drain_closed_segments` and `_decode_live_segment_if_due`
+  (src/agents/transcriber.py:359 and :379), so `bundle` must stay to receive `self._bundle`;
+  deleting the parameter makes the stub raise TypeError on the first decode. Vulture flags
+  it at 100% confidence as an unused variable at both sites. Same class as the `art`/`t_mgr`
+  stub-parameter entries above.
+- `interrupt_reason` (`tests/test_worktree_quarantine.py:664`, keyword parameter of the
+  `fake_resume_worker` stub installed for `spawner.resume_worker` via `monkeypatch.setattr`)
+  — all three production call sites in `src/core/init_worker_recovery.py` (:268, :305, :317)
+  pass `interrupt_reason=` by keyword, and the stalled-run test asserts the fake ran
+  (`resume_calls == [True]`), so deleting the parameter makes the stub raise TypeError on
+  the unexpected keyword. Vulture flags it at 100% confidence as an unused variable. Same
+  class as the `verify_report` keyword-fixed stub-parameter entry above.
+- `cls` (`src/core/config.py:259`, first parameter of `migrate_and_expand`, the
+  `@model_validator(mode="before")` `@classmethod` on `CharlieBotConfig`) — the pydantic
+  classmethod-validator protocol passes the class as the first positional argument, so the
+  arity is framework-fixed even though the body reads only `values`; deleting `cls` turns
+  every `CharlieBotConfig` construction into a TypeError. Vulture flags it at 100%
+  confidence as an unused variable. Same framework-fixed class as the `model_config` entry
+  above.
+- `sig` (`tests/test_worktree_quarantine.py:575`, `:615`, `:659`, second parameter of the
+  three identical `lambda pid, sig: killed.append(pid)` stubs installed for
+  `worker_recovery_module.kill_process_group` via `monkeypatch.setattr`) — signature-mirror
+  parameter kept deliberately: all three tests assert the recorded list stays empty (no
+  tested recovery path reaches `kill_process_group`), so deleting `sig` stays green, but it
+  keeps the lambda a drop-in mirror of `kill_process_group(pid, sig=signal.SIGTERM)`
+  (src/core/process.py:21), which `src/core/init_worker_recovery.py:325` already calls with
+  two positional arguments. Vulture flags each site at 100% confidence as an unused
+  variable. Same class as the `check`/`format` signature-mirror entry above.
+- `check` (`tests/test_terminal_backend.py:196`, keyword parameter of the inline
+  `fake_run_tmux` stub installed for `terminal._run_tmux` via `monkeypatch.setattr`) —
+  second site of the signature-mirror class: the stub mirrors
+  `pty_common._run_tmux(*args, check: bool = False)` (src/agents/backends/pty_common.py:68,
+  imported at src/agents/backends/terminal.py:17), the reuse test's only stub call is
+  `("has-session", "-t", "charliebot-terminal")` with no `check=`, so deleting the parameter
+  stays green; the mirror keeps the stub a faithful drop-in. Vulture flags it at 100%
+  confidence as an unused variable. Same class as the `check`/`format` signature-mirror
+  entry above.

@@ -131,7 +131,7 @@ async def serve_file(path: str, request: Request):
   HEAD answers the same status as GET, which is how the chat asks whether a linked path is
   still there without pulling the file down.
   """
-  fs_path = await asyncio.to_thread(lambda: (Path("/") / path).resolve())
+  fs_path = await asyncio.to_thread((Path("/") / path).resolve)
 
   if not await asyncio.to_thread(fs_path.exists):
     raise HTTPException(status_code=404, detail="Not found")

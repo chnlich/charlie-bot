@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from conftest import assistant_event as _assistant_event
+from conftest import queued_user_reorder_events as _reorder_events
 
 from src.api.message_utils import events_to_messages, events_to_view
 from src.core import event_types as ET
@@ -624,18 +625,7 @@ def test_thinking_event_alone_creates_assistant_draft() -> None:
 
 
 def test_stable_history_orders_queued_user_between_completed_runs() -> None:
-  events = [
-      {"session_id": "opencode-session"},
-      {"id": "thinking-1", "type": ET.THINKING, "content": "final thought"},
-      {"id": "tool-1", "type": ET.TOOL_USE, "name": "Read", "input": {"file_path": "report.txt"}},
-      {"id": "queued-user", "type": ET.USER, "content": "second question"},
-      {"id": "tool-result-1", "type": ET.TOOL_RESULT, "content": "report contents"},
-      _assistant_event("first conclusion", "assistant-1"),
-      {"id": "done-1", "type": ET.MASTER_DONE, "thinking_seconds": 4},
-      {"session_id": "opencode-session"},
-      _assistant_event("second answer", "assistant-2"),
-      {"id": "done-2", "type": ET.MASTER_DONE, "thinking_seconds": 2},
-  ]
+  events = _reorder_events()
 
   messages = events_to_messages(events)
   view_messages, pending = events_to_view(events)

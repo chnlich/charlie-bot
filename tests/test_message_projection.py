@@ -17,6 +17,7 @@ from conftest import BROADCAST_PATCH_TARGET, make_home_session
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
 from conftest import assistant_event as _assistant_event
+from conftest import queued_user_reorder_events as _reorder_events
 
 from src.api.message_utils import events_to_messages
 from src.core import event_types as ET
@@ -28,57 +29,6 @@ from src.core.sessions import SessionManager
 # ---------------------------------------------------------------------------
 # Fixture event builders
 # ---------------------------------------------------------------------------
-
-
-def _reorder_events() -> list[dict]:
-  """Events that trigger _stable_history_projection reordering.
-
-  A session_id-bearing event ... master_done interval containing a queued
-  user event. The queued user is moved after the completed run.
-  """
-  return [
-      {
-          "session_id": "opencode-session"
-      },
-      {
-          "id": "thinking-1",
-          "type": ET.THINKING,
-          "content": "final thought"
-      },
-      {
-          "id": "tool-1",
-          "type": ET.TOOL_USE,
-          "name": "Read",
-          "input": {
-              "file_path": "report.txt"
-          }
-      },
-      {
-          "id": "queued-user",
-          "type": ET.USER,
-          "content": "second question"
-      },
-      {
-          "id": "tool-result-1",
-          "type": ET.TOOL_RESULT,
-          "content": "report contents"
-      },
-      _assistant_event("first conclusion", "assistant-1"),
-      {
-          "id": "done-1",
-          "type": ET.MASTER_DONE,
-          "thinking_seconds": 4
-      },
-      {
-          "session_id": "opencode-session"
-      },
-      _assistant_event("second answer", "assistant-2"),
-      {
-          "id": "done-2",
-          "type": ET.MASTER_DONE,
-          "thinking_seconds": 2
-      },
-  ]
 
 
 def _pending_draft_events() -> list[dict]:

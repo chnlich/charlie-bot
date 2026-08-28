@@ -132,6 +132,56 @@ def assistant_event(content: str, event_id: str = "assistant") -> dict:
   }
 
 
+def queued_user_reorder_events() -> list[dict]:
+  """Two runs on one session: thinking + tool_use + tool_result + assistant + master_done in the first, a queued
+  USER event inside the first run's interval, then a repeated session_id marker and a second assistant + master_done.
+  The queued user sitting inside the closed run is what stable-history projection moves past that run, so the
+  aggregator and projection suites both assert the reordered id sequence off this one list."""
+  return [
+      {
+          "session_id": "opencode-session"
+      },
+      {
+          "id": "thinking-1",
+          "type": ET.THINKING,
+          "content": "final thought"
+      },
+      {
+          "id": "tool-1",
+          "type": ET.TOOL_USE,
+          "name": "Read",
+          "input": {
+              "file_path": "report.txt"
+          }
+      },
+      {
+          "id": "queued-user",
+          "type": ET.USER,
+          "content": "second question"
+      },
+      {
+          "id": "tool-result-1",
+          "type": ET.TOOL_RESULT,
+          "content": "report contents"
+      },
+      assistant_event("first conclusion", "assistant-1"),
+      {
+          "id": "done-1",
+          "type": ET.MASTER_DONE,
+          "thinking_seconds": 4
+      },
+      {
+          "session_id": "opencode-session"
+      },
+      assistant_event("second answer", "assistant-2"),
+      {
+          "id": "done-2",
+          "type": ET.MASTER_DONE,
+          "thinking_seconds": 2
+      },
+  ]
+
+
 def make_json_response(payload: dict[str, Any]) -> MagicMock:
   """A `requests.Response` stand-in for patched CLI `requests.post` calls: `.json()` returns payload,
   `raise_for_status()` is a configured no-op so the CLI's success path runs straight through."""

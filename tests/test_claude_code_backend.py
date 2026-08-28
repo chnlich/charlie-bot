@@ -242,10 +242,8 @@ print(json.dumps({"type": "result", "result": "", "usage": {}}), flush=True)
   prompt = "x" * (140 * 1024)
   backend = ClaudeCodeBackend(cli_binary=str(stub))
 
-  events: list[dict] = []
   env = {**os.environ, "PROMPT_CAPTURE_PATH": str(capture_path)}
-  async for event in backend.run(prompt, str(tmp_path), env):
-    events.append(event)
+  events = [event async for event in backend.run(prompt, str(tmp_path), env)]
 
   assert capture_path.read_text(encoding="utf-8") == prompt
   assert any(event.get("type") == "result" for event in events)

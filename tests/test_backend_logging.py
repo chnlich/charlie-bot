@@ -21,10 +21,7 @@ class _ScriptedBackend(AgentBackend):
 
 
 async def _consume(backend: AgentBackend, cwd: Path) -> list[dict]:
-  events: list[dict] = []
-  async for evt in backend.run("ignored prompt", str(cwd), {"PATH": "/usr/bin:/bin"}):
-    events.append(evt)
-  return events
+  return [evt async for evt in backend.run("ignored prompt", str(cwd), {"PATH": "/usr/bin:/bin"})]
 
 
 @pytest.mark.asyncio

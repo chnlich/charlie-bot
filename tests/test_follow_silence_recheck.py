@@ -52,6 +52,9 @@ def _clear_once_keys():
 
 
 async def _consume(raw: Path, sink: list[dict], on_silence) -> None:
+  # The sink must receive events as they arrive: the follow runs until
+  # cancelled, so a collect-then-extend form would leave the sink empty, and
+  # an async generator cannot feed list.extend directly.
   async for ev in tail_follow_events(
       raw,
       translate=lambda e: [e],

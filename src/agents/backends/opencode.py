@@ -781,9 +781,10 @@ class OpenCodeBackend(AgentBackend):
         part = event.get("part")
         if not isinstance(part, dict):
           continue
-        for translated in self._translate_part(part):
-          if translated.get("type") == ET.ASSISTANT:
-            parts.append(extract_text_from_message(translated.get("message")))
+        parts.extend(
+            extract_text_from_message(translated.get("message"))
+            for translated in self._translate_part(part)
+            if translated.get("type") == ET.ASSISTANT)
       await proc.wait()
       return "".join(parts).strip()
 

@@ -133,8 +133,8 @@ def _turned_messages_events(turn_lengths: list[int]) -> list[dict]:
         "content": f"q{turn_i}",
         "timestamp": f"t{turn_i}-u",
     })
-    for j in range(length - 1):
-      events.append(_assistant_event(f"a{turn_i}-{j}", f"a{turn_i}-{j}"))
+    events.extend(
+        _assistant_event(f"a{turn_i}-{j}", f"a{turn_i}-{j}") for j in range(length - 1))
     events.append({
         "id": f"done{turn_i}",
         "type": ET.MASTER_DONE,

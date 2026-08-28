@@ -216,10 +216,7 @@ def _find(el: _Element, tag: str, classes: tuple = ()) -> list[_Element]:
 
 
 def _text(el: _Element) -> str:
-  parts: list[str] = []
-  for child in el.children:
-    parts.append(child if isinstance(child, str) else _text(child))
-  return "".join(parts)
+  return "".join(child if isinstance(child, str) else _text(child) for child in el.children)
 
 
 def _section_heading(el: _Element) -> str:

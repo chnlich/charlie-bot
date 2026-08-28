@@ -271,10 +271,7 @@ async def _probe_remaining_remote_pids(
   goes empty are dropped. Returns ``host:pid`` labels for newly-exited pids;
   transient probe errors are logged and the pid stays under observation.
   """
-  probes: list[tuple[str, int]] = []
-  for host, pids in remaining.items():
-    for pid in pids:
-      probes.append((host, pid))
+  probes = [(host, pid) for host, pids in remaining.items() for pid in pids]
   results = await asyncio.gather(*[_ssh_probe_pid(h, p) for h, p in probes])
   newly_exited: list[str] = []
   for (host, pid), (status, raw) in zip(probes, results):

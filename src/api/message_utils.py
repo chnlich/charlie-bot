@@ -371,11 +371,11 @@ async def build_session_view_data(
 
 def _committed_messages(agg: MessageAggregator, events: list[dict]) -> list[dict]:
   """Feed events through the aggregator and collect the committed message deltas."""
-  messages: list[dict] = []
-  for delta in agg.feed_indexed(_stable_history_projection(events)):
-    if delta["type"] == "message":
-      messages.append(delta["message"])
-  return messages
+  return [
+      delta["message"]
+      for delta in agg.feed_indexed(_stable_history_projection(events))
+      if delta["type"] == "message"
+  ]
 
 
 def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[dict]:

@@ -32,14 +32,14 @@ def _install_fake_agy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str
 
 
 async def _consume(backend: AntigravityCliBackend, cwd: Path) -> list[dict]:
-  events: list[dict] = []
-  async for event in backend.run("hello from CharlieBot", str(cwd), {"PATH": "/usr/bin:/bin"}):
-    events.append(event)
-  return events
+  return [event async for event in backend.run("hello from CharlieBot", str(cwd), {"PATH": "/usr/bin:/bin"})]
 
 
 async def _consume_raising(backend: AntigravityCliBackend, cwd: Path, events: list[dict]) -> None:
   """Consume events until the generator raises, retaining events yielded before the raise."""
+  # The per-item append is load-bearing: events yielded before the raise must
+  # stay in the caller's list, which a collected-then-extended form drops, and
+  # an async generator cannot feed list.extend directly.
   async for event in backend.run("hello from CharlieBot", str(cwd), {"PATH": "/usr/bin:/bin"}):
     events.append(event)
 

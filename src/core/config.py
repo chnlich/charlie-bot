@@ -351,9 +351,10 @@ class CharlieBotConfig(BaseModel):
       parent = Path(dir_str)
       if not parent.is_dir():
         continue
-      for child in sorted(parent.iterdir()):
-        if child.is_dir() and (child / ".git").exists():
-          repos.append({"name": child.name, "path": str(child)})
+      repos.extend(
+          {"name": child.name, "path": str(child)}
+          for child in sorted(parent.iterdir())
+          if child.is_dir() and (child / ".git").exists())
     return repos
 
 

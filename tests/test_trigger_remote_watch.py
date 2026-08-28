@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 from datetime import UTC, datetime, timedelta
@@ -227,10 +228,8 @@ async def test_backoff_intervals_and_plateau(tmp_path: Path) -> None:
         break
       await real_sleep(0)
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError, BaseException):
       await task
-    except (asyncio.CancelledError, BaseException):
-      pass
 
   expected_bases = [10, 20, 40, 80, 160, 320, 600, 600]
   assert len(recorded_sleeps) >= len(expected_bases), (

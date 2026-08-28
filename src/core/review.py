@@ -329,7 +329,7 @@ def select_reviewer_backend(
         log.warning("reviewer_all_backends_exhausted", tried=tried_backends)
         return None
 
-  return resolved_backend, resolved_model, tried_backends + [resolved_backend]
+  return resolved_backend, resolved_model, [*tried_backends, resolved_backend]
 
 
 @dataclass(frozen=True)

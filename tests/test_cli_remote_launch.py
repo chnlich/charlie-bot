@@ -1,5 +1,6 @@
 """Tests for src/cli/remote_launch.py."""
 
+import contextlib
 import json
 import os
 import shlex
@@ -104,10 +105,8 @@ def test_end_to_end_localhost(tmp_path: Path, capsys: pytest.CaptureFixture[str]
     assert (remote_dir / "sentinel").read_text().strip() == "0"
   finally:
     if not (remote_dir / "sentinel").exists():
-      try:
+      with contextlib.suppress(ProcessLookupError):
         os.kill(meta["remote_pid"], signal.SIGKILL)
-      except ProcessLookupError:
-        pass
     shutil.rmtree(remote_dir, ignore_errors=True)
 
 

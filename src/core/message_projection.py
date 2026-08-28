@@ -31,7 +31,7 @@ class MessageProjection:
   whole projection.
   """
 
-  __slots__ = ("committed", "pending_draft", "event_count", "separator_ordinals", "_history")
+  __slots__ = ("_history", "committed", "event_count", "pending_draft", "separator_ordinals")
 
   def __init__(self, events: list[dict], event_index_offset: int = 0) -> None:
     self.event_count = event_index_offset + len(events)

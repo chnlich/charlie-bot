@@ -300,7 +300,7 @@ def _inject_legacy(h: Path) -> Path:
 
 
 @pytest.mark.parametrize(
-    "inject, expected_name, expected_path",
+    ("inject", "expected_name", "expected_path"),
     [
         (_inject_syntax, "broken-1", "broken-1.yaml"),
         (_inject_not_mapping, "broken-2", "broken-2.yaml"),
@@ -444,7 +444,7 @@ def _client(cfg):
 
 
 @pytest.mark.parametrize(
-    "inject, expected_name",
+    ("inject", "expected_name"),
     [
         (_inject_syntax, "broken-1"),
         (_inject_not_mapping, "broken-2"),

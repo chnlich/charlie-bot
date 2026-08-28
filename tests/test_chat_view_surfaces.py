@@ -161,7 +161,7 @@ async def _screen_contents(events: list[dict], cutoff: int) -> Counter:
   return seen
 
 
-@pytest.mark.parametrize("name,events", SHAPES)
+@pytest.mark.parametrize(("name", "events"), SHAPES)
 @pytest.mark.asyncio
 async def test_on_screen_contents_equal_the_log_at_every_cutoff(name: str, events: list[dict]) -> None:
   """No cutoff loses a message and no cutoff shows one twice."""
@@ -172,7 +172,7 @@ async def test_on_screen_contents_equal_the_log_at_every_cutoff(name: str, event
     assert expected - seen == Counter(), f"{name}: lost at cutoff {cutoff}: {expected - seen}"
 
 
-@pytest.mark.parametrize("name,events", SHAPES)
+@pytest.mark.parametrize(("name", "events"), SHAPES)
 @pytest.mark.asyncio
 async def test_bubble_list_and_preview_never_overlap(name: str, events: list[dict]) -> None:
   """The draft is preview surface only -- it is never also a bubble."""
@@ -184,7 +184,7 @@ async def test_bubble_list_and_preview_never_overlap(name: str, events: list[dic
     assert projection.pending_draft not in bubbles, f"{name}: draft is also a bubble at cutoff {cutoff}"
 
 
-@pytest.mark.parametrize("name,events", SHAPES)
+@pytest.mark.parametrize(("name", "events"), SHAPES)
 def test_event_count_is_the_consumed_prefix(name: str, events: list[dict]) -> None:
   """The first-paint cursor is the boundary of the snapshot the bubbles came from."""
   for cutoff in range(len(events) + 1):

@@ -249,7 +249,7 @@ def leftover_holders_for(
   own = os.getpid()
   out = []
   for holder in holders_scan.get((st.st_dev, st.st_ino), []):
-    if holder.pid == run_pid or holder.pid == own or holder.pid in _NEVER_KILL_PIDS:
+    if holder.pid in (run_pid, own) or holder.pid in _NEVER_KILL_PIDS:
       continue
     out.append(holder)
   return tuple(out)

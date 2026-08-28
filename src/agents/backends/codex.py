@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from typing import ClassVar
 
 import structlog
 
@@ -241,7 +242,7 @@ class CodexBackend(AgentBackend):
 
   # Handler registry: each handler is called for every item event,
   # preserving multi-fire semantics (independent ifs, not elif).
-  _ITEM_HANDLERS = [
+  _ITEM_HANDLERS: ClassVar[list[str]] = [
       "_handle_agent_message",
       "_handle_reasoning",
       "_handle_command_execution",

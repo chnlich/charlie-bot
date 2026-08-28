@@ -6,7 +6,7 @@ import os
 import signal
 import time
 from collections.abc import Callable, Coroutine
-from typing import Any, TypeVar
+from typing import Any
 
 import structlog
 
@@ -16,8 +16,6 @@ from src.core.timeouts import (
 )
 
 log = structlog.get_logger()
-
-T = TypeVar("T")
 
 
 def kill_process_group(pid: int, sig: signal.Signals = signal.SIGTERM) -> bool:
@@ -51,7 +49,7 @@ async def kill_group_escalating(pid: int, is_alive: Callable[[], bool]) -> None:
     kill_process_group(pid, signal.SIGKILL)
 
 
-async def wait_or_kill_group(
+async def wait_or_kill_group[T](
     coro: Coroutine[Any, Any, T], timeout: float, pid: int, stderr_task: asyncio.Task[bytes]
 ) -> T:
   """Await *coro* for at most *timeout* seconds; cancel and drain *stderr_task* on every exit.

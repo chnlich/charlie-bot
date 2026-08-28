@@ -35,6 +35,7 @@ def _read_git_sha() -> str:
         ["git", "rev-parse", "--short", "HEAD"],
         cwd=str(_REPO_ROOT),
         capture_output=True,
+        check=False,
         timeout=_GIT_SHA_TIMEOUT,
     )
   except (OSError, subprocess.SubprocessError):

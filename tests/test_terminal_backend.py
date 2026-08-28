@@ -9,6 +9,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from conftest import make_fake_run_tmux
@@ -45,7 +46,7 @@ class _AcceptingWebSocket:
 
 
 class _FakeAttachment:
-  instances: list["_FakeAttachment"] = []
+  instances: ClassVar[list["_FakeAttachment"]] = []
 
   def __init__(self, session_id: str) -> None:
     self.session_id = session_id

@@ -110,6 +110,7 @@ def _measure_page_height(chrome_bin: Path, artifact: Path) -> int:
               probe.as_uri(),
           ],
           capture_output=True,
+          check=False,
           timeout=_RENDER_TIMEOUT_S,
       )
     except subprocess.TimeoutExpired as e:

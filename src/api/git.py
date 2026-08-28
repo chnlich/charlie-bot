@@ -136,7 +136,7 @@ async def list_branches(repo: str = Query(..., description="Full path to git rep
   branches: list[str] = ["HEAD"]
   for line in result.stdout.splitlines():
     name = line.strip()
-    if not name or name == "origin" or name == "HEAD":
+    if not name or name in {"origin", "HEAD"}:
       continue
     if name not in seen:
       seen.add(name)

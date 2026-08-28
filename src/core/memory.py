@@ -260,9 +260,10 @@ def _validate_entry(entry: Entry, topics: dict[str, Topic], *, relaxed: bool, st
     parent_name = entry.path.parent.name
     if entry.topic and parent_name != entry.topic:
       violations.append(v(f"directory name {parent_name!r} != topic {entry.topic!r}"))
-    for field in ("scope", "audience"):
-      if getattr(entry, field) is None:
-        violations.append(v(f"missing required header field {field!r}"))
+    violations.extend(
+        v(f"missing required header field {field!r}")
+        for field in ("scope", "audience")
+        if getattr(entry, field) is None)
     if entry.scope is not None and entry.scope not in _SCOPES:
       violations.append(v(f"scope {entry.scope!r} not in {{user, host}}"))
     violations.extend(_audience_violations(entry, v))

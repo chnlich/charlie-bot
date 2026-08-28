@@ -135,7 +135,7 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
   # for the auto-grouping — no thread-content read of any kind, and no posted
   # acceptance message.
   posts = [c for name, c in client.calls if name == "post_message"]
-  assert posts == []
+  assert not posts
   reactions = [c for name, c in client.calls if name == "add_reaction"]
   assert reactions == [{"channel": "C_TEST", "name": "eyes", "ts": _TS}]
   permalinks = [c for name, c in client.calls if name == "get_permalink"]
@@ -266,7 +266,7 @@ async def test_disallowed_user_drops_with_no_side_effects(tmp_path: Path) -> Non
     result = await handle_app_mention(event, cfg, session_mgr, client)
 
   assert result is None
-  assert client.calls == []
+  assert not client.calls
   assert await session_mgr.get_session(_sid(event)) is None
 
 
@@ -281,7 +281,7 @@ async def test_non_app_mention_message_drops_with_no_side_effects(tmp_path: Path
     result = await handle_app_mention(event, cfg, session_mgr, client)
 
   assert result is None
-  assert client.calls == []
+  assert not client.calls
   assert await session_mgr.get_session(_sid(event)) is None
 
 
@@ -302,7 +302,7 @@ async def test_top_level_mention_uses_own_ts(tmp_path: Path) -> None:
 
   assert sid == summon_session_id("T_TEST", "C_TEST", _TS)
   posts = [c for name, c in client.calls if name == "post_message"]
-  assert posts == []
+  assert not posts
   reactions = [c for name, c in client.calls if name == "add_reaction"]
   assert reactions == [{"channel": "C_TEST", "name": "eyes", "ts": _TS}]
 

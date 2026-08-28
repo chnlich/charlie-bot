@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
+from conftest import CLI_COMMON_GET_CONFIG_PATCH_TARGET
 from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.delegate import main
@@ -18,7 +19,7 @@ def _patched_main(cfg: MagicMock, argv: list[str]) -> Iterator[MagicMock]:
   """Patch the externals a delegate main() call touches: sys.argv becomes argv, get_config returns
   cfg, and requests.post is a MagicMock (yielded, so tests set the response or assert no call)."""
   with patch("sys.argv", argv), \
-       patch("src.cli.common.get_config", return_value=cfg), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common.requests.post") as post_mock:
     yield post_mock
 

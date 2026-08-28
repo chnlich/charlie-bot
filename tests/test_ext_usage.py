@@ -550,10 +550,8 @@ def _run_poll_cycles(monkeypatch, *, accounts_fn, create_provider, n: int) -> di
 
 
 def _claude_fetch_value(utilization: float) -> dict:
-  """The fetch-result shape the claude poll tests share: one 300-minute window at the
-  given utilization plus fetched_at/provider metadata. ``_poll_loop`` copies the fetched
-  dict before keying the cache, so sharing one literal across tests would be mutation-safe;
-  a fresh dict per call keeps the sites decoupled from that."""
+  """A claude poll fetch result: one 300-minute window at the given utilization plus
+  fetched_at/provider metadata. Fresh dict per call, so no two tests share a windows list."""
   return {
       "windows": [{"window_minutes": 300, "utilization": utilization, "resets_at": ""}],
       "fetched_at": "2026-01-01T00:00:00+00:00",

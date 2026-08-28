@@ -587,8 +587,8 @@ async def _quarantine_stale_failed_worktrees(cfg: CharlieBotConfig, threads: lis
             trash_dir=trash_path,
         )
       except Exception as e:
-        log.error(
-            "quarantine_worktree_failed", thread=meta.get("id"), worktree=worktree_path, error=str(e), exc_info=True)
+        log.exception(
+            "quarantine_worktree_failed", thread=meta.get("id"), worktree=worktree_path, error=str(e))
     except Exception:
       log.exception("quarantine_thread_sweep_failed", thread=meta.get("id"))
       continue

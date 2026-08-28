@@ -10,6 +10,16 @@ from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
 from src.core.recap import generate_and_cache_summary
 
+# Import-path patch targets for the recap seams. src/core/recap.py binds build_backend at
+# import scope (`from src.agents.backends.registry import build_backend`) and defines
+# extract_recap, _write_cache_entry, and log at module scope, so patch() lands the stand-in
+# on the src.core.recap module attribute and generate_and_cache_summary reads it at call
+# time; a drifted string copy would patch a name nothing reads.
+_BUILD_BACKEND_PATCH_TARGET = "src.core.recap.build_backend"
+_EXTRACT_RECAP_PATCH_TARGET = "src.core.recap.extract_recap"
+_WRITE_CACHE_ENTRY_PATCH_TARGET = "src.core.recap._write_cache_entry"
+_LOG_PATCH_TARGET = "src.core.recap.log"
+
 
 def _cc_cfg() -> CharlieBotConfig:
   return CharlieBotConfig(
@@ -24,9 +34,9 @@ async def test_recap_skipped_when_session_missing() -> None:
   session_mgr.get_session.return_value = None
 
   with (
-      patch("src.core.recap.build_backend") as mock_build,
-      patch("src.core.recap._write_cache_entry") as mock_write,
-      patch("src.core.recap.log", new=MagicMock()) as mock_log,
+      patch(_BUILD_BACKEND_PATCH_TARGET) as mock_build,
+      patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
+      patch(_LOG_PATCH_TARGET, new=MagicMock()) as mock_log,
   ):
     result = await generate_and_cache_summary(session_mgr, "missing", 3, _cc_cfg())
 
@@ -48,9 +58,9 @@ async def test_recap_returns_empty_on_no_resolvable_preference() -> None:
   session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="codex-session")
 
   with (
-      patch("src.core.recap.build_backend") as mock_build,
-      patch("src.core.recap._write_cache_entry") as mock_write,
-      patch("src.core.recap.log", new=MagicMock()) as mock_log,
+      patch(_BUILD_BACKEND_PATCH_TARGET) as mock_build,
+      patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
+      patch(_LOG_PATCH_TARGET, new=MagicMock()) as mock_log,
   ):
     result = await generate_and_cache_summary(session_mgr, "s", 3, cfg)
 
@@ -68,9 +78,9 @@ async def test_recap_generates_and_caches_on_success() -> None:
   one_shot = AsyncMock(return_value="- discussed X\nLast: doing Y")
 
   with (
-      patch("src.core.recap.build_backend", return_value=make_one_shot_backend(one_shot)),
-      patch("src.core.recap.extract_recap", return_value={"asks": ["do X"], "last": {"user": "u", "assistant": "a"}}),
-      patch("src.core.recap._write_cache_entry") as mock_write,
+      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
+      patch(_EXTRACT_RECAP_PATCH_TARGET, return_value={"asks": ["do X"], "last": {"user": "u", "assistant": "a"}}),
+      patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
   ):
     result = await generate_and_cache_summary(session_mgr, "s", 5, cfg)
 
@@ -89,9 +99,9 @@ async def test_recap_uses_preferences_when_session_backend_is_empty() -> None:
   one_shot = AsyncMock(return_value="summary")
 
   with (
-      patch("src.core.recap.build_backend", return_value=make_one_shot_backend(one_shot)),
-      patch("src.core.recap.extract_recap", return_value={"asks": [], "last": None}),
-      patch("src.core.recap._write_cache_entry") as mock_write,
+      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
+      patch(_EXTRACT_RECAP_PATCH_TARGET, return_value={"asks": [], "last": None}),
+      patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
   ):
     result = await generate_and_cache_summary(session_mgr, "s", 5, cfg)
 
@@ -116,11 +126,11 @@ async def test_recap_falls_back_after_first_candidate_failure() -> None:
 
   with (
       patch(
-          "src.core.recap.build_backend",
+          _BUILD_BACKEND_PATCH_TARGET,
           side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(second_one_shot)],
       ) as mock_build,
-      patch("src.core.recap.extract_recap", return_value={"asks": ["do X"], "last": None}),
-      patch("src.core.recap._write_cache_entry") as mock_write,
+      patch(_EXTRACT_RECAP_PATCH_TARGET, return_value={"asks": ["do X"], "last": None}),
+      patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
   ):
     result = await generate_and_cache_summary(session_mgr, "s", 5, cfg)
 
@@ -147,11 +157,11 @@ async def test_recap_returns_empty_without_cache_when_all_candidates_are_empty()
 
   with (
       patch(
-          "src.core.recap.build_backend",
+          _BUILD_BACKEND_PATCH_TARGET,
           side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(second_one_shot)],
       ) as mock_build,
-      patch("src.core.recap.extract_recap", return_value={"asks": [], "last": None}),
-      patch("src.core.recap._write_cache_entry") as mock_write,
+      patch(_EXTRACT_RECAP_PATCH_TARGET, return_value={"asks": [], "last": None}),
+      patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
   ):
     result = await generate_and_cache_summary(session_mgr, "s", 5, cfg)
 
@@ -180,11 +190,11 @@ async def test_recap_raises_last_exception_when_all_candidates_raise() -> None:
 
   with (
       patch(
-          "src.core.recap.build_backend",
+          _BUILD_BACKEND_PATCH_TARGET,
           side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(last_one_shot)],
       ),
-      patch("src.core.recap.extract_recap", return_value={"asks": [], "last": None}),
-      patch("src.core.recap._write_cache_entry") as mock_write,
+      patch(_EXTRACT_RECAP_PATCH_TARGET, return_value={"asks": [], "last": None}),
+      patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
   ):
     with pytest.raises(RuntimeError) as exc_info:
       await generate_and_cache_summary(session_mgr, "s", 5, cfg)
@@ -215,15 +225,15 @@ async def test_recap_raises_last_exception_after_error_and_empty_result() -> Non
 
   with (
       patch(
-          "src.core.recap.build_backend",
+          _BUILD_BACKEND_PATCH_TARGET,
           side_effect=[
               make_one_shot_backend(first_one_shot),
               make_one_shot_backend(empty_one_shot),
               make_one_shot_backend(last_one_shot),
           ],
       ),
-      patch("src.core.recap.extract_recap", return_value={"asks": [], "last": None}),
-      patch("src.core.recap._write_cache_entry") as mock_write,
+      patch(_EXTRACT_RECAP_PATCH_TARGET, return_value={"asks": [], "last": None}),
+      patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
   ):
     with pytest.raises(RuntimeError) as exc_info:
       await generate_and_cache_summary(session_mgr, "s", 5, cfg)

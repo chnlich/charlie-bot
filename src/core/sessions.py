@@ -1397,17 +1397,17 @@ class SessionManager:
       plan_approval_flags = await plan_approval_future
 
     if running_flags is not None:
-      for meta, running in zip(active_sessions, running_flags):
+      for meta, running in zip(active_sessions, running_flags, strict=True):
         meta.has_running_tasks = bool(meta.thinking_since) or running
 
     if trigger_states is not None:
-      for meta, (pending_count, next_trigger_at) in zip(active_sessions, trigger_states):
+      for meta, (pending_count, next_trigger_at) in zip(active_sessions, trigger_states, strict=True):
         meta.has_pending_trigger = pending_count > 0
         meta.pending_trigger_count = pending_count
         meta.next_trigger_at = next_trigger_at
 
     if plan_approval_flags is not None:
-      for meta, has_pending in zip(active_sessions, plan_approval_flags):
+      for meta, has_pending in zip(active_sessions, plan_approval_flags, strict=True):
         meta.has_pending_plan_approval = bool(has_pending)
 
   async def _next_session_name(self) -> str:

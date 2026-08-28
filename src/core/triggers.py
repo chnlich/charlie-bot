@@ -274,7 +274,7 @@ async def _probe_remaining_remote_pids(
   probes = [(host, pid) for host, pids in remaining.items() for pid in pids]
   results = await asyncio.gather(*[_ssh_probe_pid(h, p) for h, p in probes])
   newly_exited: list[str] = []
-  for (host, pid), (status, raw) in zip(probes, results):
+  for (host, pid), (status, raw) in zip(probes, results, strict=True):
     if status == "DEAD":
       remaining[host].discard(pid)
       if not remaining[host]:
@@ -455,7 +455,7 @@ class TriggerManager:
     """Probe each remote target once before persisting; reject if any not ALIVE."""
     results = await asyncio.gather(*[_ssh_probe_pid(t.host, t.pid) for t in targets])
     bad: list[str] = []
-    for t, (status, raw) in zip(targets, results):
+    for t, (status, raw) in zip(targets, results, strict=True):
       if status != "ALIVE":
         bad.append(f"{t.host}:{t.pid} -> {status} ({raw.strip()!r})")
     if bad:
@@ -481,7 +481,7 @@ class TriggerManager:
 
     observed: dict[str, str] = {}
     bad: list[str] = []
-    for host, (states, error) in zip(hosts, results):
+    for host, (states, error) in zip(hosts, results, strict=True):
       if error is not None:
         bad.append(f"{host} -> {error}")
         continue

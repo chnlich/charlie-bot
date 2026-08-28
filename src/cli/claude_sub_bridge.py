@@ -467,7 +467,7 @@ class HookBridge:
       task.cancel()
     if tasks:
       results = await asyncio.gather(*tasks, return_exceptions=True)
-      for task, result in zip(tasks, results):
+      for task, result in zip(tasks, results, strict=True):
         if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
           raise HookBridgeError(f"hook bridge client shutdown failed for {task}: {result}") from result
     if self.socket_path.exists():

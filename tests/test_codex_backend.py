@@ -629,7 +629,7 @@ async def test_one_shot_text_kills_process_group_on_timeout(monkeypatch) -> None
 
   with (
       patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
-      patch("src.agents.backends.codex.kill_process_group") as mock_kill,
+      patch("src.core.process.kill_process_group") as mock_kill,
   ):
     backend = _build_backend(monkeypatch)
     with pytest.raises(TimeoutError):

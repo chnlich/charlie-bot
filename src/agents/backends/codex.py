@@ -1,10 +1,8 @@
 """CodexBackend — AgentBackend wrapping the `codex exec --json` CLI."""
 
 import asyncio
-import contextlib
 import json
 import os
-import signal
 from pathlib import Path
 
 import structlog
@@ -21,7 +19,7 @@ from src.agents.backends.base import (
 )
 from src.core import event_types as ET
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
-from src.core.process import kill_process_group
+from src.core.process import wait_or_kill_group
 
 log = structlog.get_logger()
 
@@ -176,26 +174,18 @@ class CodexBackend(AgentBackend):
       stderr = await stderr_task
       return text, structured_error, returncode, stderr
 
-    try:
-      text, structured_error, returncode, stderr = await asyncio.wait_for(_run(), timeout)
-      if structured_error:
-        raise RuntimeError(f"Codex one-shot failed: {structured_error}")
+    text, structured_error, returncode, stderr = await wait_or_kill_group(_run(), timeout, proc.pid, stderr_task)
+    if structured_error:
+      raise RuntimeError(f"Codex one-shot failed: {structured_error}")
 
-      stderr_text = stderr.decode("utf-8", errors="replace").strip()
-      if returncode != 0:
-        detail = f": {stderr_text}" if stderr_text else ""
-        raise RuntimeError(f"Codex one-shot failed (exit {returncode}){detail}")
-      if not text:
-        detail = f": {stderr_text}" if stderr_text else ""
-        raise RuntimeError(f"Codex one-shot returned no assistant text{detail}")
-      return text
-    except TimeoutError:
-      kill_process_group(proc.pid, signal.SIGKILL)
-      raise
-    finally:
-      stderr_task.cancel()
-      with contextlib.suppress(asyncio.CancelledError):
-        await stderr_task
+    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+    if returncode != 0:
+      detail = f": {stderr_text}" if stderr_text else ""
+      raise RuntimeError(f"Codex one-shot failed (exit {returncode}){detail}")
+    if not text:
+      detail = f": {stderr_text}" if stderr_text else ""
+      raise RuntimeError(f"Codex one-shot returned no assistant text{detail}")
+    return text
 
   def translate_event(self, ev: dict) -> list[dict]:
     """Translate a single Codex NDJSON event into CC-compatible event(s)."""

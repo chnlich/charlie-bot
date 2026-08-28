@@ -128,6 +128,7 @@ async def list_branches(repo: str = Query(..., description="Full path to git rep
       cwd=repo_path,
       capture_output=True,
       text=True,
+      check=False,
       timeout=SUBPROCESS_GIT_READ_TIMEOUT,
   )
   if result.returncode != 0:

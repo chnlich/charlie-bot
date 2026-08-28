@@ -563,7 +563,8 @@ def _sections_from_csv(abspath: str) -> dict[int, list[dict]] | None:
   """
   cmd = ["ncu", "--import", abspath, "--csv", "--page", "details"]
   try:
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT)
+    proc = subprocess.run(
+        cmd, capture_output=True, text=True, check=False, timeout=SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT)
   except (FileNotFoundError, subprocess.TimeoutExpired):
     log.warning("ncu_sections_csv_unavailable")
     return None
@@ -581,6 +582,7 @@ def _parse_with_csv(abspath: str) -> dict:
         cmd,
         capture_output=True,
         text=True,
+        check=False,
         timeout=SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT,
     )
   except FileNotFoundError as exc:

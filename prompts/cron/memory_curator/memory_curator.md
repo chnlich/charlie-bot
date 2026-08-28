@@ -3,7 +3,8 @@ Memory curation.
 Read `~/workspace/charlie-bot/skills/llm-context-guideline/SKILL.md` first.
 Read the Writing Style section of `~/workspace/charlie-bot/prompts/master.md` before writing or
 editing any entry prose, and check every added or rewritten line against it, ending with a framing-only
-pass over the added lines (each states the working action or standing reality first).
+pass over the added lines (each states the working action or standing reality first, and gives the
+healthy or working reading before any failure reading).
 
 Step 1: guard against an undecided prior day.
 If the memory repo working tree at `~/.charliebot/memory/` is dirty (uncommitted changes from a

@@ -14,7 +14,7 @@ def parse_ndjson_file(path: Path) -> list[dict]:
   if not path.exists():
     return []
   events: list[dict] = []
-  with open(path, "r", encoding="utf-8") as f:
+  with open(path, encoding="utf-8") as f:
     for line in f:
       line = line.strip()
       if not line:
@@ -99,7 +99,7 @@ def parse_ndjson_range(path: Path, start: int, end: int) -> tuple[list[dict], bo
   if not path.exists():
     return [], False
   events: list[dict] = []
-  with open(path, "r", encoding="utf-8") as f:
+  with open(path, encoding="utf-8") as f:
     for i, line in enumerate(f):
       if i >= end:
         break

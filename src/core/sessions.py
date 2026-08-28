@@ -275,7 +275,7 @@ class SessionManager:
     path = self._metadata_path(session_id)
     if not path.exists():
       return None
-    async with aiofiles.open(path, "r") as f:
+    async with aiofiles.open(path) as f:
       raw = await f.read()
     if not raw.strip():
       log.warning("session_metadata_empty", session_id=session_id, path=str(path))

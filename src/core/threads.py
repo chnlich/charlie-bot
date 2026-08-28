@@ -63,7 +63,7 @@ class ThreadManager:
     path = self._metadata_path(session_id, thread_id)
     if not path.exists():
       return None
-    async with aiofiles.open(path, "r") as f:
+    async with aiofiles.open(path) as f:
       raw = await f.read()
     return ThreadMetadata.model_validate_json(raw)
 

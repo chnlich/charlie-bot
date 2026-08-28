@@ -157,7 +157,7 @@ class ChatEventStore:
       if cursor >= end:
         break
       try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
           for line in f:
             if cursor >= end:
               break
@@ -185,7 +185,7 @@ class ChatEventStore:
     archived_raw: list[str] = []
     kept_raw: list[str] = []
     split_reached = False
-    with open(live_path, "r", encoding="utf-8") as f:
+    with open(live_path, encoding="utf-8") as f:
       for line in f:
         raw = line.rstrip("\n")
         if split_reached:

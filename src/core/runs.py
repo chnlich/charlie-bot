@@ -128,7 +128,7 @@ def cursor_path(thread_dir: Path) -> Path:
 
 def read_host_boot_time() -> datetime:
   """Host boot time from /proc/stat ``btime`` as a tz-aware UTC datetime."""
-  with open("/proc/stat", "r", encoding="utf-8") as f:
+  with open("/proc/stat", encoding="utf-8") as f:
     for line in f:
       if line.startswith("btime "):
         return datetime.fromtimestamp(int(line.split()[1]), tz=UTC)
@@ -144,7 +144,7 @@ def read_pid_stat(pid: int) -> tuple[str, str] | None:
   field 3 (state) is then index 0 and field 22 is index 19.
   """
   try:
-    with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as f:
+    with open(f"/proc/{pid}/stat", encoding="utf-8") as f:
       content = f.read()
   except OSError:
     return None

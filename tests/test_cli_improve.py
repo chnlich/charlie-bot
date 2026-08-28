@@ -3,7 +3,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import CLI_COMMON_GET_CONFIG_PATCH_TARGET, make_json_response
+from conftest import (
+  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+  CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+  make_json_response,
+)
 from conftest import setup_session_cwd as _setup_session_cwd
 from pydantic import ValidationError
 
@@ -45,7 +49,7 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
       "sys.argv",
       _improve_argv("s1", str(tmp_path), goal_file, "--backend", "codex-o3", "--iterations", "2")), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp_mock) as post_mock:
     main()
 
   # Should have posted exactly once to the improve endpoint
@@ -80,7 +84,7 @@ def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.
       "sys.argv",
       _improve_argv("s1", str(tmp_path), goal_file, "--iterations", "2", "--plan-file", str(plan_file))), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp_mock) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -103,7 +107,8 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
       "sys.argv",
       _improve_argv("s1", str(tmp_path), goal_file)), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", side_effect=req_lib.RequestException("conn error")):
+       patch(
+          CLI_COMMON_REQUESTS_POST_PATCH_TARGET, side_effect=req_lib.RequestException("conn error")):
     with pytest.raises(SystemExit) as exc_info:
       main()
     assert exc_info.value.code == 1
@@ -117,7 +122,7 @@ def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.Monke
 
   with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file)), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp_mock) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -132,7 +137,7 @@ def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
   with patch("sys.argv", _improve_argv("abc", str(tmp_path), goal_file)), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp_mock) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp_mock) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -147,7 +152,7 @@ def test_main_rejects_missing_goal_file(
 
   with patch("sys.argv", _improve_argv(None, str(tmp_path), missing)), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -166,7 +171,7 @@ def test_main_rejects_empty_goal_file(
 
   with patch("sys.argv", _improve_argv(None, str(tmp_path), empty)), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -186,7 +191,7 @@ def test_main_rejects_missing_plan_file(
 
   with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file, "--plan-file", str(missing))), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -207,7 +212,7 @@ def test_main_rejects_empty_plan_file(
 
   with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file, "--plan-file", str(empty))), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -226,7 +231,7 @@ def test_main_rejects_relative_repo_path(
 
   with patch("sys.argv", _improve_argv("s1", "meshy-research", goal_file)), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -247,7 +252,7 @@ def test_main_rejects_nonexistent_repo_path(
 
   with patch("sys.argv", _improve_argv("s1", nonexistent, goal_file)), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
     with pytest.raises(SystemExit) as exc_info:
       main()
 

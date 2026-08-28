@@ -144,15 +144,21 @@ def test_one_char_per_chunk_preserves_lines() -> None:
 def test_production_frame_shape_with_raw_boundary_chars_survives_chunking() -> None:
   nel = "\x85"
   ls = "\u2028"
-  data_line = 'data: {"type":"message.part.updated","properties":{"part":{"text":"'
-  data_line += '...identifier\\");else{a:48<' + nel + ">NEL-CHAR" + ls + '>LS-CHAR"},"status":"running",...'
-  data_line += '"}}}'
+  part_text = '...identifier\\");else{a:48<' + nel + ">NEL-CHAR" + ls + '>LS-CHAR"},"status":"running",...'
+  payload = json.dumps(
+      {"type": "message.part.updated", "properties": {"part": {"text": part_text}}},
+      ensure_ascii=False,
+  )
+  assert nel in payload and ls in payload
+  bs = chr(92)
+  assert (bs * 3 + '"') in payload and (bs + '"status' + bs + '"') in payload
+  data_line = "data: " + payload
   stream = data_line + "\n\n"
   cut_nel = stream.index(nel) + 1
   cut_ls = stream.index(ls)
   lines = _split_chunked([stream[:cut_nel], stream[cut_nel:cut_ls], stream[cut_ls:]])
   assert lines == [data_line, ""]
-  assert json.loads(lines[0][len("data: "):]) == json.loads(data_line[len("data: "):])
+  assert json.loads(lines[0][len("data: "):])["properties"]["part"]["text"] == part_text
 
 
 @pytest.mark.asyncio

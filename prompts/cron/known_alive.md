@@ -163,3 +163,31 @@ Known-alive symbols:
   makes each stub raise TypeError when the poll loop calls it. Vulture flags it at 100%
   confidence as an unused variable at all ten sites (`tests/test_ext_usage.py` lines
   565–1045). Same class as the `chrome`/`art` stub-parameter entry above.
+- `verify_report`, `on_spawned` (`tests/conftest.py`, parameters of the
+  `fake_notify_completion` and `CapturingWorker.__init__` stubs), `entry_id`
+  (`tests/core/test_artifact_check.py:599`, the `get_backend_option` lambda), `host_boot`
+  (`tests/test_master_restart_transport_unit.py:447`, the `is_run_alive` lambda),
+  `scheduled`, `include_running_status`, `include_pending_trigger_status`
+  (`tests/test_pages.py:31-33` and `:226-228`, the two `list_sessions` overrides), and
+  `exclude_thread_id` (`tests/test_reviewer_model_preference.py:337`, the `fake_spawn_review`
+  parameter) — stub parameters whose keyword name or arity is fixed by the production call
+  each stub replaces. Finalize passes `verify_report=` by keyword
+  (`_run_finalize_effects` in src/core/spawner_finalize.py). The production `Worker`
+  construction passes `on_spawned=` by keyword (src/core/spawner_launch.py).
+  `iter_light_backends` passes one positional argument to `cfg.get_backend_option`
+  (src/core/autonamer.py), so the lambda must take exactly one. The `host_boot` lambda
+  receives `runs.is_run_alive`'s four positional arguments. The pages routes pass
+  `scheduled=`/`include_running_status=`/`include_pending_trigger_status=` by keyword into
+  `list_sessions` (src/api/pages.py). Both `spawn_review_worker` call sites in
+  src/core/review.py pass `exclude_thread_id=` by keyword. Vulture flags each at 100%
+  confidence as an unused variable. Same class as the `art`/`t_mgr`/`dir_path`
+  stub-parameter entries above.
+- `check` (`tests/conftest.py`, keyword parameter of the `fake_run_tmux` stub) and `format`
+  (`tests/test_cli_restart_contract.py:437`, the `log_message` override's second parameter)
+  — signature-mirror parameters kept deliberately, not fixed by any call: no caller passes
+  `check=` to `pty_common._run_tmux`, and the stdlib invokes `log_message(format, *args)`
+  positionally into the override's trailing `*args`, so deleting either parameter stays
+  green; both keep the stub a faithful mirror of the signature it replaces (the
+  `fake_run_tmux` factory docstring states that drop-in contract, and `format` mirrors the
+  stdlib `BaseHTTPRequestHandler.log_message(self, format, *args)` signature). Vulture flags
+  each at 100% confidence as an unused variable.

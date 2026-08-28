@@ -198,7 +198,7 @@ async def test_pidfd_fallback_works_on_host(tmp_path: Path) -> None:
     pytest.skip("pidfd not supported on this host (not even via syscall)")
   proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.5)"])
   try:
-    cfg, session_mgr, trigger_mgr, session_id = await _make_mgr(tmp_path)
+    _cfg, _session_mgr, trigger_mgr, session_id = await _make_mgr(tmp_path)
     with patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
       trigger = await trigger_mgr.create_trigger(
           session_id, delay_seconds=10, message="live", watch_targets=_local(proc.pid),

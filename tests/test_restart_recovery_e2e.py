@@ -380,7 +380,7 @@ async def test_projection_exact_equality_at_deterministic_line_boundary(
   # Confirm nothing raced in after the snapshot: no growth past the boundary.
   assert raw.stat().st_size == boundary_offset
 
-  recovered, alive_at_reattach, master_wakes = await _recover(monkeypatch, home)
+  recovered, alive_at_reattach, _master_wakes = await _recover(monkeypatch, home)
 
   assert recovered == 1
   assert alive_at_reattach == [False]

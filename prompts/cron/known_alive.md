@@ -229,5 +229,4 @@ Known-alive symbols:
   imported at src/agents/backends/terminal.py:17), the reuse test's only stub call is
   `("has-session", "-t", "charliebot-terminal")` with no `check=`, so deleting the parameter
   stays green; the mirror keeps the stub a faithful drop-in. Vulture flags it at 100%
-  confidence as an unused variable. Same class as the `check`/`format` signature-mirror
-  entry above.
+  confidence as an unused variable.

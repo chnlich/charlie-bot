@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import build_slack_cfg
+from conftest import build_slack_cfg, make_task_spawner
 from conftest import cfg_with_repo as _cfg_with_repo
 
 from src.cli import slack as slack_cli
@@ -112,18 +112,14 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
   session_mgr = SessionManager(cfg)
   client = _FakeSlackClient()
   event = _make_event()
-
-  def _spawn(coro, *, name=None):
-    task = asyncio.get_running_loop().create_task(coro)
-    _spawn_round_tasks.tasks.append(task)
-    return task
+  tasks = _spawn_round_tasks()
 
   with (
       patch("src.core.slack_listener.trigger_master", new=AsyncMock()) as trigger,
-      patch("src.core.slack_listener.create_logged_task", side_effect=_spawn),
+      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
   ):
     sid = await handle_app_mention(event, cfg, session_mgr, client)
-    await asyncio.gather(*_spawn_round_tasks.tasks)
+    await asyncio.gather(*tasks)
 
   assert sid == _sid(event)
 
@@ -297,14 +293,9 @@ async def test_top_level_mention_uses_own_ts(tmp_path: Path) -> None:
   event = _make_event()  # no thread_ts, so the mention's own ts is the thread
   tasks = _spawn_round_tasks()
 
-  def _spawn(coro, *, name=None):
-    task = asyncio.get_running_loop().create_task(coro)
-    tasks.append(task)
-    return task
-
   with (
       patch("src.core.slack_listener.trigger_master", new=AsyncMock()),
-      patch("src.core.slack_listener.create_logged_task", side_effect=_spawn),
+      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
   ):
     sid = await handle_app_mention(event, cfg, session_mgr, client)
     await asyncio.gather(*tasks)
@@ -330,14 +321,9 @@ async def test_reactions_add_failure_still_spawns_the_round(tmp_path: Path) -> N
   client = _FailingReactionClient()
   tasks = _spawn_round_tasks()
 
-  def _spawn(coro, *, name=None):
-    task = asyncio.get_running_loop().create_task(coro)
-    tasks.append(task)
-    return task
-
   with (
       patch("src.core.slack_listener.trigger_master", new=AsyncMock()) as trigger,
-      patch("src.core.slack_listener.create_logged_task", side_effect=_spawn),
+      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
   ):
     sid = await handle_app_mention(event, cfg, session_mgr, client)
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -412,14 +398,9 @@ async def test_unresolvable_channel_name_groups_by_channel_id(tmp_path: Path) ->
   client = _UnresolvingClient()
   tasks = _spawn_round_tasks()
 
-  def _spawn(coro, *, name=None):
-    task = asyncio.get_running_loop().create_task(coro)
-    tasks.append(task)
-    return task
-
   with (
       patch("src.core.slack_listener.trigger_master", new=AsyncMock()) as trigger,
-      patch("src.core.slack_listener.create_logged_task", side_effect=_spawn),
+      patch("src.core.slack_listener.create_logged_task", side_effect=make_task_spawner(tasks)),
   ):
     sid = await handle_app_mention(event, cfg, session_mgr, client)
     await asyncio.gather(*tasks)

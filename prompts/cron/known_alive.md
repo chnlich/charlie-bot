@@ -89,10 +89,10 @@ Known-alive symbols:
   `requests.Response` stand-ins; `Response.json()` reads `self._content` when the fake
   response is consumed. Nothing in the repo reads the name back, so vulture flags the writes
   as unused attributes.
-- `art` (`tests/core/test_artifact_check.py`, the lambda in `_patch_height`) — second
-  parameter of the stub installed for `artifact_check._measure_page_height(chrome_bin,
+- `chrome`, `art` (`tests/core/test_artifact_check.py`, the lambda in `_patch_height`) — the
+  two parameters of the stub installed for `artifact_check._measure_page_height(chrome_bin,
   artifact)` via `monkeypatch.setattr`; the replaced signature fixes the arity, so deleting
-  the parameter makes the stub raise TypeError when the gate calls it. Vulture flags the
+  either parameter makes the stub raise TypeError when the gate calls it. Vulture flags the
   unused parameter at 100% confidence as an unused variable. (The four earlier sites in
   `tests/core/test_plan_gates.py` were folded into this one helper when the page gates
   merged into the artifact-check entry point.)
@@ -155,3 +155,11 @@ Known-alive symbols:
   to receive the identity task; deleting the parameter makes the stub raise TypeError.
   Vulture flags it at 100% confidence as an unused variable. Same class as the `art`
   stub-parameter entry above.
+- `dir_path` (ten `create_provider(provider, label, dir_path)` stubs in
+  `tests/test_ext_usage.py`, installed for `ext_usage_mod._create_provider` via
+  `monkeypatch.setattr`) — the real `_create_provider` (src/api/ext_usage.py:291) is called
+  with three positional arguments (src/api/ext_usage.py:281), so the stubs' replaced
+  signature fixes the arity and `dir_path` must stay to receive it; deleting the parameter
+  makes each stub raise TypeError when the poll loop calls it. Vulture flags it at 100%
+  confidence as an unused variable at all ten sites (`tests/test_ext_usage.py` lines
+  565–1045). Same class as the `chrome`/`art` stub-parameter entry above.

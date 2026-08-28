@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import requests
 from conftest import (
+  CLI_COMMON_REQUESTS_GET_PATCH_TARGET,
+  CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
   TRIGGER_MASTER_PATCH_TARGET,
   FakeAsyncProcess,
   assert_trigger_fired_completed,
@@ -410,7 +412,7 @@ def test_cli_accepts_mixed_kinds(monkeypatch) -> None:
   captured: dict = {}
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
 
-  monkeypatch.setattr("src.cli.common.requests.post", _fake_200_post(captured))
+  monkeypatch.setattr(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, _fake_200_post(captured))
   with patch.object(sys, "argv", argv):
     cli_module.main()
 
@@ -456,7 +458,7 @@ def test_cli_max_wait_accepted(monkeypatch) -> None:
   captured: dict = {}
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
 
-  monkeypatch.setattr("src.cli.common.requests.post", _fake_200_post(captured))
+  monkeypatch.setattr(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, _fake_200_post(captured))
   with patch.object(sys, "argv", argv):
     cli_module.main()
 
@@ -493,8 +495,8 @@ def test_cli_remote_dead_exits_with_code_2(monkeypatch) -> None:
   def _offline_get(url, **kwargs):  # best-effort version hint must not reach a real server
     raise requests.ConnectionError("offline")
 
-  monkeypatch.setattr("src.cli.common.requests.post", _fake_post)
-  monkeypatch.setattr("src.cli.common.requests.get", _offline_get)
+  monkeypatch.setattr(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, _fake_post)
+  monkeypatch.setattr(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, _offline_get)
   with patch.object(sys, "argv", argv):
     with pytest.raises(SystemExit) as excinfo:
       cli_module.main()

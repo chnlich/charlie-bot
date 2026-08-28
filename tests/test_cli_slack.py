@@ -7,7 +7,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-from conftest import CLI_COMMON_GET_CONFIG_PATCH_TARGET, make_json_response
+from conftest import (
+  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+  CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+  make_json_response,
+)
 from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.slack import main
@@ -23,7 +27,7 @@ def test_reply_posts_the_file_text_for_the_cwd_session_and_prints_the_readback(
   resp = make_json_response(_READBACK)
   with patch("sys.argv", ["slack", "reply", "--file", str(reply_file)]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     main()
 
   assert post_mock.call_args.args[0].endswith("/api/internal/slack/reply")
@@ -40,7 +44,7 @@ def test_reply_reads_stdin_when_the_file_is_a_dash(
   resp = make_json_response(_READBACK)
   with patch("sys.argv", ["slack", "reply", "--file", "-"]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     main()
 
   assert post_mock.call_args.kwargs["json"]["text"] == "piped reply\n"
@@ -62,7 +66,7 @@ def test_reply_without_text_is_a_usage_error_before_any_request(
     file_arg = "-"
   with patch("sys.argv", ["slack", "reply", "--file", file_arg]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post") as post_mock, \
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
        pytest.raises(SystemExit) as exc_info:
     main()
 
@@ -84,7 +88,7 @@ def test_server_refusal_exits_non_zero_with_the_detail_on_stderr(
   with patch("sys.argv", ["slack", "reply", "--file", str(reply_file)]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch("src.cli.common._maybe_version_skew_hint", return_value=None), \
-       patch("src.cli.common.requests.post", return_value=refusal), \
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=refusal), \
        pytest.raises(SystemExit) as exc_info:
     main()
 

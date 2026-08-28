@@ -374,6 +374,14 @@ TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
 # src.cli.common module attribute and every helper defined there reads it at call time.
 CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
 
+# Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py binds the
+# library with module-scope `import requests`, and its helpers read requests.get at call time
+# and pick requests.post inside call_internal_api's `request_fn = requests.post if ... else
+# ...`, so mock and monkeypatch.setattr land the stand-in on the requests module through the
+# src.cli.common route and every helper defined there picks it up at call time.
+CLI_COMMON_REQUESTS_POST_PATCH_TARGET = "src.cli.common.requests.post"
+CLI_COMMON_REQUESTS_GET_PATCH_TARGET = "src.cli.common.requests.get"
+
 
 def plan_page_html(goal_body: str = "Ship the fix.") -> str:
   """Minimal plan page passing the plan assertion set: the shipped template's <style> block

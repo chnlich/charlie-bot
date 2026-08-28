@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-from conftest import CLI_COMMON_GET_CONFIG_PATCH_TARGET, make_json_response
+from conftest import (
+  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+  CLI_COMMON_REQUESTS_GET_PATCH_TARGET,
+  CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+  make_json_response,
+)
 from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.plan import _PLAN_REMINDER, main
@@ -21,7 +26,7 @@ def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pyt
       "--title", "P1",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -46,7 +51,7 @@ def test_plan_present_passes_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
       "--base-sha", "s",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -64,7 +69,7 @@ def test_plan_amend_posts_with_default_trigger(
       "--file", "artifacts/plan_02.html",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -88,7 +93,7 @@ def test_plan_amend_passes_plan_and_trigger(tmp_path: Path, monkeypatch: pytest.
       "--trigger", "auto_amend",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -102,7 +107,7 @@ def test_plan_approve_posts_plan_id(
   resp = make_json_response({"plan": 1, "v": 1, "state": "approved"})
   with patch("sys.argv", ["plan", "approve", "--plan", "1"]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -121,7 +126,7 @@ def test_plan_close_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
       "--as", "superseded",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -137,7 +142,7 @@ def test_plan_close_posts_completed(tmp_path: Path, monkeypatch: pytest.MonkeyPa
       "--as", "completed",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -150,7 +155,7 @@ def test_plan_list_uses_get_endpoint(
   resp = make_json_response({"plans": []})
   with patch("sys.argv", ["plan", "list"]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.get", return_value=resp) as get_mock:
+       patch(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, return_value=resp) as get_mock:
     main()
 
   assert get_mock.call_args.args[0].endswith("/api/sessions/abc/plans")
@@ -174,7 +179,7 @@ def test_plan_list_corrupt_registry_prints_errors_and_exits_0(
   resp = make_json_response(payload)
   with patch("sys.argv", ["plan", "list"]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.get", return_value=resp):
+       patch(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, return_value=resp):
     main()  # no SystemExit — exits 0
 
   out = capsys.readouterr().out
@@ -196,7 +201,7 @@ def test_plan_present_stdout_json(
       "--title", "P1",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp):
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp):
     main()
 
   out = capsys.readouterr().out
@@ -223,7 +228,7 @@ def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(
       "--title", "P1",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", side_effect=FakeRequestException()):
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, side_effect=FakeRequestException()):
     with pytest.raises(SystemExit) as exc_info:
       main()
 
@@ -238,7 +243,7 @@ def test_plan_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.
   resp = make_json_response({"plans": []})
   with patch("sys.argv", ["plan", "list"]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.get", return_value=resp) as get_mock:
+       patch(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, return_value=resp) as get_mock:
     main()
 
   assert "/api/sessions/abc/plans" in get_mock.call_args.args[0]

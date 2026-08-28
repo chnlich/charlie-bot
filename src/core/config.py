@@ -393,7 +393,7 @@ def _config_fingerprint() -> tuple:
   inside one second on a coarse-resolution filesystem) that an mtime-only key
   would miss silently. A content change that preserves both mtime and size is
   deliberately not covered. A missing file stats to a sentinel rather than
-  raising, mirroring the old mtime-only key.
+  raising.
   """
   home = charliebot_home_dir()
   return (

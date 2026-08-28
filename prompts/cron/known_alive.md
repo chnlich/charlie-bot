@@ -93,9 +93,7 @@ Known-alive symbols:
   two parameters of the stub installed for `artifact_check._measure_page_height(chrome_bin,
   artifact)` via `monkeypatch.setattr`; the replaced signature fixes the arity, so deleting
   either parameter makes the stub raise TypeError when the gate calls it. Vulture flags the
-  unused parameter at 100% confidence as an unused variable. (The four earlier sites in
-  `tests/core/test_plan_gates.py` were folded into this one helper when the page gates
-  merged into the artifact-check entry point.)
+  unused parameter at 100% confidence as an unused variable.
 - The `if False: yield {}` lines in `tests/test_chat_cancel.py`, `tests/test_master_cc_consumer.py`,
   `tests/test_master_cc_voice.py`, and `tests/test_worker_diagnostics.py` are flagged as
   100%-confidence unsatisfiable `if` conditions; the unreachable branch is what keeps each fake

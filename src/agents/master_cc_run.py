@@ -281,7 +281,7 @@ def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotCo
 
   The memory block is assembled from the labeled-entry store via
   :func:`src.core.memory.assemble_master` (resident topics full text + index
-  lines for the rest); it replaces the former three-file concatenation.
+  lines for the rest).
 
   *prompt_overlay* names a file under ``prompts/model_overlays/`` (without the
   ``.md`` suffix) whose full text is appended as the final part. The backend

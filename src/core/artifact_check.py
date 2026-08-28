@@ -35,7 +35,7 @@ from src.core.timeouts import ARTIFACT_PROBE_TIMEOUT
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------
-# Budgets and measurements (moved from src/core/plans.py, behavior unchanged)
+# Budgets and measurements
 # ---------------------------------------------------------------------------
 
 GOAL_WEIGHTED_BUDGET = 240

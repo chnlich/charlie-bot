@@ -120,7 +120,7 @@ class CodexUsageResolver:
   """Resolves context-window usage from native Codex rollout logs.
 
   Encapsulates all Codex-specific thread-id resolution, rollout log discovery,
-  and usage extraction that was previously spread across SessionManager.
+  and usage extraction.
   """
 
   def __init__(

@@ -163,3 +163,25 @@ Known-alive symbols:
   makes each stub raise TypeError when the poll loop calls it. Vulture flags it at 100%
   confidence as an unused variable at all ten sites (`tests/test_ext_usage.py` lines
   565–1045). Same class as the `chrome`/`art` stub-parameter entry above.
+- `check`, `verify_report`, `on_spawned` (`tests/conftest.py`, parameters of the
+  `fake_run_tmux`/`fake_notify_completion`/`CapturingWorker.__init__` stubs), `entry_id`
+  (`tests/core/test_artifact_check.py:599`, the `get_backend_option` lambda), `format`
+  (`tests/test_cli_restart_contract.py:437`, the `log_message` override's first parameter),
+  `host_boot` (`tests/test_master_restart_transport_unit.py:447`, the `is_run_alive`
+  lambda), `scheduled`, `include_running_status`, `include_pending_trigger_status`
+  (`tests/test_pages.py:31-33` and `:226-228`, the two `list_sessions` overrides), and
+  `exclude_thread_id` (`tests/test_reviewer_model_preference.py:337`, the `fake_spawn_review`
+  parameter) — stub parameters whose arity or keyword name is fixed by the production call
+  each stub replaces. `fake_run_tmux` mirrors `pty_common._run_tmux(*args, check=False)` per
+  its factory docstring. Finalize passes `verify_report=` by keyword
+  (`_run_finalize_effects` in src/core/spawner_finalize.py). The production `Worker`
+  construction passes `on_spawned=` by keyword (src/core/spawner_launch.py).
+  `iter_light_backends` passes one positional argument to `cfg.get_backend_option`
+  (src/core/autonamer.py), so the lambda must take exactly one. `format` is the stdlib
+  `BaseHTTPRequestHandler.log_message` contract name — same dispatch class as the
+  `do_GET`/`do_POST` entry above. The `host_boot` lambda receives `runs.is_run_alive`'s
+  four positional arguments. The pages routes pass `scheduled=`/`include_running_status=`/
+  `include_pending_trigger_status=` by keyword into `list_sessions` (src/api/pages.py).
+  Both `spawn_review_worker` call sites in src/core/review.py pass `exclude_thread_id=` by
+  keyword. Vulture flags each at 100% confidence as an unused variable. Same class as the
+  `art`/`t_mgr`/`dir_path` stub-parameter entries above.

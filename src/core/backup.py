@@ -138,7 +138,7 @@ def apply_retention(target_dir: Path | None = None) -> None:
         log.warning('backup_delete_failed', name=backup_file.name, error=str(e))
 
 
-def restore_backup(archive_path: Path, target: Path = None) -> None:
+def restore_backup(archive_path: Path, target: Path | None = None) -> None:
   """Extract a backup archive to target directory.
 
   Args:

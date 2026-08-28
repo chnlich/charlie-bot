@@ -248,7 +248,7 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   cron_dir().mkdir(parents=True, exist_ok=True)
   await asyncio.to_thread(_write_cron_yaml, req.name, body)
   log.debug('cron_task_created', name=req.name)
-  return {**{'name': req.name}, **body}
+  return {'name': req.name, **body}
 
 
 @router.delete('/tasks/{name}')

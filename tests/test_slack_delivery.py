@@ -524,7 +524,7 @@ async def test_summon_round_without_a_reply_wakes_the_master_once_with_a_nudge(t
   assert [t.get_name() for t in tasks] == [f"slack-nudge-{sid}"]
   assert client.posts == []
   assert client.reactions[_THREAD] == {"eyes"}  # the question is still open
-  assert [ev for ev in logs if ev["event"] == "slack_reply_nudge"][0]["summon_id"] == summon["id"]
+  assert next(ev for ev in logs if ev["event"] == "slack_reply_nudge")["summon_id"] == summon["id"]
 
 
 @pytest.mark.asyncio

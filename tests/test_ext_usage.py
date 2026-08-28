@@ -730,7 +730,7 @@ def test_poll_prunes_removed_account_cache_key_at_round_boundary(monkeypatch) ->
 
 def test_poll_empty_round_guard_sleeps_once_before_rederiving(monkeypatch) -> None:
   def create_provider(provider, label, dir_path):
-    return _FakeProvider(lambda: {})
+    return _FakeProvider(dict)
 
   derive_count = {"i": 0}
 

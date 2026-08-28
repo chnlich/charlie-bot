@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -276,7 +277,7 @@ async def test_resolve_successor_chain_allows_exactly_100_hops(tmp_path: Path) -
       for i in range(101)
   ]
 
-  for current, successor in zip(sessions, sessions[1:], strict=False):
+  for current, successor in itertools.pairwise(sessions):
     meta = await mgr.read_metadata_fresh(current.id)
     assert meta is not None
     meta.successor_session_id = successor.id

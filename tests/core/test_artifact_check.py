@@ -268,7 +268,7 @@ def test_fact_anchored_fails_without_src_and_reports_block_tag(tmp_path: Path) -
   doc = _sitrep_ok_doc().replace('The reading holds. <span class="src">s</span>', 'The reading holds.')
   (outcome,) = _run("sitrep", _write(tmp_path, doc))["fact-anchored"]
   assert not outcome.passed
-  assert "fact label #1 (section '4 Risks') sits in a p with no span.src" == outcome.detail
+  assert outcome.detail == "fact label #1 (section '4 Risks') sits in a p with no span.src"
 
 
 def test_fact_anchored_fails_on_a_label_parked_in_a_bare_div(tmp_path: Path) -> None:

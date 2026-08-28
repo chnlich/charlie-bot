@@ -79,7 +79,7 @@ def test_no_event_loop_skips_send_without_persisting(
   # Synchronous CLI context: no running loop, so nothing is sent and nothing is
   # persisted — the next looped evaluation transitions again and fires.
   cm._fire_cron_error_alert(["x"])
-  assert sent == []
+  assert not sent
   assert not _state_file(temp_home).exists()
 
   _fire(["x"])
@@ -107,7 +107,7 @@ def test_alert_fires_through_loader_refresh(
       {"cron": "27 6 * * *", "prompt_file": str(target)}))
 
   async def refresh() -> None:
-    assert cm.get_scheduled_tasks() == []
+    assert not cm.get_scheduled_tasks()
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 

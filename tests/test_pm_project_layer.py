@@ -156,7 +156,7 @@ async def test_master_task_fire_wakes_master_with_prompt_plus_group_line(
   result = await scheduler._execute_task(task_cfg)
 
   # No worker spawn on the master path.
-  assert spawned == []
+  assert not spawned
   # The wake is trigger_master(session, prompt + Group line, cfg, session_mgr),
   # fire-and-forget through create_logged_task named by task.
   assert task_names == ["scheduled_master_pm_bp_eval"]

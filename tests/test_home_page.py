@@ -40,7 +40,7 @@ async def test_home_page_reads_config(tmp_path: Path) -> None:
   """Zero services renders no external cards; N services render exactly N cards."""
   empty = await pages.home_page(make_page_request("/home"), _cfg(tmp_path / "h0", []))
   assert empty.status_code == 200
-  assert _external_hrefs(empty.body.decode("utf-8")) == []
+  assert not _external_hrefs(empty.body.decode("utf-8"))
 
   services = [
       {"name": f"svc-{i}", "description": f"Service {i}", "url": f"https://127.0.0.1:1/svc{i}"}

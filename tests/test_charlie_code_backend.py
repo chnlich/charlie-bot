@@ -110,7 +110,7 @@ def test_translate_thought_and_unknown(monkeypatch) -> None:
           }]
       },
   }]
-  assert backend.translate_event({"type": "future-event"}) == []
+  assert not backend.translate_event({"type": "future-event"})
 
 
 def test_translate_session_event(monkeypatch) -> None:

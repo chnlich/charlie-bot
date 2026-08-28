@@ -75,7 +75,7 @@ def test_translate_event_mappings(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
   assert backend.translate_event({"type": "init", "session_id": "sid"}) == [{"session_id": "sid"}]
-  assert backend.translate_event({"type": "message", "role": "user", "content": "ignored"}) == []
+  assert not backend.translate_event({"type": "message", "role": "user", "content": "ignored"})
   assert backend.translate_event({"type": "message", "role": "assistant", "content": "hello"}) == [{
       "type": "assistant",
       "message": {"content": [{"type": "text", "text": "hello"}]},
@@ -147,4 +147,4 @@ def test_translate_event_tool_result_error_and_unknown(monkeypatch) -> None:
       "tool_name": "Bash",
       "content": "generic failure",
   }]
-  assert backend.translate_event({"type": "unhandled"}) == []
+  assert not backend.translate_event({"type": "unhandled"})

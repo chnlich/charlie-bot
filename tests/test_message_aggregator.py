@@ -494,7 +494,7 @@ def test_init_system_event_is_ignored() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "draft"}]}, "timestamp": "t1"}))
 
-  assert list(agg.feed({"type": "system", "subtype": "init", "timestamp": "t2"})) == []
+  assert not list(agg.feed({"type": "system", "subtype": "init", "timestamp": "t2"}))
   assert agg.pending_draft_message()["content"] == "draft"
 
 
@@ -515,7 +515,7 @@ def test_flush_pending_emits_dangling_draft() -> None:
       }
   ]
   assert agg.pending_draft_message() is None
-  assert list(agg.flush_pending()) == []
+  assert not list(agg.flush_pending())
 
 
 def test_pending_draft_message_is_a_pure_snapshot() -> None:

@@ -188,7 +188,7 @@ async def test_switch_to_effective_current_is_idempotent_noop(tmp_path: Path, mo
     response = client.post(f"/api/sessions/{sid}/backend", json={"backend": "claude-opus-5"})
   assert response.status_code == 200
   assert response.json()["backend"] == "claude-opus-5"
-  assert captured == [], "idempotent no-op must persist no audit event"
+  assert not captured, "idempotent no-op must persist no audit event"
 
 
 @pytest.mark.asyncio
@@ -212,7 +212,7 @@ async def test_switch_cross_domain_refuses_and_guides_clone(tmp_path: Path, monk
       detail = response.json()["detail"]
       assert "clone" in detail.lower() or "fork" in detail.lower(), f"{target}: detail must steer to clone/fork"
 
-  assert captured == [], "cross-domain refusal must not persist an event"
+  assert not captured, "cross-domain refusal must not persist an event"
 
 
 @pytest.mark.asyncio
@@ -283,7 +283,7 @@ async def test_switch_unknown_backend_is_400(tmp_path: Path, monkeypatch: pytest
     response = client.post(f"/api/sessions/{sid}/backend", json={"backend": "missing-backend"})
   assert response.status_code == 400
   assert "clone" in response.json()["detail"].lower() or "fork" in response.json()["detail"].lower()
-  assert captured == []
+  assert not captured
 
 
 @pytest.mark.asyncio
@@ -297,7 +297,7 @@ async def test_switch_missing_session_returns_404(tmp_path: Path, monkeypatch: p
   with _build_client(cfg, session_mgr) as client:
     response = client.post("/api/sessions/does-not-exist/backend", json={"backend": "claude-fable-5"})
   assert response.status_code == 404
-  assert captured == []
+  assert not captured
 
 
 # ---------------------------------------------------------------------------

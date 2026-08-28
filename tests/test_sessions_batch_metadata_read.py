@@ -70,7 +70,7 @@ async def test_batch_skips_metadata_reads_when_cache_is_fresh(
     result = await mgr._iter_session_metas()
 
     assert [item.id for item in result] == [meta.id]
-    assert metadata_reads == []
+    assert not metadata_reads
 
 
 @pytest.mark.asyncio

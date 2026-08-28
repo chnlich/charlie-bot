@@ -122,7 +122,7 @@ async def test_no_recheck_before_threshold(tmp_path: Path) -> None:
   task = asyncio.create_task(_consume(raw, events, on_silence))
   try:
     await asyncio.sleep(0.5)
-    assert reports == []
+    assert not reports
     assert [e.get("type") for e in events] == ["assistant"]
   finally:
     task.cancel()
@@ -140,7 +140,7 @@ async def test_boot_report_and_recheck_share_the_once_key() -> None:
   # Boot STALLED report claimed the key first: this thread's mounts stay silent.
   init_module._silence_reported_thread_ids.add("thread-boot-reported")
   await init_module._follow_silence_recheck(session_mgr, "sess", "thread-boot-reported")
-  assert session_mgr.events == []
+  assert not session_mgr.events
 
   # The recheck side claims first for a fresh thread; repeats cannot re-emit.
   await init_module._follow_silence_recheck(session_mgr, "sess", "thread-mounted")

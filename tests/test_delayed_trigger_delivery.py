@@ -117,7 +117,7 @@ async def test_invalid_session_trigger_is_cancelled_without_waking_master(
   ):
     await trigger_mgr._wait_and_fire(trigger)
 
-  assert session_mgr.load_chat_events_sync(session.id) == []
+  assert not session_mgr.load_chat_events_sync(session.id)
   mock_broadcast.assert_not_awaited()
   mock_trigger_master.assert_not_awaited()
   stored_trigger = await trigger_mgr._load_trigger(session.id, trigger.id)

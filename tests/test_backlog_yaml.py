@@ -32,7 +32,7 @@ def test_parses_without_error(backlog_items: list[dict]) -> None:
 
 
 def test_empty(backlog_items: list[dict]) -> None:
-  assert backlog_items == []
+  assert not backlog_items
 
 
 @pytest.mark.parametrize('field', REQUIRED_FIELDS)

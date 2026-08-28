@@ -151,7 +151,7 @@ def test_loader_loads_prompt_file_pointer(temp_home: Path) -> None:
 def test_loader_rejects_inline_prompt(temp_home: Path) -> None:
   _write_task_text(temp_home, "t", _dump({"cron": "* * * * *", "prompt": "body v1"}))
 
-  assert get_scheduled_tasks() == []
+  assert not get_scheduled_tasks()
   errors = get_scheduled_task_errors()
   assert len(errors) == 1 and errors[0].name == "t"
   assert "prompt_file" in errors[0].error
@@ -160,7 +160,7 @@ def test_loader_rejects_inline_prompt(temp_home: Path) -> None:
 def test_loader_rejects_promptless_with_no_handler_or_loop(temp_home: Path) -> None:
   _write_task_text(temp_home, "t", _dump({"cron": "* * * * *"}))
 
-  assert get_scheduled_tasks() == []
+  assert not get_scheduled_tasks()
   errors = get_scheduled_task_errors()
   assert len(errors) == 1 and errors[0].name == "t"
   # the message the operator reads names prompt_file as the missing source
@@ -185,7 +185,7 @@ def test_missing_pointer_target_recovers_when_restored(temp_home: Path) -> None:
   assert [e.name for e in get_scheduled_task_errors()] == ["task-a"]
 
   prompt_path.write_text("v1", encoding="utf-8")
-  assert get_scheduled_task_errors() == []
+  assert not get_scheduled_task_errors()
   assert get_scheduled_tasks()[0].prompt == "v1"
 
 
@@ -415,7 +415,7 @@ def test_incident_prompt_file_missing_path(temp_home: Path) -> None:
   injected = _write_task_text(temp_home, "memory-curator", _dump(
       {"cron": "27 6 * * *", "timezone": "local", "prompt_file": str(missing), "enabled": True}))
 
-  assert get_scheduled_tasks() == []
+  assert not get_scheduled_tasks()
   errors = get_scheduled_task_errors()
   assert len(errors) == 1
   err = errors[0]
@@ -630,8 +630,8 @@ def test_api_delete_broken_file_repairs(temp_home: Path) -> None:
     assert response.status_code == 200
     assert not path.exists()
     # loader surface is clean after the delete
-    assert get_scheduled_tasks() == []
-    assert get_scheduled_task_errors() == []
+    assert not get_scheduled_tasks()
+    assert not get_scheduled_task_errors()
 
 
 # --- API: name traversal is rejected with 400 --------------------------------
@@ -657,7 +657,7 @@ def test_api_rejects_path_traversal_name(temp_home: Path, bad: str) -> None:
   assert r_post.status_code in (400, 404)
   # no files escaped cron.d/ (a ".." or "a/b" name must never reach the FS)
   assert not (temp_home / ".charliebot" / "config.d" / bad).exists()
-  assert list(_cron_d_dir(temp_home).glob("*.yaml")) == []
+  assert not list(_cron_d_dir(temp_home).glob("*.yaml"))
 
 
 # --- config surface: no base-branch key ----------------------------------------

@@ -689,7 +689,7 @@ async def test_zero_output_guard_skips_nonzero_usage(tmp_path: Path, monkeypatch
       tmp_path, monkeypatch, "zero-neg-usage", [make_result_event(output_tokens=5)])
 
   errors, dones = _guard_events(cb)
-  assert errors == []
+  assert not errors
   assert dones and dones[0]["exit_code"] == 0, "clean run keeps its exit code"
 
 
@@ -701,7 +701,7 @@ async def test_zero_output_guard_skips_assistant_text(tmp_path: Path, monkeypatc
       [make_text_event("hello"), make_result_event()])
 
   errors, dones = _guard_events(cb)
-  assert errors == []
+  assert not errors
   assert dones and dones[0]["exit_code"] == 0
 
 
@@ -712,7 +712,7 @@ async def test_zero_output_guard_skips_missing_result(tmp_path: Path, monkeypatc
       tmp_path, monkeypatch, "zero-neg-noresult", [make_text_event("hello")])
 
   errors, dones = _guard_events(cb)
-  assert errors == []
+  assert not errors
   assert dones and dones[0]["exit_code"] == 0
 
 
@@ -769,7 +769,7 @@ async def test_zero_output_guard_exempts_manual_compact(tmp_path: Path, monkeypa
       ])
 
   errors, dones = _guard_events(cb)
-  assert errors == []
+  assert not errors
   assert dones and dones[0]["exit_code"] == 0, "exempt turn keeps the backend's own exit code"
   assert dones[0].get("zero_output") is not True, "master_done must carry no zero_output flag"
   cb.mark_unread.assert_awaited()
@@ -855,7 +855,7 @@ async def test_zero_output_guard_resume_exempts_manual_compact(
     _reset_master_state(session_id)
 
   errors, dones = _guard_events(cb)
-  assert errors == []
+  assert not errors
   assert dones and dones[0]["exit_code"] == 0, "exempt turn keeps the backend's own exit code"
   assert dones[0].get("zero_output") is not True, "master_done must carry no zero_output flag"
   cb.mark_unread.assert_awaited()
@@ -880,7 +880,7 @@ async def test_zero_output_guard_passes_through_independent_error(
   )
 
   errors, dones = _guard_events(cb)
-  assert errors == [], "no zero-output ERROR may be synthesized on top of the backend's own"
+  assert not errors, "no zero-output ERROR may be synthesized on top of the backend's own"
   assist_errors = [
       c.args[1] for c in cb.persist_and_broadcast.await_args_list
       if c.args[1].get("type") == ET.ASSISTANT_ERROR

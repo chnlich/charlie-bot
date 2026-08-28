@@ -442,7 +442,7 @@ def test_cli_two_open_forks_without_explainer_report_two_locations_and_skip_the_
       "FAIL fork-explainer: fork #2 (section '1 What waits on you?') has no details.details-layer",
   ]
   assert "--- cold read ---" not in out
-  assert factory_called == []
+  assert not factory_called
 
 
 def _probe_cfg(tmp_path: Path) -> tuple[SimpleNamespace, dict[str, SimpleNamespace]]:

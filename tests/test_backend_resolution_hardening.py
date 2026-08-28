@@ -201,11 +201,11 @@ async def test_run_cc_refuses_to_substitute_an_unknown_pinned_backend(tmp_path: 
   item = make_work_item(cfg, session_meta, None)
   cc_session_id, exit_code, error_msg, extras = await master_cc._run_cc(item)
 
-  assert spawned == []
+  assert not spawned
   assert cc_session_id is None
   assert exit_code == 1
   assert "deleted-id" in error_msg and "refusing to substitute" in error_msg
-  assert extras == {}
+  assert not extras
   events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
   assert any(e["type"] == ET.ASSISTANT_ERROR and "deleted-id" in e["content"] for e in events)
 
@@ -227,11 +227,11 @@ async def test_run_cc_refuses_no_option_and_no_pin(tmp_path: Path, monkeypatch) 
   item = make_work_item(cfg, session_meta, None)
   cc_session_id, exit_code, error_msg, extras = await master_cc._run_cc(item)
 
-  assert spawned == []
+  assert not spawned
   assert cc_session_id is None
   assert exit_code == 1
   assert "no backend option" in error_msg and "backend_options[0]" in error_msg
-  assert extras == {}
+  assert not extras
   events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
   assert any(e["type"] == ET.ASSISTANT_ERROR and "no backend option" in e["content"] for e in events)
 

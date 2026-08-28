@@ -63,7 +63,7 @@ def test_cli_rejects_201_char_message(
   assert str(MAX_TRIGGER_MESSAGE_CHARS) in stderr
   assert "short label" in stderr
   # Zero new trigger JSON files were written under the session's triggers dir.
-  assert list(triggers_dir.glob("*.json")) == []
+  assert not list(triggers_dir.glob("*.json"))
 
 
 # ---------------------------------------------------------------------------

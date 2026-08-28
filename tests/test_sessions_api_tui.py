@@ -67,7 +67,7 @@ async def test_archive_tui_session_does_not_kill_tmux(
 
   assert response.status_code == 200
   assert response.json()["status"] == "archived"
-  assert killed == []
+  assert not killed
 
 
 @pytest.mark.asyncio

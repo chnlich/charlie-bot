@@ -228,7 +228,7 @@ def test_file_change_started_html_artifact_emits_nothing(monkeypatch, tmp_path: 
       },
   })
 
-  assert translated == []
+  assert not translated
 
 
 def test_file_change_regular_file_emits_file_write_without_filename_field(monkeypatch, tmp_path: Path) -> None:
@@ -412,7 +412,7 @@ def test_translate_todo_list_suppresses_duplicate_snapshots(monkeypatch) -> None
           }],
       },
   }]
-  assert completed_without_changes == []
+  assert not completed_without_changes
   assert updated == [{
       "type": "assistant",
       "message": {
@@ -454,7 +454,7 @@ def test_reasoning_item_emits_thinking_deltas(monkeypatch) -> None:
 
   assert first == [{"type": ET.THINKING, "content": "Plan"}]
   assert second == [{"type": ET.THINKING, "content": " in action"}]
-  assert duplicate == []
+  assert not duplicate
 
 
 # ---------------------------------------------------------------------------

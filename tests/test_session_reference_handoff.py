@@ -104,7 +104,7 @@ async def test_reference_handoff_errors_write_no_reference(tmp_path: Path) -> No
 
   with pytest.raises(FileNotFoundError):
     await mgr.fork_session("missing", event_index=0)
-  assert list(cfg.sessions_dir.glob("*/data/parent_reference.jsonl")) == []
+  assert not list(cfg.sessions_dir.glob("*/data/parent_reference.jsonl"))
 
   parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend="claude-opus-4.6")
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "only"}])
@@ -112,7 +112,7 @@ async def test_reference_handoff_errors_write_no_reference(tmp_path: Path) -> No
   with pytest.raises(ValueError, match="out of range"):
     await mgr.elone_session(parent.id, event_index=1)
 
-  assert list(cfg.sessions_dir.glob("*/data/parent_reference.jsonl")) == []
+  assert not list(cfg.sessions_dir.glob("*/data/parent_reference.jsonl"))
   updated_parent = await mgr.get_session(parent.id)
   assert updated_parent is not None
   assert updated_parent.status == SessionStatus.ACTIVE

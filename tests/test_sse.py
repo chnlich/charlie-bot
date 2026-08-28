@@ -95,7 +95,7 @@ def test_trailing_cr_is_held_until_next_chunk_or_final() -> None:
 
 def test_crlf_straddling_two_chunks_yields_one_line() -> None:
   lines, held = split_sse_lines("data: x\r", final=False)
-  assert lines == []
+  assert not lines
   assert held == "data: x\r"
   lines, remainder = split_sse_lines(held + "\ndata: y\n", final=False)
   assert lines == ["data: x", "data: y"]

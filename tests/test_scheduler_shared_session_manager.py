@@ -90,7 +90,7 @@ async def test_scheduled_round_events_reach_shared_read_cache(
       backend="claude-opus-4.6",
   )
   # Warm the cache the way an HTTP history read does, before the round fires.
-  assert session_mgr.load_chat_events_sync(meta.id) == []
+  assert not session_mgr.load_chat_events_sync(meta.id)
 
   scheduler = Scheduler(cfg, session_mgr)
   monkeypatch.setattr("src.core.scheduler.load_config", lambda: cfg)

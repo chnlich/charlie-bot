@@ -297,7 +297,7 @@ def test_load_missing_topics_raises(tmp_path: Path) -> None:
 def test_load_empty_store_is_valid(tmp_path: Path) -> None:
   _write_topics(tmp_path)
   store = load_store(tmp_path)
-  assert store.entries == []
+  assert not store.entries
   assert set(store.topics) == {"profile", "communication", "workflow", "rulings", "host", "charliebot"}
 
 
@@ -317,7 +317,7 @@ def test_load_legacy_store_still_loads(tmp_path: Path) -> None:
 def test_lint_clean_store(tmp_path: Path) -> None:
   _write_topics(tmp_path)
   _write_entry(tmp_path, "profile", "dark-mode")
-  assert lint(tmp_path) == []
+  assert not lint(tmp_path)
 
 
 def test_lint_entries_flags_missing_title(tmp_path: Path) -> None:
@@ -366,7 +366,7 @@ def test_lint_staging_legacy_candidate_stays_clean(tmp_path: Path) -> None:
   _write_topics(tmp_path)
   _write_staging(tmp_path, "20260728T120000Z-abcd1234-pending", "profile", "pending", legacy=True, audience="both")
   violations = lint(tmp_path)
-  assert violations == [], f"expected clean, got: {violations}"
+  assert not violations, f"expected clean, got: {violations}"
 
 
 def test_lint_revises_in_staging_accepted(tmp_path: Path) -> None:
@@ -375,14 +375,14 @@ def test_lint_revises_in_staging_accepted(tmp_path: Path) -> None:
   _write_staging(
       tmp_path, "20260728T120000Z-abcd1234-rev-prop", "newtopic", "rev-prop", revises="existing", audience="worker")
   violations = lint(tmp_path)
-  assert violations == [], f"expected clean, got: {violations}"
+  assert not violations, f"expected clean, got: {violations}"
 
 
 def test_lint_staging_comma_audience_accepted(tmp_path: Path) -> None:
   _write_topics(tmp_path)
   _write_staging(tmp_path, "cand", "profile", "cand", audience="master, worker")
   violations = lint(tmp_path)
-  assert violations == [], f"expected clean, got: {violations}"
+  assert not violations, f"expected clean, got: {violations}"
 
 
 def test_lint_revises_in_entries_flagged(tmp_path: Path) -> None:
@@ -410,7 +410,7 @@ def test_lint_staging_free_form_capture_stays_clean(tmp_path: Path) -> None:
   staging.mkdir()
   staging.joinpath("20260810T000000Z-nosess-dark-mode.md").write_text(
       "# Dark Mode\n\nUser prefers dark UI.\n", encoding="utf-8")
-  assert lint(tmp_path) == []
+  assert not lint(tmp_path)
 
 
 def test_lint_staging_capture_bad_first_line_flagged(tmp_path: Path) -> None:

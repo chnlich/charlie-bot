@@ -60,5 +60,5 @@ def test_flat_tool_result_with_empty_buf_is_silent() -> None:
 
   deltas = list(aggregator.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "orphan"}))
 
-  assert deltas == []
+  assert not deltas
   assert aggregator.pending_draft_message() is None

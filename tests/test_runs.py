@@ -313,7 +313,7 @@ def test_scan_and_leftover_holders(sleep_holding_stdout) -> None:
   assert all(h.pid != proc.pid for h in leftovers)
 
   # A missing raw log has no inode, hence no holders.
-  assert runs.leftover_holders_for(target.parent / "gone", holders_scan, run_pid=None) == ()
+  assert not runs.leftover_holders_for(target.parent / "gone", holders_scan, run_pid=None)
 
 
 def test_resolve_attaches_leftover_holders_only_when_not_alive(sleep_holding_stdout, tmp_path: Path) -> None:
@@ -336,14 +336,14 @@ def test_resolve_attaches_leftover_holders_only_when_not_alive(sleep_holding_std
   # the dead arm above previously ran with this exact incomplete identity.)
   resolution = _resolve(tmp_path, pid=999999, holders_scan=holders_scan)
   assert resolution.outcome is runs.RunOutcome.RUNNING
-  assert resolution.leftover_holders == ()
+  assert not resolution.leftover_holders
 
   # Alive run: fd holders are descendants, never liveness, and not reported.
   pid = os.getpid()
   pid_start, _ = runs.read_pid_stat(pid)  # type: ignore[misc]
   resolution = _resolve(tmp_path, pid=pid, pid_start=pid_start, holders_scan=holders_scan)
   assert resolution.outcome is runs.RunOutcome.RUNNING
-  assert resolution.leftover_holders == ()
+  assert not resolution.leftover_holders
 
 
 # ---------------------------------------------------------------------------

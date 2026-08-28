@@ -550,7 +550,7 @@ def test_session_config_overlay_idempotent_when_already_configured(
 
   claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
 
-  assert writes == []
+  assert not writes
 
 
 def test_session_credentials_recopied_when_source_strictly_newer(
@@ -757,7 +757,7 @@ async def test_migration_resumes_same_session_after_old_tui_exits_and_session_cl
 
   assert resume is True
   assert created == [SESSION_ID]
-  assert marker_states == []
+  assert not marker_states
 
 
 @pytest.mark.asyncio

@@ -280,7 +280,7 @@ def test_migrate_legacy_watch_pids_none_value() -> None:
   )
   trigger, migrated = _migrate_legacy_watch_pids(legacy)
   assert migrated is True
-  assert trigger.watch_targets == []
+  assert not trigger.watch_targets
 
 
 def test_migrate_legacy_no_op_when_already_new_schema() -> None:

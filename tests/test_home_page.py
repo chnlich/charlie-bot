@@ -98,7 +98,7 @@ async def test_home_badge_never_labels_a_link_that_cannot_open(
 
   hrefs = _external_hrefs(body)
   assert len(hrefs) == len(services) == len(probed)
-  for href, probe_url in zip(hrefs, probed):
+  for href, probe_url in zip(hrefs, probed, strict=True):
     href_parts = urlparse(href)
     probe_parts = urlparse(probe_url)
     assert (href_parts.hostname, href_parts.port) == (probe_parts.hostname, probe_parts.port)

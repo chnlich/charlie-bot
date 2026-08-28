@@ -453,7 +453,7 @@ async def test_projection_equals_reference_after_every_append(tmp_path: Path) ->
   This asserts the mechanism (derived validity) rather than a dirty-mark policy:
   no event type is special, so adding one later cannot reintroduce staleness.
   """
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   for i, event in enumerate(_COMMITTING_EVENT_SEQUENCE):
     with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
@@ -471,7 +471,7 @@ async def test_projection_equals_reference_after_every_append(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_first_paint_surfaces_are_disjoint(tmp_path: Path) -> None:
   """The bubble list and the streaming preview never carry the same message."""
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.persist_and_broadcast(session.id, {"type": ET.USER, "content": "q1", "timestamp": "t1"})
@@ -500,7 +500,7 @@ async def test_first_paint_surfaces_are_disjoint(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_event_count_is_the_snapshot_the_projection_consumed(tmp_path: Path) -> None:
   """event_count is the boundary the first-paint cursor is derived from."""
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   for n in range(1, 5):
     with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
@@ -574,7 +574,7 @@ def test_page_latency_does_not_grow_with_session_size() -> None:
 @pytest.mark.asyncio
 async def test_archive_offset_returns_none_from_projection(tmp_path: Path) -> None:
   """A session with archive_offset > 0 returns None from get_message_projection."""
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   cutoff, events = _archive_cutoff_events()
   _append_events(mgr.get_chat_events_path(session.id), events)
@@ -591,7 +591,7 @@ async def test_archive_fallback_serves_from_old_path(tmp_path: Path) -> None:
   """An archived session serves entirely from the event-index cursor path."""
   from src.api.sessions import get_session_events_page
 
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   cutoff, events = _archive_cutoff_events()
   _append_events(mgr.get_chat_events_path(session.id), events)
@@ -665,7 +665,7 @@ async def test_lru_eviction_drops_oldest_projection(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_lru_eviction_cannot_serve_stale_after_dirty_mark(tmp_path: Path) -> None:
   """A dirty-marked projection that gets evicted is rebuilt fresh on next access."""
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "first", "timestamp": "t1"})
@@ -767,7 +767,7 @@ def test_worker_summary_without_origin_keeps_fields_unchanged() -> None:
 async def test_worker_summary_delivered_to_successor_projects_origin_and_thread(tmp_path: Path) -> None:
   """End-to-end: a worker_summary delivered through deliver_to_successor into an
   eloned session projects with the origin session id and thread id."""
-  cfg, mgr, parent = await make_home_session(tmp_path, name="parent", backend="claude-opus-4.6")
+  _cfg, mgr, parent = await make_home_session(tmp_path, name="parent", backend="claude-opus-4.6")
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.persist_and_broadcast(parent.id, {"type": "user", "content": "q", "timestamp": "t0"})
   child = await mgr.elone_session(parent.id, event_index=0)

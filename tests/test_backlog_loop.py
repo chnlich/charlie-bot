@@ -292,7 +292,7 @@ async def test_missing_backlog_generates(tmp_path: Path) -> None:
   backlog = tmp_path / 'nonexistent' / 'backlog.yaml'
   cfg = _make_cfg(max_pending=10)
 
-  action, prompt = await determine_action(backlog, cfg, tmp_path)
+  action, _prompt = await determine_action(backlog, cfg, tmp_path)
 
   assert action == 'generate'
 

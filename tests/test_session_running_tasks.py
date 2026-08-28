@@ -63,6 +63,6 @@ async def test_has_running_tasks_false_for_stale_running_thread_without_reading_
 
 @pytest.mark.asyncio
 async def test_has_running_tasks_false_when_no_threads(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="Empty")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="Empty")
 
   assert await mgr._has_running_tasks(session.id) is False

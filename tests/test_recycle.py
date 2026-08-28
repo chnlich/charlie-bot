@@ -69,7 +69,7 @@ async def test_recycle_deletes_only_old_terminal_threads(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   cutoff, events = _archive_cutoff_events()
   live_path = mgr.get_chat_events_path(session.id)
@@ -111,7 +111,7 @@ async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_recycle_noop_when_nothing_old(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   cutoff = datetime(2026, 5, 10, 0, 0, 0, tzinfo=UTC)
   events = [
@@ -138,7 +138,7 @@ async def test_recycle_noop_when_nothing_old(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_load_chat_events_range_spans_archive_and_live(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   cutoff, events = _archive_cutoff_events()
   live_path = mgr.get_chat_events_path(session.id)
@@ -163,7 +163,7 @@ async def test_load_chat_events_range_spans_archive_and_live(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   cutoff, events = _archive_cutoff_events()
   _append_events(mgr.get_chat_events_path(session.id), events)
@@ -187,7 +187,7 @@ async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_session_bootstrap_uses_tail_without_thread_or_usage_load(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   # Turns of (user, separator) so tail(2) returns exactly the last turn.
   events = []
   for i in range(4):
@@ -208,7 +208,7 @@ async def test_session_bootstrap_uses_tail_without_thread_or_usage_load(tmp_path
 
 @pytest.mark.asyncio
 async def test_events_page_returns_raw_next_before_for_aggregated_messages(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   events = [
       {
           "type": ET.TOOL_USE,

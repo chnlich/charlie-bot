@@ -435,7 +435,7 @@ async def test_save_drops_legacy_verify_keys(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_broadcast_called_on_present(tmp_path: Path) -> None:
-  cfg, session_mgr, thread_mgr, _plan_mgr, meta = await _setup(tmp_path)
+  cfg, session_mgr, _thread_mgr, _plan_mgr, meta = await _setup(tmp_path)
   plan_mgr = PlanRegistryManager(cfg, session_mgr)
   calls: list[tuple[str, dict]] = []
 

@@ -315,7 +315,7 @@ async def test_all_sessions_status_pending_plan_approval_closed_is_unset(tmp_pat
 
 @pytest.mark.asyncio
 async def test_all_sessions_status_pending_plan_approval_no_plans_json_is_unset(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="NoPlans")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="NoPlans")
 
   status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
   assert status[session.id]["has_pending_plan_approval"] is False
@@ -370,7 +370,7 @@ async def test_pending_plan_approval_archived_session_is_unset(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_pending_plan_approval_no_parse_cost_without_plans_json(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="ShortCircuit")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="ShortCircuit")
 
   # The existence check short-circuits sessions without plans.json: the sync
   # helper returns False without parsing, and the status payload reflects it.
@@ -475,7 +475,7 @@ async def test_list_sessions_endpoint_includes_pending_plan_approval_true(tmp_pa
 @pytest.mark.asyncio
 async def test_list_sessions_endpoint_pending_plan_approval_false_without_plans_json(tmp_path: Path) -> None:
   """Sanity: a session with no plans.json reports has_pending_plan_approval: false on GET /."""
-  cfg, mgr, session = await make_home_session(tmp_path, name="NoPlans")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="NoPlans")
 
   app = _build_sessions_app(mgr)
   with TestClient(app) as client:

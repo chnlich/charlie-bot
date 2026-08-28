@@ -164,7 +164,7 @@ async def test_at_most_one_round_in_flight(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  clock, scheduler, session, session_mgr, pending, task_cfg = _pending_rig(monkeypatch, tmp_path)
+  clock, scheduler, _session, session_mgr, pending, task_cfg = _pending_rig(monkeypatch, tmp_path)
 
   await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)
   await asyncio.sleep(0)  # let the birthed round become the in-flight handle

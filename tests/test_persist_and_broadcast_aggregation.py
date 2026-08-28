@@ -15,7 +15,7 @@ def _broadcast_calls(mock: AsyncMock) -> list[dict]:
 
 @pytest.mark.asyncio
 async def test_persist_user_event_broadcasts_message_delta_only(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "hi", "timestamp": "ts"})
@@ -29,7 +29,7 @@ async def test_persist_user_event_broadcasts_message_delta_only(tmp_path: Path) 
 
 @pytest.mark.asyncio
 async def test_persist_assistant_text_broadcasts_stream_then_message_on_master_done(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(session.id, {
@@ -56,7 +56,7 @@ async def test_persist_assistant_text_broadcasts_stream_then_message_on_master_d
 
 @pytest.mark.asyncio
 async def test_persist_handler_result_broadcasts_message_delta_and_raw_event(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(session.id, {
@@ -76,7 +76,7 @@ async def test_persist_handler_result_broadcasts_message_delta_and_raw_event(tmp
 @pytest.mark.asyncio
 async def test_aggregator_state_persists_across_calls(tmp_path: Path) -> None:
   """Tools attached in one event surface in the eventual flush message."""
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(session.id, {

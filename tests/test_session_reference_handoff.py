@@ -27,7 +27,7 @@ def _reference_path(session_mgr: SessionManager, session_id: str) -> Path:
 
 @pytest.mark.asyncio
 async def test_fork_session_writes_truncated_reference_and_live_banner(tmp_path: Path) -> None:
-  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
+  _cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
   _append_events(
       mgr.get_chat_events_path(parent.id),
       [
@@ -57,7 +57,7 @@ async def test_fork_session_writes_truncated_reference_and_live_banner(tmp_path:
 
 @pytest.mark.asyncio
 async def test_elone_session_writes_reference_and_archives_parent(tmp_path: Path) -> None:
-  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
+  _cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
   _append_events(
       mgr.get_chat_events_path(parent.id),
       [
@@ -84,7 +84,7 @@ async def test_elone_session_writes_reference_and_archives_parent(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_reference_handoff_uses_global_event_index_with_archive_offset(tmp_path: Path) -> None:
-  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
+  _cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
 
   cutoff, events = _archive_cutoff_events()
   _append_events(mgr.get_chat_events_path(parent.id), events)
@@ -121,7 +121,7 @@ async def test_reference_handoff_errors_write_no_reference(tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_reference_bootstraps_are_not_divider_recap_asks(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="Child", backend="claude-opus-4.6")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="Child", backend="claude-opus-4.6")
   _append_events(
       mgr.get_chat_events_path(session.id),
       [

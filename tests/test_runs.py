@@ -54,7 +54,7 @@ def test_read_pid_stat_live_and_dead() -> None:
 
 def test_is_run_alive_requires_full_identity() -> None:
   pid = os.getpid()
-  pid_start, state = runs.read_pid_stat(pid)  # type: ignore[misc]
+  pid_start, _state = runs.read_pid_stat(pid)  # type: ignore[misc]
   assert runs.is_run_alive(pid, pid_start, NOW, HOST_BOOT) is True
   # Each missing conjunct kills the judgment.
   assert runs.is_run_alive(None, pid_start, NOW, HOST_BOOT) is False

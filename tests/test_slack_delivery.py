@@ -695,7 +695,7 @@ async def test_summon_issued_under_the_marker_contract_is_outside_the_audit(tmp_
 @pytest.mark.asyncio
 async def test_the_master_done_funnel_itself_starts_the_audit(tmp_path: Path) -> None:
   """persist_and_broadcast spawns the audit for every done; here it produces the nudge."""
-  cfg, session_mgr, client = _rig(tmp_path)
+  _cfg, session_mgr, client = _rig(tmp_path)
   sid = await _slack_session(session_mgr)
   summon = await _append(session_mgr, sid, _summon())
   funnel_tasks: list[asyncio.Task] = []

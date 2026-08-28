@@ -335,7 +335,7 @@ async def test_resolve_successor_chain_returns_none_for_missing_session(tmp_path
 
 @pytest.mark.asyncio
 async def test_resolve_successor_chain_raises_runtime_error_on_cycle(tmp_path: Path) -> None:
-  cfg, mgr, a = await make_home_session(tmp_path, name="A", backend="claude-opus-4.6")
+  _cfg, mgr, a = await make_home_session(tmp_path, name="A", backend="claude-opus-4.6")
   b = await mgr.create_session(CreateSessionRequest(name="B"), backend="claude-opus-4.6")
   a_meta = await mgr.read_metadata_fresh(a.id)
   b_meta = await mgr.read_metadata_fresh(b.id)

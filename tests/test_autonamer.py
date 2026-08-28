@@ -16,6 +16,10 @@ from src.core.autonamer import (
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
 
+_BUILD_BACKEND_PATCH_TARGET = "src.core.autonamer.build_backend"
+_STREAMING_BROADCAST_PATCH_TARGET = "src.core.autonamer.streaming_manager.broadcast"
+_LOG_PATCH_TARGET = "src.core.autonamer.log"
+
 
 def _write_claude_jsonl(home_dir: Path, session_id: str, rows: list[dict | str]) -> Path:
   jsonl_path = home_dir / ".claude" / "projects" / "encoded-cwd" / f"{session_id}.jsonl"
@@ -61,8 +65,8 @@ async def test_maybe_auto_name_passes_existing_groups_to_backend() -> None:
   one_shot = AsyncMock(return_value='{"name":"Test Name","group":"work"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)),
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
+      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
     await maybe_auto_name(
         cfg,
@@ -91,8 +95,8 @@ async def test_maybe_auto_name_does_not_overwrite_existing_manual_group() -> Non
   one_shot = AsyncMock(return_value='{"name":"Test Name","group":"Work"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)),
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
+      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
   ):
     await maybe_auto_name(
         cfg,
@@ -117,8 +121,8 @@ async def test_maybe_auto_name_preserves_default_session_number() -> None:
   one_shot = AsyncMock(return_value='{"name":"Refactor Config Loader"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)),
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
+      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
     await maybe_auto_name(
         cfg,
@@ -142,8 +146,8 @@ async def test_maybe_auto_name_rechecks_current_name_before_renaming() -> None:
   one_shot = AsyncMock(return_value='{"name":"Generated Name","group":"Work"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)),
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
+      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
   ):
     await maybe_auto_name(
         cfg,
@@ -169,8 +173,8 @@ async def test_maybe_auto_name_keeps_snake_case_identifier_verbatim() -> None:
   one_shot = AsyncMock(return_value=raw)
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)),
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
+      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
     await maybe_auto_name(
         cfg, session_meta, "Set CHARLIEBOT_HOME for the run.", "Done.", session_mgr, [])
@@ -189,8 +193,8 @@ async def test_maybe_auto_name_keeps_chinese_title_verbatim() -> None:
   one_shot = AsyncMock(return_value=raw)
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)),
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
+      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
     await maybe_auto_name(
         cfg, session_meta, "重构「TRELLIS.2」的分支。", "好的，开始重构。", session_mgr, [])
@@ -209,11 +213,11 @@ async def test_maybe_auto_name_falls_back_after_first_backend_failure() -> None:
 
   with (
       patch(
-          "src.core.autonamer.build_backend",
+          _BUILD_BACKEND_PATCH_TARGET,
           side_effect=[RuntimeError("unsupported reasoning effort"), make_one_shot_backend(one_shot)],
       ) as mock_build,
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
-      patch("src.core.autonamer.log", new=MagicMock()) as mock_log,
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
+      patch(_LOG_PATCH_TARGET, new=MagicMock()) as mock_log,
   ):
     await maybe_auto_name(cfg, session_meta, "First naming attempt", "Backend failed.", session_mgr, [])
 
@@ -239,11 +243,11 @@ async def test_maybe_auto_name_keeps_default_name_when_all_first_responses_are_u
 
   with (
       patch(
-          "src.core.autonamer.build_backend",
+          _BUILD_BACKEND_PATCH_TARGET,
           side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(second_one_shot)],
       ) as mock_build,
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
-      patch("src.core.autonamer.log", new=MagicMock()) as mock_log,
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
+      patch(_LOG_PATCH_TARGET, new=MagicMock()) as mock_log,
   ):
     await maybe_auto_name(cfg, session_meta, "Some ask", "Some answer.", session_mgr, [])
 
@@ -269,10 +273,10 @@ async def test_maybe_auto_name_falls_back_to_next_backend_on_non_json_response()
 
   with (
       patch(
-          "src.core.autonamer.build_backend",
+          _BUILD_BACKEND_PATCH_TARGET,
           side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(second_one_shot)],
       ) as mock_build,
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
     await maybe_auto_name(cfg, session_meta, "Refactor the loader", "Done.", session_mgr, [])
 
@@ -295,10 +299,10 @@ async def test_maybe_auto_name_falls_back_to_next_backend_when_name_too_long() -
 
   with (
       patch(
-          "src.core.autonamer.build_backend",
+          _BUILD_BACKEND_PATCH_TARGET,
           side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(second_one_shot)],
       ) as mock_build,
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
     await maybe_auto_name(cfg, session_meta, "Some ask", "Some answer.", session_mgr, [])
 
@@ -352,8 +356,8 @@ async def test_maybe_auto_name_builds_codex_backend_for_claude_session() -> None
   one_shot = AsyncMock(return_value='{"name":"Codex Title"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)) as mock_build,
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
+      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)) as mock_build,
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
     await maybe_auto_name(cfg, session_meta, "Do the codex thing", "Done.", session_mgr, [])
 
@@ -376,8 +380,8 @@ async def test_maybe_auto_name_builds_same_id_opencode_backend() -> None:
   one_shot = AsyncMock(return_value='{"name":"Open Code Task"}')
 
   with (
-      patch("src.core.autonamer.build_backend", return_value=make_one_shot_backend(one_shot)) as mock_build,
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()),
+      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)) as mock_build,
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
     await maybe_auto_name(cfg, session_meta, "Use opencode", "Done.", session_mgr, [])
 
@@ -398,9 +402,9 @@ async def test_maybe_auto_name_skips_loudly_when_no_preference_resolves() -> Non
   session_mgr = AsyncMock()
 
   with (
-      patch("src.core.autonamer.build_backend") as mock_build,
-      patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast,
-      patch("src.core.autonamer.log", new=MagicMock()) as mock_log,
+      patch(_BUILD_BACKEND_PATCH_TARGET) as mock_build,
+      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
+      patch(_LOG_PATCH_TARGET, new=MagicMock()) as mock_log,
   ):
     await maybe_auto_name(cfg, session_meta, "Some ask", "Some answer.", session_mgr, [])
 
@@ -496,7 +500,7 @@ async def test_claude_ai_title_applies_title_for_default_session(
       ],
   )
 
-  with patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast:
+  with patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast:
     await maybe_auto_name_from_claude_ai_title(session_meta, session_mgr)
 
   session_mgr.rename_session.assert_awaited_once_with("session-title", "3: Investigate TUI Autonaming")
@@ -523,7 +527,7 @@ async def test_claude_ai_title_prefixes_default_session_number(
       }],
   )
 
-  with patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()):
+  with patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await maybe_auto_name_from_claude_ai_title(session_meta, session_mgr)
 
   session_mgr.rename_session.assert_awaited_once_with(
@@ -551,7 +555,7 @@ async def test_claude_ai_title_does_not_overwrite_manual_session_name(
       }],
   )
 
-  with patch("src.core.autonamer.streaming_manager.broadcast", new=AsyncMock()) as mock_broadcast:
+  with patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast:
     await maybe_auto_name_from_claude_ai_title(session_meta, session_mgr)
 
   session_mgr.rename_session.assert_not_awaited()

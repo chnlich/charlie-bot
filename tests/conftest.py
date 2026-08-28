@@ -482,6 +482,17 @@ async def no_sleep(_seconds: float) -> None:
   return None
 
 
+def make_task_spawner(tasks: list[asyncio.Task]) -> Callable[..., asyncio.Task]:
+  """A create_logged_task substitute that spawns eagerly and captures every task."""
+
+  def _spawn(coro, *, name=None):
+    task = asyncio.get_running_loop().create_task(coro, name=name)
+    tasks.append(task)
+    return task
+
+  return _spawn
+
+
 def dump_yaml(body: Any) -> str:
   """Block-style ``yaml.safe_dump`` with the dict's insertion key order kept; callers write the result
   into cron host files whose key order should read like a hand-written file."""

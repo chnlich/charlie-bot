@@ -6,7 +6,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, TRIGGER_MASTER_PATCH_TARGET
+from conftest import (
+  BROADCAST_PATCH_TARGET,
+  TRIGGER_MASTER_PATCH_TARGET,
+  TRIGGERS_GET_CONFIG_PATCH_TARGET,
+)
 
 from src.api.message_utils import events_to_messages
 from src.core import event_types as ET
@@ -37,7 +41,7 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
       patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger_master,
       # The wake path re-reads the config instead of using the snapshot captured at
       # construction, so the fresh read is what must reach trigger_master.
-      patch("src.core.triggers.get_config", return_value=cfg),
+      patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ):
     await trigger_mgr._wait_and_fire(trigger)
 
@@ -113,7 +117,7 @@ async def test_invalid_session_trigger_is_cancelled_without_waking_master(
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
       patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger_master,
-      patch("src.core.triggers.get_config", return_value=cfg),
+      patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ):
     await trigger_mgr._wait_and_fire(trigger)
 

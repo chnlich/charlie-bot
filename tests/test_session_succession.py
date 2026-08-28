@@ -14,6 +14,7 @@ import yaml
 from conftest import (
   BROADCAST_PATCH_TARGET,
   TRIGGER_MASTER_PATCH_TARGET,
+  TRIGGERS_GET_CONFIG_PATCH_TARGET,
   build_sessions_cfg,
   build_two_backend_cfg,
   make_home_session,
@@ -567,7 +568,7 @@ async def test_succession_keeps_scheduler_chain_intact_for_tick_and_triggers(
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
       patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
-      patch("src.core.triggers.get_config", return_value=cfg),
+      patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ):
     # A trigger stays pending on the parent across the succession.
     trigger = await trigger_mgr.create_trigger(parent.id, delay_seconds=3600, message="queued wake")

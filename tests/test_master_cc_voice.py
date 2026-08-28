@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import make_work_item, mock_session_callbacks, patch_instructions_content
+from conftest import BUILD_BACKEND_PATCH_TARGET, make_work_item, mock_session_callbacks, patch_instructions_content
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import config as core_config
@@ -63,7 +63,7 @@ async def test_run_cc_hands_disclaimer_prefixed_prompt_to_backend(
   cfg = _make_cfg(tmp_path)
   meta = models.SessionMetadata(id="voice-cc", name="Voice")
   backend = _PromptCapturingBackend()
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **kw: backend)
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, meta, cfg.backend_options[0], user_content="transcribed hello", is_voice=True)
@@ -81,7 +81,7 @@ async def test_run_cc_passes_verbatim_prompt_when_not_voice(
   cfg = _make_cfg(tmp_path)
   meta = models.SessionMetadata(id="plain-cc", name="Plain")
   backend = _PromptCapturingBackend()
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **kw: backend)
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, meta, cfg.backend_options[0], user_content="plain hello")
@@ -102,7 +102,7 @@ async def _run_message_with_capturing_backend(
   meta = models.SessionMetadata(id="voice-msg-session", name="Voice", backend="fake")
   callbacks = mock_session_callbacks()
   backend = _PromptCapturingBackend()
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", lambda *a, **kw: backend)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **kw: backend)
   patch_instructions_content(monkeypatch)
   master_cc_state._session_queues.pop(meta.id, None)
   master_cc_state._session_consumers.pop(meta.id, None)

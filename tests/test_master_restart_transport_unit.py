@@ -28,7 +28,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import make_work_item, patch_instructions_content, run_session_consumer
+from conftest import BUILD_BACKEND_PATCH_TARGET, make_work_item, patch_instructions_content, run_session_consumer
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import init as init_module
@@ -218,7 +218,7 @@ def _install_backend(monkeypatch: pytest.MonkeyPatch, backend: _HungBackend) -> 
     backend.on_spawn = kwargs["on_spawn"]
     return backend
 
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", _build)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _build)
   patch_instructions_content(monkeypatch)
 
 

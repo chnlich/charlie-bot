@@ -382,6 +382,14 @@ CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
 CLI_COMMON_REQUESTS_POST_PATCH_TARGET = "src.cli.common.requests.post"
 CLI_COMMON_REQUESTS_GET_PATCH_TARGET = "src.cli.common.requests.get"
 
+# Import-path patch target shared by every test that swaps the backend factory a master session
+# runs under. src/agents/master_cc_run.py binds the factory with call-time `from
+# src.agents.backends.registry import build_backend` inside its run/resume helpers, so
+# monkeypatch.setattr on the registry module attribute lands the stand-in where those imports
+# resolve. Module-scope binders of the same function (worker.py, autonamer.py, recap.py, ...)
+# keep their own namespaces and are not intercepted through this route.
+BUILD_BACKEND_PATCH_TARGET = "src.agents.backends.registry.build_backend"
+
 
 def plan_page_html(goal_body: str = "Ship the fix.") -> str:
   """Minimal plan page passing the plan assertion set: the shipped template's <style> block

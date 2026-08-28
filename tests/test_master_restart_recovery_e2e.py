@@ -1025,7 +1025,7 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(tmp_pat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "pid,pid_start",
+    ("pid", "pid_start"),
     [(999999, "1"), (None, None)],
     ids=["legacy-raw-missing", "never-started"],
 )

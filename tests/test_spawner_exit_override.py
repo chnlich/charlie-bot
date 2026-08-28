@@ -185,7 +185,7 @@ def test_helper_is_wired_into_spawn_worker_after_stream_events() -> None:
 
 
 @pytest.mark.parametrize(
-    "outcome,expected",
+    ("outcome", "expected"),
     [
         (spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""), False),
         (spawner._WorkerRunOutcome(exit_code=143, quota_exhausted=False, error=""), True),

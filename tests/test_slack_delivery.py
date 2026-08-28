@@ -338,7 +338,7 @@ async def test_reply_past_the_post_cap_posts_ordered_chunks_and_counts_them(tmp_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "text,expect_over_budget",
+    ("text", "expect_over_budget"),
     [("a short reply", False), ("z" * 600, True)],
 )
 async def test_readback_and_log_measure_the_reply_against_the_budget(
@@ -411,7 +411,7 @@ def test_route_returns_the_readback_json() -> None:
 
 
 @pytest.mark.parametrize(
-    "meta,session_id,text,status,detail_fragment",
+    ("meta", "session_id", "text", "status", "detail_fragment"),
     [
         (None, "s1", "hi", 404, "Session not found"),
         (SessionMetadata(id="s1", name="browser"), "s1", "hi", 409, "no Slack thread"),

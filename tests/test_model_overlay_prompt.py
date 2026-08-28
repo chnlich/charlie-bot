@@ -56,7 +56,7 @@ def _rendered_overlay_alert(event: dict) -> list[dict]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prompt_overlay, file_exists, expected_product, expects_alert",
+    ("prompt_overlay", "file_exists", "expected_product", "expects_alert"),
     [
         ("synthetic_overlay", True, "BASE PROMPT\n\nOVERLAY BODY", False),
         ("none", False, "BASE PROMPT", False),

@@ -195,7 +195,7 @@ _REAL_SESSION_EVENTS = _real_session_events()
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name,events", FIXTURE_EVENTS)
+@pytest.mark.parametrize(("name", "events"), FIXTURE_EVENTS)
 def test_projection_history_equals_events_to_messages(name: str, events: list[dict]) -> None:
   """projection.history must equal events_to_messages(all_events) by definition."""
   projection = MessageProjection(events)
@@ -224,7 +224,7 @@ def test_projection_pending_draft_fixture_has_draft() -> None:
   assert projection.history[1] is projection.pending_draft
 
 
-@pytest.mark.parametrize("name,events", _REAL_SESSION_EVENTS)
+@pytest.mark.parametrize(("name", "events"), _REAL_SESSION_EVENTS)
 def test_projection_history_equals_events_to_messages_real_sessions(name: str, events: list[dict]) -> None:
   """Definitional equivalence on real sessions under ~/.charliebot/sessions."""
   projection = MessageProjection(events)
@@ -335,7 +335,7 @@ def test_lossless_walk_on_reorder_session() -> None:
   assert len(collected) == len(full_ids)
 
 
-@pytest.mark.parametrize("name,events", _REAL_SESSION_EVENTS)
+@pytest.mark.parametrize(("name", "events"), _REAL_SESSION_EVENTS)
 def test_turn_aligned_backwards_walk_real_sessions(name: str, events: list[dict]) -> None:
   """Every page of a full backwards walk starts at a turn start and the pages
   tile the whole history — on every real session under ~/.charliebot/sessions."""

@@ -450,7 +450,7 @@ def _probe_cfg(tmp_path: Path) -> tuple[SimpleNamespace, dict[str, SimpleNamespa
   cfg = SimpleNamespace(
       headless_chrome_bin=write_stub_chrome(tmp_path, 800),
       model_preference=["alpha", "beta"],
-      get_backend_option=lambda entry_id: options.get(entry_id),
+      get_backend_option=options.get,
   )
   return cfg, options
 

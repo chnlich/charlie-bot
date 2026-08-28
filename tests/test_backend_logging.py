@@ -85,7 +85,7 @@ async def test_stderr_streams_live(tmp_path: Path) -> None:
   # Write 5 stderr lines spaced 0.1s apart, then exit. Total ~0.5s.
   script = (
       "for i in 1 2 3 4 5; do "
-      "echo \"err line $i\" 1>&2; sleep 0.1; "
+      'echo "err line $i" 1>&2; sleep 0.1; '
       "done\n"
       'printf \'{"type": "result", "result": "", "usage": {}}\\n\'\n'
       "exit 0\n"
@@ -121,7 +121,7 @@ async def test_stderr_streams_live(tmp_path: Path) -> None:
 async def test_no_log_dir_still_populates_stderr_text(tmp_path: Path) -> None:
   """Construct backend without log_dir; stderr_text still populated, no crash."""
   script = (
-      "echo \"on stderr\" 1>&2\n"
+      'echo "on stderr" 1>&2\n'
       'printf \'{"type": "result", "result": "", "usage": {}}\\n\'\n'
       "exit 0\n"
   )

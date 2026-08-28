@@ -3,7 +3,12 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BUILD_BACKEND_PATCH_TARGET, make_work_item, mock_session_callbacks, patch_instructions_content
+from conftest import (
+  BUILD_BACKEND_PATCH_TARGET,
+  make_work_item,
+  mock_session_callbacks,
+  patch_instructions_content,
+)
 from fastapi import HTTPException
 
 from src.agents import master_cc, master_cc_run

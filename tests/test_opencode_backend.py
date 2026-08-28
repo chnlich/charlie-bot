@@ -75,13 +75,13 @@ async def test_iter_sse_events_ignores_comments_and_metadata(monkeypatch) -> Non
           "event: message.updated",
           "id: event-1",
           "retry: 1000",
-          "data: {\"type\": \"server.connected\"}",
+          'data: {"type": "server.connected"}',
           "",
           ": another keepalive",
           "event: session.idle",
           "x-extra: ignored",
-          "data: {\"type\": \"session.idle\",",
-          "data: \"properties\": {\"sessionID\": \"session-1\"}}",
+          'data: {"type": "session.idle",',
+          'data: "properties": {"sessionID": "session-1"}}',
           "",
       ])
 

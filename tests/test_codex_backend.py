@@ -79,8 +79,8 @@ def test_build_command_defaults_to_xhigh_reasoning_effort(monkeypatch) -> None:
 
   cmd = backend._build_command("do the thing")
 
-  assert "model_reasoning_effort=\"xhigh\"" in cmd
-  idx = cmd.index("model_reasoning_effort=\"xhigh\"")
+  assert 'model_reasoning_effort="xhigh"' in cmd
+  idx = cmd.index('model_reasoning_effort="xhigh"')
   assert cmd[idx - 1] == "--config"
 
 
@@ -89,8 +89,8 @@ def test_build_command_uses_custom_reasoning_effort(monkeypatch) -> None:
 
   cmd = backend._build_command("do the thing")
 
-  assert "model_reasoning_effort=\"ultra\"" in cmd
-  idx = cmd.index("model_reasoning_effort=\"ultra\"")
+  assert 'model_reasoning_effort="ultra"' in cmd
+  idx = cmd.index('model_reasoning_effort="ultra"')
   assert cmd[idx - 1] == "--config"
 
 

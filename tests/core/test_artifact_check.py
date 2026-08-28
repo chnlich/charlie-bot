@@ -250,7 +250,7 @@ def test_fork_explainer_reports_every_open_fork_missing_a_details_layer(tmp_path
 def test_fork_explainer_passes_with_details_layer(tmp_path: Path) -> None:
   fork = _OPEN_FORK.replace("</div>", '<details class="details-layer"><summary>Why</summary><ul><li>w</li></ul></details></div>')
   doc = _genre_doc("sitrep", f'<section><h2><span class="n">1</span> S1</h2>{fork}</section>' + _sections([f"S{i}" for i in range(2, 6)]))
-  doc = doc.replace("<h2><span class=\"n\">2</span> S2</h2>", "<h2><span class=\"n\">2</span> S2</h2><p><span class=\"req\">r1</span></p>")
+  doc = doc.replace('<h2><span class="n">2</span> S2</h2>', '<h2><span class="n">2</span> S2</h2><p><span class="req">r1</span></p>')
   assert [o.passed for o in _run("sitrep", _write(tmp_path, doc))["fork-explainer"]] == [True]
 
 

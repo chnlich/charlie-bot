@@ -237,7 +237,7 @@ def test_exit_plan_mode_emits_plan_message_with_explicit_text() -> None:
                           "input": {
                               "plan": "Step 1\nStep 2"
                           }
-                      },],
+                      }],
                   },
               "timestamp": "t1",
           }))

@@ -30,7 +30,7 @@ class _ScriptedWebSocket:
   async def receive_text(self) -> str:
     if self._messages:
       return self._messages.pop(0)
-    raise WebSocketDisconnect()
+    raise WebSocketDisconnect
 
   async def send_json(self, payload: dict) -> None:
     self.sent.append(payload)

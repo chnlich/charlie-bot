@@ -61,7 +61,7 @@ def is_default_session_name(name: str) -> bool:
 
 _TITLE_INSTRUCTION = (
     "Generate a short, descriptive title (3-6 words) and assign a group for this conversation.\n"
-    "Return ONLY valid JSON: {{\"name\": \"<title>\", \"group\": \"<group>\"}}\n"
+    'Return ONLY valid JSON: {{"name": "<title>", "group": "<group>"}}\n'
     "No explanation, no markdown fences, no extra text.\n"
     "Use only names that appear verbatim in the conversation (project, repo, tool names); never invent abbreviations, codes, or new spellings.\n"
     "{groups_clause}")

@@ -38,8 +38,8 @@ def _blocks_to_text(content: Any, label: str) -> str:
   if not isinstance(content, list):
     raise ValueError(f"{label} must be a string or content block list")
   parts: list[str] = []
-  for block in content:
-    block = _require_dict(block, f"{label} block")
+  for raw_block in content:
+    block = _require_dict(raw_block, f"{label} block")
     block_type = block.get("type")
     if block_type != "text":
       raise ValueError(f"unsupported {label} block type: {block_type}")
@@ -67,8 +67,8 @@ def _convert_user_message(message: dict) -> list[dict]:
 
   converted: list[dict] = []
   text_parts: list[str] = []
-  for block in content:
-    block = _require_dict(block, "user content block")
+  for raw_block in content:
+    block = _require_dict(raw_block, "user content block")
     block_type = block.get("type")
     if block_type == "text":
       text_parts.append(str(block.get("text", "")))
@@ -98,8 +98,8 @@ def _convert_assistant_message(message: dict) -> dict:
 
   text_parts: list[str] = []
   tool_calls: list[dict] = []
-  for block in content:
-    block = _require_dict(block, "assistant content block")
+  for raw_block in content:
+    block = _require_dict(raw_block, "assistant content block")
     block_type = block.get("type")
     if block_type == "text":
       text_parts.append(str(block.get("text", "")))
@@ -131,8 +131,8 @@ def _convert_messages(messages: list[dict], system: Any) -> list[dict]:
   if system:
     converted.append({"role": "system", "content": _blocks_to_text(system, "system")})
 
-  for message in messages:
-    message = _require_dict(message, "message")
+  for raw_message in messages:
+    message = _require_dict(raw_message, "message")
     role = message.get("role")
     if role == "user":
       converted.extend(_convert_user_message(message))
@@ -145,8 +145,8 @@ def _convert_messages(messages: list[dict], system: Any) -> list[dict]:
 
 def _convert_tools(tools: list[dict]) -> list[dict]:
   converted: list[dict] = []
-  for tool in tools:
-    tool = _require_dict(tool, "tool")
+  for raw_tool in tools:
+    tool = _require_dict(raw_tool, "tool")
     if tool.get("type"):
       raise ValueError(f"unsupported Anthropic built-in tool type: {tool.get('type')}")
     name = tool.get("name")

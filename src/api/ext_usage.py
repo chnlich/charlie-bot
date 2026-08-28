@@ -334,8 +334,8 @@ def _extract_latest_codex_usage(
   effective_fetched_at = fetched_at or datetime.now(UTC).isoformat()
 
   # Scan lines in reverse for the latest token_count event
-  for line in reversed(lines):
-    line = line.strip()
+  for raw_line in reversed(lines):
+    line = raw_line.strip()
     if not line:
       continue
     try:
@@ -424,8 +424,8 @@ def _compute_codex_spend_windows(
 
     current_model = ""
     try:
-      for line_number, line in enumerate(path.read_text().splitlines(), start=1):
-        line = line.strip()
+      for line_number, raw_line in enumerate(path.read_text().splitlines(), start=1):
+        line = raw_line.strip()
         if not line:
           continue
         try:

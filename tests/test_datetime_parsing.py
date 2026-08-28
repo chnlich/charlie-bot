@@ -46,7 +46,7 @@ async def test_handle_stale_accepts_z_timestamp(
 
   monkeypatch.setattr("src.core.backlog_loop.git_add_commit_push", commit_mock)
   monkeypatch.setattr(
-      "src.core.backlog_loop.datetime", SimpleNamespace(now=lambda tz: datetime(2026, 4, 17, 2, 30, tzinfo=tz),))
+      "src.core.backlog_loop.datetime", SimpleNamespace(now=lambda tz: datetime(2026, 4, 17, 2, 30, tzinfo=tz)))
 
   modified = await _handle_stale(items, backlog_path, cfg, tmp_path)
 

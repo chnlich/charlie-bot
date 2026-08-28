@@ -3,7 +3,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import BUILD_BACKEND_PATCH_TARGET, FakeBackend, make_work_item, patch_instructions_content
+from conftest import (
+  BUILD_BACKEND_PATCH_TARGET,
+  FakeBackend,
+  make_work_item,
+  patch_instructions_content,
+)
 from conftest import make_transcript as _make_transcript
 from structlog.testing import capture_logs
 

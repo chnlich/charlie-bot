@@ -7,7 +7,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import BUILD_BACKEND_PATCH_TARGET, make_work_item, mock_session_callbacks, patch_instructions_content
+from conftest import (
+  BUILD_BACKEND_PATCH_TARGET,
+  make_work_item,
+  mock_session_callbacks,
+  patch_instructions_content,
+)
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.core import config as core_config

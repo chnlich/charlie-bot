@@ -530,7 +530,7 @@ def _run_poll_cycles(monkeypatch, *, accounts_fn, create_provider, n: int) -> di
   async def _fake_sleep(_):
     state["sleeps"] += 1
     if state["sleeps"] >= n:
-      raise _StopAfter()
+      raise _StopAfter
 
   async def _track_broadcast(_channel, event):
     state["broadcasts"] += 1

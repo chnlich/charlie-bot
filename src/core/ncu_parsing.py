@@ -104,10 +104,10 @@ _MSG_TYPE_LABELS = {0: "none", 1: "ok", 2: "optimization", 3: "warning", 4: "err
 # (label, attribute suffix, formatter) — every one is also in the raw metric set.
 _DEVICE_SUMMARY_FIELDS = [
     ("Device", "display_name", str),
-    ("Streaming multiprocessors", "multiprocessor_count", lambda v: int(v)),
-    ("Max threads / block", "max_threads_per_block", lambda v: int(v)),
-    ("Max warps / SM", "max_warps_per_multiprocessor", lambda v: int(v)),
-    ("Max shared mem / block", "max_shared_memory_per_block", lambda v: int(v)),
+    ("Streaming multiprocessors", "multiprocessor_count", int),
+    ("Max threads / block", "max_threads_per_block", int),
+    ("Max warps / SM", "max_warps_per_multiprocessor", int),
+    ("Max shared mem / block", "max_shared_memory_per_block", int),
 ]
 
 _TIME_UNIT_TO_NS = {

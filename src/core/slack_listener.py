@@ -375,6 +375,7 @@ async def _post_with_retry(client: SlackClient, channel: str, thread_ts: str, te
       logger.warning("slack_post_retry", session=session_id, channel=channel, thread_ts=thread_ts,
                      attempt=attempt + 1, error=str(e))
       await asyncio.sleep(_RETRY_DELAYS[attempt])
+  raise AssertionError("unreachable: the last loop iteration returns (attempt == attempts - 1)")
 
 
 def _ack_clear(client: SlackClient, slack_block: dict, session_id: str) -> None:

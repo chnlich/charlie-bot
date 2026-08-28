@@ -13,8 +13,6 @@ one place; consumers keep their per-line parsing logic unchanged.
 import codecs
 from collections.abc import AsyncIterator
 
-import httpx
-
 
 def split_sse_lines(buffer: str, *, final: bool) -> tuple[list[str], str]:
   """Split complete SSE lines off ``buffer`` and return ``(lines, remainder)``.
@@ -51,7 +49,7 @@ def split_sse_lines(buffer: str, *, final: bool) -> tuple[list[str], str]:
   return lines, remainder
 
 
-async def iter_sse_lines(response: httpx.Response) -> AsyncIterator[str]:
+async def iter_sse_lines(response) -> AsyncIterator[str]:
   """Yield SSE lines from ``response.aiter_bytes()``.
 
   Decodes incrementally with a UTF-8 decoder using ``errors="replace"``

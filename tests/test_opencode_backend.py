@@ -33,17 +33,28 @@ class _FakeEventStream:
 
 
 class _FakeSseResponse:
-  """SSE response double: each line arrives as one pre-chunked byte piece."""
+  """SSE response double over pre-chunked bytes (one chunk per line)."""
 
   def __init__(self, lines: list[str]) -> None:
     self._lines = lines
+
+  async def aiter_bytes(self):
+    for line in self._lines:
+      yield (line + "\n").encode("utf-8")
+
+
+class _FakeRawChunksResponse:
+  """SSE response double over arbitrary pre-cut byte chunks."""
+
+  def __init__(self, chunks: list[bytes]) -> None:
+    self._chunks = chunks
 
   def raise_for_status(self) -> None:
     pass
 
   async def aiter_bytes(self):
-    for line in self._lines:
-      yield (line + "\n").encode("utf-8")
+    for chunk in self._chunks:
+      yield chunk
 
 
 class _FakeOneShotStdout:
@@ -87,6 +98,88 @@ async def test_iter_sse_events_ignores_comments_and_metadata(monkeypatch) -> Non
           }
       },
   ]
+
+
+@pytest.mark.asyncio
+async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkeypatch, tmp_path: Path) -> None:
+  """Regression for run 6dc42358: a message.part.updated frame whose JSON string
+  carries raw U+0085/U+2028 (which JSON.stringify leaves unescaped and the SSE
+  spec keeps inside the line) must parse as exactly one event through the full
+  backend chain instead of dying with 'Unterminated string'."""
+  _patch_watchdog_timeout(monkeypatch)
+  backend = _build_backend(monkeypatch, model="provider/model")
+  nel = "\x85"
+  ls = "\u2028"
+  part_text = '...identifier\\");else{a:48<' + nel + ">NEL-CHAR" + ls + '>LS-CHAR"},"status":"running",...'
+  payload = json.dumps(
+      {
+          "type": "message.part.updated",
+          "properties": {
+              "sessionID": "session-1",
+              "part": {
+                  "messageID": "m1",
+                  "id": "part-1",
+                  "type": "text",
+                  "text": part_text,
+              },
+          },
+      },
+      ensure_ascii=False,
+  )
+  raw_frame = ("data: " + payload + "\n\n").encode("utf-8")
+  cut_nel = raw_frame.index(nel.encode("utf-8")) + 1
+  cut_ls = raw_frame.index(ls.encode("utf-8"))
+  chunks = [
+      b'data: {"type": "server.connected", "properties": {}}\n',
+      b"\n",
+      b'data: {"type": "message.updated", "properties": {"sessionID": "session-1", '
+      b'"info": {"id": "m1", "role": "assistant"}}}\n',
+      b"\n",
+      raw_frame[:cut_nel],
+      raw_frame[cut_nel:cut_ls],
+      raw_frame[cut_ls:],
+      b'data: {"type": "session.idle", "properties": {"sessionID": "session-1"}}\n',
+      b"\n",
+  ]
+
+  parsed = [
+      event async for event in backend._iter_sse_events(_FakeRawChunksResponse(chunks))
+  ]
+  assert parsed == [json.loads(payload)]
+  assert parsed[0]["properties"]["part"]["text"] == part_text
+
+  process = MagicMock()
+  process.pid = 4321
+  process.returncode = 0
+  process.wait = AsyncMock(return_value=0)
+  monkeypatch.setattr(
+      "src.agents.backends.opencode.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
+  monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
+  monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
+  monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())
+  monkeypatch.setattr(backend, "_check_health", AsyncMock())
+  monkeypatch.setattr(backend, "_fetch_model_limit", AsyncMock(return_value=None))
+  monkeypatch.setattr(backend, "_create_session", AsyncMock(return_value="session-1"))
+  monkeypatch.setattr(backend, "_send_prompt", AsyncMock())
+  monkeypatch.setattr(
+      "src.agents.backends.opencode.httpx.AsyncClient",
+      lambda **kwargs: _FakeRunHttpClient(_FakeRawChunksResponse(chunks)))
+
+  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
+
+  error_events = [event for event in events if event.get("type") == ET.ERROR]
+  assert error_events == []
+  text_events = [event for event in events if event.get("type") == ET.ASSISTANT]
+  assert text_events == [{
+      "type": ET.ASSISTANT,
+      "message": {
+          "content": [{
+              "type": "text",
+              "text": part_text,
+          }]
+      },
+  }]
+  assert backend.exit_code == 0
 
 
 def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch) -> None:
@@ -1163,83 +1256,3 @@ async def test_sse_watchdog_timeout_fails_run_end_to_end(monkeypatch, tmp_path: 
   abort_session.assert_awaited_once()
   process.wait.assert_awaited()
   assert "opencode_sse_silence_timeout" in capsys.readouterr().out
-
-
-@pytest.mark.asyncio
-async def test_sse_frame_with_raw_line_boundary_characters_parses_as_one_event(
-    monkeypatch, tmp_path: Path) -> None:
-  """Regression for production run 6dc42358: a message.part.updated frame whose
-  JSON string legitimately carries raw U+0085/U+2028/U+2029 parses into exactly
-  one event, field-by-field equal to parsing the un-split frame, and the run
-  completes with the text intact. httpx's splitlines-based aiter_lines() cut
-  such frames mid-string and json.loads failed with 'Unterminated string'."""
-  backend = _build_backend(monkeypatch, model="provider/model")
-
-  part_text = "if(!a)return this.identifier\\\",else{a:48<\x85nel:kept\\\";ls\u2028line:kept\u2029"
-  part = {
-      "messageID": "message-1",
-      "id": "part-1",
-      "type": "text",
-      "text": part_text,
-  }
-  part_frame = json.dumps(
-      {"type": "message.part.updated", "properties": {"sessionID": "session-1", "part": part}},
-      ensure_ascii=False)
-  assert "\x85" in part_frame
-  assert "\u2028" in part_frame
-
-  # Splitter level: the frame's data payload is exactly one event, equal
-  # field-by-field to parsing the un-split frame.
-  sse_events = [
-      event async for event in backend._iter_sse_events(
-          _FakeSseResponse(["data: " + part_frame, ""]))
-  ]
-  assert sse_events == [json.loads(part_frame)]
-  assert "\x85" in sse_events[0]["properties"]["part"]["text"]
-  assert "\u2028" in sse_events[0]["properties"]["part"]["text"]
-  assert "\u2029" in sse_events[0]["properties"]["part"]["text"]
-
-  # Full run chain: the frame's text survives watchdog, translation, and turn end.
-  process = MagicMock()
-  process.pid = 4321
-  process.returncode = 0
-  process.wait = AsyncMock(return_value=0)
-  monkeypatch.setattr(
-      "src.agents.backends.opencode.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
-  monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
-  monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
-  monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())
-  monkeypatch.setattr(backend, "_check_health", AsyncMock())
-  monkeypatch.setattr(backend, "_fetch_model_limit", AsyncMock(return_value=None))
-  monkeypatch.setattr(backend, "_create_session", AsyncMock(return_value="session-1"))
-  monkeypatch.setattr(backend, "_send_prompt", AsyncMock())
-  monkeypatch.setattr(backend, "_abort_session", AsyncMock())
-  run_lines = [
-      'data: {"type": "server.connected", "properties": {}}',
-      "",
-      'data: {"type": "message.updated", "properties": {"sessionID": "session-1", "info": '
-      '{"id": "message-1", "role": "assistant", "sessionID": "session-1"}}}',
-      "",
-      "data: " + part_frame,
-      "",
-      'data: {"type": "session.idle", "properties": {"sessionID": "session-1"}}',
-      "",
-  ]
-  monkeypatch.setattr(
-      "src.agents.backends.opencode.httpx.AsyncClient",
-      lambda **kwargs: _FakeRunHttpClient(_FakeDelayedStreamResponse([(0.0, line)
-                                                                       for line in run_lines])))
-
-  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
-
-  assert [event for event in events if event.get("type") == ET.ERROR] == []
-  text_events = [
-      event for event in events
-      if event.get("type") == ET.ASSISTANT
-      and event.get("message", {}).get("content", [{}])[0].get("type") == "text"
-  ]
-  assert len(text_events) == 1
-  assert text_events[0]["message"]["content"][0]["text"] == part_text
-  assert text_events[0]["message"]["content"][0]["text"] == json.loads(part_frame)["properties"][
-      "part"]["text"]
-  assert backend.exit_code == 0

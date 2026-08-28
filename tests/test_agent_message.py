@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from conftest import (
   CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+  CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
   FakeSessionManager,
   make_json_response,
 )
@@ -221,7 +222,7 @@ def test_cli_session_create_posts_metadata_only_payload(tmp_path: Path) -> None:
 
   with patch("sys.argv", ["session", "create", "--name", "task-a", "--backend", "codex-o3", "--role", "project"]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     session_cli_main()
 
   assert post_mock.call_count == 1
@@ -237,7 +238,7 @@ def test_cli_session_create_group_triggers_second_group_call(tmp_path: Path) -> 
 
   with patch("sys.argv", ["session", "create", "--name", "task-a", "--group", "bp-eval"]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", side_effect=[create_resp, group_resp]) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, side_effect=[create_resp, group_resp]) as post_mock:
     session_cli_main()
 
   assert post_mock.call_count == 2
@@ -254,7 +255,7 @@ def test_cli_session_send_relays_message(tmp_path: Path) -> None:
 
   with patch("sys.argv", ["session", "send", "target-id", "--message", "relay this", "--session", "caller-id"]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     session_cli_main()
 
   assert post_mock.call_count == 1
@@ -275,7 +276,7 @@ def test_cli_session_send_reads_message_file(tmp_path: Path) -> None:
 
   with patch("sys.argv", ["session", "send", "target-id", "--file", str(msg_file), "--session", "caller-id"]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch("src.cli.common.requests.post", return_value=resp) as post_mock:
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     session_cli_main()
 
   assert post_mock.call_args[1]["json"]["content"] == "file content relay"

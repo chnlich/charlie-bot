@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, TRIGGER_MASTER_PATCH_TARGET
+from conftest import BROADCAST_PATCH_TARGET, TRIGGER_MASTER_PATCH_TARGET, fake_cli_cfg
 from pydantic import ValidationError
 
 from src.cli import schedule_trigger as cli_module
@@ -22,18 +22,6 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager
-
-
-def _fake_cli_cfg(monkeypatch, triggers_dir: Path | None = None) -> None:
-  """Point the CLI HTTP layer at a fake config so tests never touch a real server."""
-
-  class _Cfg:
-    server_base_url = "https://server"
-    charliebot_access_key = ""
-    sessions_dir = triggers_dir if triggers_dir is not None else Path("/nonexistent-sessions")
-
-  monkeypatch.setattr("src.cli.common.get_config", lambda: _Cfg())
-
 
 # ---------------------------------------------------------------------------
 # CLI: 201-char --message rejected before any network call, exit 2
@@ -50,7 +38,7 @@ def test_cli_rejects_201_char_message(
       "--max-wait", "60",
       "--message", "x" * 201,
   ]
-  _fake_cli_cfg(monkeypatch, triggers_dir)
+  fake_cli_cfg(monkeypatch, triggers_dir)
 
   with patch.object(sys, "argv", argv):
     with patch("src.cli.schedule_trigger.post_internal_api") as mock_post:

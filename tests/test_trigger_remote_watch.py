@@ -15,6 +15,7 @@ from conftest import (
   TRIGGER_MASTER_PATCH_TARGET,
   FakeAsyncProcess,
   assert_trigger_fired_completed,
+  fake_cli_cfg,
   patch_trigger_fire,
 )
 from conftest import make_trigger_setup as _make_mgr
@@ -379,17 +380,6 @@ def test_cli_parse_rejects_bad_pid() -> None:
       cli_module._parse_watch_target(bad)
 
 
-def _fake_cli_cfg(monkeypatch) -> None:
-  """Point the CLI HTTP layer at a fake config so tests never touch a real server."""
-
-  class _Cfg:
-    server_base_url = "https://server"
-    charliebot_access_key = ""
-    sessions_dir = Path("/nonexistent-sessions")
-
-  monkeypatch.setattr("src.cli.common.get_config", lambda: _Cfg())
-
-
 def _fake_200_post(captured: dict):
 
   class _FakeResp:
@@ -418,7 +408,7 @@ def test_cli_accepts_mixed_kinds(monkeypatch) -> None:
       "--watch", "1234", "neptune:5678", "slurm:99",
   ]
   captured: dict = {}
-  _fake_cli_cfg(monkeypatch)
+  fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
 
   monkeypatch.setattr("src.cli.common.requests.post", _fake_200_post(captured))
   with patch.object(sys, "argv", argv):
@@ -464,7 +454,7 @@ def test_cli_max_wait_accepted(monkeypatch) -> None:
       "--message", "hello",
   ]
   captured: dict = {}
-  _fake_cli_cfg(monkeypatch)
+  fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
 
   monkeypatch.setattr("src.cli.common.requests.post", _fake_200_post(captured))
   with patch.object(sys, "argv", argv):
@@ -485,7 +475,7 @@ def test_cli_remote_dead_exits_with_code_2(monkeypatch) -> None:
       "--message", "hello",
       "--watch", "neptune:5678",
   ]
-  _fake_cli_cfg(monkeypatch)
+  fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
 
   class _FakeResp:
     status_code = 422

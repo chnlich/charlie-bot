@@ -48,7 +48,7 @@ def _parse_pre_takeoff_timestamp(event: dict, session_id: str) -> datetime | Non
     )
     return None
   try:
-    issued_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    issued_at = datetime.fromisoformat(timestamp)
   except ValueError:
     log.warning(
         "pre_takeoff_timestamp_unparseable",

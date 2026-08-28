@@ -467,6 +467,38 @@ def test_derived_state_enum_reserves_zero_unknown() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _good_plus_bad_plans_payload() -> dict:
+  """One loadable plan (id 1, one initial version) and one that fails per-plan validation (id 2, empty versions)."""
+  return {
+      "plans":
+          [
+              {
+                  "id": 1,
+                  "title": "Good",
+                  "versions":
+                      [
+                          {
+                              "v": 1,
+                              "file": "artifacts/plan_01.html",
+                              "created_at": "2026-07-20T00:00:00+00:00",
+                              "trigger": "initial",
+                              "base": None,
+                          }
+                      ],
+                  "takeoff": None,
+                  "closed": None,
+              },
+              {
+                  "id": 2,
+                  "title": "Bad",
+                  "versions": [],
+                  "takeoff": None,
+                  "closed": None,
+              },
+          ]
+  }
+
+
 def test_read_plans_tolerant_missing_file(tmp_path: Path) -> None:
   result = read_plans_tolerant(tmp_path / "missing.json", "sess")
   assert result == {"plans": [], "errors": []}
@@ -495,34 +527,7 @@ def test_read_plans_tolerant_non_dict_top_level_returns_one_file_level_error(tmp
 
 def test_read_plans_tolerant_per_plan_failure_skips_bad_and_keeps_good(tmp_path: Path) -> None:
   p = tmp_path / "plans.json"
-  data = {
-      "plans":
-          [
-              {
-                  "id": 1,
-                  "title": "Good",
-                  "versions":
-                      [
-                          {
-                              "v": 1,
-                              "file": "artifacts/plan_01.html",
-                              "created_at": "2026-07-20T00:00:00+00:00",
-                              "trigger": "initial",
-                              "base": None,
-                          }
-                      ],
-                  "takeoff": None,
-                  "closed": None,
-              },
-              {
-                  "id": 2,
-                  "title": "Bad",
-                  "versions": [],
-                  "takeoff": None,
-                  "closed": None,
-              },
-          ]
-  }
+  data = _good_plus_bad_plans_payload()
   p.write_text(json.dumps(data), encoding="utf-8")
   result = read_plans_tolerant(p, "sess")
   assert len(result["plans"]) == 1
@@ -590,34 +595,7 @@ async def test_list_plans_partial_degradation_returns_valid_plan_and_error(tmp_p
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   plans_path = cfg.sessions_dir / meta.id / "plans.json"
   plans_path.parent.mkdir(parents=True, exist_ok=True)
-  data = {
-      "plans":
-          [
-              {
-                  "id": 1,
-                  "title": "Good",
-                  "versions":
-                      [
-                          {
-                              "v": 1,
-                              "file": "artifacts/plan_01.html",
-                              "created_at": "2026-07-20T00:00:00+00:00",
-                              "trigger": "initial",
-                              "base": None,
-                          }
-                      ],
-                  "takeoff": None,
-                  "closed": None,
-              },
-              {
-                  "id": 2,
-                  "title": "Bad",
-                  "versions": [],
-                  "takeoff": None,
-                  "closed": None,
-              },
-          ]
-  }
+  data = _good_plus_bad_plans_payload()
   plans_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
   listing = await plan_mgr.list_plans(meta.id)

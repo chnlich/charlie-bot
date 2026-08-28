@@ -549,12 +549,18 @@ def _run_poll_cycles(monkeypatch, *, accounts_fn, create_provider, n: int) -> di
   return state
 
 
-def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeypatch) -> None:
-  main_value = {
-      "windows": [{"window_minutes": 300, "utilization": 42.0, "resets_at": ""}],
+def _claude_fetch_value(utilization: float) -> dict:
+  """A claude poll fetch result: one 300-minute window at the given utilization plus
+  fetched_at/provider metadata. Fresh dict per call, so no two tests share a windows list."""
+  return {
+      "windows": [{"window_minutes": 300, "utilization": utilization, "resets_at": ""}],
       "fetched_at": "2026-01-01T00:00:00+00:00",
       "provider": "claude",
   }
+
+
+def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeypatch) -> None:
+  main_value = _claude_fetch_value(42.0)
 
   def create_provider(provider, label, dir_path):
     if label == "main":
@@ -581,11 +587,7 @@ def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeyp
 
 def test_poll_stale_keep_on_fetch_failure(monkeypatch) -> None:
   fetch_no = {"i": 0}
-  original = {
-      "windows": [{"window_minutes": 300, "utilization": 42.0, "resets_at": ""}],
-      "fetched_at": "2026-01-01T00:00:00+00:00",
-      "provider": "claude",
-  }
+  original = _claude_fetch_value(42.0)
 
   def create_provider(provider, label, dir_path):
     def get_value():
@@ -610,11 +612,7 @@ def test_poll_drops_removed_account_on_next_rebuild(monkeypatch) -> None:
   def create_provider(provider, label, dir_path):
     def get_value():
       fetch_no["i"] += 1
-      return {
-          "windows": [{"window_minutes": 300, "utilization": float(fetch_no["i"]), "resets_at": ""}],
-          "fetched_at": "2026-01-01T00:00:00+00:00",
-          "provider": "claude",
-      }
+      return _claude_fetch_value(float(fetch_no["i"]))
     return _FakeProvider(get_value)
 
   call = {"i": 0}
@@ -646,11 +644,7 @@ def test_poll_round_robin_fetches_accounts_in_derivation_order(monkeypatch) -> N
   def create_provider(provider, label, dir_path):
     def get_value():
       fetch_order.append(label)
-      return {
-          "windows": [{"window_minutes": 300, "utilization": 1.0, "resets_at": ""}],
-          "fetched_at": "2026-01-01T00:00:00+00:00",
-          "provider": "claude",
-      }
+      return _claude_fetch_value(1.0)
     return _FakeProvider(get_value)
 
   accounts = {
@@ -667,11 +661,7 @@ def test_poll_round_robin_fetches_accounts_in_derivation_order(monkeypatch) -> N
 
 def test_poll_broadcasts_once_per_fetch_not_per_round(monkeypatch) -> None:
   def create_provider(provider, label, dir_path):
-    return _FakeProvider(lambda: {
-        "windows": [{"window_minutes": 300, "utilization": 1.0, "resets_at": ""}],
-        "fetched_at": "2026-01-01T00:00:00+00:00",
-        "provider": "claude",
-    })
+    return _FakeProvider(lambda: _claude_fetch_value(1.0))
 
   accounts = {"claude": [("main", "/fake/main"), ("invite-1", "/fake/invite-1")], "codex": []}
   derive_count = {"i": 0}
@@ -690,11 +680,7 @@ def test_poll_broadcasts_once_per_fetch_not_per_round(monkeypatch) -> None:
 
 
 def test_poll_prunes_removed_account_cache_key_at_round_boundary(monkeypatch) -> None:
-  good = {
-      "windows": [{"window_minutes": 300, "utilization": 7.0, "resets_at": ""}],
-      "fetched_at": "2026-01-01T00:00:00+00:00",
-      "provider": "claude",
-  }
+  good = _claude_fetch_value(7.0)
   main_calls = {"i": 0}
 
   def main_get():
@@ -749,11 +735,7 @@ def test_poll_empty_round_guard_sleeps_once_before_rederiving(monkeypatch) -> No
 def test_poll_outer_exception_still_backs_off_before_retrying(monkeypatch) -> None:
   """A non-fetch exception (e.g. from ``_derive_accounts``) must hit a backoff
   sleep, not spin the outer loop with no await point."""
-  good = {
-      "windows": [{"window_minutes": 300, "utilization": 1.0, "resets_at": ""}],
-      "fetched_at": "2026-01-01T00:00:00+00:00",
-      "provider": "claude",
-  }
+  good = _claude_fetch_value(1.0)
   accounts = {"claude": [("main", "/fake/main")], "codex": []}
   derive_count = {"i": 0}
 
@@ -1033,11 +1015,7 @@ def test_poll_seeds_pending_rows_so_no_account_is_missing_from_the_first_broadca
   fixed. Seeding costs no extra request: the placeholders ride along in the
   broadcast the first real fetch already sends.
   """
-  main_value = {
-      "windows": [{"window_minutes": 300, "utilization": 42.0, "resets_at": ""}],
-      "fetched_at": "2026-01-01T00:00:00+00:00",
-      "provider": "claude",
-  }
+  main_value = _claude_fetch_value(42.0)
 
   def create_provider(provider, label, dir_path):
     if provider == "claude" and label == "main":

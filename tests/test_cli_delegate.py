@@ -222,10 +222,7 @@ def test_main_repo_task_types_require_repo_and_base_branch(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
   task_spec_file = _write_task_spec(tmp_path)
-  if provide_repo:
-    argv_tail = ["--repo", str(tmp_path)]
-  else:
-    argv_tail = ["--base-branch", "main"]
+  argv_tail = ["--repo", str(tmp_path)] if provide_repo else ["--base-branch", "main"]
 
   with patch(
       "sys.argv",

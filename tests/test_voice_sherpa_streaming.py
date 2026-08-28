@@ -53,7 +53,7 @@ def _normalize_for_cer(text: str) -> str:
   chars: list[str] = []
   for ch in text.casefold():
     category = unicodedata.category(ch)
-    if category.startswith("P") or category.startswith("S") or ch.isspace():
+    if category.startswith(("P", "S")) or ch.isspace():
       continue
     chars.append(ch)
   return "".join(chars)

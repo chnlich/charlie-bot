@@ -68,8 +68,8 @@ async def test_subprocess_hang_after_result_captures_diagnostics(
   assert backend.hang_diagnostics is not None
   diag = backend.hang_diagnostics
   assert "captured_at" in diag
-  assert "process_tree" in diag and diag["process_tree"]
-  assert "status" in diag and diag["status"]
+  assert diag.get("process_tree")
+  assert diag.get("status")
   assert "fds" in diag
   assert "children" in diag
   assert (log_dir / "agent.raw.ndjson").read_bytes() == (result_line + "\n").encode("utf-8")

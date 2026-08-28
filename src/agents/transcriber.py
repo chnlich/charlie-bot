@@ -161,7 +161,7 @@ def models_are_cached(cfg: CharlieBotConfig) -> bool:
   return all(path.is_file() for path in _qwen3_model_files(paths)) and paths.silero_vad.is_file()
 
 
-def create_transcription_session() -> "SimulatedStreamingTranscriptionSession":
+def create_transcription_session() -> SimulatedStreamingTranscriptionSession:
   paths = get_ready_model_paths()
   bundle = _get_model_bundle(paths)
   return SimulatedStreamingTranscriptionSession(bundle)

@@ -11,7 +11,12 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import OPUS_BACKEND_OPTION, FakeThreadManager, close_create_logged_task
+from conftest import (
+  OPUS_BACKEND_OPTION,
+  SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
+  FakeThreadManager,
+  close_create_logged_task,
+)
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig
@@ -69,7 +74,7 @@ async def test_scheduled_prompt_task_hands_injected_session_manager_to_worker(
       AsyncMock(return_value=("claude-opus-4.6", "claude-opus-4-6")),
   )
   monkeypatch.setattr("src.core.scheduler.spawn_worker", fake_spawn_worker)
-  monkeypatch.setattr("src.core.scheduler.create_logged_task", close_create_logged_task)
+  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
 
   await scheduler._execute_task(task_cfg)
 

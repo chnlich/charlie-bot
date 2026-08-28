@@ -383,6 +383,13 @@ CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
 SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET = "src.core.slack_listener.trigger_master"
 SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.slack_listener.create_logged_task"
 
+# Import-path patch target for the background-task spawner a scheduled task fires through.
+# src/core/scheduler.py binds the name at import scope (`from src.core.tasks import
+# create_logged_task`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler
+# module attribute and _execute_master_task/_spawn_scheduled_worker read it at call time; the
+# src.core.slack_listener route above reaches a different namespace.
+SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_task"
+
 # Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py binds the
 # library with module-scope `import requests`, and its helpers read requests.get at call time
 # and pick requests.post inside call_internal_api's `request_fn = requests.post if ... else

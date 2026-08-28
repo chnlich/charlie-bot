@@ -10,6 +10,7 @@ import pytest
 from conftest import (
   BROADCAST_PATCH_TARGET,
   TRIGGER_MASTER_PATCH_TARGET,
+  TRIGGERS_GET_CONFIG_PATCH_TARGET,
   make_home_session,
 )
 from conftest import make_parent as _make_parent
@@ -66,7 +67,7 @@ async def test_firing_trigger_eloned_delivers_into_successor_and_wakes(tmp_path:
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
       patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
-      patch("src.core.triggers.get_config", return_value=cfg),
+      patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ):
     trigger = await trigger_mgr.create_trigger(parent_id, delay_seconds=0, message="wake successor")
     task = trigger_mgr._tasks[trigger.id]

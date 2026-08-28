@@ -369,6 +369,13 @@ BROADCAST_PATCH_TARGET = "src.core.sessions.streaming_manager.broadcast"
 # their own routes; grep `from src.core.master_trigger import trigger_master` for the full set.
 TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
 
+# Import-path patch target for the config re-read a firing trigger passes to the master wake.
+# src/core/triggers.py binds the name at import scope (`from src.core.config import get_config`),
+# so mock setattrs the stand-in on the src.core.triggers module attribute and _wait_and_fire's
+# wake path reads it at call time. Sibling modules binding get_config in their own namespaces
+# keep their own routes.
+TRIGGERS_GET_CONFIG_PATCH_TARGET = "src.core.triggers.get_config"
+
 # Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py binds the
 # name with `from src.core.config import get_config`, so mock setattrs the stand-in on the
 # src.cli.common module attribute and every helper defined there reads it at call time.

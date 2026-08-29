@@ -7,28 +7,14 @@ fragments must load to the exact same ``CharlieBotConfig``.
 """
 
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from conftest import reset_config_caches
 
 from src.core import config as core_config
 from src.core.config import CharlieBotConfig
 from src.core.yaml_utils import load_yaml, save_yaml
-
-
-@pytest.fixture(autouse=True)
-def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-  """Point the profile at a fresh tmp dir and clear the module caches.
-
-  ``get_config()`` caches process-wide on a fingerprint, so an instance from an
-  earlier test would answer with the wrong profile.
-  """
-  monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(tmp_path))
-  reset_config_caches()
-  yield tmp_path
-  reset_config_caches()
 
 
 def _example_mapping() -> dict:

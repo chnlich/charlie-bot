@@ -24,20 +24,15 @@ from conftest import (
   build_scheduler_cfg,
   close_create_logged_task,
   make_cron_client,
+  make_sessions_client,
 )
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from src.agents import master_cc
-from src.api import sessions as sessions_api
-from src.api.deps import get_session_manager
 from src.core.config import (
-  CharlieBotConfig,
   ImprovementLoopConfig,
   ScheduledTaskConfig,
   _validate_cron_body,
-  get_config,
 )
 from src.core.models import (
   PROJECT_ROLE,
@@ -364,14 +359,6 @@ def test_cron_update_enabling_conflicting_master_task_is_409(cron_dir: Path, tmp
 # ---------------------------------------------------------------------------
 
 
-def _build_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
-  app = FastAPI()
-  app.include_router(sessions_api.router, prefix="/api/sessions")
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  return TestClient(app)
-
-
 @pytest.mark.asyncio
 async def test_role_bound_scheduled_session_backend_switch_writes_through_and_rotates(
     cron_dir: Path,
@@ -398,7 +385,7 @@ async def test_role_bound_scheduled_session_backend_switch_writes_through_and_ro
   )
   await session_mgr.set_group(pm.id, "bp-eval")
 
-  with _build_sessions_client(cfg, session_mgr) as client:
+  with make_sessions_client(cfg, session_mgr) as client:
     resp = client.post(f"/api/sessions/{pm.id}/backend", json={"backend": "codex-o3"})
 
   assert resp.status_code == 200
@@ -430,7 +417,7 @@ async def test_regular_scheduled_session_without_role_keeps_clone_fork_guard(tmp
       backend="claude-opus-4.6",
   )
 
-  with _build_sessions_client(cfg, session_mgr) as client:
+  with make_sessions_client(cfg, session_mgr) as client:
     resp = client.post(f"/api/sessions/{worker.id}/backend", json={"backend": "codex-o3"})
 
   assert resp.status_code == 400

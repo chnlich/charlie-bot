@@ -489,9 +489,13 @@ class AgentBackend(ABC):
         limit=self._buffer_limit,
         start_new_session=True,
     )
+    await self._pin_identity_and_fire_on_spawn()
+
+  async def _pin_identity_and_fire_on_spawn(self) -> None:
     # Pin the process identity BEFORE on_spawn so the callback can persist
     # (pid, pid_start) together; a proc that exited before we could read its
     # stat simply yields None and can never be judged alive later.
+    assert self._proc is not None
     stat_pair = runs.read_pid_stat(self._proc.pid)
     self.pid_start = stat_pair[0] if stat_pair else None
     if self._on_spawn is not None:
@@ -552,16 +556,9 @@ class AgentBackend(ABC):
       os.close(raw_fd)
       os.close(stderr_fd)
 
-    # Pin the process identity BEFORE on_spawn so the callback can persist
-    # (pid, pid_start) together; a proc that exited before we could read its
-    # stat simply yields None and can never be judged alive later.
-    stat_pair = runs.read_pid_stat(self._proc.pid)
-    self.pid_start = stat_pair[0] if stat_pair else None
-
     if stdin_prompt is not None:
       self._stdin_task = asyncio.create_task(self._write_stdin_prompt(stdin_prompt))
-    if self._on_spawn is not None:
-      await self._on_spawn(self._proc.pid)
+    await self._pin_identity_and_fire_on_spawn()
 
     try:
       async for event in tail_follow_events(

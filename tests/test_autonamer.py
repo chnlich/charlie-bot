@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
+  ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
   CODEX_RESOLVE_BINARY_PATCH_TARGET,
   OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
   SYNTHETIC_MODEL,
@@ -583,7 +584,7 @@ async def test_claude_one_shot_text_uses_model_and_returns_stdout() -> None:
   proc.returncode = 0
   proc.pid = 4321
 
-  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)) as mock_exec:
+  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
     backend = ClaudeCodeBackend(model="haiku")
     result = await backend.one_shot_text("the prompt", "the system prompt", timeout=5.0)
 
@@ -605,7 +606,7 @@ async def test_claude_one_shot_text_raises_on_nonzero_exit() -> None:
   proc.returncode = 2
   proc.pid = 4322
 
-  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = ClaudeCodeBackend(model="haiku")
     with pytest.raises(RuntimeError, match="claude CLI failed"):
       await backend.one_shot_text("p", "s", timeout=5.0)
@@ -633,7 +634,7 @@ async def test_codex_one_shot_text_accumulates_agent_message(monkeypatch) -> Non
   proc.pid = 9999
   proc.returncode = 0
 
-  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)) as mock_exec:
+  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
     backend = CodexBackend(model="gpt-x", model_reasoning_effort="high")
     result = await backend.one_shot_text("hello prompt", "sys prompt", timeout=5.0)
 
@@ -667,7 +668,7 @@ async def test_codex_one_shot_text_returns_empty_when_no_agent_message(monkeypat
   proc.pid = 9998
   proc.returncode = 0
 
-  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = CodexBackend(model="gpt-x")
     with pytest.raises(RuntimeError, match="no assistant text"):
       await backend.one_shot_text("hi", "sys", timeout=5.0)
@@ -695,7 +696,7 @@ async def test_opencode_one_shot_text_extracts_text_from_flat_part_event(monkeyp
   proc.wait = AsyncMock(return_value=0)
   proc.pid = 7777
 
-  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)) as mock_exec:
+  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
     backend = OpenCodeBackend(model=SYNTHETIC_MODEL)
     result = await backend.one_shot_text("hello prompt", "sys prompt", timeout=5.0)
 
@@ -728,7 +729,7 @@ async def test_opencode_one_shot_text_returns_empty_when_no_text_part(monkeypatc
   proc.wait = AsyncMock(return_value=0)
   proc.pid = 7776
 
-  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = OpenCodeBackend(model=SYNTHETIC_MODEL)
     result = await backend.one_shot_text("hi", "sys", timeout=5.0)
 

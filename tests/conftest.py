@@ -427,6 +427,14 @@ TRIGGERS_GET_CONFIG_PATCH_TARGET = "src.core.triggers.get_config"
 # stand-in on the asyncio module through the src.core.triggers route.
 TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.core.triggers.asyncio.create_subprocess_exec"
 
+# Library-root patch target for stubs that intercept the subprocess spawn for any caller:
+# the bare spelling sets the stand-in on the asyncio module itself, so every importer's
+# asyncio.create_subprocess_exec read resolves to the stand-in during the patch window.
+# TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET above reaches the same asyncio
+# attribute through the src.core.triggers namespace; the two routes are not interchangeable
+# spellings — a test names this one when the interception, not the caller, is the point.
+ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "asyncio.create_subprocess_exec"
+
 # Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py binds the
 # name with `from src.core.config import get_config`, so mock setattrs the stand-in on the
 # src.cli.common module attribute and every helper defined there reads it at call time.

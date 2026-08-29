@@ -4,7 +4,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import CODEX_RESOLVE_BINARY_PATCH_TARGET, FLAG_LIKE_PROMPT, FakeStdout
+from conftest import (
+  ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+  CODEX_RESOLVE_BINARY_PATCH_TARGET,
+  FLAG_LIKE_PROMPT,
+  FakeStdout,
+)
 from pydantic import ValidationError
 
 from src.agents.backends.codex import CodexBackend
@@ -563,7 +568,7 @@ async def test_one_shot_text_raises_structured_error(monkeypatch) -> None:
       b'{"type":"error","error":{"message":"unsupported reasoning effort: ultra"}}\n',
   ], stderr=b"generic stderr")
 
-  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = _build_backend(monkeypatch, model_reasoning_effort="ultra")
     with pytest.raises(RuntimeError, match="unsupported reasoning effort: ultra") as exc_info:
       await backend.one_shot_text("prompt", "system", timeout=5.0)
@@ -577,7 +582,7 @@ async def test_one_shot_text_raises_turn_failed_diagnostic(monkeypatch) -> None:
       b'{"type":"turn.failed","error":{"message":"context window exceeded"}}\n',
   ], stderr=b"generic stderr")
 
-  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = _build_backend(monkeypatch)
     with pytest.raises(RuntimeError, match="context window exceeded") as exc_info:
       await backend.one_shot_text("prompt", "system", timeout=5.0)
@@ -590,7 +595,7 @@ async def test_one_shot_text_raises_nonzero_exit_with_bounded_stderr(monkeypatch
   stderr = b"codex process failed\n" + b"x" * 10000
   proc = _fake_one_shot_proc([], stderr=stderr, returncode=2)
 
-  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = _build_backend(monkeypatch)
     with pytest.raises(RuntimeError, match="codex process failed") as exc_info:
       await backend.one_shot_text("prompt", "system", timeout=5.0)
@@ -607,7 +612,7 @@ async def test_one_shot_text_ignores_non_agent_assistant_events(monkeypatch) -> 
       b'"items":[{"text":"not an assistant response","status":"completed"}]}}\n',
   ])
 
-  with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+  with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = _build_backend(monkeypatch)
     with pytest.raises(RuntimeError, match="no assistant text"):
       await backend.one_shot_text("prompt", "system", timeout=5.0)
@@ -628,7 +633,7 @@ async def test_one_shot_text_kills_process_group_on_timeout(monkeypatch) -> None
   proc.stdout = _BlockingStdout()
 
   with (
-      patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
+      patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)),
       patch("src.core.process.kill_process_group") as mock_kill,
   ):
     backend = _build_backend(monkeypatch)

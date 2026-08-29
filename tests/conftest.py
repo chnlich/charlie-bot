@@ -545,6 +545,18 @@ CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.codex.resolve_binary"
 # helper (charlie_code.py, codex.py, gemini_cli.py, opencode.py) keep their own namespaces.
 ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.antigravity_cli.resolve_binary"
 
+# Import-path patch targets for the tmux seams the TUI session handlers read. The handlers
+# bind the names with call-time `from src.agents.backends.tui import ...`
+# (src/api/sessions.py's tui status/stop handlers, src/core/sessions.py's delete path). The
+# import resolves the src.agents.backends.tui module attribute at call time, so
+# monkeypatch.setattr lands the stand-in exactly there. kill_tmux_session and
+# tmux_session_exists are pty_common re-exports on that namespace; _claude_jsonl_busy is
+# defined in tui.py itself. src/api/threads.py binds tmux_session_exists at import scope and
+# keeps its own route.
+TUI_KILL_TMUX_SESSION_PATCH_TARGET = "src.agents.backends.tui.kill_tmux_session"
+TUI_TMUX_SESSION_EXISTS_PATCH_TARGET = "src.agents.backends.tui.tmux_session_exists"
+TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET = "src.agents.backends.tui._claude_jsonl_busy"
+
 
 def plan_page_html(goal_body: str = "Ship the fix.") -> str:
   """Minimal plan page passing the plan assertion set: the shipped template's <style> block

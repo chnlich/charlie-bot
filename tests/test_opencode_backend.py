@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from conftest import OPENCODE_RESOLVE_BINARY_PATCH_TARGET, SYNTHETIC_MODEL
+from conftest import (
+  OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+  SYNTHETIC_MODEL,
+  FakeChunkedResponse,
+)
 
 from src.agents.backends.opencode import (
     SSE_EVENT_MESSAGE_PART_UPDATED,
@@ -51,20 +55,6 @@ class _FakeSseResponse:
   async def aiter_bytes(self):
     for line in self._lines:
       yield (line + "\n").encode("utf-8")
-
-
-class _FakeRawChunksResponse:
-  """SSE response double over arbitrary pre-cut byte chunks."""
-
-  def __init__(self, chunks: list[bytes]) -> None:
-    self._chunks = chunks
-
-  def raise_for_status(self) -> None:
-    pass
-
-  async def aiter_bytes(self):
-    for chunk in self._chunks:
-      yield chunk
 
 
 class _FakeOneShotStdout:
@@ -152,7 +142,7 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
   ]
 
   parsed = [
-      event async for event in backend._iter_sse_events(_FakeRawChunksResponse(frame_chunks))
+      event async for event in backend._iter_sse_events(FakeChunkedResponse(frame_chunks))
   ]
   assert parsed == [json.loads(payload)]
   assert parsed[0]["properties"]["part"]["text"] == part_text
@@ -172,7 +162,7 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
   monkeypatch.setattr(backend, "_send_prompt", AsyncMock())
   monkeypatch.setattr(
       "src.agents.backends.opencode.httpx.AsyncClient",
-      lambda **kwargs: _FakeRunHttpClient(_FakeRawChunksResponse(chunks)))
+      lambda **kwargs: _FakeRunHttpClient(FakeChunkedResponse(chunks)))
 
   events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
 

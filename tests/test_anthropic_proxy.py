@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from conftest import FakeChunkedResponse
 
 from src.api.anthropic_proxy import (
     OpenAIChatStreamToAnthropic,
@@ -366,20 +367,6 @@ def test_stream_translator_does_not_passthrough_reasoning_content() -> None:
   assert events[2][1]["delta"] == {"type": "text_delta", "text": "final"}
 
 
-class _FakeUpstreamResponse:
-  """Upstream SSE response double over pre-cut byte chunks."""
-
-  def __init__(self, chunks: list[bytes]) -> None:
-    self._chunks = chunks
-
-  async def aiter_bytes(self):
-    for chunk in self._chunks:
-      yield chunk
-
-  async def aclose(self) -> None:
-    pass
-
-
 @pytest.mark.asyncio
 async def test_iter_anthropic_sse_translates_frame_with_raw_splitline_chars() -> None:
   """Same regression class as the opencode SSE bug: an upstream chunk whose JSON
@@ -395,7 +382,7 @@ async def test_iter_anthropic_sse_translates_frame_with_raw_splitline_chars() ->
 
   blobs = [
       blob
-      async for blob in _iter_anthropic_sse(_FakeUpstreamResponse(chunks), "test-model")
+      async for blob in _iter_anthropic_sse(FakeChunkedResponse(chunks), "test-model")
   ]
 
   parsed = []

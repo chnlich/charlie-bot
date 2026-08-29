@@ -6,9 +6,11 @@ const { readStatic } = require('./read_static');
 
 const {dockOf, findChildByClass, makeElement} = require('./artifact_comments_dom_stub');
 
+const {SESSIONS_ROOT} = require('./sessions_root_stub');
+
 const ARTIFACT_COMMENTS_JS = readStatic('artifact-comments.js');
 
-const ARTIFACT_PATH = '/files/home/user/.charliebot/sessions/sess-draft/artifacts/plan.html';
+const ARTIFACT_PATH = '/files' + SESSIONS_ROOT + '/sess-draft/artifacts/plan.html';
 const DRAFT_KEY = 'cbc-draft:' + ARTIFACT_PATH;
 
 // Objects created inside a vm context have a different Object.prototype than the

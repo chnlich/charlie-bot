@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
+from conftest import REVIEW_TRIGGER_MASTER_PATCH_TARGET
 from test_restart_recovery_e2e import _cfg, _recovery_reports
 
 from src.agents.worker import Worker
@@ -67,7 +68,7 @@ def _no_master_wake(monkeypatch: pytest.MonkeyPatch) -> None:
   async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
     pass
 
-  monkeypatch.setattr("src.core.review.trigger_master", fake_trigger_master)
+  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
 
 
 @pytest.mark.asyncio

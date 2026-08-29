@@ -443,6 +443,14 @@ SCHEDULER_SPAWN_WORKER_PATCH_TARGET = "src.core.scheduler.spawn_worker"
 SCHEDULER_THREAD_MANAGER_PATCH_TARGET = "src.core.scheduler.ThreadManager"
 SCHEDULER_TRIGGER_MASTER_PATCH_TARGET = "src.core.scheduler.trigger_master"
 
+# Import-path patch target for the master wake a review-chain finalize fires. src/core/review.py
+# binds the name at import scope (`from src.core.master_trigger import trigger_master`), so
+# monkeypatch.setattr lands the stand-in on the src.core.review module attribute and
+# _trigger_master_judged reads it at call time; sibling modules binding the same function
+# (TRIGGER_MASTER_PATCH_TARGET, SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
+# SCHEDULER_TRIGGER_MASTER_PATCH_TARGET above) keep their own routes.
+REVIEW_TRIGGER_MASTER_PATCH_TARGET = "src.core.review.trigger_master"
+
 # Import-path patch targets for the worker spawn/resume seam a recovery or improve-loop run
 # fires through. The spawner facade binds both names at import scope (`from
 # src.core.spawner_lifecycle import resume_worker, spawn_worker` in src/core/spawner.py), so

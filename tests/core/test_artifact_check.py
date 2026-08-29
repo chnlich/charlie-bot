@@ -26,6 +26,8 @@ from src.core.artifact_check import run_assertions, run_probe
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET = "src.cli.artifact.get_config"
+
 
 def _genre_doc(genre: str, body: str) -> str:
   """Full HTML document for *genre*: its template's <style> block verbatim plus *body*."""
@@ -403,7 +405,7 @@ def _run_cli(argv_tail: list[str]) -> int:
 def test_cli_plan_template_assertions_only_passes_and_prints_ok_lines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = _write(tmp_path, plan_page_html())
-  monkeypatch.setattr("src.cli.artifact.get_config", lambda: _cli_ok_cfg(tmp_path))
+  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
   assert _run_cli([str(artifact), "--genre", "plan", "--assertions-only"]) == 0
   assert capsys.readouterr().out.splitlines() == [
       "ok style-verbatim",
@@ -433,7 +435,7 @@ def test_cli_two_open_forks_without_explainer_report_two_locations_and_skip_the_
     raise AssertionError("the probe must never run when an assertion failed")
 
   monkeypatch.setattr(artifact_check, "build_backend", factory)
-  monkeypatch.setattr("src.cli.artifact.get_config", lambda: _cli_ok_cfg(tmp_path))
+  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 1
   out = capsys.readouterr().out
   fail_lines = [line for line in out.splitlines() if line.startswith("FAIL fork-explainer")]
@@ -480,7 +482,7 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
   cfg, _options = _probe_cfg(tmp_path)
   backends = {"alpha": _FakeBackend(error="boom"), "beta": _FakeBackend(answer="(1) The reader's problem.\n(2)-(6) fine.")}
   _patch_backends(monkeypatch, backends)
-  monkeypatch.setattr("src.cli.artifact.get_config", lambda: cfg)
+  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
   lines = capsys.readouterr().out.splitlines()
   assert lines[-5:] == [
@@ -503,7 +505,7 @@ def test_cli_probe_exit_1_when_every_backend_fails(
   artifact = _write(tmp_path, _debug_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
   _patch_backends(monkeypatch, {"alpha": _FakeBackend(error="down"), "beta": _FakeBackend(error="dead")})
-  monkeypatch.setattr("src.cli.artifact.get_config", lambda: cfg)
+  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   assert _run_cli([str(artifact), "--genre", "debug", "--trigger", "what broke?"]) == 1
 
   out = capsys.readouterr().out
@@ -516,7 +518,7 @@ def test_cli_assertions_only_skips_probe_on_probe_genre(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = _write(tmp_path, _sitrep_ok_doc())
   monkeypatch.setattr(artifact_check, "build_backend", lambda option, cfg: pytest.fail("probe must not run"))
-  monkeypatch.setattr("src.cli.artifact.get_config", lambda: _cli_ok_cfg(tmp_path))
+  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
   assert _run_cli([str(artifact), "--genre", "sitrep", "--assertions-only"]) == 0
   assert "--- cold read ---" not in capsys.readouterr().out
 
@@ -542,7 +544,7 @@ def test_cli_unknown_genre_is_usage_error(capsys: pytest.CaptureFixture[str]) ->
 
 def test_cli_missing_file_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  monkeypatch.setattr("src.cli.artifact.get_config", lambda: _cli_ok_cfg(tmp_path))
+  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
   assert _run_cli([str(tmp_path / "nope.html"), "--genre", "plan", "--assertions-only"]) == 1
   assert "artifact not found" in capsys.readouterr().err
 

@@ -5,14 +5,10 @@
 // listener detach, and the LaTeX PDF interaction hooks.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-function readStatic(...parts) {
-  return fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'js', ...parts), 'utf8');
-}
+const { readStatic } = require('./read_static');
 
 function fakeEl(id, width) {
   const listeners = new Map();

@@ -21,12 +21,9 @@ const BUILD_ENV = Object.assign({}, process.env, {
   PATH: `${NODE_BIN_DIR}:${process.env.PATH || ''}`,
 });
 
-function readStatic(relativePath) {
-  return fs.readFileSync(path.join(ROOT, 'web', 'static', 'js', relativePath), 'utf8');
-}
-
 const { FakeElement } = require('./fake_dom');
 const { escapeHtml } = require('./escape_html_stub');
+const { readStatic } = require('./read_static');
 
 function makeDocument(elements) {
   return {

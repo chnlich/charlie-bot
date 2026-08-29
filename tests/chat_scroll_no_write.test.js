@@ -1,14 +1,8 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const ROOT = path.join(__dirname, '..');
-
-function readStatic(relativePath) {
-  return fs.readFileSync(path.join(ROOT, 'web', 'static', 'js', relativePath), 'utf8');
-}
+const { readStatic } = require('./read_static');
 
 // ---------------------------------------------------------------------------
 // A DOM node that counts every write to `class`/`title`, mirroring the real

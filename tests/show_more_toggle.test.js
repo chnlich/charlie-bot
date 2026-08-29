@@ -6,14 +6,10 @@
 // button classes, and the short/full split at each site's limit.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-function readStatic(...parts) {
-  return fs.readFileSync(path.join(__dirname, '..', 'web', 'static', 'js', ...parts), 'utf8');
-}
+const { readStatic } = require('./read_static');
 
 const { FakeElement } = require('./fake_dom');
 

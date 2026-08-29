@@ -454,7 +454,7 @@ OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.opencode.resolve_bin
 # src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
 # stand-in on the src.agents.backends.codex module attribute and CodexBackend.__init__
 # reads it at call time; sibling backends binding the same helper (opencode.py,
-# antigravity_cli.py, charlie_code.py) keep their own namespaces.
+# antigravity_cli.py, charlie_code.py, gemini_cli.py) keep their own namespaces.
 CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.codex.resolve_binary"
 
 

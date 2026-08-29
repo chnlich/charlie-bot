@@ -99,3 +99,51 @@ test('touch drag scrolls by rounded tenths of the y delta', () => {
   byType.touchmove({changedTouches: [{screenY: 10}]});
   assert.deepEqual(scrolled, [-3, 1]);
 });
+
+test('fitTerminalAndSendResize fits, then sends the fitted grid', () => {
+  const {context} = loadHelpers();
+  const fits = [];
+  const sent = [];
+  const fitAddon = {fit() { fits.push(1); }};
+  const term = {cols: 120, rows: 30};
+  context.fitTerminalAndSendResize(term, fitAddon, (cols, rows) => sent.push([cols, rows]));
+  assert.equal(fits.length, 1);
+  assert.deepEqual(sent, [[120, 30]]);
+});
+
+test('fitTerminalAndSendResize skips the send on a zero-sized grid', () => {
+  const {context} = loadHelpers();
+  const fits = [];
+  const sent = [];
+  const fitAddon = {fit() { fits.push(1); }};
+  context.fitTerminalAndSendResize({cols: 0, rows: 0}, fitAddon, (cols, rows) => sent.push([cols, rows]));
+  assert.equal(fits.length, 1);
+  assert.deepEqual(sent, []);
+});
+
+test('fitTerminalAndSendResize swallows a fit failure into one warning', () => {
+  const {context} = loadHelpers();
+  const warnings = [];
+  context.console = {warn(...args) { warnings.push(args); }};
+  const sent = [];
+  const fitAddon = {fit() { throw new Error('boom'); }};
+  const term = {cols: 80, rows: 24};
+  context.fitTerminalAndSendResize(term, fitAddon, (cols, rows) => sent.push([cols, rows]));
+  assert.equal(warnings.length, 1);
+  assert.deepEqual(sent, []);
+});
+
+test('scheduleAfterTerminalPaint defers across two animation frames', () => {
+  const {context} = loadHelpers();
+  const queue = [];
+  context.requestAnimationFrame = fn => queue.push(fn);
+  let ran = 0;
+  context.scheduleAfterTerminalPaint(() => { ran += 1; });
+  assert.equal(queue.length, 1);
+  assert.equal(ran, 0);
+  queue.shift()();
+  assert.equal(queue.length, 1);
+  assert.equal(ran, 0);
+  queue.shift()();
+  assert.equal(ran, 1);
+});

@@ -66,16 +66,11 @@
 
   function fitAndSendResize() {
     if (!fitAddon || !term) return;
-    try {
-      fitAddon.fit();
-      if (term.cols && term.rows) sendResize(term.cols, term.rows);
-    } catch (err) {
-      console.warn('TUI terminal fit failed', err);
-    }
+    fitTerminalAndSendResize(term, fitAddon, sendResize);
   }
 
   function scheduleFitAndSendResize() {
-    requestAnimationFrame(() => requestAnimationFrame(fitAndSendResize));
+    scheduleAfterTerminalPaint(fitAndSendResize);
   }
 
   function ensureMount(sessionId) {

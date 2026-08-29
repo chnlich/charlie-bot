@@ -12,15 +12,12 @@ from unittest.mock import AsyncMock
 import pytest
 import yaml
 from conftest import CODEX_BACKEND_OPTION
+from conftest import make_sessions_client as _build_client
 from conftest import make_transcript as _make_transcript
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from src.agents import master_cc
-from src.api.deps import get_session_manager
 from src.api.sessions import _active_backend_payload, _same_backend_domain
-from src.api.sessions import router as sessions_router
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig
 from src.core.models import (
   BackendOption,
   CreateSessionRequest,
@@ -49,14 +46,6 @@ def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path, Path]:
       ],
   )
   return cfg, config_a, config_b
-
-
-def _build_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
-  app = FastAPI()
-  app.include_router(sessions_router, prefix="/api/sessions")
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  return TestClient(app)
 
 
 # ---------------------------------------------------------------------------

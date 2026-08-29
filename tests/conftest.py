@@ -482,6 +482,21 @@ REVIEW_TRIGGER_MASTER_PATCH_TARGET = "src.core.review.trigger_master"
 SPAWNER_SPAWN_WORKER_PATCH_TARGET = "src.core.spawner.spawn_worker"
 SPAWNER_RESUME_WORKER_PATCH_TARGET = "src.core.spawner.resume_worker"
 
+# Import-path patch targets for the chat API's message bootstrap and cancel route.
+# src/api/chat.py defines run_and_finalize itself and binds create_logged_task
+# (`from src.core.tasks import create_logged_task`) and cancel_master (`from
+# src.agents.master_cc import cancel_master`) at import scope, so mock and
+# monkeypatch.setattr land the stand-ins on the src.api.chat module attributes and
+# send_message's fire-and-forget bootstrap, launch_prompt_dispatch's slash-dispatch
+# run, run_and_finalize's auto-name task, and cancel_master_agent read them at call
+# time. src/api/slash.py binds launch_prompt_dispatch at import scope and
+# src/api/sessions.py re-imports run_and_finalize at call time, so both reach the
+# same src.api.chat namespace attributes; src.core.tasks.create_logged_task stays a
+# separate route.
+CHAT_RUN_AND_FINALIZE_PATCH_TARGET = "src.api.chat.run_and_finalize"
+CHAT_CREATE_LOGGED_TASK_PATCH_TARGET = "src.api.chat.create_logged_task"
+CHAT_CANCEL_MASTER_PATCH_TARGET = "src.api.chat.cancel_master"
+
 # Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py binds the
 # library with module-scope `import requests`, and its helpers read requests.get at call time
 # and pick requests.post inside call_internal_api's `request_fn = requests.post if ... else

@@ -12,9 +12,7 @@ from src.core.chat_events import chat_events_path
 from src.core.config import CharlieBotConfig
 from src.core.git import (
   git_current_branch,
-  git_worktree_dir_name,
-  git_worktree_prune,
-  git_worktree_remove,
+  git_worktree_remove_reporting,
 )
 from src.core.master_trigger import trigger_master
 from src.core.message_aggregator import extract_text_from_message
@@ -66,36 +64,16 @@ async def finalize_review_chain(
   fails so the caller (which holds session_mgr) can broadcast it; returns None on
   success or when there is nothing to clean.
   """
-  if not original_thread.repo_path or not original_thread.worktree_path:
-    return None
   if original_thread.keep_worktree:
     return None
-  wt = Path(original_thread.worktree_path)
-  if not wt.exists():
-    return None
-  if not original_thread.branch_name:
-    raise RuntimeError(f"thread {original_thread.id} has worktree_path but no branch_name")
-  try:
-    removed = await git_worktree_remove(
-        original_thread.repo_path,
-        wt,
-        original_thread.id,
-        allowed_parent=worktree_parent,
-        expected_residue_name=git_worktree_dir_name(original_thread.branch_name),
-    )
-  except Exception as e:
-    log.exception(
-        "review_chain_cleanup_failed",
-        session=session_id,
-        thread_id=original_thread.id,
-        worktree=str(wt),
-        error=str(e))
-    return f"Review worktree cleanup failed for {wt}: {e}"
-  if not removed:
-    log.error("review_chain_cleanup_remove_failed", session=session_id, thread_id=original_thread.id, worktree=str(wt))
-    return f"Review worktree cleanup failed for {wt}: git worktree remove reported failure"
-  await git_worktree_prune(original_thread.repo_path, original_thread.id)
-  return None
+  return await git_worktree_remove_reporting(
+      original_thread,
+      worktree_parent,
+      session_id=session_id,
+      label="Review worktree",
+      fail_event="review_chain_cleanup_failed",
+      remove_failed_event="review_chain_cleanup_remove_failed",
+  )
 
 
 def build_review_prompt(

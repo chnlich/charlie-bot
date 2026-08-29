@@ -20,6 +20,7 @@ from conftest import (
   recording_notify_completion,
 )
 
+from src.core import git as git_module
 from src.core import review, spawner, spawner_finalize, spawner_launch
 from src.core.models import (
   SpawnRequest,
@@ -68,7 +69,7 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
     raise AssertionError("git_worktree_remove must not be called when keep_worktree=True")
 
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
-  monkeypatch.setattr(spawner_finalize, "git_worktree_remove", fail_git_worktree_remove)
+  monkeypatch.setattr(git_module, "git_worktree_remove", fail_git_worktree_remove)
 
   await spawner._finalize_worker(
       session_id="session-id",
@@ -113,7 +114,7 @@ async def test_finalize_review_chain_skips_when_keep_worktree(
   async def fail_git_worktree_remove(*args: Any, **kwargs: Any) -> bool:
     raise AssertionError("git_worktree_remove must not be called when keep_worktree=True")
 
-  monkeypatch.setattr(review, "git_worktree_remove", fail_git_worktree_remove)
+  monkeypatch.setattr(git_module, "git_worktree_remove", fail_git_worktree_remove)
 
   await review.finalize_review_chain(
       "session-id", original, worktree_parent=tmp_path / "worktrees")
@@ -158,8 +159,8 @@ async def test_finalize_review_chain_removes_worktree_by_default(
   async def fake_git_worktree_prune(repo_path: str, thread_id: str) -> None:
     prune_calls.append((repo_path, thread_id))
 
-  monkeypatch.setattr(review, "git_worktree_remove", fake_git_worktree_remove)
-  monkeypatch.setattr(review, "git_worktree_prune", fake_git_worktree_prune)
+  monkeypatch.setattr(git_module, "git_worktree_remove", fake_git_worktree_remove)
+  monkeypatch.setattr(git_module, "git_worktree_prune", fake_git_worktree_prune)
 
   await review.finalize_review_chain(
       "session-id", original, worktree_parent=tmp_path / "worktrees")

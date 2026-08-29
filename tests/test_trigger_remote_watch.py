@@ -15,6 +15,7 @@ from conftest import (
   CLI_COMMON_REQUESTS_GET_PATCH_TARGET,
   CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
   TRIGGER_MASTER_PATCH_TARGET,
+  TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
   FakeAsyncProcess,
   assert_trigger_fired_completed,
   fake_cli_cfg,
@@ -72,7 +73,7 @@ async def test_remote_create_alive_persists(tmp_path: Path) -> None:
   scripted = {("neptune", 1234): ["ALIVE"]}
 
   with (
-      patch("src.core.triggers.asyncio.create_subprocess_exec", new=_mk_subprocess_mock(scripted)),
+      patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)),
       patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()),
       patch.object(TriggerManager, "_start_task", lambda self, t: None),
   ):
@@ -95,7 +96,7 @@ async def test_remote_create_dead_rejects(tmp_path: Path) -> None:
   cfg, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
   scripted = {("neptune", 1234): ["DEAD"]}
 
-  with patch("src.core.triggers.asyncio.create_subprocess_exec", new=_mk_subprocess_mock(scripted)):
+  with patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)):
     with pytest.raises(RemoteVerifyError) as excinfo:
       await trigger_mgr.create_trigger(
           session_id,
@@ -118,7 +119,7 @@ async def test_remote_create_one_dead_among_many_rejects(tmp_path: Path) -> None
       ("neptune", 2): ["DEAD"],
       ("noire", 3): ["ALIVE"],
   }
-  with patch("src.core.triggers.asyncio.create_subprocess_exec", new=_mk_subprocess_mock(scripted)):
+  with patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)):
     with pytest.raises(RemoteVerifyError) as excinfo:
       await trigger_mgr.create_trigger(
           session_id,

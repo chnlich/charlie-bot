@@ -376,6 +376,12 @@ TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
 # keep their own routes.
 TRIGGERS_GET_CONFIG_PATCH_TARGET = "src.core.triggers.get_config"
 
+# Import-path patch target for the subprocess spawn the trigger watchers probe through.
+# src/core/triggers.py binds the library with module-scope `import asyncio`, and its
+# watch paths read asyncio.create_subprocess_exec at call time, so mock lands the
+# stand-in on the asyncio module through the src.core.triggers route.
+TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.core.triggers.asyncio.create_subprocess_exec"
+
 # Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py binds the
 # name with `from src.core.config import get_config`, so mock setattrs the stand-in on the
 # src.cli.common module attribute and every helper defined there reads it at call time.
@@ -810,7 +816,7 @@ def patch_trigger_fire(
   patches = []
   if sacct_available is not None:
     patches.append(patch("src.core.triggers._SACCT_AVAILABLE", sacct_available))
-  patches.append(patch("src.core.triggers.asyncio.create_subprocess_exec", new=subprocess_mock))
+  patches.append(patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=subprocess_mock))
   if sleep_mock is not None:
     patches.append(patch("src.core.triggers.asyncio.sleep", new=sleep_mock))
   patches.append(patch(BROADCAST_PATCH_TARGET, new=AsyncMock()))

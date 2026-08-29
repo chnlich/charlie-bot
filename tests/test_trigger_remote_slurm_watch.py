@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
+  TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
   FakeAsyncProcess,
   assert_trigger_fired_completed,
   patch_trigger_fire,
@@ -104,7 +105,7 @@ async def test_remote_slurm_timeout_while_running(tmp_path: Path) -> None:
 async def test_probe_sacct_skips_array_task_rows() -> None:
   sacct = _mk_sacct_mock({(None, 122111): ["122111_3|COMPLETED|0:0\n122111|RUNNING|0:0\n"]})
 
-  with patch("src.core.triggers.asyncio.create_subprocess_exec", new=sacct):
+  with patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=sacct):
     states, error = await _probe_sacct([122111], "trig-test", host=None)
 
   assert error is None
@@ -132,7 +133,7 @@ async def test_verify_on_create_rejects_failed_probe(tmp_path: Path) -> None:
 
   with (
       patch("src.core.triggers._SACCT_AVAILABLE", False),
-      patch("src.core.triggers.asyncio.create_subprocess_exec", new=AsyncMock(side_effect=_failing_sacct_factory)),
+      patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(side_effect=_failing_sacct_factory)),
   ):
     with pytest.raises(RemoteVerifyError):
       await trigger_mgr.create_trigger(

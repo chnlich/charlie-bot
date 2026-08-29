@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 from conftest import (
+  CLEAN_EXIT_OUTCOME,
   CODEX_BACKEND_OPTION,
   CapturingThreadManager,
   JudgmentShim,
@@ -242,7 +243,7 @@ async def test_worker_finish_summary_is_locator_without_task_description(monkeyp
       "session-id",
       "Sensitive task description",
       thread,
-      spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""),
+      CLEAN_EXIT_OUTCOME,
       FakeThreadManager(),
       FakeSessionManager(),
       verify_report=None,
@@ -452,7 +453,7 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
       session_id="session-id",
       description="Prompt-only task",
       thread=thread,
-      outcome=spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""),
+      outcome=CLEAN_EXIT_OUTCOME,
       thread_mgr=CapturingThreadManager(thread, captures),
       session_mgr=object(),
       cfg=cfg,

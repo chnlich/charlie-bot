@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from conftest import (
+  CLEAN_EXIT_OUTCOME,
   CapturingThreadManager,
   SpawnFlowSessionManager,
   build_codex_worktree_cfg,
@@ -73,7 +74,7 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
       session_id="session-id",
       description="slurm benchmark",
       thread=thread,
-      outcome=spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""),
+      outcome=CLEAN_EXIT_OUTCOME,
       thread_mgr=CapturingThreadManager(thread, captures),
       session_mgr=object(),
       cfg=cfg,

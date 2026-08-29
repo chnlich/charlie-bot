@@ -3,8 +3,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import CLEAN_EXIT_OUTCOME, JudgmentShim
 from conftest import THREE_BACKEND_OPTIONS as BACKEND_OPTIONS
-from conftest import JudgmentShim
 
 from src.core import event_types as ET
 from src.core import review, spawner, spawner_finalize, spawner_launch
@@ -143,7 +143,7 @@ async def test_verify_completion_uses_untruncated_result_without_task_spec_prefi
       thread.session_id,
       thread.description,
       thread,
-      spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""),
+      CLEAN_EXIT_OUTCOME,
       thread_mgr,
       session_mgr,
       verify_report=report,

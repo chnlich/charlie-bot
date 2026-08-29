@@ -330,13 +330,6 @@ Object.assign(Sidebar, {
   handleSidebarSearch,
   toggleSessionStar,
 });
-Sidebar.Filters = {
-  register: registerSidebarFilter,
-  get: getSidebarFilter,
-  restorableNames: getRestorableSidebarFilters,
-  renderPills: renderSidebarFilterPills,
-  all: () => sidebarFilters.slice(),
-};
 Sidebar.expose([
   'archiveSession',
   'deleteSessionPermanently',

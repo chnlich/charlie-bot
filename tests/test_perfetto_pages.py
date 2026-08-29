@@ -4,6 +4,7 @@ import io
 import json
 import os
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -22,6 +23,18 @@ def _write_trace(path: Path, marker: str = "event") -> None:
       json.dumps({"traceEvents": [{"ph": "X", "pid": 1, "tid": 1, "name": marker}]}),
       encoding="utf-8",
   )
+
+
+def _make_blocking_merge(
+    calls: list[int], started: threading.Event, release: threading.Event
+) -> Callable[[list[Path], Path, bool], None]:
+  def blocking_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
+    calls.append(1)
+    real_merge_traces(paths, out_path, slim)
+    started.set()
+    release.wait(10.0)
+
+  return blocking_merge
 
 
 @pytest.fixture
@@ -356,13 +369,7 @@ def test_single_flight_one_build_per_key(monkeypatch: pytest.MonkeyPatch, tmp_pa
   release = threading.Event()
   calls: list[int] = []
 
-  def blocking_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
-    calls.append(1)
-    real_merge_traces(paths, out_path, slim)
-    started.set()
-    release.wait(10.0)
-
-  monkeypatch.setattr(pages, "merge_traces", blocking_merge)
+  monkeypatch.setattr(pages, "merge_traces", _make_blocking_merge(calls, started, release))
 
   async def run() -> None:
     paths = [first, second]
@@ -420,13 +427,7 @@ def test_disconnect_does_not_lose_work(monkeypatch: pytest.MonkeyPatch, tmp_path
   release = threading.Event()
   calls: list[int] = []
 
-  def blocking_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
-    calls.append(1)
-    real_merge_traces(paths, out_path, slim)
-    started.set()
-    release.wait(10.0)
-
-  monkeypatch.setattr(pages, "merge_traces", blocking_merge)
+  monkeypatch.setattr(pages, "merge_traces", _make_blocking_merge(calls, started, release))
 
   async def run() -> None:
     waiter = asyncio.create_task(pages._cached_merge(key, False))

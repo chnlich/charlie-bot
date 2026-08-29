@@ -19,6 +19,7 @@ if TYPE_CHECKING:
   from src.core.sessions import SessionManager
   from src.core.threads import ThreadManager
 
+from src.core import event_types as ET
 from src.core import finalize_effects, runs
 from src.core.git import git_quarantine_worktree, git_worktree_dir_name
 from src.core.json_utils import load_json_meta
@@ -347,7 +348,7 @@ async def _report_recovery_event(session_mgr: SessionManager, session_id: str, c
   try:
     await session_mgr.deliver_to_successor(
         session_id, {
-            "type": "error",
+            "type": ET.ERROR,
             "content": content,
             "source": "crash_recovery",
         })
@@ -400,7 +401,7 @@ async def _maybe_respawn(
 
   invocation = None
   for ev in reversed(chat_events):
-    if ev.get("type") == "task_delegated" and ev.get("thread_id") == thread_id:
+    if ev.get("type") == ET.TASK_DELEGATED and ev.get("thread_id") == thread_id:
       invocation = ev.get("delegate_invocation") or {}
       break
   if invocation is None:

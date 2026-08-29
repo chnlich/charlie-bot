@@ -1,5 +1,4 @@
-"""The resume_worker finalize liveness gate (plan 4.1 finalize 存活总闸),
-acceptance leg (j).
+"""The resume_worker finalize liveness gate.
 
 Before resume_worker records a FAILED outcome on ANY exception or
 cancellation path (asyncio.CancelledError included — a BaseException that

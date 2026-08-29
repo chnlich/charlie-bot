@@ -1,6 +1,6 @@
 """End-to-end boot recovery for effective-alive (unverifiable-death) runs.
 
-Plan "boot recovery 误杀判定保守化", acceptance legs (a), (e), (f-mount):
+Legs:
 
   (a) a running worker whose pid_start is missing resolves RUNNING, is mounted
       with a constant-true liveness probe, and is never failed on missing
@@ -48,13 +48,13 @@ async def test_pid_start_missing_running_worker_never_false_failed(
   """Legs (a)+(e): pid_start scrubbed mid-run -> the boot judges RUNNING and
   mounts a constant-true probe (death unprovable), the shim's real result
   event then closes the run through the existing completion path — no failed
-  finalize at any point (the 2026-08-08误杀 shape)."""
+  finalize at any point."""
   home = tmp_path / "home"
   proc, ids = _launch_driver(tmp_path, home, result_delay=3.0)
   _kill_driver_mid_run(proc, home, ids)
 
   # Scrub pid_start: the shim process is alive, but the recorded identity can
-  # no longer prove death (the incident's exact metadata shape).
+  # no longer prove death.
   meta_path = home / "sessions" / ids["session"] / "threads" / ids["thread"] / "metadata.json"
   meta = json.loads(meta_path.read_text(encoding="utf-8"))
   assert meta.get("pid") is not None
@@ -80,7 +80,7 @@ async def test_pid_start_missing_running_worker_never_false_failed(
   summaries = _terminal_summaries(home, ids)
   assert len(summaries) == 1
   assert len(master_wakes) == 1
-  # No exception-gate report and no report-only分流: this thread always had a
+  # No exception-gate report and nothing report-only: this thread always had a
   # followable transport, so nothing but the normal completion was emitted.
   assert _recovery_reports(home, ids["session"]) == []
 
@@ -117,7 +117,7 @@ async def test_uncovered_effective_alive_run_reported_not_attached(
 
   assert recovered == 1
   assert outcomes == [runs.RunOutcome.RUNNING]
-  # Report-only分流: no follow was ever mounted for this thread.
+  # Report-only: no follow was ever mounted for this thread.
   assert not alive_at_reattach
   meta = _read_meta(home, ids["session"], ids["thread"])
   assert meta["status"] == "running"

@@ -403,14 +403,13 @@ def test_broken_entry_enabled_null_on_unparseable_yaml(temp_home: Path) -> None:
   assert errors[0].enabled is None
 
 
-# --- the incident shape: prompt_file pointing at a path that no longer exists -
+# --- a prompt_file pointing at a path that no longer exists ------------------
 #
-# The loud-failure fixture: a seeded memory-curator.yaml whose prompt_file
-# outlived a repo-side move. The broken entry's message carries the target's
+# The loud-failure fixture: the broken entry's message carries the target's
 # absolute path so the operator can locate the missing file.
 
 
-def test_incident_prompt_file_missing_path(temp_home: Path) -> None:
+def test_broken_prompt_file_missing_path(temp_home: Path) -> None:
   missing = temp_home / "prompts" / "cron" / "memory_curator" / "memory_curator.md"
   injected = _write_task_text(temp_home, "memory-curator", _dump(
       {"cron": "27 6 * * *", "timezone": "local", "prompt_file": str(missing), "enabled": True}))

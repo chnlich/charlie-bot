@@ -11,6 +11,7 @@ from src.api.deps import (
   get_session_manager,
   get_thread_manager,
   get_trigger_manager,
+  require_found,
 )
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
@@ -90,9 +91,7 @@ async def _authorize_spawn_request(
     session_mgr: SessionManager,
 ) -> tuple[SessionMetadata, CharlieBotConfig, str | None, str | None]:
   """Validate session, enforce takeoff gate, and resolve backend/model for spawn-style endpoints."""
-  meta = await session_mgr.get_session(req.session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
+  meta = require_found(await session_mgr.get_session(req.session_id))
 
   if isinstance(req, DelegateRequest) and req.task_type == TaskType.VERIFY:
     pass
@@ -253,9 +252,7 @@ async def schedule_trigger(
     trigger_mgr: TriggerManager = Depends(get_trigger_manager),
 ):
   """Schedule a delayed trigger that will wake the master CC after a delay."""
-  meta = await session_mgr.get_session(req.session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
+  require_found(await session_mgr.get_session(req.session_id))
 
   if req.watch_targets is not None:
     if len(req.watch_targets) == 0:
@@ -321,9 +318,7 @@ async def session_message(
   prefix. The injected content bypasses slash-command dispatch; when the target
   session is mid-run the wake enqueues on the master work-item queue.
   """
-  caller = await session_mgr.get_session(req.session_id)
-  if caller is None:
-    raise HTTPException(status_code=404, detail="Session not found")
+  caller = require_found(await session_mgr.get_session(req.session_id))
   target = await session_mgr.get_session(req.target_session_id)
   if target is None:
     raise HTTPException(status_code=404, detail="Target session not found")
@@ -389,9 +384,7 @@ def _build_base(req: PlanPresentRequest | PlanAmendRequest) -> dict | None:
 
 
 async def _authorize_plan_session(session_id: str, session_mgr: SessionManager) -> None:
-  meta = await session_mgr.get_session(session_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
+  require_found(await session_mgr.get_session(session_id))
 
 
 @router.post("/plan/present")

@@ -37,6 +37,12 @@ log = structlog.get_logger()
 DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
 _STDERR_TAIL_BYTES = 64 * 1024
 
+# The flag that suppresses the CLI's interactive permission prompt. Its
+# spelling is fixed by the vendor CLI contract, not by this repo, so every
+# Claude-compatible launcher here (claude headless/TUI, claude-sub, agy,
+# opencode) must pass the same literal.
+SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
+
 # Poll cadence of the tail-follow read loop. Event volume is low (median
 # inter-event gap ~54 s measured), so a fixed poll beats an inotify dependency.
 _TAIL_POLL_INTERVAL = 0.15

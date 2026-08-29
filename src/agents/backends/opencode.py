@@ -32,6 +32,14 @@ from src.core.timeouts import (
 log = structlog.get_logger()
 
 _SERVER_URL_RE = re.compile(r"opencode server listening on (http://127\.0\.0\.1:\d+)")
+# Handled `opencode serve` SSE event types: each frame's "type" value, fixed by the
+# opencode binary's event stream. Ignored types live in _IGNORED_SSE_EVENT_TYPES.
+SSE_EVENT_SERVER_CONNECTED = "server.connected"
+SSE_EVENT_PERMISSION_ASKED = "permission.asked"
+SSE_EVENT_SESSION_ERROR = "session.error"
+SSE_EVENT_SESSION_IDLE = "session.idle"
+SSE_EVENT_MESSAGE_UPDATED = "message.updated"
+SSE_EVENT_MESSAGE_PART_UPDATED = "message.part.updated"
 _IGNORED_SSE_EVENT_TYPES = {
     "message.part.delta",
     "session.diff",
@@ -190,7 +198,7 @@ class OpenCodeBackend(AgentBackend):
       properties = event.get("properties", {})
       event_type = event.get("type")
 
-      if event_type == "permission.asked":
+      if event_type == SSE_EVENT_PERMISSION_ASKED:
         self._failed = True
         yield make_error_event(self._format_permission_error(properties))
         return
@@ -201,11 +209,11 @@ class OpenCodeBackend(AgentBackend):
       for translated in self._translate_sse_event(event):
         yield translated
 
-      if event_type == "session.error":
+      if event_type == SSE_EVENT_SESSION_ERROR:
         self._failed = True
         return
 
-      if event_type == "session.idle":
+      if event_type == SSE_EVENT_SESSION_IDLE:
         yield self._make_accumulated_result()
         return
     raise RuntimeError("OpenCode SSE stream closed before session.idle")
@@ -363,7 +371,7 @@ class OpenCodeBackend(AgentBackend):
 
   async def _wait_for_server_connected(self, events: AsyncIterator[dict]) -> None:
     async for event in events:
-      if event.get("type") == "server.connected":
+      if event.get("type") == SSE_EVENT_SERVER_CONNECTED:
         return
     raise RuntimeError("OpenCode SSE stream closed before server.connected")
 
@@ -460,7 +468,7 @@ class OpenCodeBackend(AgentBackend):
     ev_type = ev.get("type", "")
     properties = ev.get("properties", {})
 
-    if ev_type == "message.updated":
+    if ev_type == SSE_EVENT_MESSAGE_UPDATED:
       info = properties["info"]
       self._message_roles[info["id"]] = info["role"]
       pending_parts = self._pending_parts.pop(info["id"], [])
@@ -482,7 +490,7 @@ class OpenCodeBackend(AgentBackend):
         translated.extend(self._translate_part(part))
       return translated
 
-    if ev_type == "message.part.updated":
+    if ev_type == SSE_EVENT_MESSAGE_PART_UPDATED:
       part = properties["part"]
       if part["messageID"] in self._compaction_message_ids:
         if part.get("type") == "step-finish":
@@ -496,10 +504,10 @@ class OpenCodeBackend(AgentBackend):
         return []
       return self._translate_part(part)
 
-    if ev_type == "session.error":
+    if ev_type == SSE_EVENT_SESSION_ERROR:
       return [make_error_event(self._format_session_error(ev))]
 
-    if ev_type == "session.idle":
+    if ev_type == SSE_EVENT_SESSION_IDLE:
       if self._pending_parts:
         log.warning(
             "opencode_pending_parts_discarded",

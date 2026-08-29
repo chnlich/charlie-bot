@@ -1,11 +1,9 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const https = require('node:https');
 
-const ROOT = path.join(__dirname, '..');
+const { readStatic } = require('./read_static');
 
 // Fetch the exact marked build the browser serves (web/templates/index.html).
 // No version is pinned, so resolving the range today and caching it keeps this
@@ -47,7 +45,7 @@ async function loadRenderer() {
   };
   vm.createContext(context);
   vm.runInContext(markedSrc, context, { filename: 'marked.min.js' });
-  const src = fs.readFileSync(path.join(ROOT, 'web', 'static', 'js', 'markdown-renderer.js'), 'utf8');
+  const src = readStatic('markdown-renderer.js');
   vm.runInContext(src, context, { filename: 'markdown-renderer.js' });
   return context.marked;
 }

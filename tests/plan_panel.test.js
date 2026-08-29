@@ -5,10 +5,9 @@ const test = require('node:test');
 const vm = require('node:vm');
 const { escapeHtml } = require('./escape_html_stub');
 
-const PLAN_PANEL_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'plan-panel.js'),
-  'utf8'
-);
+const { readStatic } = require('./read_static');
+
+const PLAN_PANEL_JS = readStatic('plan-panel.js');
 
 // ---------------------------------------------------------------------------
 // Minimal DOM shim used both as the `DOMParser` injected into the plan-panel

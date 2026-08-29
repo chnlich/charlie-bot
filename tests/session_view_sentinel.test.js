@@ -1,25 +1,13 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const COMPAT_LOADER_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'compat-loader.js'),
-  'utf8'
-);
-const CHAT_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'chat.js'),
-  'utf8'
-);
-const SIDEBAR_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'sidebar.js'),
-  'utf8'
-);
-const PAGE_TIMERS_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'page-timers.js'),
-  'utf8'
-);
+const { readStatic } = require('./read_static');
+
+const COMPAT_LOADER_JS = readStatic('compat-loader.js');
+const CHAT_JS = readStatic('chat.js');
+const SIDEBAR_JS = readStatic('sidebar.js');
+const PAGE_TIMERS_JS = readStatic('page-timers.js');
 
 function createClassList(initial = '') {
   const names = new Set(String(initial).split(/\s+/).filter(Boolean));

@@ -1,15 +1,12 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const { readStatic } = require('./read_static');
+
 const {dockOf, findChildByClass, makeElement} = require('./artifact_comments_dom_stub');
 
-const ARTIFACT_COMMENTS_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'artifact-comments.js'),
-  'utf8'
-);
+const ARTIFACT_COMMENTS_JS = readStatic('artifact-comments.js');
 
 const SESSION_270_PLAN_PATH = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
 const PATH_SESSION_PLAN_PATH = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';

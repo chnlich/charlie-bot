@@ -1,15 +1,12 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const { readStatic } = require('./read_static');
+
 const {createFakeWebSocketClass} = require('./fake_websocket');
 
-const WEBSOCKET_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'websocket.js'),
-  'utf8'
-);
+const WEBSOCKET_JS = readStatic('websocket.js');
 
 function buildContext(sessionId) {
   const messages = [];

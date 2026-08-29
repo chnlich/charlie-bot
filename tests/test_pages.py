@@ -8,10 +8,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import make_page_request
+from conftest import make_home_config, make_page_request
 
 from src.api import pages
-from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
 from src.core.token_tally import AccountRow, ModelRow, TokenTally
 
@@ -168,7 +167,7 @@ async def test_token_usage_inline_script_parses(monkeypatch: pytest.MonkeyPatch,
 
 @pytest.mark.asyncio
 async def test_index_uses_pinned_runtime_git_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   git_lookup_calls = 0
 
   def fail_git_lookup() -> str:
@@ -199,7 +198,7 @@ async def test_index_uses_pinned_runtime_git_version(monkeypatch: pytest.MonkeyP
 
 @pytest.mark.asyncio
 async def test_index_versions_local_static_assets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   monkeypatch.setattr(pages, "_RUNTIME_GIT_VERSION", "abc1234 · 03-24")
 
   response = await pages.index(
@@ -238,7 +237,7 @@ class PendingTriggerSessionManager(FakeSessionManager):
 @pytest.mark.asyncio
 async def test_index_embeds_initial_sessions_for_client_sidebar_render(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   session = SessionMetadata(
       id="session-with-trigger",
       name="Wake later",

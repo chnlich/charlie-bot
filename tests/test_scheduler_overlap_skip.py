@@ -17,9 +17,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from conftest import make_home_config
 
 from src.core import scheduler as scheduler_module
-from src.core.config import CharlieBotConfig, ScheduledTaskConfig
+from src.core.config import ScheduledTaskConfig
 from src.core.models import (
   CreateSessionRequest,
   SessionMetadata,
@@ -86,10 +87,6 @@ def _install_clock(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> None:
   )
 
 
-def _cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
-
-
 def _task(name: str = "code-health", cron: str = "* * * * *", **kw) -> ScheduledTaskConfig:
   base: dict = {"name": name, "cron": cron, "timezone": "UTC", "prompt": "run the round"}
   base.update(kw)
@@ -143,7 +140,7 @@ def _pending_rig(
   pending in-flight round, session anchored at that instant, one-minute-cadence task."""
   clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
   _install_clock(monkeypatch, clock)
-  scheduler = Scheduler(_cfg(tmp_path), AsyncMock())
+  scheduler = Scheduler(make_home_config(tmp_path), AsyncMock())
   session = SessionMetadata(id="session-1", name="Scheduled: code-health")
   session.last_scheduled_run = clock.now().isoformat()  # 00:00
   monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
@@ -282,7 +279,7 @@ async def test_fire_ignores_stuck_running_disk_state(
   signal would stall this fire."""
   clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
   _install_clock(monkeypatch, clock)
-  cfg = _cfg(tmp_path)
+  cfg = make_home_config(tmp_path)
   scheduler = Scheduler(cfg, AsyncMock())
 
   session_mgr = SessionManager(cfg)
@@ -326,7 +323,7 @@ async def test_manual_run_is_outside_and_leaves_handle_unchanged(
   handle untouched (manual rounds neither block nor are blocked)."""
   clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
   _install_clock(monkeypatch, clock)
-  cfg = _cfg(tmp_path)
+  cfg = make_home_config(tmp_path)
   scheduler = Scheduler(cfg, AsyncMock())
 
   # A scheduled round is in flight.
@@ -361,7 +358,7 @@ async def test_master_mode_skips_rather_than_queuing_a_second_wake(
 ) -> None:
   clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
   _install_clock(monkeypatch, clock)
-  cfg = _cfg(tmp_path)
+  cfg = make_home_config(tmp_path)
   scheduler = Scheduler(cfg, AsyncMock())
   session = SessionMetadata(
       id="session-1",

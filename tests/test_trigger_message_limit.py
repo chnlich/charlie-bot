@@ -9,11 +9,15 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, TRIGGER_MASTER_PATCH_TARGET, fake_cli_cfg
+from conftest import (
+  BROADCAST_PATCH_TARGET,
+  TRIGGER_MASTER_PATCH_TARGET,
+  fake_cli_cfg,
+  make_home_config,
+)
 from pydantic import ValidationError
 
 from src.cli import schedule_trigger as cli_module
-from src.core.config import CharlieBotConfig
 from src.core.models import (
   MAX_TRIGGER_MESSAGE_CHARS,
   CreateSessionRequest,
@@ -101,7 +105,7 @@ def test_cli_error_embeds_constant() -> None:
 
 @pytest.mark.asyncio
 async def test_persisted_over_limit_message_fires_verbatim(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Over-limit fire"))
   trigger_mgr = TriggerManager(cfg, session_mgr)

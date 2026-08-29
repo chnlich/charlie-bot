@@ -14,6 +14,12 @@ from pydantic import ValidationError
 from src.cli.improve import main
 from src.core.models import ImproveRequest
 
+_INTERNAL_GET_CONFIG_PATCH_TARGET = "src.api.internal.get_config"
+_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET = "src.api.internal.check_takeoff_gate"
+_INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = (
+    "src.api.internal.resolve_requested_subagent_backend_model")
+_INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET = "src.api.internal.reserve_loop_state"
+
 
 def _mock_config(tmp_path: Path):
   """Create a mock config with sessions_dir."""
@@ -325,13 +331,13 @@ async def test_improve_endpoint_creates_background_task(tmp_path: Path):
   cfg = MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"
 
-  with patch("src.api.internal.get_config") as mock_cfg, \
-       patch("src.api.internal.check_takeoff_gate", return_value=None), \
+  with patch(_INTERNAL_GET_CONFIG_PATCH_TARGET) as mock_cfg, \
+       patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
        patch(
-           "src.api.internal.resolve_requested_subagent_backend_model",
+           _INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
            side_effect=fake_resolve_requested_subagent_backend_model), \
        patch(
-           "src.api.internal.reserve_loop_state",
+           _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET,
            return_value=MagicMock(loop_id=11)) as mock_reserve, \
        patch("src.api.internal.create_logged_task", side_effect=fake_create_logged_task) as mock_create_task:
     mock_cfg.return_value = cfg
@@ -386,9 +392,9 @@ async def test_improve_endpoint_returns_400_for_invalid_backend():
   async def fake_resolve_requested_subagent_backend_model(*args: object, **kwargs: object) -> tuple[str, str]:
     raise ValueError("requested backend 'missing' is not in backend_options")
 
-  with patch("src.api.internal.check_takeoff_gate", return_value=None), \
+  with patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
        patch(
-           "src.api.internal.resolve_requested_subagent_backend_model",
+           _INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
            side_effect=fake_resolve_requested_subagent_backend_model):
     with pytest.raises(HTTPException) as exc_info:
       await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
@@ -419,11 +425,11 @@ async def test_improve_endpoint_returns_409_for_running_loop():
   session_mgr.get_session.return_value = MagicMock()
   thread_mgr = AsyncMock()
 
-  with patch("src.api.internal.get_config", return_value=MagicMock()), \
-       patch("src.api.internal.check_takeoff_gate", return_value=None), \
-       patch("src.api.internal.resolve_requested_subagent_backend_model", return_value=("codex-o3", "o3")), \
+  with patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=MagicMock()), \
+       patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
+       patch(_INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, return_value=("codex-o3", "o3")), \
        patch(
-           "src.api.internal.reserve_loop_state",
+           _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET,
            side_effect=ImproveLoopAlreadyRunningError(7)):
     with pytest.raises(HTTPException) as exc_info:
       await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)

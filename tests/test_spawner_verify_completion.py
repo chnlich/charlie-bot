@@ -1,9 +1,8 @@
-import json
 from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import CLEAN_EXIT_OUTCOME, JudgmentShim
+from conftest import CLEAN_EXIT_OUTCOME, JudgmentShim, append_events
 from conftest import THREE_BACKEND_OPTIONS as BACKEND_OPTIONS
 
 from src.core import event_types as ET
@@ -27,11 +26,6 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
       backend_options=BACKEND_OPTIONS,
       model_preference=["claude-opus-4.6", "codex-o3", "kimi-k2.5"],
   )
-
-
-def _write_events(path: Path, events: list[dict[str, Any]]) -> None:
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
 
 
 class FakeThreadManager(JudgmentShim):
@@ -162,7 +156,7 @@ async def test_verify_completion_uses_untruncated_result_without_task_spec_prefi
 async def test_verify_final_report_falls_back_to_untruncated_last_assistant_message(tmp_path: Path) -> None:
   report = "confirmed | claim | URL | " + "y" * 1200 + "\nRESULT: clean"
   events_path = tmp_path / "events.jsonl"
-  _write_events(
+  append_events(
       events_path,
       [
           {
@@ -213,7 +207,7 @@ async def test_verify_result_trailer_controls_completion_without_retry(
 ) -> None:
   cfg = _build_cfg(tmp_path)
   events_path = tmp_path / "events.jsonl"
-  _write_events(events_path, [{"type": ET.RESULT, "result": report}])
+  append_events(events_path, [{"type": ET.RESULT, "result": report}])
   thread = ThreadMetadata(id="verify-thread-id", session_id="session-id", description="## Verify plan")
   thread_mgr = FakeThreadManager(thread, events_path)
   session_mgr = FakeSessionManager(thread.session_id)

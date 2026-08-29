@@ -53,6 +53,7 @@ from conftest import (
   MASTER_RECOVERY_TASK_PREFIXES,
   await_recovery_tasks,
   patch_instructions_content,
+  read_chat_events,
 )
 from structlog.testing import capture_logs
 from test_restart_recovery_e2e import _wait_for
@@ -260,13 +261,6 @@ def _cfg(home: Path, shim: Path) -> CharlieBotConfig:
 
 def _session_meta(home: Path, session_id: str) -> dict:
   return json.loads((home / "sessions" / session_id / "metadata.json").read_text(encoding="utf-8"))
-
-
-def _chat_events(home: Path, session_id: str) -> list[dict]:
-  path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
-  if not path.exists():
-    return []
-  return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _raw_logs(home: Path, session_id: str) -> list[Path]:
@@ -491,7 +485,7 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   # the turn was followed, never respawned nor replayed.
   assert not (state / "inv-2.argv").exists(), "a second master process was spawned"
   assert "message A" in _shim_prompt(state, 1)
-  events = _chat_events(home, session_id)
+  events = read_chat_events(home, session_id)
   assert sum(1 for e in events if e.get("type") == "master_done") == 1
   user_events = [e for e in events if e.get("type") == "user"]
   assert len(user_events) == 1
@@ -536,7 +530,7 @@ async def test_master_replay_when_master_killed_with_server(tmp_path: Path, monk
   replayed_prompt = _shim_prompt(state, 2)
   assert replayed_prompt.startswith(master_cc_queue._REPLAY_MARKER)
   assert "message A" in replayed_prompt
-  events = _chat_events(home, session_id)
+  events = read_chat_events(home, session_id)
   assert len([e for e in events if e.get("type") == "user"]) == 1
   assert sum(1 for e in events if e.get("type") == "master_done") == 1
   assert _session_meta(home, session_id)["master_run"] is None
@@ -571,7 +565,7 @@ async def test_queued_message_answered_after_restart(tmp_path: Path, monkeypatch
   assert replayed_prompt.startswith(master_cc_queue._REPLAY_MARKER)
   assert "message B" in replayed_prompt
 
-  events = _chat_events(home, session_id)
+  events = read_chat_events(home, session_id)
   assert len([e for e in events if e.get("type") == "user"]) == 2
   assert sum(1 for e in events if e.get("type") == "master_done") == 2
 
@@ -678,7 +672,7 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
   # the COMPLETED row was drained AND replayed; neither would mean it was
   # cleared unanswered — the regression this row prevents.
   assert not (state / "inv-2.argv").exists(), "recovering a completed turn must start no agent process"
-  events = _chat_events(home, session_id)
+  events = read_chat_events(home, session_id)
   assert len([e for e in events if e.get("type") == "user"]) == 1
   master_done = [e for e in events if e.get("type") == "master_done"]
   assert len(master_done) == 1
@@ -752,7 +746,7 @@ async def test_missing_pid_start_turn_reattached_after_server_kill(tmp_path: Pat
   # original user event unreplayed, the record cleared by the normal path.
   assert not (state / "inv-2.argv").exists(), "a second master process was spawned"
   assert not _shim_prompt(state, 1).startswith(master_cc_queue._REPLAY_MARKER)
-  events = _chat_events(home, session_id)
+  events = read_chat_events(home, session_id)
   assert len([e for e in events if e.get("type") == "user"]) == 1
   master_done = [e for e in events if e.get("type") == "master_done"]
   assert len(master_done) == 1
@@ -791,7 +785,7 @@ async def test_completed_delegate_wake_drained_after_server_kill(tmp_path: Path,
   # Exactly one answer, delivered by the drain; the replay pass had nothing
   # to redeliver (the chat log holds no user event for this turn).
   assert not (state / "inv-2.argv").exists(), "recovering a completed turn must start no agent process"
-  events = _chat_events(home, session_id)
+  events = read_chat_events(home, session_id)
   assert not [e for e in events if e.get("type") == "user"]
   master_done = [e for e in events if e.get("type") == "master_done"]
   assert len(master_done) == 1
@@ -844,7 +838,7 @@ async def test_stalled_turn_reattached_after_server_kill(tmp_path: Path, monkeyp
   _kill_agent_only(home, session_id)
   await _await_recovery_tasks()
 
-  events = _chat_events(home, session_id)
+  events = read_chat_events(home, session_id)
   assert len([e for e in events if e.get("type") == "user"]) == 1
   master_done = [e for e in events if e.get("type") == "master_done"]
   assert len(master_done) == 1
@@ -881,7 +875,7 @@ async def test_midrun_death_delegate_wake_drained_as_failure(tmp_path: Path,
   await _await_recovery_tasks()
 
   assert not (state / "inv-2.argv").exists(), "a mid-run-dead wake must not spawn a new agent"
-  events = _chat_events(home, session_id)
+  events = read_chat_events(home, session_id)
   assert not [e for e in events if e.get("type") == "user"]
   master_done = [e for e in events if e.get("type") == "master_done"]
   assert len(master_done) == 1
@@ -949,7 +943,7 @@ async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monk
   assert resolved[0]["outcome"] == runs.RunOutcome.DIED.value
   assert resolved[0]["reason"] == runs.TRANSPORT_NOT_COVERED_REASON
   assert _session_meta(home, meta.id)["master_run"] is None
-  events = _chat_events(home, meta.id)
+  events = read_chat_events(home, meta.id)
   assert not any(e.get("source") == "crash_recovery" for e in events)
   # The drain invariant: no drain ran, so this turn never produced a MASTER_DONE.
   assert not any(e.get("type") == "master_done" for e in events)
@@ -1011,7 +1005,7 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(tmp_pat
     await init_module.run_crash_recovery(cfg, datetime.now(UTC))
     await _await_recovery_tasks()
 
-    events = _chat_events(home, meta.id)
+    events = read_chat_events(home, meta.id)
     reports = [e for e in events if e.get("source") == "crash_recovery"]
     assert len(reports) == 1
     assert runs.UNCOVERED_ALIVE_REASON in reports[0]["content"]
@@ -1063,7 +1057,7 @@ async def test_undrainable_dead_turn_replayed_with_marker(tmp_path: Path, monkey
   replayed_prompt = _shim_prompt(state, 1)
   assert replayed_prompt.startswith(master_cc_queue._REPLAY_MARKER)
   assert "message A" in replayed_prompt
-  events = _chat_events(home, meta.id)
+  events = read_chat_events(home, meta.id)
   assert len([e for e in events if e.get("type") == "user"]) == 1
   assert sum(1 for e in events if e.get("type") == "master_done") == 1
   assert _session_meta(home, meta.id)["master_run"] is None
@@ -1088,7 +1082,7 @@ async def test_graceful_teardown_detached_turn_reattached_and_answered_once(
   record = _session_meta(home, session_id)["master_run"]
   assert record is not None, "teardown cleared the record a boot needs"
   os.kill(record["pid"], 0)
-  events = _chat_events(home, session_id)
+  events = read_chat_events(home, session_id)
   assert not any(e.get("type") == "master_done" for e in events)
   assert not _session_meta(home, session_id).get("has_unread"), "teardown wrote terminal state"
 
@@ -1100,7 +1094,7 @@ async def test_graceful_teardown_detached_turn_reattached_and_answered_once(
   await _await_recovery_tasks()
 
   assert not (state / "inv-2.argv").exists(), "a second master process was spawned"
-  events = _chat_events(home, session_id)
+  events = read_chat_events(home, session_id)
   markers = [e for e in events if "ASSISTANT-INV-1" in json.dumps(e)]
   assert len(markers) == 1, "the shim's assistant marker must land exactly once"
   master_done = [e for e in events if e.get("type") == "master_done"]

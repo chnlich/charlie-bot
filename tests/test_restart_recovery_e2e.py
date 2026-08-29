@@ -42,6 +42,7 @@ from conftest import (
   SPAWNER_RESUME_WORKER_PATCH_TARGET,
   await_recovery_tasks,
   build_recovery_cfg,
+  read_chat_events,
 )
 
 from src.agents.worker import QuotaExhaustedException, Worker
@@ -434,15 +435,8 @@ def _thread_metas(home: Path, session_id: str) -> list[dict]:
   ]
 
 
-def _session_chat_events(home: Path, session_id: str) -> list[dict]:
-  path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
-  if not path.exists():
-    return []
-  return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-
-
 def _recovery_reports(home: Path, session_id: str) -> list[dict]:
-  return [e for e in _session_chat_events(home, session_id) if e.get("source") == "crash_recovery"]
+  return [e for e in read_chat_events(home, session_id) if e.get("source") == "crash_recovery"]
 
 
 async def _settle_finalize_window(home: Path, session_id: str, original_id: str) -> None:
@@ -563,7 +557,7 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
     await _settle_finalize_window(home, session_meta.id, original.id)
 
   # Effect 1: terminal worker_summary for the original thread, exactly once.
-  chat_events = _session_chat_events(home, session_meta.id)
+  chat_events = read_chat_events(home, session_meta.id)
   terminal_summaries = [
       e for e in chat_events
       if e.get("type") == "worker_summary" and e.get("thread_id") == original.id and e.get("status") != "running"
@@ -762,7 +756,7 @@ def _launch_graceful_driver(
 
 def _terminal_summaries(home: Path, ids: dict) -> list[dict]:
   return [
-      e for e in _session_chat_events(home, ids["session"])
+      e for e in read_chat_events(home, ids["session"])
       if e.get("type") == "worker_summary" and e.get("thread_id") == ids["thread"] and e.get("status") != "running"
   ]
 

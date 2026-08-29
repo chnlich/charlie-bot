@@ -117,6 +117,20 @@ def append_events(path: Path, events: list[dict]) -> None:
     f.writelines(json.dumps(event) + "\n" for event in events)
 
 
+def read_chat_events(home: Path, session_id: str) -> list[dict]:
+  """Parse a session's chat_events.jsonl under a staged CHARLIEBOT_HOME; [] when absent.
+
+  Shared raw reader for the crash-recovery e2e suites (test_restart_recovery_e2e,
+  test_master_restart_recovery_e2e); each event stays an unmodeled dict so tests
+  assert the exact persisted shape. A missing file means the run never wrote
+  events, which callers assert on directly rather than treat as an error.
+  """
+  path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
+  if not path.exists():
+    return []
+  return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 def assistant_event(content: str, event_id: str = "assistant") -> dict:
   """An ASSISTANT event whose message is a single text block; projection and aggregator tests build on this
   shape, and a test needing extra fields (timestamp, token usage) builds its own or merges them in."""

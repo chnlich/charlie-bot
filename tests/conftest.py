@@ -5,7 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable, Coroutine, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -805,7 +805,7 @@ class FakeChunkedResponse:
   async def aclose(self) -> None:
     pass
 
-  async def aiter_bytes(self):
+  async def aiter_bytes(self) -> AsyncIterator[bytes]:
     for chunk in self._chunks:
       yield chunk
 

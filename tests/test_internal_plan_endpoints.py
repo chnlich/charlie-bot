@@ -244,7 +244,7 @@ async def test_plan_reverify_endpoint_removed(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Session view payload no longer carries plans (A6 — /view is plans-less)
+# Session view payload carries no plans
 # ---------------------------------------------------------------------------
 
 

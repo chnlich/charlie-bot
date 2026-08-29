@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import build_two_backend_cfg, close_create_logged_task
+from conftest import (
+  CHAT_RUN_AND_FINALIZE_PATCH_TARGET,
+  build_two_backend_cfg,
+  close_create_logged_task,
+)
 from conftest import make_sessions_client as _build_client
 from conftest import session_dir_names as _session_dir_names
 
@@ -51,7 +55,7 @@ def _capture_bootstrap(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
     return noop()
 
-  monkeypatch.setattr("src.api.chat.run_and_finalize", fake_run_and_finalize)
+  monkeypatch.setattr(CHAT_RUN_AND_FINALIZE_PATCH_TARGET, fake_run_and_finalize)
   monkeypatch.setattr("src.core.tasks.create_logged_task", close_create_logged_task)
   return calls
 

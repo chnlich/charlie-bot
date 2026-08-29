@@ -39,6 +39,7 @@ import pytest
 from conftest import (
   OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
   RECOVERY_TASK_PREFIXES,
+  REVIEW_TRIGGER_MASTER_PATCH_TARGET,
   SPAWNER_RESUME_WORKER_PATCH_TARGET,
   await_recovery_tasks,
   build_recovery_cfg,
@@ -255,7 +256,7 @@ async def _recover(
     return resolution
 
   monkeypatch.setattr(SPAWNER_RESUME_WORKER_PATCH_TARGET, spy_resume)
-  monkeypatch.setattr("src.core.review.trigger_master", fake_trigger_master)
+  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
   monkeypatch.setattr("src.core.runs.resolve_run", spy_resolve)
 
   cfg = cfg or _cfg(home)
@@ -517,7 +518,7 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
         session_id,
         {"type": ET.ASSISTANT, "message": {"role": "assistant", "content": [{"type": "text", "text": "ack"}]}})
 
-  monkeypatch.setattr("src.core.review.trigger_master", fake_trigger_master)
+  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
 
   # --- keep the shared worktree alive across every reconcile round: the real
   # finalize_review_chain removes it once a review lands, which would make rounds
@@ -985,7 +986,7 @@ async def test_ui_cancel_endpoint_still_finalizes_cancelled(
   async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
     master_wakes.append(summary)
 
-  monkeypatch.setattr("src.core.review.trigger_master", fake_trigger_master)
+  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
 
   cfg = _cfg(home)
   session_mgr = SessionManager(cfg)

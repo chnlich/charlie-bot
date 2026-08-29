@@ -36,7 +36,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import RECOVERY_TASK_PREFIXES, await_recovery_tasks, build_recovery_cfg
+from conftest import (
+  OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+  RECOVERY_TASK_PREFIXES,
+  await_recovery_tasks,
+  build_recovery_cfg,
+)
 
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
@@ -892,11 +897,11 @@ async def test_restart_recovery_summary_invariant_to_backend_binary_presence(
       def _missing_binary(name: str, fallback: str) -> str:
         raise FileNotFoundError(f"{name} binary not found on PATH or at {fallback}")
 
-      monkeypatch.setattr("src.agents.backends.opencode.resolve_binary", _missing_binary)
+      monkeypatch.setattr(OPENCODE_RESOLVE_BINARY_PATCH_TARGET, _missing_binary)
       home = tmp_path / "home-absent"
     else:
       monkeypatch.setattr(
-          "src.agents.backends.opencode.resolve_binary", lambda name, fallback: binary)
+          OPENCODE_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: binary)
       home = tmp_path / "home-present"
 
     cfg = build_recovery_cfg(home)

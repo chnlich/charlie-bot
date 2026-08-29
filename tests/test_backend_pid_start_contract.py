@@ -29,6 +29,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from conftest import OPENCODE_RESOLVE_BINARY_PATCH_TARGET
 
 import src.agents.backends as backends_package
 from src.agents.backends.antigravity_cli import AntigravityCliBackend
@@ -126,7 +127,7 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """opencode custom run() harness (test_opencode_backend.py's MagicMock spawn shape)."""
   monkeypatch.setattr(
-      "src.agents.backends.opencode.resolve_binary", lambda name, fallback: "/usr/bin/opencode")
+      OPENCODE_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/opencode")
   _install_sentinel_read_pid_stat(monkeypatch)
   observed: list[tuple[int, str | None]] = []
   backend: AgentBackend

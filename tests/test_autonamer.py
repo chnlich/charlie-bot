@@ -5,7 +5,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import SYNTHETIC_MODEL, FakeStdout, make_one_shot_backend
+from conftest import (
+  OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+  SYNTHETIC_MODEL,
+  FakeStdout,
+  make_one_shot_backend,
+)
 
 from src.core import autonamer
 from src.core.autonamer import (
@@ -674,7 +679,7 @@ async def test_opencode_one_shot_text_extracts_text_from_flat_part_event(monkeyp
   from src.agents.backends.opencode import OpenCodeBackend
 
   monkeypatch.setattr(
-      "src.agents.backends.opencode.resolve_binary",
+      OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/opencode",
   )
   lines = [
@@ -708,7 +713,7 @@ async def test_opencode_one_shot_text_returns_empty_when_no_text_part(monkeypatc
   from src.agents.backends.opencode import OpenCodeBackend
 
   monkeypatch.setattr(
-      "src.agents.backends.opencode.resolve_binary",
+      OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/opencode",
   )
   lines = [

@@ -23,6 +23,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from src.agents.backends.base import SKIP_PERMISSIONS_FLAG
 from src.agents.backends.claude_code import headless_claude_env
 from src.agents.backends.pty_common import (
   _TMUX_SOCKET,
@@ -135,7 +136,7 @@ def parse_argv(argv: list[str]) -> ClaudeSubArgs:
         "-p",
         "--print",
         "--verbose",
-        "--dangerously-skip-permissions",
+        SKIP_PERMISSIONS_FLAG,
         "--allow-dangerously-skip-permissions",
     ):
       i += 1
@@ -505,7 +506,7 @@ def _build_claude_argv(
       "claude",
       "--settings",
       _session_settings(args),
-      "--dangerously-skip-permissions",
+      SKIP_PERMISSIONS_FLAG,
       "--plugin-dir",
       str(plugin_dir),
       "--resume" if resume else "--session-id",

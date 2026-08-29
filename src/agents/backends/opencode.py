@@ -12,6 +12,7 @@ import httpx
 import structlog
 
 from src.agents.backends.base import (
+  SKIP_PERMISSIONS_FLAG,
   AgentBackend,
   iter_ndjson_events,
   make_error_event,
@@ -760,7 +761,7 @@ class OpenCodeBackend(AgentBackend):
         "json",
         "-m",
         self._model,
-        "--dangerously-skip-permissions",
+        SKIP_PERMISSIONS_FLAG,
         "--",
         framed,
     ]

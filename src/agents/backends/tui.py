@@ -19,6 +19,7 @@ from typing import Any
 import structlog
 from fastapi import WebSocket
 
+from src.agents.backends.base import SKIP_PERMISSIONS_FLAG
 from src.agents.backends.pty_common import (
   PTY_EXIT,
   PtyAttachment,
@@ -65,7 +66,7 @@ def _build_claude_argv(
       "claude",
       "--settings",
       _CLAUDE_TUI_SETTINGS,
-      "--dangerously-skip-permissions",
+      SKIP_PERMISSIONS_FLAG,
       session_arg,
       session_id,
   ]

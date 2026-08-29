@@ -104,9 +104,9 @@ def _post_compact_tokens_after(events: list[dict], chosen_idx: int) -> int | Non
   """
   post_tokens: int | None = None
   for ev in events[chosen_idx + 1:]:
-    if ev.get("type") != ET.SYSTEM or ev.get("subtype") != "compact_boundary":
+    if ev.get("type") != ET.SYSTEM or ev.get("subtype") != ET.COMPACT_BOUNDARY:
       continue
-    candidate = (ev.get("compact_metadata") or {}).get("post_tokens")
+    candidate = (ev.get(ET.COMPACT_METADATA) or {}).get("post_tokens")
     if isinstance(candidate, int):
       post_tokens = candidate
   return post_tokens

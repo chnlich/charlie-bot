@@ -1,8 +1,9 @@
-"""Canonical event-type string constants.
+"""Canonical event wire-name constants.
 
 Every raw event dict in the system carries a ``"type"`` field whose value is
-one of the strings defined here.  Import constants from this module instead of
-hard-coding the strings at construction and consumption sites.
+one of the strings defined here; a few constants instead name a subtype value
+or payload key (their comments say which).  Import constants from this module
+instead of hard-coding the strings at construction and consumption sites.
 """
 
 # -- Core chat events --------------------------------------------------------
@@ -45,6 +46,13 @@ SLACK_REPLY = "slack_reply"
 CONTEXT_COMPACTED = "context_compacted"
 CONTEXT_COMPACT_FAILED = "context_compact_failed"
 RESUME_CONTEXT_DROPPED = "resume_context_dropped"
+# A backend emits this ``subtype`` on a ``system`` event when the conversation
+# crosses a compaction boundary; the event carries its ``trigger`` and token
+# counts under the ``compact_metadata`` key.  Both are persisted wire values:
+# tier resolution re-reads them from chat_events.jsonl history
+# (src/core/session_usage.py), so producer and consumers share one definition.
+COMPACT_BOUNDARY = "compact_boundary"
+COMPACT_METADATA = "compact_metadata"
 
 # -- Clone / fork ------------------------------------------------------------
 CLONE_START = "clone_start"

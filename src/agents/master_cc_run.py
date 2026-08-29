@@ -47,9 +47,9 @@ def _is_manual_compact_boundary(event: dict) -> bool:
   unknown/absent triggers fail loud — neither may exempt the turn.
   """
   return (
-      event.get("type") == "system"
-      and event.get("subtype") == "compact_boundary"
-      and (event.get("compact_metadata") or {}).get("trigger") == "manual"
+      event.get("type") == ET.SYSTEM
+      and event.get("subtype") == ET.COMPACT_BOUNDARY
+      and (event.get(ET.COMPACT_METADATA) or {}).get("trigger") == "manual"
   )
 
 

@@ -479,9 +479,9 @@ class OpenCodeBackend(AgentBackend):
           return []
         pre_tokens = self._last_step_tokens["input"] if self._last_step_tokens is not None else None
         return [{
-            "type": "system",
-            "subtype": "compact_boundary",
-            "compact_metadata": {"trigger": "auto", "pre_tokens": pre_tokens},
+            "type": ET.SYSTEM,
+            "subtype": ET.COMPACT_BOUNDARY,
+            ET.COMPACT_METADATA: {"trigger": "auto", "pre_tokens": pre_tokens},
         }]
       if info["role"] != "assistant":
         return []

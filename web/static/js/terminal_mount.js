@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // Shared xterm.js mount for the two terminal surfaces (tui_session.js,
 // terminal_panel.js): both mount identical Terminal options, the same
-// open/clipboard/focus sequence, and the same touch-drag scroll wiring.
+// open/clipboard/focus sequence, the same touch-drag scroll wiring, and the
+// same fit-then-send-resize timing.
 // ---------------------------------------------------------------------------
 globalThis.createTerminal = function(container) {
   const term = new Terminal({
@@ -19,6 +20,21 @@ globalThis.createTerminal = function(container) {
   wireTerminalClipboard(term);
   term.focus();
   return {term, fitAddon};
+};
+
+globalThis.fitTerminalAndSendResize = function(term, fitAddon, sendResize) {
+  try {
+    fitAddon.fit();
+    if (term.cols && term.rows) sendResize(term.cols, term.rows);
+  } catch (err) {
+    console.warn('terminal fit failed', err);
+  }
+};
+
+// Cell metrics are only valid after the container's layout has painted, so
+// every caller (mount, font load, container resize) defers across two frames.
+globalThis.scheduleAfterTerminalPaint = function(fn) {
+  requestAnimationFrame(() => requestAnimationFrame(fn));
 };
 
 globalThis.wireTerminalTouchScroll = function(container, term, listenerOptions) {

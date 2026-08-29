@@ -34,16 +34,11 @@
 
   function fitAndSendResize() {
     if (!terminalOpen || !fitAddon || !term) return;
-    try {
-      fitAddon.fit();
-      if (term.cols && term.rows) sendResize(term.cols, term.rows);
-    } catch (err) {
-      console.warn('Terminal fit failed', err);
-    }
+    fitTerminalAndSendResize(term, fitAddon, sendResize);
   }
 
   function scheduleFitAndSendResize() {
-    requestAnimationFrame(() => requestAnimationFrame(fitAndSendResize));
+    scheduleAfterTerminalPaint(fitAndSendResize);
   }
 
   function ensureMount() {

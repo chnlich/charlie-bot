@@ -441,6 +441,13 @@ TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.core.triggers.asynci
 # spellings — a test names this one when the interception, not the caller, is the point.
 ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "asyncio.create_subprocess_exec"
 
+# Import-path patch target for the host capability probe the slurm watchers read.
+# src/core/triggers.py runs the probe once at import scope (`_SACCT_AVAILABLE =
+# shutil.which("sacct") is not None`), and create_trigger's local-slurm guard and
+# _wait_sacct_group's no-sacct skip read the module attribute at call time, so mock
+# patch setattrs the stand-in on the src.core.triggers module attribute.
+TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.core.triggers._SACCT_AVAILABLE"
+
 # Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py binds the
 # name with `from src.core.config import get_config`, so mock setattrs the stand-in on the
 # src.cli.common module attribute and every helper defined there reads it at call time.
@@ -980,7 +987,7 @@ def patch_trigger_fire(
   """
   patches = []
   if sacct_available is not None:
-    patches.append(patch("src.core.triggers._SACCT_AVAILABLE", sacct_available))
+    patches.append(patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, sacct_available))
   patches.append(patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=subprocess_mock))
   if sleep_mock is not None:
     patches.append(patch("src.core.triggers.asyncio.sleep", new=sleep_mock))

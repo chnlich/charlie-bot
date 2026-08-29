@@ -3,19 +3,9 @@
 import json
 
 import pytest
+from conftest import FakeChunkedResponse
 
 from src.core.sse import iter_sse_lines, split_sse_lines
-
-
-class _FakeByteStreamResponse:
-  """SSE response double exposing pre-chunked bytes through aiter_bytes()."""
-
-  def __init__(self, chunks: list[bytes]) -> None:
-    self._chunks = chunks
-
-  async def aiter_bytes(self):
-    for chunk in self._chunks:
-      yield chunk
 
 
 def _splitlines_boundary_chars() -> list[str]:
@@ -36,7 +26,7 @@ def _split_chunked(chunks: list[str]) -> list[str]:
 
 
 async def _drain_lines(chunks: list[bytes]) -> list[str]:
-  return [line async for line in iter_sse_lines(_FakeByteStreamResponse(chunks))]
+  return [line async for line in iter_sse_lines(FakeChunkedResponse(chunks))]
 
 
 @pytest.mark.parametrize("terminator", ["\n", "\r\n", "\r"])

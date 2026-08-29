@@ -1,12 +1,10 @@
 """Unit tests for the effective-alive invariant in ``runs.resolve_run``.
 
-Plan "boot recovery 误杀判定保守化": death is reported only when it can be
-PROVEN — pid, pid_start, and started_at all present AND ``is_run_alive`` says
-dead. Every other case (any input missing, raw missing so death is
-unverifiable, or the probe says alive) is treated as alive and resolves to a
-RUNNING/STALLED row, never a DIED-on-missing-evidence finalize.
-
-Covers acceptance legs (b), (d-new), (f-resolver), (g).
+Death is reported only when it can be PROVEN — pid, pid_start, and started_at
+all present AND ``is_run_alive`` says dead. Every other case (any input
+missing, raw missing so death is unverifiable, or the probe says alive) is
+treated as alive and resolves to a RUNNING/STALLED row, never a
+DIED-on-missing-evidence finalize.
 """
 
 from __future__ import annotations
@@ -26,13 +24,13 @@ def _live_identity() -> tuple[int, str]:
 
 
 # ---------------------------------------------------------------------------
-# (b) Liveness row: each missing-input variant is effective-alive
+# Liveness row: each missing-input variant is effective-alive
 # ---------------------------------------------------------------------------
 
 
 def test_missing_pid_and_started_at_variants_are_effective_alive(tmp_path: Path) -> None:
-  """pid=None and started_at=None variants resolve exactly like (a)'s
-  pid_start=None: RUNNING with the missing field named, never DIED."""
+  """pid=None and started_at=None variants resolve exactly like pid_start=None:
+  RUNNING with the missing field named, never DIED."""
   _write_raw(tmp_path, [ASSISTANT_LINE])
   pid, pid_start = _live_identity()
 
@@ -70,7 +68,7 @@ def test_missing_fields_never_reach_died_even_with_a_dead_pid(tmp_path: Path) ->
 
 
 # ---------------------------------------------------------------------------
-# (f-resolver) Uncovered row: result pre-check, then effective-alive, then DIED
+# Uncovered row: result pre-check, then effective-alive, then DIED
 # ---------------------------------------------------------------------------
 
 
@@ -98,7 +96,7 @@ def test_uncovered_without_raw_and_unverifiable_resolves_running(tmp_path: Path)
 
 
 # ---------------------------------------------------------------------------
-# (g) raw-missing row: both effective-alive variants, no DIED backdoor
+# Raw-missing row: both effective-alive variants, no DIED backdoor
 # ---------------------------------------------------------------------------
 
 

@@ -337,9 +337,8 @@ async def test_remote_default_branch_read_from_remote(remote_default_repo: dict[
 
 @pytest.mark.asyncio
 async def test_baseless_launch_starts_at_remote_default_tip(remote_default_repo: dict[str, Path]) -> None:
-  """The incident state: origin's main advanced, local main stale, checkout on a
-  branch origin does not have. A base-less launch must still start at origin's
-  main tip."""
+  """origin's main advanced, local main stale, checkout on a branch origin does
+  not have. A base-less launch must still start at origin's main tip."""
   seed = remote_default_repo["seed"]
   clone = remote_default_repo["clone"]
   tmp_path = remote_default_repo["tmp_path"]

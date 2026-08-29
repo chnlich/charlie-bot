@@ -694,6 +694,19 @@ def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   return tmp_path
 
 
+@pytest.fixture
+def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+  """Point ``CHARLIEBOT_HOME`` at a fresh tmp dir and clear the config module caches around it.
+
+  ``get_config()`` caches process-wide on a fingerprint, so an instance cached under an
+  earlier test's profile would answer with the wrong profile.
+  """
+  monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(tmp_path))
+  reset_config_caches()
+  yield tmp_path
+  reset_config_caches()
+
+
 def cron_d_dir(home: Path) -> Path:
   """The per-job cron dir under a HOME-rooted test dir; once the temp_home fixture points HOME at
   ``home``, this is the dir ``get_scheduled_tasks`` scans for per-job host files."""

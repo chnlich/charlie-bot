@@ -13,6 +13,7 @@ import structlog
 
 from src.agents.backends.base import (
   AgentBackend,
+  iter_ndjson_events,
   make_error_event,
   make_result_event,
   make_text_event,
@@ -778,14 +779,7 @@ class OpenCodeBackend(AgentBackend):
     async def _collect() -> str:
       parts: list[str] = []
       assert proc.stdout is not None
-      async for raw_line in proc.stdout:
-        line = raw_line.decode("utf-8", errors="replace").strip()
-        if not line:
-          continue
-        try:
-          event = json.loads(line)
-        except json.JSONDecodeError:
-          continue
+      async for event in iter_ndjson_events(proc.stdout):
         part = event.get("part")
         if not isinstance(part, dict):
           continue

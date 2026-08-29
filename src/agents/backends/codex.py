@@ -10,6 +10,7 @@ import structlog
 
 from src.agents.backends.base import (
   AgentBackend,
+  iter_ndjson_events,
   make_error_event,
   make_result_event,
   make_text_event,
@@ -147,14 +148,7 @@ class CodexBackend(AgentBackend):
       parts: list[str] = []
       structured_error: str | None = None
       assert proc.stdout is not None
-      async for raw_line in proc.stdout:
-        line = raw_line.decode("utf-8", errors="replace").strip()
-        if not line:
-          continue
-        try:
-          ev = json.loads(line)
-        except json.JSONDecodeError:
-          continue
+      async for ev in iter_ndjson_events(proc.stdout):
         for translated in self.translate_event(ev):
           translated_type = translated.get("type")
           if translated_type == ET.ERROR:

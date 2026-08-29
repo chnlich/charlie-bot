@@ -8,7 +8,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import patch_improve_git_ops
+from conftest import SPAWNER_SPAWN_WORKER_PATCH_TARGET, patch_improve_git_ops
 
 from src.core import improve_command
 from src.core.improve_command import (
@@ -384,7 +384,7 @@ def _capture_descriptions(
     if on_spawn is not None:
       on_spawn(request)
 
-  monkeypatch.setattr("src.core.spawner.spawn_worker", capturing_spawn_worker)
+  monkeypatch.setattr(SPAWNER_SPAWN_WORKER_PATCH_TARGET, capturing_spawn_worker)
   return descriptions
 
 
@@ -401,7 +401,7 @@ def _patch_improve_loop_io(monkeypatch: pytest.MonkeyPatch) -> tuple[list[SpawnR
     del session, _cfg, _session_mgr
     triggered_payloads.append(json.loads(summary))
 
-  monkeypatch.setattr("src.core.spawner.spawn_worker", fake_spawn_worker)
+  monkeypatch.setattr(SPAWNER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)
   monkeypatch.setattr(improve_command, "trigger_master", fake_trigger_master)
   patch_improve_git_ops(monkeypatch)
   return spawn_requests, triggered_payloads
@@ -666,7 +666,7 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
   async def fake_trigger_master(session: str, summary: str, _cfg, _session_mgr) -> None:
     del session, summary, _cfg, _session_mgr
 
-  monkeypatch.setattr("src.core.spawner.spawn_worker", fake_spawn_worker)
+  monkeypatch.setattr(SPAWNER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)
   monkeypatch.setattr("src.core.improve_command.trigger_master", fake_trigger_master)
   patch_improve_git_ops(monkeypatch)
   monkeypatch.setattr("src.core.ndjson.parse_ndjson_file", lambda path: [{"type": "result", "result": "ok"}])
@@ -988,7 +988,7 @@ async def _gate_loop(
     if report is not None:
       (Path(request.loop_dir) / f'iter_{request.iteration_number:04d}.md').write_text(report)
 
-  monkeypatch.setattr("src.core.spawner.spawn_worker", writing_spawn_worker)
+  monkeypatch.setattr(SPAWNER_SPAWN_WORKER_PATCH_TARGET, writing_spawn_worker)
 
   await _run_loop(
       session_id="gate-session",

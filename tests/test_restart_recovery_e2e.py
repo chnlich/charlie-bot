@@ -39,6 +39,7 @@ import pytest
 from conftest import (
   OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
   RECOVERY_TASK_PREFIXES,
+  SPAWNER_RESUME_WORKER_PATCH_TARGET,
   await_recovery_tasks,
   build_recovery_cfg,
 )
@@ -252,7 +253,7 @@ async def _recover(
     outcomes.append(resolution.outcome)
     return resolution
 
-  monkeypatch.setattr("src.core.spawner.resume_worker", spy_resume)
+  monkeypatch.setattr(SPAWNER_RESUME_WORKER_PATCH_TARGET, spy_resume)
   monkeypatch.setattr("src.core.review.trigger_master", fake_trigger_master)
   monkeypatch.setattr("src.core.runs.resolve_run", spy_resolve)
 

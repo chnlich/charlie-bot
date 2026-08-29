@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import CLEAN_EXIT_OUTCOME
 
 from src.core import spawner
 from src.core.models import ThreadMetadata
@@ -187,7 +188,7 @@ def test_helper_is_wired_into_spawn_worker_after_stream_events() -> None:
 @pytest.mark.parametrize(
     ("outcome", "expected"),
     [
-        (spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=""), False),
+        (CLEAN_EXIT_OUTCOME, False),
         (spawner._WorkerRunOutcome(exit_code=143, quota_exhausted=False, error=""), True),
         (spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error="setup boom"), True),
         (spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error=""), False),

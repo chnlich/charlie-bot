@@ -354,6 +354,10 @@ SYNTHETIC_MODEL = "synthetic-provider/nvidia/Synthetic-Model"
 # each backend's build-command test asserts the string reaches the CLI as prompt payload only.
 FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 
+# Success-path counterpart of src/core/spawner_finalize.py's _QUOTA_EXHAUSTED_OUTCOME; the
+# finalize/summary tests that take the clean-exit branch through the finalize chain share it.
+CLEAN_EXIT_OUTCOME = spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error="")
+
 # Import-path patch target shared by every test that silences or spies on streaming broadcasts.
 # Mock resolves the route through the src.core.sessions namespace (src/core/sessions.py:43 imports
 # the streaming_manager singleton) and setattr's broadcast on that shared object; a move of the

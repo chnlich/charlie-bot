@@ -6,7 +6,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import make_fake_git_create_worktree
+from conftest import SPAWNER_SPAWN_WORKER_PATCH_TARGET, make_fake_git_create_worktree
 
 from src.core import git as git_module
 from src.core import improve_command, review, spawner, spawner_finalize
@@ -184,7 +184,7 @@ async def test_improve_loop_keeps_worktree_on_failure(tmp_path: Path, monkeypatc
     del args, kwargs
 
   monkeypatch.setattr(improve_command, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
-  monkeypatch.setattr("src.core.spawner.spawn_worker", boom_spawn_worker)
+  monkeypatch.setattr(SPAWNER_SPAWN_WORKER_PATCH_TARGET, boom_spawn_worker)
   monkeypatch.setattr(improve_command, "git_worktree_remove", fake_remove)
   monkeypatch.setattr(improve_command, "git_worktree_prune", noop_async)
   monkeypatch.setattr(improve_command, "trigger_master", noop_async)

@@ -425,6 +425,17 @@ SCHEDULER_SPAWN_WORKER_PATCH_TARGET = "src.core.scheduler.spawn_worker"
 SCHEDULER_THREAD_MANAGER_PATCH_TARGET = "src.core.scheduler.ThreadManager"
 SCHEDULER_TRIGGER_MASTER_PATCH_TARGET = "src.core.scheduler.trigger_master"
 
+# Import-path patch targets for the worker spawn/resume seam a recovery or improve-loop run
+# fires through. The spawner facade binds both names at import scope (`from
+# src.core.spawner_lifecycle import resume_worker, spawn_worker` in src/core/spawner.py), so
+# monkeypatch.setattr lands the stand-in on the src.core.spawner module attribute; the
+# attribute-read call sites (init_worker_recovery's `spawner.spawn_worker(...)`/
+# `spawner.resume_worker(...)`) and the call-time `from src.core.spawner import spawn_worker`
+# inside improve_command/review resolve it. scheduler.py binds spawn_worker at import scope
+# and keeps its own route (SCHEDULER_SPAWN_WORKER_PATCH_TARGET above).
+SPAWNER_SPAWN_WORKER_PATCH_TARGET = "src.core.spawner.spawn_worker"
+SPAWNER_RESUME_WORKER_PATCH_TARGET = "src.core.spawner.resume_worker"
+
 # Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py binds the
 # library with module-scope `import requests`, and its helpers read requests.get at call time
 # and pick requests.post inside call_internal_api's `request_fn = requests.post if ... else

@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import RECOVERY_TASK_PREFIXES, await_recovery_tasks
+from conftest import (
+  RECOVERY_TASK_PREFIXES,
+  SPAWNER_RESUME_WORKER_PATCH_TARGET,
+  await_recovery_tasks,
+)
 
 from src.core import git as git_module
 from src.core import init as init_module
@@ -664,7 +668,7 @@ async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
                                interrupt_reason="", on_silence=None):
     resume_calls.append(is_alive())
 
-  monkeypatch.setattr("src.core.spawner.resume_worker", fake_resume_worker)
+  monkeypatch.setattr(SPAWNER_RESUME_WORKER_PATCH_TARGET, fake_resume_worker)
 
   proc = subprocess.Popen(["sleep", "30"])
   try:

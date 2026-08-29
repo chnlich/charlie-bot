@@ -7,6 +7,8 @@ const { escapeHtml } = require('./escape_html_stub');
 
 const { readStatic } = require('./read_static');
 
+const { SESSIONS_ROOT } = require('./sessions_root_stub');
+
 const PLAN_PANEL_JS = readStatic('plan-panel.js');
 
 // ---------------------------------------------------------------------------
@@ -185,10 +187,10 @@ function loadPlanPanelScript(opts = {}) {
   };
   const context = {
     SESSION_ID: opts.sessionId || 'test-session',
-    SESSIONS_ROOT: opts.sessionsRoot || '/home/user/.charliebot/sessions',
+    SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT,
     console: {error: noop, log: noop, warn: noop},
     document,
-    window: {SESSIONS_ROOT: opts.sessionsRoot || '/home/user/.charliebot/sessions'},
+    window: {SESSIONS_ROOT: opts.sessionsRoot || SESSIONS_ROOT},
     localStorage: {getItem: () => null, setItem: noop},
     fetch: opts.fetch || (async () => {
       throw new Error('fetch should not run during script load');

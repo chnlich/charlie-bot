@@ -6,6 +6,8 @@ const { readStatic } = require('./read_static');
 
 const { escapeHtml } = require('./escape_html_stub');
 
+const { SESSIONS_ROOT, SESSION_ID, SESSION_DIR } = require('./sessions_root_stub');
+
 const NAMESPACE_JS = readStatic('chat/namespace.js');
 const ARTIFACTS_JS = readStatic('chat/artifacts.js');
 
@@ -16,7 +18,7 @@ function loadArtifactsScript(opts) {
     escapeHtml,
     hljs: {highlight: (value) => ({value: escapeHtml(value)})},
     localStorage: {getItem: () => null, setItem: () => {}},
-    window: {addEventListener: () => {}, SESSIONS_ROOT: '/home/user/.charliebot/sessions'},
+    window: {addEventListener: () => {}, SESSIONS_ROOT},
     console,
     URL: globalThis.URL,
   };
@@ -27,10 +29,6 @@ function loadArtifactsScript(opts) {
   vm.runInContext(ARTIFACTS_JS, context, {filename: 'artifacts.js'});
   return context;
 }
-
-const SESSIONS_ROOT = '/home/user/.charliebot/sessions';
-const SESSION_ID = 'sess-42';
-const SESSION_DIR = SESSIONS_ROOT + '/' + SESSION_ID;
 
 function makeVersion(v, file, verifyState) {
   return {
@@ -266,7 +264,7 @@ test('buildPlanCompactCardHtml includes the title, vN, verbatim state, and Open 
 
 test('buildPlanCompactCardHtml includes an Open in tab anchor whose href carries #cbsession= and no cbpanel', () => {
   const ctx = loadArtifactsScript();
-  const absPath = '/home/user/.charliebot/sessions/sess-42/artifacts/plan_03.html';
+  const absPath = SESSION_DIR + '/artifacts/plan_03.html';
   const html = ctx.buildPlanCompactCardHtml(3, 2, 'Refactor the registry', 'awaiting approval', absPath);
   // Anchor is present, opens in a new tab with the standard rel attributes.
   const anchorMatch = html.match(/<a[^>]*href="([^"]+)"[^>]*target="_blank"[^>]*rel="noopener noreferrer"[^>]*>Open in tab<\/a>/);

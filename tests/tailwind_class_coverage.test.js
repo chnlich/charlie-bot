@@ -24,6 +24,7 @@ const BUILD_ENV = Object.assign({}, process.env, {
 const { FakeElement } = require('./fake_dom');
 const { escapeHtml } = require('./escape_html_stub');
 const { readStatic } = require('./read_static');
+const { SESSIONS_ROOT } = require('./sessions_root_stub');
 
 function makeDocument(elements) {
   return {
@@ -100,7 +101,7 @@ function loadArtifactsScript() {
     escapeHtml,
     hljs: { highlight: (value) => ({ value: escapeHtml(value) }) },
     localStorage: { getItem: () => null, setItem: () => {} },
-    window: { addEventListener: () => {}, SESSIONS_ROOT: '/home/user/.charliebot/sessions' },
+    window: { addEventListener: () => {}, SESSIONS_ROOT },
     console,
     URL: globalThis.URL,
   };

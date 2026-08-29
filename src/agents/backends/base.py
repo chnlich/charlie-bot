@@ -495,6 +495,7 @@ class AgentBackend(ABC):
     # Pin the process identity BEFORE on_spawn so the callback can persist
     # (pid, pid_start) together; a proc that exited before we could read its
     # stat simply yields None and can never be judged alive later.
+    assert self._proc is not None
     stat_pair = runs.read_pid_stat(self._proc.pid)
     self.pid_start = stat_pair[0] if stat_pair else None
     if self._on_spawn is not None:

@@ -102,7 +102,7 @@ async def run_session_consumer(
     with (
         patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
         patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
-        patch("src.core.sessions.SessionManager", return_value=workers_mock),
+        patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
     ):
       await asyncio.wait_for(master_cc_queue._session_consumer(session_id), timeout=5)
   finally:
@@ -360,6 +360,13 @@ FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 # sessions-side import updates this one string. src.core.autonamer and src.agents.worker import
 # the same singleton, so their routes reach the same attribute.
 BROADCAST_PATCH_TARGET = "src.core.sessions.streaming_manager.broadcast"
+
+# Import-path patch target shared by every test that stubs the workers-running probe the master
+# consumer's teardown runs. master_cc_queue binds the class with call-time `from
+# src.core.sessions import SessionManager` (src/agents/master_cc_queue.py:207), so mock and
+# monkeypatch.setattr land the stand-in on the src.core.sessions module attribute and the
+# teardown's SessionManager(...) construction resolves it at call time.
+SESSIONS_SESSION_MANAGER_PATCH_TARGET = "src.core.sessions.SessionManager"
 
 # Import-path patch target shared by every test that silences or spies on the master wake a
 # trigger fires. src/core/triggers.py binds the name with `from src.core.master_trigger import

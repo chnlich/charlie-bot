@@ -30,6 +30,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from conftest import (
   BUILD_BACKEND_PATCH_TARGET,
+  SESSIONS_SESSION_MANAGER_PATCH_TARGET,
   make_work_item,
   patch_instructions_content,
   run_session_consumer,
@@ -547,7 +548,7 @@ async def test_queued_user_event_ids_covers_running_and_queued_items() -> None:
     with (
         patch.object(master_cc_run, "_run_cc", side_effect=blocked_run_cc),
         patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
-        patch("src.core.sessions.SessionManager", return_value=workers_mock),
+        patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
     ):
       master_cc._enqueue_work_item(session_meta.id, running)
       master_cc._enqueue_work_item(session_meta.id, queued)

@@ -12,6 +12,7 @@ import pytest
 from conftest import (
   BROADCAST_PATCH_TARGET,
   BUILD_BACKEND_PATCH_TARGET,
+  SESSIONS_SESSION_MANAGER_PATCH_TARGET,
   make_work_item,
   mock_session_callbacks,
   patch_instructions_content,
@@ -166,7 +167,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
 
   monkeypatch.setattr(master_cc_run, "_run_cc", fake_run_cc)
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", broadcast_hook)
-  monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: workers_mock)
+  monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: workers_mock)
 
   _reset_master_state(session_id)
   try:
@@ -243,7 +244,7 @@ async def test_busy_cleared_when_run_cc_raises(tmp_path: Path, monkeypatch: pyte
 
   monkeypatch.setattr(master_cc_run, "_run_cc", exploding_run_cc)
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: workers_mock)
+  monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: workers_mock)
 
   _reset_master_state(session_id)
   try:
@@ -568,7 +569,7 @@ async def test_resume_reattach_uses_persisted_interval_start(
 
   monkeypatch.setattr(master_cc_run, "_resume_cc", fake_resume_cc)
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", broadcast)
-  monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: workers_mock)
+  monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: workers_mock)
 
   cfg = _make_consumer_cfg(tmp_path)
   meta = _make_meta(session_id)
@@ -732,7 +733,7 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
 
   monkeypatch.setattr(master_cc_run, "_resume_cc", fake_resume_cc)
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: MagicMock(
+  monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: MagicMock(
       _has_running_tasks=AsyncMock(return_value=False)))
 
   _reset_master_state(session_id)
@@ -840,7 +841,7 @@ async def test_zero_output_guard_resume_exempts_manual_compact(
 
   monkeypatch.setattr(master_cc_run, "_build_fresh_translate", lambda *a, **k: (lambda event: [event]))
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr("src.core.sessions.SessionManager", lambda *a, **k: MagicMock(
+  monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: MagicMock(
       _has_running_tasks=AsyncMock(return_value=False)))
 
   _reset_master_state(session_id)

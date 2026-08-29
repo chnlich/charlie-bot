@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from conftest import (
   BUILD_BACKEND_PATCH_TARGET,
+  SESSIONS_SESSION_MANAGER_PATCH_TARGET,
   make_work_item,
   mock_session_callbacks,
   patch_instructions_content,
@@ -114,7 +115,7 @@ async def _run_message_with_capturing_backend(
   try:
     with (
         patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
-        patch("src.core.sessions.SessionManager") as session_mgr_cls,
+        patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET) as session_mgr_cls,
     ):
       session_mgr_inst = MagicMock()
       session_mgr_inst._has_running_tasks = AsyncMock(return_value=False)

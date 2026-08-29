@@ -49,6 +49,9 @@ _CHANNEL = "C_TEST"
 _THREAD = "1700000000.000100"
 _TEAM = "T_TEST"
 _BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
+_SLACK_LISTENER_MODULE = "src.core.slack_listener"
+_RETRY_DELAYS_PATCH_TARGET = "src.core.slack_listener._RETRY_DELAYS"
+_QUEUED_USER_EVENT_IDS_PATCH_TARGET = "src.agents.master_cc.queued_user_event_ids"
 _PERMALINK = "https://fake.slack.test/archives/C_TEST/p1700000000000100"
 # A summon prompt embeds prompts/slack_reply_format.md, which names the reply
 # command; the audit reads that name off the summon to know its contract.
@@ -304,7 +307,7 @@ async def test_slack_rejecting_the_post_is_502_and_persists_nothing(tmp_path: Pa
 
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener._RETRY_DELAYS", (0.0, 0.0)),
+      patch(_RETRY_DELAYS_PATCH_TARGET, (0.0, 0.0)),
       capture_logs() as logs,
   ):
     with pytest.raises(SlackReplyError) as excinfo:
@@ -442,7 +445,7 @@ def test_route_maps_a_rejected_post_to_502() -> None:
   client = _FakeSlackClient(fail_posts=True)
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.core.slack_listener._RETRY_DELAYS", (0.0, 0.0)),
+      patch(_RETRY_DELAYS_PATCH_TARGET, (0.0, 0.0)),
       _route_client(session_mgr) as http,
   ):
     resp = http.post("/api/internal/slack/reply", json={"session_id": "s1", "text": "hi"})
@@ -488,7 +491,7 @@ async def test_summon_round_with_a_reply_is_left_alone(tmp_path: Path) -> None:
   before = len(session_mgr.load_chat_events_sync(sid))
   trigger = AsyncMock()
 
-  with patch.multiple("src.core.slack_listener", _bot_client=lambda cfg: client, trigger_master=trigger):
+  with patch.multiple(_SLACK_LISTENER_MODULE, _bot_client=lambda cfg: client, trigger_master=trigger):
     assert await deliver_done(sid, done, cfg, session_mgr) is False
 
   assert not client.posts
@@ -627,7 +630,7 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
-      patch("src.core.slack_listener._RETRY_DELAYS", (0.0, 0.0)),
+      patch(_RETRY_DELAYS_PATCH_TARGET, (0.0, 0.0)),
       capture_logs() as logs,
   ):
     assert await deliver_done(sid, done, cfg, session_mgr) is False
@@ -641,7 +644,7 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
-      patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
+      patch(_QUEUED_USER_EVENT_IDS_PATCH_TARGET, return_value=set()),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
     await asyncio.gather(*tasks)
@@ -670,7 +673,7 @@ async def test_rounds_outside_a_summon_are_not_audited(tmp_path: Path, kind: str
   before = len(session_mgr.load_chat_events_sync(sid))
   trigger = AsyncMock()
 
-  with patch.multiple("src.core.slack_listener", _bot_client=lambda cfg: client, trigger_master=trigger):
+  with patch.multiple(_SLACK_LISTENER_MODULE, _bot_client=lambda cfg: client, trigger_master=trigger):
     assert await deliver_done(sid, done, cfg, session_mgr) is False
 
   assert not client.posts
@@ -688,9 +691,9 @@ async def test_summon_issued_under_the_marker_contract_is_outside_the_audit(tmp_
   done = await _append(session_mgr, sid, _done(summon["id"]))
   trigger = AsyncMock()
 
-  with patch.multiple("src.core.slack_listener", _bot_client=lambda cfg: client, trigger_master=trigger):
+  with patch.multiple(_SLACK_LISTENER_MODULE, _bot_client=lambda cfg: client, trigger_master=trigger):
     assert await deliver_done(sid, done, cfg, session_mgr) is False
-    with patch("src.agents.master_cc.queued_user_event_ids", return_value=set()):
+    with patch(_QUEUED_USER_EVENT_IDS_PATCH_TARGET, return_value=set()):
       assert await backfill_lost_summons(cfg, session_mgr) == 0
 
   assert not client.posts
@@ -820,7 +823,7 @@ async def test_each_live_round_exclusion_suppresses_the_notice(tmp_path: Path, e
 
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.agents.master_cc.queued_user_event_ids", return_value=queued),
+      patch(_QUEUED_USER_EVENT_IDS_PATCH_TARGET, return_value=queued),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 0
 
@@ -839,7 +842,7 @@ async def test_answered_summon_is_not_lost_and_its_reply_settles_the_audit(tmp_p
 
   with (
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
+      patch(_QUEUED_USER_EVENT_IDS_PATCH_TARGET, return_value=set()),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 0
 
@@ -895,7 +898,7 @@ async def test_boot_audit_nudges_a_summon_round_left_without_a_reply_once(tmp_pa
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
       patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, trigger),
-      patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
+      patch(_QUEUED_USER_EVENT_IDS_PATCH_TARGET, return_value=set()),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
     await asyncio.gather(*tasks)
@@ -928,7 +931,7 @@ async def test_boot_audit_posts_the_notice_for_a_nudge_round_left_without_a_repl
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
       patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, trigger),
-      patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
+      patch(_QUEUED_USER_EVENT_IDS_PATCH_TARGET, return_value=set()),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
     assert await backfill_lost_summons(cfg, session_mgr) == 0
@@ -958,7 +961,7 @@ async def test_lost_nudge_gets_the_lost_summon_report_and_no_second_action(tmp_p
       patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
       patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, trigger),
-      patch("src.agents.master_cc.queued_user_event_ids", return_value=set()),
+      patch(_QUEUED_USER_EVENT_IDS_PATCH_TARGET, return_value=set()),
   ):
     assert await backfill_lost_summons(cfg, session_mgr) == 1
     await asyncio.gather(*tasks)

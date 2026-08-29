@@ -14,13 +14,12 @@ const { readStatic } = require('./read_static');
 
 const { escapeHtml } = require('./escape_html_stub');
 
+const { SESSIONS_ROOT, SESSION_ID, SESSION_DIR } = require('./sessions_root_stub');
+
 const NAMESPACE_JS = readStatic('chat/namespace.js');
 const ARTIFACTS_JS = readStatic('chat/artifacts.js');
 
 const PAGE_URL = 'https://charliebot.example/';
-const SESSIONS_ROOT = '/home/user/.charliebot/sessions';
-const SESSION_ID = 'sess-42';
-const SESSION_DIR = SESSIONS_ROOT + '/' + SESSION_ID;
 const ARTIFACT_ABS = SESSION_DIR + '/artifacts/report.html';
 const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;

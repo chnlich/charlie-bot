@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
+  CODEX_RESOLVE_BINARY_PATCH_TARGET,
   OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
   SYNTHETIC_MODEL,
   FakeStdout,
@@ -613,7 +614,7 @@ async def test_claude_one_shot_text_raises_on_nonzero_exit() -> None:
 @pytest.mark.asyncio
 async def test_codex_one_shot_text_accumulates_agent_message(monkeypatch) -> None:
   monkeypatch.setattr(
-      "src.agents.backends.codex.resolve_binary",
+      CODEX_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/codex",
   )
   from src.agents.backends.codex import CodexBackend
@@ -649,7 +650,7 @@ async def test_codex_one_shot_text_accumulates_agent_message(monkeypatch) -> Non
 @pytest.mark.asyncio
 async def test_codex_one_shot_text_returns_empty_when_no_agent_message(monkeypatch) -> None:
   monkeypatch.setattr(
-      "src.agents.backends.codex.resolve_binary",
+      CODEX_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/codex",
   )
   from src.agents.backends.codex import CodexBackend

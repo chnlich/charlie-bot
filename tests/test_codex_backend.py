@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import FLAG_LIKE_PROMPT, FakeStdout
+from conftest import CODEX_RESOLVE_BINARY_PATCH_TARGET, FLAG_LIKE_PROMPT, FakeStdout
 from pydantic import ValidationError
 
 from src.agents.backends.codex import CodexBackend
@@ -27,7 +27,7 @@ def _fake_one_shot_proc(lines: list[bytes], *, stderr: bytes = b"", returncode: 
 
 def _build_backend(monkeypatch, **kwargs) -> CodexBackend:
   monkeypatch.setattr(
-      "src.agents.backends.codex.resolve_binary",
+      CODEX_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/codex",
   )
   kwargs.setdefault("model", "codex-test-model")
@@ -535,7 +535,7 @@ def test_backend_option_rejects_nonpositive_auto_compact_limit(bad: int) -> None
 
 def test_registry_propagates_auto_compact_limit_into_codex_backend(monkeypatch) -> None:
   monkeypatch.setattr(
-      "src.agents.backends.codex.resolve_binary",
+      CODEX_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/codex",
   )
   option = BackendOption(

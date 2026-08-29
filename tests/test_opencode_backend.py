@@ -9,9 +9,10 @@ import pytest
 from conftest import SYNTHETIC_MODEL
 
 from src.agents.backends.opencode import (
-  SSE_EVENT_MESSAGE_PART_UPDATED,
-  SSE_EVENT_MESSAGE_UPDATED,
-  SSE_EVENT_SERVER_CONNECTED,
+    SSE_EVENT_MESSAGE_PART_UPDATED,
+    SSE_EVENT_MESSAGE_UPDATED,
+    SSE_EVENT_PERMISSION_ASKED,
+    SSE_EVENT_SERVER_CONNECTED,
   SSE_EVENT_SESSION_IDLE,
   OpenCodeBackend,
   OpenCodeSseSilenceError,
@@ -487,7 +488,7 @@ async def test_consume_sse_events_parent_permission_ask_fails_fast(monkeypatch) 
       backend._consume_sse_events(
           _FakeEventStream([
               {
-                  "type": "permission.asked",
+                  "type": SSE_EVENT_PERMISSION_ASKED,
                   "properties": {
                       "id": "perm-1",
                       "sessionID": "parent-session",
@@ -518,7 +519,7 @@ async def test_consume_sse_events_child_permission_ask_fails_before_filtering(mo
   events = await _drain(
       backend._consume_sse_events(
           _FakeEventStream([{
-              "type": "permission.asked",
+              "type": SSE_EVENT_PERMISSION_ASKED,
               "properties": {
                   "id": "perm-2",
                   "sessionID": "child-session",

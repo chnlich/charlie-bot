@@ -35,6 +35,7 @@ _SERVER_URL_RE = re.compile(r"opencode server listening on (http://127\.0\.0\.1:
 # Handled `opencode serve` SSE event types: each frame's "type" value, fixed by the
 # opencode binary's event stream. Ignored types live in _IGNORED_SSE_EVENT_TYPES.
 SSE_EVENT_SERVER_CONNECTED = "server.connected"
+SSE_EVENT_PERMISSION_ASKED = "permission.asked"
 SSE_EVENT_SESSION_ERROR = "session.error"
 SSE_EVENT_SESSION_IDLE = "session.idle"
 SSE_EVENT_MESSAGE_UPDATED = "message.updated"
@@ -197,7 +198,7 @@ class OpenCodeBackend(AgentBackend):
       properties = event.get("properties", {})
       event_type = event.get("type")
 
-      if event_type == "permission.asked":
+      if event_type == SSE_EVENT_PERMISSION_ASKED:
         self._failed = True
         yield make_error_event(self._format_permission_error(properties))
         return

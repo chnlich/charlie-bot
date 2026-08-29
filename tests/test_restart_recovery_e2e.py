@@ -762,6 +762,17 @@ def _terminal_summaries(home: Path, ids: dict) -> list[dict]:
   ]
 
 
+def _assert_failed_with_transport_reason(home: Path, ids: dict) -> None:
+  """Shared tail of the uncovered-backend recovery tests: the thread finalizes failed with exit
+  code -1 and resolve_run's transport reason lands in exactly one terminal worker_summary."""
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "failed"
+  assert meta["exit_code"] == -1
+  summaries = _terminal_summaries(home, ids)
+  assert len(summaries) == 1
+  assert runs.TRANSPORT_NOT_COVERED_REASON in summaries[0]["full_content"]
+
+
 def _pid_alive(pid: int) -> bool:
   try:
     os.kill(pid, 0)
@@ -864,12 +875,7 @@ async def test_restart_finalizes_uncovered_transport_with_explicit_reason(
 
   assert recovered == 1
   assert alive_at_reattach == [False]
-  meta = _read_meta(home, ids["session"], ids["thread"])
-  assert meta["status"] == "failed"
-  assert meta["exit_code"] == -1
-  summaries = _terminal_summaries(home, ids)
-  assert len(summaries) == 1
-  assert runs.TRANSPORT_NOT_COVERED_REASON in summaries[0]["full_content"]
+  _assert_failed_with_transport_reason(home, ids)
   assert len(master_wakes) == 1
 
 

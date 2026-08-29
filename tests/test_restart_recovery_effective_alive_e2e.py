@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 from conftest import build_recovery_cfg
 from test_restart_recovery_e2e import (
+  _assert_failed_with_transport_reason,
   _kill_driver_mid_run,
   _launch_driver,
   _read_meta,
@@ -160,9 +161,4 @@ async def test_uncovered_dead_pinned_worker_finalized_failed_with_reason(
   assert recovered == 1
   assert outcomes == [runs.RunOutcome.DIED]
   assert alive_at_reattach == [False]
-  meta = _read_meta(home, ids["session"], ids["thread"])
-  assert meta["status"] == "failed"
-  assert meta["exit_code"] == -1
-  summaries = _terminal_summaries(home, ids)
-  assert len(summaries) == 1
-  assert runs.TRANSPORT_NOT_COVERED_REASON in summaries[0]["full_content"]
+  _assert_failed_with_transport_reason(home, ids)

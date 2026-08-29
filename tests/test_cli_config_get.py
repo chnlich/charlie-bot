@@ -5,24 +5,13 @@ diagnostics go to stderr. Unknown keys exit 2, known-but-unset keys exit 1.
 """
 
 import json
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from conftest import reset_config_caches
 
 import src.cli.config as cli
-from src.core import config as core_config
 from src.core.yaml_utils import save_yaml
-
-
-@pytest.fixture(autouse=True)
-def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-  """Point the profile at a fresh tmp dir and clear the module config caches."""
-  monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(tmp_path))
-  reset_config_caches()
-  yield tmp_path
-  reset_config_caches()
 
 
 def _run_get(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], key: str) -> tuple[int, str, str]:

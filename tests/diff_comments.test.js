@@ -1,13 +1,10 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const DIFF_COMMENTS_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'diff_comments.js'),
-  'utf8'
-);
+const { readStatic } = require('./read_static');
+
+const DIFF_COMMENTS_JS = readStatic('diff_comments.js');
 
 function makeElement() {
   return {

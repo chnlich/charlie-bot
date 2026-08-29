@@ -1,17 +1,11 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const GROUPS_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'sidebar', 'groups.js'),
-  'utf8'
-);
-const MODALS_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'sidebar', 'modals.js'),
-  'utf8'
-);
+const { readStatic } = require('./read_static');
+
+const GROUPS_JS = readStatic('sidebar/groups.js');
+const MODALS_JS = readStatic('sidebar/modals.js');
 
 function escapeHtml(str) {
   return String(str)

@@ -1,10 +1,8 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const ROOT = path.join(__dirname, '..');
+const { readStatic } = require('./read_static');
 
 // Load markdown-renderer.js in a fake environment that supplies marked, hljs,
 // and a stub document. Stubbing marked.use captures the renderer the file
@@ -28,7 +26,7 @@ function loadRenderer() {
     },
   };
   vm.createContext(context);
-  const src = fs.readFileSync(path.join(ROOT, 'web', 'static', 'js', 'markdown-renderer.js'), 'utf8');
+  const src = readStatic('markdown-renderer.js');
   vm.runInContext(src, context, { filename: 'markdown-renderer.js' });
   return { renderer: captured, context };
 }

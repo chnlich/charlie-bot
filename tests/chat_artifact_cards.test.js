@@ -5,21 +5,15 @@
 // expanded frames are bounded.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const { readStatic } = require('./read_static');
+
 const { escapeHtml } = require('./escape_html_stub');
 
-const NAMESPACE_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'chat', 'namespace.js'),
-  'utf8'
-);
-const ARTIFACTS_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'chat', 'artifacts.js'),
-  'utf8'
-);
+const NAMESPACE_JS = readStatic('chat/namespace.js');
+const ARTIFACTS_JS = readStatic('chat/artifacts.js');
 
 const SESSIONS_ROOT = '/home/user/.charliebot/sessions';
 const SESSION_ID = 'sess-42';

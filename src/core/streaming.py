@@ -70,11 +70,11 @@ async def handle_compaction_events(
   """Detect compact_boundary and compact-failure system events, log, persist, and
   broadcast a synthesized event. At most one synthesized event is emitted per
   input event."""
-  if event.get("type") != "system":
+  if event.get("type") != ET.SYSTEM:
     return
   subtype = event.get("subtype")
-  if subtype == "compact_boundary":
-    meta = event.get("compact_metadata", {})
+  if subtype == ET.COMPACT_BOUNDARY:
+    meta = event.get(ET.COMPACT_METADATA, {})
     trigger = meta.get("trigger", "unknown")
     pre_tokens = meta.get("pre_tokens")
     log.info("cc_context_compacted", trigger=trigger, pre_tokens=pre_tokens, **log_context)

@@ -8,7 +8,11 @@ never enumerate the whole directory.
 from pathlib import Path
 
 import pytest
-from conftest import build_tui_sessions_cfg
+from conftest import (
+  TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET,
+  TUI_TMUX_SESSION_EXISTS_PATCH_TARGET,
+  build_tui_sessions_cfg,
+)
 from conftest import make_sessions_client as _build_client
 
 from src.core.models import CreateSessionRequest, SessionMetadata
@@ -103,8 +107,8 @@ async def test_tui_status_returns_only_requested_tui_sessions(
   def fake_claude_jsonl_busy(session_id: str) -> bool:
     return False
 
-  monkeypatch.setattr("src.agents.backends.tui.tmux_session_exists", fake_tmux_session_exists)
-  monkeypatch.setattr("src.agents.backends.tui._claude_jsonl_busy", fake_claude_jsonl_busy)
+  monkeypatch.setattr(TUI_TMUX_SESSION_EXISTS_PATCH_TARGET, fake_tmux_session_exists)
+  monkeypatch.setattr(TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET, fake_claude_jsonl_busy)
   _forbid_list_sessions(monkeypatch)
 
   with _build_client(cfg, session_mgr) as client:

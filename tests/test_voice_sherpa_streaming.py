@@ -7,6 +7,7 @@ import wave
 from pathlib import Path
 
 import pytest
+from conftest import make_home_config
 from fastapi.testclient import TestClient
 
 import server
@@ -101,7 +102,7 @@ def test_sherpa_simulated_streaming_acceptance_baseline() -> None:
 
 
 def test_voice_websocket_streams_partials_final_and_persists_dump(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   cfg.charliebot_home.mkdir(parents=True)
   model_cache = CharlieBotConfig().charliebot_home / "models"
   if not model_cache.exists():

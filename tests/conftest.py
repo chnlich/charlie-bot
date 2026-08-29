@@ -292,6 +292,12 @@ def run_node_js_test(node_test: Path, skip_reason: str) -> None:
     pytest.fail(f'Node tests failed.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}')
 
 
+def make_home_config(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig rooted at tmp_path/"charliebot-home". Leaves the home dir un-created:
+  one call site (the sherpa streaming test) mkdirs it itself, and most sites never touch disk."""
+  return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+
+
 def make_session_mgr(tmp_path: Path) -> SessionManager:
   """SessionManager over a SimpleNamespace cfg whose sessions_dir is tmp_path/"sessions"; a test
   needing a richer cfg builds its own."""
@@ -720,7 +726,7 @@ async def make_plan_setup(
 
 async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, str]:
   """Real cfg/session_mgr/trigger_mgr trio plus one created session, for the PID/SLURM watch tests."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(models.CreateSessionRequest(name="Trigger watch"))
   trigger_mgr = TriggerManager(cfg, session_mgr)

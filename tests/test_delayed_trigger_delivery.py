@@ -10,11 +10,11 @@ from conftest import (
   BROADCAST_PATCH_TARGET,
   TRIGGER_MASTER_PATCH_TARGET,
   TRIGGERS_GET_CONFIG_PATCH_TARGET,
+  make_home_config,
 )
 
 from src.api.message_utils import events_to_messages
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, PendingTrigger, TriggerStatus
 from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager
@@ -24,7 +24,7 @@ VOICE_KEY = "is_" + "voice"
 
 @pytest.mark.asyncio
 async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Delayed trigger"))
   trigger_mgr = TriggerManager(cfg, session_mgr)
@@ -91,7 +91,7 @@ class _Invalidation(enum.Enum):
 @pytest.mark.parametrize("invalidation", list(_Invalidation))
 async def test_invalid_session_trigger_is_cancelled_without_waking_master(
     tmp_path: Path, invalidation: _Invalidation) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Invalid session trigger"))
   trigger_mgr = TriggerManager(cfg, session_mgr)

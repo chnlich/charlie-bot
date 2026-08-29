@@ -20,6 +20,8 @@ from src.agents.backends.opencode import (
 from src.core import event_types as ET
 from src.core.streaming import handle_compaction_events
 
+_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.opencode.asyncio.create_subprocess_exec"
+
 
 def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
   monkeypatch.setattr(
@@ -160,7 +162,7 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
   process.returncode = 0
   process.wait = AsyncMock(return_value=0)
   monkeypatch.setattr(
-      "src.agents.backends.opencode.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
+      _CREATE_SUBPROCESS_EXEC_PATCH_TARGET, AsyncMock(return_value=process))
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
   monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())
@@ -354,7 +356,7 @@ async def test_run_passes_proxy_environment_to_serve_subprocess(monkeypatch, tmp
   process = MagicMock()
   process.pid = 1234
   create_process = AsyncMock(return_value=process)
-  monkeypatch.setattr("src.agents.backends.opencode.asyncio.create_subprocess_exec", create_process)
+  monkeypatch.setattr(_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, create_process)
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(side_effect=RuntimeError("stop after spawn")))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
   cleanup = AsyncMock()
@@ -394,7 +396,7 @@ async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatc
   process.returncode = 0
   create_process = AsyncMock(return_value=process)
 
-  with patch("src.agents.backends.opencode.asyncio.create_subprocess_exec", new=create_process):
+  with patch(_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=create_process):
     result = await backend.one_shot_text("prompt", "system", timeout=5.0)
 
   child_env = create_process.await_args.kwargs["env"]
@@ -1233,7 +1235,7 @@ async def test_sse_watchdog_timeout_fails_run_end_to_end(monkeypatch, tmp_path: 
   process.returncode = 0
   process.wait = AsyncMock(return_value=0)
   monkeypatch.setattr(
-      "src.agents.backends.opencode.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
+      _CREATE_SUBPROCESS_EXEC_PATCH_TARGET, AsyncMock(return_value=process))
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
   monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())

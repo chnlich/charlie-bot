@@ -1,4 +1,4 @@
-"""Follow-time silence recheck (plan 取舍 1 = 复检), acceptance leg (i).
+"""Follow-time silence recheck.
 
 A mounted follow loop records the last raw-output moment (seeded from the raw
 log's mtime, so pre-follow silence counts) and, on crossing the existing

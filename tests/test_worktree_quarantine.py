@@ -566,10 +566,8 @@ async def test_reconcile_pre_boot_run_without_raw_log_kept_alive_when_death_unve
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Raw log missing with pid recorded but pid_start absent: death cannot be
   proven, so the run is effective-alive (raw-missing-alive) — reported once,
-  never killed, never finalized failed. Re-judged fossil: this previously
-  asserted failed/-1, the original误杀 shape (pid reuse must never
-  finalize an innocent run).
-  """
+  never killed, never finalized failed; pid reuse must never finalize an
+  innocent run."""
   import json
 
   from src.core import runs

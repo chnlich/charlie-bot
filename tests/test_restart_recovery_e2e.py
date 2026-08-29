@@ -666,7 +666,7 @@ async def test_fresh_spawn_rotates_stale_raw_log_so_verify_retry_quota_not_repla
 
 
 # ---------------------------------------------------------------------------
-# Graceful shutdown: cancellation writes no terminal state (plan "关机不再抢先下结论")
+# Graceful shutdown: cancellation writes no terminal state
 # ---------------------------------------------------------------------------
 
 GRACEFUL_DRIVER = """import asyncio
@@ -840,10 +840,10 @@ async def test_graceful_shutdown_in_setup_phase_reaches_never_started_row(
 @pytest.mark.asyncio
 async def test_restart_finalizes_uncovered_transport_with_explicit_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The incident shape: an opencode-backed verify thread left running by a
-  graceful shutdown. The next boot cannot re-attach (transport not covered),
-  so the thread fails with resolve_run's reason — the module constant, not a
-  retyped literal — in the worker_summary the master reads."""
+  """An opencode-backed verify thread left running by a graceful shutdown. The
+  next boot cannot re-attach (transport not covered), so the thread fails with
+  resolve_run's reason — the module constant, not a retyped literal — in the
+  worker_summary the master reads."""
   home = tmp_path / "home"
   cfg = build_recovery_cfg(home)
   session_mgr = SessionManager(cfg)

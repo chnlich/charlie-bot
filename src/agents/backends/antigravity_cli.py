@@ -10,6 +10,7 @@ from pathlib import Path
 import aiofiles
 
 from src.agents.backends.base import (
+  SKIP_PERMISSIONS_FLAG,
   AgentBackend,
   make_error_event,
   make_result_event,
@@ -45,7 +46,7 @@ class AntigravityCliBackend(AgentBackend):
         f"--print={effective_prompt}",
         "--print-timeout",
         _PRINT_TIMEOUT,
-        "--dangerously-skip-permissions",
+        SKIP_PERMISSIONS_FLAG,
         "--output-format",
         "json",
     ]

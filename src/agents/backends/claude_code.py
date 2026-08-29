@@ -7,7 +7,7 @@ from pathlib import Path
 
 import structlog
 
-from src.agents.backends.base import AgentBackend
+from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, AgentBackend
 from src.core.process import kill_process_group
 
 log = structlog.get_logger()
@@ -18,7 +18,7 @@ BASE_COMMAND: list[str] = [
     "--output-format",
     "stream-json",
     "--verbose",
-    "--dangerously-skip-permissions",
+    SKIP_PERMISSIONS_FLAG,
     # Disable Claude Code tools that are unsafe in CharlieBot headless one-shot mode.
     # Besides scheduling/monitoring (scheduling tools are no-ops in -p mode, and Monitor
     # can create false recall expectations after external waits), this also blocks Claude

@@ -29,7 +29,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import OPENCODE_RESOLVE_BINARY_PATCH_TARGET
+from conftest import (
+  ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
+  OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+)
 
 import src.agents.backends as backends_package
 from src.agents.backends.antigravity_cli import AntigravityCliBackend
@@ -160,7 +163,7 @@ async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
       encoding="utf-8")
   fake_agy.chmod(0o755)
   monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary", lambda name, fallback: str(fake_agy))
+      ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: str(fake_agy))
   _install_sentinel_read_pid_stat(monkeypatch)
   observed: list[tuple[int, str | None]] = []
   backend: AgentBackend

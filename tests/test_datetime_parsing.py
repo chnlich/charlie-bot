@@ -7,9 +7,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 import yaml
+from conftest import make_home_config
 
 from src.core.backlog_loop import _handle_stale
-from src.core.config import CharlieBotConfig, ImprovementLoopConfig, ScheduledTaskConfig
+from src.core.config import ImprovementLoopConfig, ScheduledTaskConfig
 from src.core.models import SessionMetadata, parse_utc_datetime
 from src.core.scheduler import Scheduler
 
@@ -62,7 +63,7 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   scheduler = Scheduler(cfg, AsyncMock())
   session = SessionMetadata(name="Backup session")
   # Base is in the future so croniter's next fire is always after now, removing the minute-boundary

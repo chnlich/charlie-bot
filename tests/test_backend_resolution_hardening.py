@@ -13,6 +13,7 @@ from conftest import (
   TRIGGER_MASTER_PATCH_TARGET,
   TRIGGERS_GET_CONFIG_PATCH_TARGET,
   FakeBackend,
+  make_home_config,
   make_work_item,
   patch_instructions_content,
 )
@@ -157,7 +158,7 @@ def test_get_config_keeps_previous_value_when_reload_fails(tmp_path: Path, monke
 @pytest.mark.asyncio
 async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_path: Path) -> None:
   """A backend added after the manager was constructed must reach trigger_master."""
-  stale = core_config.CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  stale = make_home_config(tmp_path)
   session_mgr = SessionManager(stale)
   session = await session_mgr.create_session(CreateSessionRequest(name="Trigger"))
   trigger_mgr = TriggerManager(stale, session_mgr)

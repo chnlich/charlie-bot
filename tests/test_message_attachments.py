@@ -9,13 +9,13 @@ from conftest import (
   CHAT_CREATE_LOGGED_TASK_PATCH_TARGET,
   CHAT_RUN_AND_FINALIZE_PATCH_TARGET,
   close_create_logged_task,
+  make_home_config,
 )
 from fastapi import UploadFile
 
 from src.api.chat import send_message, upload_file
 from src.api.message_utils import events_to_messages
 from src.api.slash import SlashExecuteRequest, execute_command
-from src.core.config import CharlieBotConfig
 from src.core.models import SendMessageRequest, SessionMetadata, UploadedFileRef
 from src.core.slash_commands import SlashDispatchResult
 
@@ -24,7 +24,7 @@ VOICE_KEY = "is_" + "voice"
 
 @pytest.mark.asyncio
 async def test_upload_file_strips_directory_components(tmp_path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   meta = SessionMetadata(name="Upload Session")
   outside_path = cfg.sessions_dir / "evil.txt"
   outside_path.parent.mkdir(parents=True)
@@ -105,7 +105,7 @@ def test_events_to_messages_extracts_legacy_attachment_block() -> None:
 
 @pytest.mark.asyncio
 async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   meta = SessionMetadata(name="Test Session")
   session_mgr = AsyncMock()
   req = SendMessageRequest(
@@ -138,7 +138,7 @@ async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path
 
 @pytest.mark.asyncio
 async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   meta = SessionMetadata(name="Slash Session")
   session_mgr = AsyncMock()
   request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))

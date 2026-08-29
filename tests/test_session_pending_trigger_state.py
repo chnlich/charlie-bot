@@ -5,9 +5,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from conftest import make_home_config
 
 from src.api import sessions as sessions_api
-from src.core.config import CharlieBotConfig
 from src.core.models import (
   CreateSessionRequest,
   PendingTrigger,
@@ -24,7 +24,7 @@ def _write_trigger(path: Path, trigger: PendingTrigger) -> None:
 
 @pytest.mark.asyncio
 async def test_pending_trigger_state_is_derived_without_persisting_metadata(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Wake later"))
 
@@ -90,7 +90,7 @@ async def test_pending_trigger_state_is_derived_without_persisting_metadata(tmp_
 
 @pytest.mark.asyncio
 async def test_all_sessions_status_includes_pending_trigger_fields(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Wake later"))
 
@@ -118,7 +118,7 @@ async def test_all_sessions_status_includes_pending_trigger_fields(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_all_sessions_status_includes_archived_sessions(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Archived wake"))
 
@@ -148,7 +148,7 @@ async def test_all_sessions_status_includes_archived_sessions(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_populate_sidebar_state_skips_archived_sessions(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
 
   active = await session_mgr.create_session(CreateSessionRequest(name="Active"))

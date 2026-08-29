@@ -4,19 +4,13 @@ A worker killed by SIGTERM after emitting a success result event must not be tre
 failed. The helper inspects events.jsonl and overrides non-zero exit codes accordingly.
 """
 
-import json
 from pathlib import Path
 
 import pytest
-from conftest import CLEAN_EXIT_OUTCOME
+from conftest import CLEAN_EXIT_OUTCOME, append_events
 
 from src.core import spawner
 from src.core.models import ThreadMetadata
-
-
-def _write_events(path: Path, events: list[dict]) -> None:
-  with open(path, "w", encoding="utf-8") as f:
-    f.writelines(json.dumps(ev) + "\n" for ev in events)
 
 
 class _FakeThreadManager:
@@ -35,7 +29,7 @@ def _thread() -> ThreadMetadata:
 @pytest.mark.asyncio
 async def test_success_result_with_nonzero_exit_overrides_to_zero(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
-  _write_events(events_path, [
+  append_events(events_path, [
       {"type": "assistant", "message": {"content": "working"}},
       {"type": "result", "subtype": "success", "is_error": False, "result": "done"},
   ])
@@ -49,7 +43,7 @@ async def test_success_result_with_nonzero_exit_overrides_to_zero(tmp_path: Path
 @pytest.mark.asyncio
 async def test_success_result_with_is_error_none_overrides_to_zero(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
-  _write_events(events_path, [
+  append_events(events_path, [
       {"type": "result", "subtype": "success", "result": "done"},
   ])
 
@@ -62,7 +56,7 @@ async def test_success_result_with_is_error_none_overrides_to_zero(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_error_max_turns_subtype_does_not_override(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
-  _write_events(events_path, [
+  append_events(events_path, [
       {"type": "result", "subtype": "error_max_turns", "is_error": False},
   ])
 
@@ -75,7 +69,7 @@ async def test_error_max_turns_subtype_does_not_override(tmp_path: Path) -> None
 @pytest.mark.asyncio
 async def test_is_error_true_does_not_override(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
-  _write_events(events_path, [
+  append_events(events_path, [
       {"type": "result", "subtype": "success", "is_error": True},
   ])
 
@@ -88,7 +82,7 @@ async def test_is_error_true_does_not_override(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_no_result_event_returns_original(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
-  _write_events(events_path, [
+  append_events(events_path, [
       {"type": "assistant", "message": {"content": "thinking"}},
       {"type": "tool_use", "name": "Bash"},
   ])
@@ -103,7 +97,7 @@ async def test_no_result_event_returns_original(tmp_path: Path) -> None:
 async def test_only_last_result_event_is_considered(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
   # Earlier success result followed by a later failure result: should NOT override.
-  _write_events(events_path, [
+  append_events(events_path, [
       {"type": "result", "subtype": "success", "is_error": False},
       {"type": "result", "subtype": "error_max_turns", "is_error": True},
   ])

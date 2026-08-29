@@ -316,8 +316,8 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
     log.warning("ext_usage_no_access_token", path=str(credentials_path))
     return None
 
-  # expiresAt is deliberately not read. It is a millisecond stamp, and every renewal
-  # decision it used to gate is now made by the server's 401 instead.
+  # expiresAt is deliberately not read: token renewal keys off the server's 401
+  # (poll loop above), never a local expiry check.
   return {
       "access_token": access_token,
       "refresh_token": refresh_token,

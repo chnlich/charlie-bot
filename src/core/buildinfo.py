@@ -8,11 +8,10 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
+from src.core.timeouts import SUBPROCESS_GIT_SHA_TIMEOUT
+
 # Repo root: src/core/buildinfo.py -> parents[2] == repo root (where pyproject.toml lives).
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-
-# subprocess.run timeout for `git rev-parse --short HEAD`. ~2 s per the version-skew hint spec.
-_GIT_SHA_TIMEOUT = 2.0
 
 _sha: str = "unknown"
 _started_at: str = ""
@@ -24,25 +23,29 @@ def init_build_info() -> None:
   Idempotent — re-calling overwrites the previously captured values (used by tests).
   """
   global _sha, _started_at
-  _sha = _read_git_sha()
+  _sha = read_repo_head_sha(SUBPROCESS_GIT_SHA_TIMEOUT) or "unknown"
   _started_at = datetime.now(UTC).isoformat()
 
 
-def _read_git_sha() -> str:
-  """Return `git rev-parse --short HEAD` output in the repo root, or ``"unknown"`` on any failure."""
+def read_repo_head_sha(timeout: float) -> str | None:
+  """Return `git rev-parse --short HEAD` output in the repo root, or None on any failure.
+
+  Every failure mode (missing git, non-zero exit, timeout) yields None so each caller
+  picks its own failure sentinel.
+  """
   try:
     proc = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
         cwd=str(_REPO_ROOT),
         capture_output=True,
         check=False,
-        timeout=_GIT_SHA_TIMEOUT,
+        timeout=timeout,
     )
   except (OSError, subprocess.SubprocessError):
-    return "unknown"
+    return None
   if proc.returncode != 0:
-    return "unknown"
-  return proc.stdout.decode().strip() or "unknown"
+    return None
+  return proc.stdout.decode().strip() or None
 
 
 def build_info() -> dict:

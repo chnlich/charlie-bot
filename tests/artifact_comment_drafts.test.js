@@ -67,17 +67,7 @@ function loadScript(opts = {}) {
     },
     addEventListener() {},
     querySelectorAll(selector) {
-      if (!selector.startsWith('.')) return [];
-      const targetClass = selector.slice(1);
-      const matches = [];
-      const stack = body.children.slice();
-      while (stack.length > 0) {
-        const child = stack.shift();
-        const classes = String(child.className || '').split(/\s+/);
-        if (classes.includes(targetClass)) matches.push(child);
-        stack.push(...child.children);
-      }
-      return matches;
+      return body.querySelectorAll(selector);
     },
   };
 

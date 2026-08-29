@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import (
   TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+  TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET,
   FakeAsyncProcess,
   assert_trigger_fired_completed,
   patch_trigger_fire,
@@ -132,7 +133,7 @@ async def test_verify_on_create_rejects_failed_probe(tmp_path: Path) -> None:
   cfg, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
 
   with (
-      patch("src.core.triggers._SACCT_AVAILABLE", False),
+      patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, False),
       patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(side_effect=_failing_sacct_factory)),
   ):
     with pytest.raises(RemoteVerifyError):

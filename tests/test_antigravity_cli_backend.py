@@ -7,10 +7,12 @@ from src.agents.backends.registry import build_backend
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption
 
+_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.antigravity_cli.resolve_binary"
+
 
 def _build_backend(monkeypatch, **kwargs) -> AntigravityCliBackend:
   monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
+      _RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/agy",
   )
   return AntigravityCliBackend(**kwargs)
@@ -26,7 +28,7 @@ def _write_fake_agy(tmp_path: Path, body: str) -> Path:
 def _install_fake_agy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str) -> None:
   fake_agy = _write_fake_agy(tmp_path, body)
   monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
+      _RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: str(fake_agy),
   )
 
@@ -90,7 +92,7 @@ def test_prepare_cwd_skips_agents_md_when_no_instructions(monkeypatch, tmp_path:
 
 def test_build_command_append_conversation_flag_exactly_once_when_resuming(monkeypatch) -> None:
   monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
+      _RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/agy",
   )
 
@@ -104,7 +106,7 @@ def test_build_command_append_conversation_flag_exactly_once_when_resuming(monke
 
 def test_build_command_never_uses_continue_flag(monkeypatch) -> None:
   monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
+      _RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/agy",
   )
 
@@ -276,7 +278,7 @@ def test_prepare_env_strips_api_keys_for_oauth(monkeypatch) -> None:
 
 def test_registry_builds_antigravity_backend(monkeypatch) -> None:
   monkeypatch.setattr(
-      "src.agents.backends.antigravity_cli.resolve_binary",
+      _RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/agy",
   )
   option = BackendOption(id="agy", label="Antigravity", type="antigravity")

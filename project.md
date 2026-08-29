@@ -74,7 +74,6 @@ charlie-bot/
 ├── src/                # Python backend (api/, core/, agents/)
 ├── web/                # React frontend (src/ for dev, static/ for runtime)
 ├── config/             # Default templates and examples
-├── .yapf               # YAPF code style configuration
 ├── server.py           # Entry point
 └── project.md          # This specification
 ```
@@ -238,14 +237,9 @@ Master parses this to distinguish "thinking" from "stuck" and track progress pre
 
 ### 10.1 Code Style
 - **Standard**: Google Code Style (2-space indent, 120 column limit)
-- **Python**: Enforced via YAPF (`.yapf`):
-  ```ini
-  [style]
-  based_on_style = google
-  indent_width = 2
-  split_before_first_argument = true
-  column_limit = 120
-  ```
+- **Python**: lint-enforced via ruff (`[tool.ruff.lint]` in `pyproject.toml`, CI runs
+  `uv run ruff check src`); indentation and column limit are review convention — no
+  formatter runs in CI.
 
 ### 10.2 Worker Instructions (CLAUDE.md)
 Each Thread's `CLAUDE.md` contains:

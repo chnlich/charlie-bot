@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import (
   BUILD_BACKEND_PATCH_TARGET,
+  CHAT_CANCEL_MASTER_PATCH_TARGET,
   make_work_item,
   mock_session_callbacks,
   patch_instructions_content,
@@ -74,7 +75,7 @@ async def test_cancel_master_agent_success() -> None:
   session_mgr = AsyncMock()
   meta = object()
 
-  with patch("src.api.chat.cancel_master", new=AsyncMock(return_value=True)) as mock_cancel:
+  with patch(CHAT_CANCEL_MASTER_PATCH_TARGET, new=AsyncMock(return_value=True)) as mock_cancel:
     result = await cancel_master_agent("session-ok", meta=meta, session_mgr=session_mgr)
 
   assert result == {"ok": True}
@@ -87,7 +88,7 @@ async def test_cancel_master_agent_no_active_master_broadcasts_error() -> None:
   session_mgr = AsyncMock()
   meta = object()
 
-  with patch("src.api.chat.cancel_master", new=AsyncMock(return_value=False)) as mock_cancel:
+  with patch(CHAT_CANCEL_MASTER_PATCH_TARGET, new=AsyncMock(return_value=False)) as mock_cancel:
     with pytest.raises(HTTPException) as exc_info:
       await cancel_master_agent("session-missing", meta=meta, session_mgr=session_mgr)
 

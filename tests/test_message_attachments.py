@@ -5,7 +5,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import close_create_logged_task
+from conftest import (
+  CHAT_CREATE_LOGGED_TASK_PATCH_TARGET,
+  CHAT_RUN_AND_FINALIZE_PATCH_TARGET,
+  close_create_logged_task,
+)
 from fastapi import UploadFile
 
 from src.api.chat import send_message, upload_file
@@ -112,8 +116,8 @@ async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path
   )
 
   with (
-      patch("src.api.chat.run_and_finalize", new=AsyncMock()) as mock_run,
-      patch("src.api.chat.create_logged_task", side_effect=close_create_logged_task),
+      patch(CHAT_RUN_AND_FINALIZE_PATCH_TARGET, new=AsyncMock()) as mock_run,
+      patch(CHAT_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=close_create_logged_task),
   ):
     response = await send_message(
         meta.id,
@@ -149,8 +153,8 @@ async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_p
 
   with (
       patch("src.api.slash.dispatch_slash_command", new=AsyncMock(return_value=dispatch)),
-      patch("src.api.chat.run_and_finalize", new=AsyncMock()) as mock_run,
-      patch("src.api.chat.create_logged_task", side_effect=close_create_logged_task),
+      patch(CHAT_RUN_AND_FINALIZE_PATCH_TARGET, new=AsyncMock()) as mock_run,
+      patch(CHAT_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=close_create_logged_task),
   ):
     response = await execute_command(
         request=request,

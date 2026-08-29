@@ -16,7 +16,6 @@ import argparse
 import contextlib
 import json
 import re
-import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -25,12 +24,13 @@ from typing import Any, NoReturn
 
 import requests
 
+from src.core.buildinfo import read_repo_head_sha
 from src.core.config import CharlieBotConfig, get_config
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
     HTTP_INTERNAL_API_TIMEOUT,
     HTTP_VERSION_SKEW_TIMEOUT,
-    SUBPROCESS_VERSION_SKEW_TIMEOUT,
+    SUBPROCESS_GIT_SHA_TIMEOUT,
 )
 
 TASK_SPEC_REQUIRED_HEADINGS = (
@@ -41,9 +41,6 @@ TASK_SPEC_REQUIRED_HEADINGS = (
     "Reviewer Checklist",
     "Out of Scope",
 )
-
-# Repo root derived from this file: src/cli/common.py -> parents[2] == repo root.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def internal_api_auth_headers(cfg: CharlieBotConfig) -> dict[str, str]:
@@ -146,27 +143,6 @@ def compose_version_skew_hint(
           f"— server restart may be required")
 
 
-def _read_local_repo_sha() -> str | None:
-  """Return `git rev-parse --short HEAD` in the repo root, or None on any failure.
-
-  Every failure mode (missing git, non-zero exit, timeout) is swallowed so the CLI
-  error path never stalls on a best-effort hint computation.
-  """
-  try:
-    proc = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
-        cwd=str(_REPO_ROOT),
-        capture_output=True,
-        check=False,
-        timeout=SUBPROCESS_VERSION_SKEW_TIMEOUT,
-    )
-  except (OSError, subprocess.SubprocessError):
-    return None
-  if proc.returncode != 0:
-    return None
-  return proc.stdout.decode().strip() or None
-
-
 def _best_effort_server_version(cfg: CharlieBotConfig) -> tuple[str | None, str | None]:
   """Best-effort fetch of /api/internal/version. Returns (sha, started_at) or (None, None).
 
@@ -190,7 +166,7 @@ def _best_effort_server_version(cfg: CharlieBotConfig) -> tuple[str | None, str 
 def _maybe_version_skew_hint(cfg: CharlieBotConfig) -> str | None:
   """Gather server + local SHAs and compose the hint. Pure-failure-safe (never raises)."""
   server_sha, started_at = _best_effort_server_version(cfg)
-  local_sha = _read_local_repo_sha()
+  local_sha = read_repo_head_sha(SUBPROCESS_GIT_SHA_TIMEOUT)
   return compose_version_skew_hint(server_sha, started_at, local_sha)
 
 

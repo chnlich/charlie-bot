@@ -66,11 +66,14 @@ HTTP_OAUTH_TIMEOUT = 30  # seconds — remote API may be slow under load
 # CLI -> CharlieBot server internal endpoints (delegate, improve).
 HTTP_INTERNAL_API_TIMEOUT = 30  # seconds — local loopback, generous for cold starts
 
-# Best-effort fetch of /api/internal/version on the CLI error path, plus the local
-# `git rev-parse --short HEAD` used to compose the version-skew hint. Both are bounded
-# so a hung server or a hung git never stalls CLI error reporting.
+# Best-effort fetch of /api/internal/version on the CLI error path, bounded so a hung
+# server never stalls CLI error reporting.
 HTTP_VERSION_SKEW_TIMEOUT = 2.0  # seconds
-SUBPROCESS_VERSION_SKEW_TIMEOUT = 2.0  # seconds
+
+# Best-effort `git rev-parse --short HEAD` read behind build identity: the startup capture
+# serving /api/internal/version and the CLI's local read for the version-skew hint. The bound
+# keeps a hung git from stalling startup or CLI error reporting.
+SUBPROCESS_GIT_SHA_TIMEOUT = 2.0  # seconds
 
 # sherpa-onnx speech-model artifact download via urllib; a one-shot per host,
 # but the tarball is large.

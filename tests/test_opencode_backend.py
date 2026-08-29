@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from conftest import SYNTHETIC_MODEL
+from conftest import OPENCODE_RESOLVE_BINARY_PATCH_TARGET, SYNTHETIC_MODEL
 
 from src.agents.backends.opencode import (
     SSE_EVENT_MESSAGE_PART_UPDATED,
@@ -25,7 +25,7 @@ _CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.opencode.asyncio.cre
 
 def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
   monkeypatch.setattr(
-      "src.agents.backends.opencode.resolve_binary",
+      OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/opencode",
   )
   return OpenCodeBackend(**kwargs)

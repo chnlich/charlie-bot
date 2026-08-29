@@ -434,6 +434,14 @@ CLI_COMMON_REQUESTS_GET_PATCH_TARGET = "src.cli.common.requests.get"
 # keep their own namespaces and are not intercepted through this route.
 BUILD_BACKEND_PATCH_TARGET = "src.agents.backends.registry.build_backend"
 
+# Import-path patch target for the binary resolution an OpenCodeBackend construction runs.
+# src/agents/backends/opencode.py binds the helper at import scope (`from
+# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
+# stand-in on the src.agents.backends.opencode module attribute and OpenCodeBackend.__init__
+# reads it at call time; sibling backends binding the same helper (codex.py,
+# antigravity_cli.py, charlie_code.py) keep their own namespaces.
+OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.opencode.resolve_binary"
+
 
 def plan_page_html(goal_body: str = "Ship the fix.") -> str:
   """Minimal plan page passing the plan assertion set: the shipped template's <style> block

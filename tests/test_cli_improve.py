@@ -6,6 +6,7 @@ import pytest
 from conftest import (
   CLI_COMMON_GET_CONFIG_PATCH_TARGET,
   CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+  assert_cli_reject,
   make_json_response,
 )
 from conftest import setup_session_cwd as _setup_session_cwd
@@ -162,10 +163,8 @@ def test_main_rejects_missing_goal_file(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
+  assert_cli_reject(exc_info, capsys, "goal-file", "not found")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "goal-file" in err and "not found" in err
 
 
 def test_main_rejects_empty_goal_file(
@@ -181,10 +180,8 @@ def test_main_rejects_empty_goal_file(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
+  assert_cli_reject(exc_info, capsys, "empty")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "empty" in err
 
 
 def test_main_rejects_missing_plan_file(
@@ -201,10 +198,8 @@ def test_main_rejects_missing_plan_file(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
+  assert_cli_reject(exc_info, capsys, "plan-file", "not found")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "plan-file" in err and "not found" in err
 
 
 def test_main_rejects_empty_plan_file(
@@ -222,10 +217,8 @@ def test_main_rejects_empty_plan_file(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
+  assert_cli_reject(exc_info, capsys, "plan-file", "empty")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "plan-file" in err and "empty" in err
 
 
 def test_main_rejects_relative_repo_path(
@@ -241,11 +234,8 @@ def test_main_rejects_relative_repo_path(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
+  assert_cli_reject(exc_info, capsys, "must be an absolute path", "meshy-research")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "must be an absolute path" in err
-  assert "meshy-research" in err
 
 
 def test_main_rejects_nonexistent_repo_path(
@@ -262,11 +252,8 @@ def test_main_rejects_nonexistent_repo_path(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
+  assert_cli_reject(exc_info, capsys, "does not exist", nonexistent)
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "does not exist" in err
-  assert nonexistent in err
 
 
 # ---------------------------------------------------------------------------

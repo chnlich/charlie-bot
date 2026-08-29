@@ -11,6 +11,8 @@ import requests
 from conftest import (
   CLI_COMMON_GET_CONFIG_PATCH_TARGET,
   CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+  assert_cli_reject,
+  assert_cli_reject_exit2,
 )
 from conftest import setup_session_cwd as _setup_session_cwd
 
@@ -205,10 +207,7 @@ def test_main_verify_rejects_repo_scoped_arguments(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
-  err = capsys.readouterr().err
-  assert flag in err
-  assert "forbidden" in err
+  assert_cli_reject(exc_info, capsys, flag, "forbidden")
 
 
 @pytest.mark.parametrize("task_type", ["implement", "quick-edit", "script-run"])
@@ -246,10 +245,7 @@ def test_main_repo_task_types_require_repo_and_base_branch(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
-  err = capsys.readouterr().err
-  assert missing_flag in err
-  assert "required" in err
+  assert_cli_reject(exc_info, capsys, missing_flag, "required")
 
 
 def test_main_rejects_relative_repo_path(
@@ -261,11 +257,8 @@ def test_main_rejects_relative_repo_path(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
+  assert_cli_reject(exc_info, capsys, "must be an absolute path", "meshy-research")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "must be an absolute path" in err
-  assert "meshy-research" in err
 
 
 def test_main_rejects_nonexistent_repo_path(
@@ -278,11 +271,8 @@ def test_main_rejects_nonexistent_repo_path(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
+  assert_cli_reject(exc_info, capsys, "does not exist", nonexistent)
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "does not exist" in err
-  assert nonexistent in err
 
 
 def test_main_help_lists_verify_profile(capsys: pytest.CaptureFixture[str]) -> None:
@@ -343,9 +333,7 @@ def test_main_requires_task_spec_file(tmp_path: Path, capsys: pytest.CaptureFixt
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
-  err = capsys.readouterr().err
-  assert "--task-spec-file" in err
+  assert_cli_reject(exc_info, capsys, "--task-spec-file")
 
 
 def test_main_rejects_legacy_description_argparse(
@@ -359,10 +347,8 @@ def test_main_rejects_legacy_description_argparse(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
+  assert_cli_reject(exc_info, capsys, "--description")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "--description" in err
 
 
 def test_main_rejects_legacy_context_argparse(
@@ -376,10 +362,8 @@ def test_main_rejects_legacy_context_argparse(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
+  assert_cli_reject(exc_info, capsys, "--context")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "--context" in err
 
 
 def test_main_rejects_invalid_task_type(
@@ -392,9 +376,7 @@ def test_main_rejects_invalid_task_type(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
-  err = capsys.readouterr().err
-  assert "--task-type" in err
+  assert_cli_reject(exc_info, capsys, "--task-type")
 
 
 def test_main_rejects_legacy_require_review_flag(
@@ -450,9 +432,7 @@ def test_main_requires_keep_worktree_flag(tmp_path: Path, capsys: pytest.Capture
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code != 0
-  err = capsys.readouterr().err
-  assert "--keep-worktree" in err
+  assert_cli_reject(exc_info, capsys, "--keep-worktree")
 
 
 def test_main_rejects_missing_task_spec_file(
@@ -464,10 +444,8 @@ def test_main_rejects_missing_task_spec_file(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code == 2
+  assert_cli_reject_exit2(exc_info, capsys, "task-spec-file", "not found")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "task-spec-file" in err and "not found" in err
 
 
 def test_main_rejects_empty_task_spec_file(
@@ -480,10 +458,8 @@ def test_main_rejects_empty_task_spec_file(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code == 2
+  assert_cli_reject_exit2(exc_info, capsys, "task-spec-file", "empty")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "task-spec-file" in err and "empty" in err
 
 
 def test_main_rejects_missing_reviewer_context_file(
@@ -497,10 +473,8 @@ def test_main_rejects_missing_reviewer_context_file(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code == 2
+  assert_cli_reject_exit2(exc_info, capsys, "reviewer-context-file", "not found")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "reviewer-context-file" in err and "not found" in err
 
 
 def test_main_rejects_empty_reviewer_context_file(
@@ -515,10 +489,8 @@ def test_main_rejects_empty_reviewer_context_file(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code == 2
+  assert_cli_reject_exit2(exc_info, capsys, "reviewer-context-file", "empty")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "reviewer-context-file" in err and "empty" in err
 
 
 def test_main_rejects_task_spec_missing_required_heading(
@@ -530,10 +502,8 @@ def test_main_rejects_task_spec_missing_required_heading(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code == 2
+  assert_cli_reject_exit2(exc_info, capsys, "## Required Behavior")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "## Required Behavior" in err
 
 
 def test_main_rejects_nonexistent_absolute_source_file(
@@ -545,10 +515,8 @@ def test_main_rejects_nonexistent_absolute_source_file(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code == 2
+  assert_cli_reject_exit2(exc_info, capsys, "/definitely/not/there/task-source.md")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "/definitely/not/there/task-source.md" in err
 
 
 def test_main_rejects_relative_source_file_entry(
@@ -560,10 +528,8 @@ def test_main_rejects_relative_source_file_entry(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code == 2
+  assert_cli_reject_exit2(exc_info, capsys, "absolute paths")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "absolute paths" in err
 
 
 def test_main_rejects_empty_source_files_section(
@@ -575,10 +541,8 @@ def test_main_rejects_empty_source_files_section(
     with pytest.raises(SystemExit) as exc_info:
       main()
 
-  assert exc_info.value.code == 2
+  assert_cli_reject_exit2(exc_info, capsys, "Source Files section")
   post_mock.assert_not_called()
-  err = capsys.readouterr().err
-  assert "Source Files section" in err
 
 
 def test_main_allows_source_files_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

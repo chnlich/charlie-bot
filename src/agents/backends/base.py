@@ -145,6 +145,22 @@ def make_tool_result_event(tool_name: str, content: str) -> dict:
   return {"type": ET.TOOL_RESULT, "tool_name": tool_name, "content": content}
 
 
+async def iter_ndjson_events(stdout: asyncio.StreamReader) -> AsyncIterator[dict]:
+  """Yield the JSON objects of an NDJSON stream.
+
+  Lines decode as UTF-8 with replacement; blank lines and lines that do not
+  parse as JSON are skipped.
+  """
+  async for raw_line in stdout:
+    line = raw_line.decode("utf-8", errors="replace").strip()
+    if not line:
+      continue
+    try:
+      yield json.loads(line)
+    except json.JSONDecodeError:
+      continue
+
+
 def _clamp_event_timestamp(translated: dict, mtime: float) -> None:
   """Inject an event-time into a translated event that lacks one.
 

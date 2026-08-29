@@ -317,7 +317,7 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
     return None
 
   # expiresAt is deliberately not read: token renewal keys off the server's 401
-  # (poll loop above), never a local expiry check.
+  # in ClaudeUsageProvider.fetch, never a local expiry check.
   return {
       "access_token": access_token,
       "refresh_token": refresh_token,

@@ -252,6 +252,26 @@ def setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str)
   return cfg
 
 
+def _assert_stderr_fragments(capsys: pytest.CaptureFixture[str], *fragments: str) -> None:
+  err = capsys.readouterr().err
+  for fragment in fragments:
+    assert fragment in err
+
+
+def assert_cli_reject(exc_info: pytest.ExceptionInfo[SystemExit], capsys: pytest.CaptureFixture[str],
+                      *err_fragments: str) -> None:
+  """Shared tail of CLI reject tests: main() exited nonzero and every fragment landed on stderr."""
+  assert exc_info.value.code != 0
+  _assert_stderr_fragments(capsys, *err_fragments)
+
+
+def assert_cli_reject_exit2(exc_info: pytest.ExceptionInfo[SystemExit], capsys: pytest.CaptureFixture[str],
+                            *err_fragments: str) -> None:
+  """Same as assert_cli_reject with the exit code pinned at 2 (CLI usage error, e.g. bad file input)."""
+  assert exc_info.value.code == 2
+  _assert_stderr_fragments(capsys, *err_fragments)
+
+
 def run_node_js_test(node_test: Path, skip_reason: str) -> None:
   """Run one node --test file; hosts without node skip rather than fail, and cwd=ROOT keeps repo-relative asset
   loads working."""

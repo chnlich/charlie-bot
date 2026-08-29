@@ -10,6 +10,9 @@ from src.core.config import CharlieBotConfig
 from src.core.master_trigger import is_resume_not_found_error, trigger_master
 from src.core.models import BackendOption, SessionCallbacks, SessionMetadata
 
+_RUN_MESSAGE_PATCH_TARGET = "src.core.master_trigger.run_message"
+_LOG_PATCH_TARGET = "src.core.master_trigger.log"
+
 
 def _build_cfg() -> CharlieBotConfig:
   return CharlieBotConfig(
@@ -101,8 +104,8 @@ async def test_stale_resume_id_retries_once_without_resume_and_does_not_persist(
     return "fresh-id"
 
   mock_log = Mock()
-  monkeypatch.setattr("src.core.master_trigger.run_message", fake_run_message)
-  monkeypatch.setattr("src.core.master_trigger.log", mock_log)
+  monkeypatch.setattr(_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
+  monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
 
   await trigger_master(session_id, "worker summary", cfg, session_mgr)
 
@@ -138,8 +141,8 @@ async def test_non_recoverable_error_does_not_retry_and_failure_is_preserved(mon
     raise RuntimeError("backend crashed unexpectedly")
 
   mock_log = Mock()
-  monkeypatch.setattr("src.core.master_trigger.run_message", fake_run_message)
-  monkeypatch.setattr("src.core.master_trigger.log", mock_log)
+  monkeypatch.setattr(_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
+  monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
 
   await trigger_master(session_id, "worker summary", cfg, session_mgr)
 
@@ -169,8 +172,8 @@ async def test_valid_resume_path_is_unchanged(monkeypatch: pytest.MonkeyPatch) -
     return "valid-id"
 
   mock_log = Mock()
-  monkeypatch.setattr("src.core.master_trigger.run_message", fake_run_message)
-  monkeypatch.setattr("src.core.master_trigger.log", mock_log)
+  monkeypatch.setattr(_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
+  monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
 
   await trigger_master(session_id, "worker summary", cfg, session_mgr)
 
@@ -204,7 +207,7 @@ async def test_scheduled_task_auto_trigger_uses_session_backend(monkeypatch: pyt
     call_backend_options.append(kwargs["backend_option"])
     return "claude-master-id"
 
-  monkeypatch.setattr("src.core.master_trigger.run_message", fake_run_message)
+  monkeypatch.setattr(_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
 
   await trigger_master(session_id, "worker summary", cfg, session_mgr)
 

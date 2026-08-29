@@ -1,13 +1,10 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const TERMINAL_B64_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'terminal_b64.js'),
-  'utf8'
-);
+const { readStatic } = require('./read_static');
+
+const TERMINAL_B64_JS = readStatic('terminal_b64.js');
 
 function loadHelpers() {
   const context = {atob, btoa, TextEncoder};

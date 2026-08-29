@@ -1,27 +1,15 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+const { readStatic } = require('./read_static');
+
 const { escapeHtml } = require('./escape_html_stub');
 
-const COMPAT_LOADER_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'compat-loader.js'),
-  'utf8'
-);
-const CHAT_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'chat.js'),
-  'utf8'
-);
-const FILE_UPLOAD_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'file-upload.js'),
-  'utf8'
-);
-const SLASH_COMMANDS_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'slash-commands.js'),
-  'utf8'
-);
+const COMPAT_LOADER_JS = readStatic('compat-loader.js');
+const CHAT_JS = readStatic('chat.js');
+const FILE_UPLOAD_JS = readStatic('file-upload.js');
+const SLASH_COMMANDS_JS = readStatic('slash-commands.js');
 
 class FakeClassList {
   constructor() {

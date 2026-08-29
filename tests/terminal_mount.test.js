@@ -1,13 +1,10 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const TERMINAL_MOUNT_JS = fs.readFileSync(
-  path.join(__dirname, '..', 'web', 'static', 'js', 'terminal_mount.js'),
-  'utf8'
-);
+const { readStatic } = require('./read_static');
+
+const TERMINAL_MOUNT_JS = readStatic('terminal_mount.js');
 
 function loadHelpers() {
   const constructed = [];

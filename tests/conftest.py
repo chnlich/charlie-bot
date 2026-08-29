@@ -787,6 +787,29 @@ class FakeStdout:
     return self._lines.pop(0)
 
 
+class FakeChunkedResponse:
+  """httpx streaming-response double replaying the constructor's byte chunks from aiter_bytes().
+
+  Callers pass it where production code holds an httpx streaming response
+  (the SSE consumers) and rely on their pre-cut chunks reaching that consumer
+  as-is; raise_for_status() and aclose() no-op to mirror httpx's response
+  surface.
+  """
+
+  def __init__(self, chunks: list[bytes]) -> None:
+    self._chunks = chunks
+
+  def raise_for_status(self) -> None:
+    pass
+
+  async def aclose(self) -> None:
+    pass
+
+  async def aiter_bytes(self):
+    for chunk in self._chunks:
+      yield chunk
+
+
 class FakeBackend:
   """AgentBackend double whose run() yields one canned result event.
 

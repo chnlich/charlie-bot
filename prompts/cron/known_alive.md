@@ -162,6 +162,14 @@ Known-alive symbols:
   makes each stub raise TypeError when the poll loop calls it. Vulture flags it at 100%
   confidence as an unused variable at all ten sites (`tests/test_ext_usage.py` lines
   565–1045). Same class as the `chrome`/`art` stub-parameter entry above.
+- `rollout_paths` (`tests/test_ext_usage.py:328`, parameter of the `_broken_compute`
+  stub installed for `CodexUsageProvider._compute_spend` via `monkeypatch.setattr`) —
+  the real `_compute_spend` (src/api/ext_usage.py:250) is called with one positional
+  argument (src/api/ext_usage.py:227, through `asyncio.to_thread`), so the stub's
+  replaced signature fixes the arity and `rollout_paths` must stay to receive it;
+  deleting the parameter makes the stub raise TypeError when `fetch()` calls it.
+  Vulture flags it at 100% confidence as an unused variable. Same class as the
+  `dir_path` arity-fixed entry above.
 - `verify_report`, `on_spawned` (`tests/conftest.py`, parameters of the
   `fake_notify_completion` and `CapturingWorker.__init__` stubs), `entry_id`
   (`tests/core/test_artifact_check.py:599`, the `get_backend_option` lambda), `host_boot`

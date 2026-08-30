@@ -19,6 +19,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M6 session usage latency | M6 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
 | M7 token-usage page | M7 collector below | seconds per page load | median < 3 s | — (introduced with its first history row) |
 | M8 sidebar search, absent needle | M8 collector below | seconds per request | median < 0.5 s | — (introduced with its first history row) |
+| M9 ext-usage codex spend rescan, steady state | M9 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -192,6 +193,28 @@ live chat files), the same shape as the M7 protocol.
 
 ```bash
 KEY=$(grep -m1 '^charliebot_access_key:' ~/.charliebot/config.yaml | awk '{print $2}'); for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: Bearer $KEY" "http://127.0.0.1:18498/api/sessions/search?q=zzq9xneverpresentneedle77"; done | sort -n | awk '{a[NR]=$1} END {printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
+```
+
+M9 — ext-usage poller codex spend rescan, steady state. The poller's cost is background work invisible to HTTP probes, so the collector times the function the poller calls every round: the provider's spend computation over the live corpus (read-only), from the main repo checkout. The collector reports the no-churn steady state; a round where a rollout file changed re-parses just that file, and one cold full-corpus pass runs per server process start:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import sys, time
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from pathlib import Path
+from src.api.ext_usage import CodexUsageProvider, _list_rollout_files
+
+prov = CodexUsageProvider("main", str(Path.home() / ".codex"))
+rollouts = _list_rollout_files(prov.sessions_dir)
+prov._compute_spend(rollouts)  # cold pass, as at a server restart; not timed
+times = []
+for _ in range(5):
+    t0 = time.perf_counter()
+    prov._compute_spend(rollouts)
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"{len(rollouts)} rollout files; steady-state spend rescan median {times[2]:.4f} s, max {times[-1]:.4f} s")
+EOF
 ```
 
 ## Sampling history

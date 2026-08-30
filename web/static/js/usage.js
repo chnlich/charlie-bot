@@ -19,9 +19,7 @@ function showStreaming(draft) {
   const thinking = (draft && draft.thinking) || '';
   var html = '';
   if (thinking) {
-    var thinkId = 'streaming-thinking';
-    html += "<button onclick=\"const el=document.getElementById(\x27" + thinkId + "\x27);el.style.display=el.style.display===\x27none\x27?\x27block\x27:\x27none\x27\" class=\"text-xs text-slate-500 hover:text-slate-400 italic mb-1\">Thinking…</button>"
-      + "<div id=\"" + thinkId + "\" style=\"display:none\" class=\"text-xs text-slate-500 whitespace-pre-wrap mb-2\">" + escapeHtml(String(thinking)) + "</div>";
+    html += thinkingToggleHtml('streaming-thinking', thinking);
   }
   html += marked.parse(fixNestedFences(content));
   inner.innerHTML = html;

@@ -38,6 +38,13 @@ function showMoreToggleHtml(id, restHtml) {
   return `<span id="${id}-short">… <button onclick="document.getElementById('${id}-short').style.display='none';document.getElementById('${id}-full').style.display='inline'" class="text-blue-400 hover:underline text-xs">Show more</button></span><span id="${id}-full" style="display:none">${restHtml}</span>`;
 }
 
+// Collapsed "Thinking…" block: the button swaps the hidden div in place. The id
+// must be page-unique — chat mints one per message; the streaming draft is a
+// singleton, so its fixed id cannot collide.
+function thinkingToggleHtml(id, thinking) {
+  return `<button onclick="const el=document.getElementById('${id}');el.style.display=el.style.display==='none'?'block':'none'" class="text-xs text-slate-500 hover:text-slate-400 italic mb-1">Thinking…</button><div id="${id}" style="display:none" class="text-xs text-slate-500 whitespace-pre-wrap mb-2">${escapeHtml(String(thinking))}</div>`;
+}
+
 function formatBubbleTime(isoStr) {
   if (!isoStr) return '';
   const d = new Date(isoStr);
@@ -73,6 +80,7 @@ Chat.escapeHtml = escapeHtml;
 Chat.escapeHtmlAttr = escapeHtmlAttr;
 Chat.escapeJsSingleQuoted = escapeJsSingleQuoted;
 Chat.showMoreToggleHtml = showMoreToggleHtml;
+Chat.thinkingToggleHtml = thinkingToggleHtml;
 Chat.formatBubbleTime = formatBubbleTime;
 Chat.messageIdentityAttrs = messageIdentityAttrs;
 Chat.isRenderedMessage = isRenderedMessage;
@@ -82,6 +90,7 @@ Chat.expose([
   'escapeHtmlAttr',
   'isRenderedMessage',
   'showMoreToggleHtml',
+  'thinkingToggleHtml',
 ]);
 
 })();

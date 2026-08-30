@@ -282,7 +282,7 @@ def test_next_id_empty_backlog() -> None:
 
 
 # ---------------------------------------------------------------------------
-# test_missing_backlog_file
+# test_missing_backlog_generates
 # ---------------------------------------------------------------------------
 
 
@@ -298,7 +298,7 @@ async def test_missing_backlog_generates(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# test_language_rule_in_prompt
+# test_language_rule_zh_cn
 # ---------------------------------------------------------------------------
 
 

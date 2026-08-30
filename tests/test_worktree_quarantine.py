@@ -11,6 +11,7 @@ from conftest import (
   RECOVERY_TASK_PREFIXES,
   SPAWNER_RESUME_WORKER_PATCH_TARGET,
   await_recovery_tasks,
+  spy_on_load_json_meta,
 )
 
 from src.core import git as git_module
@@ -745,19 +746,6 @@ def test_scan_missing_started_at_falls_back_to_ctime(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _spy_on_load_json_meta(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
-  """Record every path init.iter_recent_thread_metas actually reads+parses."""
-  read_paths: list[Path] = []
-  real_load = worker_recovery_module.load_json_meta
-
-  def spy(path: Path, log_event: str, **kwargs: Any) -> Any:
-    read_paths.append(Path(path))
-    return real_load(path, log_event, **kwargs)
-
-  monkeypatch.setattr(worker_recovery_module, "load_json_meta", spy)
-  return read_paths
-
-
 def _age_metadata_mtime(meta_path: Path, days: float) -> None:
   """Backdate a metadata.json's mtime by *days*, mimicking when it was last written."""
   import os
@@ -775,7 +763,7 @@ def test_scan_skips_out_of_window_thread(tmp_path: Path, monkeypatch: pytest.Mon
   recent pre-boot thread beside it still is.
   """
   cfg = _cfg(tmp_path)
-  read_paths = _spy_on_load_json_meta(monkeypatch)
+  read_paths = spy_on_load_json_meta(monkeypatch)
 
   boot_time = utc_now()
   recent_path = _write_thread_meta(

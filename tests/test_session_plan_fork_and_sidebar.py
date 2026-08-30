@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import OPUS_BACKEND_ID, make_home_session
 from conftest import append_events as _append_events
-from conftest import make_home_session
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
@@ -75,7 +75,7 @@ def _write_artifact(cfg: CharlieBotConfig, session_id: str, file: str, content: 
 
 @pytest.mark.asyncio
 async def test_fork_copies_plans_json_and_referenced_artifacts(tmp_path: Path) -> None:
-  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   _write_artifact(cfg, parent.id, _PLAN_V1_REL, "<html>v1</html>")
@@ -102,7 +102,7 @@ async def test_fork_copies_plans_json_and_referenced_artifacts(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_fork_normalizes_absolute_in_session_paths_and_copies_distinct_files(tmp_path: Path) -> None:
-  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   artifact_rel = _PLAN_V1_REL
@@ -128,7 +128,7 @@ async def test_fork_normalizes_absolute_in_session_paths_and_copies_distinct_fil
 
 @pytest.mark.asyncio
 async def test_fork_normalizes_mixed_absolute_and_relative_paths(tmp_path: Path) -> None:
-  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   first_rel = _PLAN_V1_REL
@@ -152,7 +152,7 @@ async def test_fork_normalizes_mixed_absolute_and_relative_paths(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_fork_missing_artifact_logs_warning_and_does_not_abort(tmp_path: Path) -> None:
-  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   _write_artifact(cfg, parent.id, _PLAN_V1_REL, "<html>present</html>")
@@ -184,8 +184,8 @@ async def test_fork_missing_artifact_logs_warning_and_does_not_abort(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_fork_outside_parent_artifact_logs_warning_and_keeps_version(tmp_path: Path) -> None:
-  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
-  other = await mgr.create_session(CreateSessionRequest(name="Other"), backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
+  other = await mgr.create_session(CreateSessionRequest(name="Other"), backend=OPUS_BACKEND_ID)
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   external_rel = "artifacts/external.html"
@@ -210,8 +210,8 @@ async def test_fork_outside_parent_artifact_logs_warning_and_keeps_version(tmp_p
 
 @pytest.mark.asyncio
 async def test_fork_outside_parent_artifact_does_not_alias_copied_artifact(tmp_path: Path) -> None:
-  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
-  other = await mgr.create_session(CreateSessionRequest(name="Other"), backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
+  other = await mgr.create_session(CreateSessionRequest(name="Other"), backend=OPUS_BACKEND_ID)
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   artifact_rel = "artifacts/collision.html"
@@ -244,7 +244,7 @@ async def test_fork_outside_parent_artifact_does_not_alias_copied_artifact(tmp_p
 
 @pytest.mark.asyncio
 async def test_fork_without_plans_json_copies_nothing(tmp_path: Path) -> None:
-  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   child = await mgr.fork_session(parent.id)
@@ -254,7 +254,7 @@ async def test_fork_without_plans_json_copies_nothing(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_elone_also_copies_plans_and_artifacts(tmp_path: Path) -> None:
-  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend="claude-opus-4.6")
+  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
   _append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
 
   _write_artifact(cfg, parent.id, _PLAN_V1_REL, "<html>v1</html>")

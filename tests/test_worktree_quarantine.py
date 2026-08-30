@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from conftest import (
+  OPUS_BACKEND_ID,
   RECOVERY_TASK_PREFIXES,
   SPAWNER_RESUME_WORKER_PATCH_TARGET,
   await_recovery_tasks,
@@ -32,7 +33,7 @@ async def _make_session(cfg: CharlieBotConfig, session_id: str) -> None:
   can resolve it; without a successor the report is written into the session itself."""
   mgr = SessionManager(cfg)
   session = await mgr.create_session(
-      CreateSessionRequest(name=session_id, session_id=session_id), backend="claude-opus-4.6")
+      CreateSessionRequest(name=session_id, session_id=session_id), backend=OPUS_BACKEND_ID)
   assert session.id == session_id
 
 

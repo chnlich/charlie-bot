@@ -13,6 +13,7 @@ import pytest
 import yaml
 from conftest import (
   BROADCAST_PATCH_TARGET,
+  OPUS_BACKEND_ID,
   TRIGGER_MASTER_PATCH_TARGET,
   TRIGGERS_GET_CONFIG_PATCH_TARGET,
   build_sessions_cfg,
@@ -58,7 +59,7 @@ def _seed_scheduled_task(
     *,
     task_name: str = "nightly",
     cron: str = "0 2 * * *",
-    backend: str = "claude-opus-4.6",
+    backend: str = OPUS_BACKEND_ID,
 ) -> Path:
   """Seed a prompt_file-backed host cron file and point the core backend-write helper at it.
 
@@ -92,7 +93,7 @@ async def _make_scheduled_parent(
     *,
     task: str = "nightly",
     name: str = "Scheduled: nightly",
-    backend: str = "claude-opus-4.6",
+    backend: str = OPUS_BACKEND_ID,
     role: str | None = None,
     group: str | None = None,
     events: int = 3,
@@ -274,7 +275,7 @@ async def test_resolve_successor_chain_allows_exactly_100_hops(tmp_path: Path) -
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
   sessions = [
-      await mgr.create_session(CreateSessionRequest(name=f"Generation {i}"), backend="claude-opus-4.6")
+      await mgr.create_session(CreateSessionRequest(name=f"Generation {i}"), backend=OPUS_BACKEND_ID)
       for i in range(101)
   ]
 
@@ -336,8 +337,8 @@ async def test_resolve_successor_chain_returns_none_for_missing_session(tmp_path
 
 @pytest.mark.asyncio
 async def test_resolve_successor_chain_raises_runtime_error_on_cycle(tmp_path: Path) -> None:
-  _cfg, mgr, a = await make_home_session(tmp_path, name="A", backend="claude-opus-4.6")
-  b = await mgr.create_session(CreateSessionRequest(name="B"), backend="claude-opus-4.6")
+  _cfg, mgr, a = await make_home_session(tmp_path, name="A", backend=OPUS_BACKEND_ID)
+  b = await mgr.create_session(CreateSessionRequest(name="B"), backend=OPUS_BACKEND_ID)
   a_meta = await mgr.read_metadata_fresh(a.id)
   b_meta = await mgr.read_metadata_fresh(b.id)
   assert a_meta is not None and b_meta is not None
@@ -450,7 +451,7 @@ async def test_deliver_to_successor_leaves_origin_absent_for_no_successor(tmp_pa
 async def test_deliver_to_successor_returns_none_and_writes_nothing_when_chain_end_dir_removed(
     tmp_path: Path,
 ) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="Gone", backend="claude-opus-4.6")
+  cfg, mgr, session = await make_home_session(tmp_path, name="Gone", backend=OPUS_BACKEND_ID)
 
   # Remove the whole session directory, including metadata.json, exactly as a
   # permanent delete does. append_ndjson would recreate the dir — assert it does not.
@@ -471,7 +472,7 @@ async def test_deliver_to_successor_reresolves_when_successor_appears_between_re
 ) -> None:
   mgr = SessionManager(CharlieBotConfig(charliebot_home=tmp_path / "home"))
   gen0 = await _make_parent(mgr)
-  gen1 = await mgr.create_session(CreateSessionRequest(name="Late successor"), backend="claude-opus-4.6")
+  gen1 = await mgr.create_session(CreateSessionRequest(name="Late successor"), backend=OPUS_BACKEND_ID)
 
   real_read = mgr.read_metadata_fresh
   calls = {"n": 0}

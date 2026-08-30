@@ -5,9 +5,12 @@ from typing import Any
 
 import pytest
 from conftest import (
+  OPUS_BACKEND_ID,
+  capture_create_logged_task,
+)
+from conftest import (
   build_plan_cfg as _build_cfg,
 )
-from conftest import capture_create_logged_task
 from conftest import (
   make_plan_setup as _setup,
 )
@@ -309,14 +312,14 @@ async def test_delegate_sets_task_type_on_thread(tmp_path: Path, monkeypatch: py
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="Test"), backend="claude-opus-4.6")
+  meta = await session_mgr.create_session(CreateSessionRequest(name="Test"), backend=OPUS_BACKEND_ID)
   captured_thread: dict[str, Any] = {}
 
   async def fake_spawn_worker(*args: Any, **kwargs: Any) -> None:
     return None
 
   async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
-    return "claude-opus-4.6", "claude-opus-4-6"
+    return OPUS_BACKEND_ID, "claude-opus-4-6"
 
   monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
   monkeypatch.setattr(internal, "spawn_worker", fake_spawn_worker)

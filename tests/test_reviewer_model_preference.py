@@ -6,9 +6,7 @@ from typing import Any
 
 import pytest
 from conftest import (
-  THREE_BACKEND_OPTIONS as BACKEND_OPTIONS,
-)
-from conftest import (
+  OPUS_BACKEND_ID,
   JudgmentShim,
   ReviewSpawnSessionManager,
   ReviewSpawnThreadManager,
@@ -16,6 +14,9 @@ from conftest import (
   fake_git_current_branch,
   fake_spawn_worker,
   patch_review_spawn_path,
+)
+from conftest import (
+  THREE_BACKEND_OPTIONS as BACKEND_OPTIONS,
 )
 
 from src.core import review, spawner
@@ -158,11 +159,11 @@ _AGY_OPTION = BackendOption(id="agy", label="Antigravity", type="antigravity")
 _PREFERENCE_CASES = [
     pytest.param(None, [], ("codex-o3", "o3"), ("codex-o3", "o3"),
                  id="empty-preference-uses-worker-backend"),
-    pytest.param(None, ["kimi-k2.5", "claude-opus-4.6"], ("codex-o3", "o3"), ("kimi-k2.5", "kimi-k2.5"),
+    pytest.param(None, ["kimi-k2.5", OPUS_BACKEND_ID], ("codex-o3", "o3"), ("kimi-k2.5", "kimi-k2.5"),
                  id="selects-first-non-matching-entry"),
     pytest.param(_AGY_OPTION, ["agy"], ("codex-o3", "o3"), ("agy", None),
                  id="selects-antigravity-entry-without-model"),
-    pytest.param(None, ["codex-o3", "claude-opus-4.6"], ("codex-o3", "o3"), ("claude-opus-4.6", "claude-opus-4-6"),
+    pytest.param(None, ["codex-o3", OPUS_BACKEND_ID], ("codex-o3", "o3"), (OPUS_BACKEND_ID, "claude-opus-4-6"),
                  id="skips-entry-matching-worker-backend"),
     pytest.param(None, ["nonexistent-1", "nonexistent-2"], ("codex-o3", "o3"), ("codex-o3", "o3"),
                  id="invalid-entries-fall-back-to-worker-backend"),
@@ -236,7 +237,7 @@ async def test_spawn_review_worker_returns_false_when_session_missing(monkeypatc
 @pytest.mark.asyncio
 async def test_retry_skips_tried_backend(monkeypatch: pytest.MonkeyPatch) -> None:
   """On retry, tried_backends are skipped; next untried preference is selected."""
-  cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
+  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
   captured: dict[str, Any] = {}
 
   patch_review_spawn_path(monkeypatch, captured)
@@ -251,14 +252,14 @@ async def test_retry_skips_tried_backend(monkeypatch: pytest.MonkeyPatch) -> Non
   )
 
   assert result is True
-  assert captured["request"].resolved_backend == "claude-opus-4.6"
+  assert captured["request"].resolved_backend == OPUS_BACKEND_ID
   assert captured["request"].resolved_model == "claude-opus-4-6"
 
 
 @pytest.mark.asyncio
 async def test_retry_all_prefs_exhausted_falls_back_to_worker(monkeypatch: pytest.MonkeyPatch) -> None:
   """When all preferences are tried, falls back to worker's original backend."""
-  cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
+  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
   captured: dict[str, Any] = {}
 
   patch_review_spawn_path(monkeypatch, captured)
@@ -269,7 +270,7 @@ async def test_retry_all_prefs_exhausted_falls_back_to_worker(monkeypatch: pytes
       cfg,
       ReviewSpawnSessionManager("Test"),
       ReviewSpawnThreadManager(),
-      tried_backends=["kimi-k2.5", "claude-opus-4.6"],
+      tried_backends=["kimi-k2.5", OPUS_BACKEND_ID],
   )
 
   assert result is True
@@ -280,7 +281,7 @@ async def test_retry_all_prefs_exhausted_falls_back_to_worker(monkeypatch: pytes
 @pytest.mark.asyncio
 async def test_retry_all_backends_exhausted_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
   """When all backends including worker are tried, returns False."""
-  cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
+  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
 
   monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
 
@@ -290,7 +291,7 @@ async def test_retry_all_backends_exhausted_returns_false(monkeypatch: pytest.Mo
       cfg,
       ReviewSpawnSessionManager("Test"),
       ReviewSpawnThreadManager(),
-      tried_backends=["kimi-k2.5", "claude-opus-4.6", "codex-o3"],
+      tried_backends=["kimi-k2.5", OPUS_BACKEND_ID, "codex-o3"],
   )
 
   assert result is False
@@ -299,7 +300,7 @@ async def test_retry_all_backends_exhausted_returns_false(monkeypatch: pytest.Mo
 @pytest.mark.asyncio
 async def test_tried_backends_propagated_to_review_thread(monkeypatch: pytest.MonkeyPatch) -> None:
   """Review thread metadata gets tried_backends set."""
-  cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
+  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
   thread_mgr = ReviewSpawnThreadManager()
 
   monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
@@ -315,10 +316,10 @@ async def test_tried_backends_propagated_to_review_thread(monkeypatch: pytest.Mo
       tried_backends=["kimi-k2.5"],
   )
 
-  # The saved review thread should have tried_backends = ["kimi-k2.5", "claude-opus-4.6"]
+  # The saved review thread should have tried_backends = ["kimi-k2.5", OPUS_BACKEND_ID]
   saved = [m for m in thread_mgr.saved if m.review_of]
   assert len(saved) == 1
-  assert saved[0].tried_backends == ["kimi-k2.5", "claude-opus-4.6"]
+  assert saved[0].tried_backends == ["kimi-k2.5", OPUS_BACKEND_ID]
 
 
 def _make_fake_spawn_review(spawn_calls: list[dict], result: bool = True) -> Callable[..., Awaitable[bool]]:
@@ -384,7 +385,7 @@ def _make_review_thread(tried_backends: list[str] | None = None) -> ThreadMetada
 class NotifyFakeSessionManager(JudgmentShim):
 
   async def get_session(self, session_id: str) -> SessionMetadata | None:
-    return SessionMetadata(id=session_id, name="Test", backend="claude-opus-4.6")
+    return SessionMetadata(id=session_id, name="Test", backend=OPUS_BACKEND_ID)
 
   async def save_metadata(self, meta: Any) -> None:
     pass
@@ -425,7 +426,7 @@ async def test_notify_reviewer_failure_triggers_retry(monkeypatch: pytest.Monkey
   spawn_calls: list[dict] = []
   trigger_calls: list[str] = []
 
-  cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
+  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
 
   monkeypatch.setattr(review, "spawn_review_worker", _make_fake_spawn_review(spawn_calls))
   monkeypatch.setattr(review, "trigger_master", _make_fake_trigger(trigger_calls))
@@ -453,7 +454,7 @@ async def test_notify_reviewer_success_no_retry(monkeypatch: pytest.MonkeyPatch)
   spawn_calls: list[dict] = []
   trigger_calls: list[str] = []
 
-  cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
+  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
 
   monkeypatch.setattr(review, "spawn_review_worker", _make_fake_spawn_review(spawn_calls))
   monkeypatch.setattr(review, "trigger_master", _make_fake_trigger(trigger_calls))
@@ -469,7 +470,7 @@ async def test_notify_reviewer_success_no_retry(monkeypatch: pytest.MonkeyPatch)
 @pytest.mark.asyncio
 async def test_notify_retries_exhausted_triggers_master(monkeypatch: pytest.MonkeyPatch) -> None:
   """When all retries are exhausted, trigger master instead of retrying."""
-  review_thread = _make_review_thread(tried_backends=["kimi-k2.5", "claude-opus-4.6", "codex-o3"])
+  review_thread = _make_review_thread(tried_backends=["kimi-k2.5", OPUS_BACKEND_ID, "codex-o3"])
   original_thread = _make_original_thread()
 
   thread_mgr = NotifyFakeThreadManager({
@@ -480,7 +481,7 @@ async def test_notify_retries_exhausted_triggers_master(monkeypatch: pytest.Monk
   spawn_calls: list[dict] = []
   trigger_calls: list[str] = []
 
-  cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
+  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
 
   monkeypatch.setattr(review, "spawn_review_worker", _make_fake_spawn_review(spawn_calls, result=False))
   monkeypatch.setattr(review, "trigger_master", _make_fake_trigger(trigger_calls))
@@ -504,7 +505,7 @@ async def test_require_review_false_skips_reviewer_triggers_master(monkeypatch: 
       session_id="session-id",
       description="Prompt task",
       require_review=False,
-      backend="claude-opus-4.6",
+      backend=OPUS_BACKEND_ID,
       model="claude-opus-4-6",
       branch_name="charliebot/task-1",
       repo_path="/tmp/repo",
@@ -518,7 +519,7 @@ async def test_require_review_false_skips_reviewer_triggers_master(monkeypatch: 
   spawn_calls: list[dict] = []
   trigger_calls: list[str] = []
 
-  cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
+  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
 
   monkeypatch.setattr(review, "spawn_review_worker", _make_fake_spawn_review(spawn_calls))
   monkeypatch.setattr(review, "trigger_master", _make_fake_trigger(trigger_calls))
@@ -541,7 +542,7 @@ async def test_require_review_true_spawns_reviewer(monkeypatch: pytest.MonkeyPat
       session_id="session-id",
       description="Implement task",
       require_review=True,
-      backend="claude-opus-4.6",
+      backend=OPUS_BACKEND_ID,
       model="claude-opus-4-6",
       branch_name="charliebot/task-1",
       repo_path="/tmp/repo",
@@ -555,7 +556,7 @@ async def test_require_review_true_spawns_reviewer(monkeypatch: pytest.MonkeyPat
   spawn_calls: list[dict] = []
   trigger_calls: list[str] = []
 
-  cfg = _build_cfg(model_preference=["kimi-k2.5", "claude-opus-4.6"])
+  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
 
   monkeypatch.setattr(review, "spawn_review_worker", _make_fake_spawn_review(spawn_calls))
   monkeypatch.setattr(review, "trigger_master", _make_fake_trigger(trigger_calls))

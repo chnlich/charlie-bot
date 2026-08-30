@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, patch_improve_git_ops
+from conftest import BROADCAST_PATCH_TARGET, OPUS_BACKEND_ID, patch_improve_git_ops
 from conftest import make_parent as _make_parent
 
 from src.core import event_types as ET
@@ -52,7 +52,7 @@ async def test_spawner_worker_summary_lands_in_successor_and_preserves_thread_id
   parent_id = await _make_parent(mgr)
   child_id = await _elone(mgr, parent_id)
 
-  thread = ThreadMetadata(session_id=parent_id, id="thread-1", description="delegate", backend="claude-opus-4.6")
+  thread = ThreadMetadata(session_id=parent_id, id="thread-1", description="delegate", backend=OPUS_BACKEND_ID)
   event = _thread_worker_event(thread, "completed", full_content="done", content="locator")
 
   with _broadcast_patch():
@@ -70,7 +70,7 @@ async def test_spawner_worker_summary_no_successor_writes_into_itself_without_or
   mgr = SessionManager(_make_cfg(tmp_path))
   session_id = await _make_parent(mgr)
 
-  thread = ThreadMetadata(session_id=session_id, id="thread-1", description="hello", backend="claude-opus-4.6")
+  thread = ThreadMetadata(session_id=session_id, id="thread-1", description="hello", backend=OPUS_BACKEND_ID)
   event = _thread_worker_event(thread, "completed", full_content="done", content="locator")
 
   with _broadcast_patch():
@@ -142,7 +142,7 @@ async def test_improve_final_summary_lands_in_successor(tmp_path: Path, monkeypa
         base_branch="main",
         work_branch="improve/test",
         merge_back=False,
-        resolved_backend="claude-opus-4.6",
+        resolved_backend=OPUS_BACKEND_ID,
         resolved_model="claude-opus-4-6",
     )
 
@@ -177,7 +177,7 @@ async def test_improve_worktree_creation_failure_lands_in_successor(tmp_path: Pa
         base_branch="main",
         work_branch="improve/test",
         merge_back=False,
-        resolved_backend="claude-opus-4.6",
+        resolved_backend=OPUS_BACKEND_ID,
         resolved_model="claude-opus-4-6",
     )
 
@@ -208,7 +208,7 @@ async def test_improve_final_summary_no_successor_writes_into_itself_without_ori
         base_branch="main",
         work_branch="improve/test",
         merge_back=False,
-        resolved_backend="claude-opus-4.6",
+        resolved_backend=OPUS_BACKEND_ID,
         resolved_model="claude-opus-4-6",
     )
 
@@ -261,7 +261,7 @@ async def test_review_cleanup_error_is_routed_to_successor(tmp_path: Path, monke
   _patch_review_reviewer_chain(monkeypatch, cleanup_error="Worktree cleanup failed for /x: boom")
   thread_mgr = _make_review_thread_mgr(tmp_path)
 
-  thread = MagicMock(id="reviewer-1", description="original", backend="claude-opus-4.6")
+  thread = MagicMock(id="reviewer-1", description="original", backend=OPUS_BACKEND_ID)
   with _broadcast_patch():
     with patch.object(mgr, "deliver_to_successor", side_effect=fake_deliver) as mock_deliver:
       await review.maybe_spawn_reviewer(
@@ -299,7 +299,7 @@ async def test_review_cleanup_error_no_successor_writes_into_itself_without_orig
   _patch_review_reviewer_chain(monkeypatch, cleanup_error="Worktree cleanup for /x: boom")
   thread_mgr = _make_review_thread_mgr(tmp_path)
 
-  thread = MagicMock(id="reviewer-1", description="original", backend="claude-opus-4.6")
+  thread = MagicMock(id="reviewer-1", description="original", backend=OPUS_BACKEND_ID)
   with _broadcast_patch():
     with patch.object(mgr, "deliver_to_successor", side_effect=fake_deliver) as mock_deliver:
       await review.maybe_spawn_reviewer(

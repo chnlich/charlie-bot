@@ -6,8 +6,8 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from conftest import OPUS_BACKEND_ID, FakeSessionManager, capture_create_logged_task
 from conftest import THREE_BACKEND_OPTIONS as VERIFY_BACKEND_OPTIONS
-from conftest import FakeSessionManager, capture_create_logged_task
 from fastapi import HTTPException
 
 from src.api import internal
@@ -567,7 +567,7 @@ async def _authorize_verify(
 async def test_verify_no_backend_defaults_to_first_differing_preference(monkeypatch: pytest.MonkeyPatch) -> None:
   """Session backend is the first preference entry -> the second (first differing) entry wins."""
   resolved = await _authorize_verify(
-      monkeypatch, session_backend="claude-opus-4.6", model_preference=["claude-opus-4.6", "codex-o3"])
+      monkeypatch, session_backend=OPUS_BACKEND_ID, model_preference=[OPUS_BACKEND_ID, "codex-o3"])
   assert resolved == ("codex-o3", "o3")
 
 
@@ -575,8 +575,8 @@ async def test_verify_no_backend_defaults_to_first_differing_preference(monkeypa
 async def test_verify_no_backend_session_backend_not_in_preference_uses_first_entry(
     monkeypatch: pytest.MonkeyPatch) -> None:
   resolved = await _authorize_verify(
-      monkeypatch, session_backend="kimi-k2.5", model_preference=["claude-opus-4.6", "codex-o3"])
-  assert resolved == ("claude-opus-4.6", "claude-opus-4-6")
+      monkeypatch, session_backend="kimi-k2.5", model_preference=[OPUS_BACKEND_ID, "codex-o3"])
+  assert resolved == (OPUS_BACKEND_ID, "claude-opus-4-6")
 
 
 @pytest.mark.asyncio
@@ -589,8 +589,8 @@ async def test_verify_no_backend_empty_preference_keeps_session_backend(monkeypa
 async def test_verify_explicit_backend_wins_over_preference(monkeypatch: pytest.MonkeyPatch) -> None:
   resolved = await _authorize_verify(
       monkeypatch,
-      session_backend="claude-opus-4.6",
-      model_preference=["claude-opus-4.6", "codex-o3"],
+      session_backend=OPUS_BACKEND_ID,
+      model_preference=[OPUS_BACKEND_ID, "codex-o3"],
       backend="kimi-k2.5",
   )
   assert resolved == ("kimi-k2.5", "kimi-k2.5")
@@ -601,8 +601,8 @@ async def test_verify_unknown_explicit_backend_returns_400(monkeypatch: pytest.M
   with pytest.raises(HTTPException) as exc_info:
     await _authorize_verify(
         monkeypatch,
-        session_backend="claude-opus-4.6",
-        model_preference=["claude-opus-4.6", "codex-o3"],
+        session_backend=OPUS_BACKEND_ID,
+        model_preference=[OPUS_BACKEND_ID, "codex-o3"],
         backend="nonexistent",
     )
 

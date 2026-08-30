@@ -29,6 +29,7 @@ from src.agents.backends.pty_common import (
   _TMUX_SOCKET,
   _tmux_binary,
   _tmux_client_env,
+  tmux_session_exists,
   tmux_session_name,
 )
 from src.agents.backends.tui import mark_project_trusted
@@ -253,11 +254,6 @@ async def _tmux_checked(*args: str, capture: bool = False) -> str:
   if rc != 0:
     raise ClaudeSubError(f"tmux {' '.join(args)} failed (rc={rc}): {output.strip()}")
   return output
-
-
-async def tmux_session_exists(session_id: str) -> bool:
-  rc, _ = await _run_tmux("has-session", "-t", tmux_session_name(session_id))
-  return rc == 0
 
 
 async def _pane_info(session_id: str) -> PaneInfo:

@@ -59,7 +59,6 @@ function loadGroups(cronTasksPayload) {
     updateRelativeTimes: () => {},
     refreshTuiDots: () => {},
     relativeTime: () => '',
-    formatNextRun: () => '',
     formatLastRun: () => '',
     getSessionIndicatorState: () => 'idle',
     renderPendingTriggerIndicator: () => '',

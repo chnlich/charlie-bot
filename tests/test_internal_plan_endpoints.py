@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from conftest import (
   OPUS_BACKEND_ID,
+  OPUS_BACKEND_OPTION,
   capture_create_logged_task,
 )
 from conftest import (
@@ -319,7 +320,7 @@ async def test_delegate_sets_task_type_on_thread(tmp_path: Path, monkeypatch: py
     return None
 
   async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
-    return OPUS_BACKEND_ID, "claude-opus-4-6"
+    return OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model
 
   monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
   monkeypatch.setattr(internal, "spawn_worker", fake_spawn_worker)

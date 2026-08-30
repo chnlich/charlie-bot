@@ -76,7 +76,7 @@ async def test_scheduled_prompt_task_hands_injected_session_manager_to_worker(
   monkeypatch.setattr(SCHEDULER_THREAD_MANAGER_PATCH_TARGET, lambda _cfg: FakeThreadManager())
   monkeypatch.setattr(
       SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
-      AsyncMock(return_value=(OPUS_BACKEND_ID, "claude-opus-4-6")),
+      AsyncMock(return_value=(OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model)),
   )
   monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)
   monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)

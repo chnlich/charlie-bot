@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from conftest import (
   OPUS_BACKEND_ID,
+  OPUS_BACKEND_OPTION,
   JudgmentShim,
   ReviewSpawnSessionManager,
   ReviewSpawnThreadManager,
@@ -163,7 +164,7 @@ _PREFERENCE_CASES = [
                  id="selects-first-non-matching-entry"),
     pytest.param(_AGY_OPTION, ["agy"], ("codex-o3", "o3"), ("agy", None),
                  id="selects-antigravity-entry-without-model"),
-    pytest.param(None, ["codex-o3", OPUS_BACKEND_ID], ("codex-o3", "o3"), (OPUS_BACKEND_ID, "claude-opus-4-6"),
+    pytest.param(None, ["codex-o3", OPUS_BACKEND_ID], ("codex-o3", "o3"), (OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model),
                  id="skips-entry-matching-worker-backend"),
     pytest.param(None, ["nonexistent-1", "nonexistent-2"], ("codex-o3", "o3"), ("codex-o3", "o3"),
                  id="invalid-entries-fall-back-to-worker-backend"),
@@ -253,7 +254,7 @@ async def test_retry_skips_tried_backend(monkeypatch: pytest.MonkeyPatch) -> Non
 
   assert result is True
   assert captured["request"].resolved_backend == OPUS_BACKEND_ID
-  assert captured["request"].resolved_model == "claude-opus-4-6"
+  assert captured["request"].resolved_model == OPUS_BACKEND_OPTION.model
 
 
 @pytest.mark.asyncio
@@ -506,7 +507,7 @@ async def test_require_review_false_skips_reviewer_triggers_master(monkeypatch: 
       description="Prompt task",
       require_review=False,
       backend=OPUS_BACKEND_ID,
-      model="claude-opus-4-6",
+      model=OPUS_BACKEND_OPTION.model,
       branch_name="charliebot/task-1",
       repo_path="/tmp/repo",
       worktree_path=_WORKTREE_PATH,
@@ -543,7 +544,7 @@ async def test_require_review_true_spawns_reviewer(monkeypatch: pytest.MonkeyPat
       description="Implement task",
       require_review=True,
       backend=OPUS_BACKEND_ID,
-      model="claude-opus-4-6",
+      model=OPUS_BACKEND_OPTION.model,
       branch_name="charliebot/task-1",
       repo_path="/tmp/repo",
       worktree_path=_WORKTREE_PATH,

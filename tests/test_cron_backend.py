@@ -11,6 +11,7 @@ import pytest
 import yaml
 from conftest import (
   OPUS_BACKEND_ID,
+  OPUS_BACKEND_OPTION,
   SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
   SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
   SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
@@ -114,7 +115,7 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
   session = SessionMetadata(id="session-1", name="Scheduled: nightly", backend=OPUS_BACKEND_ID)
   task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt")
   fake_thread_mgr = FakeThreadManager()
-  resolve_backend = AsyncMock(return_value=(OPUS_BACKEND_ID, "claude-opus-4-6"))
+  resolve_backend = AsyncMock(return_value=(OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model))
 
   def fake_spawn_worker(**_kwargs: Any) -> Coroutine[Any, Any, None]:
     return _noop()

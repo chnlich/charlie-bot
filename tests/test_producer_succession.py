@@ -13,7 +13,12 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, OPUS_BACKEND_ID, patch_improve_git_ops
+from conftest import (
+  BROADCAST_PATCH_TARGET,
+  OPUS_BACKEND_ID,
+  OPUS_BACKEND_OPTION,
+  patch_improve_git_ops,
+)
 from conftest import make_parent as _make_parent
 
 from src.core import event_types as ET
@@ -143,7 +148,7 @@ async def test_improve_final_summary_lands_in_successor(tmp_path: Path, monkeypa
         work_branch="improve/test",
         merge_back=False,
         resolved_backend=OPUS_BACKEND_ID,
-        resolved_model="claude-opus-4-6",
+        resolved_model=OPUS_BACKEND_OPTION.model,
     )
 
   child_events = mgr.load_chat_events_sync(child_id)
@@ -178,7 +183,7 @@ async def test_improve_worktree_creation_failure_lands_in_successor(tmp_path: Pa
         work_branch="improve/test",
         merge_back=False,
         resolved_backend=OPUS_BACKEND_ID,
-        resolved_model="claude-opus-4-6",
+        resolved_model=OPUS_BACKEND_OPTION.model,
     )
 
   child_events = mgr.load_chat_events_sync(child_id)
@@ -209,7 +214,7 @@ async def test_improve_final_summary_no_successor_writes_into_itself_without_ori
         work_branch="improve/test",
         merge_back=False,
         resolved_backend=OPUS_BACKEND_ID,
-        resolved_model="claude-opus-4-6",
+        resolved_model=OPUS_BACKEND_OPTION.model,
     )
 
   own_events = mgr.load_chat_events_sync(session_id)

@@ -337,10 +337,17 @@ def test_agent_message_aggregates_to_message_delta() -> None:
 
 
 def test_agent_message_is_whitelisted_in_chat_renderers() -> None:
-  """The chat renderers must know the agent_message role, or the turns vanish from the UI."""
+  """The chat renderers must know the agent_message role, or the turns vanish from the UI.
+
+  STIMULUS_ROLES lives once in chat/shared.js; rendering.js's DOM matcher and
+  turn-engine.js's fold derive both read that shared list.
+  """
+  shared = (ROOT / "web" / "static" / "js" / "chat" / "shared.js").read_text(encoding="utf-8")
   rendering = (ROOT / "web" / "static" / "js" / "chat" / "rendering.js").read_text(encoding="utf-8")
   turn_engine = (ROOT / "web" / "static" / "js" / "chat" / "turn-engine.js").read_text(encoding="utf-8")
+  assert "'agent_message'" in shared, "shared.js: STIMULUS_ROLES lost the agent_message entry"
   for name, source in (("rendering.js", rendering), ("turn-engine.js", turn_engine)):
-    assert "'agent_message'" in source, f"{name}: STIMULUS_ROLES lost the agent_message entry"
+    assert "STIMULUS_ROLES" in source, f"{name}: no longer reads the shared STIMULUS_ROLES list"
+    assert "const STIMULUS_ROLES" not in source, f"{name}: re-split STIMULUS_ROLES into a local copy"
   assert "agent_message: 'Agent'" in rendering, "rendering.js: TURN_TYPE_LABELS lost the Agent label"
   assert 'msg.role === "agent_message"' in rendering, "rendering.js lost the agent_message render branch"

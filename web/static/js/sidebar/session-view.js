@@ -157,6 +157,19 @@ function disposeActiveTurnEngine() {
   if (engine) engine.dispose();
 }
 
+// Runs on every path that leaves the active session view: the per-session
+// pollers and turn engine must be down before the next view reuses the
+// composer state cleared here.
+function teardownActiveSessionView() {
+  stopActiveSessionViewPolling();
+  resetLazySessionData();
+  disposeActiveTurnEngine();
+  resetVoiceState();
+  uploadedFiles = [];
+  renderFileChips();
+  hideSlashPopup();
+}
+
 function scheduleLazySessionDataLoad() {
   if (!SESSION_ID || lazySessionDataTimer) return;
   lazySessionDataTimer = scheduleIdleTask(() => {
@@ -206,17 +219,8 @@ async function switchSession(sessionId) {
     else localStorage.removeItem(DRAFT_KEY);
   }
 
-  // Stop thinking indicator
   if (masterThinking) stopThinking();
-  stopActiveSessionViewPolling();
-  resetLazySessionData();
-  disposeActiveTurnEngine();
-
-  // Clean up transient UI state from previous session
-  resetVoiceState();
-  uploadedFiles = [];
-  renderFileChips();
-  hideSlashPopup();
+  teardownActiveSessionView();
   document.getElementById('text-modal-overlay')?.setAttribute('style', 'display:none');
 
   // Close WebSocket (suppress auto-reconnect)
@@ -609,13 +613,7 @@ async function createSession() {
       else localStorage.removeItem(DRAFT_KEY);
     }
     if (masterThinking) stopThinking();
-    stopActiveSessionViewPolling();
-    resetLazySessionData();
-    disposeActiveTurnEngine();
-    resetVoiceState();
-    uploadedFiles = [];
-    renderFileChips();
-    hideSlashPopup();
+    teardownActiveSessionView();
     disconnectWS();
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     pendingUserMsg = false;
@@ -653,13 +651,7 @@ function renderNoActiveSessionView() {
   ++switchGeneration;
 
   if (masterThinking) stopThinking({preserveSessionIndicator: true});
-  stopActiveSessionViewPolling();
-  resetLazySessionData();
-  disposeActiveTurnEngine();
-  resetVoiceState();
-  uploadedFiles = [];
-  renderFileChips();
-  hideSlashPopup();
+  teardownActiveSessionView();
   hideStreaming();
   disconnectWS();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }

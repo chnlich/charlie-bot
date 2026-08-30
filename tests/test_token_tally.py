@@ -85,11 +85,12 @@ def _write_opencode(path: Path, rows: list[tuple[dict, str, str]]) -> None:
   con.close()
 
 
-def _collect(claude: Claude | None, codex: Codex | None, db: Path):
+def _collect(claude: Claude | None, codex: Codex | None, db: Path, cache: Path | None = None):
   return collect_token_usage(
       claude_homes=claude.dirs if claude else {},
       codex_homes=codex.homes if codex else {},
       opencode_db=db,
+      cache_path=cache,
   )
 
 
@@ -292,3 +293,68 @@ def test_source_failure_isolation(tmp_path: Path) -> None:
   assert any(r.source == "Codex" and r.model == "gpt-ok" for r in tally.rows)
   assert any(r.source == "opencode" for r in tally.rows)
   assert any("unreadable" in n and "ext" in n for n in tally.notes)
+
+
+def _usage(input_: int, output: int) -> dict:
+  return {"input_tokens": input_, "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0, "output_tokens": output}
+
+
+def test_cache_serves_unchanged_files(tmp_path: Path) -> None:
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [
+      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  first = _collect(claude, None, db, cache)
+  assert first.scanned_bytes > 0
+
+  second = _collect(claude, None, db, cache)
+  # Every log file came from the cache: nothing re-read, same tally.
+  assert second.scanned_bytes == 0
+  assert _row(second, "Claude Code", NAME).total == _row(first, "Claude Code", NAME).total
+
+
+def test_cache_replays_are_not_double_counted(tmp_path: Path) -> None:
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [
+      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(100, 10))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  before = _row(_collect(claude, None, db, cache), "Claude Code", NAME)
+
+  # A verbatim copy under a new session id (resume/fork) lands after the cache was written.
+  src = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
+  dst = claude.work / "projects" / "rel" / "sess2"
+  dst.mkdir(parents=True, exist_ok=True)
+  (dst / "sess2.jsonl").write_text(src.read_text())
+
+  after = _row(_collect(claude, None, db, cache), "Claude Code", NAME)
+  assert after.total == before.total
+  assert after.calls == before.calls
+
+
+def test_cache_invalidates_on_append(tmp_path: Path) -> None:
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [
+      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  before = _row(_collect(claude, None, db, cache), "Claude Code", NAME)
+
+  log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
+  with log_file.open("a") as fh:
+    fh.write(json.dumps(_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))) + "\n")
+
+  after = _row(_collect(claude, None, db, cache), "Claude Code", NAME)
+  assert after.total == before.total + 1002
+  assert after.calls == before.calls + 1
+
+
+def test_corrupt_cache_is_rebuilt_with_note(tmp_path: Path) -> None:
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [
+      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  cache.write_text("{ not json")
+
+  tally = _collect(claude, None, db, cache)
+  assert any("rebuilt" in n for n in tally.notes)
+  assert _row(tally, "Claude Code", NAME).total == 15

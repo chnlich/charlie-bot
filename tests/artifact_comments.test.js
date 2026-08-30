@@ -102,6 +102,21 @@ async function flushPromises(times = 3) {
   for (let i = 0; i < times; i++) await waitForPromises();
 }
 
+// Records every fetch and answers that session's two endpoints: the name
+// lookup and the chat POST target the tray sends to.
+function sessionFetchStub(calls, sessionId, sessionName) {
+  return async (url, options = {}) => {
+    calls.push({url, method: options.method || 'GET'});
+    if (url === '/api/sessions/' + sessionId) {
+      return {ok: true, status: 200, async json() { return {name: sessionName}; }};
+    }
+    if (url === '/api/chat/' + sessionId + '/message') {
+      return {ok: true, status: 200};
+    }
+    throw new Error('Unexpected fetch: ' + url);
+  };
+}
+
 function rectsIntersect(a, b) {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
@@ -176,16 +191,7 @@ test('batch tray labels and POST target use the hash session when it resolves', 
   const pathName = PATH_SESSION_PLAN_PATH;
   const {body} = loadArtifactCommentsScript(pathName, false, {
     hash: '#cbsession=view-session',
-    fetch: async (url, options = {}) => {
-      calls.push({url, method: options.method || 'GET'});
-      if (url === '/api/sessions/view-session') {
-        return {ok: true, status: 200, async json() { return {name: 'Viewing Session'}; }};
-      }
-      if (url === '/api/chat/view-session/message') {
-        return {ok: true, status: 200};
-      }
-      throw new Error('Unexpected fetch: ' + url);
-    },
+    fetch: sessionFetchStub(calls, 'view-session', 'Viewing Session'),
   });
 
   const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
@@ -686,31 +692,30 @@ function pendingTrayParts(body) {
   };
 }
 
+// The label the tray shows and the session it POSTs to are the section rule
+// above; keep the two checks and the send together so a test cannot drift one
+// without the other.
+async function expectTrayPostsTo(body, calls, sessionId, sessionName, postMessage) {
+  const {header, sendBtn} = pendingTrayParts(body);
+  await flushPromises(5);
+  assert.equal(header.textContent, 'Pending comments (1) \u2192 ' + sessionName);
+  assert.equal(sendBtn.textContent, 'Send 1 \u2192 ' + sessionName);
+
+  await clickElement(sendBtn);
+  assert.ok(calls.some((call) => call.url === '/api/chat/' + sessionId + '/message' && call.method === 'POST'),
+    postMessage);
+}
+
 test('framed tray POSTs to the live parent session when it differs from the artifact-URL session', async () => {
   const calls = [];
   const pathName = PATH_SESSION_PLAN_PATH;
   const {body} = loadArtifactCommentsScript(pathName, true, {
     hash: '#cbsession=path-session&cbpanel=1',
     parent: {planPanel: {currentSessionId: () => 'live-session'}},
-    fetch: async (url, options = {}) => {
-      calls.push({url, method: options.method || 'GET'});
-      if (url === '/api/sessions/live-session') {
-        return {ok: true, status: 200, async json() { return {name: 'Live Session'}; }};
-      }
-      if (url === '/api/chat/live-session/message') {
-        return {ok: true, status: 200};
-      }
-      throw new Error('Unexpected fetch: ' + url);
-    },
+    fetch: sessionFetchStub(calls, 'live-session', 'Live Session'),
   });
 
-  const {header, sendBtn} = pendingTrayParts(body);
-  await flushPromises(5);
-  assert.equal(header.textContent, 'Pending comments (1) \u2192 Live Session');
-  assert.equal(sendBtn.textContent, 'Send 1 \u2192 Live Session');
-
-  await clickElement(sendBtn);
-  assert.ok(calls.some((call) => call.url === '/api/chat/live-session/message' && call.method === 'POST'),
+  await expectTrayPostsTo(body, calls, 'live-session', 'Live Session',
     'POST targets the live parent session');
   assert.equal(calls.some((call) => call.url === '/api/chat/path-session/message'), false,
     'POST does not target the stale artifact-URL session');
@@ -722,25 +727,10 @@ test('framed tray falls back to the artifact session when window.parent.planPane
   const {body} = loadArtifactCommentsScript(pathName, true, {
     hash: '#cbsession=path-session&cbpanel=1',
     // No opts.parent → window.parent is the bare {} from the harness default.
-    fetch: async (url, options = {}) => {
-      calls.push({url, method: options.method || 'GET'});
-      if (url === '/api/sessions/path-session') {
-        return {ok: true, status: 200, async json() { return {name: 'Path Session'}; }};
-      }
-      if (url === '/api/chat/path-session/message') {
-        return {ok: true, status: 200};
-      }
-      throw new Error('Unexpected fetch: ' + url);
-    },
+    fetch: sessionFetchStub(calls, 'path-session', 'Path Session'),
   });
 
-  const {header, sendBtn} = pendingTrayParts(body);
-  await flushPromises(5);
-  assert.equal(header.textContent, 'Pending comments (1) \u2192 Path Session');
-  assert.equal(sendBtn.textContent, 'Send 1 \u2192 Path Session');
-
-  await clickElement(sendBtn);
-  assert.ok(calls.some((call) => call.url === '/api/chat/path-session/message' && call.method === 'POST'),
+  await expectTrayPostsTo(body, calls, 'path-session', 'Path Session',
     'POST falls back to the artifact-URL session');
 });
 
@@ -751,25 +741,10 @@ test('framed tray falls back to the artifact session when currentSessionId throw
     hash: '#cbsession=path-session&cbpanel=1',
     parent: {planPanel: {currentSessionId: () => { throw new Error('cross-window boom'); }}},
     console: {warn() {}, error() {}, log() {}},
-    fetch: async (url, options = {}) => {
-      calls.push({url, method: options.method || 'GET'});
-      if (url === '/api/sessions/path-session') {
-        return {ok: true, status: 200, async json() { return {name: 'Path Session'}; }};
-      }
-      if (url === '/api/chat/path-session/message') {
-        return {ok: true, status: 200};
-      }
-      throw new Error('Unexpected fetch: ' + url);
-    },
+    fetch: sessionFetchStub(calls, 'path-session', 'Path Session'),
   });
 
-  const {header, sendBtn} = pendingTrayParts(body);
-  await flushPromises(5);
-  assert.equal(header.textContent, 'Pending comments (1) \u2192 Path Session');
-  assert.equal(sendBtn.textContent, 'Send 1 \u2192 Path Session');
-
-  await clickElement(sendBtn);
-  assert.ok(calls.some((call) => call.url === '/api/chat/path-session/message' && call.method === 'POST'),
+  await expectTrayPostsTo(body, calls, 'path-session', 'Path Session',
     'POST falls back when the live accessor throws');
 });
 
@@ -779,25 +754,10 @@ test('framed tray falls back to the artifact session when currentSessionId retur
   const {body} = loadArtifactCommentsScript(pathName, true, {
     hash: '#cbsession=path-session&cbpanel=1',
     parent: {planPanel: {currentSessionId: () => null}},
-    fetch: async (url, options = {}) => {
-      calls.push({url, method: options.method || 'GET'});
-      if (url === '/api/sessions/path-session') {
-        return {ok: true, status: 200, async json() { return {name: 'Path Session'}; }};
-      }
-      if (url === '/api/chat/path-session/message') {
-        return {ok: true, status: 200};
-      }
-      throw new Error('Unexpected fetch: ' + url);
-    },
+    fetch: sessionFetchStub(calls, 'path-session', 'Path Session'),
   });
 
-  const {header, sendBtn} = pendingTrayParts(body);
-  await flushPromises(5);
-  assert.equal(header.textContent, 'Pending comments (1) \u2192 Path Session');
-  assert.equal(sendBtn.textContent, 'Send 1 \u2192 Path Session');
-
-  await clickElement(sendBtn);
-  assert.ok(calls.some((call) => call.url === '/api/chat/path-session/message' && call.method === 'POST'),
+  await expectTrayPostsTo(body, calls, 'path-session', 'Path Session',
     'POST falls back when the live accessor returns null');
 });
 

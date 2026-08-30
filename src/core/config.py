@@ -304,10 +304,6 @@ class CharlieBotConfig(BaseModel):
   google_refresh_token: str | None = None
   linear_api_key: str | None = None
   slack_user_token: str | None = None
-  twitter_api_key: str | None = None
-  twitter_api_secret: str | None = None
-  twitter_access_token: str | None = None
-  twitter_access_token_secret: str | None = None
   public_base_url: str | None = None
 
   @model_validator(mode="before")

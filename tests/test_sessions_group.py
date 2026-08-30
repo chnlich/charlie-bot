@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET
+from conftest import BROADCAST_PATCH_TARGET, OPUS_BACKEND_ID
 from conftest import make_session_mgr as _make_session_mgr
 
 from src.core import event_types as ET
@@ -20,7 +20,7 @@ async def _seed_parent(
     mgr: SessionManager,
     *,
     group: str | None = "Work",
-    backend: str = "claude-opus-4.6",
+    backend: str = OPUS_BACKEND_ID,
 ) -> SessionMetadata:
   """Create and persist a parent session with chat events."""
   parent = SessionMetadata(name="Parent", group=group, backend=backend)
@@ -85,7 +85,7 @@ async def test_fork_session_inherits_none_group(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_fork_session_accepts_backend_override(tmp_path: Path) -> None:
   mgr = _make_session_mgr(tmp_path)
-  parent = await _seed_parent(mgr, group="Research", backend="claude-opus-4.6")
+  parent = await _seed_parent(mgr, group="Research", backend=OPUS_BACKEND_ID)
 
   child = await mgr.fork_session(parent.id, backend="codex-o3")
 
@@ -121,7 +121,7 @@ async def test_elone_session_inherits_none_group(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_elone_session_accepts_backend_override(tmp_path: Path) -> None:
   mgr = _make_session_mgr(tmp_path)
-  parent = await _seed_parent(mgr, group="Research", backend="claude-opus-4.6")
+  parent = await _seed_parent(mgr, group="Research", backend=OPUS_BACKEND_ID)
 
   child = await mgr.elone_session(parent.id, event_index=0, backend="codex-o3")
 

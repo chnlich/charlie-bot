@@ -8,7 +8,11 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import SPAWNER_SPAWN_WORKER_PATCH_TARGET, patch_improve_git_ops
+from conftest import (
+  OPUS_BACKEND_ID,
+  SPAWNER_SPAWN_WORKER_PATCH_TARGET,
+  patch_improve_git_ops,
+)
 
 from src.core import improve_command
 from src.core.improve_command import (
@@ -627,7 +631,7 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
   class FakeSessionManager:
 
     async def get_session(self, session: str):
-      return MagicMock(id=session, name="Pinned", backend="claude-opus-4.6")
+      return MagicMock(id=session, name="Pinned", backend=OPUS_BACKEND_ID)
 
     async def persist_and_broadcast(self, session: str, event: dict) -> None:
       del session

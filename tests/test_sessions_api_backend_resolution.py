@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from conftest import (
   CHAT_RUN_AND_FINALIZE_PATCH_TARGET,
+  OPUS_BACKEND_ID,
   build_two_backend_cfg,
   close_create_logged_task,
 )
@@ -18,7 +19,7 @@ from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
 
 
-async def _seed_parent(session_mgr: SessionManager, *, backend: str = "claude-opus-4.6") -> str:
+async def _seed_parent(session_mgr: SessionManager, *, backend: str = OPUS_BACKEND_ID) -> str:
   parent = await session_mgr.create_session(CreateSessionRequest(name="Parent"), backend=backend)
   events_path = session_mgr.get_chat_events_path(parent.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,19 +76,19 @@ def two_backend_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _RouteEn
 @pytest.mark.asyncio
 async def test_fork_route_inherits_parent_backend_when_backend_omitted(two_backend_env: _RouteEnv) -> None:
   cfg, session_mgr, _ = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
+  parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
 
   with _build_client(cfg, session_mgr) as client:
     response = client.post(f"/api/sessions/{parent_id}/fork")
 
   assert response.status_code == 200
-  assert response.json()["backend"] == "claude-opus-4.6"
+  assert response.json()["backend"] == OPUS_BACKEND_ID
 
 
 @pytest.mark.asyncio
 async def test_fork_route_resolves_codex_family_override(two_backend_env: _RouteEnv) -> None:
   cfg, session_mgr, _ = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
+  parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
 
   with _build_client(cfg, session_mgr) as client:
     response = client.post(
@@ -105,7 +106,7 @@ async def test_fork_route_resolves_codex_family_override(two_backend_env: _Route
 @pytest.mark.asyncio
 async def test_elone_route_accepts_valid_backend_override(two_backend_env: _RouteEnv) -> None:
   cfg, session_mgr, _ = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
+  parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
 
   with _build_client(cfg, session_mgr) as client:
     response = client.post(
@@ -144,7 +145,7 @@ async def test_elone_route_rejects_unresolvable_explicit_backend_and_persists_no
 @pytest.mark.asyncio
 async def test_fork_route_bootstrap_points_at_reference_file(two_backend_env: _RouteEnv) -> None:
   cfg, session_mgr, calls = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
+  parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
 
   with _build_client(cfg, session_mgr) as client:
     response = client.post(f"/api/sessions/{parent_id}/fork", json={"event_index": 0})
@@ -164,7 +165,7 @@ async def test_fork_route_bootstrap_points_at_reference_file(two_backend_env: _R
 @pytest.mark.asyncio
 async def test_elone_route_bootstrap_points_at_reference_file(two_backend_env: _RouteEnv) -> None:
   cfg, session_mgr, calls = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
+  parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
 
   with _build_client(cfg, session_mgr) as client:
     response = client.post(f"/api/sessions/{parent_id}/elone", json={"event_index": 1})
@@ -203,7 +204,7 @@ async def test_fork_route_rejects_unresolvable_explicit_backend_and_persists_not
     two_backend_env: _RouteEnv,
 ) -> None:
   cfg, session_mgr, _ = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
+  parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
   before = _session_dir_names(cfg)
 
   with _build_client(cfg, session_mgr) as client:
@@ -266,8 +267,8 @@ async def test_persisted_backend_stays_within_backend_options_across_mixed_calls
 ) -> None:
   cfg, session_mgr, _ = two_backend_env
   valid_ids = {opt.id for opt in cfg.backend_options}
-  fork_parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
-  elone_ok_parent_id = await _seed_parent(session_mgr, backend="claude-opus-4.6")
+  fork_parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
+  elone_ok_parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
   elone_bad_parent_id = await _seed_parent(session_mgr, backend="missing-backend")
   # The bad-parent seed intentionally simulates a pre-existing session pinned to a
   # since-removed id (out of scope to migrate); exclude pre-existing dirs from the

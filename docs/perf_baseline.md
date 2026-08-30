@@ -15,6 +15,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M2 UI polls | M2 collector below | polls/h; log MB | < 6000 polls/h | 2755 polls/h; 3.1 MB log |
 | M3 API latency, 401 path | M3 collector below | seconds per request | median < 0.05 s | median 0.002 s, max 0.002 s |
 | M4 turns | M4 collector below | seconds per turn; hung sessions | median < 300 s; hung = 0 | median 53 s, max 1133 s; 0 hung |
+| M5 threads/list latency | M5 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -126,6 +127,24 @@ if malformed:
     line += f"; {malformed} malformed event lines"
 print(line)
 EOF
+```
+
+M5 — threads/list latency for the session with the most thread metadata files on disk (the worst
+case the 3 s workers-panel poll can hit; the key is read read-only from the host config):
+
+```bash
+KEY=$(grep -m1 '^charliebot_access_key:' ~/.charliebot/config.yaml | awk '{print $2}'); read SID N <<<"$(python3 -c '
+from pathlib import Path
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    t = d / "threads"
+    if t.is_dir():
+        n = sum(1 for p in t.iterdir() if (p / "metadata.json").is_file())
+        if n > best_n:
+            best, best_n = d, n
+print(best.name, best_n)
+')"; echo "session $SID, $N threads"; for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: Bearer $KEY" "http://127.0.0.1:18498/api/threads/$SID/list"; done | sort -n | awk '{a[NR]=$1} END {printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
 ```
 
 ## Sampling history

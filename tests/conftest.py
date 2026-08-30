@@ -746,6 +746,12 @@ def write_plans(cfg: CharlieBotConfig, session_id: str, data: dict) -> Path:
   return plans_path
 
 
+def write_trigger(path: Path, trigger: models.PendingTrigger) -> None:
+  """Write trigger as a pending-trigger JSON file at path, creating parent dirs."""
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_text(trigger.model_dump_json(indent=2), encoding="utf-8")
+
+
 async def make_plan_setup(
     tmp_path: Path,
 ) -> tuple[CharlieBotConfig, SessionManager, ThreadManager, PlanRegistryManager, models.SessionMetadata]:

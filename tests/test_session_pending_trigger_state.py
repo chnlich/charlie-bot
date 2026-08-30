@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config
+from conftest import make_home_config, write_trigger
 
 from src.api import sessions as sessions_api
 from src.core.models import (
@@ -17,11 +17,6 @@ from src.core.models import (
 from src.core.sessions import SessionManager
 
 
-def _write_trigger(path: Path, trigger: PendingTrigger) -> None:
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(trigger.model_dump_json(indent=2), encoding="utf-8")
-
-
 @pytest.mark.asyncio
 async def test_pending_trigger_state_is_derived_without_persisting_metadata(tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
@@ -30,7 +25,7 @@ async def test_pending_trigger_state_is_derived_without_persisting_metadata(tmp_
 
   now = datetime.now(UTC)
   triggers_dir = cfg.sessions_dir / session.id / "triggers"
-  _write_trigger(
+  write_trigger(
       triggers_dir / "pending-late.json",
       PendingTrigger(
           id="pending-late",
@@ -39,7 +34,7 @@ async def test_pending_trigger_state_is_derived_without_persisting_metadata(tmp_
           message="later",
       ),
   )
-  _write_trigger(
+  write_trigger(
       triggers_dir / "pending-soon.json",
       PendingTrigger(
           id="pending-soon",
@@ -48,7 +43,7 @@ async def test_pending_trigger_state_is_derived_without_persisting_metadata(tmp_
           message="soon",
       ),
   )
-  _write_trigger(
+  write_trigger(
       triggers_dir / "cancelled.json",
       PendingTrigger(
           id="cancelled",
@@ -106,7 +101,7 @@ async def test_all_sessions_status_includes_pending_trigger_fields(tmp_path: Pat
       fire_at=now + timedelta(minutes=3),
       message="status",
   )
-  _write_trigger(cfg.sessions_dir / session.id / "triggers" / "pending-status.json", trigger)
+  write_trigger(cfg.sessions_dir / session.id / "triggers" / "pending-status.json", trigger)
 
   status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=session_mgr)
   assert status[session.id]["has_unread"] is True
@@ -133,7 +128,7 @@ async def test_all_sessions_status_includes_archived_sessions(tmp_path: Path) ->
       fire_at=datetime.now(UTC) + timedelta(minutes=2),
       message="archived status",
   )
-  _write_trigger(cfg.sessions_dir / session.id / "triggers" / "pending-archived.json", trigger)
+  write_trigger(cfg.sessions_dir / session.id / "triggers" / "pending-archived.json", trigger)
 
   status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=session_mgr)
   # Archived sessions remain in the status response but skip per-session
@@ -160,7 +155,7 @@ async def test_populate_sidebar_state_skips_archived_sessions(tmp_path: Path) ->
   await session_mgr.save_metadata(archived_meta)
 
   now = datetime.now(UTC)
-  _write_trigger(
+  write_trigger(
       cfg.sessions_dir / active.id / "triggers" / "pending-active.json",
       PendingTrigger(
           id="pending-active",
@@ -169,7 +164,7 @@ async def test_populate_sidebar_state_skips_archived_sessions(tmp_path: Path) ->
           message="active",
       ),
   )
-  _write_trigger(
+  write_trigger(
       cfg.sessions_dir / archived.id / "triggers" / "pending-archived.json",
       PendingTrigger(
           id="pending-archived",

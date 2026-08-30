@@ -11,11 +11,11 @@
 ---
 
 ## 2. Technical Stack
-- **Language**: Python 3.10+
+- **Language**: Python 3.12+
 - **Master Agent**: Claude Code session (pluggable backends: Claude, Kimi, Codex, Gemini, OpenCode)
 - **Worker Agent**: Claude Code (local CLI invocation, non-interactive mode)
-- **Backend**: FastAPI (or Flask), WebSockets/SSE for real-time streaming, asyncio for concurrency
-- **Frontend**: React SPA built to static files, served by FastAPI
+- **Backend**: FastAPI, WebSockets/SSE for real-time streaming, asyncio for concurrency
+- **Frontend**: vanilla JS + Tailwind CSS, served by FastAPI StaticFiles
 - **Storage**: JSON for state/data, YAML for configuration
 
 ---
@@ -23,7 +23,7 @@
 ## 3. Directory Structure
 
 ### 3.1 Home Directory (`~/.charliebot/` or `CHARLIEBOT_HOME`)
-All instance-specific data (configs, logs, sessions) is stored here.
+All instance-specific data (configs, sessions, memory) is stored here.
 
 `CHARLIEBOT_HOME` selects which one: unset gives `~/.charliebot`, and a set value (absolute
 or `~`-prefixed; relative is rejected) gives a separate profile, seeded on first use. Several
@@ -33,15 +33,14 @@ other path derives from `CharlieBotConfig.charliebot_home`.
 
 ```text
 ~/.charliebot/
-├── config.yaml          # API keys, settings, and project_dirs list
+├── config.yaml          # API keys, settings, and workspace_dirs list
 ├── memory/             # Labeled-entry memory store (local git repo)
 │   ├── entries/<topic>/<slug>.md   # canonical entries (one fact per file)
 │   ├── topics                       # controlled topic vocabulary
 │   └── staging/                     # candidate entries (.gitignore'd)
 └── sessions/            # Session directories
     └── {session_uuid}/
-        ├── metadata.json      # Session info (name, repo, branch)
-        ├── repo.git/          # Session-scoped bare git repository
+        ├── metadata.json      # Session info (name, status, timestamps)
         ├── data/              # Session-level JSON data
         └── threads/           # Thread directories
             └── {thread_uuid}/
@@ -49,31 +48,25 @@ other path derives from `CharlieBotConfig.charliebot_home`.
                 └── data/            # Thread-specific JSON data (logs, state)
 ```
 
-**Worktrees** are stored in the repository root, not under `~/.charliebot/`:
+**Worktrees** are stored under `worktree_dir` (config, default `~/worktrees`), one directory per
+thread branch — the directory name is the branch name with `/` replaced by `-`:
 
 ```text
-<repo_path>/
-├── .git/
-├── worktree/                           # Overall worktree directory
-│   ├── main/                           # Session's base branch worktree
-│   └── charliebot/task-{ts}-{id}/      # Thread worktree (isolated branch)
-└── src/
+<worktree_dir>/
+└── charliebot-task-{ts}-{id}/      # Thread worktree (isolated branch `charliebot/task-{ts}-{id}`)
 ```
 
-For sessions created with `repo_url` (no local path), worktrees fall back to `~/.charliebot/sessions/{uuid}/worktree/`.
-
 **Notes:**
-- `logs/`: Stores application-level logs (server errors, HTTP access, Worker spawn/crash events). Individual Worker logs are in `threads/{uuid}/data/`.
-- `repo.git/`: Bare git repository is session-scoped.
+- Individual Worker logs are in `threads/{uuid}/data/` (`stdout.log`, `stderr.log`, `events.jsonl`).
 - `CLAUDE.md`: Written into each thread's worktree (so Claude Code finds it via cwd).
-- `project_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The `GET /api/sessions/projects` endpoint returns discovered projects for the UI project picker.
+- `workspace_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The `GET /api/sessions/projects` endpoint returns discovered projects for the UI project picker.
 
 ### 3.2 Repository Code Structure (Stateless)
 ```text
 charlie-bot/
 ├── src/                # Python backend (api/, core/, agents/)
-├── web/                # React frontend (src/ for dev, static/ for runtime)
-├── config/             # Default templates and examples
+├── web/                # Web UI (templates/ + static/)
+├── configs/            # Default templates and examples
 ├── server.py           # Entry point
 └── project.md          # This specification
 ```
@@ -117,7 +110,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 1. **Task Delegation** (Master → Worker):
    - User submits request via Web UI chat
    - Master Agent (Claude Code session) decides to delegate a coding task
-   - Master calls `charliebot delegate --repo /path --base-branch main --description "task"` (`src/cli/delegate.py`); session identity is supplied by cwd in normal master use
+   - Master calls `charliebot delegate --repo /path --base-branch main --task-spec-file <file>` (`src/cli/delegate.py`); session identity is supplied by cwd in normal master use
    - The CLI POSTs to `/api/internal/delegate`, which creates a thread and spawns a Worker via `spawn_worker()` (`src/core/spawner.py`)
 
 2. **Worker Execution** (Phase 1 — Implement):
@@ -139,7 +132,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
    - If the reviewer **fails**, it retries with the next untried backend from `model_preference`. Max retries = `len(model_preference)`
 
 4. **Master Trigger on Completion**:
-   - After review completes (success or all retries exhausted), the master agent is triggered via `_trigger_master()` with a combined summary of worker + reviewer results
+   - After review completes (success or all retries exhausted), the master agent is triggered via `trigger_master()` with a combined summary of worker + reviewer results
    - If the worker itself failed (no review spawned), the master is triggered immediately with the worker's summary
    - The master can then inform the user and decide on follow-up actions
 
@@ -255,13 +248,13 @@ Each Thread's `CLAUDE.md` contains:
 
 **Backend**
 - FastAPI server (`server.py`)
-- All API routes: `/api/sessions`, `/api/chat`, `/api/threads`, `/api/voice`, `/api/memory`, `/api/internal/delegate`
+- All API routes: `/api/sessions`, `/api/chat`, `/api/threads`, `/api/internal/delegate` (full list: the `include_router` calls in `server.py`)
 - Master Agent as Claude Code session (`src/agents/master_cc.py`) with `--resume` support for persistent conversations. Supports multiple backends (Claude, Kimi, Codex, Gemini, OpenCode) via pluggable `AgentBackend` interface
 - Delegation CLI (`src/cli/delegate.py`) — called by the master to spawn workers via `POST /api/internal/delegate`
 - Worker spawner (`src/core/spawner.py`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
 - Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `model_preference`). Failed reviewers retry with the next untried backend
-- Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `_trigger_master()` for user notification and follow-up decisions
-- `SessionManager`, `ThreadManager`, `MemoryManager`, `GitManager`
+- Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `trigger_master()` for user notification and follow-up decisions
+- `SessionManager`, `ThreadManager`, `PlanRegistryManager`, `TriggerManager`, `StreamingManager`
 - `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml` and the memory store scaffold (git repo + topics vocabulary)
 - Memory updates: sessions stage candidates via `charliebot memory add` (writes `staging/`, never `entries/`); the daily memory curator builds a user-approved diff that admits, revises, or evicts entries
 
@@ -269,7 +262,7 @@ Each Thread's `CLAUDE.md` contains:
 - `/ws/sessions/{session_id}` — session-level events (worker completion summaries pushed to chat)
 
 **Frontend**
-- React SPA (Vite + TypeScript) built to `web/static/`, served by FastAPI StaticFiles (Node.js/npm is build-time only)
+- Vanilla-JS UI under `web/static/js/`, served by FastAPI StaticFiles (Node.js/npm is build-time only: Tailwind CSS)
 - Panels: Sessions sidebar, Chat (SSE streaming), Threads list, Plan review checklist, Voice push-to-talk
 - ChatPanel subscribes to session WebSocket — receives worker summaries and renders them as assistant messages
 - ThreadsPanel polls every 3 seconds for thread status updates

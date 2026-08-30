@@ -235,11 +235,15 @@ Known-alive symbols:
   `google_docs_refresh_token`, `google_refresh_token`, `linear_api_key`, `slack_user_token`,
   `public_base_url` (`src/core/config.py:292-307`, `CharlieBotConfig` fields) — yaml keys
   hosts carry in `config.yaml` / `config.d/*.yaml`, kept deliberately: consumers read the
-  raw yaml outside this repo (skill scripts quote the key names in `skills/feishu/SKILL.md`,
-  `skills/gmail/SKILL.md`, `skills/google-sheets/SKILL.md`, `skills/google-docs/SKILL.md`,
-  `skills/linear/SKILL.md`, `skills/slack/SKILL.md`), and the fields exist only so
-  `extra='forbid'` keeps those host files loadable — the block comment directly above the
-  fields in `config.py` states this. `test_declared_integration_keys_round_trip`
-  (`tests/test_config_fragments.py`) pins the full set by name. Nothing in the repo
-  attribute-reads the values, so vulture flags every field as an unused variable. Same
-  kept-deliberately class as the `backlog_label` entry above.
+  raw yaml outside this repo. Ten of the sixteen are quoted by name in the skill files
+  that read them (`skills/feishu/SKILL.md`, `skills/gmail/SKILL.md`,
+  `skills/google-sheets/SKILL.md`, `skills/google-docs/SKILL.md`, `skills/linear/SKILL.md`,
+  `skills/slack/SKILL.md`); the other five — `gemini_api_key`, `gemini_model`,
+  `google_docs_client_id`, `google_docs_client_secret`, `public_base_url` — have no
+  in-repo script consumer (`gemini_api_key` surfaces only in README/setup/template
+  prose). The fields exist so `extra='forbid'` keeps those host files loadable — the
+  block comment directly above the fields in `config.py` states this for the whole set.
+  `test_declared_integration_keys_round_trip` (`tests/test_config_fragments.py`) pins the
+  full set by name. Nothing in the repo attribute-reads the values, so vulture flags
+  every field as an unused variable. Same kept-deliberately class as the `backlog_label`
+  entry above.

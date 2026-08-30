@@ -65,15 +65,22 @@ class _FakeSlackClient:
   """Records posts and models each message's live reaction set; never touches the network.
 
   ``reactions`` maps a message ts to the names currently on it — the Slack-side
-  end state the ack-clear tests assert against.
+  end state the ack-clear tests assert against. ``thread`` is what the
+  conversations.replies seam (the reply gate) returns: an empty thread by
+  default, so a test that never seeds it faces no unread messages.
   """
 
   def __init__(self, *, fail_posts: bool = False, fail_remove: bool = False) -> None:
     self.posts: list[dict] = []
     self.remove_calls: list[dict] = []
     self.reactions: dict[str, set[str]] = {}
+    self.thread: list[dict] = []
     self.fail_posts = fail_posts
     self._fail_remove = fail_remove
+
+  async def get_thread_replies(self, channel: str, thread_ts: str) -> list[dict]:
+    """The thread-read seam the reply gate consumes; the seeded ``thread`` as-is."""
+    return self.thread
 
   async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
     if self.fail_posts:

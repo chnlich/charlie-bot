@@ -203,9 +203,8 @@ def test_main_verify_rejects_repo_scoped_arguments(
           "verify",
           flag,
           value,
-      ]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+      ]), pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert_cli_reject(exc_info, capsys, flag, "forbidden")
 
@@ -241,9 +240,8 @@ def test_main_repo_task_types_require_repo_and_base_branch(
           "--task-type",
           task_type,
           *argv_tail,
-      ]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+      ]), pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert_cli_reject(exc_info, capsys, missing_flag, "required")
 
@@ -253,9 +251,11 @@ def test_main_rejects_relative_repo_path(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path)
 
-  with _patched_main(cfg, _repo_argv("meshy-research", task_spec_file, session="s1")) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      _patched_main(cfg, _repo_argv("meshy-research", task_spec_file, session="s1")) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert_cli_reject(exc_info, capsys, "must be an absolute path", "meshy-research")
   post_mock.assert_not_called()
@@ -267,18 +267,19 @@ def test_main_rejects_nonexistent_repo_path(
   task_spec_file = _write_task_spec(tmp_path)
   nonexistent = str(tmp_path / "nonexistent")
 
-  with _patched_main(cfg, _repo_argv(nonexistent, task_spec_file, session="s1")) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      _patched_main(cfg, _repo_argv(nonexistent, task_spec_file, session="s1")) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert_cli_reject(exc_info, capsys, "does not exist", nonexistent)
   post_mock.assert_not_called()
 
 
 def test_main_help_lists_verify_profile(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["delegate", "--help"]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with patch("sys.argv", ["delegate", "--help"]), pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert exc_info.value.code == 0
   out = capsys.readouterr().out
@@ -287,9 +288,8 @@ def test_main_help_lists_verify_profile(capsys: pytest.CaptureFixture[str]) -> N
 
 
 def test_main_help_states_backend_omission_rule(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["delegate", "--help"]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with patch("sys.argv", ["delegate", "--help"]), pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert exc_info.value.code == 0
   out = " ".join(capsys.readouterr().out.split())
@@ -329,9 +329,8 @@ def test_main_requires_task_spec_file(tmp_path: Path, capsys: pytest.CaptureFixt
       "main",
       "--keep-worktree",
       "0",
-  ]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  ]), pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert_cli_reject(exc_info, capsys, "--task-spec-file")
 
@@ -342,10 +341,12 @@ def test_main_rejects_legacy_description_argparse(
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  with _patched_main(
-      cfg, _repo_argv(str(tmp_path), task_spec_file, "--description", "task", session="s1")) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      _patched_main(
+          cfg, _repo_argv(str(tmp_path), task_spec_file, "--description", "task", session="s1")) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert_cli_reject(exc_info, capsys, "--description")
   post_mock.assert_not_called()
@@ -357,10 +358,12 @@ def test_main_rejects_legacy_context_argparse(
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  with _patched_main(
-      cfg, _repo_argv(str(tmp_path), task_spec_file, "--context", "review hint", session="s1")) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      _patched_main(
+          cfg, _repo_argv(str(tmp_path), task_spec_file, "--context", "review hint", session="s1")) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert_cli_reject(exc_info, capsys, "--context")
   post_mock.assert_not_called()
@@ -372,9 +375,11 @@ def test_main_rejects_invalid_task_type(
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, "--task-type", "bogus", session="s1")):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, "--task-type", "bogus", session="s1")),
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert_cli_reject(exc_info, capsys, "--task-type")
 
@@ -385,9 +390,11 @@ def test_main_rejects_legacy_require_review_flag(
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
-  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, "--require-review", "0", session="s1")):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, "--require-review", "0", session="s1")),
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert exc_info.value.code != 0
   err = capsys.readouterr().err
@@ -428,9 +435,8 @@ def test_main_requires_keep_worktree_flag(tmp_path: Path, capsys: pytest.Capture
       "main",
       "--task-spec-file",
       str(task_spec_file),
-  ]):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  ]), pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert_cli_reject(exc_info, capsys, "--keep-worktree")
 
@@ -440,9 +446,8 @@ def test_main_rejects_missing_task_spec_file(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   missing = tmp_path / "missing.md"
 
-  with _patched_main(cfg, _repo_argv(str(tmp_path), missing)) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with _patched_main(cfg, _repo_argv(str(tmp_path), missing)) as post_mock, pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert_cli_reject_exit2(exc_info, capsys, "task-spec-file", "not found")
   post_mock.assert_not_called()
@@ -454,9 +459,8 @@ def test_main_rejects_empty_task_spec_file(
   empty = tmp_path / "empty.md"
   empty.write_text("  \n")
 
-  with _patched_main(cfg, _repo_argv(str(tmp_path), empty)) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with _patched_main(cfg, _repo_argv(str(tmp_path), empty)) as post_mock, pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert_cli_reject_exit2(exc_info, capsys, "task-spec-file", "empty")
   post_mock.assert_not_called()
@@ -468,10 +472,12 @@ def test_main_rejects_missing_reviewer_context_file(
   task_spec_file = _write_task_spec(tmp_path)
   missing = tmp_path / "missing_context.md"
 
-  with _patched_main(
-      cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file", str(missing))) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      _patched_main(
+          cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file", str(missing))) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert_cli_reject_exit2(exc_info, capsys, "reviewer-context-file", "not found")
   post_mock.assert_not_called()
@@ -484,10 +490,12 @@ def test_main_rejects_empty_reviewer_context_file(
   empty = tmp_path / "empty_context.md"
   empty.write_text("  \n")
 
-  with _patched_main(
-      cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file", str(empty))) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      _patched_main(
+          cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file", str(empty))) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert_cli_reject_exit2(exc_info, capsys, "reviewer-context-file", "empty")
   post_mock.assert_not_called()
@@ -498,9 +506,11 @@ def test_main_rejects_task_spec_missing_required_heading(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec().replace("## Required Behavior\n", ""))
 
-  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert_cli_reject_exit2(exc_info, capsys, "## Required Behavior")
   post_mock.assert_not_called()
@@ -511,9 +521,11 @@ def test_main_rejects_nonexistent_absolute_source_file(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec("- /definitely/not/there/task-source.md"))
 
-  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert_cli_reject_exit2(exc_info, capsys, "/definitely/not/there/task-source.md")
   post_mock.assert_not_called()
@@ -524,9 +536,11 @@ def test_main_rejects_relative_source_file_entry(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec("- relative/source.md"))
 
-  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert_cli_reject_exit2(exc_info, capsys, "absolute paths")
   post_mock.assert_not_called()
@@ -537,9 +551,11 @@ def test_main_rejects_empty_source_files_section(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec(""))
 
-  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert_cli_reject_exit2(exc_info, capsys, "Source Files section")
   post_mock.assert_not_called()

@@ -7,38 +7,13 @@
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
-const { loadChatRenderingModules } = require('./chat_rendering_context_stub');
+const { loadToggleHarness } = require('./chat_rendering_context_stub');
 
 const { FakeElement } = require('./fake_dom');
 
 function loadContext() {
-  const elements = new Map();
-  const context = {
-    document: {
-      getElementById(id) { return elements.get(id) || null; },
-      createElement(tag) { return new FakeElement(tag); },
-      querySelector() { return null; },
-      querySelectorAll() { return []; },
-    },
-    console: { error: () => {}, log: () => {}, warn: () => {} },
-    marked: { parse: (v) => '<p>' + String(v || '') + '</p>' },
-    fixNestedFences: (v) => String(v || ''),
-    renderChatMath: () => {},
-    showScrollToBottom: () => {},
-    CSS: { escape: (v) => String(v) },
-    SESSION_ID: 'sess-1',
-    fetch: () => Promise.resolve({ ok: true }),
-    _elements: elements,
-  };
-  vm.createContext(context);
-  // Deterministic toggle ids: 0.5.toString(36).slice(2) === 'i'.
-  vm.runInContext('Math.random = () => 0.5', context);
-  loadChatRenderingModules(context);
-  vm.runInContext(readStatic('usage.js'), context, { filename: 'usage.js' });
-  return context;
+  return loadToggleHarness('usage.js', {showScrollToBottom: () => {}});
 }
 
 function toggleHtml(id, escapedThinking) {

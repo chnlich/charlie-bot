@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import SYNTHETIC_MODEL
+from conftest import OPUS_BACKEND_ID, SYNTHETIC_MODEL
 
 from src.agents.backends.claude_code import (
   CLAUDE_COMPACT_CONTEXT_RESERVE,
@@ -24,7 +24,7 @@ def _build_cfg(tmp_path: Path, **codex_kwargs) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path,
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Claude", type="cc-claude", model="claude-opus-4-6"),
+          BackendOption(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude", model="claude-opus-4-6"),
           codex_opt,
       ],
   )
@@ -142,7 +142,7 @@ def _snapshot(model: str, tokens: dict, limit: dict | None) -> dict:
 async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-assistant", name="Assistant", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-assistant", name="Assistant", backend=OPUS_BACKEND_ID)
   # Result carries a turn-cumulative 1.5M sum; a later main-chain assistant event
   # reports a realistic per-request size.
   _write_session(session_mgr, meta, [
@@ -181,7 +181,7 @@ async def test_claude_tier_context_tokens_reads_post_tokens_after_selected_assis
 ) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-postboundary", name="Post Boundary", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-postboundary", name="Post Boundary", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [
       _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
       _assistant_event("claude-opus-4-6", input_tokens=239_708),
@@ -203,7 +203,7 @@ async def test_claude_tier_ignores_compact_boundary_before_selected_assistant(
 ) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-preboundary", name="Pre Boundary", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-preboundary", name="Pre Boundary", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [
       _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
       _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
@@ -226,7 +226,7 @@ async def test_claude_tier_boundary_without_post_tokens_leaves_reading_alone(
 ) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-noboundarytokens", name="No Post Tokens", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-noboundarytokens", name="No Post Tokens", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [
       _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
       _assistant_event("claude-opus-4-6", input_tokens=100_000),
@@ -247,7 +247,7 @@ async def test_claude_tier_boundary_without_post_tokens_leaves_reading_alone(
 async def test_claude_tier_admission_unaffected_by_boundary_only_events(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-boundaryonly", name="Boundary Only", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-boundaryonly", name="Boundary Only", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [
       _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
       {"type": "user", "content": "hello", "timestamp": "2026-03-31T20:42:52Z"},
@@ -275,7 +275,7 @@ async def test_claude_tier_resolves_context_full_from_assistant_model_not_dict_o
 ) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-modelorder", name="Model Order", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-modelorder", name="Model Order", backend=OPUS_BACKEND_ID)
   # modelUsage lists a small-window sub-model FIRST; the assistant event's model
   # is the real (second) model.
   _write_session(session_mgr, meta, [
@@ -303,7 +303,7 @@ async def test_claude_tier_context_full_is_declared_window_when_model_usage_abse
 ) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-nomodel", name="No Model Usage", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-nomodel", name="No Model Usage", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [
       _result_event(0.3),  # no modelUsage
       _assistant_event("claude-opus-4-6", input_tokens=70_000),
@@ -326,7 +326,7 @@ async def test_claude_tier_context_full_is_declared_window_when_model_usage_abse
 async def test_claude_tier_ignores_subagent_and_synthetic_assistant_events(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-ignore", name="Ignore", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-ignore", name="Ignore", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [
       # sub-agent event with large usage — must be ignored (parent_tool_use_id set)
       _assistant_event("claude-opus-4-6", input_tokens=400_000, parent_tool_use_id="tool_1"),
@@ -351,7 +351,7 @@ async def test_claude_tier_ignores_subagent_and_synthetic_assistant_events(tmp_p
 async def test_no_source_tier_when_results_but_no_assistant_usage(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-nosource", name="No Source", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-nosource", name="No Source", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [
       _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
       # only sub-agent / zero-usage assistant events — not usable
@@ -378,7 +378,7 @@ async def test_no_source_tier_when_results_but_no_assistant_usage(tmp_path: Path
 async def test_cost_is_none_when_all_results_report_zero(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-zerocost", name="Zero Cost", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-zerocost", name="Zero Cost", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [
       _result_event(0.0, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
       _result_event(0.0, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=2000),
@@ -395,7 +395,7 @@ async def test_cost_is_none_when_all_results_report_zero(tmp_path: Path) -> None
 async def test_cost_sums_positive_results_across_full_list(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-poscost", name="Positive Cost", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-poscost", name="Positive Cost", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [
       _result_event(0.10, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
       _result_event(0.20, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=2000),
@@ -417,7 +417,7 @@ async def test_cost_sums_positive_results_across_full_list(tmp_path: Path) -> No
 async def test_public_entry_point_has_no_events_parameter(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-wholelist", name="Whole List", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-wholelist", name="Whole List", backend=OPUS_BACKEND_ID)
   # More than 40 result events with cost, so a tail would under-count.
   events = [_result_event(0.01, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=i)
             for i in range(50)]
@@ -501,7 +501,7 @@ def test_declared_window_returns_default_when_window_unparseable_and_warns(
 async def test_claude_tier_full_and_point_for_1m_window_model(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-1m", name="1M Window", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-1m", name="1M Window", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [
       _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 1_000_000}}),
       _assistant_event("claude-opus-4-6", input_tokens=72_900),
@@ -520,7 +520,7 @@ async def test_claude_tier_full_and_point_for_1m_window_model(tmp_path: Path) ->
 async def test_claude_tier_full_and_point_for_200k_window_model(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-200k", name="200k Window", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-200k", name="200k Window", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [
       _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
       _assistant_event("claude-opus-4-6", input_tokens=72_900),
@@ -542,7 +542,7 @@ async def test_claude_tier_point_none_under_forwarded_unmodelled_override(
   monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "1")
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-override", name="Override", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-override", name="Override", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [
       _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 1_000_000}}),
       _assistant_event("claude-opus-4-6", input_tokens=72_900),
@@ -702,7 +702,7 @@ async def test_snapshot_tier_compact_at_ignores_claude_constants_but_claude_tier
   assert snap_usage["context_compact_at"] == 250_000
 
   # Claude tier — its point follows the monkeypatched Claude constants.
-  claude_meta = SessionMetadata(id="session-decouple-claude", name="Claude Decouple", backend="claude-opus-4.6")
+  claude_meta = SessionMetadata(id="session-decouple-claude", name="Claude Decouple", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, claude_meta, [
       _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 600_000}}),
       _assistant_event("claude-opus-4-6", input_tokens=72_900),
@@ -762,7 +762,7 @@ async def test_codex_rollout_resolves_via_other_backend_when_session_backend_abs
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path,
       backend_options=[
-          BackendOption(id="claude-opus-4.6", label="Claude", type="cc-claude",
+          BackendOption(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude",
                         model="claude-opus-4-6"),
           BackendOption(id="codex-new", label="Codex New", type="codex", model="gpt-5.5",
                         codex_home=str(tmp_path / "codex-tree")),
@@ -944,7 +944,7 @@ async def test_codex_native_cost_is_none_for_unknown_model(tmp_path: Path) -> No
 async def test_empty_event_list_returns_none(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-empty", name="Empty", backend="claude-opus-4.6")
+  meta = SessionMetadata(id="session-empty", name="Empty", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)

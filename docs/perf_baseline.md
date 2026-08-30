@@ -151,3 +151,4 @@ print(best.name, best_n)
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-08-30 | #457 | M5 median 0.068 s → 0.029 s (117-thread worst session) | one executor hop for the threads metadata scan; M5 definition and healthy range introduced with this PR |

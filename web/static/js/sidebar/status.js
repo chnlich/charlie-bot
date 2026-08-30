@@ -45,8 +45,7 @@ function statusRequestUrls(path, ids) {
   return urls;
 }
 
-async function fetchScopedStatus(path) {
-  const ids = sidebarSessionIds();
+async function fetchScopedStatus(path, ids) {
   if (!ids.length) return {};
   const responses = await Promise.all(statusRequestUrls(path, ids).map(url => fetch(url)));
   const merged = {};
@@ -65,7 +64,14 @@ function isTuiSession(session) {
   return sessionBackendType(session) === 'tui-cli';
 }
 
+// Backend type of every rendered sidebar row, keyed by session id. The sidebar
+// re-renders its rows wholesale on every refresh, and each row render flows
+// through renderTuiStatusDot, so this map tracks the rendered truth; the
+// tui/status poll reads it to request only tui-cli rows.
+const renderedSessionBackendTypes = {};
+
 function renderTuiStatusDot(session) {
+  renderedSessionBackendTypes[session.id] = sessionBackendType(session);
   if (!isTuiSession(session)) return '';
   const status = globalThis.TuiStatusMap[session.id] || {running: false, busy: false};
   const classes = ['tui-status-dot', 'w-2', 'h-2', 'rounded-full', 'flex-shrink-0'];
@@ -75,9 +81,23 @@ function renderTuiStatusDot(session) {
   return `<span class="${classes.join(' ')}" data-session-id="${escapeHtmlAttr(session.id)}" title="${title}"></span>`;
 }
 
+// The poll goes out only for sessions that can consume the answer: rows
+// rendered as tui-cli, plus the active session whenever its current backend
+// type is tui-cli — the Stop button reads TuiStatusMap[SESSION_ID] and the
+// active session's row can be missing or stale right after a backend switch.
+// With no tui-cli sessions the request is skipped entirely.
+function tuiSidebarSessionIds() {
+  const ids = sidebarSessionIds().filter(sid => renderedSessionBackendTypes[sid] === 'tui-cli');
+  if (typeof SESSION_ID !== 'undefined' && SESSION_ID &&
+      globalThis.ACTIVE_BACKEND_TYPE === 'tui-cli' && !ids.includes(SESSION_ID)) {
+    ids.unshift(SESSION_ID);
+  }
+  return ids;
+}
+
 async function fetchTuiStatus() {
   try {
-    globalThis.TuiStatusMap = await fetchScopedStatus('/api/sessions/tui/status');
+    globalThis.TuiStatusMap = await fetchScopedStatus('/api/sessions/tui/status', tuiSidebarSessionIds());
     refreshTuiDots();
   } catch (err) {
     console.error('fetchTuiStatus failed:', err);
@@ -282,7 +302,7 @@ function refreshSessionStatusNow(opts) {
 function pollSessionStatus() {
   if (statusPollInflight) return statusPollPromise;
   statusPollInflight = true;
-  statusPollPromise = fetchScopedStatus('/api/sessions/status')
+  statusPollPromise = fetchScopedStatus('/api/sessions/status', sidebarSessionIds())
     .then(data => {
       if (!data) return false;
       let anyRunning = false;
@@ -364,6 +384,7 @@ async function cancelMaster() {
 
 Object.assign(Sidebar, {
   sidebarSessionIds,
+  tuiSidebarSessionIds,
   renderTuiStatusDot,
   fetchTuiStatus,
   refreshTuiDots,
@@ -390,6 +411,7 @@ Object.assign(Sidebar, {
 });
 Sidebar.expose([
   'sidebarSessionIds',
+  'tuiSidebarSessionIds',
   'renderTuiStatusDot',
   'fetchTuiStatus',
   'refreshTuiDots',

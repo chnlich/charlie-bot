@@ -51,5 +51,19 @@ class _WorkItem:
 # Per-session currently-processing work item. Read by queued_user_event_ids so
 # startup replay can skip user messages this process already owns — the
 # restart-reconcile exclusion must be per-event, never per-session, or a
-# message queued behind a running one would be replayed.
+# message queued behind a running one would be replayed. Read by
+# running_user_event_id so Slack reply binding uses the running round's
+# identity without passing through the session metadata cache.
 _current_items: dict[str, _WorkItem] = {}
+
+
+def running_user_event_id(session_id: str) -> str | None:
+  """Chat event id the session's currently-running round answers, or None.
+
+  None covers both "no round is running in this process" and "the running
+  round was not started by a chat event (worker wake)". Unlike
+  ``queued_user_event_ids`` this never mixes in queued items: reply binding
+  means the running round only, and a set carries no single answer.
+  """
+  item = _current_items.get(session_id)
+  return item.user_event_id if item is not None else None

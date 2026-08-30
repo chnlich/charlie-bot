@@ -782,7 +782,6 @@
       this.reproject('mount');
       if (this.container.clientHeight !== 0) this.writeScrollTop(this.container.scrollHeight);
       this.scheduleIdle();
-      globalThis.__turnEngineStats = this.stats;
     }
 
     dispose() {
@@ -822,7 +821,6 @@
       this.offsets = [];
       this.offsetsDirty = false;
       this.totalHeight = 0;
-      if (globalThis.__turnEngineStats === this.stats) delete globalThis.__turnEngineStats;
       activeEngines().delete(this.container);
     }
 

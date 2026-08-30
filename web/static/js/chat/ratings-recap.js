@@ -8,7 +8,6 @@ let activeRoundRatings = {};
 
 function setActiveRoundRatings(roundRatings) {
   activeRoundRatings = roundRatings || {};
-  globalThis.ACTIVE_ROUND_RATINGS = activeRoundRatings;
 }
 
 function getRoundRating(roundId) {

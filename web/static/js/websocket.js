@@ -34,9 +34,7 @@ function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const targetSession = SESSION_ID;
   const generation = ++wsGeneration;
-  let wsUrl = `${proto}//${location.host}/ws/sessions/${SESSION_ID}`;
-  const accessKey = localStorage.getItem('charliebot_access_key');
-  if (accessKey) wsUrl += '?token=' + encodeURIComponent(accessKey);
+  let wsUrl = withAccessToken(`${proto}//${location.host}/ws/sessions/${SESSION_ID}`);
   const socket = new WebSocket(wsUrl);
   ws = socket;
 

@@ -183,9 +183,7 @@ function resetVoiceState() {
 function openVoiceSocket(targetSession) {
   return new Promise((resolve, reject) => {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let wsUrl = `${proto}//${location.host}/ws/voice/${encodeURIComponent(targetSession)}`;
-    const accessKey = localStorage.getItem('charliebot_access_key');
-    if (accessKey) wsUrl += '?token=' + encodeURIComponent(accessKey);
+    let wsUrl = withAccessToken(`${proto}//${location.host}/ws/voice/${encodeURIComponent(targetSession)}`);
     const socket = new WebSocket(wsUrl);
     socket.binaryType = 'arraybuffer';
     socket.onopen = () => resolve(socket);

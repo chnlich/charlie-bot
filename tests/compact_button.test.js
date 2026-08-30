@@ -67,6 +67,8 @@ function loadChatContext(elements) {
     SESSION_ID: 'session-a',
     confirm: () => true,
     fetch: () => Promise.resolve({ ok: true }),
+    // No stored key: mirrors page-load order config.js → websocket.js on the no-key path.
+    withAccessToken: (url) => url,
   };
   vm.createContext(context);
   loadChatRenderingModules(context);

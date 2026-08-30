@@ -18,6 +18,14 @@ function showAuthOverlay() {
   if (el) el.style.display = 'flex';
 }
 
+// WebSocket endpoints take the access key as a 'token' query param: the
+// browser WebSocket API exposes no header channel for the fetch wrapper's
+// Bearer header. Loads before the websocket/voice/terminal connectors.
+function withAccessToken(url) {
+  const key = localStorage.getItem('charliebot_access_key');
+  return key ? url + '?token=' + encodeURIComponent(key) : url;
+}
+
 function hideAuthOverlay() {
   const el = document.getElementById('auth-overlay');
   if (el) el.style.display = 'none';

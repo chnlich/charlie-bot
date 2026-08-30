@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 from croniter import croniter
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from starlette.responses import Response
@@ -231,14 +232,32 @@ async def list_projects():
   return await asyncio.to_thread(cfg.discover_repos)
 
 
-@router.get("/archived", response_model=list[SessionMetadata])
-async def list_archived_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
-  """List archived sessions, newest first."""
-  return await session_mgr.list_sessions(
-      status=SessionStatus.ARCHIVED,
-      include_running_status=True,
-      include_pending_trigger_status=True,
-  )
+class ArchivedGroupCount(BaseModel):
+  group: str | None
+  total: int
+
+
+class ArchivedSessionsPage(BaseModel):
+  sessions: list[SessionMetadata]
+  has_more: bool
+  next_before: str | None
+  next_before_id: str | None
+  groups: list[ArchivedGroupCount]
+
+
+@router.get("/archived", response_model=ArchivedSessionsPage)
+async def list_archived_sessions(
+    group: str | None = None,
+    limit: int = 100,
+    before: str | None = None,
+    before_id: str | None = None,
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+  """One keyset page of archived sessions, newest first, with group aggregates for the filter strip."""
+  try:
+    return await session_mgr.list_archived_page(group=group, limit=limit, before=before, before_id=before_id)
+  except ValueError as e:
+    raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @router.get("/starred", response_model=list[SessionMetadata])

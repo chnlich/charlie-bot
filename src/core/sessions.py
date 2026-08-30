@@ -50,6 +50,7 @@ _RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset({ET.ASSISTANT, ET.USE
 log = structlog.get_logger()
 
 _METADATA_CACHE_TTL = 30.0  # seconds
+_SEARCH_RESULT_LIMIT = 200  # newest rows a name/content search returns; keeps the render bounded
 _PROJECTION_LRU_LIMIT = 8
 # str.lower() and substring search hold the GIL for the whole input, so the
 # sidebar content search reads chat files in windows of this many characters:
@@ -469,10 +470,10 @@ class SessionManager:
       include_pending_plan_approval: bool = False,
   ) -> list[SessionMetadata]:
     """List sessions, newest first. Optionally filter by status, starred, and/or scheduled."""
-    all_meta = await self._iter_session_metas()
+    all_meta = await self._iter_session_metas(status=status)
     sessions = [
-        meta for meta in all_meta if (status is None or meta.status == status) and
-        (starred is None or meta.starred == starred) and (scheduled is None or bool(meta.scheduled_task) == scheduled)
+        meta for meta in all_meta
+        if (starred is None or meta.starred == starred) and (scheduled is None or bool(meta.scheduled_task) == scheduled)
     ]
     return await self._enrich_and_sort(
         sessions,
@@ -481,24 +482,94 @@ class SessionManager:
         include_pending_plan_approval=include_pending_plan_approval,
     )
 
+  async def list_archived_page(
+      self,
+      *,
+      group: str | None = None,
+      limit: int = 100,
+      before: str | None = None,
+      before_id: str | None = None,
+  ) -> dict:
+    """One page of archived sessions, newest first, plus group aggregates.
+
+    ``group`` picks membership: None = every archived session, "" = the
+    ungrouped ones, a name = that group. ``limit`` clamps to 1..500. The
+    keyset cursor ``(before, before_id)`` names the previous page's last row;
+    rows strictly after it in ``(updated_at, id)``-descending order form the
+    next page, so a row archived or deleted between fetches never shifts the
+    page boundary. ``groups`` aggregates the whole archived set (not the
+    current filter) for the filter strip: named groups alphabetically, the
+    ungrouped bucket (group=None) last. Ordering and aggregation are computed
+    per request from the cache — archived entries never expire there
+    (``_fresh_cached_meta``), so the warm request path reads no metadata
+    files. A cursor that fails to parse raises ValueError: the caller's
+    explicit cursor stops with the error instead of silently serving page 1.
+    """
+    limit = max(1, min(500, limit))
+    metas = await self._load_session_metas(status=SessionStatus.ARCHIVED)
+
+    counts: dict[str | None, int] = {}
+    for meta in metas:
+      key = meta.group or None
+      counts[key] = counts.get(key, 0) + 1
+    groups = [{"group": name, "total": counts[name]} for name in sorted(k for k in counts if k is not None)]
+    if None in counts:
+      groups.append({"group": None, "total": counts[None]})
+
+    if group is None:
+      rows = list(metas)
+    elif group == "":
+      rows = [meta for meta in metas if not meta.group]
+    else:
+      rows = [meta for meta in metas if meta.group == group]
+    rows.sort(key=lambda meta: (meta.updated_at, meta.id), reverse=True)
+
+    if (before is None) != (before_id is None):
+      raise ValueError("before and before_id form one cursor: pass both or neither")
+    if before is not None:
+      cursor_time = datetime.fromisoformat(before)
+      if cursor_time.tzinfo is None:
+        raise ValueError("before must be a timezone-aware ISO timestamp")
+      cursor = (cursor_time, before_id)
+      rows = [meta for meta in rows if (meta.updated_at, meta.id) < cursor]
+
+    page = rows[:limit]
+    has_more = len(rows) > limit
+    sessions = [_stamp_thinking_since(meta.model_copy()) for meta in page]
+    await self.populate_sidebar_state(
+        sessions,
+        include_running_status=True,
+        include_pending_trigger_status=True,
+    )
+    return {
+        "sessions": sessions,
+        "has_more": has_more,
+        "next_before": page[-1].updated_at.isoformat() if page and has_more else None,
+        "next_before_id": page[-1].id if page and has_more else None,
+        "groups": groups,
+    }
+
   async def search_sessions(
       self,
       query: str,
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
   ) -> list[SessionMetadata]:
-    """Search active sessions by name and chat event content (case-insensitive)."""
+    """Search sessions by name (every status) and chat event content (active only), case-insensitive.
+
+    Returns at most ``_SEARCH_RESULT_LIMIT`` rows, newest first: the cap keeps
+    the render bounded when a short query matches thousands of archived names.
+    """
     query_lower = query.lower()
-    all_meta = await self._iter_session_metas()
+    all_meta = await self._load_session_metas()
     results: list[SessionMetadata] = []
     content_candidates: list[tuple[SessionMetadata, Path]] = []
     for meta in all_meta:
-      if meta.status != SessionStatus.ACTIVE:
-        continue
       if query_lower in meta.name.lower():
-        results.append(meta)
+        results.append(_stamp_thinking_since(meta.model_copy()))
         continue
-      content_candidates.append((meta, self.get_chat_events_path(meta.id)))
+      if meta.status == SessionStatus.ACTIVE:
+        content_candidates.append((meta, self.get_chat_events_path(meta.id)))
 
     async def _check_content(meta: SessionMetadata, path: Path) -> SessionMetadata | None:
       """Check if a session's chat events contain the query (runs file I/O in thread pool)."""
@@ -525,15 +596,16 @@ class SessionManager:
           log.debug("search_read_failed", session_id=meta.id, error=str(e))
           return False
 
-      return meta if await asyncio.to_thread(_read_and_check) else None
+      return _stamp_thinking_since(meta.model_copy()) if await asyncio.to_thread(_read_and_check) else None
 
     content_hits = await asyncio.gather(*(_check_content(m, p) for m, p in content_candidates))
     results.extend(meta for meta in content_hits if meta is not None)
-    return await self._enrich_and_sort(
+    enriched = await self._enrich_and_sort(
         results,
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
     )
+    return enriched[:_SEARCH_RESULT_LIMIT]
 
   async def fork_session(
       self,
@@ -1029,7 +1101,10 @@ class SessionManager:
     """Return metadata for active sessions by reading metadata.json files.
 
     Sync method — returns full SessionMetadata objects so callers avoid
-    a second disk read. Populates the metadata cache as a side-effect.
+    a second disk read. Populates the metadata cache for every status as a
+    side-effect: the boot-time recovery scan already reads each file, so the
+    same pass warms the listing cache and archived entries stay authoritative
+    from then on (``_fresh_cached_meta``).
     """
     if not self._cfg.sessions_dir.exists():
       return []
@@ -1044,8 +1119,8 @@ class SessionManager:
       try:
         raw = meta_path.read_text(encoding="utf-8")
         meta = SessionMetadata.model_validate_json(raw)
+        self._metadata_cache[d.name] = (meta, now)
         if meta.status == SessionStatus.ACTIVE:
-          self._metadata_cache[d.name] = (meta, now)
           results.append(_stamp_thinking_since(meta.model_copy()))
       except (OSError, ValueError) as e:
         log.debug("list_active_ids_skip", dir=d.name, error=str(e))
@@ -1213,19 +1288,25 @@ class SessionManager:
     self._metadata_cache.pop(session_id, None)
 
   def _fresh_cached_meta(self, session_id: str) -> SessionMetadata | None:
-    """Return the cached metadata for *session_id* when fresh under ``_METADATA_CACHE_TTL``.
+    """Return the cached metadata for *session_id* when the entry is authoritative.
 
-    The two TTL-checked metadata readers (``get_session`` and
-    ``_iter_session_metas``) route through this one TTL check, and a stale entry
-    is evicted here, so the two cannot drift on freshness semantics.
-    ``list_active_session_metas`` reads metadata.json unconditionally and
-    repopulates the cache from its own scan instead — a third reader this
-    check does not govern.
+    An archived entry is served regardless of age: archived metadata changes
+    only through the in-process write funnel (``save_metadata`` refreshes the
+    entry, ``delete_session_permanently`` invalidates it), so a TTL re-read
+    buys nothing there and the archived set stays listable without disk scans.
+    Active entries keep the ``_METADATA_CACHE_TTL`` freshness window. The two
+    TTL-checked metadata readers (``get_session`` and ``_load_session_metas``)
+    route through this one check, and a stale entry is evicted here, so the
+    two cannot drift on freshness semantics. ``list_active_session_metas``
+    reads metadata.json unconditionally and repopulates the cache from its own
+    scan instead — a third reader this check does not govern.
     """
     cached = self._metadata_cache.get(session_id)
     if cached is None:
       return None
     meta, ts = cached
+    if meta.status == SessionStatus.ARCHIVED:
+      return meta
     if (time.monotonic() - ts) < _METADATA_CACHE_TTL:
       return meta
     del self._metadata_cache[session_id]
@@ -1264,17 +1345,20 @@ class SessionManager:
       meta.round_ratings = migrated
     return changed
 
-  async def _iter_session_metas(self) -> list[SessionMetadata]:
-    """Load all session metadata, batching disk reads for cache misses.
+  async def _load_session_metas(self, status: SessionStatus | None = None) -> list[SessionMetadata]:
+    """Load session metadata, batching disk reads and parses for cache misses.
 
-    Performs the listing preamble for the two entry points routed through here
-    (``list_sessions`` and ``search_sessions``): (1) return [] if sessions_dir
-    does not exist, (2) list session directories under asyncio.to_thread to
-    avoid blocking the event loop, (3) use fresh cache entries directly and
-    load all missing metadata files serially in one asyncio.to_thread call,
-    logging and dropping any session that fails to load. The sync active-only
-    scan ``list_active_session_metas`` keeps its own per-file sync reads and
-    does not route through here.
+    Performs the listing preamble for the entry points routed through here
+    (``list_sessions``, ``search_sessions``, and ``list_archived_page``):
+    (1) return [] if sessions_dir does not exist, (2) list session directories
+    under asyncio.to_thread to avoid blocking the event loop, (3) use fresh
+    cache entries directly and read+parse all missing metadata files serially
+    in one asyncio.to_thread call — the parse stays off the event loop —
+    logging and dropping any session that fails to load. Returns the cached
+    objects themselves, filtered to *status* when given: callers that hand
+    metadata out of the manager copy through ``_iter_session_metas``. The sync
+    active-only scan ``list_active_session_metas`` keeps its own per-file sync
+    reads and does not route through here.
     """
     if not self._cfg.sessions_dir.exists():
       return []
@@ -1289,23 +1373,29 @@ class SessionManager:
       else:
         cached_metas[d.name] = meta
 
-    raw_by_id: dict[str, str] = {}
-    read_failures: dict[str, Exception] = {}
+    parsed_by_id: dict[str, SessionMetadata] = {}
+    empty_ids: set[str] = set()
+    load_failures: dict[str, Exception] = {}
     if missing_ids:
-      def _read_missing() -> tuple[dict[str, str], dict[str, Exception]]:
-        loaded: dict[str, str] = {}
-        failures: dict[str, Exception] = {}
+      def _read_and_parse_missing() -> None:
         for session_id in missing_ids:
           path = self._metadata_path(session_id)
           try:
             if not path.exists():
               continue
-            loaded[session_id] = path.read_text(encoding="utf-8")
+            raw = path.read_text(encoding="utf-8")
           except Exception as exc:
-            failures[session_id] = exc
-        return loaded, failures
+            load_failures[session_id] = exc
+            continue
+          if not raw.strip():
+            empty_ids.add(session_id)
+            continue
+          try:
+            parsed_by_id[session_id] = SessionMetadata.model_validate_json(raw)
+          except Exception as exc:
+            load_failures[session_id] = exc
 
-      raw_by_id, read_failures = await asyncio.to_thread(_read_missing)
+      await asyncio.to_thread(_read_and_parse_missing)
 
     result: list[SessionMetadata] = []
     for d in dirs:
@@ -1314,20 +1404,15 @@ class SessionManager:
       if loaded_from_cache:
         meta = cached_metas[session_id]
       else:
-        if session_id in read_failures:
-          log.warning("session_load_failed", session_id=session_id, error=str(read_failures[session_id]))
+        if session_id in load_failures:
+          log.warning("session_load_failed", session_id=session_id, error=str(load_failures[session_id]))
           continue
-        if session_id not in raw_by_id:
-          continue
-        raw = raw_by_id[session_id]
-        if not raw.strip():
+        if session_id in empty_ids:
           log.warning("session_metadata_empty", session_id=session_id, path=str(self._metadata_path(session_id)))
           continue
-        try:
-          meta = SessionMetadata.model_validate_json(raw)
-        except Exception as exc:
-          log.warning("session_load_failed", session_id=session_id, error=str(exc))
+        if session_id not in parsed_by_id:
           continue
+        meta = parsed_by_id[session_id]
 
       try:
         migrated = self._migrate_round_rating_keys(meta)
@@ -1339,8 +1424,14 @@ class SessionManager:
 
       if not loaded_from_cache and not migrated:
         self._metadata_cache.setdefault(session_id, (meta, time.monotonic()))
-      result.append(_stamp_thinking_since(meta.model_copy()))
+      if status is None or meta.status == status:
+        result.append(meta)
     return result
+
+  async def _iter_session_metas(self, status: SessionStatus | None = None) -> list[SessionMetadata]:
+    """Copying wrapper over ``_load_session_metas``: the status filter runs first,
+    so only metadata that leaves the manager pays the model_copy and thinking stamp."""
+    return [_stamp_thinking_since(meta.model_copy()) for meta in await self._load_session_metas(status)]
 
   def _lock_for(self, session_id: str) -> asyncio.Lock:
     """Return (creating on first use) the per-session metadata RMW lock."""

@@ -454,7 +454,7 @@ if __name__ == "__main__":
   cfg = get_config()
   uvicorn.run(
     "server:app",
-    host="127.0.0.1",
+    host=cfg.server_host,
     port=cfg.server_port,
     reload=False,
     log_level="info",

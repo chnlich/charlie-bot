@@ -216,7 +216,9 @@ class CharlieBotConfig(BaseModel):
   # Authentication — shared secret; empty string disables auth
   charliebot_access_key: str = ""
 
-  # Server
+  # Server — the bind address uvicorn listens on. Loopback by default; a host that
+  # fronts the server itself (reverse proxy on another interface, Tailscale) sets it.
+  server_host: str = "127.0.0.1"
   server_port: int = 18498
 
   # Paths — resolved per instantiation so CHARLIEBOT_HOME selects the profile
@@ -301,6 +303,10 @@ class CharlieBotConfig(BaseModel):
   google_refresh_token: str | None = None
   linear_api_key: str | None = None
   slack_user_token: str | None = None
+  twitter_api_key: str | None = None
+  twitter_api_secret: str | None = None
+  twitter_access_token: str | None = None
+  twitter_access_token_secret: str | None = None
   public_base_url: str | None = None
 
   @model_validator(mode="before")

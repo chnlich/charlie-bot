@@ -1,7 +1,5 @@
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+/* Scrollbar: standard properties keep the scroller on the compositor thread */
+* { scrollbar-width: thin; scrollbar-color: #475569 transparent; }
 /* Markdown prose inside messages */
 .prose-msg { overflow-wrap: break-word; word-break: break-word; }
 .prose-msg pre { background: #0d1117; padding: 0.75rem; border-radius: 0.375rem; overflow-x: auto; max-width: 100%; margin: 0.5rem 0; }

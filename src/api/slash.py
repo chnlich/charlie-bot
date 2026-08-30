@@ -66,17 +66,15 @@ _STOP_IMPROVE_ENTRY = {
 async def _build_command_list() -> list[dict]:
   """Return the full command list: YAML commands + built-ins."""
   cmds = await asyncio.to_thread(load_slash_commands)
-  result = []
-  for c in cmds:
-    cmd_dict = {
-        'name': c.name,
-        'scope': c.scope,
-        'description': c.description,
-        'params': [p.model_dump(exclude_defaults=True) for p in c.params],
-    }
-    if c.args is not None:
-      cmd_dict['args'] = c.args
-    result.append(cmd_dict)
+  result = [
+      {
+          'name': c.name,
+          'scope': c.scope,
+          'description': c.description,
+          'args': c.args,
+          'params': [p.model_dump(exclude_defaults=True) for p in c.params],
+      } for c in cmds
+  ]
   result.append(_HELP_ENTRY)
   result.append(_RUN_ENTRY)
   result.append(_STOP_IMPROVE_ENTRY)

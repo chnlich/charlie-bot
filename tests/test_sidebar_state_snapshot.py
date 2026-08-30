@@ -14,7 +14,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import append_events, make_home_session, write_plans, write_thread_meta
+from conftest import (
+  append_events,
+  make_home_session,
+  write_plans,
+  write_thread_meta,
+  write_trigger,
+)
 
 from src.api import sessions as sessions_api
 from src.core import sessions as sessions_core
@@ -37,11 +43,6 @@ def _clean_sidebar_state():
   sidebar_state.reset_for_tests()
   yield
   sidebar_state.reset_for_tests()
-
-
-def _write_trigger(path: Path, trigger: PendingTrigger) -> None:
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(trigger.model_dump_json(indent=2), encoding="utf-8")
 
 
 def _counting_probes(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
@@ -212,7 +213,7 @@ async def test_first_and_forced_poll_match_direct_probing(tmp_path: Path) -> Non
   # busy: running thread + pending trigger + awaiting-approval plans + unread.
   write_thread_meta(cfg, busy.id, {"id": "t1", "status": "running"})
   now = datetime.now(UTC)
-  _write_trigger(
+  write_trigger(
       cfg.sessions_dir / busy.id / "triggers" / "pending.json",
       PendingTrigger(id="pending", session_id=busy.id, fire_at=now + timedelta(minutes=3), message="wake"),
   )
@@ -238,7 +239,7 @@ async def test_first_and_forced_poll_match_direct_probing(tmp_path: Path) -> Non
 
   # archived: leave running thread + trigger + plans on disk; the shortcut must win.
   write_thread_meta(cfg, archived.id, {"id": "t2", "status": "running"})
-  _write_trigger(
+  write_trigger(
       cfg.sessions_dir / archived.id / "triggers" / "pending-archived.json",
       PendingTrigger(
           id="pending-archived", session_id=archived.id, fire_at=now + timedelta(minutes=4), message="archived"

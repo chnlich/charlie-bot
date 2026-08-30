@@ -9,6 +9,8 @@ const { readStatic } = require('./read_static');
 
 const { SESSIONS_ROOT } = require('./sessions_root_stub');
 
+const { makePlan, makeVersion } = require('./plan_factories_stub');
+
 const PLAN_PANEL_JS = readStatic('plan-panel.js');
 
 // ---------------------------------------------------------------------------
@@ -202,30 +204,6 @@ function loadPlanPanelScript(opts = {}) {
   vm.runInContext(PLAN_PANEL_JS, context, {filename: 'plan-panel.js'});
   const planPanel = vm.runInContext('planPanel', context);
   return {context, planPanel};
-}
-
-function makePlan(id, versions, opts) {
-  const o = opts || {};
-  return {
-    id: id,
-    title: o.title || 'Plan ' + id,
-    versions: versions,
-    takeoff: o.takeoff || null,
-    closed: o.closed || null,
-    state: o.state || 'in flight',
-  };
-}
-
-function makeVersion(v, file) {
-  return {
-    v: v,
-    file: file || ('artifacts/plan_' + String(v).padStart(2, '0') + '.html'),
-    created_at: '2026-07-20T00:00:00+00:00',
-    trigger: v === 1 ? 'initial' : 'feedback',
-    verify_thread: 'th_' + v,
-    verify_state: 'pending',
-    base: null,
-  };
 }
 
 // ---------------------------------------------------------------------------

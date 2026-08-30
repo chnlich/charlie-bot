@@ -782,6 +782,14 @@ async def no_sleep(_seconds: float) -> None:
   return
 
 
+@pytest.fixture
+def pidfd_open_available() -> None:
+  """Skip when the production pidfd helpers are not supported on this host."""
+  from src.core.triggers import _PIDFD_SUPPORTED
+  if not _PIDFD_SUPPORTED:
+    pytest.skip("pidfd not supported on this host (not even via syscall)")
+
+
 def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
   """Point the CLI HTTP layer at a fake config so tests never touch a real server."""
   monkeypatch.setattr(

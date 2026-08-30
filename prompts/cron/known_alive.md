@@ -38,9 +38,9 @@ Known-alive symbols:
   `_clean_sidebar_state` (`tests/test_sidebar_state_snapshot.py`) — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
   definitions, so vulture flags them as unused functions. Vulture also flags
-  `pidfd_open_available` (`tests/test_trigger_pid_watch.py`,
-  `tests/test_trigger_slurm_watch.py`), but it is named in the parameter lists of the tests that
-  use it, so the Step 3 grep already finds its references; no list entry needed.
+  `pidfd_open_available` (`tests/conftest.py`, shared skip gate for the pid/slurm watch
+  tests), but it is named in the parameter lists of the tests that use it, so the Step 3
+  grep already finds its references; no list entry needed.
 - `session_websocket`, `voice_websocket` — `@app.websocket` handlers in `server.py`
   (`/ws/sessions/{session_id}`, `/ws/voice/{session_id}`), reached by URL string:
   `web/static/js/websocket.js` dials `/ws/sessions/${SESSION_ID}` and `web/static/js/voice-input.js`

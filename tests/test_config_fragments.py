@@ -286,3 +286,87 @@ def test_without_fragments_matches_plain_config_yaml(profile_home: Path, with_em
   loaded = core_config.load_config()
   plain = CharlieBotConfig(**mapping)
   assert _without_home(loaded) == _without_home(plain)
+
+
+# The 16 integration keys whose consumers read the raw yaml outside this repo;
+# 15 ship in config.yaml, public_base_url in a config.d/slack.yaml fragment.
+_DECLARED_INTEGRATION_KEYS = [
+    "feishu_app_id",
+    "feishu_app_secret",
+    "feishu_refresh_token",
+    "feishu_user_access_token",
+    "gemini_api_key",
+    "gemini_model",
+    "google_client_id",
+    "google_client_secret",
+    "google_docs_client_id",
+    "google_docs_client_secret",
+    "google_docs_default_folder_id",
+    "google_docs_refresh_token",
+    "google_refresh_token",
+    "linear_api_key",
+    "slack_user_token",
+    "public_base_url",
+]
+
+
+def test_declared_integration_keys_round_trip(profile_home: Path) -> None:
+  """The declared integration keys load from config.yaml and the slack fragment and are reachable."""
+  values = {key: f"value-{key}" for key in _DECLARED_INTEGRATION_KEYS}
+  save_yaml(profile_home / "config.yaml", {
+      key: values[key] for key in _DECLARED_INTEGRATION_KEYS if key != "public_base_url"})
+  _write_key_set(profile_home, "config.d/slack.yaml", ["public_base_url"], values)
+
+  cfg = core_config.load_config()
+  for key in _DECLARED_INTEGRATION_KEYS:
+    assert getattr(cfg, key) == f"value-{key}"
+
+
+def test_unknown_top_level_key_names_key_and_file(profile_home: Path) -> None:
+  """extra='forbid' surfaces at startup with the key and the file it came from."""
+  save_yaml(profile_home / "config.yaml", {"server_port": 18498, "bogus_key": "x"})
+  with pytest.raises(ValueError) as exc_info:
+    core_config.load_config()
+  message = str(exc_info.value)
+  assert "bogus_key" in message
+  assert str(profile_home / "config.yaml") in message
+
+
+def test_unknown_top_level_key_in_a_fragment_names_that_fragment(profile_home: Path) -> None:
+  """The file attribution follows the merge: a fragment's unknown key names the fragment."""
+  save_yaml(profile_home / "config.yaml", {"server_port": 18498})
+  fragment = profile_home / "config.d" / "extra.yaml"
+  fragment.parent.mkdir()
+  save_yaml(fragment, {"bogus_fragment_key": "x"})
+  with pytest.raises(ValueError) as exc_info:
+    core_config.load_config()
+  message = str(exc_info.value)
+  assert "bogus_fragment_key" in message
+  assert str(fragment) in message
+
+
+def test_deprecated_max_concurrent_workers_raises(profile_home: Path) -> None:
+  """The formerly silently dropped deprecated key now names itself at startup."""
+  save_yaml(profile_home / "config.yaml", {"server_port": 18498, "max_concurrent_workers": 4})
+  with pytest.raises(ValueError) as exc_info:
+    core_config.load_config()
+  assert "max_concurrent_workers" in str(exc_info.value)
+
+
+def test_project_dirs_alongside_workspace_dirs_raises(profile_home: Path) -> None:
+  """Double-writing the legacy name and its successor names the legacy key instead of dropping it."""
+  save_yaml(profile_home / "config.yaml", {
+      "server_port": 18498,
+      "project_dirs": ["~/a"],
+      "workspace_dirs": ["~/b"],
+  })
+  with pytest.raises(ValueError) as exc_info:
+    core_config.load_config()
+  assert "project_dirs" in str(exc_info.value)
+
+
+def test_single_project_dirs_still_migrates(profile_home: Path) -> None:
+  """The data-carrying rename keeps working: a lone legacy key becomes workspace_dirs."""
+  save_yaml(profile_home / "config.yaml", {"server_port": 18498, "project_dirs": ["~/a"]})
+  cfg = core_config.load_config()
+  assert cfg.workspace_dirs == [os.path.expanduser("~/a")]

@@ -1,15 +1,18 @@
 (function() {
   const Sidebar = globalThis.Sidebar;
 
-function formatTriggerTimeLabel(status, fireAt) {
-  if (status === 'cancelled') return 'cancelled';
-  const prefix = status === 'fired' ? 'fired at ' : 'fires at ';
-  const d = new Date(fireAt);
+function formatCardTimestamp(d) {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   const hh = String(d.getHours()).padStart(2, '0');
   const mi = String(d.getMinutes()).padStart(2, '0');
-  return prefix + mm + '/' + dd + ' ' + hh + ':' + mi;
+  return mm + '/' + dd + ' ' + hh + ':' + mi;
+}
+
+function formatTriggerTimeLabel(status, fireAt) {
+  if (status === 'cancelled') return 'cancelled';
+  const prefix = status === 'fired' ? 'fired at ' : 'fires at ';
+  return prefix + formatCardTimestamp(new Date(fireAt));
 }
 
 function workerUuidRow(id) {
@@ -33,11 +36,7 @@ function renderWorkersTab(threads, sessionId, triggers) {
     const dotColor = statusColors[t.status] || 'bg-slate-500';
     const pulse = t.status === 'running' ? ' animate-pulse' : '';
     const created = new Date(t.created_at);
-    const mm = String(created.getMonth() + 1).padStart(2, '0');
-    const dd = String(created.getDate()).padStart(2, '0');
-    const hh = String(created.getHours()).padStart(2, '0');
-    const mi = String(created.getMinutes()).padStart(2, '0');
-    const timeStr = mm + '/' + dd + ' ' + hh + ':' + mi;
+    const timeStr = formatCardTimestamp(created);
     let duration = '';
     if (t.completed_at) {
       const secs = Math.floor((new Date(t.completed_at) - created) / 1000);
@@ -238,14 +237,7 @@ function addWorkerCard(threadId, description, createdAt, backend) {
   if (document.getElementById('thread-dot-' + threadId)) return;
   const card = document.createElement('div');
   card.className = 'bg-slate-800 rounded-xl border border-slate-700 overflow-hidden';
-  const nowStr = (() => {
-    const d = createdAt ? new Date(createdAt) : new Date();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mi = String(d.getMinutes()).padStart(2, '0');
-    return `${mm}/${dd} ${hh}:${mi}`;
-  })();
+  const nowStr = formatCardTimestamp(createdAt ? new Date(createdAt) : new Date());
   card.innerHTML = `
     <div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-750"
          onclick="toggleThreadDetail('${threadId}', '${SESSION_ID}')">

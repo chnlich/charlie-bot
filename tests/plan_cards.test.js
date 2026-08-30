@@ -8,6 +8,8 @@ const { escapeHtml } = require('./escape_html_stub');
 
 const { SESSIONS_ROOT, SESSION_ID, SESSION_DIR } = require('./sessions_root_stub');
 
+const { makePlan, makeVersion } = require('./plan_factories_stub');
+
 const NAMESPACE_JS = readStatic('chat/namespace.js');
 const ARTIFACTS_JS = readStatic('chat/artifacts.js');
 
@@ -28,30 +30,6 @@ function loadArtifactsScript(opts) {
   vm.runInContext(NAMESPACE_JS, context, {filename: 'chat/namespace.js'});
   vm.runInContext(ARTIFACTS_JS, context, {filename: 'artifacts.js'});
   return context;
-}
-
-function makeVersion(v, file, verifyState) {
-  return {
-    v: v,
-    file: file || ('artifacts/plan_' + String(v).padStart(2, '0') + '.html'),
-    created_at: '2026-07-20T00:00:00+00:00',
-    trigger: v === 1 ? 'initial' : 'feedback',
-    verify_thread: 'th_' + v,
-    verify_state: verifyState || 'pending',
-    base: null,
-  };
-}
-
-function makePlan(id, versions, opts) {
-  const o = opts || {};
-  return {
-    id: id,
-    title: o.title || 'Plan ' + id,
-    versions: versions,
-    takeoff: o.takeoff || null,
-    closed: o.closed || null,
-    state: o.state || 'in flight',
-  };
 }
 
 // ---------------------------------------------------------------------------

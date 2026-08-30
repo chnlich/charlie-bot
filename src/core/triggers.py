@@ -410,12 +410,16 @@ class TriggerManager:
       message: str,
       watch_targets: list[WatchTarget] | None = None,
       probe_out: dict[str, str] | None = None,
+      created_at: datetime | None = None,
   ) -> PendingTrigger:
     """Create a pending trigger, persist to disk, and start the sleep task.
 
     ``probe_out``, when given, is filled with ``label -> observed state`` for every
     remote SLURM target probed at create time, so the caller can report what was
-    actually seen without probing twice.
+    actually seen without probing twice. ``created_at``, when given, stamps the
+    record with the caller's timestamp instead of now; the Slack thread-follow
+    path uses it to inherit a chain's original start across cancel-then-create
+    re-arms, keeping the follow chain's flush cap anchored (src/core/slack_listener.py).
     """
     targets = list(watch_targets or [])
     kinds = {t.kind for t in targets}
@@ -435,11 +439,15 @@ class TriggerManager:
         probe_out.update(observed)
 
     fire_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
+    stamp: dict[str, Any] = {}
+    if created_at is not None:
+      stamp["created_at"] = created_at
     trigger = PendingTrigger(
         session_id=session_id,
         fire_at=fire_at,
         message=message,
         watch_targets=targets,
+        **stamp,
     )
     await self._save_trigger(trigger)
     self._start_task(trigger)

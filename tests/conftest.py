@@ -728,6 +728,23 @@ def write_plan_artifact(
   return f"artifacts/{name}"
 
 
+def write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Path:
+  """Write meta as the session's threads/<meta["id"]>/metadata.json and return the file path."""
+  thread_dir = cfg.sessions_dir / session_id / "threads" / meta["id"]
+  thread_dir.mkdir(parents=True, exist_ok=True)
+  path = thread_dir / "metadata.json"
+  path.write_text(json.dumps(meta), encoding="utf-8")
+  return path
+
+
+def write_plans(cfg: CharlieBotConfig, session_id: str, data: dict) -> Path:
+  """Write data as the session's plans.json and return the file path."""
+  plans_path = cfg.sessions_dir / session_id / "plans.json"
+  plans_path.parent.mkdir(parents=True, exist_ok=True)
+  plans_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+  return plans_path
+
+
 async def make_plan_setup(
     tmp_path: Path,
 ) -> tuple[CharlieBotConfig, SessionManager, ThreadManager, PlanRegistryManager, models.SessionMetadata]:

@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from conftest import OPUS_BACKEND_ID, make_home_session
 from conftest import append_events as _append_events
+from conftest import write_plans as _write_plans
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
@@ -52,13 +53,6 @@ def _make_version(v: int, file: str, verify_state: str = "pending") -> dict:
       "verify_state": verify_state,
       "base": None,
   }
-
-
-def _write_plans(cfg: CharlieBotConfig, session_id: str, data: dict) -> Path:
-  plans_path = cfg.sessions_dir / session_id / "plans.json"
-  plans_path.parent.mkdir(parents=True, exist_ok=True)
-  plans_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-  return plans_path
 
 
 def _write_artifact(cfg: CharlieBotConfig, session_id: str, file: str, content: str = "<html></html>") -> Path:

@@ -10,12 +10,11 @@ transition; disk stays the single source of truth.
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import append_events, make_home_session
+from conftest import append_events, make_home_session, write_plans, write_thread_meta
 
 from src.api import sessions as sessions_api
 from src.core import sessions as sessions_core
@@ -40,24 +39,9 @@ def _clean_sidebar_state():
   sidebar_state.reset_for_tests()
 
 
-def _write_thread_meta(cfg, session_id: str, meta: dict) -> Path:
-  thread_dir = cfg.sessions_dir / session_id / "threads" / meta["id"]
-  thread_dir.mkdir(parents=True, exist_ok=True)
-  path = thread_dir / "metadata.json"
-  path.write_text(json.dumps(meta), encoding="utf-8")
-  return path
-
-
 def _write_trigger(path: Path, trigger: PendingTrigger) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(trigger.model_dump_json(indent=2), encoding="utf-8")
-
-
-def _write_plans(cfg, session_id: str, data: dict) -> Path:
-  plans_path = cfg.sessions_dir / session_id / "plans.json"
-  plans_path.parent.mkdir(parents=True, exist_ok=True)
-  plans_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-  return plans_path
 
 
 def _counting_probes(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
@@ -226,13 +210,13 @@ async def test_first_and_forced_poll_match_direct_probing(tmp_path: Path) -> Non
   archived = await mgr.create_session(CreateSessionRequest(name="Archived"))
 
   # busy: running thread + pending trigger + awaiting-approval plans + unread.
-  _write_thread_meta(cfg, busy.id, {"id": "t1", "status": "running"})
+  write_thread_meta(cfg, busy.id, {"id": "t1", "status": "running"})
   now = datetime.now(UTC)
   _write_trigger(
       cfg.sessions_dir / busy.id / "triggers" / "pending.json",
       PendingTrigger(id="pending", session_id=busy.id, fire_at=now + timedelta(minutes=3), message="wake"),
   )
-  _write_plans(cfg, busy.id, {"plans": [{
+  write_plans(cfg, busy.id, {"plans": [{
       "id": 1,
       "title": "Plan",
       "versions": [{
@@ -253,7 +237,7 @@ async def test_first_and_forced_poll_match_direct_probing(tmp_path: Path) -> Non
   await mgr.save_metadata(busy_meta)
 
   # archived: leave running thread + trigger + plans on disk; the shortcut must win.
-  _write_thread_meta(cfg, archived.id, {"id": "t2", "status": "running"})
+  write_thread_meta(cfg, archived.id, {"id": "t2", "status": "running"})
   _write_trigger(
       cfg.sessions_dir / archived.id / "triggers" / "pending-archived.json",
       PendingTrigger(
@@ -337,7 +321,7 @@ async def test_force_param_reprobes_clean_sessions(tmp_path: Path, monkeypatch: 
 async def test_every_tenth_poll_reprobes_all_active_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, mgr, first = await make_home_session(tmp_path, name="A")
   second = await mgr.create_session(CreateSessionRequest(name="B"))
-  _write_thread_meta(cfg, second.id, {"id": "t1", "status": "running"})
+  write_thread_meta(cfg, second.id, {"id": "t1", "status": "running"})
 
   ids = f"{first.id},{second.id}"
   # Poll 1 (cold) probes both and warms the snapshot.

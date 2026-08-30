@@ -158,9 +158,13 @@ def _scan_interrupted_runs(cfg: CharlieBotConfig, boot_time: datetime) -> tuple[
       if session_id not in archived:
         archived[session_id] = _session_archived(session_dir)
       if archived[session_id]:
-        log.info("recovery_skip_archived_session", session=session_id, thread=meta.get("id"))
         continue
       interrupted.append(_InterruptedRun(session_id=session_id, thread_dir=thread_dir, meta=meta))
+  # One line, not one per session: every archived session holding an in-window
+  # thread matches, which on a long-lived host is dozens of them at every boot.
+  skipped = sum(archived.values())
+  if skipped:
+    log.info("recovery_skipped_archived_sessions", sessions=skipped)
   return interrupted, threads
 
 

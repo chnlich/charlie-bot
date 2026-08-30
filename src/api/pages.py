@@ -16,7 +16,6 @@ import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
-from zoneinfo import ZoneInfo
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -27,7 +26,7 @@ from src.api.code_server import is_code_server_available
 from src.api.deps import get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload
-from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig, get_config
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
 from src.core.sessions import SessionManager
@@ -38,7 +37,6 @@ from src.core.trace_merge import merge_traces
 log = structlog.get_logger()
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
-_PT_TZ = ZoneInfo(HOUSE_TIMEZONE)
 _PERFETTO_MERGE_CACHE_LIMIT = 24
 # Prefixes the file server answers on (server.py mounts one router under both). A trace= input
 # names an absolute path under either of them.
@@ -646,8 +644,6 @@ async def index(
     load_errors.append("Failed to load sessions. Check server logs for details.")
 
   active_session = None
-  threads = []
-  triggers = []
   pending_draft: dict | None = None
   event_count = 0
   session_bootstrap: dict | None = None
@@ -686,9 +682,6 @@ async def index(
           "initial_sessions": [s.model_dump(mode="json") for s in sessions],
           "active_session": active_session,
           "pending_draft": pending_draft,
-          "threads": threads,
-          "triggers": triggers,
-          "pt_tz": _PT_TZ,
           "event_count": event_count,
           "session_bootstrap": session_bootstrap,
           "backend_options": cfg.backend_options,

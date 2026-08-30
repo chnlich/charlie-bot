@@ -178,7 +178,12 @@ async function setSessionGroup(sessionId, group) {
       body: JSON.stringify({group}),
     });
     if (!res.ok) throw new Error(`Set group failed: ${res.status}`);
-    // Refresh the sidebar
+    if (currentFilter === 'archived') {
+      // The archived view updates the row and filter-strip counts in place;
+      // a refetch would rebuild the whole paginated list.
+      applyArchivedGroupChange(sessionId, group);
+      return;
+    }
     switchSidebarFilter(currentFilter);
   } catch (err) {
     console.error('Set group failed:', err);
@@ -492,7 +497,9 @@ function scheduleProjectManagerRefresh() {
     pmStateCache = fresh;
     // Repaint only the list currently rendered into #session-list: both
     // renderers write the same element, so repainting a stale sibling would
-    // clobber the visible tab.
+    // clobber the visible tab. The archived view renders its own flat list
+    // with no PM rows, so a pending refresh resolving there repaints nothing.
+    if (currentFilter === 'archived') return;
     if (currentFilter === 'scheduled' && lastScheduledRenderArgs) {
       renderGroupedScheduledList(lastScheduledRenderArgs, {skipRefresh: true});
     } else if (lastGroupedRenderArgs) {
@@ -653,19 +660,28 @@ function sessionBackendLabel(session) {
   return { full, display: sep === -1 ? full : full.slice(sep + 3) };
 }
 
-function renderSessionTimeLine(s, timeIso, timeStr) {
+function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
   const label = sessionBackendLabel(s);
   const model = label
     ? `<span class="session-backend truncate" title="${escapeHtmlAttr(label.full)}">${escapeHtml(label.display)}</span>`
     : '';
+  // A static row formats its time once at build; without data-time it stays
+  // outside updateRelativeTimes's [data-time] sweep, so a long archived list
+  // never joins the periodic full-table refresh.
+  const timeAttr = staticTime ? '' : ` data-time="${timeIso}"`;
   return `<span class="flex items-center gap-1.5 text-xs text-slate-500">`
-    + `<span class="session-time flex-shrink-0" data-time="${timeIso}">${timeStr}</span>`
+    + `<span class="session-time flex-shrink-0"${timeAttr}>${timeStr}</span>`
     + model
     + `</span>`;
 }
 
 function renderSessionItem(s, filter, options = {}) {
+  recordRenderedSessionStatus(s);
   const isActive = SESSION_ID === s.id;
+  // An archived session keeps the archived row form in every view (archived
+  // tab, search results): unarchive/delete actions, and none of the live-state
+  // indicators, which archived sessions cannot carry.
+  const isArchivedRow = filter === 'archived' || s.status === 'archived';
   const indicatorState = getSessionIndicatorState(s);
   const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
   const activeBtnClass = isActive ? '!opacity-100' : '';
@@ -678,7 +694,7 @@ function renderSessionItem(s, filter, options = {}) {
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/></svg>
     </button>`;
   let actions = '';
-  if (filter === 'archived') {
+  if (isArchivedRow) {
     const ratingBadge = s.rating === 'thumbs_up' ? '<span class="text-xs flex-shrink-0" title="Rated: thumbs up">👍</span>'
       : s.rating === 'neutral' ? '<span class="text-xs flex-shrink-0" title="Rated: neutral">—</span>'
       : s.rating === 'thumbs_down' ? '<span class="text-xs flex-shrink-0" title="Rated: thumbs down">👎</span>'
@@ -705,21 +721,22 @@ function renderSessionItem(s, filter, options = {}) {
   }
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
-  return `<a href="/?session=${s.id}&filter=${filter}"
-     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"
-     ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
-     onclick="event.preventDefault(); switchSession('${s.id}')"
-     id="session-${s.id}"${extraAttrs}>
-    <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+  const indicators = isArchivedRow ? '' : `<svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
     <svg id="worker-indicator-${s.id}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
     <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>
     ${renderPendingTriggerIndicator(s)}
     ${renderPendingPlanApprovalIndicator(s)}
     ${s.scheduled_task ? `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>` : ''}
-    ${renderTuiStatusDot(s)}
+    ${renderTuiStatusDot(s)}`;
+  return `<a href="/?session=${s.id}&filter=${filter}"
+     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"
+     ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
+     onclick="event.preventDefault(); switchSession('${s.id}')"
+     id="session-${s.id}"${extraAttrs}>
+    ${indicators}
     <span class="flex-1 min-w-0">
       <span class="truncate block session-name">${escapeHtml(s.name)}</span>
-      ${filter === 'scheduled' && s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>` : renderSessionTimeLine(s, timeIso, timeStr)}
+      ${filter === 'scheduled' && s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>` : renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime)}
     </span>
     ${actions}
   </a>`;
@@ -747,7 +764,10 @@ function renderSessionList(sessions, filter) {
     renderGroupedSessionList(sessions, filter);
     return;
   }
-  nav.innerHTML = sessions.map(s => renderSessionItem(s, filter)).join('');
+  const truncationHint = filter === 'search' && sessions.length >= 200
+    ? '<p class="text-slate-500 text-sm px-3 py-2">Showing the newest 200 matches — narrow the search.</p>'
+    : '';
+  nav.innerHTML = sessions.map(s => renderSessionItem(s, filter)).join('') + truncationHint;
   // Resync sessionUnread dict from fresh DOM data
   sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
   updateRelativeTimes();

@@ -11,6 +11,7 @@ charliebotLoadCompatModules('sidebar', [
   'workers.js',
   'filters.js',
   'groups.js',
+  'archived.js',
   'session-view.js',
   'modals.js',
 ]);

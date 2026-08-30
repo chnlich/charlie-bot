@@ -276,6 +276,9 @@ class SessionMetadata(BaseModel):
   successor_session_id: str | None = None
   # Slack thread this session was summoned from; set at creation, never mutated.
   slack_origin: SlackOrigin | None = None
+  # Newest consumed thread ts for a followed Slack thread; None = nothing
+  # consumed yet. Advanced by summon creation (mention ts) and ack only.
+  slack_watermark_ts: str | None = None
   # Rating
   rating: SessionRating | None = None
   # Key is the round event id (UUID generated at event write time, or
@@ -443,6 +446,14 @@ class SlackReplyRequest(BaseModel):
 
   session_id: str
   text: str
+
+
+class SlackAckRequest(BaseModel):
+  """Request body for the internal slack/ack endpoint: the calling session marks *message_ids* (Slack ts) as read."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  message_ids: list[str]
 
 
 # ---------------------------------------------------------------------------

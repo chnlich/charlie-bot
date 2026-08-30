@@ -79,9 +79,7 @@
       reconnectTimer = null;
     }
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let url = `${proto}//${location.host}/ws/terminal`;
-    const accessKey = localStorage.getItem('charliebot_access_key');
-    if (accessKey) url += '?token=' + encodeURIComponent(accessKey);
+    let url = withAccessToken(`${proto}//${location.host}/ws/terminal`);
 
     socket = new WebSocket(url);
     socket.onopen = () => {

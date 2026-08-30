@@ -17,6 +17,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M4 turns | M4 collector below | seconds per turn; hung sessions | median < 300 s; hung = 0 | median 53 s, max 1133 s; 0 hung |
 | M5 threads/list latency | M5 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
 | M6 session usage latency | M6 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
+| M7 token-usage page | M7 collector below | seconds per page load | median < 3 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -168,6 +169,20 @@ print(best.name, best_n)
 ')"; echo "session $SID, $N chat events"; for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: Bearer $KEY" "http://127.0.0.1:18498/api/sessions/$SID/usage"; done | sort -n | awk '{a[NR]=$1} END {printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
 ```
 
+M7 — token-usage page load: five timed requests of the rendered page. The page builds a
+persisted per-file tally cache for the gigabyte-scale Claude logs; the first load after a
+server start (or after bulk log churn) is a full scan, later loads re-scan only changed
+Claude logs plus the megabyte-scale Codex/opencode sources, so the five-request median reads
+the warm steady state (~2 s at the seed host's 2.2 GB + 190 MB log volume — hence the
+provisional 3 s ceiling). Evidence while the live server runs older code is a scratch-instance
+A/B: live-before against this instance, scratch-after against a scratch server on the changed
+code with a scratch `CHARLIEBOT_HOME` (its own empty cache directory — cold-then-warm measures
+both paths):
+
+```bash
+KEY=$(grep -m1 '^charliebot_access_key:' ~/.charliebot/config.yaml | awk '{print $2}'); for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: Bearer $KEY" http://127.0.0.1:18498/token-usage; done | sort -n | awk '{a[NR]=$1} END {printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -175,3 +190,4 @@ print(best.name, best_n)
 | 2026-08-30 | #457 | M5 median 0.068 s → 0.029 s (117-thread worst session) | one executor hop for the threads metadata scan; M5 definition and healthy range introduced with this PR |
 | 2026-08-30 | #461 | M2 tui/status share 1396/3146 status polls (44 %) → 0 tui/status requests in a 15 s headless-page window (scratch A/B) | sidebar tui/status poll scoped to rows rendered as tui-cli; zero tui-cli backends configured on this host |
 | 2026-08-30 | #463 | M6 median 0.015 s → 0.011 s (20534-event worst session, live-before vs scratch-after) | one-pass event scan for usage resolution; M6 definition and healthy range introduced with this PR |
+| 2026-08-30 | #468 | M7 median 10.269 s → 2.087 s (live-before vs scratch-after warm; scratch cold 11.17 s; 2.2 GB agent logs) | persisted per-file Claude tally cache keyed on (mtime, size); M7 definition and healthy range introduced with this PR |

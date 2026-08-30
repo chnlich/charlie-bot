@@ -67,7 +67,7 @@ async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch) -
       scanned_bytes=999,
   )
 
-  def fake_collect() -> TokenTally:
+  def fake_collect(**_kwargs) -> TokenTally:
     return tally
 
   monkeypatch.setattr(pages, "collect_token_usage", fake_collect)
@@ -89,7 +89,7 @@ async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch) -
 async def test_token_usage_route_is_single_flight(monkeypatch: pytest.MonkeyPatch) -> None:
   calls = 0
 
-  def fake_collect() -> TokenTally:
+  def fake_collect(**_kwargs) -> TokenTally:
     nonlocal calls
     calls += 1
     time.sleep(0.2)  # keep the collection genuinely in flight so both requests share it
@@ -113,7 +113,7 @@ async def test_token_usage_viewer_clears_inflight_task_after_render(
   """A finished collection is cleared, so the next request re-scans afresh."""
   calls = 0
 
-  def fake_collect() -> TokenTally:
+  def fake_collect(**_kwargs) -> TokenTally:
     nonlocal calls
     calls += 1
     return TokenTally(rows=[], notes=[], elapsed_s=0.01, scanned_bytes=0)
@@ -148,7 +148,7 @@ async def test_token_usage_inline_script_parses(monkeypatch: pytest.MonkeyPatch,
       scanned_bytes=999,
   )
 
-  monkeypatch.setattr(pages, "collect_token_usage", lambda: tally)
+  monkeypatch.setattr(pages, "collect_token_usage", lambda **_kwargs: tally)
 
   response = await pages.token_usage_viewer(make_page_request("/"))
   assert response.status_code == 200

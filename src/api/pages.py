@@ -101,6 +101,11 @@ def _perfetto_merge_cache_dir() -> Path:
   return get_config().charliebot_home / "cache" / "perfetto_merge"
 
 
+def _token_tally_cache_path() -> Path:
+  """This profile's token-tally cache. Resolved per call, never at import."""
+  return get_config().charliebot_home / "cache" / "token_tally.json"
+
+
 def _get_git_version() -> str:
   """Return git short hash + commit date (e.g. 'bc6b882 · 03-24'), or '' on failure."""
   try:
@@ -563,7 +568,8 @@ async def token_usage_viewer(request: Request):
   global _token_usage_task
   task = _token_usage_task
   if task is None:
-    task = _token_usage_task = asyncio.create_task(asyncio.to_thread(collect_token_usage))
+    task = _token_usage_task = asyncio.create_task(
+        asyncio.to_thread(collect_token_usage, cache_path=_token_tally_cache_path()))
   tally = await task
   if _token_usage_task is task:
     # Only the last joiner to observe its own task still installed clears it; a joiner that

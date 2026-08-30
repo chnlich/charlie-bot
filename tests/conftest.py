@@ -31,6 +31,7 @@ from src.api.deps import get_session_manager  # noqa: E402
 from src.api.sessions import router as sessions_router  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
 from src.core import improve_command  # noqa: E402
+from src.core import init_worker_recovery as worker_recovery_module  # noqa: E402
 from src.core import models  # noqa: E402
 from src.core import review  # noqa: E402
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402
@@ -1435,3 +1436,16 @@ async def await_recovery_tasks(prefixes: tuple[str, ...]) -> None:
     if not pending:
       return
     await asyncio.gather(*pending)
+
+
+def spy_on_load_json_meta(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+  """Record every path init.iter_recent_thread_metas actually reads+parses."""
+  read_paths: list[Path] = []
+  real_load = worker_recovery_module.load_json_meta
+
+  def spy(path: Path, log_event: str, **kwargs: Any) -> Any:
+    read_paths.append(Path(path))
+    return real_load(path, log_event, **kwargs)
+
+  monkeypatch.setattr(worker_recovery_module, "load_json_meta", spy)
+  return read_paths

@@ -563,6 +563,24 @@ def test_scan_skips_post_boot_running_thread(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_scan_skips_archived_session_threads(tmp_path: Path) -> None:
+  """An archived session's pre-boot thread is not reconciled, yet still feeds the quarantine list."""
+  cfg = _cfg(tmp_path)
+  await _make_session(cfg, "live")
+  await _make_session(cfg, "done")
+  started_at = utc_now().isoformat()
+  for session_id, thread_id in (("live", "live-thread"), ("done", "archived-thread")):
+    _write_thread_meta(cfg, session_id, {"id": thread_id, "status": "running", "pid": 4242, "started_at": started_at})
+  await SessionManager(cfg).archive_session("done")
+
+  interrupted, threads = init_module._scan_interrupted_runs(cfg, utc_now() + timedelta(hours=1))
+
+  assert [item.meta["id"] for item in interrupted] == ["live-thread"]
+  # Quarantine still sees both: archiving says nothing about reclaiming worktree disk.
+  assert sorted(m["id"] for m in threads) == ["archived-thread", "live-thread"]
+
+
+@pytest.mark.asyncio
 async def test_reconcile_pre_boot_run_without_raw_log_kept_alive_when_death_unverifiable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Raw log missing with pid recorded but pid_start absent: death cannot be

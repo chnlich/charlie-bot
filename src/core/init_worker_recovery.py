@@ -25,6 +25,7 @@ from src.core.git import git_quarantine_worktree, git_worktree_dir_name
 from src.core.json_utils import load_json_meta
 from src.core.models import (
   TERMINAL_THREAD_STATUSES,
+  SessionStatus,
   TaskType,
   ThreadMetadata,
   parse_utc_datetime,
@@ -109,6 +110,19 @@ class _InterruptedRun:
 
 
 
+def _session_archived(session_dir: Path) -> bool:
+  """Whether *session_dir*'s session is archived.
+
+  Archiving is the user's statement that the session is finished, so its threads
+  are not work to resume: a terminal thread whose finalize effects can never be
+  satisfied would otherwise be re-reconciled on every boot for as long as it sits
+  inside ``RUNNING_SCAN_WINDOW``. A session with no readable metadata is treated as
+  not archived — the recovery path stays the default.
+  """
+  meta = load_json_meta(session_dir / "metadata.json", "session_meta_unreadable")
+  return meta is not None and meta.get("status") == SessionStatus.ARCHIVED
+
+
 def _scan_interrupted_runs(cfg: CharlieBotConfig, boot_time: datetime) -> tuple[list[_InterruptedRun], list[dict]]:
   """Collect pre-boot threads (any status) plus the full in-window metadata list.
 
@@ -119,6 +133,12 @@ def _scan_interrupted_runs(cfg: CharlieBotConfig, boot_time: datetime) -> tuple[
   ``_quarantine_stale_failed_worktrees`` (a failed thread's metadata mtime equals
   its ``completed_at`` write time).
 
+  Threads of an archived session are left out of the interrupted list (see
+  :func:`_session_archived`) but stay in the metadata list: quarantine reclaims a
+  failed worktree's disk regardless of whether its session was archived. The
+  session metadata is read only once a session has produced a pre-boot thread, so
+  the common all-recent-sessions-idle boot costs no extra reads.
+
   Returns (interrupted runs, all in-window metadata dicts) — the second list
   feeds the quarantine sweep unchanged.
   """
@@ -126,13 +146,21 @@ def _scan_interrupted_runs(cfg: CharlieBotConfig, boot_time: datetime) -> tuple[
     return [], []
   interrupted: list[_InterruptedRun] = []
   threads: list[dict] = []
+  archived: dict[str, bool] = {}
   now = utc_now()
   for session_dir in cfg.sessions_dir.iterdir():
     threads_dir = session_dir / "threads"
     for thread_dir, _meta_path, meta in iter_recent_thread_metas(threads_dir, now, "thread_meta_unreadable"):
-      if _started_before_boot(meta, thread_dir, boot_time):
-        interrupted.append(_InterruptedRun(session_id=session_dir.name, thread_dir=thread_dir, meta=meta))
       threads.append(meta)
+      if not _started_before_boot(meta, thread_dir, boot_time):
+        continue
+      session_id = session_dir.name
+      if session_id not in archived:
+        archived[session_id] = _session_archived(session_dir)
+      if archived[session_id]:
+        log.info("recovery_skip_archived_session", session=session_id, thread=meta.get("id"))
+        continue
+      interrupted.append(_InterruptedRun(session_id=session_id, thread_dir=thread_dir, meta=meta))
   return interrupted, threads
 
 

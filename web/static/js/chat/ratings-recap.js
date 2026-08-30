@@ -1,7 +1,7 @@
 
 (function() {
   const Chat = globalThis.Chat;
-  const escapeChatAttr = Chat.escapeChatAttr;
+  const escapeHtmlAttr = Chat.escapeHtmlAttr;
   const escapeJsSingleQuoted = Chat.escapeJsSingleQuoted;
 
 let activeRoundRatings = {};
@@ -27,8 +27,8 @@ function renderRoundRatingButtons(sessionId, roundId) {
   const sessionArg = escapeJsSingleQuoted(sessionId);
   const roundKey = String(roundId);
   const roundArg = escapeJsSingleQuoted(roundKey);
-  const sharedAttrs = ' data-round-rating-session="' + escapeChatAttr(sessionId) + '"'
-    + ' data-round-rating-event="' + escapeChatAttr(roundKey) + '"';
+  const sharedAttrs = ' data-round-rating-session="' + escapeHtmlAttr(sessionId) + '"'
+    + ' data-round-rating-event="' + escapeHtmlAttr(roundKey) + '"';
   return '<button type="button" data-round-rating="thumbs_up"' + sharedAttrs
     + ' aria-pressed="' + String(activeRating === 'thumbs_up') + '"'
     + ' onclick="rateRound(\'' + sessionArg + '\', \'' + roundArg + '\', \'thumbs_up\')"'

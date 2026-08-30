@@ -2,7 +2,7 @@
 (function() {
   const Chat = globalThis.Chat;
   const formatBubbleTime = Chat.formatBubbleTime;
-  const escapeChatAttr = Chat.escapeChatAttr;
+  const escapeHtmlAttr = Chat.escapeHtmlAttr;
   const messageIdentityAttrs = Chat.messageIdentityAttrs;
   const renderRoundRatingButtons = Chat.renderRoundRatingButtons;
   const embedLinkedHtmlArtifacts = Chat.embedLinkedHtmlArtifacts;
@@ -639,7 +639,7 @@ function renderMessage(msg, sessionId) {
   if (msg.role === "separator") {
     var timeStr = msg.thinking_seconds != null ? " &middot; " + msg.thinking_seconds + "s" : "";
     var secondsAttr = msg.thinking_seconds != null
-      ? " data-thinking-seconds=\"" + escapeChatAttr(msg.thinking_seconds) + "\"" : "";
+      ? " data-thinking-seconds=\"" + escapeHtmlAttr(msg.thinking_seconds) + "\"" : "";
     var buttons = "";
     if (sessionId) {
       if (msg.event_index != null) {

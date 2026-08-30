@@ -70,7 +70,6 @@ function isRenderedMessage(msg) {
 
 Chat.shouldAutoScroll = shouldAutoScroll;
 Chat.escapeHtml = escapeHtml;
-Chat.escapeChatAttr = escapeHtmlAttr;
 Chat.escapeHtmlAttr = escapeHtmlAttr;
 Chat.escapeJsSingleQuoted = escapeJsSingleQuoted;
 Chat.showMoreToggleHtml = showMoreToggleHtml;

@@ -64,8 +64,6 @@ def _path_properties(cfg: CharlieBotConfig) -> dict[str, Path]:
 
 # The two properties derived from the repo/config rather than charliebot_home;
 # everything else returning a Path must follow the redirected home.
-NON_HOME_DERIVED = {"charlie_bot_repo", "code_server_config_path"}
-
 
 def test_with_home_redirects_every_derived_path(tmp_path: Path) -> None:
   """Every home-derived Path property resolves under the new home, nothing else moves.

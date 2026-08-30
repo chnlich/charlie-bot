@@ -307,16 +307,70 @@ async def test_codex_provider_fetch_returns_quota_when_spend_aggregations_raises
   )
   os.utime(live_rollout_path, (now.timestamp(), now.timestamp()))
 
-  def _broken_compute(*, sessions_dir=None, now=None):
+  def _broken_compute(self, rollout_paths):
     raise RuntimeError("simulated spend failure")
 
-  monkeypatch.setattr("src.api.ext_usage._compute_codex_spend_windows", _broken_compute)
+  monkeypatch.setattr(CodexUsageProvider, "_compute_spend", _broken_compute)
 
   usage = await provider.fetch()
 
   assert usage is not None
   assert [w["utilization"] for w in usage["windows"]] == [8.0, 2.0]
   assert usage["spend"] is None
+
+
+@pytest.mark.asyncio
+async def test_codex_provider_spend_reparses_only_changed_files(tmp_path, monkeypatch) -> None:
+  """Steady-state rounds reuse parsed spend events; only a file with a new (mtime, size) re-parses."""
+  provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
+  now = datetime.now(UTC)
+  rollout_dir = tmp_path / "sessions" / f"{now.year:04d}" / f"{now.month:02d}" / f"{now.day:02d}"
+  rollout_dir.mkdir(parents=True)
+
+  def spend_event(input_tokens: int) -> str:
+    return json.dumps({
+        "timestamp": now.isoformat(),
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": {
+                "last_token_usage": {
+                    "input_tokens": input_tokens,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 0,
+                },
+            },
+        },
+    })
+
+  model_line = json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.3-codex"}})
+  first = rollout_dir / "rollout-first.jsonl"
+  second = rollout_dir / "rollout-second.jsonl"
+  first.write_text(model_line + "\n" + spend_event(1000) + "\n")
+  second.write_text(model_line + "\n" + spend_event(3000) + "\n")
+
+  extracted: list[str] = []
+  real_extract = ext_usage_mod._extract_codex_spend_events
+
+  def _counting_extract(path):
+    extracted.append(path.name)
+    return real_extract(path)
+
+  monkeypatch.setattr(ext_usage_mod, "_extract_codex_spend_events", _counting_extract)
+
+  first_usage = await provider.fetch()
+  assert sorted(extracted) == ["rollout-first.jsonl", "rollout-second.jsonl"]
+
+  extracted.clear()
+  with first.open("a") as stream:
+    stream.write(spend_event(2000) + "\n")
+  reapplied_usage = await provider.fetch()
+
+  assert extracted == ["rollout-first.jsonl"]
+  assert reapplied_usage is not None
+  # 6000 input tokens priced after the append beat the 4000 before it: the
+  # changed file's re-parse adds its new events, the cached file's do not double-count.
+  assert reapplied_usage["spend"]["last_7d_usd"] > first_usage["spend"]["last_7d_usd"]
 
 
 def test_compute_codex_spend_windows_skips_bad_rows_without_poisoning_totals(tmp_path) -> None:

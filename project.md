@@ -23,7 +23,7 @@
 ## 3. Directory Structure
 
 ### 3.1 Home Directory (`~/.charliebot/` or `CHARLIEBOT_HOME`)
-All instance-specific data (configs, logs, sessions) is stored here.
+All instance-specific data (configs, sessions, memory) is stored here.
 
 `CHARLIEBOT_HOME` selects which one: unset gives `~/.charliebot`, and a set value (absolute
 or `~`-prefixed; relative is rejected) gives a separate profile, seeded on first use. Several
@@ -57,7 +57,7 @@ thread branch — the directory name is the branch name with `/` replaced by `-`
 ```
 
 **Notes:**
-- `logs/`: Stores application-level logs (server errors, HTTP access, Worker spawn/crash events). Individual Worker logs are in `threads/{uuid}/data/`.
+- Individual Worker logs are in `threads/{uuid}/data/` (`stdout.log`, `stderr.log`, `events.jsonl`).
 - `CLAUDE.md`: Written into each thread's worktree (so Claude Code finds it via cwd).
 - `workspace_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The `GET /api/sessions/projects` endpoint returns discovered projects for the UI project picker.
 

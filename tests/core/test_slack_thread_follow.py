@@ -13,6 +13,7 @@ import requests
 from conftest import (
   CLI_COMMON_GET_CONFIG_PATCH_TARGET,
   CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+  SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
   SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
   SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
   TRIGGER_MASTER_PATCH_TARGET,
@@ -56,7 +57,6 @@ _CHANNEL = "C_TEST"
 _ROOT = "1700000000.000100"  # the summon ts; the thread's root
 _MENTION_ERA_WATERMARK = "1700000000.000050"
 _PERMALINK = f"https://fake.slack.test/archives/{_CHANNEL}/p{_ROOT}"
-_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
 
 
 def _ts(seq: int) -> str:
@@ -387,7 +387,7 @@ async def test_reply_gate_refuses_the_stale_thread_and_persists_nothing(tmp_path
   meta = await _make_session(session_mgr)
   _seed_gate_thread(client)
 
-  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client):
+  with patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     with pytest.raises(SlackReplyError) as excinfo:
       await assert_thread_fresh(meta.id, cfg, session_mgr)
 
@@ -408,7 +408,7 @@ async def test_ack_completeness_advance_and_idempotence(tmp_path: Path) -> None:
   meta = await _make_session(session_mgr)
   _seed_gate_thread(client)
 
-  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client):
+  with patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     # A skip attempt names the jumped-over unread id and persists nothing.
     with pytest.raises(SlackReplyError) as excinfo:
       await ack_messages(meta.id, [_ts(130)], cfg, session_mgr)
@@ -429,7 +429,7 @@ async def test_ack_completeness_advance_and_idempotence(tmp_path: Path) -> None:
   assert len(acks) == 1
   assert acks[0]["slack_ack"] == {"message_ids": [_ts(110), _ts(130)], "watermark_ts": _ts(130)}
 
-  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client):
+  with patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     # Re-acking at or below the watermark is an idempotent no-op counted as acked.
     assert await ack_messages(meta.id, [_ts(110)], cfg, session_mgr) == {
         "acked": 1, "watermark_ts": _ts(130)}
@@ -453,7 +453,7 @@ async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: Path) -> None
   meta = await _make_session(session_mgr)
   _seed_gate_thread(client)
 
-  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client), _route_client(cfg, session_mgr) as http:
+  with patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client), _route_client(cfg, session_mgr) as http:
     resp = http.post("/api/internal/slack/reply", json={"session_id": meta.id, "text": "the answer"})
     assert resp.status_code == 412
     body = resp.json()["detail"]
@@ -482,7 +482,7 @@ async def test_ack_route_maps_refusals(tmp_path: Path) -> None:
   plain = await session_mgr.create_session(CreateSessionRequest(name="browser session"))
   _seed_gate_thread(client)
 
-  with patch(_BOT_CLIENT_PATCH_TARGET, return_value=client), _route_client(cfg, session_mgr) as http:
+  with patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client), _route_client(cfg, session_mgr) as http:
     resp = http.post("/api/internal/slack/ack", json={"session_id": "no-such", "message_ids": [_ts(110)]})
     assert resp.status_code == 404
     resp = http.post("/api/internal/slack/ack", json={"session_id": plain.id, "message_ids": [_ts(110)]})

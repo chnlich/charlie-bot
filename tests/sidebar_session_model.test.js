@@ -29,7 +29,6 @@ function loadGroups() {
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
     relativeTime: () => 'Jul 29, 5:12 PM',
-    formatNextRun: () => '',
     formatLastRun: () => '',
     getSessionIndicatorState: () => 'idle',
     renderPendingTriggerIndicator: () => '',

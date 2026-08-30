@@ -168,7 +168,6 @@ function buildSidebarContext() {
     relativeTime: (t) => t,
     updateRelativeTimes() {},
     formatTokens: (n) => String(n),
-    formatNextRun: (t) => t,
     formatLastRun: (t) => t,
     renderWorkersTab() {},
     updateWorkersTabBadge() {},

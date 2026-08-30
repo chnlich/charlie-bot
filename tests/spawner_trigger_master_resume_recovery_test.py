@@ -213,7 +213,7 @@ async def test_scheduled_task_auto_trigger_uses_session_backend(monkeypatch: pyt
 
   assert call_session_backends == [OPUS_BACKEND_ID]
   assert [option.id for option in call_backend_options] == [OPUS_BACKEND_ID]
-  assert [option.model for option in call_backend_options] == ["claude-opus-4-6"]
+  assert [option.model for option in call_backend_options] == [OPUS_BACKEND_OPTION.model]
   assert call_summaries[0].startswith("[Auto-triggered scheduled task result for 'nightly']")
   # trigger_master no longer persists the anchor; the consumer owns it.
   assert not session_mgr.persisted_cc_session_ids

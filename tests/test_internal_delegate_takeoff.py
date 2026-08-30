@@ -6,7 +6,12 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import OPUS_BACKEND_ID, FakeSessionManager, capture_create_logged_task
+from conftest import (
+  OPUS_BACKEND_ID,
+  OPUS_BACKEND_OPTION,
+  FakeSessionManager,
+  capture_create_logged_task,
+)
 from conftest import THREE_BACKEND_OPTIONS as VERIFY_BACKEND_OPTIONS
 from fastapi import HTTPException
 
@@ -576,7 +581,7 @@ async def test_verify_no_backend_session_backend_not_in_preference_uses_first_en
     monkeypatch: pytest.MonkeyPatch) -> None:
   resolved = await _authorize_verify(
       monkeypatch, session_backend="kimi-k2.5", model_preference=[OPUS_BACKEND_ID, "codex-o3"])
-  assert resolved == (OPUS_BACKEND_ID, "claude-opus-4-6")
+  assert resolved == (OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model)
 
 
 @pytest.mark.asyncio

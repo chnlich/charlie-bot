@@ -51,6 +51,11 @@ log = structlog.get_logger()
 
 _METADATA_CACHE_TTL = 30.0  # seconds
 _PROJECTION_LRU_LIMIT = 8
+# str.lower() and substring search hold the GIL for the whole input, so the
+# sidebar content search reads chat files in windows of this many characters:
+# each lower()/scan call's GIL hold stays bounded instead of scaling with the
+# chat file's size, which would stall the event loop for every other request.
+_SEARCH_CHUNK_CHARS = 1 << 18
 # Bounds both the successor-chain walk (a cycle must never spin) and the
 # delivery retry loop that re-resolves racing elones, keeping the two in agreement.
 _SUCCESSOR_CHAIN_HOP_LIMIT = 100
@@ -501,8 +506,21 @@ class SessionManager:
       def _read_and_check() -> bool:
         if not path.exists():
           return False
+        overlap = len(query_lower) - 1
+        tail = ""
         try:
-          return query_lower in path.read_text(encoding="utf-8").lower()
+          with path.open(encoding="utf-8") as stream:
+            while True:
+              chunk = stream.read(_SEARCH_CHUNK_CHARS)
+              if not chunk:
+                return False
+              window = tail + chunk.lower()
+              if query_lower in window:
+                return True
+              # This and the next window together cover the file with an
+              # overlap of len(query)-1 chars, so a hit straddling the chunk
+              # boundary lies whole inside exactly one window.
+              tail = window[-overlap:] if overlap else ""
         except OSError as e:
           log.debug("search_read_failed", session_id=meta.id, error=str(e))
           return False

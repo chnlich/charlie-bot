@@ -466,6 +466,12 @@ CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
 SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET = "src.core.slack_listener.trigger_master"
 SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.slack_listener.create_logged_task"
 
+# Import-path patch target for the Slack client factory every listener outbound path posts
+# through. src/core/slack_listener.py defines _bot_client at module scope, and its handlers
+# and reply/backfill helpers resolve the name at call time, so mock setattrs the stand-in
+# on the src.core.slack_listener module attribute.
+SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
+
 # Import-path patch target for the background-task spawner a scheduled task fires through.
 # src/core/scheduler.py binds the name at import scope (`from src.core.tasks import
 # create_logged_task`), so monkeypatch.setattr lands the stand-in on the src.core.scheduler

@@ -94,7 +94,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `web/` — Jinja2 templates + vanilla JS static assets
 - `skills/` — repo-shared agent skills
 - `prompts/` — agent prompt definitions
-- `scripts/` — setup, skill sync, server launcher
+- `scripts/` — setup, skill sync, server launcher, web scroll probe
 - `tests/` — pytest suite
 - `configs/` — example config and repo-default cron tasks
 - `docs/` — supplementary documentation and assets

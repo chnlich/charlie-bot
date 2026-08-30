@@ -181,7 +181,7 @@ class BacklogRepoConfig(BaseModel):
 
 
 class HomeService(BaseModel):
-  """An externally-hosted service listed on the home page."""
+  """A service this host runs, listed on the /home page and probed for reachability."""
   name: str  # card title
   description: str  # one line saying what it is for
   url: str  # what the card links to; the probe connects to this URL's host and port
@@ -241,7 +241,8 @@ class CharlieBotConfig(BaseModel):
 
   # Backlog panel
   backlog_repos: list[BacklogRepoConfig] = []
-  # Home page — externally-hosted services probed for reachability; default empty
+  # Home page — services this host runs, probed for reachability; default empty. Each card
+  # links to the URL and the probe connects to the same host and port.
   home_services: list[HomeService] = []
   backlog_repo: str | None = None  # deprecated, migrated to backlog_repos
   backlog_label: str = 'Project Backlog'  # deprecated, used during migration

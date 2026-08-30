@@ -248,7 +248,6 @@ function renderCronGearButton(taskName, activeBtnClass) {
 
 function renderScheduledSessionItem(s, options = {}) {
   const isActive = SESSION_ID === s.id;
-  const indicatorState = getSessionIndicatorState(s);
   const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
   const activeBtnClass = isActive ? '!opacity-100' : '';
   const actions = `
@@ -263,9 +262,7 @@ function renderScheduledSessionItem(s, options = {}) {
      ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
      onclick="event.preventDefault(); switchSession('${s.id}')"
      id="session-${s.id}"${extraAttrs}>
-    <svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-    <svg id="worker-indicator-${s.id}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-    <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>
+    ${renderSessionIndicators(s)}
     ${renderPendingTriggerIndicator(s)}
     ${renderPendingPlanApprovalIndicator(s)}
     <svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task || '')}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>
@@ -398,7 +395,6 @@ const PM_BADGE_CLASS = 'px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wid
 
 function renderProjectManagerRow(pm) {
   const isActive = SESSION_ID === pm.id;
-  const indicatorState = getSessionIndicatorState(pm);
   const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
   const timeStr = pm.updated_at ? relativeTime(pm.updated_at) : '';
   const timeIso = pm.updated_at || '';
@@ -407,9 +403,7 @@ function renderProjectManagerRow(pm) {
      onclick="event.preventDefault(); switchSession('${pm.id}')"
      id="session-${pm.id}"
      data-pm-head="1">
-    <svg id="spinner-${pm.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-    <svg id="worker-indicator-${pm.id}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-    <span id="unread-${pm.id}" data-has-unread="${pm.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${pm.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>
+    ${renderSessionIndicators(pm)}
     ${renderPendingPlanApprovalIndicator(pm)}
     <span class="${PM_BADGE_CLASS} bg-indigo-900 text-indigo-300">PM</span>
     <span class="flex-1 min-w-0 truncate">${escapeHtml(pm.name)}</span>
@@ -682,7 +676,6 @@ function renderSessionItem(s, filter, options = {}) {
   // tab, search results): unarchive/delete actions, and none of the live-state
   // indicators, which archived sessions cannot carry.
   const isArchivedRow = filter === 'archived' || s.status === 'archived';
-  const indicatorState = getSessionIndicatorState(s);
   const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
   const activeBtnClass = isActive ? '!opacity-100' : '';
   const timeStr = s.updated_at ? relativeTime(s.updated_at) : '';
@@ -721,9 +714,7 @@ function renderSessionItem(s, filter, options = {}) {
   }
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
-  const indicators = isArchivedRow ? '' : `<svg id="spinner-${s.id}" class="w-4 h-4 animate-spin text-yellow-400 flex-shrink-0 ${indicatorState === 'thinking' ? '' : 'hidden'}" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-    <svg id="worker-indicator-${s.id}" class="w-3.5 h-3.5 text-amber-400 flex-shrink-0 animate-[spin_3s_linear_infinite] ${indicatorState === 'worker_only' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-    <span id="unread-${s.id}" data-has-unread="${s.has_unread ? 1 : 0}" class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse-dot flex-shrink-0 ${s.has_unread && indicatorState === 'idle' ? '' : 'hidden'}"></span>
+  const indicators = isArchivedRow ? '' : `${renderSessionIndicators(s)}
     ${renderPendingTriggerIndicator(s)}
     ${renderPendingPlanApprovalIndicator(s)}
     ${s.scheduled_task ? `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>` : ''}

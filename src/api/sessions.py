@@ -6,9 +6,9 @@ from zoneinfo import ZoneInfo
 
 import structlog
 from croniter import croniter
-from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from starlette.responses import Response
 
 from src.api.cron import TaskUpdate, apply_task_yaml_update

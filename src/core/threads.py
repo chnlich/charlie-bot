@@ -16,6 +16,7 @@ from src.core.models import (
   ThreadStatus,
   utc_now,
 )
+from src.core.sidebar_state import mark_sidebar_dirty
 
 log = structlog.get_logger()
 
@@ -121,6 +122,9 @@ class ThreadManager:
     path.parent.mkdir(parents=True, exist_ok=True)
     async with aiofiles.open(path, "w") as f:
       await f.write(meta.model_dump_json(indent=2))
+    # Single funnel behind create_thread/update_status/save_metadata: thread
+    # status transitions (running -> terminal) land here.
+    mark_sidebar_dirty(meta.session_id)
 
   def _metadata_path(self, session_id: str, thread_id: str) -> Path:
     return self.thread_dir(session_id, thread_id) / "metadata.json"

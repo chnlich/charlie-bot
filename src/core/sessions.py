@@ -13,7 +13,7 @@ import aiofiles
 import structlog
 
 from src.core import event_types as ET
-from src.core import plan_paths
+from src.core import plan_paths, sidebar_state
 from src.core.chat_events import ChatEventStore
 from src.core.config import CharlieBotConfig
 from src.core.init import iter_recent_thread_metas
@@ -94,6 +94,99 @@ def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
   """
   meta.thinking_since = busy_since(meta.id)
   return meta
+
+
+# ---------------------------------------------------------------------------
+# Sidebar probe cores — pure path-in/result-out functions shared by the
+# per-session probe methods below and by the poll's serial re-probe (one
+# asyncio.to_thread task over all sessions instead of one task per session
+# per probe group).
+# ---------------------------------------------------------------------------
+
+
+def has_running_tasks_sync(threads_dir: Path) -> bool:
+  """True if any thread under *threads_dir* is marked 'running'.
+
+  The 30-day-window scan (``iter_recent_thread_metas``): only threads whose
+  metadata mtime is within the window are read+parsed; older thread dirs cost
+  a scandir+stat with zero content reads.
+  """
+  for _thread_dir, _meta_path, meta in iter_recent_thread_metas(threads_dir, utc_now(), "thread_meta_read_failed"):
+    if meta.get("status") == "running":
+      return True
+  return False
+
+
+def pending_trigger_state_sync(triggers_dir: Path) -> tuple[int, datetime | None]:
+  """(pending trigger count, earliest fire time) from the *.json files under *triggers_dir*."""
+  if not triggers_dir.exists():
+    return 0, None
+
+  pending_count = 0
+  next_trigger_at: datetime | None = None
+  for trigger_path in triggers_dir.glob("*.json"):
+    trigger = load_json_meta(
+        trigger_path,
+        "trigger_meta_read_failed",
+        catch=(OSError, ValueError),
+    )
+    if trigger is None:
+      continue
+    if trigger.get("status") != "pending":
+      continue
+
+    pending_count += 1
+    fire_at = SessionManager._parse_optional_utc(
+        trigger.get("fire_at"), "trigger_fire_at_parse_failed", trigger_path=str(trigger_path))
+    if fire_at is None:
+      continue
+    if next_trigger_at is None or fire_at < next_trigger_at:
+      next_trigger_at = fire_at
+
+  return pending_count, next_trigger_at
+
+
+def has_pending_plan_approval_sync(plans_path: Path, session_id: str) -> bool:
+  """True if any lineage in the plans.json at *plans_path* is 'awaiting approval'.
+
+  Delegates to the tolerant read in src.core.plans (single authority for
+  catch-and-derive). Any error entry is logged via ``plan_registry_read_failed``
+  and contributes no pending approval. The probe must never raise — a corrupt
+  single-session file cannot 5xx the sidebar poll for all sessions.
+  """
+  # lazy: plans imports SessionManager from this module at top level
+  from src.core.plans import read_plans_tolerant
+
+  result = read_plans_tolerant(plans_path, session_id)
+  for error in result["errors"]:
+    log.warning(
+        "plan_registry_read_failed",
+        session_id=error.get("session_id"),
+        error=error.get("error"),
+    )
+  return any(plan.get("state") == "awaiting approval" for plan in result["plans"])
+
+
+def probe_sidebar_state_sync(specs: list[tuple[str, Path, Path, Path]]) -> dict[str, dict]:
+  """Probe every ``(session_id, threads_dir, triggers_dir, plans_path)`` spec serially.
+
+  The execution core of a sidebar poll's re-probe: all three probe groups per
+  session, one session at a time, so re-probing N sessions costs one
+  thread-pool task instead of 3*N. Returns
+  ``{session_id: {"thread_running", "pending_trigger_count", "next_trigger_at",
+  "has_pending_plan_approval"}}``.
+  """
+  results: dict[str, dict] = {}
+  for session_id, threads_dir, triggers_dir, plans_path in specs:
+    running = has_running_tasks_sync(threads_dir)
+    pending_count, next_trigger_at = pending_trigger_state_sync(triggers_dir)
+    results[session_id] = {
+        "thread_running": running,
+        "pending_trigger_count": pending_count,
+        "next_trigger_at": next_trigger_at,
+        "has_pending_plan_approval": has_pending_plan_approval_sync(plans_path, session_id),
+    }
+  return results
 
 
 class SuccessionRefused(ValueError):
@@ -573,6 +666,10 @@ class SessionManager:
     await append_ndjson(events_path, clone_event)
     await self.save_metadata(meta)
     await self._copy_plans_to_child(parent_id, session_dir)
+    # The child plans.json is written by _copy_plans_sync (not PlanRegistryManager._save),
+    # and a poll racing between save_metadata and this copy could have snapshotted
+    # the child without plans; re-mark so the copied registry is always probed.
+    sidebar_state.mark_sidebar_dirty(meta.id)
     return _stamp_thinking_since(meta)
 
   async def _copy_plans_to_child(self, parent_id: str, child_session_dir: Path) -> None:
@@ -1259,49 +1356,11 @@ class SessionManager:
     returns False without reading any metadata. Runs its filesystem work in a thread
     to keep the event loop responsive (called per-session by the sidebar/status polls).
     """
-
-    def _check() -> bool:
-      threads_dir = self._threads_dir(session_id)
-      now = utc_now()
-      for _thread_dir, _meta_path, meta in iter_recent_thread_metas(threads_dir, now, "thread_meta_read_failed"):
-        if meta.get("status") == "running":
-          return True
-      return False
-
-    return await asyncio.to_thread(_check)
+    return await asyncio.to_thread(has_running_tasks_sync, self._threads_dir(session_id))
 
   async def _get_pending_trigger_state(self, session_id: str) -> tuple[int, datetime | None]:
     """Return the number of pending delayed triggers and the earliest fire time."""
-
-    def _check() -> tuple[int, datetime | None]:
-      triggers_dir = self._session_dir(session_id) / "triggers"
-      if not triggers_dir.exists():
-        return 0, None
-
-      pending_count = 0
-      next_trigger_at: datetime | None = None
-      for trigger_path in triggers_dir.glob("*.json"):
-        trigger = load_json_meta(
-            trigger_path,
-            "trigger_meta_read_failed",
-            catch=(OSError, ValueError),
-        )
-        if trigger is None:
-          continue
-        if trigger.get("status") != "pending":
-          continue
-
-        pending_count += 1
-        fire_at = self._parse_optional_utc(
-            trigger.get("fire_at"), "trigger_fire_at_parse_failed", trigger_path=str(trigger_path))
-        if fire_at is None:
-          continue
-        if next_trigger_at is None or fire_at < next_trigger_at:
-          next_trigger_at = fire_at
-
-      return pending_count, next_trigger_at
-
-    return await asyncio.to_thread(_check)
+    return await asyncio.to_thread(pending_trigger_state_sync, self._session_dir(session_id) / "triggers")
 
   def _has_pending_plan_approval(self, session_id: str) -> bool:
     """Return True if the session has a lineage whose derived state is 'awaiting approval'.
@@ -1311,18 +1370,7 @@ class SessionManager:
     approval. The probe must never raise — a corrupt single-session file cannot 5xx the
     sidebar poll for all sessions.
     """
-    # lazy: plans imports SessionManager from this module at top level
-    from src.core.plans import read_plans_tolerant
-
-    plans_path = self._session_dir(session_id) / "plans.json"
-    result = read_plans_tolerant(plans_path, session_id)
-    for error in result["errors"]:
-      log.warning(
-          "plan_registry_read_failed",
-          session_id=error.get("session_id"),
-          error=error.get("error"),
-      )
-    return any(plan.get("state") == "awaiting approval" for plan in result["plans"])
+    return has_pending_plan_approval_sync(self._session_dir(session_id) / "plans.json", session_id)
 
   async def _enrich_and_sort(
       self,
@@ -1347,9 +1395,22 @@ class SessionManager:
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
       include_pending_plan_approval: bool = False,
+      force: bool = False,
   ) -> None:
-    """Populate derived sidebar-only state on session metadata objects."""
+    """Populate derived sidebar-only state on session metadata objects.
+
+    Serves active sessions from the in-process sidebar snapshot
+    (:mod:`src.core.sidebar_state`) with zero disk access, and re-probes — in
+    ONE ``asyncio.to_thread`` task, serial over sessions, via the pure probe
+    cores above — only the dirty sessions, or every active session on every
+    10th call and whenever *force* is set (the ``/status?force=1`` escape
+    hatch). A session with no snapshot entry (cold boot, new session) is
+    probed like a dirty one, so an empty snapshot is a full probe. Archived
+    sessions keep the constant-False shortcut.
+    """
     if not sessions:
+      return
+    if not (include_running_status or include_pending_trigger_status or include_pending_plan_approval):
       return
 
     # Archived sessions cannot have running tasks or pending triggers, so skip
@@ -1370,46 +1431,45 @@ class SessionManager:
     if not active_sessions:
       return
 
-    running_future = None
-    trigger_future = None
-    plan_approval_future = None
-    if include_running_status:
-      running_future = asyncio.gather(*(self._has_running_tasks(meta.id) for meta in active_sessions))
-    if include_pending_trigger_status:
-      trigger_future = asyncio.gather(*(self._get_pending_trigger_state(meta.id) for meta in active_sessions))
-    if include_pending_plan_approval:
-      plan_approval_future = asyncio.gather(
-          *(asyncio.to_thread(self._has_pending_plan_approval, meta.id) for meta in active_sessions))
+    force_full = sidebar_state.register_poll(force)
+    if force_full:
+      probe_ids = [meta.id for meta in active_sessions]
+    else:
+      probe_ids = [
+          meta.id for meta in active_sessions
+          if sidebar_state.is_dirty(meta.id) or sidebar_state.snapshot_entry(meta.id) is None
+      ]
+    # Selection-time removal: a transition mark landing while the probe runs
+    # re-adds the id, so that write is re-probed by the next poll even if the
+    # in-flight probe raced it.
+    sidebar_state.discard_dirty(probe_ids)
 
-    # One collective wait first: cancelling or failing here takes every probe
-    # group down together. The named awaits below then collect from already-
-    # done futures, so the groups stay concurrent regardless of await order.
-    requested = [f for f in (running_future, trigger_future, plan_approval_future) if f is not None]
-    if requested:
-      await asyncio.gather(*requested)
-    running_flags = None
-    trigger_states = None
-    plan_approval_flags = None
-    if running_future is not None:
-      running_flags = await running_future
-    if trigger_future is not None:
-      trigger_states = await trigger_future
-    if plan_approval_future is not None:
-      plan_approval_flags = await plan_approval_future
+    if probe_ids:
+      specs = [
+          (session_id, self._threads_dir(session_id), self._session_dir(session_id) / "triggers",
+           self._session_dir(session_id) / "plans.json")
+          for session_id in probe_ids
+      ]
+      try:
+        probed = await asyncio.to_thread(probe_sidebar_state_sync, specs)
+      except BaseException:
+        # A failed probe must not lose the dirty state it was serving.
+        for session_id in probe_ids:
+          sidebar_state.mark_sidebar_dirty(session_id)
+        raise
+      for session_id, entry in probed.items():
+        sidebar_state.store_snapshot_entry(session_id, entry)
 
-    if running_flags is not None:
-      for meta, running in zip(active_sessions, running_flags, strict=True):
-        meta.has_running_tasks = bool(meta.thinking_since) or running
-
-    if trigger_states is not None:
-      for meta, (pending_count, next_trigger_at) in zip(active_sessions, trigger_states, strict=True):
-        meta.has_pending_trigger = pending_count > 0
-        meta.pending_trigger_count = pending_count
-        meta.next_trigger_at = next_trigger_at
-
-    if plan_approval_flags is not None:
-      for meta, has_pending in zip(active_sessions, plan_approval_flags, strict=True):
-        meta.has_pending_plan_approval = bool(has_pending)
+    for meta in active_sessions:
+      entry = sidebar_state.required_snapshot_entry(meta.id)
+      if include_running_status:
+        meta.has_running_tasks = bool(meta.thinking_since) or bool(entry["thread_running"])
+      if include_pending_trigger_status:
+        meta.has_pending_trigger = entry["pending_trigger_count"] > 0
+        meta.pending_trigger_count = entry["pending_trigger_count"]
+        meta.next_trigger_at = entry["next_trigger_at"]
+      if include_pending_plan_approval:
+        meta.has_pending_plan_approval = bool(entry["has_pending_plan_approval"])
 
   async def _next_session_name(self) -> str:
     """Generate 'Session 0', 'Session 1', etc. using a persistent counter file.
@@ -1458,6 +1518,10 @@ class SessionManager:
 
     await asyncio.to_thread(atomic_write_text, path, serialized)
     self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic())
+    # The single funnel for every session-metadata write (35+ call sites, plus
+    # the ScheduledSessionStore delegate): status transitions (archive/unarchive)
+    # land here, so the sidebar snapshot must re-probe this session.
+    sidebar_state.mark_sidebar_dirty(meta.id)
 
   def _session_dir(self, session_id: str) -> Path:
     return self._cfg.sessions_dir / session_id

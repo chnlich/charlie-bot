@@ -27,6 +27,7 @@ from src.core.models import (
   WatchTarget,
 )
 from src.core.sessions import SessionManager
+from src.core.sidebar_state import mark_sidebar_dirty
 from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
@@ -882,6 +883,9 @@ class TriggerManager:
     path.parent.mkdir(parents=True, exist_ok=True)
     async with aiofiles.open(path, "w") as f:
       await f.write(trigger.model_dump_json(indent=2))
+    # Single funnel for every trigger-file write (schedule/cancel/undeliverable):
+    # a pending-count change must reach the sidebar snapshot.
+    mark_sidebar_dirty(trigger.session_id)
 
   async def _load_trigger(self, session_id: str, trigger_id: str) -> PendingTrigger:
     path = self._trigger_path(session_id, trigger_id)

@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 
 import structlog
 
+from src.core.sidebar_state import mark_sidebar_dirty
+
 log = structlog.get_logger()
 
 # session_id -> busy interval start (a continuous run+queued stretch).
@@ -37,6 +39,8 @@ def mark_busy(session_id: str, since: datetime | None = None) -> tuple[datetime,
     return existing, False
   started_at = since if since is not None else datetime.now(UTC)
   _busy_since[session_id] = started_at
+  # busy flips the sidebar's has_running_tasks (bool(thinking_since) or running).
+  mark_sidebar_dirty(session_id)
   log.debug("thinking_state_busy", session=session_id, busy_since=started_at.isoformat())
   return started_at, True
 
@@ -45,6 +49,8 @@ def clear_busy(session_id: str) -> None:
   """Drop the busy entry for *session_id*. Idempotent."""
   started_at = _busy_since.pop(session_id, None)
   if started_at is not None:
+    # The busy -> idle flip changes the sidebar's has_running_tasks.
+    mark_sidebar_dirty(session_id)
     log.debug("thinking_state_idle", session=session_id, busy_since=started_at.isoformat())
 
 

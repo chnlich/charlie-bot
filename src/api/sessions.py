@@ -322,9 +322,17 @@ async def _load_requested_sessions(session_mgr: SessionManager, ids: str) -> lis
 @router.get('/status')
 async def all_sessions_status(
     ids: str = Query(..., description="Comma-separated ids of the sessions the sidebar is rendering"),
+    force: bool = False,
     session_mgr: SessionManager = Depends(get_session_manager),
 ):
-  """Return derived sidebar state for the requested sessions."""
+  """Return derived sidebar state for the requested sessions.
+
+  Clean sessions are served from the in-process snapshot with zero disk
+  access; only sessions whose probed state changed since the last poll are
+  re-probed from disk. Pass ``force=1`` to skip the dirty check and re-probe
+  every requested session (a full probe also runs on every 10th poll as a
+  self-heal fallback).
+  """
   sessions = await _load_requested_sessions(session_mgr, ids)
   if not sessions:
     return {}
@@ -333,6 +341,7 @@ async def all_sessions_status(
       include_running_status=True,
       include_pending_trigger_status=True,
       include_pending_plan_approval=True,
+      force=force,
   )
   result: dict[str, dict] = {}
   for meta in sessions:

@@ -70,10 +70,21 @@ class ThreadManager:
 
   async def list_threads(self, session_id: str) -> list[ThreadMetadata]:
     threads_dir = self._cfg.sessions_dir / session_id / "threads"
-    dirs = await asyncio.to_thread(
-        lambda: [d for d in threads_dir.iterdir() if d.is_dir()] if threads_dir.exists() else [])
-    all_meta = await asyncio.gather(*(self.get_thread(session_id, d.name) for d in dirs))
-    threads = [m for m in all_meta if m]
+
+    def load_all() -> list[ThreadMetadata]:
+      # One executor hop for the whole scan: a per-file aiofiles read costs
+      # ~0.5 ms in thread-pool hand-off, so per-file reads make the 3s
+      # workers-panel poll scale linearly with thread count.
+      if not threads_dir.exists():
+        return []
+      metas = []
+      for d in threads_dir.iterdir():
+        path = d / "metadata.json"
+        if d.is_dir() and path.exists():
+          metas.append(ThreadMetadata.model_validate_json(path.read_text(encoding="utf-8")))
+      return metas
+
+    threads = await asyncio.to_thread(load_all)
     threads.sort(key=lambda t: t.created_at, reverse=True)
     return threads
 

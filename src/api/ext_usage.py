@@ -207,18 +207,24 @@ class ClaudeUsageProvider:
 
 
 class CodexUsageProvider:
-  """Reads usage from <home_dir>/sessions/ JSONL files for one account."""
+  """Reads usage from <home_dir>/sessions/ JSONL files for one account.
+
+  ``_spend_cache`` holds resolved spend events per rollout file keyed on the
+  file's (mtime_ns, size). The poll loop fetches one account at a time and
+  awaits each fetch, so one instance's cache never sees concurrent access.
+  """
 
   def __init__(self, label: str, home_dir: str) -> None:
     self.label = label
     self.sessions_dir = Path(home_dir) / "sessions"
     self.last_error = "no sessions found"
+    self._spend_cache: dict[Path, tuple[int, int, list[_SpendEvent]]] = {}
 
   async def fetch(self) -> dict[str, Any] | None:
     rollout_paths = await asyncio.to_thread(_list_rollout_files, self.sessions_dir)
     usage, spend = await asyncio.gather(
         asyncio.to_thread(self._fetch_usage, rollout_paths),
-        asyncio.to_thread(_compute_codex_spend_windows, rollout_paths=rollout_paths),
+        asyncio.to_thread(self._compute_spend, rollout_paths),
         return_exceptions=True,
     )
     if isinstance(usage, Exception):
@@ -240,6 +246,36 @@ class CodexUsageProvider:
       return None
     text = jsonl_path.read_text()
     return _extract_latest_codex_usage(text.splitlines(), account=self.label)
+
+  def _compute_spend(self, rollout_paths: list[Path]) -> dict[str, float]:
+    # A changed file is re-read from the start, never tail-only: a token_count
+    # event's model comes from the turn_context line above it.
+    now = datetime.now(UTC)
+    min_mtime = (now - timedelta(days=7)).timestamp()
+    live: set[Path] = set()
+    events_by_file = []
+    for path in rollout_paths:
+      try:
+        stat = path.stat()
+      except OSError as e:
+        log.warning("ext_usage_codex_spend_file_skip", path=str(path), error=str(e))
+        continue
+      if stat.st_mtime < min_mtime:
+        continue
+      live.add(path)
+      cached = self._spend_cache.get(path)
+      if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        events_by_file.append(cached[2])
+        continue
+      events = _extract_codex_spend_events(path)
+      # An unreadable file (None) is skipped, not cached, so the next round retries it.
+      if events is not None:
+        self._spend_cache[path] = (stat.st_mtime_ns, stat.st_size, events)
+        events_by_file.append(events)
+    for path in list(self._spend_cache):
+      if path not in live:
+        del self._spend_cache[path]
+    return _sum_codex_spend_events(events_by_file, now=now)
 
 
 def _list_rollout_files(sessions_dir: Path) -> list[Path]:
@@ -394,6 +430,86 @@ def _log_codex_spend_row_skip(path: Path, line_number: int, error: Exception | s
   )
 
 
+# One spend event from a rollout log: (observed_at, model, token_usage).
+_SpendEvent = tuple[datetime, str, dict[str, int]]
+
+
+def _extract_codex_spend_events(path: Path) -> list[_SpendEvent] | None:
+  # Model attribution is positional (a turn_context line applies to the token_count
+  # events after it), so it is resolved here during the single pass. None means the
+  # file could not be read (a warning was logged); event lists may be cached, None not.
+  events: list[_SpendEvent] = []
+  current_model = ""
+  try:
+    for line_number, raw_line in enumerate(path.read_text().splitlines(), start=1):
+      line = raw_line.strip()
+      if not line:
+        continue
+      try:
+        event = json.loads(line)
+        if not isinstance(event, dict):
+          raise ValueError(f"expected JSON object, got {type(event).__name__}")
+        event_type = event.get("type")
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
+          raise ValueError(f"payload must be an object, got {type(payload).__name__}")
+        if event_type == "turn_context":
+          model = payload.get("model")
+          if isinstance(model, str):
+            current_model = model
+          continue
+        if event_type != "event_msg" or payload.get("type") != "token_count":
+          continue
+
+        info = payload.get("info") or {}
+        if not isinstance(info, dict):
+          raise ValueError(f"info must be an object, got {type(info).__name__}")
+        last_usage = info.get("last_token_usage")
+        if not last_usage:
+          continue
+        if not isinstance(last_usage, dict):
+          raise ValueError(f"last_token_usage must be an object, got {type(last_usage).__name__}")
+        token_usage = {
+            "input_tokens": last_usage["input_tokens"],
+            "cached_input_tokens": last_usage["cached_input_tokens"],
+            "output_tokens": last_usage["output_tokens"],
+        }
+        for key, value in token_usage.items():
+          if not isinstance(value, int):
+            raise ValueError(f"{key} must be an int, got {type(value).__name__}")
+
+        events.append((_parse_codex_timestamp(event["timestamp"]), current_model, token_usage))
+      except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+        _log_codex_spend_row_skip(path, line_number, e)
+  except OSError as e:
+    log.warning("ext_usage_codex_spend_file_skip", path=str(path), error=str(e))
+    return None
+  return events
+
+
+def _sum_codex_spend_events(events_by_file: list[list[_SpendEvent]], *, now: datetime) -> dict[str, float]:
+  if now.tzinfo is None:
+    raise ValueError("now must be timezone-aware")
+  effective_now = now.astimezone(UTC)
+  one_day_ago = effective_now - timedelta(days=1)
+  seven_days_ago = effective_now - timedelta(days=7)
+
+  last_24h_by_model: dict[str, dict[str, int]] = {}
+  last_7d_by_model: dict[str, dict[str, int]] = {}
+  for events in events_by_file:
+    for observed_at, model, token_usage in events:
+      if observed_at < seven_days_ago or observed_at > effective_now:
+        continue
+      _add_token_usage(last_7d_by_model, model, token_usage)
+      if observed_at >= one_day_ago:
+        _add_token_usage(last_24h_by_model, model, token_usage)
+
+  return {
+      "last_24h_usd": _sum_codex_spend(last_24h_by_model),
+      "last_7d_usd": _sum_codex_spend(last_7d_by_model),
+  }
+
+
 def _compute_codex_spend_windows(
     *,
     rollout_paths: list[Path] | None = None,
@@ -405,15 +521,11 @@ def _compute_codex_spend_windows(
   if effective_now.tzinfo is None:
     raise ValueError("now must be timezone-aware")
   effective_now = effective_now.astimezone(UTC)
-  one_day_ago = effective_now - timedelta(days=1)
-  seven_days_ago = effective_now - timedelta(days=7)
-  min_mtime = seven_days_ago.timestamp()
+  min_mtime = (effective_now - timedelta(days=7)).timestamp()
   if rollout_paths is None:
     rollout_paths = _list_rollout_files(sessions_dir or (Path.home() / ".codex" / "sessions"))
 
-  last_24h_by_model: dict[str, dict[str, int]] = {}
-  last_7d_by_model: dict[str, dict[str, int]] = {}
-
+  events_by_file = []
   for path in rollout_paths:
     try:
       if path.stat().st_mtime < min_mtime:
@@ -421,61 +533,11 @@ def _compute_codex_spend_windows(
     except OSError as e:
       log.warning("ext_usage_codex_spend_file_skip", path=str(path), error=str(e))
       continue
+    events = _extract_codex_spend_events(path)
+    if events is not None:
+      events_by_file.append(events)
 
-    current_model = ""
-    try:
-      for line_number, raw_line in enumerate(path.read_text().splitlines(), start=1):
-        line = raw_line.strip()
-        if not line:
-          continue
-        try:
-          event = json.loads(line)
-          if not isinstance(event, dict):
-            raise ValueError(f"expected JSON object, got {type(event).__name__}")
-          event_type = event.get("type")
-          payload = event.get("payload") or {}
-          if not isinstance(payload, dict):
-            raise ValueError(f"payload must be an object, got {type(payload).__name__}")
-          if event_type == "turn_context":
-            model = payload.get("model")
-            if isinstance(model, str):
-              current_model = model
-            continue
-          if event_type != "event_msg" or payload.get("type") != "token_count":
-            continue
-
-          info = payload.get("info") or {}
-          if not isinstance(info, dict):
-            raise ValueError(f"info must be an object, got {type(info).__name__}")
-          last_usage = info.get("last_token_usage")
-          if not last_usage:
-            continue
-          if not isinstance(last_usage, dict):
-            raise ValueError(f"last_token_usage must be an object, got {type(last_usage).__name__}")
-          token_usage = {
-              "input_tokens": last_usage["input_tokens"],
-              "cached_input_tokens": last_usage["cached_input_tokens"],
-              "output_tokens": last_usage["output_tokens"],
-          }
-          for key, value in token_usage.items():
-            if not isinstance(value, int):
-              raise ValueError(f"{key} must be an int, got {type(value).__name__}")
-
-          observed_at = _parse_codex_timestamp(event["timestamp"])
-          if observed_at < seven_days_ago or observed_at > effective_now:
-            continue
-          _add_token_usage(last_7d_by_model, current_model, token_usage)
-          if observed_at >= one_day_ago:
-            _add_token_usage(last_24h_by_model, current_model, token_usage)
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
-          _log_codex_spend_row_skip(path, line_number, e)
-    except OSError as e:
-      log.warning("ext_usage_codex_spend_file_skip", path=str(path), error=str(e))
-
-  return {
-      "last_24h_usd": _sum_codex_spend(last_24h_by_model),
-      "last_7d_usd": _sum_codex_spend(last_7d_by_model),
-  }
+  return _sum_codex_spend_events(events_by_file, now=effective_now)
 
 
 CODEX_LIMIT_SLOTS = ("primary", "secondary")

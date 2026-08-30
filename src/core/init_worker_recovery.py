@@ -75,7 +75,7 @@ def iter_recent_thread_metas(
   only ``load_json_meta`` (read + parse) the ones whose mtime is at least
   ``now - window``. Threads whose metadata is older than the window are skipped
   with zero content reads, as are dirs with missing/unreadable metadata. Shared by
-  ``_recover_orphaned_threads`` (init) and ``_has_running_tasks`` (sessions) so the
+  ``_scan_interrupted_runs`` (init) and ``has_running_tasks_sync`` (sessions) so the
   stat-before-read scan stays identical at both sites.
   """
   if not threads_dir.is_dir():

@@ -121,7 +121,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
    - Events are streamed via WebSocket and persisted to `events.jsonl`
 
 3. **Review** (Phase 2 — Automatic on Worker Success):
-   - On successful worker completion, `_spawn_review_worker()` automatically spawns a Review Agent
+   - On successful worker completion, `spawn_review_worker()` (`src/core/review.py`) automatically spawns a Review Agent
    - The reviewer intentionally uses a **different LLM backend** than the worker (cross-backend review), selected from `model_preference` config
    - Reviewer reads session conversation + worker log for context, then:
      - Reviews `git diff base_branch...branch_name`

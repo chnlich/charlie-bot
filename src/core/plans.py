@@ -23,6 +23,7 @@ from src.core.config import CharlieBotConfig
 from src.core.json_utils import write_json_atomically
 from src.core.models import utc_now
 from src.core.sessions import SessionManager
+from src.core.sidebar_state import mark_sidebar_dirty
 
 log = structlog.get_logger()
 
@@ -224,6 +225,9 @@ class PlanRegistryManager:
     # this write, not resurrect.
     await asyncio.to_thread(
         write_json_atomically, self._plans_path(session_id), _project_registry(data), indent=2)
+    # Single funnel for every registry verb (present/amend/approve/close):
+    # an awaiting-approval change must reach the sidebar snapshot.
+    mark_sidebar_dirty(session_id)
 
   async def _broadcast(self, session_id: str, plan_id: int) -> None:
     await self._session_mgr.broadcast_only(

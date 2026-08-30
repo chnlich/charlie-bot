@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -18,6 +19,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
 
+from src.agents import master_cc_state
 from src.api import internal
 from src.api.deps import get_session_manager
 from src.api.internal import router as internal_router
@@ -122,6 +124,23 @@ async def _run_record(session_mgr: SessionManager, sid: str, user_event_id: str 
   """Record a running round whose input is *user_event_id* (what post_reply binds a reply to)."""
   await session_mgr.persist_master_run(
       sid, MasterRunRecord(started_at=utc_now(), raw_log=str(tmp_path / "raw.jsonl"), user_event_id=user_event_id))
+
+
+def _running_item(cfg: CharlieBotConfig, session_mgr: SessionManager, sid: str,
+                  user_event_id: str | None) -> master_cc_state._WorkItem:
+  """A work item as the consumer parks it in ``master_cc_state._current_items`` while a round runs."""
+  return master_cc_state._WorkItem(
+      cfg=cfg,
+      session_meta=SessionMetadata(id=sid, name="slack session"),
+      user_content="summon prompt",
+      callbacks=session_mgr.callbacks(),
+      is_voice=False,
+      auto_trigger=False,
+      backend_option=None,
+      extra_claude_flags=None,
+      should_check_tex=False,
+      future=asyncio.get_running_loop().create_future(),
+      user_event_id=user_event_id)
 
 
 def _summon(thread_ts: str = _THREAD, content: str = _SUMMON_CONTENT) -> dict:
@@ -371,6 +390,146 @@ async def test_readback_and_log_measure_the_reply_against_the_budget(
   assert posted[0]["answers"] is None
 
 
+@pytest.mark.asyncio
+async def test_reply_binds_the_running_round_when_the_metadata_cache_holds_no_run(tmp_path: Path) -> None:
+  """Regression anchor for the answers=null race: a stale whole-object write-back clobbers the
+  record (cache and disk both master_run=None) while the round runs, and the reply still binds —
+  through the in-process running round, never the poisoned metadata."""
+  cfg, session_mgr, client = _rig(tmp_path)
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+  summon = await _append(session_mgr, sid, _summon())
+  await _run_record(session_mgr, sid, summon["id"], tmp_path)
+  # The production clobber: a stale read-modify-write saves a record-less meta,
+  # so the TTL cache (and disk) hold master_run=None while the round is running.
+  clobbered = await session_mgr.get_session(sid)
+  clobbered.master_run = None
+  await session_mgr.save_metadata(clobbered)
+  assert (await session_mgr.get_session(sid)).master_run is None
+
+  master_cc_state._current_items[sid] = _running_item(cfg, session_mgr, sid, summon["id"])
+  try:
+    ack_tasks: list[asyncio.Task] = []
+    with (
+        patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
+        patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(ack_tasks)),
+    ):
+      result = await post_reply(sid, "the answer", cfg, session_mgr)
+      await asyncio.gather(*ack_tasks)
+  finally:
+    master_cc_state._current_items.pop(sid, None)
+
+  assert result == {"posted": True, "chars": 10, "chunks": 1, "over_budget": False, "answers": summon["id"]}
+  reply = _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)[0]
+  assert reply["slack_reply"] == {"answers": summon["id"], "chars": 10, "chunks": 1}
+  assert client.remove_calls == [{"channel": _CHANNEL, "name": "eyes", "ts": _THREAD}]
+  assert not client.reactions[_THREAD]
+
+
+@pytest.mark.asyncio
+async def test_reply_binding_tracks_the_running_round_under_metadata_churn(tmp_path: Path) -> None:
+  """Mechanism-level check under the production topology: while item spawn/done churn,
+  sidebar-style cache-miss polls, unread flips, and event persists run concurrently, every
+  reply binds exactly the summon of the round running when the binding resolved — and is
+  null only when no round was in flight. The metadata itself never carries a record here,
+  so any binding that strays off the running round reads as a mis-binding."""
+  rng = random.Random(20260830)
+  cfg, session_mgr, client = _rig(tmp_path)
+  sid = await _slack_session(session_mgr)
+  first = await _append(session_mgr, sid, _summon())
+  second = await _append(session_mgr, sid, _summon())
+  summon_ids = [first["id"], second["id"]]
+  stop = asyncio.Event()
+
+  async def round_lifecycle() -> None:
+    """Spawn/done rhythm alternating the running round between the two summons."""
+    i = 0
+    while not stop.is_set():
+      master_cc_state._current_items[sid] = _running_item(cfg, session_mgr, sid, summon_ids[i % 2])
+      i += 1
+      for _ in range(rng.randrange(1, 4)):
+        await asyncio.sleep(0)
+      master_cc_state._current_items.pop(sid, None)
+      for _ in range(rng.randrange(1, 4)):
+        await asyncio.sleep(0)
+
+  async def poll_metadata() -> None:
+    """Sidebar-style polling with the TTL entry dropped each pass — the miss-path repopulate."""
+    while not stop.is_set():
+      session_mgr._metadata_cache.pop(sid, None)
+      await session_mgr.get_session(sid)
+      for _ in range(rng.randrange(1, 4)):
+        await asyncio.sleep(0)
+
+  async def flip_unread() -> None:
+    """Browser-style read/unread flips — the locked read-modify-write amplifier."""
+    while not stop.is_set():
+      await session_mgr.mark_unread(sid)
+      for _ in range(rng.randrange(1, 3)):
+        await asyncio.sleep(0)
+      await session_mgr.mark_read(sid)
+      for _ in range(rng.randrange(1, 3)):
+        await asyncio.sleep(0)
+
+  async def persist_churn() -> None:
+    """The event stream's concurrent persists."""
+    while not stop.is_set():
+      await session_mgr.persist_and_broadcast(sid, _assistant(f"churn {rng.randrange(1 << 30)}"))
+      for _ in range(rng.randrange(1, 3)):
+        await asyncio.sleep(0)
+
+  real_accessor = master_cc_state.running_user_event_id
+  resolved: list[str | None] = []
+
+  def observing_accessor(session_id: str) -> str | None:
+    """Record the identity the binding saw at its own instant: the round-running ground truth."""
+    result = real_accessor(session_id)
+    resolved.append(result)
+    return result
+
+  async def reply_loop() -> int:
+    posted = 0
+    while posted < 40:
+      for _ in range(rng.randrange(1, 5)):
+        await asyncio.sleep(0)
+      await post_reply(sid, "concurrent answer", cfg, session_mgr)
+      posted += 1
+    stop.set()
+    return posted
+
+  ack_tasks: list[asyncio.Task] = []
+  churn: list[asyncio.Task] = []
+  try:
+    with (
+        patch(_BOT_CLIENT_PATCH_TARGET, return_value=client),
+        patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(ack_tasks)),
+        patch.object(master_cc_state, "running_user_event_id", observing_accessor),
+    ):
+      churn = [
+          asyncio.create_task(round_lifecycle(), name="churn-round-lifecycle"),
+          asyncio.create_task(poll_metadata(), name="churn-metadata-poll"),
+          asyncio.create_task(flip_unread(), name="churn-unread-flip"),
+          asyncio.create_task(persist_churn(), name="churn-event-persist"),
+      ]
+      posted = await reply_loop()
+      await asyncio.gather(*churn)
+      await asyncio.gather(*ack_tasks)
+  finally:
+    stop.set()
+    for task in churn:
+      task.cancel()
+    if churn:
+      await asyncio.gather(*churn, return_exceptions=True)
+    master_cc_state._current_items.pop(sid, None)
+
+  assert posted == 40  # the topology exercised replies rather than degenerating
+  assert sum(r is not None for r in resolved) >= 5  # ...including replies made mid-round
+  replies = _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
+  assert len(replies) == len(resolved)
+  for reply_event, running_at_resolution in zip(replies, resolved):
+    assert reply_event["slack_reply"]["answers"] == running_at_resolution
+
+
 # ---------------------------------------------------------------------------
 # Reply: the internal route
 # ---------------------------------------------------------------------------
@@ -385,6 +544,9 @@ class _RouteSessions:
     self.persisted: list[tuple[str, dict[str, Any]]] = []
 
   async def get_session(self, session_id: str) -> SessionMetadata | None:
+    return self.meta if self.meta is not None and self.meta.id == session_id else None
+
+  async def read_metadata_fresh(self, session_id: str) -> SessionMetadata | None:
     return self.meta if self.meta is not None and self.meta.id == session_id else None
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:

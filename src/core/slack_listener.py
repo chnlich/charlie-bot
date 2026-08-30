@@ -45,7 +45,6 @@ from src.core.http import get_http_client
 from src.core.master_trigger import trigger_master
 from src.core.models import (
   CreateSessionRequest,
-  SessionMetadata,
   SessionStatus,
   SlackOrigin,
 )
@@ -466,17 +465,16 @@ class SlackReplyError(Exception):
     self.detail = detail
 
 
-def _bound_summon(events: list[dict], meta: SessionMetadata) -> tuple[str, dict] | None:
+def _bound_summon(events: list[dict], user_event_id: str | None) -> tuple[str, dict] | None:
   """``(summon_id, slack block)`` of the summon the running round answers, or None.
 
-  The running round's input is ``master_run.user_event_id``; only an input that
-  carries a slack block (a summon or its nudge) binds the reply to a summon. A
-  browser-typed message, a trigger wake, or no recorded run binds nothing.
+  Only an input event that carries a slack block (a summon or its nudge) binds
+  the reply to a summon. A browser-typed message, a trigger wake, or no round
+  identity binds nothing.
   """
-  run = meta.master_run
-  if run is None or run.user_event_id is None:
+  if user_event_id is None:
     return None
-  ev = _event_by_id(events, run.user_event_id)
+  ev = _event_by_id(events, user_event_id)
   block = ev.get("slack") if ev is not None else None
   if block is None:
     return None
@@ -501,8 +499,19 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig,
   if not text.strip():
     raise SlackReplyError(422, "Reply text is empty")
 
+  # lazy: mirrors the backfill import's agents-package guard
+  from src.agents import master_cc_state
+
   events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-  bound = _bound_summon(events, meta)
+  # Binding identity: the in-process running round first (authoritative, no
+  # metadata-cache race), the disk record as fallback for the restart gap where
+  # an orphaned master posts before the re-attach item reaches the consumer.
+  user_event_id = master_cc_state.running_user_event_id(session_id)
+  if user_event_id is None:
+    fresh = await session_mgr.read_metadata_fresh(session_id)
+    if fresh is not None and fresh.master_run is not None:
+      user_event_id = fresh.master_run.user_event_id
+  bound = _bound_summon(events, user_event_id)
   answers = bound[0] if bound is not None else None
   origin = meta.slack_origin
   client = _bot_client(cfg)

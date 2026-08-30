@@ -9,7 +9,7 @@ import cycle.
 The three assignments at the bottom serve module-level names that tests reach
 through this module (the two scan-window/quarantine constants and the
 boot-scoped silence once-key); they are assignments, not imports, so the
-export-list evidence check sees only def/class names. ``_silence_reported_``
+export-list evidence check sees only def/class names. ``_silence_reported_thread_ids``
 is bound by reference: the code and the tests must mutate one shared set.
 """
 

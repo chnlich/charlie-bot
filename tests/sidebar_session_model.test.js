@@ -31,6 +31,7 @@ function loadGroups() {
     relativeTime: () => 'Jul 29, 5:12 PM',
     formatLastRun: () => '',
     getSessionIndicatorState: () => 'idle',
+    renderSessionIndicators: () => '',
     renderPendingTriggerIndicator: () => '',
     renderPendingPlanApprovalIndicator: () => '',
     renderTuiStatusDot: () => '',

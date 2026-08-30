@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import CLEAN_EXIT_OUTCOME, JudgmentShim, append_events
+from conftest import CLEAN_EXIT_OUTCOME, OPUS_BACKEND_ID, JudgmentShim, append_events
 from conftest import THREE_BACKEND_OPTIONS as BACKEND_OPTIONS
 
 from src.core import event_types as ET
@@ -24,7 +24,7 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
       charliebot_home=tmp_path / "charliebot-home",
       worktree_dir=str(tmp_path / "worktrees"),
       backend_options=BACKEND_OPTIONS,
-      model_preference=["claude-opus-4.6", "codex-o3", "kimi-k2.5"],
+      model_preference=[OPUS_BACKEND_ID, "codex-o3", "kimi-k2.5"],
   )
 
 
@@ -68,7 +68,7 @@ class FakeThreadManager(JudgmentShim):
 
 class FakeSessionManager(JudgmentShim):
 
-  def __init__(self, session_id: str, backend: str = "claude-opus-4.6") -> None:
+  def __init__(self, session_id: str, backend: str = OPUS_BACKEND_ID) -> None:
     self.session = SessionMetadata(id=session_id, name="Test", backend=backend)
     self.events: list[dict[str, Any]] = []
 

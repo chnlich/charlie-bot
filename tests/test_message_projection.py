@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, make_home_session
+from conftest import BROADCAST_PATCH_TARGET, OPUS_BACKEND_ID, make_home_session
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
 from conftest import assistant_event as _assistant_event
@@ -717,7 +717,7 @@ def test_worker_summary_without_origin_keeps_fields_unchanged() -> None:
 async def test_worker_summary_delivered_to_successor_projects_origin_and_thread(tmp_path: Path) -> None:
   """End-to-end: a worker_summary delivered through deliver_to_successor into an
   eloned session projects with the origin session id and thread id."""
-  _cfg, mgr, parent = await make_home_session(tmp_path, name="parent", backend="claude-opus-4.6")
+  _cfg, mgr, parent = await make_home_session(tmp_path, name="parent", backend=OPUS_BACKEND_ID)
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.persist_and_broadcast(parent.id, {"type": "user", "content": "q", "timestamp": "t0"})
   child = await mgr.elone_session(parent.id, event_index=0)

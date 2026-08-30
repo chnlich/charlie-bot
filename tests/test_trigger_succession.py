@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import (
   BROADCAST_PATCH_TARGET,
+  OPUS_BACKEND_ID,
   TRIGGER_MASTER_PATCH_TARGET,
   TRIGGERS_GET_CONFIG_PATCH_TARGET,
   make_home_session,
@@ -42,7 +43,7 @@ async def test_trigger_master_runs_successor_when_requested_session_eloned(tmp_p
 
 @pytest.mark.asyncio
 async def test_trigger_master_skips_archived_without_successor(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="Archived", backend="claude-opus-4.6")
+  cfg, mgr, session = await make_home_session(tmp_path, name="Archived", backend=OPUS_BACKEND_ID)
   await mgr.archive_session(session.id)
 
   with patch(
@@ -90,7 +91,7 @@ async def test_firing_trigger_eloned_delivers_into_successor_and_wakes(tmp_path:
 
 @pytest.mark.asyncio
 async def test_firing_trigger_archived_by_hand_without_successor_still_cancels(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="Archived", backend="claude-opus-4.6")
+  cfg, mgr, session = await make_home_session(tmp_path, name="Archived", backend=OPUS_BACKEND_ID)
   await mgr.archive_session(session.id)
   trigger_mgr = TriggerManager(cfg, mgr)
 

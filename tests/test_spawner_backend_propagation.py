@@ -5,6 +5,7 @@ import pytest
 from conftest import (
   CLEAN_EXIT_OUTCOME,
   CODEX_BACKEND_OPTION,
+  OPUS_BACKEND_ID,
   CapturingThreadManager,
   JudgmentShim,
   ReviewSpawnSessionManager,
@@ -35,7 +36,7 @@ def _build_cfg() -> CharlieBotConfig:
       worktree_dir="/tmp/worktrees",
       backend_options=[
           BackendOption(
-              id="claude-opus-4.6",
+              id=OPUS_BACKEND_ID,
               label="Opus",
               type="cc-claude",
               model="claude-opus-4-6",
@@ -57,8 +58,8 @@ def _build_tmp_cfg(tmp_path: Path, backend_option: BackendOption) -> CharlieBotC
 
 def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
   cfg = _build_cfg()
-  opt = spawner.resolve_backend_option(cfg, "claude-opus-4.6", "claude-opus-4-6")
-  assert opt.id == "claude-opus-4.6"
+  opt = spawner.resolve_backend_option(cfg, OPUS_BACKEND_ID, "claude-opus-4-6")
+  assert opt.id == OPUS_BACKEND_ID
   assert opt.model == "claude-opus-4-6"
   assert opt.effort == "max"
   assert opt.cli_binary == "claude-sub"
@@ -270,7 +271,7 @@ async def test_resolve_requested_subagent_backend_model_uses_requested_backend()
 
     async def get_session(self, session_id: str) -> SessionMetadata:
       assert session_id == "session-id"
-      return SessionMetadata(id=session_id, name="Test", backend="claude-opus-4.6")
+      return SessionMetadata(id=session_id, name="Test", backend=OPUS_BACKEND_ID)
 
   backend, model = await spawner.resolve_requested_subagent_backend_model(
       "session-id", cfg, FakeSessionManager(), requested_backend="codex-o3")
@@ -287,12 +288,12 @@ async def test_resolve_requested_subagent_backend_model_defaults_to_session_back
 
     async def get_session(self, session_id: str) -> SessionMetadata:
       assert session_id == "session-id"
-      return SessionMetadata(id=session_id, name="Test", backend="claude-opus-4.6")
+      return SessionMetadata(id=session_id, name="Test", backend=OPUS_BACKEND_ID)
 
   backend, model = await spawner.resolve_requested_subagent_backend_model(
       "session-id", cfg, FakeSessionManager(), requested_backend=None)
 
-  assert backend == "claude-opus-4.6"
+  assert backend == OPUS_BACKEND_ID
   assert model == "claude-opus-4-6"
 
 

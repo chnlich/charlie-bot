@@ -229,7 +229,7 @@ def archive_cutoff_events() -> tuple[datetime, list[dict]]:
 
 async def make_parent(mgr: "SessionManager", *, name: str = "Parent") -> str:
   """A session ready to elone: the two seed events give succession tests a cut point to reference."""
-  parent = await mgr.create_session(models.CreateSessionRequest(name=name), backend="claude-opus-4.6")
+  parent = await mgr.create_session(models.CreateSessionRequest(name=name), backend=OPUS_BACKEND_ID)
   append_events(
       mgr.get_chat_events_path(parent.id),
       [
@@ -370,8 +370,12 @@ def session_dir_names(cfg: CharlieBotConfig) -> set[str]:
   return {d.name for d in cfg.sessions_dir.iterdir() if d.is_dir()}
 
 
+# Backend id the conftest configs register for the Opus option; session fixtures across the
+# suite must spell it through this constant so a rename stays a one-line change.
+OPUS_BACKEND_ID = "claude-opus-4.6"
+
 OPUS_BACKEND_OPTION = models.BackendOption(
-    id="claude-opus-4.6", label="Opus", type="cc-claude", model="claude-opus-4-6"
+    id=OPUS_BACKEND_ID, label="Opus", type="cc-claude", model="claude-opus-4-6"
 )
 CODEX_BACKEND_OPTION = models.BackendOption(
     id="codex-o3", label="Codex", type="codex", model="o3"
@@ -727,7 +731,7 @@ async def make_plan_setup(
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
   plan_mgr = PlanRegistryManager(cfg, session_mgr)
-  meta = await session_mgr.create_session(models.CreateSessionRequest(name="Test"), backend="claude-opus-4.6")
+  meta = await session_mgr.create_session(models.CreateSessionRequest(name="Test"), backend=OPUS_BACKEND_ID)
   return cfg, session_mgr, thread_mgr, plan_mgr, meta
 
 
@@ -1286,7 +1290,7 @@ class ReviewSpawnSessionManager(JudgmentShim):
     self._session_name = session_name
 
   async def get_session(self, session_id: str) -> models.SessionMetadata:
-    return models.SessionMetadata(id=session_id, name=self._session_name, backend="claude-opus-4.6")
+    return models.SessionMetadata(id=session_id, name=self._session_name, backend=OPUS_BACKEND_ID)
 
 
 class SpawnFlowSessionManager(JudgmentShim):

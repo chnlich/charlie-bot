@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import make_home_config
+from conftest import OPUS_BACKEND_ID, make_home_config
 
 from src.core import scheduler as scheduler_module
 from src.core.config import ScheduledTaskConfig
@@ -285,7 +285,7 @@ async def test_fire_ignores_stuck_running_disk_state(
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: code-health", scheduled_task="code-health"),
-      backend="claude-opus-4.6",
+      backend=OPUS_BACKEND_ID,
   )
   # A thread that is stuck running with a pid that no longer exists.
   thread_mgr = ThreadManager(cfg)

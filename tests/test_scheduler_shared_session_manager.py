@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
+  OPUS_BACKEND_ID,
   OPUS_BACKEND_OPTION,
   SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
   SCHEDULER_LOAD_CONFIG_PATCH_TARGET,
@@ -57,7 +58,7 @@ async def test_scheduled_prompt_task_hands_injected_session_manager_to_worker(
   session_mgr = SessionManager(cfg)
   await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
-      backend="claude-opus-4.6",
+      backend=OPUS_BACKEND_ID,
   )
   scheduler = Scheduler(cfg, session_mgr)
   task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt")
@@ -75,7 +76,7 @@ async def test_scheduled_prompt_task_hands_injected_session_manager_to_worker(
   monkeypatch.setattr(SCHEDULER_THREAD_MANAGER_PATCH_TARGET, lambda _cfg: FakeThreadManager())
   monkeypatch.setattr(
       SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
-      AsyncMock(return_value=("claude-opus-4.6", "claude-opus-4-6")),
+      AsyncMock(return_value=(OPUS_BACKEND_ID, "claude-opus-4-6")),
   )
   monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)
   monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
@@ -96,7 +97,7 @@ async def test_scheduled_round_events_reach_shared_read_cache(
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: probe", scheduled_task="probe"),
-      backend="claude-opus-4.6",
+      backend=OPUS_BACKEND_ID,
   )
   # Warm the cache the way an HTTP history read does, before the round fires.
   assert not session_mgr.load_chat_events_sync(meta.id)

@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from conftest import OPUS_BACKEND_ID
 from conftest import make_session_mgr as _make_session_mgr
 
 from src.core.models import SessionMetadata
@@ -35,7 +36,7 @@ async def test_atomic_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
   vacuous pass where the hook is never reached.
   """
   mgr = _make_session_mgr(tmp_path)
-  meta = SessionMetadata(name="seed", backend="claude-opus-4.6")
+  meta = SessionMetadata(name="seed", backend=OPUS_BACKEND_ID)
   await mgr.save_metadata(meta)
   target = mgr._metadata_path(meta.id)
 
@@ -62,7 +63,7 @@ async def test_atomic_read_observes_previous_document_at_swap(tmp_path: Path) ->
   up to the rename. An in-place truncating write side would read empty here.
   """
   mgr = _make_session_mgr(tmp_path)
-  meta = SessionMetadata(name="before", backend="claude-opus-4.6")
+  meta = SessionMetadata(name="before", backend=OPUS_BACKEND_ID)
   await mgr.save_metadata(meta)
   target = mgr._metadata_path(meta.id)
 
@@ -119,7 +120,7 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
   complete" check would not catch it.
   """
   mgr = _make_session_mgr(tmp_path)
-  meta = SessionMetadata(name="seed", backend="claude-opus-4.6")
+  meta = SessionMetadata(name="seed", backend=OPUS_BACKEND_ID)
   await mgr.save_metadata(meta)
   target = mgr._metadata_path(meta.id)
 

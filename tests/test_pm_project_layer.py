@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 import yaml
 from conftest import (
+  OPUS_BACKEND_ID,
   SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
   SCHEDULER_LOAD_CONFIG_PATCH_TARGET,
   SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
@@ -381,7 +382,7 @@ async def test_role_bound_scheduled_session_backend_switch_writes_through_and_ro
       encoding="utf-8")
   pm = await session_mgr.create_session(
       CreateSessionRequest(name="PM: bp-eval", scheduled_task="pm_bp_eval", role=PROJECT_ROLE),
-      backend="claude-opus-4.6",
+      backend=OPUS_BACKEND_ID,
   )
   await session_mgr.set_group(pm.id, "bp-eval")
 
@@ -414,7 +415,7 @@ async def test_regular_scheduled_session_without_role_keeps_clone_fork_guard(tmp
   session_mgr = SessionManager(cfg)
   worker = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
-      backend="claude-opus-4.6",
+      backend=OPUS_BACKEND_ID,
   )
 
   with make_sessions_client(cfg, session_mgr) as client:

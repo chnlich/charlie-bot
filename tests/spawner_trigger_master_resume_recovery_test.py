@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
-from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_OPTION
+from conftest import CODEX_BACKEND_OPTION, OPUS_BACKEND_ID, OPUS_BACKEND_OPTION
 
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import is_resume_not_found_error, trigger_master
@@ -193,7 +193,7 @@ async def test_scheduled_task_auto_trigger_uses_session_backend(monkeypatch: pyt
   meta = SessionMetadata(
       id=session_id,
       name="Scheduled: nightly",
-      backend="claude-opus-4.6",
+      backend=OPUS_BACKEND_ID,
       scheduled_task="nightly",
   )
   session_mgr = FakeSessionManager(meta)
@@ -211,8 +211,8 @@ async def test_scheduled_task_auto_trigger_uses_session_backend(monkeypatch: pyt
 
   await trigger_master(session_id, "worker summary", cfg, session_mgr)
 
-  assert call_session_backends == ["claude-opus-4.6"]
-  assert [option.id for option in call_backend_options] == ["claude-opus-4.6"]
+  assert call_session_backends == [OPUS_BACKEND_ID]
+  assert [option.id for option in call_backend_options] == [OPUS_BACKEND_ID]
   assert [option.model for option in call_backend_options] == ["claude-opus-4-6"]
   assert call_summaries[0].startswith("[Auto-triggered scheduled task result for 'nightly']")
   # trigger_master no longer persists the anchor; the consumer owns it.

@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 import yaml
 from conftest import (
+  OPUS_BACKEND_ID,
   SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
   SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
   SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
@@ -60,7 +61,7 @@ async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
   cfg = build_scheduler_cfg(tmp_path)
   session_mgr = AsyncMock()
   scheduler = Scheduler(cfg, session_mgr)
-  session = SessionMetadata(id="session-1", name="Scheduled: nightly", backend="claude-opus-4.6")
+  session = SessionMetadata(id="session-1", name="Scheduled: nightly", backend=OPUS_BACKEND_ID)
   task_cfg = ScheduledTaskConfig(
       name="nightly",
       cron="* * * * *",
@@ -110,10 +111,10 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
   cfg = build_scheduler_cfg(tmp_path)
   session_mgr = AsyncMock()
   scheduler = Scheduler(cfg, session_mgr)
-  session = SessionMetadata(id="session-1", name="Scheduled: nightly", backend="claude-opus-4.6")
+  session = SessionMetadata(id="session-1", name="Scheduled: nightly", backend=OPUS_BACKEND_ID)
   task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt")
   fake_thread_mgr = FakeThreadManager()
-  resolve_backend = AsyncMock(return_value=("claude-opus-4.6", "claude-opus-4-6"))
+  resolve_backend = AsyncMock(return_value=(OPUS_BACKEND_ID, "claude-opus-4-6"))
 
   def fake_spawn_worker(**_kwargs: Any) -> Coroutine[Any, Any, None]:
     return _noop()
@@ -133,7 +134,7 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
       session_mgr,
       require_review=False)
 
-  resolve_backend.assert_awaited_once_with("session-1", cfg, session_mgr, requested_backend="claude-opus-4.6")
+  resolve_backend.assert_awaited_once_with("session-1", cfg, session_mgr, requested_backend=OPUS_BACKEND_ID)
 
 
 @pytest.mark.asyncio
@@ -143,7 +144,7 @@ async def test_scheduler_rotates_scheduled_session_backend_and_copies_bookkeepin
   scheduler = Scheduler(cfg, session_mgr)
   old_session = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
-      backend="claude-opus-4.6",
+      backend=OPUS_BACKEND_ID,
   )
   old_session.last_scheduled_run = "2026-06-07T02:00:00-07:00"
   old_session.last_scheduled_cron = "0 2 * * *"
@@ -189,7 +190,7 @@ async def test_scheduler_backend_rotation_preserves_last_run_to_avoid_duplicate_
   scheduler = Scheduler(cfg, session_mgr)
   old_session = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
-      backend="claude-opus-4.6",
+      backend=OPUS_BACKEND_ID,
   )
   now = datetime.now(ZoneInfo("America/Los_Angeles"))
   old_session.last_scheduled_run = now.isoformat()
@@ -225,7 +226,7 @@ async def test_scheduler_skips_backend_rotation_while_old_session_is_running(
   scheduler = Scheduler(cfg, session_mgr)
   old_session = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
-      backend="claude-opus-4.6",
+      backend=OPUS_BACKEND_ID,
   )
   old_session.last_scheduled_run = (datetime.now(ZoneInfo("America/Los_Angeles")) - timedelta(hours=1)).isoformat()
   old_session.last_scheduled_cron = "* * * * *"
@@ -251,7 +252,7 @@ async def test_scheduler_skips_backend_rotation_while_old_session_is_running(
     active_sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=True)
     assert len(active_sessions) == 1
     assert active_sessions[0].id == old_session.id
-    assert active_sessions[0].backend == "claude-opus-4.6"
+    assert active_sessions[0].backend == OPUS_BACKEND_ID
   finally:
     clear_busy(old_session.id)
 
@@ -367,14 +368,14 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
   prompt_path.parent.mkdir(parents=True, exist_ok=True)
   prompt_path.write_text("run nightly", encoding="utf-8")
   (cron_dir / "nightly.yaml").write_text(
-      yaml.safe_dump({"cron": "0 2 * * *", "prompt_file": str(prompt_path), "backend": "claude-opus-4.6"}),
+      yaml.safe_dump({"cron": "0 2 * * *", "prompt_file": str(prompt_path), "backend": OPUS_BACKEND_ID}),
       encoding="utf-8")
   _patch_cron_d(monkeypatch, cron_dir)
   cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
-      backend="claude-opus-4.6",
+      backend=OPUS_BACKEND_ID,
   )
   # A busy session blocks the backend switch with 409.
   mark_busy(session.id)
@@ -386,7 +387,7 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
     assert "backend switch" in response.json()["detail"]
     assert (
         yaml.safe_load((cron_dir / "nightly.yaml").read_text(encoding="utf-8")).get("backend")
-        == "claude-opus-4.6")
+        == OPUS_BACKEND_ID)
   finally:
     clear_busy(session.id)
 

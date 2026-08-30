@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+  OPUS_BACKEND_ID,
   TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET,
   TUI_KILL_TMUX_SESSION_PATCH_TARGET,
   TUI_TMUX_SESSION_EXISTS_PATCH_TARGET,
@@ -41,7 +42,7 @@ async def test_stop_tui_kills_tmux_for_tui_session(
 async def test_stop_tui_rejects_non_tui_session(tmp_path: Path) -> None:
   cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="SDK"), backend="claude-opus-4.6")
+  meta = await session_mgr.create_session(CreateSessionRequest(name="SDK"), backend=OPUS_BACKEND_ID)
 
   with _build_client(cfg, session_mgr) as client:
     response = client.post(f"/api/sessions/{meta.id}/tui/stop")
@@ -82,7 +83,7 @@ async def test_tui_status_returns_running_busy_dict_for_tui_sessions_only(
 ) -> None:
   cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  cc_meta = await session_mgr.create_session(CreateSessionRequest(name="SDK"), backend="claude-opus-4.6")
+  cc_meta = await session_mgr.create_session(CreateSessionRequest(name="SDK"), backend=OPUS_BACKEND_ID)
   running_tui_meta = SessionMetadata(name="TUI running", backend="claude-tui")
   stopped_tui_meta = SessionMetadata(name="TUI stopped", backend="claude-tui")
   await session_mgr.save_metadata(running_tui_meta)

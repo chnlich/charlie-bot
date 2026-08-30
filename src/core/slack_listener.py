@@ -55,6 +55,7 @@ from src.core.master_trigger import trigger_master
 from src.core.models import (
   CreateSessionRequest,
   PendingTrigger,
+  SessionMetadata,
   SessionStatus,
   SlackOrigin,
   TriggerStatus,
@@ -728,6 +729,21 @@ def _bound_summon(events: list[dict], user_event_id: str | None) -> tuple[str, d
   return _summon_of(block, ev["id"]), block
 
 
+async def _require_slack_thread_session(session_id: str, session_mgr: SessionManager) -> SessionMetadata:
+  """The session named by *session_id* when it exists and carries a Slack thread.
+
+  The reply-path preamble shared by ``assert_thread_fresh``, ``ack_messages``,
+  and ``post_reply``. Refusals raise ``SlackReplyError``: 404 unknown session,
+  409 no Slack thread.
+  """
+  meta = await session_mgr.get_session(session_id)
+  if meta is None:
+    raise SlackReplyError(404, "Session not found")
+  if meta.slack_origin is None:
+    raise SlackReplyError(409, "Session has no Slack thread")
+  return meta
+
+
 async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig,
                               session_mgr: SessionManager) -> None:
   """Refuse the reply when eligible thread messages sit above the session's watermark.
@@ -739,11 +755,7 @@ async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig,
   with the structured ``stale_thread`` payload naming each unread message's ts,
   user, and a text preview; with a None watermark the whole thread tail counts.
   """
-  meta = await session_mgr.get_session(session_id)
-  if meta is None:
-    raise SlackReplyError(404, "Session not found")
-  if meta.slack_origin is None:
-    raise SlackReplyError(409, "Session has no Slack thread")
+  meta = await _require_slack_thread_session(session_id, session_mgr)
   unread = await _fetch_unread_eligible(_bot_client(cfg), meta.slack_origin, cfg, meta.slack_watermark_ts)
   if not unread:
     return
@@ -771,11 +783,7 @@ async def ack_messages(session_id: str, message_ids: list[str], cfg: CharlieBotC
   small ack event lands in the session log for the audit trail, and re-acking
   ids at or below the watermark is an idempotent no-op counted as acked.
   """
-  meta = await session_mgr.get_session(session_id)
-  if meta is None:
-    raise SlackReplyError(404, "Session not found")
-  if meta.slack_origin is None:
-    raise SlackReplyError(409, "Session has no Slack thread")
+  meta = await _require_slack_thread_session(session_id, session_mgr)
   ids = sorted(set(message_ids))
   if not ids:
     raise SlackReplyError(422, "message_ids is empty")
@@ -819,11 +827,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig,
   the text, the summon it answers, and the chunk count; a reply that answers a
   summon clears that summon's eyes.
   """
-  meta = await session_mgr.get_session(session_id)
-  if meta is None:
-    raise SlackReplyError(404, "Session not found")
-  if meta.slack_origin is None:
-    raise SlackReplyError(409, "Session has no Slack thread")
+  meta = await _require_slack_thread_session(session_id, session_mgr)
   if not text.strip():
     raise SlackReplyError(422, "Reply text is empty")
 

@@ -576,8 +576,7 @@ function renderMessage(msg, sessionId) {
     var thinkingHtml = "";
     if (msg.thinking) {
       var thinkId = 'think-' + (msg.id || Math.random().toString(36).slice(2));
-      thinkingHtml = "<button onclick=\"const el=document.getElementById(\x27" + thinkId + "\x27);el.style.display=el.style.display===\x27none\x27?\x27block\x27:\x27none\x27\" class=\"text-xs text-slate-500 hover:text-slate-400 italic mb-1\">Thinking…</button>"
-        + "<div id=\"" + thinkId + "\" style=\"display:none\" class=\"text-xs text-slate-500 whitespace-pre-wrap mb-2\">" + escapeHtml(String(msg.thinking)) + "</div>";
+      thinkingHtml = thinkingToggleHtml(thinkId, msg.thinking);
     }
     return "<div class=\"flex justify-start\"" + messageIdentityAttrs(msg) + "><div class=\"max-w-[90%] overflow-hidden bg-slate-700 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm\">"
       + thinkingHtml + contentHtml + toolsHtml + timeDiv() + "</div></div>";

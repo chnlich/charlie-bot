@@ -10,6 +10,9 @@ Slash commands let you run predefined shell scripts or inject canned prompts dir
 - Select a command from the popup (click, Tab, or Enter) to fill it in; then add any arguments and press Enter to execute.
 - The backend processes the command and either streams a result or dispatches an agent run.
 - `/help` is always available — it lists every registered command.
+- `Ctrl+/` (or the slash-button beside the chat input) opens the slash sidebar: a form
+  rendered from the selected command's `params`, whose values are joined into the
+  command's args on Run.
 
 ---
 
@@ -33,6 +36,9 @@ commands:
     timeout: 10                    # Optional — seconds (default: 10)
     # --- prompt fields ---
     prompt: "Prompt text {args}"   # Required for scope: prompt
+    claude_code_flags: ['--flag']  # Optional — extra CLI flags for the Claude Code subprocess
+    # --- form fields ---
+    params: []                     # Optional — sidebar form fields (see below)
 ```
 
 ---
@@ -72,13 +78,43 @@ Use this to run a command in a restricted permission mode, enable/disable specif
 
 ---
 
+## Sidebar form fields (`params`)
+
+`params` is an optional list of form fields for either scope. The slash sidebar
+(`Ctrl+/`) renders one input per entry and joins the entered values with spaces;
+that joined text becomes the command's args, so templates still substitute only
+`{args}` on the backend. A command without `params` runs directly from the sidebar.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Field key shown to the user when `label` is empty |
+| `label` | No | Display label (default: `name`) |
+| `type` | No | `text` (default), `number`, `select`, or `checkbox` |
+| `default` | No | Initial value; a checkbox checks when it is the string `"true"` |
+| `placeholder` | No | Placeholder text for the input |
+| `required` | No | Adds a required badge in the form (default: false) |
+| `options` | No | Choices for `type: select` |
+
+```yaml
+params:
+  - {name: environment, label: "Environment", type: select,
+     options: [staging, production], required: true}
+```
+
+An unchecked checkbox contributes the empty string; a checked one contributes `true`.
+
+---
+
 ## Built-in commands
 
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all available slash commands |
+| `/run <task-name>` | Manually trigger a scheduled task |
+| `/stop-improve` | Stop an active improve loop after current iteration |
 
-`/help` is hardcoded in the backend and cannot be overridden in the YAML file.
+Built-ins are hardcoded in the backend and take precedence over any YAML command
+with the same name.
 
 ---
 
@@ -95,14 +131,17 @@ Use this to run a command in a restricted permission mode, enable/disable specif
 
 ### `GET /api/slash/commands`
 
-Returns all registered commands plus the built-in `/help`.
+Returns all registered YAML commands plus the built-ins.
 
 **Response**
 
 ```json
 [
-  { "name": "git", "scope": "shell", "description": "Run git command", "args": "<git args>" },
-  { "name": "help", "scope": "builtin", "description": "Show available slash commands" }
+  { "name": "git", "scope": "shell", "description": "Run git command", "args": "<git args>", "params": [] },
+  { "name": "help", "scope": "builtin", "description": "Show available slash commands", "params": [] },
+  { "name": "run", "scope": "builtin", "description": "Manually trigger a scheduled task", "args": "<task-name>",
+    "params": [ { "name": "task_name", "label": "Task name", "type": "text", "required": true, "placeholder": "e.g. daily-report" } ] },
+  { "name": "stop-improve", "scope": "builtin", "description": "Stop an active improve loop after current iteration", "params": [] }
 ]
 ```
 
@@ -141,6 +180,21 @@ Execute a slash command.
 ```json
 { "type": "help", "commands": [ ... ] }
 ```
+
+**Response — /run task triggered** (HTTP 202)
+
+```json
+{ "type": "task_triggered", "task": "daily-report", "session_id": "...", "thread_id": "..." }
+```
+
+**Response — /stop-improve**
+
+```json
+{ "type": "improve_stopped", "message": "Improve loop will stop after current iteration" }
+```
+
+`/run` and `/stop-improve` return `{ "error": "..." }` when the task is unknown, the
+scheduler is unavailable, or no improve loop is active in the session.
 
 **Response — unknown command**
 

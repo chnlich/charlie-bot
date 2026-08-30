@@ -124,7 +124,7 @@ class SlashExecuteRequest(BaseModel):
 
 @router.get('/commands')
 async def list_commands():
-  """Return all available slash commands including built-in /help."""
+  """Return all available slash commands: the YAML registry plus the built-ins."""
   return await _build_command_list()
 
 

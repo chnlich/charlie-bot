@@ -248,13 +248,8 @@ class CodexUsageProvider:
     return _extract_latest_codex_usage(text.splitlines(), account=self.label)
 
   def _compute_spend(self, rollout_paths: list[Path]) -> dict[str, float]:
-    """Rolling 24h/7d spend over rollout files, re-parsing only files changed since the last round.
-
-    A changed file is re-read from the start: a token_count event's model
-    comes from the turn_context line above it, so a tail-only read cannot
-    attribute models. An unreadable file is skipped, not cached, so the next
-    round retries it.
-    """
+    # A changed file is re-read from the start, never tail-only: a token_count
+    # event's model comes from the turn_context line above it.
     now = datetime.now(UTC)
     min_mtime = (now - timedelta(days=7)).timestamp()
     live: set[Path] = set()
@@ -273,6 +268,7 @@ class CodexUsageProvider:
         events_by_file.append(cached[2])
         continue
       events = _extract_codex_spend_events(path)
+      # An unreadable file (None) is skipped, not cached, so the next round retries it.
       if events is not None:
         self._spend_cache[path] = (stat.st_mtime_ns, stat.st_size, events)
         events_by_file.append(events)
@@ -439,11 +435,9 @@ _SpendEvent = tuple[datetime, str, dict[str, int]]
 
 
 def _extract_codex_spend_events(path: Path) -> list[_SpendEvent] | None:
-  """Resolved spend events from one rollout file, or None when the file cannot be read.
-
-  Model attribution is positional (a turn_context line applies to the
-  token_count events after it), so it is resolved here during the single pass.
-  """
+  # Model attribution is positional (a turn_context line applies to the token_count
+  # events after it), so it is resolved here during the single pass. None means the
+  # file could not be read (a warning was logged); event lists may be cached, None not.
   events: list[_SpendEvent] = []
   current_model = ""
   try:
@@ -494,7 +488,6 @@ def _extract_codex_spend_events(path: Path) -> list[_SpendEvent] | None:
 
 
 def _sum_codex_spend_events(events_by_file: list[list[_SpendEvent]], *, now: datetime) -> dict[str, float]:
-  """Bucket resolved spend events into the rolling 24h/7d windows ending at ``now``."""
   if now.tzinfo is None:
     raise ValueError("now must be timezone-aware")
   effective_now = now.astimezone(UTC)

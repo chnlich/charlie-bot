@@ -190,6 +190,23 @@ def _done(input_event_id: str | None, exit_code: int = 0) -> dict:
   return event
 
 
+async def _unanswered_nudge_round(
+    session_mgr: SessionManager, client: _FakeSlackClient
+) -> tuple[str, dict, dict]:
+  """A Slack thread re-asked once with no reply yet; returns (sid, summon, nudge).
+
+  The summon round completed and the eyes reaction marks the thread
+  awaiting-answer, so the round-end audit and the boot backfill treat the
+  nudge round as still open.
+  """
+  client.reactions[_THREAD] = {"eyes"}
+  sid = await _slack_session(session_mgr)
+  summon = await _append(session_mgr, sid, _summon())
+  await _append(session_mgr, sid, _done(summon["id"]))
+  nudge = await _append(session_mgr, sid, _nudge(summon))
+  return sid, summon, nudge
+
+
 def _of_type(events: list[dict], event_type: str) -> list[dict]:
   return [ev for ev in events if ev.get("type") == event_type]
 
@@ -266,11 +283,7 @@ async def test_reply_from_a_round_no_summon_started_posts_with_null_answers_and_
 @pytest.mark.asyncio
 async def test_reply_in_a_nudge_round_answers_the_original_summon_and_clears_its_eye(tmp_path: Path) -> None:
   cfg, session_mgr, client = _rig(tmp_path)
-  client.reactions[_THREAD] = {"eyes"}
-  sid = await _slack_session(session_mgr)
-  summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _done(summon["id"]))
-  nudge = await _append(session_mgr, sid, _nudge(summon))
+  sid, summon, nudge = await _unanswered_nudge_round(session_mgr, client)
   await _run_record(session_mgr, sid, nudge["id"], tmp_path)
 
   ack_tasks: list[asyncio.Task] = []
@@ -734,11 +747,7 @@ async def test_replayed_done_for_the_summon_round_adds_no_second_nudge(tmp_path:
 async def test_nudge_round_without_a_reply_posts_the_notice_once_and_clears_the_eye(tmp_path: Path) -> None:
   """Asked twice and silent twice: the thread hears the notice, the eye goes out, no third generation."""
   cfg, session_mgr, client = _rig(tmp_path)
-  client.reactions[_THREAD] = {"eyes"}
-  sid = await _slack_session(session_mgr)
-  summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _done(summon["id"]))
-  nudge = await _append(session_mgr, sid, _nudge(summon))
+  sid, summon, nudge = await _unanswered_nudge_round(session_mgr, client)
   await _append(session_mgr, sid, _assistant("nothing to add"))
   done = await _append(session_mgr, sid, _done(nudge["id"]))
   replay = await _append(session_mgr, sid, _done(nudge["id"]))
@@ -788,11 +797,7 @@ async def test_nudge_round_with_a_reply_posts_no_notice(tmp_path: Path) -> None:
 async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_later(tmp_path: Path) -> None:
   """Post first, mark on success: a failed post leaves the collector a retry instead of a silent thread."""
   cfg, session_mgr, client = _rig(tmp_path, fail_posts=True)
-  client.reactions[_THREAD] = {"eyes"}
-  sid = await _slack_session(session_mgr)
-  summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _done(summon["id"]))
-  nudge = await _append(session_mgr, sid, _nudge(summon))
+  sid, _summon, nudge = await _unanswered_nudge_round(session_mgr, client)
   done = await _append(session_mgr, sid, _done(nudge["id"]))
   tasks: list[asyncio.Task] = []
 
@@ -1087,11 +1092,7 @@ async def test_boot_audit_nudges_a_summon_round_left_without_a_reply_once(tmp_pa
 @pytest.mark.asyncio
 async def test_boot_audit_posts_the_notice_for_a_nudge_round_left_without_a_reply_once(tmp_path: Path) -> None:
   cfg, session_mgr, client = _rig(tmp_path)
-  client.reactions[_THREAD] = {"eyes"}
-  sid = await _slack_session(session_mgr)
-  summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _done(summon["id"]))
-  nudge = await _append(session_mgr, sid, _nudge(summon))
+  sid, _summon, nudge = await _unanswered_nudge_round(session_mgr, client)
   await _append(session_mgr, sid, _done(nudge["id"]))
   tasks: list[asyncio.Task] = []
   trigger = AsyncMock()
@@ -1118,11 +1119,7 @@ async def test_boot_audit_posts_the_notice_for_a_nudge_round_left_without_a_repl
 async def test_lost_nudge_gets_the_lost_summon_report_and_no_second_action(tmp_path: Path) -> None:
   """A nudge still queued at the crash is collected by _lost_summons; the summon's done then finds the nudge."""
   cfg, session_mgr, client = _rig(tmp_path)
-  client.reactions[_THREAD] = {"eyes"}
-  sid = await _slack_session(session_mgr)
-  summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _done(summon["id"]))
-  nudge = await _append(session_mgr, sid, _nudge(summon))
+  sid, _summon, nudge = await _unanswered_nudge_round(session_mgr, client)
   tasks: list[asyncio.Task] = []
   trigger = AsyncMock()
 

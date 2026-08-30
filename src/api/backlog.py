@@ -18,7 +18,8 @@ log = structlog.get_logger()
 router = APIRouter()
 
 
-def _repo_path(repo: str | None) -> Path:
+def _repo_path(repo: str | None) -> Path | None:
+  """Resolve the backlog repo for *repo*, or None when config.yaml configures none."""
   if repo:
     return Path(repo).expanduser()
   from src.core.config import get_config
@@ -27,7 +28,7 @@ def _repo_path(repo: str | None) -> Path:
     return Path(cfg.backlog_repos[0].path)
   if cfg.backlog_repo:
     return Path(cfg.backlog_repo)
-  raise ValueError('backlog_repos not configured in config.yaml')
+  return None
 
 
 def _load_all_items(repo_path: Path) -> list[dict]:
@@ -90,6 +91,10 @@ async def get_repos():
 async def get_backlog(repo: str | None = None):
   """Return backlog items from backlog/backlogs/*.yaml or fallback backlog/backlog.yaml."""
   repo_path = _repo_path(repo)
+  if repo_path is None:
+    # The panel opens on every host: an unconfigured backlog is the empty state
+    # /repos already reports, so reads return [] rather than 500.
+    return JSONResponse(content=[])
   items = await asyncio.to_thread(_load_all_items, repo_path)
   return JSONResponse(content=items)
 
@@ -97,7 +102,10 @@ async def get_backlog(repo: str | None = None):
 @router.get('/history')
 async def get_history(repo: str | None = None):
   """Return history entries from {repo}/backlog/history-*.yaml files, sorted by timestamp descending."""
-  loop_dir = _repo_path(repo) / 'backlog'
+  repo_path = _repo_path(repo)
+  if repo_path is None:
+    return JSONResponse(content=[])
+  loop_dir = repo_path / 'backlog'
   files = sorted(loop_dir.glob('history-*.yaml'))
   if not files:
     return JSONResponse(content=[], status_code=200)
@@ -161,6 +169,10 @@ def _apply_status_transition(item: dict, patch: BacklogPatch) -> None:
 async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = None, source: str | None = None):
   """Update status/priority of a backlog item, then git commit+push."""
   repo_path = _repo_path(repo)
+  if repo_path is None:
+    # A write with no configured repo has nowhere to persist; that is an
+    # operator error, not the reads' empty state, so it stays loud.
+    raise ValueError('backlog_repos not configured in config.yaml')
   yaml_path, items = await asyncio.to_thread(_find_item_file, repo_path, item_id, source)
   if yaml_path is None:
     return JSONResponse(content={'error': f'Item {item_id} not found'}, status_code=404)

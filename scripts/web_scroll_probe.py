@@ -95,9 +95,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(_REPO_ROOT))
 
-import websockets  # noqa: E402,I001
+import websockets  # noqa: E402
 
-from src.core.config import CharlieBotConfig, get_config  # noqa: E402,I001
+from src.core.config import CharlieBotConfig, get_config  # noqa: E402
 
 LIST_SELECTOR = "#session-list"
 CHAT_SELECTOR_CANDIDATES = ("#messages", "#chat-messages", "#message-list", "main .overflow-y-auto")

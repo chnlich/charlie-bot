@@ -9,6 +9,7 @@
 // (tailwind_class_coverage.test.js).
 const vm = require('node:vm');
 
+const { FakeElement } = require('./fake_dom');
 const { readStatic } = require('./read_static');
 
 const NAMESPACE_JS = readStatic('chat/namespace.js');
@@ -23,4 +24,38 @@ function loadChatRenderingModules(context) {
   vm.runInContext(RENDERING_JS, context, {filename: 'chat/rendering.js'});
 }
 
-module.exports = {loadChatRenderingModules};
+// loadToggleHarness covers the toggle suites (show_more_toggle,
+// thinking_toggle): a FakeElement-backed document and the marked/fence/math
+// stubs the toggle render paths touch, then the module-load sequence above,
+// then one extra module (workers.js or usage.js) whose own deps arrive via
+// extraStubs. extraStubs spread onto the context before createContext, so a
+// stub is a context global when the extra module's render path reads it
+// (usage.js reads the bare identifier showScrollToBottom).
+function loadToggleHarness(extraModule, extraStubs = {}) {
+  const elements = new Map();
+  const context = {
+    document: {
+      getElementById(id) { return elements.get(id) || null; },
+      createElement(tag) { return new FakeElement(tag); },
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+    },
+    console: { error: () => {}, log: () => {}, warn: () => {} },
+    marked: { parse: (v) => '<p>' + String(v || '') + '</p>' },
+    fixNestedFences: (v) => String(v || ''),
+    renderChatMath: () => {},
+    CSS: { escape: (v) => String(v) },
+    SESSION_ID: 'sess-1',
+    fetch: () => Promise.resolve({ ok: true }),
+    _elements: elements,
+    ...extraStubs,
+  };
+  vm.createContext(context);
+  // Deterministic toggle ids: 0.5.toString(36).slice(2) === 'i'.
+  vm.runInContext('Math.random = () => 0.5', context);
+  loadChatRenderingModules(context);
+  vm.runInContext(readStatic(extraModule), context, {filename: extraModule});
+  return context;
+}
+
+module.exports = {loadChatRenderingModules, loadToggleHarness};

@@ -2,6 +2,10 @@
 (function() {
   const Chat = globalThis.Chat;
 
+// Roles whose messages open a chat turn. Both turn-layout consumers read this
+// list: rendering.js's DOM matcher and turn-engine.js's fold derive.
+const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'agent_message', 'worker_summary'];
+
 // ---------------------------------------------------------------------------
 // Auto-scroll helper — returns true only when user is near the bottom
 // ---------------------------------------------------------------------------
@@ -84,6 +88,7 @@ Chat.thinkingToggleHtml = thinkingToggleHtml;
 Chat.formatBubbleTime = formatBubbleTime;
 Chat.messageIdentityAttrs = messageIdentityAttrs;
 Chat.isRenderedMessage = isRenderedMessage;
+Chat.STIMULUS_ROLES = STIMULUS_ROLES;
 Chat.expose([
   'shouldAutoScroll',
   'escapeHtml',
@@ -91,6 +96,7 @@ Chat.expose([
   'isRenderedMessage',
   'showMoreToggleHtml',
   'thinkingToggleHtml',
+  'STIMULUS_ROLES',
 ]);
 
 })();

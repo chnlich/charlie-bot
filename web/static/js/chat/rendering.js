@@ -108,7 +108,6 @@ function isStableRenderedMessage(el) {
 // reader-expanded `N steps` bar, an open recap panel and embedded artifact
 // iframes all survive every later derive.
 // ---------------------------------------------------------------------------
-const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'agent_message', 'worker_summary'];
 const TURN_TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', agent_message: 'Agent', worker_summary: 'Worker'};
 const TEXT_NODE = 3;
 

@@ -677,7 +677,6 @@ async def index(
       request,
       "index.html",
       context={
-          "sessions": sessions,
           "initial_sessions": [s.model_dump(mode="json") for s in sessions],
           "active_session": active_session,
           "pending_draft": pending_draft,

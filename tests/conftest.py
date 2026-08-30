@@ -372,7 +372,10 @@ def session_dir_names(cfg: CharlieBotConfig) -> set[str]:
 
 
 # Backend id the conftest configs register for the Opus option; session fixtures across the
-# suite must spell it through this constant so a rename stays a one-line change.
+# suite must spell it through this constant so a rename stays a one-line change. The option's
+# model is spelled through OPUS_BACKEND_OPTION.model wherever a fixture pairs it with the id
+# (resolve stubs, resolved-model oracles, thread backend/model fields); Claude transcript
+# payload builders keep the raw string because it is wire data there.
 OPUS_BACKEND_ID = "claude-opus-4.6"
 
 OPUS_BACKEND_OPTION = models.BackendOption(

@@ -48,44 +48,25 @@ function renderSidebarFilterPills() {
   if (addBtn) container.appendChild(addBtn);
 }
 
-function getCurrentSidebarViewRequest() {
-  const searchInput = document.getElementById('sidebar-search');
-  const query = searchInput ? searchInput.value.trim() : '';
-  if (query) {
-    return {
-      filter: 'search',
-      url: '/api/sessions/search?q=' + encodeURIComponent(query),
-    };
-  }
-  const filter = getSidebarFilter(currentFilter);
-  if (!filter) throw new Error('Unknown sidebar filter: ' + currentFilter);
-  return {filter: currentFilter, url: filter.url};
-}
-
-async function fetchSidebarSessionsForCurrentView() {
-  const view = getCurrentSidebarViewRequest();
-  const res = await fetch(view.url);
-  if (!res.ok) throw new Error(`Fetch sessions failed: ${res.status}`);
-  return {
-    filter: view.filter,
-    sessions: await res.json(),
-  };
-}
-
-async function refreshSidebarAfterSessionRemoval(sessionId) {
-  const {filter, sessions} = await fetchSidebarSessionsForCurrentView();
-  const visibleSessions = sessions.filter(s => s.id !== sessionId);
+// Inline removal shared by archive / unarchive / delete: the list never
+// refetches — the row leaves the DOM and, when it was the session being
+// viewed, the view moves to the first remaining rendered session.
+async function removeSessionRowInline(sessionId) {
+  const row = document.getElementById('session-' + sessionId);
+  if (row) row.remove();
   delete sessionUnread[sessionId];
-  renderSessionList(visibleSessions, filter);
 
   if (SESSION_ID !== sessionId) {
     updateSidebarHighlight(SESSION_ID);
     return;
   }
-
-  const nextSession = visibleSessions[0] || null;
-  if (nextSession) {
-    await switchSession(nextSession.id);
+  let nextId = null;
+  document.querySelectorAll('a[id^="session-"]').forEach(el => {
+    const sid = el.id.slice('session-'.length);
+    if (!nextId && sid && sid !== sessionId) nextId = sid;
+  });
+  if (nextId) {
+    await switchSession(nextId);
   } else {
     renderNoActiveSessionView();
   }
@@ -95,7 +76,7 @@ async function archiveSession(id) {
   try {
     const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
     if (!res.ok) throw new Error(`Archive failed: ${res.status}`);
-    await refreshSidebarAfterSessionRemoval(id);
+    await removeSessionRowInline(id);
   } catch (err) {
     console.error('Archive failed:', err);
   }
@@ -104,12 +85,19 @@ async function archiveSession(id) {
 async function deleteSessionPermanently(sessionId) {
   const res = await fetch(`/api/sessions/${sessionId}/permanent`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`Permanent delete failed: ${res.status}`);
-  await refreshSidebarAfterSessionRemoval(sessionId);
+  if (currentFilter === 'archived') archivedForgetSession(sessionId);
+  await removeSessionRowInline(sessionId);
 }
 
 async function unarchiveSession(id) {
   try {
-    await fetch(`/api/sessions/${id}/unarchive`, { method: 'POST' });
+    const res = await fetch(`/api/sessions/${id}/unarchive`, { method: 'POST' });
+    if (!res.ok) throw new Error(`Unarchive failed: ${res.status}`);
+    if (currentFilter === 'archived') {
+      archivedForgetSession(id);
+      await removeSessionRowInline(id);
+      return;
+    }
     switchSidebarFilter(currentFilter);
   } catch (err) {
     console.error('Unarchive failed:', err);
@@ -210,6 +198,12 @@ function setSidebarFilterPill(filter) {
 
 function switchSidebarFilter(filter) {
   setSidebarFilterPill(filter);
+  if (filter === 'archived') {
+    // The archived view owns its fetch: keyset pagination with a group filter
+    // strip (archived.js) instead of the one-shot array the other tabs use.
+    loadArchivedView();
+    return;
+  }
   // Fetch sessions for this filter
   const registeredFilter = getSidebarFilter(filter);
   if (!registeredFilter) throw new Error('Unknown sidebar filter: ' + filter);
@@ -317,6 +311,7 @@ Object.assign(Sidebar, {
   getSidebarFilter,
   getRestorableSidebarFilters,
   renderSidebarFilterPills,
+  removeSessionRowInline,
   archiveSession,
   deleteSessionPermanently,
   unarchiveSession,
@@ -330,6 +325,7 @@ Object.assign(Sidebar, {
   toggleSessionStar,
 });
 Sidebar.expose([
+  'removeSessionRowInline',
   'archiveSession',
   'deleteSessionPermanently',
   'unarchiveSession',

@@ -13,6 +13,17 @@ globalThis.TuiStatusMap = globalThis.TuiStatusMap || {};
 // sidebar shows, but a longer list is split so no single request can overflow.
 const STATUS_QUERY_MAX_BYTES = 8192;
 
+// Status of every rendered sidebar row, keyed by session id — the same
+// rendered-truth pattern as renderedSessionBackendTypes below. The status/tui
+// polls skip archived rows through it: their server probe is the constant-False
+// shortcut (src/core/sessions.py populate_sidebar_state), so per-cycle request
+// volume tracks the active rows on screen, not the archived list length.
+const renderedSessionStatuses = {};
+
+function recordRenderedSessionStatus(session) {
+  renderedSessionStatuses[session.id] = (session && session.status) || 'active';
+}
+
 function sidebarSessionIds() {
   const ids = [];
   const seen = new Set();
@@ -23,6 +34,7 @@ function sidebarSessionIds() {
   document.querySelectorAll('a[id^="session-"]').forEach(el => {
     const sid = el.id.slice('session-'.length);
     if (!sid || seen.has(sid)) return;
+    if (renderedSessionStatuses[sid] === 'archived') return;
     seen.add(sid);
     ids.push(sid);
   });
@@ -392,6 +404,7 @@ async function cancelMaster() {
 
 
 Object.assign(Sidebar, {
+  recordRenderedSessionStatus,
   sidebarSessionIds,
   tuiSidebarSessionIds,
   renderTuiStatusDot,
@@ -420,6 +433,7 @@ Object.assign(Sidebar, {
   cancelMaster,
 });
 Sidebar.expose([
+  'recordRenderedSessionStatus',
   'sidebarSessionIds',
   'tuiSidebarSessionIds',
   'renderTuiStatusDot',

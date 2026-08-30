@@ -35,6 +35,7 @@ function loadGroups() {
     renderPendingTriggerIndicator: () => '',
     renderPendingPlanApprovalIndicator: () => '',
     renderTuiStatusDot: () => '',
+    recordRenderedSessionStatus: () => {},
   };
   context.globalThis = context;
   vm.createContext(context);

@@ -652,10 +652,10 @@ test('toggleSessionGroupLimit expansion is ephemeral and resets on the filter-pi
   // expansion state lives in module memory only, so the enter path wipes it
   // and both groups fall back to the five-session preview.
   context.fetch = async (url) => {
-    assert.equal(url, '/api/sessions/archived');
+    assert.equal(url, '/api/sessions/starred');
     return {ok: true, json: async () => sessions};
   };
-  context.enterSidebarFilter('archived');
+  context.enterSidebarFilter('starred');
   await new Promise(setImmediate);
 
   assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
@@ -676,10 +676,10 @@ test('switchSidebarFilter owns no expansion reset and preserves expansion across
   // The render entry point must never reset the expansion table, not even when
   // the filter value differs from the current one; only the pill-enter path may.
   context.toggleSessionGroupLimit('Work');
-  context.switchSidebarFilter('archived');
+  context.switchSidebarFilter('starred');
   await new Promise(setImmediate);
 
-  assert.equal(context.currentFilter, 'archived');
+  assert.equal(context.currentFilter, 'starred');
   assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
   assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), false);
   assert.match(nav.innerHTML, />Show less<\/button>/);
@@ -697,10 +697,10 @@ test('enterSidebarFilter collapses expansions on a tab change and keeps them on 
     context.fetch = async () => ({ok: true, json: async () => sessions});
 
     context.toggleSessionGroupLimit('Work');
-    context.enterSidebarFilter('archived');
+    context.enterSidebarFilter('starred');
     await new Promise(setImmediate);
 
-    assert.equal(context.currentFilter, 'archived');
+    assert.equal(context.currentFilter, 'starred');
     assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
     assert.match(nav.innerHTML, />Show all<\/button>/);
     assert.doesNotMatch(nav.innerHTML, />Show less<\/button>/);
@@ -1329,19 +1329,23 @@ test('createSession switches open chat through SPA state without full reload', a
   });
 });
 
-test('archiveSession refreshes backend sidebar and switches active session without full reload', async () => {
+test('archiveSession removes the row inline and switches to the next rendered session without refetching', async () => {
   const nav = createElement();
   const input = createElement();
+  const rowA = createElement({tagName: 'A', id: 'session-session-a'});
   const {context} = buildContext({
     elements: new Map([
       ['session-list', nav],
       ['msg-input', input],
+      ['session-session-a', rowA],
       ['filter-all', createElement({className: 'filter-pill'})],
       ['filter-starred', createElement({className: 'filter-pill'})],
       ['filter-archived', createElement({className: 'filter-pill'})],
       ['filter-scheduled', createElement({className: 'filter-pill'})],
       ['cron-add-btn', createElement()],
     ]),
+    querySelectorAll: (selector) =>
+      selector === 'a[id^="session-"]' ? sessionAnchors(['session-b']) : [],
   });
   const requests = [];
   let rendered = null;
@@ -1351,14 +1355,6 @@ test('archiveSession refreshes backend sidebar and switches active session witho
     if (url === '/api/sessions/session-a') {
       assert.equal(opts.method, 'DELETE');
       return {ok: true, async json() { return {}; }};
-    }
-    if (url === '/api/sessions/') {
-      return {
-        ok: true,
-        async json() {
-          return [makeSession('session-b', 'Backend Session B')];
-        },
-      };
     }
     if (url === '/api/sessions/session-b/bootstrap') {
       return {
@@ -1386,22 +1382,23 @@ test('archiveSession refreshes backend sidebar and switches active session witho
 
   assert.deepEqual(requests.map((req) => req.url), [
     '/api/sessions/session-a',
-    '/api/sessions/',
     '/api/sessions/session-b/bootstrap',
   ]);
+  assert.equal(rowA.removed, true);
   assert.equal(context.location.href, '');
   assert.equal(pushedUrl, '/?session=session-b');
   assert.equal(context.SESSION_ID, 'session-b');
-  assert.match(nav.innerHTML, /Backend Session B/);
   assert.equal(rendered.session.id, 'session-b');
 });
 
-test('deleteSessionPermanently renders welcome state when backend returns no sessions', async () => {
+test('deleteSessionPermanently renders the welcome state inline when no rendered session remains', async () => {
   const nav = createElement();
   const main = createElement({tagName: 'MAIN'});
+  const rowA = createElement({tagName: 'A', id: 'session-session-a'});
   const {context} = buildContext({
     elements: new Map([
       ['session-list', nav],
+      ['session-session-a', rowA],
       ['filter-all', createElement({className: 'filter-pill'})],
       ['filter-starred', createElement({className: 'filter-pill'})],
       ['filter-archived', createElement({className: 'filter-pill'})],
@@ -1421,9 +1418,6 @@ test('deleteSessionPermanently renders welcome state when backend returns no ses
       assert.equal(opts.method, 'DELETE');
       return {ok: true, async json() { return {}; }};
     }
-    if (url === '/api/sessions/') {
-      return {ok: true, async json() { return []; }};
-    }
     throw new Error('unexpected fetch ' + url);
   };
   context.history.pushState = (_state, _title, url) => { pushedUrl = url; };
@@ -1432,12 +1426,11 @@ test('deleteSessionPermanently renders welcome state when backend returns no ses
 
   assert.deepEqual(requests.map((req) => req.url), [
     '/api/sessions/session-a/permanent',
-    '/api/sessions/',
   ]);
+  assert.equal(rowA.removed, true);
   assert.equal(context.location.href, '');
   assert.equal(pushedUrl, '/');
   assert.equal(context.SESSION_ID, null);
-  assert.match(nav.innerHTML, /No sessions yet/);
   assert.match(main.innerHTML, /Welcome to CharlieBot/);
 });
 

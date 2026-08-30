@@ -178,7 +178,12 @@ async function setSessionGroup(sessionId, group) {
       body: JSON.stringify({group}),
     });
     if (!res.ok) throw new Error(`Set group failed: ${res.status}`);
-    // Refresh the sidebar
+    if (currentFilter === 'archived') {
+      // The archived view updates the row and filter-strip counts in place;
+      // a refetch would rebuild the whole paginated list.
+      applyArchivedGroupChange(sessionId, group);
+      return;
+    }
     switchSidebarFilter(currentFilter);
   } catch (err) {
     console.error('Set group failed:', err);
@@ -486,7 +491,9 @@ function scheduleProjectManagerRefresh() {
     pmStateCache = fresh;
     // Repaint only the list currently rendered into #session-list: both
     // renderers write the same element, so repainting a stale sibling would
-    // clobber the visible tab.
+    // clobber the visible tab. The archived view renders its own flat list
+    // with no PM rows, so a pending refresh resolving there repaints nothing.
+    if (currentFilter === 'archived') return;
     if (currentFilter === 'scheduled' && lastScheduledRenderArgs) {
       renderGroupedScheduledList(lastScheduledRenderArgs, {skipRefresh: true});
     } else if (lastGroupedRenderArgs) {
@@ -647,19 +654,28 @@ function sessionBackendLabel(session) {
   return { full, display: sep === -1 ? full : full.slice(sep + 3) };
 }
 
-function renderSessionTimeLine(s, timeIso, timeStr) {
+function renderSessionTimeLine(s, timeIso, timeStr, staticTime = false) {
   const label = sessionBackendLabel(s);
   const model = label
     ? `<span class="session-backend truncate" title="${escapeHtmlAttr(label.full)}">${escapeHtml(label.display)}</span>`
     : '';
+  // A static row formats its time once at build; without data-time it stays
+  // outside updateRelativeTimes's [data-time] sweep, so a long archived list
+  // never joins the periodic full-table refresh.
+  const timeAttr = staticTime ? '' : ` data-time="${timeIso}"`;
   return `<span class="flex items-center gap-1.5 text-xs text-slate-500">`
-    + `<span class="session-time flex-shrink-0" data-time="${timeIso}">${timeStr}</span>`
+    + `<span class="session-time flex-shrink-0"${timeAttr}>${timeStr}</span>`
     + model
     + `</span>`;
 }
 
 function renderSessionItem(s, filter, options = {}) {
+  recordRenderedSessionStatus(s);
   const isActive = SESSION_ID === s.id;
+  // An archived session keeps the archived row form in every view (archived
+  // tab, search results): unarchive/delete actions, and none of the live-state
+  // indicators, which archived sessions cannot carry.
+  const isArchivedRow = filter === 'archived' || s.status === 'archived';
   const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
   const activeBtnClass = isActive ? '!opacity-100' : '';
   const timeStr = s.updated_at ? relativeTime(s.updated_at) : '';
@@ -671,7 +687,7 @@ function renderSessionItem(s, filter, options = {}) {
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/></svg>
     </button>`;
   let actions = '';
-  if (filter === 'archived') {
+  if (isArchivedRow) {
     const ratingBadge = s.rating === 'thumbs_up' ? '<span class="text-xs flex-shrink-0" title="Rated: thumbs up">👍</span>'
       : s.rating === 'neutral' ? '<span class="text-xs flex-shrink-0" title="Rated: neutral">—</span>'
       : s.rating === 'thumbs_down' ? '<span class="text-xs flex-shrink-0" title="Rated: thumbs down">👎</span>'
@@ -698,19 +714,20 @@ function renderSessionItem(s, filter, options = {}) {
   }
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
+  const indicators = isArchivedRow ? '' : `${renderSessionIndicators(s)}
+    ${renderPendingTriggerIndicator(s)}
+    ${renderPendingPlanApprovalIndicator(s)}
+    ${s.scheduled_task ? `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>` : ''}
+    ${renderTuiStatusDot(s)}`;
   return `<a href="/?session=${s.id}&filter=${filter}"
      class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"
      ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
      onclick="event.preventDefault(); switchSession('${s.id}')"
      id="session-${s.id}"${extraAttrs}>
-    ${renderSessionIndicators(s)}
-    ${renderPendingTriggerIndicator(s)}
-    ${renderPendingPlanApprovalIndicator(s)}
-    ${s.scheduled_task ? `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>` : ''}
-    ${renderTuiStatusDot(s)}
+    ${indicators}
     <span class="flex-1 min-w-0">
       <span class="truncate block session-name">${escapeHtml(s.name)}</span>
-      ${filter === 'scheduled' && s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>` : renderSessionTimeLine(s, timeIso, timeStr)}
+      ${filter === 'scheduled' && s.schedule_cron ? `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>` : renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime)}
     </span>
     ${actions}
   </a>`;
@@ -738,7 +755,10 @@ function renderSessionList(sessions, filter) {
     renderGroupedSessionList(sessions, filter);
     return;
   }
-  nav.innerHTML = sessions.map(s => renderSessionItem(s, filter)).join('');
+  const truncationHint = filter === 'search' && sessions.length >= 200
+    ? '<p class="text-slate-500 text-sm px-3 py-2">Showing the newest 200 matches — narrow the search.</p>'
+    : '';
+  nav.innerHTML = sessions.map(s => renderSessionItem(s, filter)).join('') + truncationHint;
   // Resync sessionUnread dict from fresh DOM data
   sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
   updateRelativeTimes();

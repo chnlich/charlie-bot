@@ -6,9 +6,8 @@
   <title>Events — {{ session.name }} — CharlieBot@{{ hostname }}</title>
   <link rel="stylesheet" href="/static/css/tailwind.css?v={{ static_asset_version|urlencode }}">
   <style>
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    /* Scrollbar: standard properties keep the scroller on the compositor thread */
+    * { scrollbar-width: thin; scrollbar-color: #475569 transparent; }
 
     /* JSON syntax highlighting */
     .json-key    { color: #7dd3fc; }  /* sky-300 */

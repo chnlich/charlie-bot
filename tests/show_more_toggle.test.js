@@ -10,6 +10,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
+const { loadChatRenderingModules } = require('./chat_rendering_context_stub');
 
 const { FakeElement } = require('./fake_dom');
 
@@ -34,11 +35,7 @@ function loadContext() {
   vm.createContext(context);
   // Deterministic toggle ids: 0.5.toString(36).slice(2) === 'i'.
   vm.runInContext('Math.random = () => 0.5', context);
-  vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
-  vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
-  context.Chat.renderRoundRatingButtons = () => '';
-  context.Chat.embedLinkedHtmlArtifacts = () => {};
-  vm.runInContext(readStatic('chat/rendering.js'), context, { filename: 'chat/rendering.js' });
+  loadChatRenderingModules(context);
   vm.runInContext(readStatic('workers.js'), context, { filename: 'workers.js' });
   return context;
 }

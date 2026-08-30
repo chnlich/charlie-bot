@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const { loadChatRenderingModules } = require('./chat_rendering_context_stub');
 
 const { FakeElement } = require('./fake_dom');
 
@@ -33,11 +33,7 @@ function loadContext() {
     fetch: () => Promise.resolve({ ok: true }),
   };
   vm.createContext(context);
-  vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
-  vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });
-  context.Chat.renderRoundRatingButtons = () => '';
-  context.Chat.embedLinkedHtmlArtifacts = () => {};
-  vm.runInContext(readStatic('chat/rendering.js'), context, { filename: 'chat/rendering.js' });
+  loadChatRenderingModules(context);
   return context;
 }
 

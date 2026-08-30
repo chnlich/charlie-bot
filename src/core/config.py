@@ -9,7 +9,15 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+  AliasChoices,
+  AliasPath,
+  BaseModel,
+  ConfigDict,
+  Field,
+  ValidationError,
+  model_validator,
+)
 
 from src.core.models import BackendOption
 from src.core.tasks import create_logged_task
@@ -179,8 +187,28 @@ class HomeService(BaseModel):
   url: str  # what the card links to; the probe connects to this URL's host and port
 
 
+def _alias_field_names(alias: str | AliasChoices | AliasPath | None) -> set[str]:
+  """Flat string names behind an alias declaration, for known-name checks."""
+  if isinstance(alias, str):
+    return {alias}
+  if isinstance(alias, AliasChoices):
+    return set().union(*(_alias_field_names(choice) for choice in alias.choices))
+  if isinstance(alias, AliasPath):
+    return {str(alias.path[0])}
+  return set()
+
+
 class CharlieBotConfig(BaseModel):
-  """CharlieBot configuration, loaded from ~/.charliebot/config.yaml."""
+  """CharlieBot configuration, loaded from ~/.charliebot/config.yaml.
+
+  ``extra='forbid'`` turns an unknown top-level key into an error naming it —
+  at construction and at startup load — instead of silently dropping it (same
+  rationale as :class:`ScheduledTaskConfig`). ``model_construct`` is overridden
+  for the same reason: pydantic 2.12.5 drops unknown construct kwargs silently
+  even under forbid. Copy-style home redirection goes through :meth:`with_home`.
+  """
+
+  model_config = ConfigDict(extra='forbid')
 
   # Kimi (Moonshot) — optional, not wired in by default
   moonshot_api_key: str | None = None
@@ -254,16 +282,40 @@ class CharlieBotConfig(BaseModel):
   slack_app_token: str | None = None          # xapp-…, connections:write, Socket Mode only
   slack_allowed_user_ids: list[str] = []      # Slack user ids allowed to summon; empty = nobody
 
+  # Integration keys hosts carry in config.yaml / config.d/*.yaml whose consumers read
+  # the raw yaml outside this repo (skill scripts). Declared only so extra='forbid'
+  # keeps those files loadable; this model never acts on the values, and the names
+  # are load-bearing yaml keys.
+  feishu_app_id: str | None = None
+  feishu_app_secret: str | None = None
+  feishu_refresh_token: str | None = None
+  feishu_user_access_token: str | None = None
+  gemini_api_key: str | None = None
+  gemini_model: str | None = None
+  google_client_id: str | None = None
+  google_client_secret: str | None = None
+  google_docs_client_id: str | None = None
+  google_docs_client_secret: str | None = None
+  google_docs_default_folder_id: str | None = None
+  google_docs_refresh_token: str | None = None
+  google_refresh_token: str | None = None
+  linear_api_key: str | None = None
+  slack_user_token: str | None = None
+  public_base_url: str | None = None
+
   @model_validator(mode="before")
   @classmethod
   def migrate_and_expand(cls, values: dict) -> dict:
-    """Backward compat: rename project_dirs -> workspace_dirs, expand ~ in paths."""
+    """Backward compat: rename project_dirs -> workspace_dirs, expand ~ in paths.
+
+    Data-carrying migrations only: a lone legacy ``project_dirs`` is renamed and
+    ``backlog_repo``/``backlog_label`` fold into ``backlog_repos``. Deprecated keys
+    with nothing to carry (``max_concurrent_workers``, a ``project_dirs`` alongside
+    ``workspace_dirs``) stay in place so ``extra='forbid'`` raises naming them
+    instead of silently dropping them.
+    """
     if "project_dirs" in values and "workspace_dirs" not in values:
       values["workspace_dirs"] = values.pop("project_dirs")
-    elif "project_dirs" in values:
-      values.pop("project_dirs")
-    # Remove deprecated fields silently
-    values.pop("max_concurrent_workers", None)
     # Expand ~ in workspace_dirs and worktree_dir
     ws = values.get("workspace_dirs", ["~/workspace"])
     values["workspace_dirs"] = [os.path.expanduser(p) for p in ws]
@@ -281,6 +333,48 @@ class CharlieBotConfig(BaseModel):
       if isinstance(entry, dict) and entry.get("path"):
         entry["path"] = os.path.expanduser(entry["path"])
     return values
+
+  @classmethod
+  def model_construct(cls, _fields_set: set[str] | None = None, **values: object) -> "CharlieBotConfig":
+    """``model_construct`` that rejects unknown keyword arguments by name.
+
+    pydantic 2.12.5's ``model_construct`` silently drops kwargs that match no
+    field — even with ``extra='forbid'`` — so a caller redirecting a non-field
+    name got a silently unredirected copy (the 2026-08-29 probe incident).
+    Names outside the fields and their aliases raise :class:`TypeError` listing
+    them; everything else delegates to ``super().model_construct()``.
+    """
+    known: set[str] = set(cls.model_fields)
+    for field in cls.model_fields.values():
+      known |= _alias_field_names(field.alias) | _alias_field_names(field.validation_alias)
+    unknown = sorted(set(values) - known)
+    if unknown:
+      raise TypeError(
+          f"{cls.__name__}.model_construct() got unexpected keyword argument(s): "
+          + ", ".join(unknown))
+    return super().model_construct(_fields_set, **values)
+
+  def with_home(self, path: str | Path) -> "CharlieBotConfig":
+    """Return a copy of this config with ``charliebot_home`` redirected to *path*.
+
+    This is the supported copy-style redirection entry point: it expands ``~``,
+    rejects a relative path (the same rule as :func:`charliebot_home_dir`), and
+    returns a new instance via ``model_copy`` updating exactly ``charliebot_home``.
+    Every derived Path property then resolves under the new home, nested models
+    are preserved by reference, and the original instance is untouched. Instance
+    fields have no setters, so in-place redirection was never possible anyway.
+
+    Added after the 2026-08-29 probe incident: a probe passed a derived-path
+    name to ``model_construct`` for isolation and pydantic silently dropped the
+    unknown kwarg, so the probe ran against the real home and wrote into live
+    state. Redirect through this method instead of constructing or copying by
+    hand — the unknown-kwarg gates above make any miss raise at the call site.
+    """
+    home = Path(path).expanduser()
+    if not home.is_absolute():
+      raise ValueError(
+          f"with_home() requires an absolute path or a '~' path; got {path!r}")
+    return self.model_copy(update={"charliebot_home": home})
 
   @property
   def subprocess_buffer_limit(self) -> int:
@@ -437,7 +531,21 @@ def load_config() -> CharlieBotConfig:
     raise ValueError(
         f"{key_origin['charliebot_home']} sets 'charliebot_home'; that path is chosen by the "
         f"{CHARLIEBOT_HOME_ENV} environment variable. Remove the key.")
-  return CharlieBotConfig(charliebot_home=home, **yaml_data)
+  try:
+    return CharlieBotConfig(charliebot_home=home, **yaml_data)
+  except ValidationError as e:
+    # extra='forbid' raises naming the key only; key_origin tracks which file each
+    # key came from, so the startup error names both.
+    extras = [
+        err["loc"][0] for err in e.errors()
+        if err["type"] == "extra_forbidden" and len(err["loc"]) == 1
+    ]
+    if not extras:
+      raise
+    raise ValueError(
+        "unknown config key(s) "
+        + ", ".join(f"{key!r} ({key_origin[key]})" for key in extras)
+        + "; declare the key(s) on CharlieBotConfig or remove them") from e
 
 
 def get_config() -> CharlieBotConfig:

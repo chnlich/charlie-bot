@@ -29,14 +29,6 @@ def _local(*pids: int) -> list[LocalPid]:
   return [LocalPid(pid=p) for p in pids]
 
 
-@pytest.fixture
-def pidfd_open_available() -> None:
-  """Skip when the production pidfd helpers are not supported on this host."""
-  from src.core.triggers import _PIDFD_SUPPORTED
-  if not _PIDFD_SUPPORTED:
-    pytest.skip("pidfd not supported on this host (not even via syscall)")
-
-
 def _find_unused_pid() -> int:
   """Find a PID that is very likely not in use."""
   for candidate in range(4194303, 3999999, -1):
@@ -192,10 +184,7 @@ async def test_time_only_path_unchanged(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_pidfd_fallback_works_on_host(tmp_path: Path) -> None:
-  from src.core.triggers import _PIDFD_SUPPORTED
-  if not _PIDFD_SUPPORTED:
-    pytest.skip("pidfd not supported on this host (not even via syscall)")
+async def test_pidfd_fallback_works_on_host(tmp_path: Path, pidfd_open_available: None) -> None:
   proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.5)"])
   try:
     _cfg, _session_mgr, trigger_mgr, session_id = await _make_mgr(tmp_path)

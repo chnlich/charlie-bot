@@ -10,13 +10,11 @@ orphan, not a live task, and its content should not be read at all.
 import os
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
 
 import pytest
-from conftest import make_home_session, write_thread_meta
+from conftest import make_home_session, spy_on_load_json_meta, write_thread_meta
 
 from src.core import init as init_module
-from src.core import init_worker_recovery as worker_recovery_module
 from src.core.models import utc_now
 
 
@@ -37,14 +35,7 @@ async def test_has_running_tasks_false_for_stale_running_thread_without_reading_
   old_ts = (utc_now() - init_module.RUNNING_SCAN_WINDOW - timedelta(days=1)).timestamp()
   os.utime(stale, (old_ts, old_ts))
 
-  read_paths: list[Path] = []
-  real_load = worker_recovery_module.load_json_meta
-
-  def spy(path: Path, log_event: str, **kwargs: Any) -> Any:
-    read_paths.append(Path(path))
-    return real_load(path, log_event, **kwargs)
-
-  monkeypatch.setattr(worker_recovery_module, "load_json_meta", spy)
+  read_paths = spy_on_load_json_meta(monkeypatch)
 
   assert await mgr._has_running_tasks(session.id) is False
   # scandir+stat only — the stale metadata content is never read.

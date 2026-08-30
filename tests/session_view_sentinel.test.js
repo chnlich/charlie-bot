@@ -1,131 +1,39 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const { baseSessionContext, createChatSidebarContext } = require('./session_context_stub');
 const { createElement } = require('./dom_element_stub');
-
-const COMPAT_LOADER_JS = readStatic('compat-loader.js');
-const CHAT_JS = readStatic('chat.js');
-const SIDEBAR_JS = readStatic('sidebar.js');
-const PAGE_TIMERS_JS = readStatic('page-timers.js');
 
 function buildContext(overrides = {}) {
   const fetchCalls = [];
-  const elements = overrides.elements || new Map();
-  const localStorageData = new Map(Object.entries(overrides.localStorageItems || {}));
+  const {context, elements} = baseSessionContext(overrides);
 
-  const context = {
-    SESSION_ID: 'session-a',
-    THINKING_SINCE: null,
-    DRAFT_KEY: null,
-    ACTIVE_BACKEND_ID: overrides.ACTIVE_BACKEND_ID || 'claude-opus-4.6',
-    masterThinking: false,
-    switching: false,
-    reconnectTimer: null,
-    workersPollInterval: null,
-    streamBuf: '',
-    streamTs: null,
-    catchupDone: false,
-    pendingUserMsg: false,
-    uploadedFiles: [],
-    localStorage: {
-      getItem: (key) => localStorageData.has(key) ? localStorageData.get(key) : null,
-      setItem: (key, value) => { localStorageData.set(key, String(value)); },
-      removeItem: (key) => { localStorageData.delete(key); },
-    },
-    location: {href: '', protocol: 'http:', host: 'localhost:8000', search: ''},
-    history: {pushState: () => {}},
-    console: {error: () => {}, log: () => {}},
-    fetch: overrides.fetch || (async (url) => {
-      fetchCalls.push(url);
-      return {ok: true, async json() { return {has_more: false, next_before: 0, messages: []}; }};
-    }),
-    setInterval: () => 1,
-    setTimeout: (fn) => { if (overrides.autoTimeout) fn(); return 1; },
-    clearInterval: () => {},
-    clearTimeout: () => {},
-    URLSearchParams,
-    AbortController,
-    document: {
-      getElementById: (id) => {
-        const fromMap = elements.get(id);
-        if (fromMap) return fromMap;
-        const container = elements.get('messages');
-        if (container) {
-          for (const child of container.children) {
-            if (child.id === id) return child;
-          }
-        }
-        return null;
-      },
-      querySelectorAll: () => [],
-      querySelector: () => null,
-      createElement: (tagName) => {
-        const el = createElement({tagName: String(tagName).toUpperCase()});
-        let rawText = '';
-        Object.defineProperty(el, 'textContent', {
-          get() { return rawText; },
-          set(v) {
-            rawText = String(v);
-            el.innerHTML = String(v)
-              .replaceAll('&', '&amp;')
-              .replaceAll('<', '&lt;')
-              .replaceAll('>', '&gt;')
-              .replaceAll('"', '&quot;')
-              .replaceAll("'", '&#39;');
-          },
-        });
-        return el;
-      },
-      body: createElement({tagName: 'BODY'}),
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    },
-    disconnectWS: () => {},
-    connectWS: () => {},
-    resetVoiceState: () => {},
-    renderFileChips: () => {},
-    hideSlashPopup: () => {},
-    hideStreaming: () => {},
-    showStreaming: () => {},
-    updateSidebarHighlight: () => {},
-    pollSessionStatus: () => Promise.resolve(false),
-    pollWorkers: () => {},
-    autoResize: () => {},
-    startThinking: () => {},
-    stopThinking: () => {},
-    relativeTime: (txt) => txt,
-    updateRelativeTimes: () => {},
-    formatTokens: (n) => `${Math.round(n / 1000)}k`,
-    formatUsageCostValue: (cost) => cost == null ? 'N/A' : '$' + cost.toFixed(2),
-    formatLastRun: (txt) => txt,
-    escapeHtml: (v) => v,
-    renderUserMessageBubble: (content) => `<div>${content || ''}</div>`,
-    renderWorkersTab: () => {},
-    switchTab: () => {},
-    marked: {parse: (txt) => txt},
-    fixNestedFences: (txt) => txt,
-    renderChatMath: () => {},
-    formatBubbleTime: (txt) => txt,
-    shouldAutoScroll: () => true,
-    showScrollToBottom: () => {},
-    showToast: () => {},
-    loadedThreads: {clear: () => {}},
-    _backlogLoaded: false,
-    BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
-    BACKEND_TYPES: overrides.BACKEND_TYPES || {},
-    alert: () => {},
-    confirm: () => true,
+  context.fetch = overrides.fetch || (async (url) => {
+    fetchCalls.push(url);
+    return {ok: true, async json() { return {has_more: false, next_before: 0, messages: []}; }};
+  });
+  context.setInterval = () => 1;
+  context.setTimeout = (fn) => { if (overrides.autoTimeout) fn(); return 1; };
+  context.clearInterval = () => {};
+  context.clearTimeout = () => {};
+  context.document.getElementById = (id) => {
+    const fromMap = elements.get(id);
+    if (fromMap) return fromMap;
+    const container = elements.get('messages');
+    if (container) {
+      for (const child of container.children) {
+        if (child.id === id) return child;
+      }
+    }
+    return null;
   };
-  context.window = {addEventListener: () => {}, innerHeight: 800};
-  context.CSS = {escape: (value) => String(value)};
+  context.document.querySelectorAll = () => [];
+  context.document.querySelector = () => null;
+  context.renderUserMessageBubble = (content) => `<div>${content || ''}</div>`;
+  context.alert = () => {};
+  context.confirm = () => true;
 
-  vm.createContext(context);
-  vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
-  vm.runInContext(COMPAT_LOADER_JS, context, {filename: 'compat-loader.js'});
-  vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
-  vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
+  createChatSidebarContext(context);
   return {context, fetchCalls, elements};
 }
 

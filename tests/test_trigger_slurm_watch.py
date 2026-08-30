@@ -45,14 +45,6 @@ def _mk_sacct_mock(outputs: list[str]) -> AsyncMock:
   return AsyncMock(side_effect=_factory)
 
 
-@pytest.fixture
-def pidfd_open_available() -> None:
-  """Skip when pidfd helpers are unavailable (needed for mixed local+slurm)."""
-  from src.core.triggers import _PIDFD_SUPPORTED
-  if not _PIDFD_SUPPORTED:
-    pytest.skip("pidfd not supported on this host")
-
-
 # ---------------------------------------------------------------------------
 # Single slurm job: terminal-state detection
 # ---------------------------------------------------------------------------

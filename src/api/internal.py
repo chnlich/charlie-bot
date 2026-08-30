@@ -36,6 +36,7 @@ from src.core.models import (
   SessionMessageRequest,
   SessionMetadata,
   SessionStatus,
+  SlackAckRequest,
   SlackReplyRequest,
   SpawnRequest,
   TaskType,
@@ -43,7 +44,12 @@ from src.core.models import (
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
-from src.core.slack_listener import SlackReplyError, post_reply
+from src.core.slack_listener import (
+  SlackReplyError,
+  ack_messages,
+  assert_thread_fresh,
+  post_reply,
+)
 from src.core.spawner import (
   resolve_requested_subagent_backend_model,
   select_verify_backend,
@@ -364,10 +370,36 @@ async def slack_reply(
   the reply answers, and the readback (chars, chunks, over_budget, answers) is
   what the CLI prints. Refusals map SlackReplyError's status (404 unknown
   session, 409 no Slack thread, 422 blank text, 502 Slack rejected the post
-  after retries); nothing is persisted on a refusal.
+  after retries); nothing is persisted on a refusal. Freshness is gated first:
+  eligible thread messages above the session's watermark refuse with a 412
+  ``stale_thread`` payload naming each unseen message, before any chunk posts.
   """
   try:
+    await assert_thread_fresh(req.session_id, cfg, session_mgr)
     return await post_reply(req.session_id, req.text, cfg, session_mgr)
+  except SlackReplyError as exc:
+    raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
+
+@router.post("/slack/ack")
+async def slack_ack(
+    req: SlackAckRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config),
+):
+  """Mark the calling session's read thread messages as consumed and return the readback.
+
+  The boundary behind ``charliebot slack ack``: ``message_ids`` are Slack ts
+  values, every one must be eligible, and every eligible id at or below the
+  newest must be included — a skipped id (or an unknown/ineligible one) refuses
+  with 422 naming it and persists nothing. Success advances the session's
+  ``slack_watermark_ts``, persists a small ack event for the audit trail, and
+  returns ``acked`` plus the new watermark; re-acking ids at or below the
+  watermark is an idempotent no-op counted as acked. Refusals map
+  SlackReplyError's status: 404 unknown session, 409 no Slack thread.
+  """
+  try:
+    return await ack_messages(req.session_id, req.message_ids, cfg, session_mgr)
   except SlackReplyError as exc:
     raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 

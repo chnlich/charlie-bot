@@ -290,6 +290,15 @@ class PlanRegistryManager:
         return plan
     return None
 
+  def _require_open_plan(self, data: dict, plan_id: int) -> dict:
+    """Return the named plan, raising when it is missing or closed."""
+    plan = self._get_plan(data, plan_id)
+    if plan is None:
+      raise ValueError(f"plan {plan_id} not found in session")
+    if plan.get("closed") is not None:
+      raise ValueError(f"plan {plan_id} is closed ({plan['closed']['as']!r})")
+    return plan
+
   # -- verbs --------------------------------------------------------------
 
   async def present(
@@ -352,12 +361,7 @@ class PlanRegistryManager:
 
   def _resolve_target_plan_for_amend(self, data: dict, plan_id: int | None) -> dict:
     if plan_id is not None:
-      plan = self._get_plan(data, plan_id)
-      if plan is None:
-        raise ValueError(f"plan {plan_id} not found in session")
-      if plan.get("closed") is not None:
-        raise ValueError(f"plan {plan_id} is closed ({plan['closed']['as']!r})")
-      return plan
+      return self._require_open_plan(data, plan_id)
     open_candidates = [p for p in data["plans"] if p.get("closed") is None and p.get("takeoff") is None]
     if not open_candidates:
       raise ValueError("no open lineage to amend; pass --plan to amend an approved one")
@@ -378,11 +382,7 @@ class PlanRegistryManager:
 
   def _resolve_target_plan_for_approve(self, data: dict, plan_id: int | None) -> dict:
     if plan_id is not None:
-      plan = self._get_plan(data, plan_id)
-      if plan is None:
-        raise ValueError(f"plan {plan_id} not found in session")
-      if plan.get("closed") is not None:
-        raise ValueError(f"plan {plan_id} is closed ({plan['closed']['as']!r})")
+      plan = self._require_open_plan(data, plan_id)
       if plan.get("takeoff") is not None:
         raise ValueError(f"plan {plan_id} is already approved")
       return plan

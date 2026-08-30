@@ -218,6 +218,10 @@ def _claude_file_contribution(path: Path) -> tuple[dict, int]:
   dupes = 0
   records: list[list] = []
   nbytes = 0
+  # The signature is taken before the read: a concurrent append mid-read then necessarily
+  # outdates the stored sig and the next lookup re-scans, so a partial or extended read can
+  # never be served later as if complete.
+  st = path.stat()
   with path.open(errors="replace") as fh:
     for line in fh:
       nbytes += len(line)
@@ -244,7 +248,6 @@ def _claude_file_contribution(path: Path) -> tuple[dict, int]:
           usage.get("cache_creation_input_tokens", 0) or 0,
           usage.get("cache_read_input_tokens", 0) or 0,
           usage.get("output_tokens", 0) or 0])
-  st = path.stat()
   return {"sig": [st.st_mtime_ns, st.st_size], "records": records, "dupes": dupes}, nbytes
 
 

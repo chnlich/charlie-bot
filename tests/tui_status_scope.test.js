@@ -31,6 +31,12 @@ function loadStatusContext(overrides = {}) {
   return context;
 }
 
+// vm-context objects carry the context's own Object prototype, which strict
+// deepEqual reads as a mismatch; a JSON round-trip re-realms the value.
+function statusMapOf(context) {
+  return JSON.parse(JSON.stringify(context.TuiStatusMap));
+}
+
 function sessionAnchors(ids) {
   return ids.map((id) => ({ id: 'session-' + id, tagName: 'A' }));
 }
@@ -56,7 +62,7 @@ test('fetchTuiStatus issues no request when no rendered row is tui-cli', async (
   await context.fetchTuiStatus();
 
   assert.deepEqual(requested, []);
-  assert.deepEqual(context.TuiStatusMap, {});
+  assert.deepEqual(statusMapOf(context), {});
 });
 
 test('fetchTuiStatus requests only the rows rendered as tui-cli', async () => {
@@ -73,7 +79,7 @@ test('fetchTuiStatus requests only the rows rendered as tui-cli', async () => {
   await context.fetchTuiStatus();
 
   assert.deepEqual(requested, ['/api/sessions/tui/status?ids=session-b']);
-  assert.deepEqual(context.TuiStatusMap, { 'session-b': { running: true, busy: false } });
+  assert.deepEqual(statusMapOf(context), { 'session-b': { running: true, busy: false } });
 });
 
 test('fetchTuiStatus keeps the active tui session polled when its row is not rendered', async () => {
@@ -137,5 +143,5 @@ test('a failed tui poll keeps the last status map', async () => {
 
   await context.fetchTuiStatus();
 
-  assert.deepEqual(context.TuiStatusMap, { 'session-a': { running: true, busy: false } });
+  assert.deepEqual(statusMapOf(context), { 'session-a': { running: true, busy: false } });
 });

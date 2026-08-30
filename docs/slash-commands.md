@@ -109,7 +109,7 @@ An unchecked checkbox contributes the empty string; a checked one contributes `t
 
 | Command | Description |
 |---------|-------------|
-| `/help` | Show all available slash commands |
+| `/help` | Show available slash commands |
 | `/run <task-name>` | Manually trigger a scheduled task |
 | `/stop-improve` | Stop an active improve loop after current iteration |
 

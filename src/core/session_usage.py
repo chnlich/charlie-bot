@@ -1,7 +1,11 @@
 """Session usage resolution — a read-only projection over the in-memory event list.
 
-Usage is computed on demand from the full chat-event stream; no incremental cache
-is maintained. See the plan ``panel-usage-readout-fix`` for the tier contract.
+Usage is computed on demand in ONE pass over the full chat-event stream; no
+incremental cache is maintained. The ``/api/sessions/<id>/usage`` endpoint is
+polled every 3 s per browser tab while the viewed session is thinking, so one
+scan per resolution keeps that recurring CPU charge proportional to the event
+count once, not to the tier count. See the plan ``panel-usage-readout-fix``
+for the tier contract.
 
 The usage dict carries four context fields plus cost and model:
 
@@ -20,6 +24,7 @@ bar). ``None`` for any context field means "unknown" — the bar is hidden.
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from src.agents.backends.claude_code import (
     CLAUDE_COMPACT_CONTEXT_RESERVE,
@@ -41,26 +46,83 @@ def _prompt_token_sum(usage: dict) -> int:
       + usage.get("cache_read_input_tokens", 0))
 
 
-def _cost_from_result_events(events: list[dict]) -> float | None:
-  """Sum ``total_cost_usd`` over every result event in the full event list.
+@dataclass(frozen=True)
+class _UsageFacts:
+  """One scan's harvest of everything the usage tiers read from the event list.
 
-  Returns ``None`` when no result event reported a positive cost, or when any
-  result event's ``total_cost_usd`` is ``None``. A sum of exactly 0 means
-  "never reported", not "free".
+  ``chosen_prompt_tokens`` > 0 selects the claude tier: the value is the chosen
+  assistant event's usage prompt-token sum, and ``chosen_model`` is its
+  ``message.model``. ``post_compact_tokens`` is the latest ``compact_boundary``
+  int ``post_tokens`` strictly after that assistant event, or None.
+  ``model_windows`` merges ``modelUsage[model].contextWindow`` across result
+  events (last wins). ``snapshot`` is the newest result event's dict
+  ``context_snapshot``, or None. ``cost`` is the rounded ``total_cost_usd`` sum
+  over result events: None when any of them is None or the sum is not positive.
   """
+
+  chosen_prompt_tokens: int
+  chosen_model: str
+  post_compact_tokens: int | None
+  model_windows: dict[str, int]
+  snapshot: dict | None
+  cost: float | None
+
+
+def _scan_usage_facts(events: list[dict]) -> _UsageFacts:
+  """Collect every tier's inputs in one pass over *events*.
+
+  A ``compact_boundary`` counts only after the assistant event the claude tier
+  will choose: a newer qualifying assistant resets the boundary seen so far,
+  so the final value is the latest ``post_tokens`` strictly after the chosen
+  assistant — the same set a suffix scan from the chosen index would consider.
+  """
+  chosen_prompt_tokens = 0
+  chosen_model = ""
+  post_compact_tokens: int | None = None
+  model_windows: dict[str, int] = {}
+  snapshot: dict | None = None
   total_cost = 0.0
   unknown_cost = False
   for ev in events:
-    if ev.get("type") != ET.RESULT:
-      continue
-    event_cost = ev.get("total_cost_usd", 0.0)
-    if event_cost is None:
-      unknown_cost = True
-    else:
-      total_cost += event_cost
+    kind = ev.get("type")
+    if kind == ET.ASSISTANT:
+      if ev.get("parent_tool_use_id"):
+        continue
+      message = ev.get("message") or {}
+      prompt_tokens = _prompt_token_sum(message.get("usage") or {})
+      if prompt_tokens > 0:
+        chosen_prompt_tokens = prompt_tokens
+        chosen_model = message.get("model") or ""
+        post_compact_tokens = None
+    elif kind == ET.SYSTEM:
+      if chosen_prompt_tokens > 0 and ev.get("subtype") == ET.COMPACT_BOUNDARY:
+        candidate = (ev.get(ET.COMPACT_METADATA) or {}).get("post_tokens")
+        if isinstance(candidate, int):
+          post_compact_tokens = candidate
+    elif kind == ET.RESULT:
+      for model_name, info in (ev.get("modelUsage") or {}).items():
+        window = info.get("contextWindow")
+        if isinstance(window, int):
+          model_windows[model_name] = window
+      candidate_snapshot = ev.get("context_snapshot")
+      if isinstance(candidate_snapshot, dict):
+        snapshot = candidate_snapshot
+      event_cost = ev.get("total_cost_usd", 0.0)
+      if event_cost is None:
+        unknown_cost = True
+      else:
+        total_cost += event_cost
+  cost = round(total_cost, 4)
   if unknown_cost or total_cost <= 0:
-    return None
-  return round(total_cost, 4)
+    cost = None
+  return _UsageFacts(
+      chosen_prompt_tokens=chosen_prompt_tokens,
+      chosen_model=chosen_model,
+      post_compact_tokens=post_compact_tokens,
+      model_windows=model_windows,
+      snapshot=snapshot,
+      cost=cost,
+  )
 
 
 def _usage_dict(
@@ -68,51 +130,23 @@ def _usage_dict(
     context_full: int | None,
     context_compact_at: int | None,
     model: str,
-    events: list[dict],
+    cost: float | None,
 ) -> dict:
   """Single construction site for the usage-dict shape declared in the module docstring.
 
   Every tier fills the four context fields from its own source; the cost field
-  is always the sum over result events of the same full event list.
+  is the shared scan's sum over result events.
   """
   return {
       "context_tokens": context_tokens,
       "context_full": context_full,
       "context_compact_at": context_compact_at,
-      "total_cost_usd": _cost_from_result_events(events),
+      "total_cost_usd": cost,
       "model": model,
   }
 
 
-def _model_context_windows_from_results(events: list[dict]) -> dict[str, int]:
-  """Merge ``modelUsage[model].contextWindow`` across every result event (last wins)."""
-  windows: dict[str, int] = {}
-  for ev in events:
-    if ev.get("type") != ET.RESULT:
-      continue
-    for model_name, info in (ev.get("modelUsage") or {}).items():
-      context_window = info.get("contextWindow")
-      if isinstance(context_window, int):
-        windows[model_name] = context_window
-  return windows
-
-
-def _post_compact_tokens_after(events: list[dict], chosen_idx: int) -> int | None:
-  """Latest ``compact_boundary`` event's int ``post_tokens`` strictly after ``chosen_idx``.
-
-  Returns ``None`` when no qualifying boundary exists after that index.
-  """
-  post_tokens: int | None = None
-  for ev in events[chosen_idx + 1:]:
-    if ev.get("type") != ET.SYSTEM or ev.get("subtype") != ET.COMPACT_BOUNDARY:
-      continue
-    candidate = (ev.get(ET.COMPACT_METADATA) or {}).get("post_tokens")
-    if isinstance(candidate, int):
-      post_tokens = candidate
-  return post_tokens
-
-
-def _resolve_claude_tier(events: list[dict]) -> dict | None:
+def _resolve_claude_tier(facts: _UsageFacts) -> dict | None:
   """Resolve usage from the last main-chain assistant event with positive prompt tokens.
 
   context_tokens is that assistant event's ``message.usage`` prompt-token sum, unless
@@ -123,41 +157,24 @@ def _resolve_claude_tier(events: list[dict]) -> dict | None:
   ``modelUsage`` the declared window alone is used. context_compact_at is
   ``context_full - OUTPUT_RESERVE - CONTEXT_RESERVE``; it is ``None`` when the
   declared window is degraded (a forwarded-but-unmodelled override is present).
-  cost is summed over result events. Returns ``None`` when no qualifying
-  assistant event exists.
+  Returns ``None`` when no qualifying assistant event exists.
   """
-  chosen: dict | None = None
-  chosen_idx = -1
-  for idx, ev in enumerate(events):
-    if ev.get("type") != ET.ASSISTANT:
-      continue
-    if ev.get("parent_tool_use_id"):
-      continue
-    message = ev.get("message") or {}
-    usage = message.get("usage") or {}
-    if _prompt_token_sum(usage) > 0:
-      chosen = ev
-      chosen_idx = idx
-
-  if chosen is None:
+  if facts.chosen_prompt_tokens <= 0:
     return None
-
-  message = chosen.get("message") or {}
-  usage = message.get("usage") or {}
-  post_tokens = _post_compact_tokens_after(events, chosen_idx)
-  context_tokens = post_tokens if post_tokens is not None else _prompt_token_sum(usage)
-  model = message.get("model") or ""
+  context_tokens = (
+      facts.post_compact_tokens
+      if facts.post_compact_tokens is not None
+      else facts.chosen_prompt_tokens)
   declared_window, compact_point = headless_claude_declared_window()
-  windows = _model_context_windows_from_results(events)
-  if model and model in windows:
-    context_full = min(windows[model], declared_window)
+  if facts.chosen_model and facts.chosen_model in facts.model_windows:
+    context_full = min(facts.model_windows[facts.chosen_model], declared_window)
   else:
     context_full = declared_window
   if compact_point is None:
     context_compact_at: int | None = None
   else:
     context_compact_at = context_full - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
-  return _usage_dict(context_tokens, context_full, context_compact_at, model, events)
+  return _usage_dict(context_tokens, context_full, context_compact_at, facts.chosen_model, facts.cost)
 
 
 def _snapshot_tokens_sum(tokens: dict) -> int:
@@ -194,22 +211,15 @@ def _snapshot_full_and_compact(limit: dict) -> tuple[int | None, int | None]:
   return context_full, context_compact_at
 
 
-def _resolve_snapshot_tier(events: list[dict]) -> dict | None:
+def _resolve_snapshot_tier(facts: _UsageFacts) -> dict | None:
   """Resolve usage from the newest result event carrying a ``context_snapshot``.
 
   context_tokens is the sum of the snapshot's five ``tokens`` fields. context_full /
   context_compact_at derive from the snapshot's ``limit`` (see
   ``_snapshot_full_and_compact``); both are ``None`` when ``limit`` is ``None``.
-  cost is summed over result events. Returns ``None`` when no result event carries
-  a ``context_snapshot``.
+  Returns ``None`` when no result event carries a ``context_snapshot``.
   """
-  snapshot: dict | None = None
-  for ev in events:
-    if ev.get("type") != ET.RESULT:
-      continue
-    candidate = ev.get("context_snapshot")
-    if isinstance(candidate, dict):
-      snapshot = candidate
+  snapshot = facts.snapshot
   if snapshot is None:
     return None
   tokens = snapshot.get("tokens") or {}
@@ -220,21 +230,21 @@ def _resolve_snapshot_tier(events: list[dict]) -> dict | None:
   else:
     context_full, context_compact_at = None, None
   model = snapshot.get("model") or ""
-  return _usage_dict(context_tokens, context_full, context_compact_at, model, events)
+  return _usage_dict(context_tokens, context_full, context_compact_at, model, facts.cost)
 
 
-def _resolve_no_source_tier(events: list[dict]) -> dict:
+def _resolve_no_source_tier(facts: _UsageFacts) -> dict:
   """Usage object when no tier applies.
 
   context_tokens / context_full / context_compact_at are ``None`` (rendered as
-  ``unknown``); cost is still summed over result events.
+  ``unknown``); cost is the shared scan's sum over result events.
   """
   return _usage_dict(
       context_tokens=None,
       context_full=None,
       context_compact_at=None,
       model="",
-      events=events)
+      cost=facts.cost)
 
 
 class SessionUsageResolver:
@@ -258,7 +268,8 @@ class SessionUsageResolver:
     """Resolve display usage for a session view.
 
     Loads the full event list itself (memoised by the chat-events cache, so no
-    extra disk I/O) and selects a tier by data availability, not backend name:
+    extra disk I/O) and scans it once; the tiers then read the scan's facts,
+    selected by data availability, not backend name:
 
     - claude: a main-chain ``assistant`` event with positive prompt tokens exists.
     - codex: the backend is codex and the native rollout resolves.
@@ -268,8 +279,9 @@ class SessionUsageResolver:
     Returns ``None`` only when the event list is empty.
     """
     events = await asyncio.to_thread(self._load_chat_events_sync, session_id)
+    facts = _scan_usage_facts(events)
 
-    usage = _resolve_claude_tier(events)
+    usage = _resolve_claude_tier(facts)
     if usage is not None:
       return usage
 
@@ -279,10 +291,10 @@ class SessionUsageResolver:
       if merged is not None:
         return merged
 
-    usage = _resolve_snapshot_tier(events)
+    usage = _resolve_snapshot_tier(facts)
     if usage is not None:
       return usage
 
     if not events:
       return None
-    return _resolve_no_source_tier(events)
+    return _resolve_no_source_tier(facts)

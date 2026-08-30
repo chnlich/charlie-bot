@@ -80,6 +80,35 @@ def _build_weekly_token_count_event(
   }
 
 
+def _build_spend_token_count_event(
+    *,
+    timestamp: Any,
+    input_tokens: Any,
+    cached_input_tokens: Any,
+    output_tokens: Any,
+) -> dict:
+  """A per-turn token_count event as the spend aggregation reads it.
+
+  ``payload.info.last_token_usage`` is the block ``_extract_codex_spend_events``
+  prices. Every field is ``Any`` so malformed-row probes pass bad values
+  through verbatim.
+  """
+  return {
+    "timestamp": timestamp,
+    "type": "event_msg",
+    "payload": {
+      "type": "token_count",
+      "info": {
+        "last_token_usage": {
+          "input_tokens": input_tokens,
+          "cached_input_tokens": cached_input_tokens,
+          "output_tokens": output_tokens,
+        },
+      },
+    },
+  }
+
+
 def test_extract_latest_codex_usage_adds_token_count_observed_at() -> None:
   fetched_at = "2026-03-27T18:30:00+00:00"
   lines = [json.dumps(_build_token_count_event(
@@ -203,31 +232,20 @@ def test_compute_codex_spend_windows_prices_recent_turns_by_model(tmp_path) -> N
   rollout_dir.mkdir(parents=True)
   rollout_path = rollout_dir / "rollout-recent.jsonl"
 
-  def token_count_event(offset: timedelta, input_tokens: int, cached_input_tokens: int,
-                        output_tokens: int) -> dict:
-    return {
-      "timestamp": (now - offset).isoformat().replace("+00:00", "Z"),
-      "type": "event_msg",
-      "payload": {
-        "type": "token_count",
-        "info": {
-          "last_token_usage": {
-            "input_tokens": input_tokens,
-            "cached_input_tokens": cached_input_tokens,
-            "output_tokens": output_tokens,
-          },
-        },
-      },
-    }
-
   events = [
     {
       "type": "turn_context",
       "payload": {"model": "gpt-5.5"},
     },
-    token_count_event(timedelta(hours=2), 1_000_000, 100_000, 10_000),
-    token_count_event(timedelta(days=2), 2_000_000, 500_000, 20_000),
-    token_count_event(timedelta(days=8), 5_000_000, 0, 100_000),
+    _build_spend_token_count_event(
+        timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+        input_tokens=1_000_000, cached_input_tokens=100_000, output_tokens=10_000),
+    _build_spend_token_count_event(
+        timestamp=(now - timedelta(days=2)).isoformat().replace("+00:00", "Z"),
+        input_tokens=2_000_000, cached_input_tokens=500_000, output_tokens=20_000),
+    _build_spend_token_count_event(
+        timestamp=(now - timedelta(days=8)).isoformat().replace("+00:00", "Z"),
+        input_tokens=5_000_000, cached_input_tokens=0, output_tokens=100_000),
   ]
   rollout_path.write_text("\n".join(json.dumps(event) for event in events) + "\n")
   os.utime(rollout_path, (now.timestamp(), now.timestamp()))
@@ -328,20 +346,9 @@ async def test_codex_provider_spend_reparses_only_changed_files(tmp_path, monkey
   rollout_dir.mkdir(parents=True)
 
   def spend_event(input_tokens: int) -> str:
-    return json.dumps({
-        "timestamp": now.isoformat(),
-        "type": "event_msg",
-        "payload": {
-            "type": "token_count",
-            "info": {
-                "last_token_usage": {
-                    "input_tokens": input_tokens,
-                    "cached_input_tokens": 0,
-                    "output_tokens": 0,
-                },
-            },
-        },
-    })
+    return json.dumps(_build_spend_token_count_event(
+        timestamp=now.isoformat(), input_tokens=input_tokens,
+        cached_input_tokens=0, output_tokens=0))
 
   model_line = json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.3-codex"}})
   first = rollout_dir / "rollout-first.jsonl"
@@ -379,32 +386,25 @@ def test_compute_codex_spend_windows_skips_bad_rows_without_poisoning_totals(tmp
   rollout_dir.mkdir(parents=True)
   rollout_path = rollout_dir / "rollout-mixed.jsonl"
 
-  def token_count_event(timestamp: str, input_tokens: Any, cached_input_tokens: Any,
-                        output_tokens: Any) -> dict:
-    return {
-      "timestamp": timestamp,
-      "type": "event_msg",
-      "payload": {
-        "type": "token_count",
-        "info": {
-          "last_token_usage": {
-            "input_tokens": input_tokens,
-            "cached_input_tokens": cached_input_tokens,
-            "output_tokens": output_tokens,
-          },
-        },
-      },
-    }
-
   events = [
     {"type": "turn_context", "payload": {"model": "gpt-5.5"}},
-    token_count_event((now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"), 1_000_000, 100_000, 10_000),
-    token_count_event((now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"), "bad", 0, 0),
-    token_count_event((now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"), 500_000, None, 5_000),
-    token_count_event(None, 1_000_000, 0, 0),
-    token_count_event(12345, 1_000_000, 0, 0),
+    _build_spend_token_count_event(
+        timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+        input_tokens=1_000_000, cached_input_tokens=100_000, output_tokens=10_000),
+    _build_spend_token_count_event(
+        timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+        input_tokens="bad", cached_input_tokens=0, output_tokens=0),
+    _build_spend_token_count_event(
+        timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+        input_tokens=500_000, cached_input_tokens=None, output_tokens=5_000),
+    _build_spend_token_count_event(timestamp=None, input_tokens=1_000_000,
+                                   cached_input_tokens=0, output_tokens=0),
+    _build_spend_token_count_event(timestamp=12345, input_tokens=1_000_000,
+                                   cached_input_tokens=0, output_tokens=0),
     {"timestamp": (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"), "type": "event_msg", "payload": {"type": "token_count", "info": {}}},
-    token_count_event((now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"), 500_000, 50_000, 5_000),
+    _build_spend_token_count_event(
+        timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+        input_tokens=500_000, cached_input_tokens=50_000, output_tokens=5_000),
   ]
   rollout_path.write_text("\n".join(json.dumps(event) if isinstance(event, dict) else event for event in events) + "\n")
   os.utime(rollout_path, (now.timestamp(), now.timestamp()))
@@ -428,20 +428,9 @@ def test_compute_codex_spend_windows_skips_unreadable_file(tmp_path) -> None:
   readable_path = rollout_dir / "rollout-readable.jsonl"
   events = [
     {"type": "turn_context", "payload": {"model": "gpt-5.5"}},
-    {
-      "timestamp": now.isoformat().replace("+00:00", "Z"),
-      "type": "event_msg",
-      "payload": {
-        "type": "token_count",
-        "info": {
-          "last_token_usage": {
-            "input_tokens": 1_000_000,
-            "cached_input_tokens": 0,
-            "output_tokens": 0,
-          },
-        },
-      },
-    },
+    _build_spend_token_count_event(
+        timestamp=now.isoformat().replace("+00:00", "Z"),
+        input_tokens=1_000_000, cached_input_tokens=0, output_tokens=0),
   ]
   readable_path.write_text("\n".join(json.dumps(event) for event in events) + "\n")
   os.utime(readable_path, (now.timestamp(), now.timestamp()))
@@ -1036,20 +1025,9 @@ def test_compute_codex_spend_windows_accepts_a_prebuilt_file_list(tmp_path) -> N
   rollout_path = rollout_dir / "rollout-shared.jsonl"
   rollout_path.write_text("\n".join([
       json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.3-codex"}}),
-      json.dumps({
-          "timestamp": now.isoformat(),
-          "type": "event_msg",
-          "payload": {
-              "type": "token_count",
-              "info": {
-                  "last_token_usage": {
-                      "input_tokens": 1000,
-                      "cached_input_tokens": 0,
-                      "output_tokens": 100,
-                  },
-              },
-          },
-      }),
+      json.dumps(_build_spend_token_count_event(
+          timestamp=now.isoformat(), input_tokens=1000,
+          cached_input_tokens=0, output_tokens=100)),
   ]) + "\n")
   os.utime(rollout_path, (now.timestamp(), now.timestamp()))
 

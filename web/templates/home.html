@@ -62,7 +62,7 @@
 <div class="wrap">
   <h1>CharlieBot home</h1>
   <p class="sub">Everything this host (<b>{{ hostname }}</b>) serves, in one place. The first block is
-  the pages this server itself renders; the second lists externally-hosted services with a live
+  the pages this server itself renders; the second lists services this host runs, each with a live
   reachability probe at page-load time.</p>
 
   <h2><span class="n">1</span>Served by this server</h2>
@@ -77,7 +77,7 @@
   </div>
 
   {% if services %}
-  <h2><span class="n">2</span>External services</h2>
+  <h2><span class="n">2</span>Served by this host</h2>
   <div class="cards">
     {% for s in services %}
     <a class="card svc-card" href="{{ s.url }}">

@@ -20,6 +20,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M7 token-usage page | M7 collector below | seconds per page load | median < 3 s | — (introduced with its first history row) |
 | M8 sidebar search, absent needle | M8 collector below | seconds per request | median < 0.5 s | — (introduced with its first history row) |
 | M9 ext-usage codex spend rescan, steady state | M9 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
+| M10 thread-metadata torn reads | M10 collector below | torn reads per concurrent save stream | 0 torn reads | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -214,6 +215,68 @@ for _ in range(5):
     times.append(time.perf_counter() - t0)
 times.sort()
 print(f"{len(rollouts)} rollout files; steady-state spend rescan median {times[2]:.4f} s, max {times[-1]:.4f} s")
+EOF
+```
+
+M10 — thread-metadata torn reads: the invariant behind the threads/list endpoint's writes.
+`list_threads` validates every thread's `metadata.json` from an executor thread with no
+coordination against `save_metadata`'s rewrite, so a save that publishes the file
+truncated lets a concurrent poll observe a half-written file; that read fails
+`ThreadMetadata` validation and 500s the whole list response (the same failure the
+3 s workers-panel poll hits). The collector cannot drive that race through HTTP on the
+live instance without writing to its state, so it reproduces the race against the main
+checkout's code with scratch state: 3000 `save_metadata` calls on one thread's file
+while four reader threads validate every read. A torn read under this stream is a read
+the fixed write path cannot produce; the count is the metric.
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, sys, tempfile, threading
+from pathlib import Path
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.core.config import CharlieBotConfig
+from src.core.models import CreateSessionRequest, ThreadMetadata
+from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
+
+WRITES = 3000
+
+async def main():
+    work = Path(tempfile.mkdtemp(prefix="m10-torn-read-"))
+    cfg = CharlieBotConfig(charliebot_home=work / "home")
+    sessions = SessionManager(cfg)
+    threads = ThreadManager(cfg)
+    session = await sessions.create_session(CreateSessionRequest(name="M10"))
+    meta = await threads.create_thread(session, "m10")
+    path = work / "home" / "sessions" / session.id / "threads" / meta.id / "metadata.json"
+    torn = 0
+    reads = 0
+    stop = False
+
+    async def writer():
+        for _ in range(WRITES):
+            await threads.save_metadata(meta)
+
+    def reader():
+        nonlocal torn, reads
+        while not stop:
+            raw = path.read_text(encoding="utf-8")
+            reads += 1
+            try:
+                ThreadMetadata.model_validate_json(raw)
+            except ValueError:
+                torn += 1
+
+    running = [threading.Thread(target=reader) for _ in range(4)]
+    for t in running:
+        t.start()
+    await writer()
+    stop = True
+    for t in running:
+        t.join()
+    print(f"{WRITES} save_metadata calls, {reads} concurrent reads; torn reads observed: {torn}")
+
+asyncio.run(main())
 EOF
 ```
 

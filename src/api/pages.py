@@ -462,7 +462,6 @@ async def ncu_viewer(
           "ncu_details_cmd": f"ncu --import {path} --page details",
           "ncu_source_cmd": f"ncu --import {path} --page source --print-source sass",
           "ncu_session_cmd": f"ncu --import {path} --page session",
-          "hostname": socket.gethostname(),
       })
 
 
@@ -643,7 +642,6 @@ async def index(
   active_session = None
   threads = []
   triggers = []
-  session_usage = None
   pending_draft: dict | None = None
   event_count = 0
   session_bootstrap: dict | None = None
@@ -687,7 +685,6 @@ async def index(
           "triggers": triggers,
           "pt_tz": _PT_TZ,
           "event_count": event_count,
-          "session_usage": session_usage,
           "session_bootstrap": session_bootstrap,
           "backend_options": cfg.backend_options,
           "active_backend": active_backend,

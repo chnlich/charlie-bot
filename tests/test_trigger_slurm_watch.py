@@ -83,9 +83,8 @@ async def test_slurm_failed_captures_exit_code(tmp_path: Path) -> None:
     )
     await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
 
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.fire_reason == "completed"
-  assert "finished: slurm:42: FAILED 1:0" in mock_master.await_args.args[1]
+  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
+  assert "finished: slurm:42: FAILED 1:0" in msg
 
 
 @pytest.mark.asyncio
@@ -103,9 +102,8 @@ async def test_slurm_cancelled_with_uid_suffix_is_terminal(tmp_path: Path) -> No
     )
     await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
 
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.fire_reason == "completed"
-  assert "finished: slurm:7: CANCELLED by 1000 0:15" in mock_master.await_args.args[1]
+  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
+  assert "finished: slurm:7: CANCELLED by 1000 0:15" in msg
 
 
 @pytest.mark.asyncio
@@ -147,11 +145,10 @@ async def test_sacct_accounting_lag_keeps_polling(tmp_path: Path) -> None:
     )
     await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
 
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.fire_reason == "completed"
+  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
   # The empty result was NOT treated as terminal: it kept polling.
   assert sacct.call_count >= 2
-  assert "finished: slurm:12345: COMPLETED 0:0" in mock_master.await_args.args[1]
+  assert "finished: slurm:12345: COMPLETED 0:0" in msg
 
 
 @pytest.mark.asyncio
@@ -168,10 +165,9 @@ async def test_sacct_unknown_state_keeps_polling(tmp_path: Path) -> None:
     )
     await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
 
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.fire_reason == "completed"
+  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
   assert sacct.call_count >= 2
-  assert "finished: slurm:12345: COMPLETED 0:0" in mock_master.await_args.args[1]
+  assert "finished: slurm:12345: COMPLETED 0:0" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -203,10 +199,7 @@ async def test_mixed_local_and_slurm_and_semantics(tmp_path: Path, pidfd_open_av
 
   assert elapsed >= 0.4, f"fired before the local pid exited: {elapsed:.2f}s"
   assert elapsed < 5, f"fired too late: {elapsed:.2f}s"
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.fire_reason == "completed"
-  msg = mock_master.await_args.args[1]
-  assert "[Scheduled trigger fired | completed]" in msg
+  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
   assert str(proc.pid) in msg
   assert "slurm:77: COMPLETED 0:0" in msg
 

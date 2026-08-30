@@ -146,10 +146,7 @@ async def test_multiple_pids_all_semantics(tmp_path: Path, pidfd_open_available:
 
     assert elapsed >= 1.0, f"fired too early: {elapsed:.2f}s"
     assert elapsed < 5, f"fired too late: {elapsed:.2f}s"
-    stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-    assert stored.fire_reason == "completed"
-    msg = mock_master.await_args.args[1]
-    assert "[Scheduled trigger fired | completed]" in msg
+    msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
     assert str(fast.pid) in msg
     assert str(slow.pid) in msg
   finally:

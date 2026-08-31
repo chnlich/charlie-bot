@@ -4,6 +4,7 @@ const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
 const { loadChatRenderingModules } = require('./chat_rendering_context_stub');
+const { loadSidebarStatusContext } = require('./sidebar_status_context_stub');
 
 const { FakeElement } = require('./fake_dom');
 
@@ -27,21 +28,6 @@ function makeDocument(elements) {
       return null;
     },
   };
-}
-
-function loadStatusContext(elements) {
-  const context = {
-    document: {
-      getElementById: (id) => elements.get(id) || null,
-    },
-    console: { error: () => {} },
-    fetch: () => Promise.resolve({ ok: true, json: async () => ({}) }),
-    SESSION_ID: 'session-a',
-  };
-  vm.createContext(context);
-  vm.runInContext(readStatic('sidebar/namespace.js'), context, { filename: 'sidebar/namespace.js' });
-  vm.runInContext(readStatic('sidebar/status.js'), context, { filename: 'sidebar/status.js' });
-  return context;
 }
 
 function fakeHeaderButton() {
@@ -100,7 +86,9 @@ test('updateBackendHeaderControls gates #compact-btn to exactly cc-claude, for e
   const compactBtn = fakeHeaderButton();
   const stopBtn = fakeHeaderButton();
   const elements = new Map([['compact-btn', compactBtn], ['stop-tui-btn', stopBtn]]);
-  const context = loadStatusContext(elements);
+  const context = loadSidebarStatusContext({
+    document: { getElementById: (id) => elements.get(id) || null },
+  });
 
   const uniqueTypes = Array.from(new Set(Object.values(BACKEND_TYPES)));
   assert.ok(uniqueTypes.length >= 3, 'fixture should exercise more than one non-cc-claude type');

@@ -3,6 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
+const { loadSidebarStatusContext } = require('./sidebar_status_context_stub');
 
 // ---------------------------------------------------------------------------
 // A DOM node that counts every write to `class`/`title`, mirroring the real
@@ -111,26 +112,15 @@ test('hideScrollToBottom writes exactly once when the button needs to become hid
 // ---------------------------------------------------------------------------
 // sidebar/status.js: refreshTuiDots
 // ---------------------------------------------------------------------------
-function loadStatusContext(elements, dots) {
-  const context = {
-    document: {
-      getElementById: (id) => elements.get(id) || null,
-      querySelectorAll: (sel) => (sel === '.tui-status-dot[data-session-id]' ? dots : []),
-    },
-    console: { error: () => {} },
-    fetch: () => Promise.resolve({ ok: true, json: async () => ({}) }),
-    SESSION_ID: 'session-a',
-  };
-  vm.createContext(context);
-  vm.runInContext(readStatic('sidebar/namespace.js'), context, { filename: 'sidebar/namespace.js' });
-  vm.runInContext(readStatic('sidebar/status.js'), context, { filename: 'sidebar/status.js' });
-  return context;
-}
-
 test('refreshTuiDots writes nothing when every dot already matches its live status', () => {
   const dot = makeCountingElement(['tui-status-dot', 'w-2', 'h-2', 'rounded-full', 'flex-shrink-0', 'running'], 'Claude idle');
   dot.dataset.sessionId = 's1';
-  const context = loadStatusContext(new Map(), [dot]);
+  const context = loadSidebarStatusContext({
+    document: {
+      getElementById: () => null,
+      querySelectorAll: (sel) => (sel === '.tui-status-dot[data-session-id]' ? [dot] : []),
+    },
+  });
   context.TuiStatusMap = { s1: { running: true, busy: false } };
   context.refreshTuiDots();
   assert.equal(dot.counts.classWrites, 0);
@@ -140,7 +130,12 @@ test('refreshTuiDots writes nothing when every dot already matches its live stat
 test('refreshTuiDots writes class and title when the dot status actually changed', () => {
   const dot = makeCountingElement(['tui-status-dot', 'w-2', 'h-2', 'rounded-full', 'flex-shrink-0'], '');
   dot.dataset.sessionId = 's1';
-  const context = loadStatusContext(new Map(), [dot]);
+  const context = loadSidebarStatusContext({
+    document: {
+      getElementById: () => null,
+      querySelectorAll: (sel) => (sel === '.tui-status-dot[data-session-id]' ? [dot] : []),
+    },
+  });
   context.TuiStatusMap = { s1: { running: true, busy: true } };
   context.refreshTuiDots();
   assert.ok(dot.counts.classWrites > 0);

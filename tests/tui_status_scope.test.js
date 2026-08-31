@@ -1,8 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const { loadSidebarStatusContext } = require('./sidebar_status_context_stub');
 
 const BACKEND_TYPES = {
   'claude-opus-4.6': 'cc-claude',
@@ -11,11 +10,9 @@ const BACKEND_TYPES = {
 };
 
 function loadStatusContext(overrides = {}) {
-  const context = {
-    SESSION_ID: overrides.SESSION_ID || 'session-a',
+  const extras = {
     ACTIVE_BACKEND_TYPE: overrides.ACTIVE_BACKEND_TYPE || 'cc-claude',
     BACKEND_TYPES,
-    console: { error: () => {} },
     escapeHtmlAttr: (v) => String(v),
     fetch: overrides.fetch || (() => {
       throw new Error('unexpected fetch');
@@ -25,10 +22,8 @@ function loadStatusContext(overrides = {}) {
       querySelectorAll: overrides.querySelectorAll || (() => []),
     },
   };
-  vm.createContext(context);
-  vm.runInContext(readStatic('sidebar/namespace.js'), context, { filename: 'sidebar/namespace.js' });
-  vm.runInContext(readStatic('sidebar/status.js'), context, { filename: 'sidebar/status.js' });
-  return context;
+  if (overrides.SESSION_ID) extras.SESSION_ID = overrides.SESSION_ID;
+  return loadSidebarStatusContext(extras);
 }
 
 // vm-context objects carry the context's own Object prototype, which strict

@@ -1,9 +1,12 @@
-"""Tests for the recap summary path (generate_and_cache_summary)."""
+"""Tests for the recap summary path (generate_and_cache_summary, _write_cache_entry)."""
 
+import json
+import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import make_one_shot_backend
+from conftest import make_home_session, make_one_shot_backend
 
 from src.core import recap
 from src.core.config import CharlieBotConfig
@@ -243,3 +246,53 @@ async def test_recap_raises_last_exception_after_error_and_empty_result() -> Non
   empty_one_shot.assert_awaited_once()
   last_one_shot.assert_awaited_once()
   mock_write.assert_not_called()
+
+
+_REAL_REPLACE = os.replace
+
+
+@pytest.mark.asyncio
+async def test_recap_cache_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
+  """The recap summary cache write goes through os.replace on recap_summaries.json.
+
+  The recap GET reads this file from an executor thread with no coordination
+  against the summarize write; an in-place truncating write-through lets that
+  read observe a half-written file and fail json parsing. A write side that
+  never calls os.replace fails here because the hook never fires.
+  """
+  _cfg, mgr, session = await make_home_session(tmp_path, name="recap")
+  target = recap._cache_path(mgr, session.id)
+
+  replaced_targets: list[str] = []
+
+  def _capture_replace(src: str, dst: str) -> None:
+    replaced_targets.append(str(dst))
+    return _REAL_REPLACE(src, dst)
+
+  with patch("src.core.json_utils.os.replace", side_effect=_capture_replace):
+    recap._write_cache_entry(mgr, session.id, 0, "summary")
+
+  assert str(target) in replaced_targets
+
+
+@pytest.mark.asyncio
+async def test_recap_cache_read_at_swap_observes_previous_document(tmp_path: Path) -> None:
+  """A read of the cache at the instant of the swap yields the previous complete document.
+
+  An in-place truncating write side would read empty or partial JSON here.
+  """
+  _cfg, mgr, session = await make_home_session(tmp_path, name="recap")
+  target = recap._cache_path(mgr, session.id)
+  recap._write_cache_entry(mgr, session.id, 0, "before")
+
+  read_at_swap: list[str] = []
+
+  def _read_then_replace(src: str, dst: str) -> None:
+    read_at_swap.append(target.read_text(encoding="utf-8"))
+    return _REAL_REPLACE(src, dst)
+
+  with patch("src.core.json_utils.os.replace", side_effect=_read_then_replace):
+    recap._write_cache_entry(mgr, session.id, 1, "after")
+
+  assert len(read_at_swap) == 1
+  assert json.loads(read_at_swap[0])["0"]["summary"] == "before"

@@ -15,14 +15,17 @@ Two accounting traps this handles:
   2. Codex subagent threads inherit the parent's cumulative total_token_usage, so per-request
      last_token_usage is summed instead; total_token_usage only cross-checks root sessions.
 
-Cache — one JSON document of per-file Claude contributions (the gigabyte-scale source), so a
-page load re-parses only the Claude logs that changed; Codex and opencode rescan each load.
+Cache — one JSON document of per-file Claude and Codex contributions (the gigabyte-scale and
+hundred-megabyte-scale sources), so a page load re-parses only the logs that changed; opencode
+rescans each load.
 Vocabulary:
   signature   ``[mtime_ns, size]``; a file re-scans whole whenever either value moves
-  entry       ``{"sig", "records", "dupes"}`` — a file's parsed contribution and its
-              within-file replay count
-  records     ``[key, model, ts, in_fresh, cache_write, cache_read, output]`` per response,
-              replay-deduped within the file
+  entry       a file's parsed contribution: ``{"sig", "records", "dupes"}`` for Claude (dupes is
+              the within-file replay count), ``{"sig", "records", "check"}`` for Codex (check is
+              the root-session self-check pair ``[walked, final_total]`` or None)
+  records     Claude: ``[key, model, ts, in_fresh, cache_write, cache_read, output]`` per
+              response, replay-deduped within the file; Codex: ``[model, ts, in_fresh,
+              cache_read, output]`` per token_count event, model resolved by file position
 Cross-file replay dedupe happens at merge (first record wins in walk order), which composed
 with within-file first-wins gives exactly the global first-wins a cacheless scan computes.
 """
@@ -280,59 +283,78 @@ def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) 
       f"{dupes:,} replayed lines skipped")
 
 
-def collect_codex(t: _Tally, homes: dict[str, Path]) -> None:
+def _codex_file_contribution(path: Path) -> tuple[dict, int]:
+  """Parse one Codex rollout jsonl into its cache entry; return (entry, bytes read)."""
+  # Every record the tally reads (session_meta, turn_context, token_count) serializes
+  # its type as a quoted literal in the raw line, so the substring filter cannot skip a
+  # record the full parse would see; it only skips parsing irrelevant lines.
+  recs: list[dict] = []
+  nbytes = 0
+  # The signature is taken before the read: a concurrent append mid-read then necessarily
+  # outdates the stored sig and the next lookup re-scans, so a partial or extended read can
+  # never be served later as if complete.
+  st = path.stat()
+  with path.open(errors="replace") as fh:
+    for line in fh:
+      nbytes += len(line)
+      if not any(m in line for m in ('"session_meta"', '"turn_context"', '"token_count"')):
+        continue
+      try:
+        recs.append(json.loads(line))
+      except ValueError:
+        continue
+  meta = next((rec for rec in recs if rec.get("type") == "session_meta"), None)
+  mp = (meta or {}).get("payload") or {}
+  source = json.dumps(mp.get("source") or {})
+  is_root = not (mp.get("forked_from_id") or mp.get("parent_thread_id") or "subagent" in source)
+  model = next(
+      (
+          (rec.get("payload") or {}).get("model")
+          for rec in recs
+          if rec.get("type") in ("session_meta", "turn_context")
+          and (rec.get("payload") or {}).get("model")
+      ),
+      None,
+  )
+  walked, final_total = 0, 0
+  records: list[list] = []
+  for rec in recs:
+    payload = rec.get("payload") or {}
+    if rec.get("type") in ("session_meta", "turn_context"):
+      model = payload.get("model") or model
+      continue
+    if rec.get("type") != "event_msg" or payload.get("type") != "token_count":
+      continue
+    info = payload.get("info") or {}
+    last, total = info.get("last_token_usage") or {}, info.get("total_token_usage") or {}
+    final_total = max(final_total, total.get("total_tokens", 0) or 0)
+    cached = last.get("cached_input_tokens", 0) or 0
+    fresh = (last.get("input_tokens", 0) or 0) - cached
+    out = last.get("output_tokens", 0) or 0
+    walked += cached + fresh + out
+    records.append([model or "unknown", rec.get("timestamp"), fresh, cached, out])
+  check = [walked, final_total] if final_total and is_root else None
+  return {"sig": [st.st_mtime_ns, st.st_size], "records": records, "check": check}, nbytes
+
+
+def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
   check: list[tuple[int, int]] = []
   for account, home in homes.items():
     for path in _iter_jsonl(home / "sessions", t, "Codex", account):
-      try:
-        # Every record the tally reads (session_meta, turn_context, token_count) serializes
-        # its type as a quoted literal in the raw line, so the substring filter cannot skip a
-        # record the full parse would see; it only skips parsing irrelevant lines.
-        recs: list[dict] = []
-        for line in path.open(errors="replace"):
-          t.scanned_bytes += len(line)
-          if not any(m in line for m in ('"session_meta"', '"turn_context"', '"token_count"')):
-            continue
-          try:
-            recs.append(json.loads(line))
-          except ValueError:
-            continue
-      except OSError as exc:
-        t.notes.append(f"Codex: unreadable {account}/{path.name}: {exc}")
-        continue
-      meta = next((rec for rec in recs if rec.get("type") == "session_meta"), None)
-      mp = (meta or {}).get("payload") or {}
-      source = json.dumps(mp.get("source") or {})
-      is_root = not (mp.get("forked_from_id") or mp.get("parent_thread_id") or "subagent" in source)
-      model = next(
-          (
-              (rec.get("payload") or {}).get("model")
-              for rec in recs
-              if rec.get("type") in ("session_meta", "turn_context")
-              and (rec.get("payload") or {}).get("model")
-          ),
-          None,
-      )
-      walked, final_total = 0, 0
-      for rec in recs:
-        payload = rec.get("payload") or {}
-        if rec.get("type") in ("session_meta", "turn_context"):
-          model = payload.get("model") or model
+      entry = cache.lookup("codex", path) if cache is not None else None
+      if entry is None:
+        try:
+          entry, nbytes = _codex_file_contribution(path)
+        except OSError as exc:
+          t.notes.append(f"Codex: unreadable {account}/{path.name}: {exc}")
           continue
-        if rec.get("type") != "event_msg" or payload.get("type") != "token_count":
-          continue
-        info = payload.get("info") or {}
-        last, total = info.get("last_token_usage") or {}, info.get("total_token_usage") or {}
-        final_total = max(final_total, total.get("total_tokens", 0) or 0)
-        cached = last.get("cached_input_tokens", 0) or 0
-        fresh = (last.get("input_tokens", 0) or 0) - cached
-        out = last.get("output_tokens", 0) or 0
-        walked += cached + fresh + out
-        t.add(
-            "Codex", model or "unknown", account, rec.get("timestamp"),
-            in_fresh=fresh, cache_read=cached, output=out)
-      if final_total and is_root:
-        check.append((walked, final_total))
+        t.scanned_bytes += nbytes
+        if cache is not None:
+          cache.store("codex", path, entry)
+      for model, ts, fresh, cached, out in entry["records"]:
+        t.add("Codex", model, account, ts, in_fresh=fresh, cache_read=cached, output=out)
+      if entry["check"] is not None:
+        check.append(tuple(entry["check"]))
   if check:
     w = sum(x for x, _ in check)
     f = sum(y for _, y in check)
@@ -431,7 +453,7 @@ def collect_token_usage(
 
   cache = TallyCache.load(cache_path, t.notes) if cache_path is not None else None
   collect_claude(t, claude_homes, cache)
-  collect_codex(t, codex_homes)
+  collect_codex(t, codex_homes, cache)
   collect_opencode(t, opencode_db)
   if cache is not None:
     try:

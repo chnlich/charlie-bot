@@ -175,11 +175,12 @@ print(best.name, best_n)
 ```
 
 M7 — token-usage page load: five timed requests of the rendered page. The page builds a
-persisted per-file tally cache for the gigabyte-scale Claude logs; the first load after a
-server start (or after bulk log churn) is a full scan, later loads re-scan only changed
-Claude logs plus the megabyte-scale Codex/opencode sources, so the five-request median reads
-the warm steady state (~2 s at the seed host's 2.2 GB + 190 MB log volume — hence the
-provisional 3 s ceiling). Evidence while the live server runs older code is a scratch-instance
+persisted per-file tally cache for the gigabyte-scale Claude logs and the hundred-megabyte
+Codex rollouts; the first load after a server start (or after bulk log churn) is a full
+scan, later loads re-scan only changed logs plus the megabyte-scale opencode source, so the
+five-request median reads the warm steady state (~2 s at the seed host's 2.2 GB + 190 MB log
+volume, measured before the Codex logs joined the cache — hence the provisional 3 s
+ceiling). Evidence while the live server runs older code is a scratch-instance
 A/B: live-before against this instance, scratch-after against a scratch server on the changed
 code with a scratch `CHARLIEBOT_HOME` (its own empty cache directory — cold-then-warm measures
 both paths):

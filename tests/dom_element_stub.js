@@ -6,6 +6,8 @@
 // dispatch nothing pay nothing for the record.
 // ---------------------------------------------------------------------------
 
+const { escapeHtml } = require('./escape_html_stub');
+
 function createClassList(initial = '') {
   const names = new Set(String(initial).split(/\s+/).filter(Boolean));
   return {
@@ -109,4 +111,21 @@ function createElement(overrides = {}) {
   return Object.assign(element, overrides);
 }
 
-module.exports = { createElement };
+// Production escapeHtml (web/static/js/chat/shared.js) escapes through the
+// DOM: document.createElement('div'), set textContent, read innerHTML back.
+// The vm harnesses have no browser document, so a document.createElement stub
+// must return an element whose textContent setter escapes into innerHTML.
+function createEscapingElement(tagName) {
+  const element = createElement({tagName: String(tagName).toUpperCase()});
+  let rawText = '';
+  Object.defineProperty(element, 'textContent', {
+    get() { return rawText; },
+    set(value) {
+      rawText = String(value);
+      element.innerHTML = escapeHtml(value);
+    },
+  });
+  return element;
+}
+
+module.exports = { createElement, createEscapingElement };

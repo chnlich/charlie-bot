@@ -3,7 +3,8 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
-const { createElement } = require('./dom_element_stub');
+const { createElement, createEscapingElement } = require('./dom_element_stub');
+const { escapeHtml } = require('./escape_html_stub');
 
 const COMPAT_LOADER_JS = readStatic('compat-loader.js');
 const CHAT_JS = readStatic('chat.js');
@@ -92,24 +93,7 @@ function buildContext(overrides = {}) {
       getElementById: (id) => elements.get(id) || null,
       querySelectorAll: overrides.querySelectorAll || (() => []),
       querySelector: overrides.querySelector || (() => null),
-      createElement: (tagName) => {
-        const el = createElement({tagName: String(tagName).toUpperCase()});
-        // Support escapeHtml pattern: set textContent, read innerHTML as escaped
-        let rawText = '';
-        Object.defineProperty(el, 'textContent', {
-          get() { return rawText; },
-          set(v) {
-            rawText = String(v);
-            el.innerHTML = String(v)
-              .replaceAll('&', '&amp;')
-              .replaceAll('<', '&lt;')
-              .replaceAll('>', '&gt;')
-              .replaceAll('"', '&quot;')
-              .replaceAll("'", '&#39;');
-          },
-        });
-        return el;
-      },
+      createElement: createEscapingElement,
       body: createElement({tagName: 'BODY'}),
       addEventListener: () => {},
       removeEventListener: () => {},
@@ -358,12 +342,7 @@ test('ensureActiveSessionViewPolling only schedules while the active session is 
 
 test('renderMessage preserves clone_start banners for SPA rebuilds', () => {
   const {context} = buildContext();
-  context.escapeHtml = (value) => String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+  context.escapeHtml = escapeHtml;
 
   const html = context.renderMessage({
     role: 'clone_start',

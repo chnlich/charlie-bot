@@ -9,7 +9,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
-const { createElement } = require('./dom_element_stub');
+const { createElement, createEscapingElement } = require('./dom_element_stub');
 
 const COMPAT_LOADER_JS = readStatic('compat-loader.js');
 const CHAT_JS = readStatic('chat.js');
@@ -72,24 +72,7 @@ function buildContext(overrides = {}) {
       getElementById: (id) => elements.get(id) || null,
       querySelectorAll: overrides.querySelectorAll || (() => []),
       querySelector: () => null,
-      createElement: (tagName) => {
-        const el = createElement({tagName: String(tagName).toUpperCase()});
-        // Support the escapeHtml pattern: set textContent, read innerHTML escaped.
-        let rawText = '';
-        Object.defineProperty(el, 'textContent', {
-          get() { return rawText; },
-          set(v) {
-            rawText = String(v);
-            el.innerHTML = String(v)
-              .replaceAll('&', '&amp;')
-              .replaceAll('<', '&lt;')
-              .replaceAll('>', '&gt;')
-              .replaceAll('"', '&quot;')
-              .replaceAll("'", '&#39;');
-          },
-        });
-        return el;
-      },
+      createElement: createEscapingElement,
       body: createElement({tagName: 'BODY'}),
       addEventListener: () => {},
       removeEventListener: () => {},

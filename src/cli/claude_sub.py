@@ -19,7 +19,7 @@ import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -82,7 +82,7 @@ class UnknownPromptDeliveryError(ClaudeSubError):
   """The process may have received a prompt without confirming it."""
 
 
-class SessionMarkerState(str, Enum):
+class SessionMarkerState(StrEnum):
   NEW = "new"
   STARTED_BY_NEW_ADAPTER = "started-by-new-adapter"
   MIGRATION_BLOCKED = "migration-blocked"

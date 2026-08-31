@@ -175,11 +175,12 @@ print(best.name, best_n)
 ```
 
 M7 — token-usage page load: five timed requests of the rendered page. The page builds a
-persisted per-file tally cache for the gigabyte-scale Claude logs; the first load after a
-server start (or after bulk log churn) is a full scan, later loads re-scan only changed
-Claude logs plus the megabyte-scale Codex/opencode sources, so the five-request median reads
-the warm steady state (~2 s at the seed host's 2.2 GB + 190 MB log volume — hence the
-provisional 3 s ceiling). Evidence while the live server runs older code is a scratch-instance
+persisted per-file tally cache for the gigabyte-scale Claude logs and the hundred-megabyte
+Codex rollouts; the first load after a server start (or after bulk log churn) is a full
+scan, later loads re-scan only changed logs plus the megabyte-scale opencode source, so the
+five-request median reads the warm steady state (~2 s at the seed host's 2.2 GB + 190 MB log
+volume, measured before the Codex logs joined the cache — hence the provisional 3 s
+ceiling). Evidence while the live server runs older code is a scratch-instance
 A/B: live-before against this instance, scratch-after against a scratch server on the changed
 code with a scratch `CHARLIEBOT_HOME` (its own empty cache directory — cold-then-warm measures
 both paths):
@@ -333,3 +334,4 @@ EOF
 | 2026-08-30 | #489 | M10 torn reads 38932/59366 → 0/35975 concurrent reads over 3000 save_metadata calls (collector verbatim; pre-fix code also 500ed one threads/list poll in the live server log) | thread metadata.json writes routed through the repo's atomic-write rule (atomic_write_text), mirroring the session-metadata path; M10 definition and healthy range introduced with this PR |
 | 2026-08-30 | #492 | M11 GET /api/backlog + /api/backlog/history 500/500 → 200/200 `[]` on the unconfigured host (live-before with 5 backlog 500s in the 16 h server log; scratch TestClient A/B for the after) | unconfigured backlog reads return the empty state /repos already reports; PATCH keeps the loud raise; M11 definition and healthy range introduced with this PR |
 | 2026-08-31 | #496 | M12 median 0.0071 s → 0.0006 s, max 0.0073 s → 0.0008 s (200 rollout files, 0.98 MB newest rollout; scrape results identical modulo fetched_at) | per-newest-rollout usage memo keyed on (mtime_ns, size) plus a 1 MiB tail-window read on the codex provider; M12 definition and healthy range introduced with this PR |
+| 2026-08-31 | #502 | M7 warm median 1.609 s → 0.846 s collector-level, 1.758 s → 1.158 s HTTP-level (scratch A/B: base #496 vs branch, scratch CHARLIEBOT_HOME each; 200 rollout files 180 MB, 4 Claude homes 676 MB, opencode.db 10.5 GB; tallies byte-identical) | codex rollouts joined the persisted per-file tally cache (token_count records plus the root-session self-check pair) |

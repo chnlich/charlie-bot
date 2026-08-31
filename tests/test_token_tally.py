@@ -358,3 +358,52 @@ def test_corrupt_cache_is_rebuilt_with_note(tmp_path: Path) -> None:
   tally = _collect(claude, None, db, cache)
   assert any("rebuilt" in n for n in tally.notes)
   assert _row(tally, "Claude Code", NAME).total == 15
+
+
+def test_codex_cache_serves_unchanged_files(tmp_path: Path) -> None:
+  codex = Codex(tmp_path)
+  codex.write("rollout", [
+      _codex_meta(),
+      _codex_turn("gpt-c"),
+      _codex_count({"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7},
+                   {"total_tokens": 47}, "2024-01-03T00:00:00Z"),
+  ])
+  # A subagent file rides the same cache (its self-check pair is None).
+  codex.write("sub", [
+      _codex_meta(parent_thread_id="rollout"),
+      _codex_turn("gpt-c"),
+      _codex_count({"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 1},
+                   {"total_tokens": 47}),
+  ])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  first = _collect(None, codex, db, cache)
+  assert first.scanned_bytes > 0
+
+  second = _collect(None, codex, db, cache)
+  # Every rollout came from the cache: nothing re-read, same tally and self-check note.
+  assert second.scanned_bytes == 0
+  assert _row(second, "Codex", "gpt-c").total == _row(first, "Codex", "gpt-c").total
+  assert ([n for n in second.notes if n.startswith("Codex")] ==
+          [n for n in first.notes if n.startswith("Codex")])
+
+
+def test_codex_cache_invalidates_on_append(tmp_path: Path) -> None:
+  codex = Codex(tmp_path)
+  codex.write("rollout", [
+      _codex_meta(),
+      _codex_turn("gpt-a"),
+      _codex_count({"input_tokens": 40, "cached_input_tokens": 0, "output_tokens": 3},
+                   {"total_tokens": 43}),
+  ])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  before = _row(_collect(None, codex, db, cache), "Codex", "gpt-a")
+
+  rollout = codex.home / "sessions" / "rollout" / "rollout.jsonl"
+  with rollout.open("a") as fh:
+    fh.write(json.dumps(_codex_count(
+        {"input_tokens": 100, "cached_input_tokens": 10, "output_tokens": 2},
+        {"total_tokens": 155})) + "\n")
+
+  after = _row(_collect(None, codex, db, cache), "Codex", "gpt-a")
+  assert after.total == before.total + 102  # appended event: (100 - 10) fresh + 10 read + 2 out
+  assert after.calls == before.calls + 1

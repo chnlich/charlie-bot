@@ -24,7 +24,6 @@ const BUILD_ENV = Object.assign({}, process.env, {
 const { FakeElement } = require('./fake_dom');
 const { escapeHtml } = require('./escape_html_stub');
 const { readStatic } = require('./read_static');
-const { SESSIONS_ROOT } = require('./sessions_root_stub');
 const { loadArtifactsScript } = require('./artifacts_context_stub');
 
 function makeDocument(elements) {

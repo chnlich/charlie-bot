@@ -26,7 +26,7 @@ import structlog
 
 from src.core import event_types as ET
 from src.core import runs
-from src.core.process import kill_process_group
+from src.core.process import kill_process_group, make_pdeathsig_kill_preexec
 from src.core.timeouts import (
   NO_OUTPUT_REPORT_THRESHOLD,
   SUBPROCESS_DIAG_CAPTURE_TIMEOUT,
@@ -484,6 +484,9 @@ class AgentBackend(ABC):
 
     Pipe-transport counterpart to run()'s raw-log spawn, for backends that read
     the child's stdout/stderr directly instead of tail-following log files.
+    Piped children serve this process alone, so the kernel holds them to our
+    death (PR_SET_PDEATHSIG): run()'s raw-log spawn is the exact opposite —
+    covered transports are designed to survive parent death.
     """
     self._proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -494,6 +497,7 @@ class AgentBackend(ABC):
         env=final_env,
         limit=self._buffer_limit,
         start_new_session=True,
+        preexec_fn=make_pdeathsig_kill_preexec(),
     )
     await self._pin_identity_and_fire_on_spawn()
 

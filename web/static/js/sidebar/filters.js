@@ -33,15 +33,21 @@ function getRestorableSidebarFilters() {
   return sidebarFilters.filter(filter => filter.restoreFromUrl).map(filter => filter.name);
 }
 
+// Single source for both pill strips: the sidebar filter strip here and the
+// archived view's group strip (sidebar/archived.js).
+function filterPillClass(active) {
+  return active
+    ? 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors bg-blue-600/20 text-blue-300'
+    : 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200';
+}
+
 function renderSidebarFilterPills() {
   const container = document.getElementById('sidebar-filter-pills');
   if (!container) return;
   const addBtn = document.getElementById('cron-add-btn');
   const buttons = sidebarFilters.map(filter => {
     const active = filter.name === currentFilter;
-    const cls = active
-      ? 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors bg-blue-600/20 text-blue-300'
-      : 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200';
+    const cls = filterPillClass(active);
     return `<button onclick="enterSidebarFilter('${filter.name}')" id="filter-${filter.name}" class="${cls}">${filter.label}</button>`;
   }).join('');
   container.innerHTML = buttons;
@@ -310,6 +316,7 @@ Object.assign(Sidebar, {
   registerSidebarFilter,
   getSidebarFilter,
   getRestorableSidebarFilters,
+  filterPillClass,
   renderSidebarFilterPills,
   removeSessionRowInline,
   archiveSession,

@@ -14,6 +14,7 @@ from conftest import (
   BROADCAST_PATCH_TARGET,
   TRIGGER_MASTER_PATCH_TARGET,
   assert_trigger_fired_completed,
+  assert_trigger_fired_timeout,
 )
 from conftest import make_trigger_setup as _make_mgr
 
@@ -110,11 +111,7 @@ async def test_timeout_before_pid_exit(tmp_path: Path, pidfd_open_available: Non
       task = trigger_mgr._tasks[trigger.id]
       await asyncio.wait_for(task, timeout=10)
 
-    stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-    assert stored.status == TriggerStatus.FIRED
-    assert stored.fire_reason == "timeout"
-    msg = mock_master.await_args.args[1]
-    assert "[Scheduled trigger fired | timeout]" in msg
+    msg = await assert_trigger_fired_timeout(trigger_mgr, session_id, trigger.id, mock_master)
     assert f"still alive: {proc.pid}" in msg
   finally:
     proc.kill()

@@ -18,6 +18,7 @@ from conftest import (
   TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
   FakeAsyncProcess,
   assert_trigger_fired_completed,
+  assert_trigger_fired_timeout,
   fake_cli_cfg,
   patch_trigger_fire,
 )
@@ -188,9 +189,7 @@ async def test_remote_timeout_with_alive_pids(tmp_path: Path) -> None:
     task = trigger_mgr._tasks[trigger.id]
     await asyncio.wait_for(task, timeout=10)
 
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.fire_reason == "timeout"
-  msg = mock_master.await_args.args[1]
+  msg = await assert_trigger_fired_timeout(trigger_mgr, session_id, trigger.id, mock_master)
   assert "still alive: neptune:1" in msg
 
 

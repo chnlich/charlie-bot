@@ -201,7 +201,7 @@ function renderThreadEvents(threadId, events) {
         summaryHtml = escapeHtml(short);
       }
       return `<div class="py-1.5 px-3 my-0.5 flex items-center gap-2">
-        <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-900/60 text-blue-300 border border-blue-700/50">${escapeHtml(name)}</span>
+        ${toolNameChipHtml(name)}
         <span class="text-xs text-slate-400 ${hasMore ? '' : 'truncate '}flex-1">${summaryHtml}</span>
         ${tsHtml}
       </div>`;

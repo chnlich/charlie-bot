@@ -34,6 +34,10 @@ _poller_task: asyncio.Task | None = None
 _instances: dict[tuple[str, str], "_UsageInstance"] = {}
 
 ROUND_GAP_SECONDS = EXT_USAGE_ROUND_GAP_SECONDS
+# A token_count event closes every Codex turn, so the newest one sits in the
+# rollout file's trailing bytes; a tail miss (a turn in flight appended more
+# than this window since the last event) falls back to a full-file read.
+_USAGE_TAIL_BYTES = 1 << 20
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -210,8 +214,11 @@ class CodexUsageProvider:
   """Reads usage from <home_dir>/sessions/ JSONL files for one account.
 
   ``_spend_cache`` holds resolved spend events per rollout file keyed on the
-  file's (mtime_ns, size). The poll loop fetches one account at a time and
-  awaits each fetch, so one instance's cache never sees concurrent access.
+  file's (mtime_ns, size). ``_usage_cache`` holds the newest rollout's latest
+  token_count event under the same key; an unchanged file costs no read, and a
+  changed one is read from its tail window. The poll loop fetches one account
+  at a time and awaits each fetch, so one instance's cache never sees
+  concurrent access.
   """
 
   def __init__(self, label: str, home_dir: str) -> None:
@@ -219,6 +226,7 @@ class CodexUsageProvider:
     self.sessions_dir = Path(home_dir) / "sessions"
     self.last_error = "no sessions found"
     self._spend_cache: dict[Path, tuple[int, int, list[_SpendEvent]]] = {}
+    self._usage_cache: tuple[Path, int, int, dict[str, Any] | None] | None = None
 
   async def fetch(self) -> dict[str, Any] | None:
     rollout_paths = await asyncio.to_thread(_list_rollout_files, self.sessions_dir)
@@ -244,8 +252,16 @@ class CodexUsageProvider:
     jsonl_path = _newest_rollout(rollout_paths)
     if jsonl_path is None:
       return None
-    text = jsonl_path.read_text()
-    return _extract_latest_codex_usage(text.splitlines(), account=self.label)
+    stat = jsonl_path.stat()
+    cache = self._usage_cache
+    if cache is not None and cache[0] == jsonl_path and cache[1] == stat.st_mtime_ns and cache[2] == stat.st_size:
+      event = cache[3]
+    else:
+      event = _read_latest_token_count_event(jsonl_path, stat.st_size)
+      self._usage_cache = (jsonl_path, stat.st_mtime_ns, stat.st_size, event)
+    if event is None:
+      return None
+    return _transform_codex_response(event, fetched_at=datetime.now(UTC).isoformat(), account=self.label)
 
   def _compute_spend(self, rollout_paths: list[Path]) -> dict[str, float]:
     # A changed file is re-read from the start, never tail-only: a token_count
@@ -360,16 +376,8 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
   }
 
 
-def _extract_latest_codex_usage(
-    lines: list[str],
-    *,
-    fetched_at: str | None = None,
-    account: str = "",
-) -> dict[str, Any] | None:
-  """Parse the latest Codex token_count event from a session JSONL file."""
-  effective_fetched_at = fetched_at or datetime.now(UTC).isoformat()
-
-  # Scan lines in reverse for the latest token_count event
+def _latest_token_count_event(lines: list[str]) -> dict[str, Any] | None:
+  """Return the newest token_count event in *lines*, scanned newest first."""
   for raw_line in reversed(lines):
     line = raw_line.strip()
     if not line:
@@ -383,9 +391,41 @@ def _extract_latest_codex_usage(
     payload = event.get("payload", {})
     if payload.get("type") != "token_count":
       continue
-    return _transform_codex_response(event, fetched_at=effective_fetched_at, account=account)
-
+    return event
   return None
+
+
+def _read_latest_token_count_event(path: Path, size: int) -> dict[str, Any] | None:
+  """Read the newest token_count event in *path*, from a tail window first.
+
+  The window starts at a line boundary: a 0x0A byte never sits inside a
+  multi-byte UTF-8 sequence, so decoding the window strictly fails exactly
+  where decoding the whole file would.
+  """
+  offset = max(0, size - _USAGE_TAIL_BYTES)
+  with path.open("rb") as stream:
+    stream.seek(offset)
+    blob = stream.read()
+  if offset:
+    blob = blob.split(b"\n", 1)[1] if b"\n" in blob else b""
+  event = _latest_token_count_event(blob.decode().splitlines())
+  if event is not None or offset == 0:
+    return event
+  return _latest_token_count_event(path.read_text().splitlines())
+
+
+def _extract_latest_codex_usage(
+    lines: list[str],
+    *,
+    fetched_at: str | None = None,
+    account: str = "",
+) -> dict[str, Any] | None:
+  """Parse the latest Codex token_count event from a session JSONL file."""
+  effective_fetched_at = fetched_at or datetime.now(UTC).isoformat()
+  event = _latest_token_count_event(lines)
+  if event is None:
+    return None
+  return _transform_codex_response(event, fetched_at=effective_fetched_at, account=account)
 
 
 def _parse_codex_timestamp(timestamp: Any) -> datetime:

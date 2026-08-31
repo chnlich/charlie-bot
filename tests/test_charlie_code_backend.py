@@ -113,6 +113,29 @@ def test_translate_thought_and_unknown(monkeypatch) -> None:
   assert not backend.translate_event({"type": "future-event"})
 
 
+def test_translate_compact_event_and_unknown_still_dropped(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+
+  translated = backend.translate_event({
+      "type": "compact",
+      "step": 12,
+      "layer": "mask",
+      "trigger": "threshold",
+      "pre_tokens": 85196,
+      "post_tokens_est": 27400,
+  })
+
+  assert translated == [{
+      "type": ET.SYSTEM,
+      "subtype": ET.COMPACT_BOUNDARY,
+      ET.COMPACT_METADATA: {
+          "trigger": "threshold",
+          "pre_tokens": 85196,
+      },
+  }]
+  assert backend.translate_event({"type": "future-event"}) == []
+
+
 def test_translate_session_event(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 

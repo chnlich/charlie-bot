@@ -1,6 +1,7 @@
 """Thread management for CharlieBot Worker tasks."""
 
 import asyncio
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +33,14 @@ class ThreadManager:
 
   def __init__(self, cfg: CharlieBotConfig):
     self._cfg = cfg
+    # metadata.json path -> (mtime_ns, size, parsed meta). Re-validating every
+    # thread file on each 3 s workers-panel poll costs ~176 us per thread; a
+    # rewrite always moves (mtime_ns, size), so the stale-key case cannot serve
+    # old data. Entries for files missing from the latest scan are dropped, so
+    # a deleted thread never lingers. Callers only read the returned metas:
+    # the update path (update_status) re-reads through the uncached get_thread,
+    # so no in-place mutation of a memoized instance exists to leak.
+    self._list_memo: dict[str, tuple[int, int, ThreadMetadata]] = {}
 
   async def create_thread(
       self,
@@ -75,14 +84,35 @@ class ThreadManager:
     def load_all() -> list[ThreadMetadata]:
       # One executor hop for the whole scan: a per-file aiofiles read costs
       # ~0.5 ms in thread-pool hand-off, so per-file reads make the 3s
-      # workers-panel poll scale linearly with thread count.
-      if not threads_dir.exists():
+      # workers-panel poll scale linearly with thread count. The scan itself
+      # runs on plain str paths: at this fan-out pathlib's join/str wrappers
+      # cost more CPU than the stat syscalls they drive.
+      if not threads_dir.is_dir():
         return []
+      memo = self._list_memo
+      refreshed: dict[str, tuple[int, int, ThreadMetadata]] = {}
       metas = []
-      for d in threads_dir.iterdir():
-        path = d / "metadata.json"
-        if d.is_dir() and path.exists():
-          metas.append(ThreadMetadata.model_validate_json(path.read_text(encoding="utf-8")))
+      for entry in os.scandir(threads_dir):
+        if not entry.is_dir():
+          continue
+        path = entry.path + "/metadata.json"
+        try:
+          st = os.stat(path)
+        except OSError:
+          # The pre-scandir gate was path.exists(), which also maps every
+          # stat failure (absent file, permission) to "skip this thread".
+          continue
+        hit = memo.get(path)
+        if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+          meta = hit[2]
+        else:
+          with open(path, encoding="utf-8") as f:
+            meta = ThreadMetadata.model_validate_json(f.read())
+        refreshed[path] = (st.st_mtime_ns, st.st_size, meta)
+        metas.append(meta)
+      # Swap whole dicts: concurrent load_all calls in the executor never mutate
+      # the live map, and the swap keeps the memo down to threads still on disk.
+      self._list_memo = refreshed
       return metas
 
     threads = await asyncio.to_thread(load_all)

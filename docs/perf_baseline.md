@@ -23,6 +23,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M10 thread-metadata torn reads | M10 collector below | torn reads per concurrent save stream | 0 torn reads | — (introduced with its first history row) |
 | M11 backlog reads on this host | M11 collector below | HTTP status of GET /api/backlog + /api/backlog/history | both 200; 0 backlog 500s in the server log | — (introduced with its first history row) |
 | M12 ext-usage codex usage scrape, steady state | M12 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
+| M13 worker events render, steady state | M13 collector below | seconds per render, largest events file | median < 0.05 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -318,6 +319,28 @@ for _ in range(5):
     times.append(time.perf_counter() - t0)
 times.sort()
 print(f"{len(rollouts)} rollout files; steady-state usage scrape median {times[2]:.4f} s, max {times[-1]:.4f} s")
+EOF
+```
+
+M13 — worker events render, steady state. The workers-panel detail view re-fetches the rendered event list every 5 s while a running thread is expanded; the collector times the render the endpoint performs over the largest live events file (read-only), from the main repo checkout. It reports the no-churn steady state; a grown file re-reads only its appended tail, and one cold full parse runs per file per memo lifetime:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import sys, time
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from pathlib import Path
+from src.core.thread_events import render_worker_events
+
+files = sorted(Path.home().glob(".charliebot/sessions/*/threads/*/data/events.jsonl"), key=lambda p: p.stat().st_size)
+big = files[-1]
+render_worker_events(big)  # cold pass, as at a server restart; not timed
+times = []
+for _ in range(5):
+    t0 = time.perf_counter()
+    events = render_worker_events(big)
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"{big.stat().st_size / 1e6:.1f} MB events file, {len(events)} worker events; steady-state render median {times[2]:.4f} s, max {times[-1]:.4f} s")
 EOF
 ```
 

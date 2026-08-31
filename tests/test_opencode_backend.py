@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -369,6 +370,15 @@ async def test_run_passes_proxy_environment_to_serve_subprocess(monkeypatch, tmp
   cleanup.assert_awaited_once()
   assert backend._stderr_task is not None
   await backend._stderr_task
+  _assert_pdeathsig_preexec(create_process.await_args.kwargs)
+
+
+def _assert_pdeathsig_preexec(kwargs: dict) -> None:
+  """The shared piped spawn passes the PDEATHSIG preexec on Linux, an untouched spawn elsewhere."""
+  if sys.platform == "linux":
+    assert callable(kwargs["preexec_fn"])
+  else:
+    assert kwargs["preexec_fn"] is None
 
 
 @pytest.mark.asyncio
@@ -396,6 +406,7 @@ async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatc
   assert child_env["NO_PROXY"] == "internal.test,localhost,127.0.0.1,::1"
   assert json.loads(child_env["OPENCODE_CONFIG_CONTENT"]) == {"permission": {"*": "deny"}}
   process.wait.assert_awaited_once()
+  _assert_pdeathsig_preexec(create_process.await_args.kwargs)
 
 
 def test_prepare_cwd_writes_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:

@@ -22,7 +22,7 @@ from src.agents.backends.base import (
   resolve_binary,
 )
 from src.core import event_types as ET
-from src.core.process import wait_or_kill_group
+from src.core.process import make_pdeathsig_kill_preexec, wait_or_kill_group
 from src.core.sse import iter_sse_lines
 from src.core.timeouts import (
     OPENCODE_ABORT_TIMEOUT,
@@ -775,6 +775,7 @@ class OpenCodeBackend(AgentBackend):
         env=env,
         limit=self._buffer_limit,
         start_new_session=True,
+        preexec_fn=make_pdeathsig_kill_preexec(),
     )
 
     async def _collect() -> str:

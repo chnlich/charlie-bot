@@ -15,7 +15,6 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 STYLES_CSS = ROOT / 'web' / 'static' / 'css' / 'styles.css'
 EVENTS_VIEWER = ROOT / 'web' / 'templates' / 'events_viewer.html'
-TEMPLATE_GLOB = 'web/templates/*.html'
 
 
 def test_no_webkit_scrollbar_rules_anywhere() -> None:

@@ -240,7 +240,7 @@ const backlogPanel = (() => {
     try {
       const resp = await fetch(`/api/backlog/${id}${qs}`, {
         method: 'PATCH',
-        headers: {'Content-Type': 'application/json'},
+        headers: JSON_HEADERS,
         body: JSON.stringify({status: newStatus, ...extra}),
       });
       if (!resp.ok) {

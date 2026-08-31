@@ -109,7 +109,7 @@ async function saveLatexSource() {
   try {
     const res = await fetch('/api/latex/source', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ content: editor.value }),
     });
     if (!res.ok) { showToast('Failed to save source', true); return false; }

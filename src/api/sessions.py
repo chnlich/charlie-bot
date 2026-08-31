@@ -227,7 +227,6 @@ async def create_session(
 @router.get("/projects")
 async def list_projects():
   """Return git repos discovered from configured workspace_dirs."""
-  from src.core.config import get_config
   cfg = get_config()
   return await asyncio.to_thread(cfg.discover_repos)
 
@@ -813,7 +812,6 @@ async def mark_session_read(session_id: str, session_mgr: SessionManager = Depen
 @router.get("/{session_id}/events.jsonl")
 async def get_events_jsonl(session_id: str):
   """Serve the raw chat_events.jsonl file for a session."""
-  from src.core.config import get_config
   cfg = get_config()
   path = chat_events_path(cfg.sessions_dir / session_id)
   if not path.exists():

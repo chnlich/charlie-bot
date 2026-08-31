@@ -278,7 +278,6 @@ def test_improve_request_rejects_branch_prefix():
 async def test_improve_endpoint_creates_background_task(tmp_path: Path):
   """POST /api/internal/improve returns immediately and creates a background task."""
   from src.api.internal import start_improve_loop
-  from src.core.models import ImproveRequest
 
   req = ImproveRequest(
       session_id="s1",
@@ -348,7 +347,6 @@ async def test_improve_endpoint_returns_404_for_missing_session():
   from fastapi import HTTPException
 
   from src.api.internal import start_improve_loop
-  from src.core.models import ImproveRequest
 
   req = ImproveRequest(session_id="missing", repo_path="/tmp/repo", base_branch="main", iterations=1, goal="fix")
 
@@ -368,7 +366,6 @@ async def test_improve_endpoint_returns_400_for_invalid_backend():
   from fastapi import HTTPException
 
   from src.api.internal import start_improve_loop
-  from src.core.models import ImproveRequest
 
   req = ImproveRequest(session_id="s1", repo_path="/tmp/repo", base_branch="main", backend="missing", goal="fix")
 
@@ -397,7 +394,6 @@ async def test_improve_endpoint_returns_409_for_running_loop():
 
   from src.api.internal import start_improve_loop
   from src.core.improve_command import ImproveLoopAlreadyRunningError
-  from src.core.models import ImproveRequest
 
   req = ImproveRequest(
       session_id="s1",

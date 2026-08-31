@@ -3,8 +3,10 @@
 import asyncio
 import os
 import shlex
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -187,17 +189,18 @@ async def get_thread(
   )
 
 
-@router.get("/{session_id}/threads/{thread_id}/events", response_model=list[WorkerEvent])
-async def get_thread_events(
-    session_id: str,
-    thread_id: str,
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
-):
-  """Return historical Worker events from the on-disk events.jsonl log."""
-  events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  raw_events = await asyncio.to_thread(parse_ndjson_file, events_path)
+def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
+  """Read a worker's events.jsonl and project it into the response's WorkerEvent list."""
+  raw_events = parse_ndjson_file(events_path)
   events: list[WorkerEvent] = []
   tool_id_to_name: dict[str, str] = {}
+  _append_worker_events(raw_events, events, tool_id_to_name)
+  return events
+
+
+def _append_worker_events(
+    raw_events: Iterable[dict], events: list[WorkerEvent], tool_id_to_name: dict[str, str]
+) -> None:
   for data in raw_events:
     event_timestamp = data.get("timestamp") or datetime.now(UTC)
     event_type = data.get('type', '')
@@ -234,7 +237,17 @@ async def get_thread_events(
       except Exception as e:
         log.debug('event_parse_failed', error=str(e))
         events.append(WorkerEvent(type='raw', content=str(data)))
-  return events
+
+
+@router.get("/{session_id}/threads/{thread_id}/events", response_model=list[WorkerEvent])
+async def get_thread_events(
+    session_id: str,
+    thread_id: str,
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
+):
+  """Return historical Worker events from the on-disk events.jsonl log."""
+  events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
+  return await asyncio.to_thread(read_thread_worker_events, events_path)
 
 
 @router.post("/{session_id}/threads/{thread_id}/cancel")

@@ -11,12 +11,13 @@ from conftest import (
   TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET,
   FakeAsyncProcess,
   assert_trigger_fired_completed,
+  assert_trigger_fired_timeout,
   patch_trigger_fire,
 )
 from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
 
-from src.core.models import SlurmJob, TriggerStatus
+from src.core.models import SlurmJob
 from src.core.triggers import RemoteVerifyError, _probe_sacct
 
 # ---------------------------------------------------------------------------
@@ -89,11 +90,7 @@ async def test_remote_slurm_timeout_while_running(tmp_path: Path) -> None:
     )
     await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
 
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.status == TriggerStatus.FIRED
-  assert stored.fire_reason == "timeout"
-  msg = mock_master.await_args.args[1]
-  assert "[Scheduled trigger fired | timeout]" in msg
+  msg = await assert_trigger_fired_timeout(trigger_mgr, session_id, trigger.id, mock_master)
   assert "still alive: host2:slurm:122111" in msg
 
 
@@ -216,10 +213,8 @@ async def test_unreachable_host_fires_early_with_note(tmp_path: Path) -> None:
     )
     await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
 
-  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
-  assert stored.status == TriggerStatus.FIRED
-  assert stored.fire_reason == "timeout"
-  msg = mock_master.await_args.args[1]
+  msg = await assert_trigger_fired_timeout(trigger_mgr, session_id, trigger.id, mock_master)
   assert "host2:slurm:122111 (unreachable " in msg
+  stored = await trigger_mgr._load_trigger(session_id, trigger.id)
   assert stored.fired_at < trigger.fire_at
   assert (trigger.fire_at - stored.fired_at).total_seconds() > 3000

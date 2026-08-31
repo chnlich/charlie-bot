@@ -104,4 +104,16 @@ function createChatSidebarContext(context) {
   vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
 }
 
-module.exports = {baseSessionContext, createChatSidebarContext};
+// Map keys are the element ids renderUsageFromData looks up in
+// web/static/js/sidebar/session-view.js; an id rename on either side breaks the lookup.
+function buildUsageElements() {
+  return new Map([
+    ['usage-indicator', createElement({className: 'hidden'})],
+    ['usage-bar', createElement({className: 'h-full rounded-full bg-blue-500', style: {width: '0%'}})],
+    ['usage-compact-line', createElement({className: 'absolute top-0 h-full w-0.5 bg-white hidden', style: {left: '0%'}})],
+    ['usage-text', createElement({textContent: ''})],
+    ['usage-cost', createElement({textContent: ''})],
+  ]);
+}
+
+module.exports = {baseSessionContext, createChatSidebarContext, buildUsageElements};

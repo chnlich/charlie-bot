@@ -14,6 +14,7 @@ import pytest
 
 from src.core import config as core_config
 from src.core.config import CharlieBotConfig
+from src.core.models import BackendOption
 from src.core.yaml_utils import load_yaml, save_yaml
 
 
@@ -84,6 +85,16 @@ def test_split_equivalence(profile_home: Path, partition: Callable[[list[str]], 
 
   assert _without_home(actual) == _without_home(reference)
   assert actual.charliebot_home == profile_home
+
+
+def test_example_backend_options_track_the_schema_default() -> None:
+  """The template's uncommented backend_options equal the CharlieBotConfig default.
+
+  init_charliebot_home seeds a fresh host's config.yaml by copying the example
+  verbatim, so a drifted list would silently replace the schema default there.
+  """
+  entries = _example_mapping()["backend_options"]
+  assert [BackendOption.model_validate(entry) for entry in entries] == CharlieBotConfig().backend_options
 
 
 # The first real split use case: the Slack summon keys. These live outside the

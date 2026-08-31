@@ -17,6 +17,7 @@ from src.agents.backends.registry import build_backend
 from src.api.message_utils import events_to_messages
 from src.core.autonamer import iter_light_backends
 from src.core.config import CharlieBotConfig
+from src.core.json_utils import write_json_atomically
 from src.core.models import utc_now
 from src.core.sessions import SessionManager
 from src.core.timeouts import AUTONAMER_TIMEOUT
@@ -146,7 +147,9 @@ def _write_cache_entry(session_mgr: SessionManager, session_id: str, upto: int, 
   path = _cache_path(session_mgr, session_id)
   cache = _load_cache(path)
   cache[str(upto)] = {"summary": summary, "generated_at": utc_now().isoformat()}
-  path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+  # The recap GET reads this file from an executor thread with no coordination
+  # against this write; the swap keeps every read on one complete document.
+  write_json_atomically(path, cache, indent=2)
 
 
 async def generate_and_cache_summary(

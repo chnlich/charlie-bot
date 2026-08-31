@@ -191,8 +191,10 @@ async def _expected_status(mgr, session_id: str, *, archived: bool) -> dict:
         "has_pending_plan_approval": False,
     }
   running = await mgr._has_running_tasks(session_id)
-  pending_count, next_trigger_at = await mgr._get_pending_trigger_state(session_id)
-  has_plan = await asyncio.to_thread(mgr._has_pending_plan_approval, session_id)
+  pending_count, next_trigger_at = await asyncio.to_thread(
+      sessions_core.pending_trigger_state_sync, mgr._session_dir(session_id) / "triggers")
+  has_plan = await asyncio.to_thread(
+      sessions_core.has_pending_plan_approval_sync, mgr._session_dir(session_id) / "plans.json", session_id)
   return {
       "has_unread": bool(meta.has_unread),
       "has_running_tasks": bool(meta.thinking_since) or running,

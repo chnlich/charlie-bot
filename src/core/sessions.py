@@ -1317,7 +1317,7 @@ class SessionManager:
     """Parse a stored timestamp tolerantly: absent or unparseable becomes None.
 
     Both scans that route through here (``_gc_old_threads_sync`` and
-    ``_get_pending_trigger_state``) treat a bad timestamp as skip-and-continue,
+    ``pending_trigger_state_sync``) treat a bad timestamp as skip-and-continue,
     never as a hard failure, so one corrupt file must not abort the scan.
     """
     if not raw:
@@ -1466,20 +1466,6 @@ class SessionManager:
     to keep the event loop responsive (called per-session by the sidebar/status polls).
     """
     return await asyncio.to_thread(has_running_tasks_sync, self._threads_dir(session_id))
-
-  async def _get_pending_trigger_state(self, session_id: str) -> tuple[int, datetime | None]:
-    """Return the number of pending delayed triggers and the earliest fire time."""
-    return await asyncio.to_thread(pending_trigger_state_sync, self._session_dir(session_id) / "triggers")
-
-  def _has_pending_plan_approval(self, session_id: str) -> bool:
-    """Return True if the session has a lineage whose derived state is 'awaiting approval'.
-
-    Delegates to the tolerant read in src.core.plans (single authority for catch-and-derive).
-    Any error entry is logged via ``plan_registry_read_failed`` and contributes no pending
-    approval. The probe must never raise — a corrupt single-session file cannot 5xx the
-    sidebar poll for all sessions.
-    """
-    return has_pending_plan_approval_sync(self._session_dir(session_id) / "plans.json", session_id)
 
   async def _enrich_and_sort(
       self,

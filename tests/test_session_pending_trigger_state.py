@@ -174,22 +174,17 @@ async def test_populate_sidebar_state_skips_archived_sessions(tmp_path: Path) ->
       ),
   )
 
-  # Refuse to load archived trigger state from disk. If
-  # populate_sidebar_state inspects archived sessions, the test fails.
-  original_get_pending = session_mgr._get_pending_trigger_state
+  # Refuse to load archived running-task state from disk. If
+  # populate_sidebar_state probes archived sessions through the manager,
+  # the test fails. The archived trigger file written above pins the
+  # constant-False shortcut through the assertions below.
   original_has_running = session_mgr._has_running_tasks
-
-  async def _fail_for_archived_trigger(session_id: str):
-    if session_id == archived.id:
-      raise AssertionError("archived session should not query trigger state")
-    return await original_get_pending(session_id)
 
   async def _fail_for_archived_running(session_id: str):
     if session_id == archived.id:
       raise AssertionError("archived session should not query running tasks")
     return await original_has_running(session_id)
 
-  session_mgr._get_pending_trigger_state = _fail_for_archived_trigger
   session_mgr._has_running_tasks = _fail_for_archived_running
 
   active_fresh = await session_mgr.get_session(active.id)

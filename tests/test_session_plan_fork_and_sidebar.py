@@ -20,7 +20,7 @@ from src.api.deps import get_session_manager
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SessionStatus
-from src.core.sessions import SessionManager
+from src.core.sessions import SessionManager, has_pending_plan_approval_sync
 
 _PLAN_V1_REL = "artifacts/plan_01.html"
 _PLAN_V2_REL = "artifacts/plan_02.html"
@@ -364,11 +364,12 @@ async def test_pending_plan_approval_archived_session_is_unset(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_pending_plan_approval_no_parse_cost_without_plans_json(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="ShortCircuit")
+  cfg, mgr, session = await make_home_session(tmp_path, name="ShortCircuit")
 
   # The existence check short-circuits sessions without plans.json: the sync
   # helper returns False without parsing, and the status payload reflects it.
-  assert await asyncio.to_thread(mgr._has_pending_plan_approval, session.id) is False
+  assert await asyncio.to_thread(
+      has_pending_plan_approval_sync, cfg.sessions_dir / session.id / "plans.json", session.id) is False
 
   status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
   assert status[session.id]["has_pending_plan_approval"] is False
@@ -414,13 +415,13 @@ async def test_status_endpoint_survives_corrupt_plans_json_other_sessions_unaffe
 @pytest.mark.asyncio
 async def test_corrupt_plans_json_logs_plan_registry_read_failed_warning(tmp_path: Path) -> None:
   """Reviewer A1: the probe logs plan_registry_read_failed with session_id and error."""
-  cfg, mgr, session = await make_home_session(tmp_path, name="Bad")
+  cfg, _mgr, session = await make_home_session(tmp_path, name="Bad")
   plans_path = cfg.sessions_dir / session.id / "plans.json"
   plans_path.parent.mkdir(parents=True, exist_ok=True)
   plans_path.write_text("{not valid json", encoding="utf-8")
 
   with capture_logs() as logs:
-    await asyncio.to_thread(mgr._has_pending_plan_approval, session.id)
+    await asyncio.to_thread(has_pending_plan_approval_sync, plans_path, session.id)
 
   matching = [
       entry for entry in logs
@@ -434,13 +435,14 @@ async def test_corrupt_plans_json_logs_plan_registry_read_failed_warning(tmp_pat
 @pytest.mark.asyncio
 async def test_probe_partial_degradation_still_reports_pending_approval_true(tmp_path: Path) -> None:
   """Acceptance #2: one valid awaiting plan + one bad plan → probe still True (valid plan counts)."""
-  cfg, mgr, session = await make_home_session(tmp_path, name="Mixed")
+  cfg, _mgr, session = await make_home_session(tmp_path, name="Mixed")
   _write_plans(cfg, session.id, {"plans": [
       _make_plan(1, [_make_version(1, _PLAN_V1_REL, "clean")]),
       {"id": 2, "title": "Bad", "versions": [], "takeoff": None, "closed": None},
   ]})
 
-  assert await asyncio.to_thread(mgr._has_pending_plan_approval, session.id) is True
+  assert await asyncio.to_thread(
+      has_pending_plan_approval_sync, cfg.sessions_dir / session.id / "plans.json", session.id) is True
 
 
 # ---------------------------------------------------------------------------

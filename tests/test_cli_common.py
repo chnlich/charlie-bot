@@ -78,9 +78,11 @@ def test_resolve_session_id_rejects_mismatches(
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "ignored-env-session")
 
-  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
-    with pytest.raises(SystemExit) as exc_info:
-      common.resolve_session_id(arg_session)
+  with (
+      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)),
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    common.resolve_session_id(arg_session)
 
   assert exc_info.value.code == 2
   error = json.loads(capsys.readouterr().err)["error"]
@@ -102,9 +104,11 @@ def test_resolve_session_id_requires_source_outside_session_dir(
   _set_cwd(tmp_path, monkeypatch, sessions_dir, None)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "ignored-env-session")
 
-  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
-    with pytest.raises(SystemExit) as exc_info:
-      common.resolve_session_id(None)
+  with (
+      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)),
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    common.resolve_session_id(None)
 
   assert exc_info.value.code == 2
   error = json.loads(capsys.readouterr().err)["error"]
@@ -120,11 +124,12 @@ def test_post_internal_api_bearer_header(access_key: str, expect_header: bool) -
   cfg.server_base_url = "https://server"
   cfg.charliebot_access_key = access_key
 
-  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg):
-    with patch(
-        CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
-        return_value=make_json_response({"ok": True})) as mock_post:
-      assert common.post_internal_api("/api/internal/x", {"a": 1}) == {"ok": True}
+  with (
+      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+            return_value=make_json_response({"ok": True})) as mock_post,
+  ):
+    assert common.post_internal_api("/api/internal/x", {"a": 1}) == {"ok": True}
 
   headers = mock_post.call_args.kwargs["headers"]
   if expect_header:
@@ -144,9 +149,11 @@ def test_resolve_session_id_only_derives_direct_session_child(
   monkeypatch.chdir(nested_dir)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "ignored-env-session")
 
-  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
-    with pytest.raises(SystemExit) as exc_info:
-      common.resolve_session_id(None)
+  with (
+      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)),
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    common.resolve_session_id(None)
 
   assert exc_info.value.code == 2
   error = json.loads(capsys.readouterr().err)["error"]

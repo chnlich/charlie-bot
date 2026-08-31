@@ -38,9 +38,7 @@ function archivedTotalCount() {
 function renderArchivedPills() {
   if (!archivedState.pillsEl) return;
   const pill = (onclickExpr, dataAttr, label, total, isActive) => {
-    const cls = isActive
-      ? 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors bg-blue-600/20 text-blue-300'
-      : 'filter-pill px-2.5 py-1 text-xs rounded-full font-medium transition-colors text-slate-400 hover:text-slate-200';
+    const cls = Sidebar.filterPillClass(isActive);
     return `<button type="button"${dataAttr} onclick="${onclickExpr}" class="${cls}">${escapeHtml(label)} <span class="text-slate-500">${total}</span></button>`;
   };
   const parts = [pill('setArchivedGroupFilter(null)', '', 'All', archivedTotalCount(), archivedState.group === null)];

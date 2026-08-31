@@ -5,10 +5,23 @@ the triage record; `main` takes no direct pushes. Before writing code, read
 `skills/writing-style/genres/code.md` and follow it: comments carry constraints only; provenance
 lives in blame.
 
-Step 0: check for an open contract PR before anything else.
-List open pull requests whose head branch matches `code-health/*`. If any exists: produce no new
-PR. If that PR has no bot reminder comment in the last 7 days, leave a one-line reminder comment,
-then exit. Read this decision entirely from the PR's comment history; keep no state anywhere else.
+Step 0: adopt an open contract PR before anything else.
+List open pull requests whose head branch matches `code-health/*`; if more
+than one is open, adopt the oldest. An adopted PR is this run's whole job:
+work on its branch, then
+
+1. Step 6 (review with `--comment`), unless the PR's comments or reviews
+   already carry the code-review findings or an explicit skip-note; a review
+   that cannot run is reported with its reason, same as for a fresh PR.
+2. Step 7 exactly as written: checks watch, fresh-main diff guard, squash
+   merge; a red check earns the fix-on-branch ladder, and a PR that stays
+   red or fails from outside its diff is abandoned with a
+   `code-health-abandoned:` comment naming the topic.
+
+After the adopted PR closes — merged or abandoned — the run ends; it opens
+no new PR. The adopt/skip decision is read entirely from the PR's comment
+history; no state anywhere else. Only when no `code-health/*` PR is open
+does the run continue to Step 1.
 
 Step 1: pick one worthwhile cleanup.
 Scan the repo and choose the single highest-value cleanup you can land within this run: dead code
@@ -101,5 +114,5 @@ or when the failure comes from outside this diff:
     gh pr close <PR> --comment 'code-health-abandoned: <topic and reason>'
 
 Name the topic in that comment, because Step 1 reads it to skip the topic on the next run. A run
-that cannot finish the wait leaves the pull request open and reports that; Step 0's open-PR
-reminder covers the nudge on the next run.
+that cannot finish the wait leaves the pull request open and reports that; Step 0's adoption
+picks the PR up on the next run.

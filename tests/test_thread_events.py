@@ -18,7 +18,7 @@ TOOL_RESULT = {"type": "user", "timestamp": TS, "message": {"role": "user", "con
 
 
 @pytest.fixture(autouse=True)
-def _clear_memo():
+def _clear_memo() -> None:
   thread_events.reset_for_tests()
 
 

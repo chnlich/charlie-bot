@@ -49,6 +49,14 @@ function thinkingToggleHtml(id, thinking) {
   return `<button onclick="const el=document.getElementById('${id}');el.style.display=el.style.display==='none'?'block':'none'" class="text-xs text-slate-500 hover:text-slate-400 italic mb-1">Thinking…</button><div id="${id}" style="display:none" class="text-xs text-slate-500 whitespace-pre-wrap mb-2">${escapeHtml(String(thinking))}</div>`;
 }
 
+// Tool-name chip on a turn's tool-call row. Both renderers stamp it:
+// rendering.js in the chat transcript and workers.js in the thread event
+// detail. The caller passes the resolved display name; the helper escapes it.
+function toolNameChipHtml(name) {
+  return '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-900/60 text-blue-300 border border-blue-700/50">'
+    + escapeHtml(name) + '</span>';
+}
+
 function formatBubbleTime(isoStr) {
   if (!isoStr) return '';
   const d = new Date(isoStr);
@@ -85,6 +93,7 @@ Chat.escapeHtmlAttr = escapeHtmlAttr;
 Chat.escapeJsSingleQuoted = escapeJsSingleQuoted;
 Chat.showMoreToggleHtml = showMoreToggleHtml;
 Chat.thinkingToggleHtml = thinkingToggleHtml;
+Chat.toolNameChipHtml = toolNameChipHtml;
 Chat.formatBubbleTime = formatBubbleTime;
 Chat.messageIdentityAttrs = messageIdentityAttrs;
 Chat.isRenderedMessage = isRenderedMessage;
@@ -96,6 +105,7 @@ Chat.expose([
   'isRenderedMessage',
   'showMoreToggleHtml',
   'thinkingToggleHtml',
+  'toolNameChipHtml',
   'STIMULUS_ROLES',
 ]);
 

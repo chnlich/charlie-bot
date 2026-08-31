@@ -56,7 +56,7 @@ function renderToolActivity(tools) {
     var truncCls = (limit > 0 && text.length > limit) ? '' : 'truncate ';
     return '<div class="' + borderCls + 'py-1.5">'
       + '<div class="flex items-center gap-2">'
-      + '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-900/60 text-blue-300 border border-blue-700/50">' + escapeHtml(tool.name || '') + '</span>'
+      + toolNameChipHtml(tool.name || '')
       + '<span class="text-xs text-slate-400 ' + truncCls + 'flex-1 min-w-0">' + summaryHtml + '</span>'
       + '</div>'
       + outputHtml

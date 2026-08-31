@@ -22,6 +22,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M9 ext-usage codex spend rescan, steady state | M9 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
 | M10 thread-metadata torn reads | M10 collector below | torn reads per concurrent save stream | 0 torn reads | — (introduced with its first history row) |
 | M11 backlog reads on this host | M11 collector below | HTTP status of GET /api/backlog + /api/backlog/history | both 200; 0 backlog 500s in the server log | — (introduced with its first history row) |
+| M12 ext-usage codex usage scrape, steady state | M12 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -291,6 +292,32 @@ same shape as the M7 protocol.
 ```bash
 KEY=$(grep -m1 '^charliebot_access_key:' ~/.charliebot/config.yaml | awk '{print $2}'); for p in /api/backlog /api/backlog/history; do curl -s -o /dev/null -w "$p %{http_code}\n" -H "Authorization: Bearer $KEY" "http://127.0.0.1:18498$p"; done
 LOG=$(ls -1t /tmp/charliebot-logs/server_*.log | head -1); grep -c "GET /api/backlog HTTP/1.1\" 500" "$LOG"
+```
+
+M12 — ext-usage poller codex usage scrape, steady state. The scrape reads each account's
+newest rollout every round for the latest token_count event; the collector times the function
+the poller calls each round over the live corpus (read-only), from the main repo checkout. An
+unchanged file is the steady state; a changed file re-reads only its tail window (the
+full-file read remains for a token_count farther back than the window):
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import sys, time
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from pathlib import Path
+from src.api.ext_usage import CodexUsageProvider, _list_rollout_files
+
+prov = CodexUsageProvider("main", str(Path.home() / ".codex"))
+rollouts = _list_rollout_files(prov.sessions_dir)
+prov._fetch_usage(rollouts)  # cold pass, as at a server restart; not timed
+times = []
+for _ in range(5):
+    t0 = time.perf_counter()
+    prov._fetch_usage(rollouts)
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"{len(rollouts)} rollout files; steady-state usage scrape median {times[2]:.4f} s, max {times[-1]:.4f} s")
+EOF
 ```
 
 ## Sampling history

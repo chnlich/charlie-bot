@@ -380,6 +380,126 @@ async def test_codex_provider_spend_reparses_only_changed_files(tmp_path, monkey
   assert reapplied_usage["spend"]["last_7d_usd"] > first_usage["spend"]["last_7d_usd"]
 
 
+def _seed_rollout_dir(tmp_path) -> Any:
+  """Create <tmp>/sessions/YYYY/MM/DD dated today, the subtree the provider reads."""
+  now = datetime.now(UTC)
+  rollout_dir = tmp_path / "sessions" / f"{now.year:04d}" / f"{now.month:02d}" / f"{now.day:02d}"
+  rollout_dir.mkdir(parents=True)
+  return now, rollout_dir
+
+
+def _filler_lines(byte_floor: int) -> list[str]:
+  """Valid non-token_count JSONL lines (silent on both the usage and spend scans)
+  totalling at least *byte_floor* bytes."""
+  lines: list[str] = []
+  size = 0
+  while size < byte_floor:
+    line = json.dumps({"type": "event_msg", "payload": {"type": "thinking_delta", "pad": "x" * 180}})
+    lines.append(line)
+    size += len(line) + 1
+  return lines
+
+
+def _counting_scan(monkeypatch) -> list[int]:
+  """Record the line count of every _latest_token_count_event call."""
+  scanned: list[int] = []
+  real_scan = ext_usage_mod._latest_token_count_event
+
+  def _wrapped(lines):
+    scanned.append(len(lines))
+    return real_scan(lines)
+
+  monkeypatch.setattr(ext_usage_mod, "_latest_token_count_event", _wrapped)
+  return scanned
+
+
+@pytest.mark.asyncio
+async def test_codex_provider_usage_scrape_skips_read_for_unchanged_file(tmp_path, monkeypatch) -> None:
+  """Steady-state rounds serve the memoized event with no file read; an append re-reads."""
+  provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
+  now, rollout_dir = _seed_rollout_dir(tmp_path)
+  rollout_path = rollout_dir / "rollout-live.jsonl"
+
+  def event_line(percent: float) -> str:
+    return json.dumps(_build_token_count_event(
+        timestamp=now.isoformat().replace("+00:00", "Z"),
+        primary_used_percent=percent,
+        primary_resets_at=int(now.timestamp()) + 3600,
+        secondary_used_percent=2.0,
+        secondary_resets_at=int(now.timestamp()) + 86400,
+    ))
+
+  rollout_path.write_text(event_line(8.0) + "\n")
+  scanned = _counting_scan(monkeypatch)
+
+  first = await provider.fetch()
+  assert scanned == [1]
+  assert [w["utilization"] for w in first["windows"]] == [8.0, 2.0]
+
+  again = await provider.fetch()
+  assert scanned == [1]
+  assert [w["utilization"] for w in again["windows"]] == [8.0, 2.0]
+
+  with rollout_path.open("a") as stream:
+    stream.write(event_line(9.0) + "\n")
+  moved = await provider.fetch()
+  assert scanned == [1, 2]
+  assert [w["utilization"] for w in moved["windows"]] == [9.0, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_codex_provider_usage_scrape_reads_tail_only_on_hit(tmp_path, monkeypatch) -> None:
+  """When the tail window holds a token_count, the scan never sees the full file."""
+  provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
+  now, rollout_dir = _seed_rollout_dir(tmp_path)
+  rollout_path = rollout_dir / "rollout-big.jsonl"
+
+  def event_line(percent: float) -> str:
+    return json.dumps(_build_token_count_event(
+        timestamp=now.isoformat().replace("+00:00", "Z"),
+        primary_used_percent=percent,
+        primary_resets_at=int(now.timestamp()) + 3600,
+        secondary_used_percent=2.0,
+        secondary_resets_at=int(now.timestamp()) + 86400,
+    ))
+
+  filler = _filler_lines(ext_usage_mod._USAGE_TAIL_BYTES * 2)
+  rollout_path.write_text("\n".join([event_line(99.0), *filler, event_line(8.0)]) + "\n")
+  full_lines = len(filler) + 2
+  scanned = _counting_scan(monkeypatch)
+
+  usage = await provider.fetch()
+
+  assert [w["utilization"] for w in usage["windows"]] == [8.0, 2.0]
+  assert len(scanned) == 1
+  assert scanned[0] < full_lines
+
+
+@pytest.mark.asyncio
+async def test_codex_provider_usage_scrape_full_read_on_tail_miss(tmp_path, monkeypatch) -> None:
+  """A tail window without a token_count falls back to the full-file read."""
+  provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
+  now, rollout_dir = _seed_rollout_dir(tmp_path)
+  rollout_path = rollout_dir / "rollout-stale.jsonl"
+
+  event_line = json.dumps(_build_token_count_event(
+      timestamp=now.isoformat().replace("+00:00", "Z"),
+      primary_used_percent=99.0,
+      primary_resets_at=int(now.timestamp()) + 3600,
+      secondary_used_percent=2.0,
+      secondary_resets_at=int(now.timestamp()) + 86400,
+  ))
+  filler = _filler_lines(ext_usage_mod._USAGE_TAIL_BYTES * 2)
+  rollout_path.write_text("\n".join([event_line, *filler]) + "\n")
+  scanned = _counting_scan(monkeypatch)
+
+  usage = await provider.fetch()
+
+  assert [w["utilization"] for w in usage["windows"]] == [99.0, 2.0]
+  assert len(scanned) == 2
+  assert scanned[1] > scanned[0]
+
+
 def test_compute_codex_spend_windows_skips_bad_rows_without_poisoning_totals(tmp_path) -> None:
   now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
   rollout_dir = tmp_path / "2026" / "06" / "01"

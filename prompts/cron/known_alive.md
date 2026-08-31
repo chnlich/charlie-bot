@@ -35,7 +35,8 @@ Known-alive symbols:
 - `_reset_config_caches` (`tests/test_charliebot_home.py`), `_clear_once_keys`
   (`tests/test_follow_silence_recheck.py`), `_reset_token_usage_single_flight` (`tests/test_pages.py`),
   `_worktree_paths` (`tests/test_reviewer_model_preference.py`),
-  `_clean_sidebar_state` (`tests/test_sidebar_state_snapshot.py`) — pytest `autouse=True` fixtures,
+  `_clean_sidebar_state` (`tests/test_sidebar_state_snapshot.py`),
+  `_clear_events_cache` (`tests/test_thread_worker_events.py`) — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
   definitions, so vulture flags them as unused functions. Vulture also flags
   `pidfd_open_available` (`tests/conftest.py`, shared skip gate for the pid/slurm watch

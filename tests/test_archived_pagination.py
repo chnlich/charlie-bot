@@ -19,7 +19,6 @@ from conftest import make_sessions_client as _build_client
 from src.core.models import CreateSessionRequest, SessionMetadata, SessionStatus
 from src.core.sessions import SessionManager
 
-
 _BASE_TIME = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
 
 

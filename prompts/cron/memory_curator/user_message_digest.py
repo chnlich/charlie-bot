@@ -21,24 +21,25 @@ for path in glob.glob(os.path.expanduser('~/.charliebot/sessions/*/data/chat_eve
   sid = path.split('/sessions/')[1][:8]
   if now - os.path.getmtime(path) > WINDOW_S:
     continue
-  for line in open(path):
-    try:
-      event = json.loads(line)
-    except ValueError:
-      continue
-    if (event.get('type') or event.get('event_type')) != 'user':
-      continue
-    content = event.get('content')
-    if not isinstance(content, str) or not content.strip() or content.startswith('/'):
-      continue
-    ts = (event.get('timestamp') or '').replace('Z', '+00:00')
-    try:
-      t = datetime.datetime.fromisoformat(ts).timestamp()
-    except ValueError:
-      continue
-    if now - t > WINDOW_S:
-      continue
-    rows.append((t, sid, content[:TEXT_CAP].replace('\n', ' ')))
+  with open(path) as f:
+    for line in f:
+      try:
+        event = json.loads(line)
+      except ValueError:
+        continue
+      if (event.get('type') or event.get('event_type')) != 'user':
+        continue
+      content = event.get('content')
+      if not isinstance(content, str) or not content.strip() or content.startswith('/'):
+        continue
+      ts = (event.get('timestamp') or '').replace('Z', '+00:00')
+      try:
+        t = datetime.datetime.fromisoformat(ts).timestamp()
+      except ValueError:
+        continue
+      if now - t > WINDOW_S:
+        continue
+      rows.append((t, sid, content[:TEXT_CAP].replace('\n', ' ')))
 rows.sort()
 out = [
     f"{datetime.datetime.fromtimestamp(t):%Y-%m-%d} {sid} {'NEW ' if now - t <= NEW_S else ''}{text}"

@@ -1,5 +1,6 @@
 """ThreadManager.list_threads scan behavior."""
 
+import shutil
 import threading
 from pathlib import Path
 
@@ -35,6 +36,41 @@ async def test_list_threads_returns_newest_first_and_skips_dir_without_metadata(
 
   assert [t.id for t in threads] == [second.id, first.id]
   assert [t.description for t in threads] == ["second", "first"]
+
+
+@pytest.mark.asyncio
+async def test_list_threads_memo_reuses_unchanged_files_and_refreshes_on_save(tmp_path: Path) -> None:
+  cfg = make_home_config(tmp_path)
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="Memo"))
+  meta = await thread_mgr.create_thread(session, "target")
+
+  first = await thread_mgr.list_threads(session.id)
+  second = await thread_mgr.list_threads(session.id)
+  assert second[0] is first[0]
+
+  meta.description = "renamed"
+  await thread_mgr.save_metadata(meta)
+  third = await thread_mgr.list_threads(session.id)
+  assert third[0] is not first[0]
+  assert third[0].description == "renamed"
+
+
+@pytest.mark.asyncio
+async def test_list_threads_memo_drops_deleted_threads(tmp_path: Path) -> None:
+  cfg = make_home_config(tmp_path)
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="Memo"))
+  keep = await thread_mgr.create_thread(session, "keep")
+  drop = await thread_mgr.create_thread(session, "drop")
+  await thread_mgr.list_threads(session.id)
+
+  shutil.rmtree(thread_mgr.thread_dir(session.id, drop.id))
+
+  threads = await thread_mgr.list_threads(session.id)
+  assert [t.id for t in threads] == [keep.id]
 
 
 @pytest.mark.asyncio

@@ -177,12 +177,14 @@ async def test_mark_unread_and_update_thinking_state_do_not_clobber(tmp_path: Pa
     await real_save(m)
 
   updated_at = datetime(2026, 3, 31, 12, 1, tzinfo=UTC)
-  with patch.object(mgr, "save_metadata", side_effect=yielding_save):
-    with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
-      await asyncio.gather(
-          mgr.mark_unread(meta.id),
-          mgr.update_thinking_state(meta.id, updated_at=updated_at),
-      )
+  with (
+      patch.object(mgr, "save_metadata", side_effect=yielding_save),
+      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
+  ):
+    await asyncio.gather(
+        mgr.mark_unread(meta.id),
+        mgr.update_thinking_state(meta.id, updated_at=updated_at),
+    )
 
   # Bypass the metadata cache to check what's actually on disk.
   mgr._invalidate_cache(meta.id)

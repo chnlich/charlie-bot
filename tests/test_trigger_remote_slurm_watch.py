@@ -132,14 +132,14 @@ async def test_verify_on_create_rejects_failed_probe(tmp_path: Path) -> None:
   with (
       patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, False),
       patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(side_effect=_failing_sacct_factory)),
+      pytest.raises(RemoteVerifyError),
   ):
-    with pytest.raises(RemoteVerifyError):
-      await trigger_mgr.create_trigger(
-          session_id,
-          delay_seconds=600,
-          message="should not persist",
-          watch_targets=[SlurmJob(host="host2", job_id=122111)],
-      )
+    await trigger_mgr.create_trigger(
+        session_id,
+        delay_seconds=600,
+        message="should not persist",
+        watch_targets=[SlurmJob(host="host2", job_id=122111)],
+    )
 
   triggers_dir = cfg.sessions_dir / session_id / "triggers"
   assert not list(triggers_dir.glob("*.json"))

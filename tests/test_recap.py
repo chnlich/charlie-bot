@@ -195,9 +195,9 @@ async def test_recap_raises_last_exception_when_all_candidates_raise() -> None:
       ),
       patch(_EXTRACT_RECAP_PATCH_TARGET, return_value={"asks": [], "last": None}),
       patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
+      pytest.raises(RuntimeError) as exc_info,
   ):
-    with pytest.raises(RuntimeError) as exc_info:
-      await generate_and_cache_summary(session_mgr, "s", 5, cfg)
+    await generate_and_cache_summary(session_mgr, "s", 5, cfg)
 
   assert exc_info.value is last_error
   first_one_shot.assert_awaited_once()
@@ -234,9 +234,9 @@ async def test_recap_raises_last_exception_after_error_and_empty_result() -> Non
       ),
       patch(_EXTRACT_RECAP_PATCH_TARGET, return_value={"asks": [], "last": None}),
       patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
+      pytest.raises(RuntimeError) as exc_info,
   ):
-    with pytest.raises(RuntimeError) as exc_info:
-      await generate_and_cache_summary(session_mgr, "s", 5, cfg)
+    await generate_and_cache_summary(session_mgr, "s", 5, cfg)
 
   assert exc_info.value is last_error
   first_one_shot.assert_awaited_once()

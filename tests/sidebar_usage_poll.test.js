@@ -41,7 +41,7 @@ function buildContext(overrides = {}) {
       removeItem: (key) => { localStorageData.delete(key); },
     },
     // No stored key: mirrors page-load order config.js → websocket.js on the no-key path.
-    withAccessToken: (url) => url,
+    wsUrlWithToken: (path) => path,
     location: {href: '', protocol: 'http:', host: 'localhost:8000', search: ''},
     history: {pushState: () => {}},
     console: {error: () => {}, log: () => {}},

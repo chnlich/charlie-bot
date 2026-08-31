@@ -78,8 +78,7 @@
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let url = withAccessToken(`${proto}//${location.host}/ws/terminal`);
+    const url = wsUrlWithToken('/ws/terminal');
 
     socket = new WebSocket(url);
     socket.onopen = () => {

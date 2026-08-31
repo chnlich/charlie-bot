@@ -22,7 +22,7 @@ function buildContext(sessionId) {
     sessionUnread: {},
     localStorage: {getItem: () => null},
     // No stored key: mirrors page-load order config.js → websocket.js on the no-key path.
-    withAccessToken: (url) => url,
+    wsUrlWithToken: (path) => path,
     location: {protocol: 'http:', host: 'localhost:8000'},
     console: {log: () => {}, error: () => {}},
     marked: {parse: (txt) => txt},

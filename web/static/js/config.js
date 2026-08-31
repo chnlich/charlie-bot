@@ -26,6 +26,13 @@ function withAccessToken(url) {
   return key ? url + '?token=' + encodeURIComponent(key) : url;
 }
 
+// The socket scheme must track the page scheme: an https page cannot open a
+// plain ws: socket (browser mixed-content rule).
+function wsUrlWithToken(path) {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return withAccessToken(`${proto}//${location.host}${path}`);
+}
+
 function hideAuthOverlay() {
   const el = document.getElementById('auth-overlay');
   if (el) el.style.display = 'none';

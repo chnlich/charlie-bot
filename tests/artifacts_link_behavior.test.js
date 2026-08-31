@@ -1,31 +1,9 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const { loadArtifactsScript } = require('./artifacts_context_stub');
 
 const { escapeHtml } = require('./escape_html_stub');
-
-const NAMESPACE_JS = readStatic('chat/namespace.js');
-const ARTIFACTS_JS = readStatic('chat/artifacts.js');
-
-function loadArtifactsScript() {
-  const context = {
-    SESSION_ID: 'test-session',
-    escapeHtml,
-    hljs: {highlight: (value) => ({value: escapeHtml(value)})},
-    localStorage: {getItem: () => null, setItem: () => {}},
-    window: {addEventListener: () => {}},
-    console,
-    URL: globalThis.URL,
-  };
-  vm.createContext(context);
-  // namespace.js runs inside the vm so expose() assigns onto the vm's own
-  // globalThis, not the outer Node global.
-  vm.runInContext(NAMESPACE_JS, context, {filename: 'chat/namespace.js'});
-  vm.runInContext(ARTIFACTS_JS, context, {filename: 'artifacts.js'});
-  return context;
-}
 
 function countBaseTags(html) {
   const matches = html.match(/<base\b[^>]*>/gi);

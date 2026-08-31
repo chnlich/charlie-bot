@@ -81,7 +81,7 @@ async function executeSlashCommand(name, args, options = {}) {
   try {
     const res = await fetch(`/api/slash/${SESSION_ID}/execute`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ command: name, args: args, uploaded_files: payloadFiles }),
     });
     const data = await res.json();

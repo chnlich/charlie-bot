@@ -72,7 +72,7 @@ function buildContext(overrides = {}) {
       getElementById: (id) => elements.get(id) || null,
       querySelectorAll: overrides.querySelectorAll || (() => []),
       querySelector: () => null,
-      createElement: (tagName) => createEscapingElement(tagName),
+      createElement: createEscapingElement,
       body: createElement({tagName: 'BODY'}),
       addEventListener: () => {},
       removeEventListener: () => {},

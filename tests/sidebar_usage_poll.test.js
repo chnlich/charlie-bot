@@ -4,6 +4,7 @@ const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
 const { createElement, createEscapingElement } = require('./dom_element_stub');
+const { escapeHtml } = require('./escape_html_stub');
 
 const COMPAT_LOADER_JS = readStatic('compat-loader.js');
 const CHAT_JS = readStatic('chat.js');
@@ -92,7 +93,7 @@ function buildContext(overrides = {}) {
       getElementById: (id) => elements.get(id) || null,
       querySelectorAll: overrides.querySelectorAll || (() => []),
       querySelector: overrides.querySelector || (() => null),
-      createElement: (tagName) => createEscapingElement(tagName),
+      createElement: createEscapingElement,
       body: createElement({tagName: 'BODY'}),
       addEventListener: () => {},
       removeEventListener: () => {},
@@ -341,12 +342,7 @@ test('ensureActiveSessionViewPolling only schedules while the active session is 
 
 test('renderMessage preserves clone_start banners for SPA rebuilds', () => {
   const {context} = buildContext();
-  context.escapeHtml = (value) => String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+  context.escapeHtml = escapeHtml;
 
   const html = context.renderMessage({
     role: 'clone_start',

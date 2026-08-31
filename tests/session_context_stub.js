@@ -46,7 +46,7 @@ function baseSessionContext(overrides = {}) {
     document: {
       // document lookups (getElementById/querySelector*) differ per harness and
       // are assigned by each fork; createElement is shared.
-      createElement: (tagName) => createEscapingElement(tagName),
+      createElement: createEscapingElement,
       body: createElement({tagName: 'BODY'}),
       addEventListener: () => {},
       removeEventListener: () => {},

@@ -4,7 +4,6 @@ import asyncio
 import os
 import shlex
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,15 +14,14 @@ from src.agents.backends.pty_common import (
   tmux_session_name,
 )
 from src.api.deps import get_thread_manager, get_trigger_manager
-from src.api.message_utils import extract_text_from_message, extract_tool_result_text
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import (
   ThreadMetadata,
   ThreadStatus,
   WorkerEvent,
 )
-from src.core.ndjson import parse_ndjson_file
 from src.core.process import kill_process_group
+from src.core.thread_events import render_worker_events
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
 
@@ -195,46 +193,7 @@ async def get_thread_events(
 ):
   """Return historical Worker events from the on-disk events.jsonl log."""
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  raw_events = await asyncio.to_thread(parse_ndjson_file, events_path)
-  events: list[WorkerEvent] = []
-  tool_id_to_name: dict[str, str] = {}
-  for data in raw_events:
-    event_timestamp = data.get("timestamp") or datetime.now(UTC)
-    event_type = data.get('type', '')
-    if event_type == 'assistant' and isinstance(data.get('message'), dict):
-      text = extract_text_from_message(data['message'])
-      if text:
-        events.append(WorkerEvent(type='assistant', content=text, timestamp=event_timestamp))
-      for block in data['message'].get('content', []):
-        if isinstance(block, dict) and block.get('type') == 'tool_use':
-          tool_id_to_name[block['id']] = block['name']
-          events.append(
-              WorkerEvent(
-                  type='tool_use',
-                  tool_name=block['name'],
-                  input=block.get('input', {}),
-                  timestamp=event_timestamp,
-              ))
-    elif event_type == 'user' and isinstance(data.get('message'), dict):
-      for block in data['message'].get('content', []):
-        if block.get('type') == 'tool_result':
-          tool_use_id = block.get('tool_use_id', '')
-          name = tool_id_to_name.get(tool_use_id, '')
-          result_text = extract_tool_result_text(block)
-          events.append(
-              WorkerEvent(
-                  type='tool_result',
-                  tool_name=name,
-                  content=result_text,
-                  timestamp=event_timestamp,
-              ))
-    else:
-      try:
-        events.append(WorkerEvent(**{k: v for k, v in data.items() if k in WorkerEvent.model_fields}))
-      except Exception as e:
-        log.debug('event_parse_failed', error=str(e))
-        events.append(WorkerEvent(type='raw', content=str(data)))
-  return events
+  return await asyncio.to_thread(render_worker_events, events_path)
 
 
 @router.post("/{session_id}/threads/{thread_id}/cancel")

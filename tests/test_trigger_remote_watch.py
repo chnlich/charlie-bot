@@ -97,14 +97,16 @@ async def test_remote_create_dead_rejects(tmp_path: Path) -> None:
   cfg, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
   scripted = {("neptune", 1234): ["DEAD"]}
 
-  with patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)):
-    with pytest.raises(RemoteVerifyError) as excinfo:
-      await trigger_mgr.create_trigger(
-          session_id,
-          delay_seconds=30,
-          message="dead remote",
-          watch_targets=[RemotePid(host="neptune", pid=1234)],
-      )
+  with (
+      patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)),
+      pytest.raises(RemoteVerifyError) as excinfo,
+  ):
+    await trigger_mgr.create_trigger(
+        session_id,
+        delay_seconds=30,
+        message="dead remote",
+        watch_targets=[RemotePid(host="neptune", pid=1234)],
+    )
 
   assert "neptune:1234" in str(excinfo.value)
   # Nothing was persisted.
@@ -120,18 +122,20 @@ async def test_remote_create_one_dead_among_many_rejects(tmp_path: Path) -> None
       ("neptune", 2): ["DEAD"],
       ("noire", 3): ["ALIVE"],
   }
-  with patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)):
-    with pytest.raises(RemoteVerifyError) as excinfo:
-      await trigger_mgr.create_trigger(
-          session_id,
-          delay_seconds=30,
-          message="dead remote",
-          watch_targets=[
-              RemotePid(host="neptune", pid=1),
-              RemotePid(host="neptune", pid=2),
-              RemotePid(host="noire", pid=3),
-          ],
-      )
+  with (
+      patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)),
+      pytest.raises(RemoteVerifyError) as excinfo,
+  ):
+    await trigger_mgr.create_trigger(
+        session_id,
+        delay_seconds=30,
+        message="dead remote",
+        watch_targets=[
+            RemotePid(host="neptune", pid=1),
+            RemotePid(host="neptune", pid=2),
+            RemotePid(host="noire", pid=3),
+        ],
+    )
   msg = str(excinfo.value)
   assert "neptune:2" in msg
   assert "DEAD" in msg
@@ -431,9 +435,8 @@ def test_cli_watch_pid_flag_removed() -> None:
       "--message", "m",
       "--watch-pid", "1234",
   ]
-  with patch.object(sys, "argv", argv):
-    with pytest.raises(SystemExit):
-      cli_module.main()
+  with patch.object(sys, "argv", argv), pytest.raises(SystemExit):
+    cli_module.main()
 
 
 def test_cli_renamed_flag_delay_no_longer_accepted() -> None:
@@ -443,9 +446,8 @@ def test_cli_renamed_flag_delay_no_longer_accepted() -> None:
       "--delay", "60",
       "--message", "m",
   ]
-  with patch.object(sys, "argv", argv):
-    with pytest.raises(SystemExit):
-      cli_module.main()
+  with patch.object(sys, "argv", argv), pytest.raises(SystemExit):
+    cli_module.main()
 
 
 def test_cli_max_wait_accepted(monkeypatch) -> None:
@@ -497,9 +499,8 @@ def test_cli_remote_dead_exits_with_code_2(monkeypatch) -> None:
 
   monkeypatch.setattr(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, _fake_post)
   monkeypatch.setattr(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, _offline_get)
-  with patch.object(sys, "argv", argv):
-    with pytest.raises(SystemExit) as excinfo:
-      cli_module.main()
+  with patch.object(sys, "argv", argv), pytest.raises(SystemExit) as excinfo:
+    cli_module.main()
 
   assert excinfo.value.code == cli_module.EXIT_VERIFY_REJECTED
 

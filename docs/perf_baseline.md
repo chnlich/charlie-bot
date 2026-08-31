@@ -25,6 +25,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M12 ext-usage codex usage scrape, steady state | M12 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
 | M13 thread-events read+transform, steady state | M13 collector below | seconds per read, worst on-disk worker log | median < 0.05 s | — (introduced with its first history row) |
 | M14 git diff API event-loop lag | M14 collector below | seconds of loop lag per diff/files run, charlie-bot root..HEAD | median < 0.05 s | — (introduced with its first history row) |
+| M15 recap-summary cache torn reads | M15 collector below | torn reads per concurrent write stream | 0 torn reads | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -412,6 +413,70 @@ async def main():
     print(f"{total} files in root..HEAD diff; loop-lag median {worst[2]:.4f} s, max {worst[-1]:.4f} s")
 
 asyncio.run(main())
+EOF
+```
+
+M15 — recap-summary cache torn reads: the invariant behind the recap view's
+cache writes. `get_session_recap` reads `recap_summaries.json` from an executor
+thread with no coordination against `_write_cache_entry`'s rewrite from the
+summarize handler, so a write that publishes the file truncated lets a
+concurrent read observe a half-written file; that read fails json parsing and
+500s the recap response. The collector reproduces the race against the main
+checkout's code with scratch state: 3000 `_write_cache_entry` calls on one
+session's cache file while four reader threads run the handler's lookup. A torn
+read under this stream is a read the fixed write path cannot produce; the count
+is the metric. Evidence while the live server runs older code points the same
+collector at the branch checkout (`sys.path.insert` at the worktree root).
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, sys, tempfile, threading
+from pathlib import Path
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.core.config import CharlieBotConfig
+from src.core.models import CreateSessionRequest
+from src.core.sessions import SessionManager
+from src.core import recap
+
+WRITES = 3000
+
+async def setup():
+    work = Path(tempfile.mkdtemp(prefix="m15-torn-read-"))
+    cfg = CharlieBotConfig(charliebot_home=work / "home")
+    sessions = SessionManager(cfg)
+    session = await sessions.create_session(CreateSessionRequest(name="M15"))
+    return work, sessions, session
+
+work, sessions, session = asyncio.run(setup())
+recap._write_cache_entry(sessions, session.id, 0, "seed")
+
+state = {"torn": 0, "reads": 0, "stop": False, "errors": []}
+
+def writer():
+    for i in range(WRITES):
+        recap._write_cache_entry(sessions, session.id, i % 100, f"summary {i}")
+
+def reader():
+    while not state["stop"]:
+        state["reads"] += 1
+        try:
+            recap.lookup_cached_summary(sessions, session.id, 0)
+        except ValueError:
+            state["torn"] += 1
+        except BaseException as e:
+            state["errors"].append(repr(e))
+            return
+
+running = [threading.Thread(target=reader) for _ in range(4)]
+for t in running:
+    t.start()
+writer()
+state["stop"] = True
+for t in running:
+    t.join()
+if state["errors"]:
+    raise SystemExit(f"unexpected reader errors: {state['errors'][:3]}")
+print(f"{WRITES} _write_cache_entry calls, {state['reads']} concurrent reads; torn reads observed: {state['torn']}")
 EOF
 ```
 

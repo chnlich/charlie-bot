@@ -33,12 +33,17 @@ worktree_dir: ~/worktrees
 # Reviewer backend preference: list of backend_options ids. Empty = reviewer uses the worker's backend.
 model_preference: []
 
-# Backends available for model switching. Editing this list REPLACES the default;
-# keep the entries you want. Codex reasoning effort is always xhigh (hardcoded).
+# Backends available for model switching. The uncommented list below is the schema
+# default (CharlieBotConfig.backend_options); tests/test_config_fragments.py pins the
+# two together. Editing the list REPLACES the default — to add a codex backend,
+# append an entry such as:
+#   {id: codex-gpt-5.5, label: "Codex · GPT-5.5", type: codex, model: gpt-5.5}
+# Codex reasoning effort is xhigh unless the entry sets model_reasoning_effort.
 backend_options:
   - {id: claude-opus-4.8, label: "CC · Opus 5", type: cc-claude, model: claude-opus-5, effort: xhigh}
-  - {id: codex-gpt-5.5,  label: "Codex · GPT-5.5", type: codex, model: gpt-5.5}
-  - {id: claude-tui,     label: "Claude TUI", type: tui-cli}
+  - {id: claude-opus-4.8-fast, label: "CC · Opus 4.8 Fast", type: cc-claude, model: claude-opus-4-8, effort: medium, fast_mode: true}
+  - {id: claude-fable-5, label: "CC · Fable 5", type: cc-claude, model: claude-fable-5, effort: max}
+  - {id: claude-tui, label: "Claude TUI", type: tui-cli}
 
 # --- Backlog panel ---
 
@@ -61,5 +66,8 @@ backlog_repos: []
 # Other backend / notification secrets: moonshot_api_key, telegram_bot_token,
 # telegram_chat_id. cc-openai-compatible backends configure the upstream api_base,
 # model, and api_key_env per backend_option above (no top-level fields).
-# Skill integration tokens (github / linear / feishu / google) are omitted
-# for now, pending a cleanup of which keys are still used.
+# Integration keys for the skills under skills/ (the feishu_/gemini_/google_/
+# google_docs_* set, linear_api_key, slack_user_token, public_base_url) stay unlisted
+# here by design: CharlieBotConfig declares them so host files carrying them load
+# under extra='forbid', and the consuming skill scripts read the raw yaml. Each
+# skill's SKILL.md names the keys it reads.

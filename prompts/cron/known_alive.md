@@ -256,3 +256,10 @@ Known-alive symbols:
   full set by name. Nothing in the repo attribute-reads the values, so vulture flags
   every field as an unused variable. Same kept-deliberately class as the `backlog_label`
   entry above.
+- `panel-summary`, `panel-details`, `panel-roofline`, `panel-source`, `panel-session`,
+  `panel-raw` (`web/templates/ncu.html`, the six tab-panel element ids) — reached by
+  string construction: the inline tab switcher activates panels with
+  ``p.classList.toggle('active', p.id === `panel-${name}`)``, where `name` is each tab
+  button's `data-tab` attribute. A whole-repo grep for any full id finds only its
+  definition, so a dead-id scan flags each as unused markup; the constructed
+  `panel-${name}` match is what makes them live.

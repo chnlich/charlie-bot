@@ -88,9 +88,11 @@ async def test_cancel_master_agent_no_active_master_broadcasts_error() -> None:
   session_mgr = AsyncMock()
   meta = object()
 
-  with patch(CHAT_CANCEL_MASTER_PATCH_TARGET, new=AsyncMock(return_value=False)) as mock_cancel:
-    with pytest.raises(HTTPException) as exc_info:
-      await cancel_master_agent("session-missing", meta=meta, session_mgr=session_mgr)
+  with (
+      patch(CHAT_CANCEL_MASTER_PATCH_TARGET, new=AsyncMock(return_value=False)) as mock_cancel,
+      pytest.raises(HTTPException) as exc_info,
+  ):
+    await cancel_master_agent("session-missing", meta=meta, session_mgr=session_mgr)
 
   assert exc_info.value.status_code == 404
   assert exc_info.value.detail == "No active master agent"

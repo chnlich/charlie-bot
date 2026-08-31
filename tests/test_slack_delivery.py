@@ -303,9 +303,11 @@ async def test_reply_for_a_session_without_a_slack_thread_is_refused_409(tmp_pat
   cfg, session_mgr, client = _rig(tmp_path)
   meta = await session_mgr.create_session(CreateSessionRequest(name="browser session"))
 
-  with patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    with pytest.raises(SlackReplyError) as excinfo:
-      await post_reply(meta.id, "hello", cfg, session_mgr)
+  with (
+      patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
+      pytest.raises(SlackReplyError) as excinfo,
+  ):
+    await post_reply(meta.id, "hello", cfg, session_mgr)
 
   assert excinfo.value.status == 409
   assert not client.posts
@@ -315,9 +317,11 @@ async def test_reply_for_a_session_without_a_slack_thread_is_refused_409(tmp_pat
 @pytest.mark.asyncio
 async def test_unknown_session_is_refused_404(tmp_path: Path) -> None:
   cfg, session_mgr, client = _rig(tmp_path)
-  with patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    with pytest.raises(SlackReplyError) as excinfo:
-      await post_reply("no-such-session", "hello", cfg, session_mgr)
+  with (
+      patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
+      pytest.raises(SlackReplyError) as excinfo,
+  ):
+    await post_reply("no-such-session", "hello", cfg, session_mgr)
   assert excinfo.value.status == 404
   assert not client.posts
 
@@ -327,9 +331,11 @@ async def test_unknown_session_is_refused_404(tmp_path: Path) -> None:
 async def test_blank_reply_is_refused_422_before_any_post(tmp_path: Path, text: str) -> None:
   cfg, session_mgr, client = _rig(tmp_path)
   sid = await _slack_session(session_mgr)
-  with patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    with pytest.raises(SlackReplyError) as excinfo:
-      await post_reply(sid, text, cfg, session_mgr)
+  with (
+      patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
+      pytest.raises(SlackReplyError) as excinfo,
+  ):
+    await post_reply(sid, text, cfg, session_mgr)
   assert excinfo.value.status == 422
   assert not client.posts
   assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
@@ -348,9 +354,9 @@ async def test_slack_rejecting_the_post_is_502_and_persists_nothing(tmp_path: Pa
       patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
       patch(_RETRY_DELAYS_PATCH_TARGET, (0.0, 0.0)),
       capture_logs() as logs,
+      pytest.raises(SlackReplyError) as excinfo,
   ):
-    with pytest.raises(SlackReplyError) as excinfo:
-      await post_reply(sid, "never arrives", cfg, session_mgr)
+    await post_reply(sid, "never arrives", cfg, session_mgr)
 
   assert excinfo.value.status == 502
   assert "nothing was persisted" in excinfo.value.detail

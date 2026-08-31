@@ -387,9 +387,11 @@ async def test_reply_gate_refuses_the_stale_thread_and_persists_nothing(tmp_path
   meta = await _make_session(session_mgr)
   _seed_gate_thread(client)
 
-  with patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    with pytest.raises(SlackReplyError) as excinfo:
-      await assert_thread_fresh(meta.id, cfg, session_mgr)
+  with (
+      patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
+      pytest.raises(SlackReplyError) as excinfo,
+  ):
+    await assert_thread_fresh(meta.id, cfg, session_mgr)
 
   assert excinfo.value.status == 412
   payload = excinfo.value.detail

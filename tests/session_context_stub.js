@@ -8,7 +8,7 @@
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
-const { createElement } = require('./dom_element_stub');
+const { createElement, createEscapingElement } = require('./dom_element_stub');
 
 const COMPAT_LOADER_JS = readStatic('compat-loader.js');
 const CHAT_JS = readStatic('chat.js');
@@ -45,25 +45,8 @@ function baseSessionContext(overrides = {}) {
     AbortController,
     document: {
       // document lookups (getElementById/querySelector*) differ per harness and
-      // are assigned by each fork; createElement is shared: set textContent,
-      // read innerHTML as escaped, matching the escapeHtml pattern.
-      createElement: (tagName) => {
-        const el = createElement({tagName: String(tagName).toUpperCase()});
-        let rawText = '';
-        Object.defineProperty(el, 'textContent', {
-          get() { return rawText; },
-          set(v) {
-            rawText = String(v);
-            el.innerHTML = String(v)
-              .replaceAll('&', '&amp;')
-              .replaceAll('<', '&lt;')
-              .replaceAll('>', '&gt;')
-              .replaceAll('"', '&quot;')
-              .replaceAll("'", '&#39;');
-          },
-        });
-        return el;
-      },
+      // are assigned by each fork; createElement is shared.
+      createElement: createEscapingElement,
       body: createElement({tagName: 'BODY'}),
       addEventListener: () => {},
       removeEventListener: () => {},

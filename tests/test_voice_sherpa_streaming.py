@@ -126,13 +126,15 @@ def test_voice_websocket_streams_partials_final_and_persists_dump(tmp_path: Path
         raise AssertionError(message["text"])
 
   client = TestClient(server.app)
-  with client.websocket_connect(f"/ws/voice/{session_id}") as ws:
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-      future = executor.submit(receive_until_final, ws)
-      for chunk in _pcm_chunks(SAMPLE_WAV):
-        ws.send_bytes(chunk)
-      ws.send_text('{"type": "stop"}')
-      future.result(timeout=120)
+  with (
+      client.websocket_connect(f"/ws/voice/{session_id}") as ws,
+      concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor,
+  ):
+    future = executor.submit(receive_until_final, ws)
+    for chunk in _pcm_chunks(SAMPLE_WAV):
+      ws.send_bytes(chunk)
+    ws.send_text('{"type": "stop"}')
+    future.result(timeout=120)
 
   types = [message["type"] for message in messages]
   assert "partial" in types

@@ -138,9 +138,9 @@ def test_ssh_failure_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str])
       "--cmd",
       "echo hi",
   ]), patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
+       pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert exc_info.value.code == 2
   err = capsys.readouterr().err
@@ -164,9 +164,9 @@ def test_missing_session_dir_exits_4(tmp_path: Path, capsys: pytest.CaptureFixtu
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc), \
+       pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert exc_info.value.code == 4
   err = capsys.readouterr().err
@@ -189,9 +189,9 @@ def test_pid_parse_failure_exits_3(tmp_path: Path, capsys: pytest.CaptureFixture
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc), \
+       pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert exc_info.value.code == 3
 
@@ -212,9 +212,9 @@ def test_ssh_timeout_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str])
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_SUBPROCESS_RUN_PATCH_TARGET, side_effect=timeout):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+       patch(_SUBPROCESS_RUN_PATCH_TARGET, side_effect=timeout), \
+       pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert exc_info.value.code == 2
   err = capsys.readouterr().err
@@ -321,9 +321,9 @@ def test_session_env_is_not_a_remote_launch_session_source(
       "--cmd", "echo hi",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_SUBPROCESS_RUN_PATCH_TARGET) as mock_run:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+       patch(_SUBPROCESS_RUN_PATCH_TARGET) as mock_run, \
+       pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert exc_info.value.code == 2
   mock_run.assert_not_called()

@@ -267,18 +267,20 @@ async def test_review_cleanup_error_is_routed_to_successor(tmp_path: Path, monke
   thread_mgr = _make_review_thread_mgr(tmp_path)
 
   thread = MagicMock(id="reviewer-1", description="original", backend=OPUS_BACKEND_ID)
-  with _broadcast_patch():
-    with patch.object(mgr, "deliver_to_successor", side_effect=fake_deliver) as mock_deliver:
-      await review.maybe_spawn_reviewer(
-          parent_id,
-          thread,
-          exit_code=0,
-          events_summary="events",
-          full_summary="summary",
-          thread_mgr=thread_mgr,
-          session_mgr=mgr,
-          cfg=_make_cfg(tmp_path),
-      )
+  with (
+      _broadcast_patch(),
+      patch.object(mgr, "deliver_to_successor", side_effect=fake_deliver) as mock_deliver,
+  ):
+    await review.maybe_spawn_reviewer(
+        parent_id,
+        thread,
+        exit_code=0,
+        events_summary="events",
+        full_summary="summary",
+        thread_mgr=thread_mgr,
+        session_mgr=mgr,
+        cfg=_make_cfg(tmp_path),
+    )
 
   mock_deliver.assert_awaited_once()
   called_session, called_event = mock_deliver.await_args.args
@@ -305,18 +307,20 @@ async def test_review_cleanup_error_no_successor_writes_into_itself_without_orig
   thread_mgr = _make_review_thread_mgr(tmp_path)
 
   thread = MagicMock(id="reviewer-1", description="original", backend=OPUS_BACKEND_ID)
-  with _broadcast_patch():
-    with patch.object(mgr, "deliver_to_successor", side_effect=fake_deliver) as mock_deliver:
-      await review.maybe_spawn_reviewer(
-          session_id,
-          thread,
-          exit_code=0,
-          events_summary="events",
-          full_summary="summary",
-          thread_mgr=thread_mgr,
-          session_mgr=mgr,
-          cfg=_make_cfg(tmp_path),
-      )
+  with (
+      _broadcast_patch(),
+      patch.object(mgr, "deliver_to_successor", side_effect=fake_deliver) as mock_deliver,
+  ):
+    await review.maybe_spawn_reviewer(
+        session_id,
+        thread,
+        exit_code=0,
+        events_summary="events",
+        full_summary="summary",
+        thread_mgr=thread_mgr,
+        session_mgr=mgr,
+        cfg=_make_cfg(tmp_path),
+    )
 
   mock_deliver.assert_awaited_once()
   own_events = mgr.load_chat_events_sync(session_id)

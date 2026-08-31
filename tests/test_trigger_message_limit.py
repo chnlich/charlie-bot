@@ -44,10 +44,12 @@ def test_cli_rejects_201_char_message(
   ]
   fake_cli_cfg(monkeypatch, triggers_dir)
 
-  with patch.object(sys, "argv", argv):
-    with patch("src.cli.schedule_trigger.post_internal_api") as mock_post:
-      with pytest.raises(SystemExit) as excinfo:
-        cli_module.main()
+  with (
+      patch.object(sys, "argv", argv),
+      patch("src.cli.schedule_trigger.post_internal_api") as mock_post,
+      pytest.raises(SystemExit) as excinfo,
+  ):
+    cli_module.main()
 
   assert excinfo.value.code == 2
   mock_post.assert_not_called()

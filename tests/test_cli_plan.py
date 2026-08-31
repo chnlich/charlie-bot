@@ -222,15 +222,17 @@ def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(
           "detail": "file 'artifacts/missing.html' not found inside the session directory"
       }
 
-  with patch("sys.argv", [
-      "plan", "present",
-      "--file", "artifacts/missing.html",
-      "--title", "P1",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, side_effect=FakeRequestException()):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      patch("sys.argv", [
+          "plan", "present",
+          "--file", "artifacts/missing.html",
+          "--title", "P1",
+      ]),
+      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, side_effect=FakeRequestException()),
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert exc_info.value.code == 1
   err = capsys.readouterr().err
@@ -252,12 +254,14 @@ def test_plan_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.
 def test_plan_session_mismatch_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  with patch("sys.argv", [
-      "plan", "list", "--session", "xyz",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      patch("sys.argv", [
+          "plan", "list", "--session", "xyz",
+      ]),
+      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert exc_info.value.code == 2
   err = capsys.readouterr().err
@@ -271,10 +275,12 @@ def test_plan_no_session_outside_session_dir(
   cfg.sessions_dir = tmp_path / "sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   monkeypatch.chdir(tmp_path)
-  with patch("sys.argv", ["plan", "list"]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with (
+      patch("sys.argv", ["plan", "list"]),
+      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
 
   assert exc_info.value.code == 2
   err = capsys.readouterr().err
@@ -306,7 +312,6 @@ REJECTION_CASES = [
 @pytest.mark.parametrize("argv", REJECTION_CASES)
 def test_plan_argparse_rejects_argv(argv: list[str]) -> None:
   """Each malformed invocation dies in argparse with a nonzero exit code."""
-  with patch("sys.argv", argv):
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+  with patch("sys.argv", argv), pytest.raises(SystemExit) as exc_info:
+    main()
   assert exc_info.value.code != 0

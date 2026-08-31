@@ -1,8 +1,11 @@
 """Thread management API routes."""
 
 import asyncio
+import json
 import os
 import shlex
+import threading
+from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,7 +27,6 @@ from src.core.models import (
   ThreadStatus,
   WorkerEvent,
 )
-from src.core.ndjson import parse_ndjson_file
 from src.core.process import kill_process_group
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
@@ -189,13 +191,66 @@ async def get_thread(
   )
 
 
+# Reads from read_thread_worker_events, per events-log path. The workers-panel
+# poll re-reads the same append-only log every 5 s per expanded running worker,
+# so parsed results are retained and a call parses only the bytes appended since
+# the last one. A file that shrank (truncate/rewrite) restarts its entry.
+_THREAD_EVENTS_CACHE_CAP = 32
+
+
+class _ThreadEventsCacheEntry:
+  __slots__ = ("events", "offset", "tool_id_to_name")
+
+  def __init__(self) -> None:
+    self.events: list[WorkerEvent] = []
+    self.offset = 0
+    self.tool_id_to_name: dict[str, str] = {}
+
+
+_thread_events_cache: OrderedDict[str, _ThreadEventsCacheEntry] = OrderedDict()
+_thread_events_lock = threading.Lock()
+
+
 def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
-  """Read a worker's events.jsonl and project it into the response's WorkerEvent list."""
-  raw_events = parse_ndjson_file(events_path)
-  events: list[WorkerEvent] = []
-  tool_id_to_name: dict[str, str] = {}
-  _append_worker_events(raw_events, events, tool_id_to_name)
-  return events
+  """Project a worker's events.jsonl into the events endpoint's full WorkerEvent list.
+
+  The caller gets the complete projected history on every call; an unchanged
+  log costs one stat, and between polls only newly appended complete lines are
+  parsed. A trailing partial line (writer mid-append) is left for the next
+  call, so nothing the writer has not committed reaches the projection.
+  """
+  key = str(events_path)
+  with _thread_events_lock:
+    if not events_path.exists():
+      _thread_events_cache.pop(key, None)
+      return []
+    entry = _thread_events_cache.get(key)
+    if entry is not None:
+      _thread_events_cache.move_to_end(key)
+    size = events_path.stat().st_size
+    if entry is None or size < entry.offset:
+      entry = _ThreadEventsCacheEntry()
+    if size > entry.offset:
+      with open(events_path, "rb") as f:
+        f.seek(entry.offset)
+        window = f.read(size - entry.offset)
+      complete_end = window.rfind(b"\n") + 1
+      if complete_end:
+        raw_events: list[dict] = []
+        for raw_line in window[:complete_end].split(b"\n"):
+          line = raw_line.strip()
+          if not line:
+            continue
+          try:
+            raw_events.append(json.loads(line))
+          except json.JSONDecodeError as e:
+            log.debug("ndjson_parse_skip", error=str(e))
+        _append_worker_events(raw_events, entry.events, entry.tool_id_to_name)
+        entry.offset += complete_end
+    _thread_events_cache[key] = entry
+    while len(_thread_events_cache) > _THREAD_EVENTS_CACHE_CAP:
+      _thread_events_cache.popitem(last=False)
+    return list(entry.events)
 
 
 def _append_worker_events(

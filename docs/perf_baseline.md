@@ -23,6 +23,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M10 thread-metadata torn reads | M10 collector below | torn reads per concurrent save stream | 0 torn reads | — (introduced with its first history row) |
 | M11 backlog reads on this host | M11 collector below | HTTP status of GET /api/backlog + /api/backlog/history | both 200; 0 backlog 500s in the server log | — (introduced with its first history row) |
 | M12 ext-usage codex usage scrape, steady state | M12 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
+| M13 thread-events read+transform, steady state | M13 collector below | seconds per read, worst on-disk worker log | median < 0.05 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -321,6 +322,41 @@ print(f"{len(rollouts)} rollout files; steady-state usage scrape median {times[2
 EOF
 ```
 
+M13 — thread-events read+transform, steady state. The workers panel polls
+`GET /api/threads/{sid}/threads/{tid}/events` every 5 s for each expanded
+running worker, and the endpoint projects the worker's whole events log on
+every call. The cost is invisible to HTTP probes of the standing metrics, so
+the collector times the function the handler calls over the largest on-disk
+worker log (read-only), from the main repo checkout. An unchanged log is the
+steady state (one stat); a log appended between calls re-parses only its new
+tail; a shrunk log restarts its entry from scratch. Evidence while the live
+server runs older code is a scratch-instance A/B, the same shape as the M7
+protocol:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import sys, time
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from pathlib import Path
+from src.api.threads import read_thread_worker_events
+
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for p in root.glob("*/threads/*/data/events.jsonl"):
+    n = p.stat().st_size
+    if n > best_n:
+        best, best_n = p, n
+read_thread_worker_events(best)  # cold pass, as at first panel open; not timed
+times = []
+for _ in range(5):
+    t0 = time.perf_counter()
+    read_thread_worker_events(best)
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"{best_n / 1e6:.1f} MB thread log; steady-state read+transform median {times[2]:.4f} s, max {times[-1]:.4f} s")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -335,3 +371,4 @@ EOF
 | 2026-08-30 | #492 | M11 GET /api/backlog + /api/backlog/history 500/500 → 200/200 `[]` on the unconfigured host (live-before with 5 backlog 500s in the 16 h server log; scratch TestClient A/B for the after) | unconfigured backlog reads return the empty state /repos already reports; PATCH keeps the loud raise; M11 definition and healthy range introduced with this PR |
 | 2026-08-31 | #496 | M12 median 0.0071 s → 0.0006 s, max 0.0073 s → 0.0008 s (200 rollout files, 0.98 MB newest rollout; scrape results identical modulo fetched_at) | per-newest-rollout usage memo keyed on (mtime_ns, size) plus a 1 MiB tail-window read on the codex provider; M12 definition and healthy range introduced with this PR |
 | 2026-08-31 | #502 | M7 warm median 1.609 s → 0.846 s collector-level, 1.758 s → 1.158 s HTTP-level (scratch A/B: base #496 vs branch, scratch CHARLIEBOT_HOME each; 200 rollout files 180 MB, 4 Claude homes 676 MB, opencode.db 10.5 GB; tallies byte-identical) | codex rollouts joined the persisted per-file tally cache (token_count records plus the root-session self-check pair) |
+| 2026-08-31 | PRNUMBER | M13 median 0.0673 s → 0.0000 s, max 0.0818 s → 0.0001 s (6.7 MB worst worker log, 2177 projected events; projection identical including timestamps) | byte-offset incremental read with per-path cached projection for the workers-panel thread-events poll; M13 definition and healthy range introduced with this PR |

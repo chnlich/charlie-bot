@@ -22,6 +22,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M9 ext-usage codex spend rescan, steady state | M9 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
 | M10 thread-metadata torn reads | M10 collector below | torn reads per concurrent save stream | 0 torn reads | — (introduced with its first history row) |
 | M11 backlog reads on this host | M11 collector below | HTTP status of GET /api/backlog + /api/backlog/history | both 200; 0 backlog 500s in the server log | — (introduced with its first history row) |
+| M12 ext-usage codex usage scrape, steady state | M12 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -293,6 +294,32 @@ KEY=$(grep -m1 '^charliebot_access_key:' ~/.charliebot/config.yaml | awk '{print
 LOG=$(ls -1t /tmp/charliebot-logs/server_*.log | head -1); grep -c "GET /api/backlog HTTP/1.1\" 500" "$LOG"
 ```
 
+M12 — ext-usage poller codex usage scrape, steady state. The scrape reads each account's
+newest rollout every round for the latest token_count event; the collector times the function
+the poller calls each round over the live corpus (read-only), from the main repo checkout. An
+unchanged file is the steady state; a changed file re-reads only its tail window (the
+full-file read remains for a token_count farther back than the window):
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import sys, time
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from pathlib import Path
+from src.api.ext_usage import CodexUsageProvider, _list_rollout_files
+
+prov = CodexUsageProvider("main", str(Path.home() / ".codex"))
+rollouts = _list_rollout_files(prov.sessions_dir)
+prov._fetch_usage(rollouts)  # cold pass, as at a server restart; not timed
+times = []
+for _ in range(5):
+    t0 = time.perf_counter()
+    prov._fetch_usage(rollouts)
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"{len(rollouts)} rollout files; steady-state usage scrape median {times[2]:.4f} s, max {times[-1]:.4f} s")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -305,3 +332,4 @@ LOG=$(ls -1t /tmp/charliebot-logs/server_*.log | head -1); grep -c "GET /api/bac
 | 2026-08-30 | #481 | M9 per-round spend recompute 0.402 s → 0.002 s steady state, 0.063 s with the 5.2 MB active file changed (200 rollout files, 33 in the 7-day window, 41 MB; identical spend results) | per-file spend-event memo keyed on (mtime_ns, size) on the codex usage provider; M9 definition and healthy range introduced with this PR |
 | 2026-08-30 | #489 | M10 torn reads 38932/59366 → 0/35975 concurrent reads over 3000 save_metadata calls (collector verbatim; pre-fix code also 500ed one threads/list poll in the live server log) | thread metadata.json writes routed through the repo's atomic-write rule (atomic_write_text), mirroring the session-metadata path; M10 definition and healthy range introduced with this PR |
 | 2026-08-30 | #492 | M11 GET /api/backlog + /api/backlog/history 500/500 → 200/200 `[]` on the unconfigured host (live-before with 5 backlog 500s in the 16 h server log; scratch TestClient A/B for the after) | unconfigured backlog reads return the empty state /repos already reports; PATCH keeps the loud raise; M11 definition and healthy range introduced with this PR |
+| 2026-08-31 | #496 | M12 median 0.0071 s → 0.0006 s, max 0.0073 s → 0.0008 s (200 rollout files, 0.98 MB newest rollout; scrape results identical modulo fetched_at) | per-newest-rollout usage memo keyed on (mtime_ns, size) plus a 1 MiB tail-window read on the codex provider; M12 definition and healthy range introduced with this PR |

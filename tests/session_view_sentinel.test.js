@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { baseSessionContext, createChatSidebarContext } = require('./session_context_stub');
+const { baseSessionContext, buildUsageElements, createChatSidebarContext } = require('./session_context_stub');
 const { createElement } = require('./dom_element_stub');
 
 function buildContext(overrides = {}) {
@@ -324,16 +324,6 @@ test('first paint does not fetch when the tail page already fills the container'
 // ---------------------------------------------------------------------------
 // renderUsageFromData: unknown context + cost cell rendering
 // ---------------------------------------------------------------------------
-
-function buildUsageElements() {
-  return new Map([
-    ['usage-indicator', createElement({className: 'hidden'})],
-    ['usage-bar', createElement({className: 'h-full rounded-full bg-blue-500', style: {width: '0%'}})],
-    ['usage-compact-line', createElement({className: 'absolute top-0 h-full w-0.5 bg-white hidden', style: {left: '0%'}})],
-    ['usage-text', createElement({textContent: ''})],
-    ['usage-cost', createElement({textContent: ''})],
-  ]);
-}
 
 test('renderUsageFromData shows unknown and hides the bar when context_tokens is null', () => {
   const elements = buildUsageElements();

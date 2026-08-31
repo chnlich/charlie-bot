@@ -24,7 +24,7 @@ const BUILD_ENV = Object.assign({}, process.env, {
 const { FakeElement } = require('./fake_dom');
 const { escapeHtml } = require('./escape_html_stub');
 const { readStatic } = require('./read_static');
-const { SESSIONS_ROOT } = require('./sessions_root_stub');
+const { loadArtifactsScript } = require('./artifacts_context_stub');
 
 function makeDocument(elements) {
   return {
@@ -92,22 +92,6 @@ function loadBacklogContext(elements, fetchImpl) {
       readStatic('backlog-panel.js') + '\nglobalThis.backlogPanel = backlogPanel;',
       context,
       { filename: 'backlog-panel.js' });
-  return context;
-}
-
-function loadArtifactsScript() {
-  const context = {
-    SESSION_ID: 'sess-1',
-    escapeHtml,
-    hljs: { highlight: (value) => ({ value: escapeHtml(value) }) },
-    localStorage: { getItem: () => null, setItem: () => {} },
-    window: { addEventListener: () => {}, SESSIONS_ROOT },
-    console,
-    URL: globalThis.URL,
-  };
-  vm.createContext(context);
-  vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
-  vm.runInContext(readStatic('chat/artifacts.js'), context, { filename: 'artifacts.js' });
   return context;
 }
 
@@ -291,7 +275,7 @@ test('tailwind utility classes used by rendered messages/cards are all present i
   snippets.push(backlogList.innerHTML);
 
   // 4. Plan compact card, in both a pending and an approved-with-takeoff state.
-  const artifactsCtx = loadArtifactsScript();
+  const artifactsCtx = loadArtifactsScript({ sessionId: 'sess-1' });
   snippets.push(artifactsCtx.buildPlanCompactCardHtml(1, 1, 'Remove the Play CDN', 'awaiting approval', '/abs/plan_01.html'));
   snippets.push(artifactsCtx.buildPlanCompactCardHtml(2, 3, 'Follow-up plan', 'approved · v3', '/abs/plan_02.html'));
 

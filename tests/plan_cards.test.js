@@ -1,36 +1,11 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
-
-const { escapeHtml } = require('./escape_html_stub');
+const { loadArtifactsScript } = require('./artifacts_context_stub');
 
 const { SESSIONS_ROOT, SESSION_ID, SESSION_DIR } = require('./sessions_root_stub');
 
 const { makePlan, makeVersion } = require('./plan_factories_stub');
-
-const NAMESPACE_JS = readStatic('chat/namespace.js');
-const ARTIFACTS_JS = readStatic('chat/artifacts.js');
-
-function loadArtifactsScript(opts) {
-  const o = opts || {};
-  const context = {
-    SESSION_ID: 'test-session',
-    escapeHtml,
-    hljs: {highlight: (value) => ({value: escapeHtml(value)})},
-    localStorage: {getItem: () => null, setItem: () => {}},
-    window: {addEventListener: () => {}, SESSIONS_ROOT},
-    console,
-    URL: globalThis.URL,
-  };
-  if (o.document) context.document = o.document;
-  if (o.planPanel) context.planPanel = o.planPanel;
-  vm.createContext(context);
-  vm.runInContext(NAMESPACE_JS, context, {filename: 'chat/namespace.js'});
-  vm.runInContext(ARTIFACTS_JS, context, {filename: 'artifacts.js'});
-  return context;
-}
 
 // ---------------------------------------------------------------------------
 // lookupRegisteredPlanVersion (registered-version lookup)

@@ -83,6 +83,9 @@ function baseSessionContext(overrides = {}) {
     _backlogLoaded: false,
     BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
     BACKEND_TYPES: overrides.BACKEND_TYPES || {},
+    // config.js's shared header literal; index.html loads config.js before the
+    // chat/sidebar modules createChatSidebarContext fans out to.
+    JSON_HEADERS: {'Content-Type': 'application/json'},
   };
   context.window = {addEventListener: () => {}, innerHeight: 800};
   context.CSS = {escape: (value) => String(value)};

@@ -35,7 +35,7 @@ async function commitRename() {
   try {
     await fetch(`/api/sessions/${renameSessionId}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ name: newName }),
     });
     // Update DOM — sidebar and header
@@ -195,13 +195,13 @@ async function saveCronTask() {
     if (cronEditMode === 'edit') {
       res = await fetch(`/api/cron/tasks/${encodeURIComponent(cronOriginalName)}`, {
         method: 'PUT',
-        headers: {'Content-Type': 'application/json'},
+        headers: JSON_HEADERS,
         body: JSON.stringify({cron, prompt_file, repo, backend, project, timezone, enabled}),
       });
     } else {
       res = await fetch('/api/cron/tasks', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: JSON_HEADERS,
         body: JSON.stringify({name, cron, prompt_file, repo, backend, project, timezone, enabled}),
       });
     }
@@ -301,7 +301,7 @@ async function submitSessionActionModal() {
   try {
     const res = await fetch('/api/sessions/' + sessionId + '/' + action, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: JSON_HEADERS,
       body: JSON.stringify({event_index: eventIndex, backend}),
     });
     if (!res.ok) throw new Error(await res.text());

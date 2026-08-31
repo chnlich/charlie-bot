@@ -55,6 +55,8 @@ function loadSessionContext({elements, BACKEND_OPTIONS, SESSION_ID, fetchImpl}) 
     showToast: () => {},
     BACKEND_OPTIONS: BACKEND_OPTIONS || {},
     SESSION_ID: SESSION_ID || 'session-a',
+    // config.js's shared header literal; this harness skips config.js.
+    JSON_HEADERS: {'Content-Type': 'application/json'},
     fetch: fetchImpl || (() => Promise.resolve({ ok: true, async json() { return { id: SESSION_ID, backend: SESSION_ID }; } })),
   };
   vm.createContext(context);

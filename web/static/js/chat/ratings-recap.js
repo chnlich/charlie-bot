@@ -87,7 +87,7 @@ async function rateRound(sessionId, roundId, rating) {
   try {
     const res = await fetch('/api/sessions/' + sessionId + '/rounds/' + encodeURIComponent(roundKey) + '/rate', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: JSON_HEADERS,
       body: JSON.stringify({rating: nextRating}),
     });
     if (!res.ok) throw new Error(`Rate round failed: ${res.status}`);

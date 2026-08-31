@@ -58,7 +58,7 @@ async function switchBackend(backendId) {
   try {
     const res = await fetch('/api/sessions/' + SESSION_ID + '/backend', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ backend: backendId }),
     });
     if (res.ok) {
@@ -594,7 +594,7 @@ async function createSession() {
     const backend = backendSel ? backendSel.value : undefined;
     const res = await fetch('/api/sessions/', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ backend }),
     });
     if (!res.ok) throw new Error(`Create session failed: ${res.status}`);

@@ -174,7 +174,7 @@ async function setSessionGroup(sessionId, group) {
   try {
     const res = await fetch(`/api/sessions/${sessionId}/group`, {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: JSON_HEADERS,
       body: JSON.stringify({group}),
     });
     if (!res.ok) throw new Error(`Set group failed: ${res.status}`);
@@ -449,7 +449,7 @@ async function openPmSlotEditor(group) {
   try {
     const res = await fetch('/api/cron/tasks', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: JSON_HEADERS,
       body: JSON.stringify({
         name,
         cron: '30 8 * * *',
@@ -623,7 +623,7 @@ async function renameGroup(oldName) {
   if (!newName || newName.trim() === '' || newName.trim() === oldName) return;
   const res = await fetch('/api/sessions/groups/rename', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: JSON_HEADERS,
     body: JSON.stringify({old_name: oldName, new_name: newName.trim()}),
   });
   if (!res.ok) throw new Error(`Rename group failed: ${res.status}`);
@@ -634,7 +634,7 @@ async function deleteGroup(groupName) {
   if (!confirm(`Remove group "${groupName}"? Sessions will be ungrouped.`)) return;
   const res = await fetch('/api/sessions/groups/delete', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: JSON_HEADERS,
     body: JSON.stringify({group: groupName}),
   });
   if (!res.ok) throw new Error(`Delete group failed: ${res.status}`);

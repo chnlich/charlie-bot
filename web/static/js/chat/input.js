@@ -45,7 +45,7 @@ function bumpCurrentSessionToTop() {
 function postChatMessage(content, extra) {
   return fetch(`/api/chat/${SESSION_ID}/message`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_HEADERS,
     body: JSON.stringify(Object.assign({ content }, extra || {})),
   });
 }

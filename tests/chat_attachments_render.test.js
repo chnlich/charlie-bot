@@ -271,6 +271,8 @@ function loadSlashCommandsScript(fetchImpl, overrides = {}) {
     uploadsInFlight: 0,
     pendingUserMsg: false,
     console: {error: () => {}},
+    // This harness skips config.js: stand in for its shared header literal.
+    JSON_HEADERS: {'Content-Type': 'application/json'},
     fetch: fetchImpl,
     localStorage,
     showToast: (message, isError) => {

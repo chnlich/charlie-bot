@@ -18,6 +18,11 @@ function showAuthOverlay() {
   if (el) el.style.display = 'flex';
 }
 
+// Shared Content-Type for fetches that send a JSON body through the wrapper
+// above. index.html loads this file before every consumer; diff.html and the
+// artifact iframe pages do not, so their copies stay local there.
+const JSON_HEADERS = { 'Content-Type': 'application/json' };
+
 // WebSocket endpoints take the access key as a 'token' query param: the
 // browser WebSocket API exposes no header channel for the fetch wrapper's
 // Bearer header. Loads before the websocket/voice/terminal connectors.

@@ -159,9 +159,9 @@ def test_main_rejects_missing_goal_file(
 
   with patch("sys.argv", _improve_argv(None, str(tmp_path), missing)), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
+       pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert_cli_reject(exc_info, capsys, "goal-file", "not found")
   post_mock.assert_not_called()
@@ -176,9 +176,9 @@ def test_main_rejects_empty_goal_file(
 
   with patch("sys.argv", _improve_argv(None, str(tmp_path), empty)), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
+       pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert_cli_reject(exc_info, capsys, "empty")
   post_mock.assert_not_called()
@@ -194,9 +194,9 @@ def test_main_rejects_missing_plan_file(
 
   with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file, "--plan-file", str(missing))), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
+       pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert_cli_reject(exc_info, capsys, "plan-file", "not found")
   post_mock.assert_not_called()
@@ -213,9 +213,9 @@ def test_main_rejects_empty_plan_file(
 
   with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file, "--plan-file", str(empty))), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
+       pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert_cli_reject(exc_info, capsys, "plan-file", "empty")
   post_mock.assert_not_called()
@@ -230,9 +230,9 @@ def test_main_rejects_relative_repo_path(
 
   with patch("sys.argv", _improve_argv("s1", "meshy-research", goal_file)), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
+       pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert_cli_reject(exc_info, capsys, "must be an absolute path", "meshy-research")
   post_mock.assert_not_called()
@@ -248,9 +248,9 @@ def test_main_rejects_nonexistent_repo_path(
 
   with patch("sys.argv", _improve_argv("s1", nonexistent, goal_file)), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock:
-    with pytest.raises(SystemExit) as exc_info:
-      main()
+       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
+       pytest.raises(SystemExit) as exc_info:
+    main()
 
   assert_cli_reject(exc_info, capsys, "does not exist", nonexistent)
   post_mock.assert_not_called()
@@ -382,9 +382,9 @@ async def test_improve_endpoint_returns_400_for_invalid_backend():
   with patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
        patch(
            _INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
-           side_effect=fake_resolve_requested_subagent_backend_model):
-    with pytest.raises(HTTPException) as exc_info:
-      await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+           side_effect=fake_resolve_requested_subagent_backend_model), \
+       pytest.raises(HTTPException) as exc_info:
+    await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "requested backend 'missing' is not in backend_options"
@@ -417,9 +417,9 @@ async def test_improve_endpoint_returns_409_for_running_loop():
        patch(_INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, return_value=("codex-o3", "o3")), \
        patch(
            _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET,
-           side_effect=ImproveLoopAlreadyRunningError(7)):
-    with pytest.raises(HTTPException) as exc_info:
-      await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
+           side_effect=ImproveLoopAlreadyRunningError(7)), \
+       pytest.raises(HTTPException) as exc_info:
+    await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 
   assert exc_info.value.status_code == 409
   assert exc_info.value.detail == "Loop 7 is already running for this session. Use /stop-improve first."

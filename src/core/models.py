@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
@@ -42,7 +42,7 @@ SessionRating = Literal['thumbs_up', 'neutral', 'thumbs_down']
 # ---------------------------------------------------------------------------
 
 
-class ThreadStatus(str, Enum):
+class ThreadStatus(StrEnum):
   IDLE = "idle"
   RUNNING = "running"
   COMPLETED = "completed"
@@ -56,25 +56,25 @@ TERMINAL_THREAD_STATUSES: frozenset[ThreadStatus] = frozenset(
     {ThreadStatus.COMPLETED, ThreadStatus.FAILED, ThreadStatus.CANCELLED})
 
 
-class SessionStatus(str, Enum):
+class SessionStatus(StrEnum):
   ACTIVE = "active"
   ARCHIVED = "archived"
 
 
-class TriggerStatus(str, Enum):
+class TriggerStatus(StrEnum):
   PENDING = "pending"
   FIRED = "fired"
   CANCELLED = "cancelled"
 
 
-class TaskType(str, Enum):
+class TaskType(StrEnum):
   IMPLEMENT = "implement"
   QUICK_EDIT = "quick-edit"
   SCRIPT_RUN = "script-run"
   VERIFY = "verify"
 
 
-class WatchKind(str, Enum):
+class WatchKind(StrEnum):
   UNKNOWN = "unknown"  # fail-loud sentinel; never a valid target, no default
   LOCAL_PID = "local_pid"
   REMOTE_PID = "remote_pid"

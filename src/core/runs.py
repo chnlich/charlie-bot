@@ -25,7 +25,7 @@ import stat
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 import structlog
@@ -76,7 +76,7 @@ def backend_type(cfg: CharlieBotConfig, backend_id: str | None) -> str | None:
   return option.type if option else None
 
 
-class RunOutcome(str, Enum):
+class RunOutcome(StrEnum):
   """The six outcome-table rows for an interrupted run (plan r11 section 4.1)."""
   COMPLETED = "completed"  # last result event exists -> finalize from it
   RUNNING = "running"  # alive and producing output -> re-attach

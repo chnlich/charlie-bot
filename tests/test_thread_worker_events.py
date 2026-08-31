@@ -61,7 +61,7 @@ def test_partial_trailing_line_waits_for_completion(tmp_path: Path) -> None:
   assert len(threads_api.read_thread_worker_events(path)) == 1
 
   with path.open("a", encoding="utf-8") as f:
-    f.write('{"type": "assistant", "timestamp": "%s", "message": {"content":' % TS)
+    f.write(f'{{"type": "assistant", "timestamp": "{TS}", "message": {{"content":')
   assert len(threads_api.read_thread_worker_events(path)) == 1
 
   with path.open("a", encoding="utf-8") as f:

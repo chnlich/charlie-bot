@@ -147,3 +147,75 @@ test('scheduleAfterTerminalPaint defers across two animation frames', () => {
   queue.shift()();
   assert.equal(ran, 1);
 });
+
+test('terminalScriptsReady passes once both xterm globals are present', () => {
+  const {context} = loadHelpers();
+  context.window = context;
+  assert.equal(context.terminalScriptsReady(), true);
+});
+
+test('terminalScriptsReady logs once and fails when xterm.js did not load', () => {
+  const {context} = loadHelpers();
+  context.window = {};
+  const errors = [];
+  context.console = {error(...args) { errors.push(args); }};
+  assert.equal(context.terminalScriptsReady(), false);
+  assert.equal(errors.length, 1);
+  context.window = {Terminal: context.Terminal};
+  assert.equal(context.terminalScriptsReady(), false);
+  assert.equal(errors.length, 2);
+});
+
+test('makePtySenders emits the shared pty_input / pty_resize shapes', () => {
+  const {context} = loadHelpers();
+  context.encodeBytesB64 = s => 'B64<' + s + '>';
+  const sent = [];
+  const {sendInput, sendResize} = context.makePtySenders(obj => sent.push(obj));
+  sendInput('ls\n');
+  sendResize(120, 30);
+  // JSON round-trip: deepStrictEqual rejects the vm realm's Object.prototype.
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [
+    {type: 'pty_input', data: 'B64<ls\n>'},
+    {type: 'pty_resize', cols: 120, rows: 30},
+  ]);
+});
+
+test('wireTerminalRelayout refits after paint, font load, and container resize', () => {
+  const {context} = loadHelpers();
+  const frames = [];
+  context.requestAnimationFrame = fn => frames.push(fn);
+  const fontWaiters = [];
+  context.document = {fonts: {ready: {then(fn) { fontWaiters.push(fn); }}}};
+  const observers = [];
+  context.ResizeObserver = class {
+    constructor(fn) { this.fn = fn; observers.push(this); }
+    observe(container) { this.container = container; }
+  };
+  const fits = [];
+  const container = {};
+  const resizeObs = context.wireTerminalRelayout(container, () => fits.push(1));
+  assert.equal(resizeObs, observers[0]);
+  assert.equal(observers[0].container, container);
+  frames.shift()();
+  frames.shift()();
+  assert.equal(fits.length, 1);
+  fontWaiters.shift()();
+  assert.equal(fits.length, 2);
+  observers[0].fn();
+  assert.equal(fits.length, 3);
+});
+
+test('wireTerminalRelayout skips the font refit when document.fonts is absent', () => {
+  const {context} = loadHelpers();
+  const frames = [];
+  context.requestAnimationFrame = fn => frames.push(fn);
+  context.document = {};
+  const observers = [];
+  context.ResizeObserver = class {
+    constructor(fn) { this.fn = fn; observers.push(this); }
+    observe() {}
+  };
+  context.wireTerminalRelayout({}, () => {});
+  assert.equal(observers.length, 1);
+  assert.equal(frames.length, 1);
+});

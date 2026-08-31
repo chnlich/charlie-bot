@@ -31,10 +31,9 @@ function disconnectWS() {
 function connectWS() {
   if (!SESSION_ID) return;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const targetSession = SESSION_ID;
   const generation = ++wsGeneration;
-  let wsUrl = withAccessToken(`${proto}//${location.host}/ws/sessions/${SESSION_ID}`);
+  const wsUrl = wsUrlWithToken(`/ws/sessions/${SESSION_ID}`);
   const socket = new WebSocket(wsUrl);
   ws = socket;
 

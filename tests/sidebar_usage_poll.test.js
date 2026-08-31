@@ -3,13 +3,10 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
-const { createElement, createEscapingElement } = require('./dom_element_stub');
+const { createElement } = require('./dom_element_stub');
 const { escapeHtml } = require('./escape_html_stub');
+const { baseSessionContext, createChatSidebarContext } = require('./session_context_stub');
 
-const COMPAT_LOADER_JS = readStatic('compat-loader.js');
-const CHAT_JS = readStatic('chat.js');
-const SIDEBAR_JS = readStatic('sidebar.js');
-const PAGE_TIMERS_JS = readStatic('page-timers.js');
 const WEBSOCKET_JS = readStatic('websocket.js');
 
 function buildContext(overrides = {}) {
@@ -19,138 +16,63 @@ function buildContext(overrides = {}) {
   const timeouts = [];
   const clears = [];
   const alerts = [];
-  const elements = overrides.elements || new Map();
-  const localStorageData = new Map(Object.entries(overrides.localStorageItems || {}));
+  const {context, elements, localStorageData} = baseSessionContext(overrides);
 
-  const context = {
-    SESSION_ID: 'session-a',
-    THINKING_SINCE: null,
-    DRAFT_KEY: null,
-    ACTIVE_BACKEND_ID: overrides.ACTIVE_BACKEND_ID || 'claude-opus-4.6',
-    masterThinking: false,
-    switching: false,
-    reconnectTimer: null,
-    workersPollInterval: null,
-    streamBuf: '',
-    streamTs: null,
-    catchupDone: false,
-    pendingUserMsg: false,
-    uploadedFiles: [],
-    localStorage: {
-      getItem: (key) => localStorageData.has(key) ? localStorageData.get(key) : null,
-      setItem: (key, value) => { localStorageData.set(key, String(value)); },
-      removeItem: (key) => { localStorageData.delete(key); },
-    },
-    // No stored key: mirrors page-load order config.js → websocket.js on the no-key path.
-    wsUrlWithToken: (path) => path,
-    location: {href: '', protocol: 'http:', host: 'localhost:8000', search: ''},
-    history: {pushState: () => {}},
-    console: {error: () => {}, log: () => {}},
-    fetch: async (url, opts = {}) => {
-      fetchCalls.push(url);
-      fetchRequests.push({url, opts});
-      if (url.endsWith('/usage')) {
-        return {
-          ok: true,
-          async json() {
-            return {
-              session: {id: 'session-a', thinking_since: '2026-03-31T20:42:52Z'},
-              usage: {
-                context_tokens: 49179,
-                context_full: 258400,
-                context_compact_at: 180000,
-                total_cost_usd: 1.25,
-              },
-              active_backend: context.ACTIVE_BACKEND_ID,
-            };
-          },
-        };
-      }
+  // No stored key: mirrors page-load order config.js → websocket.js on the no-key path.
+  context.wsUrlWithToken = (path) => path;
+  context.fetch = async (url, opts = {}) => {
+    fetchCalls.push(url);
+    fetchRequests.push({url, opts});
+    if (url.endsWith('/usage')) {
       return {
         ok: true,
         async json() {
-          return {id: 'session-b', backend: context.ACTIVE_BACKEND_ID};
+          return {
+            session: {id: 'session-a', thinking_since: '2026-03-31T20:42:52Z'},
+            usage: {
+              context_tokens: 49179,
+              context_full: 258400,
+              context_compact_at: 180000,
+              total_cost_usd: 1.25,
+            },
+            active_backend: context.ACTIVE_BACKEND_ID,
+          };
         },
       };
-    },
-    setInterval: (fn, ms) => {
-      intervals.push({fn, ms});
-      return intervals.length;
-    },
-    setTimeout: (fn, ms) => {
-      timeouts.push({fn, ms});
-      return timeouts.length;
-    },
-    clearInterval: (id) => {
-      clears.push(id);
-    },
-    clearTimeout: (id) => {
-      clears.push(id);
-    },
-    URLSearchParams,
-    AbortController,
-    document: {
-      getElementById: (id) => elements.get(id) || null,
-      querySelectorAll: overrides.querySelectorAll || (() => []),
-      querySelector: overrides.querySelector || (() => null),
-      createElement: createEscapingElement,
-      body: createElement({tagName: 'BODY'}),
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    },
-    disconnectWS: () => {},
-    connectWS: () => {},
-    resetVoiceState: () => {},
-    renderFileChips: () => {},
-    hideSlashPopup: () => {},
-    hideStreaming: () => {},
-    showStreaming: () => {},
-    renderSessionView: () => {},
-    updateSidebarHighlight: () => {},
-    pollSessionStatus: () => Promise.resolve(false),
-    pollWorkers: () => {},
-    autoResize: () => {},
-    startThinking: () => {},
-    stopThinking: () => {},
-    relativeTime: (txt) => txt,
-    updateRelativeTimes: () => {},
-    formatTokens: (n) => `${Math.round(n / 1000)}k`,
-    formatUsageCostValue: (cost) => cost == null ? 'N/A' : '$' + cost.toFixed(2),
-    formatLastRun: (txt) => txt,
-    escapeHtml: (v) => v,
-    renderUserMessageBubble: (content, isVoice, timestamp, uploadedFiles) =>
-      `<div data-content="${content || ''}" data-voice="${isVoice ? '1' : '0'}" data-ts="${timestamp || ''}" data-files="${(uploadedFiles || []).length}"></div>`,
-    renderWorkersTab: () => {},
-    switchTab: () => {},
-    marked: {parse: (txt) => txt},
-    fixNestedFences: (txt) => txt,
-    renderChatMath: () => {},
-    formatBubbleTime: (txt) => txt,
-    shouldAutoScroll: () => true,
-    showScrollToBottom: () => {},
-    showToast: () => {},
-    loadedThreads: {clear: () => {}},
-    _backlogLoaded: false,
-    BACKEND_OPTIONS: overrides.BACKEND_OPTIONS || {},
-    BACKEND_TYPES: overrides.BACKEND_TYPES || {},
-    alert: (message) => {
-      alerts.push(message);
-    },
-    confirm: overrides.confirm || (() => true),
+    }
+    return {
+      ok: true,
+      async json() {
+        return {id: 'session-b', backend: context.ACTIVE_BACKEND_ID};
+      },
+    };
   };
-  context.window = {
-    addEventListener: () => {},
-    innerHeight: 800,
+  context.setInterval = (fn, ms) => {
+    intervals.push({fn, ms});
+    return intervals.length;
   };
-  context.CSS = {
-    escape: (value) => String(value),
+  context.setTimeout = (fn, ms) => {
+    timeouts.push({fn, ms});
+    return timeouts.length;
   };
+  context.clearInterval = (id) => {
+    clears.push(id);
+  };
+  context.clearTimeout = (id) => {
+    clears.push(id);
+  };
+  context.document.getElementById = (id) => elements.get(id) || null;
+  context.document.querySelectorAll = overrides.querySelectorAll || (() => []);
+  context.document.querySelector = overrides.querySelector || (() => null);
+  context.renderSessionView = () => {};
+  context.renderUserMessageBubble = (content, isVoice, timestamp, uploadedFiles) =>
+    `<div data-content="${content || ''}" data-voice="${isVoice ? '1' : '0'}" data-ts="${timestamp || ''}" data-files="${(uploadedFiles || []).length}"></div>`;
+  context.alert = (message) => {
+    alerts.push(message);
+  };
+  context.confirm = overrides.confirm || (() => true);
 
-  vm.createContext(context);
-  vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
-  vm.runInContext(COMPAT_LOADER_JS, context, {filename: 'compat-loader.js'});
-  vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
-  vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
+  createChatSidebarContext(context);
   return {context, fetchCalls, fetchRequests, intervals, timeouts, clears, alerts, elements, localStorageData};
 }
 

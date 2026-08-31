@@ -4,6 +4,7 @@ from pathlib import Path
 
 import structlog
 
+from src.core import event_types as ET
 from src.agents.backends.base import (
   AgentBackend,
   make_error_event,
@@ -80,6 +81,16 @@ class CharlieCodeBackend(AgentBackend):
 
     if event_type == "error":
       return [make_error_event(event.get("message", ""))]
+
+    if event_type == "compact":
+      return [{
+          "type": ET.SYSTEM,
+          "subtype": ET.COMPACT_BOUNDARY,
+          ET.COMPACT_METADATA: {
+              "trigger": event["trigger"],
+              "pre_tokens": event["pre_tokens"],
+          },
+      }]
 
     log.debug("charlie_code_unknown_event", event_type=event_type)
     return []

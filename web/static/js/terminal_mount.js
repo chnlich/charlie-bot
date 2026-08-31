@@ -1,9 +1,19 @@
 // ---------------------------------------------------------------------------
 // Shared xterm.js mount for the two terminal surfaces (tui_session.js,
 // terminal_panel.js): both mount identical Terminal options, the same
-// open/clipboard/focus sequence, the same touch-drag scroll wiring, and the
-// same fit-then-send-resize timing.
+// open/clipboard/focus sequence, the same touch-drag scroll wiring, the same
+// fit-then-send-resize timing, and the same pty_input / pty_resize message
+// shapes.
 // ---------------------------------------------------------------------------
+
+// Both mounts bail when the xterm.js script tags failed to load; a missing
+// Terminal global would otherwise surface as a TypeError deep in createTerminal.
+globalThis.terminalScriptsReady = function() {
+  if (window.Terminal && window.FitAddon) return true;
+  console.error('xterm.js or FitAddon not loaded');
+  return false;
+};
+
 globalThis.createTerminal = function(container) {
   const term = new Terminal({
     cursorBlink: true,
@@ -35,6 +45,32 @@ globalThis.fitTerminalAndSendResize = function(term, fitAddon, sendResize) {
 // every caller (mount, font load, container resize) defers across two frames.
 globalThis.scheduleAfterTerminalPaint = function(fn) {
   requestAnimationFrame(() => requestAnimationFrame(fn));
+};
+
+// The pty message shapes are the ws contract; both surfaces emit them over
+// their own socket wrapper, so the wrapper is the only parameter.
+globalThis.makePtySenders = function(sendJson) {
+  return {
+    sendInput(data) {
+      sendJson({type: 'pty_input', data: encodeBytesB64(data)});
+    },
+    sendResize(cols, rows) {
+      sendJson({type: 'pty_resize', cols, rows});
+    },
+  };
+};
+
+// Post-mount relayout: fit once after layout paint, again when the mono font
+// (and so xterm's cell metrics) settles, and on every container resize.
+// Returns the observer so a surface that remounts can disconnect the old one.
+globalThis.wireTerminalRelayout = function(container, fitAndSendResize) {
+  scheduleAfterTerminalPaint(fitAndSendResize);
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(fitAndSendResize);
+  }
+  const resizeObs = new ResizeObserver(fitAndSendResize);
+  resizeObs.observe(container);
+  return resizeObs;
 };
 
 globalThis.wireTerminalTouchScroll = function(container, term, listenerOptions) {

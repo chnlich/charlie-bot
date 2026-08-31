@@ -56,13 +56,7 @@
     }
   }
 
-  function sendInput(data) {
-    wsSendJson({type: 'pty_input', data: encodeBytesB64(data)});
-  }
-
-  function sendResize(cols, rows) {
-    wsSendJson({type: 'pty_resize', cols, rows});
-  }
+  const {sendInput, sendResize} = makePtySenders(wsSendJson);
 
   function fitAndSendResize() {
     if (!fitAddon || !term) return;
@@ -76,10 +70,7 @@
   function ensureMount(sessionId) {
     const container = getContainer();
     if (!container) return false;
-    if (!window.Terminal || !window.FitAddon) {
-      console.error('xterm.js or FitAddon not loaded');
-      return false;
-    }
+    if (!terminalScriptsReady()) return false;
     if (term && activeSessionId === sessionId) {
       // Already mounted for this session.
       scheduleFitAndSendResize();
@@ -101,18 +92,7 @@
     touchAbort = new AbortController();
     wireTerminalTouchScroll(container, term, {signal: touchAbort.signal});
 
-    // Defer once until after the initial layout/paint, then again.
-    scheduleFitAndSendResize();
-
-    // Re-fit after monospace font has loaded; xterm cell metrics depend on it.
-    if (document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(fitAndSendResize);
-    }
-
-    resizeObs = new ResizeObserver(() => {
-      fitAndSendResize();
-    });
-    resizeObs.observe(container);
+    resizeObs = wireTerminalRelayout(container, fitAndSendResize);
     return true;
   }
 

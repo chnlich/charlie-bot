@@ -24,13 +24,7 @@
     }
   }
 
-  function sendInput(data) {
-    sendJson({type: 'pty_input', data: encodeBytesB64(data)});
-  }
-
-  function sendResize(cols, rows) {
-    sendJson({type: 'pty_resize', cols, rows});
-  }
+  const {sendInput, sendResize} = makePtySenders(sendJson);
 
   function fitAndSendResize() {
     if (!terminalOpen || !fitAddon || !term) return;
@@ -44,10 +38,7 @@
   function ensureMount() {
     const container = getContainer();
     if (!container) return false;
-    if (!window.Terminal || !window.FitAddon) {
-      console.error('xterm.js or FitAddon not loaded');
-      return false;
-    }
+    if (!terminalScriptsReady()) return false;
     if (term) {
       scheduleFitAndSendResize();
       term.focus();
@@ -61,13 +52,7 @@
 
     wireTerminalTouchScroll(container, term);
 
-    scheduleFitAndSendResize();
-    if (document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(fitAndSendResize);
-    }
-
-    resizeObs = new ResizeObserver(fitAndSendResize);
-    resizeObs.observe(container);
+    resizeObs = wireTerminalRelayout(container, fitAndSendResize);
     window.addEventListener('resize', scheduleFitAndSendResize);
     return true;
   }

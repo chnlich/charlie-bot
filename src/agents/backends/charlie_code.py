@@ -4,7 +4,6 @@ from pathlib import Path
 
 import structlog
 
-from src.core import event_types as ET
 from src.agents.backends.base import (
   AgentBackend,
   make_error_event,
@@ -15,6 +14,7 @@ from src.agents.backends.base import (
   prepend_path_dir,
   resolve_binary,
 )
+from src.core import event_types as ET
 
 log = structlog.get_logger()
 

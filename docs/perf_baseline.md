@@ -24,6 +24,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M11 backlog reads on this host | M11 collector below | HTTP status of GET /api/backlog + /api/backlog/history | both 200; 0 backlog 500s in the server log | — (introduced with its first history row) |
 | M12 ext-usage codex usage scrape, steady state | M12 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
 | M13 thread-events read+transform, steady state | M13 collector below | seconds per read, worst on-disk worker log | median < 0.05 s | — (introduced with its first history row) |
+| M14 git diff API event-loop lag | M14 collector below | seconds of loop lag per diff/files run, charlie-bot root..HEAD | median < 0.05 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -354,6 +355,63 @@ for _ in range(5):
     times.append(time.perf_counter() - t0)
 times.sort()
 print(f"{best_n / 1e6:.1f} MB thread log; steady-state read+transform median {times[2]:.4f} s, max {times[-1]:.4f} s")
+EOF
+```
+
+M14 — git diff API event-loop lag. The diff endpoints run `git` subprocesses whose duration
+is user data (up to SUBPROCESS_GIT_DIFF_TIMEOUT per call, several calls per request); run
+inline in the async handler, that time is an event-loop freeze for every concurrent request
+and WebSocket, invisible to the standing probes above. The collector drives the `diff_files`
+handler over the charlie-bot checkout's full history (root commit .. HEAD — the largest
+range this host's workspace carries) with a concurrent 5 ms ticker, and reports the worst
+ticker gap per run; when the handler never yields, every gap is the handler's whole wall
+time. Evidence while the live server runs older code points the same collector at the
+branch checkout, the same shape as the M7 protocol (both runs are read-only against live
+state: the scratch CHARLIEBOT_HOME is a tempfile):
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, subprocess, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.core.config import CharlieBotConfig
+from src.api.git import diff_files
+
+REPO = Path("/home/chaoli/workspace/charlie-bot")
+BASE = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
+                      cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()[0]
+cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m14-home-")),
+                       workspace_dirs=["/home/chaoli/workspace"])
+
+async def run_once():
+    gaps = []
+    stop = False
+    async def ticker():
+        prev = time.perf_counter()
+        while not stop:
+            await asyncio.sleep(0.005)
+            now = time.perf_counter()
+            gaps.append(now - prev)
+            prev = now
+    t = asyncio.create_task(ticker())
+    t0 = time.perf_counter()
+    result = await diff_files(repo=str(REPO), base=BASE, head="HEAD", mode="three-dot", cfg=cfg)
+    wall = time.perf_counter() - t0
+    stop = True
+    await t
+    return (max(gaps) if gaps else wall), result["total_files"]
+
+async def main():
+    await run_once()  # cold pass, as at first diff after a server start; not timed
+    worst = []
+    total = 0
+    for _ in range(5):
+        gap, total = await run_once()
+        worst.append(gap)
+    worst.sort()
+    print(f"{total} files in root..HEAD diff; loop-lag median {worst[2]:.4f} s, max {worst[-1]:.4f} s")
+
+asyncio.run(main())
 EOF
 ```
 

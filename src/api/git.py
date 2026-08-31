@@ -1,5 +1,6 @@
 """Git-related API routes."""
 
+import asyncio
 import subprocess
 from pathlib import Path
 from typing import Literal
@@ -32,7 +33,7 @@ def _range_spec(base: str, head: str, mode: str) -> str:
   return f"{base}...{head}" if mode == "three-dot" else f"{base}..{head}"
 
 
-def _run_git_diff(repo_path: Path, args: list[str]) -> str:
+def _run_git_diff_sync(repo_path: Path, args: list[str]) -> str:
   """Run `git diff <args>` in repo_path and return stdout; raise HTTPException(500) on failure."""
   result = subprocess.run(
       ["git", "diff", *args],
@@ -47,7 +48,13 @@ def _run_git_diff(repo_path: Path, args: list[str]) -> str:
   return result.stdout
 
 
-def _resolve_commit(repo_path: Path, ref: str) -> str:
+async def _run_git_diff(repo_path: Path, args: list[str]) -> str:
+  """Async front for the blocking diff; a subprocess that may hold for
+  SUBPROCESS_GIT_DIFF_TIMEOUT seconds stays off the event loop."""
+  return await asyncio.to_thread(_run_git_diff_sync, repo_path, args)
+
+
+def _resolve_commit_sync(repo_path: Path, ref: str) -> str:
   """Resolve a git ref to its full commit SHA."""
   result = subprocess.run(
       ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
@@ -60,6 +67,11 @@ def _resolve_commit(repo_path: Path, ref: str) -> str:
   if result.returncode != 0:
     raise HTTPException(status_code=500, detail=result.stderr.strip() or "git rev-parse failed")
   return result.stdout.strip()
+
+
+async def _resolve_commit(repo_path: Path, ref: str) -> str:
+  """Async front for the blocking rev-parse; keeps the lookup off the event loop."""
+  return await asyncio.to_thread(_resolve_commit_sync, repo_path, ref)
 
 
 def _parse_numstat_z(output: str) -> list[tuple[int, int, str, str | None]]:
@@ -117,12 +129,8 @@ def _parse_name_status_z(output: str) -> dict[str, str]:
   return status_by_path
 
 
-@router.get("/branches")
-async def list_branches(repo: str = Query(..., description="Full path to git repo")):
-  """Return branch names for a repo, most recent first, up to 50."""
-  repo_path = Path(repo).expanduser()
-  if not (repo_path / ".git").exists() and not repo_path.name == ".git":
-    raise HTTPException(status_code=400, detail=f"Not a git repo: {repo}")
+def _list_branches_sync(repo_path: Path) -> str:
+  """Run `git branch -a` in repo_path and return stdout; raise HTTPException(500) on failure."""
   result = subprocess.run(
       ["git", "branch", "-a", "--sort=-committerdate", "--format=%(refname:short)"],
       cwd=repo_path,
@@ -133,9 +141,19 @@ async def list_branches(repo: str = Query(..., description="Full path to git rep
   )
   if result.returncode != 0:
     raise HTTPException(status_code=500, detail=result.stderr.strip())
+  return result.stdout
+
+
+@router.get("/branches")
+async def list_branches(repo: str = Query(..., description="Full path to git repo")):
+  """Return branch names for a repo, most recent first, up to 50."""
+  repo_path = Path(repo).expanduser()
+  if not (repo_path / ".git").exists() and not repo_path.name == ".git":
+    raise HTTPException(status_code=400, detail=f"Not a git repo: {repo}")
+  stdout = await asyncio.to_thread(_list_branches_sync, repo_path)
   seen: set[str] = {"HEAD"}
   branches: list[str] = ["HEAD"]
-  for line in result.stdout.splitlines():
+  for line in stdout.splitlines():
     name = line.strip()
     if not name or name in {"origin", "HEAD"}:
       continue
@@ -182,14 +200,14 @@ async def diff_files(
   """
   repo_path = _resolve_repo_under_workspace(repo, cfg)
   range_spec = _range_spec(base, head, mode)
-  head_sha = _resolve_commit(repo_path, head)
-  status_by_path = _parse_name_status_z(_run_git_diff(repo_path, ["--name-status", "-z", range_spec]))
+  head_sha = await _resolve_commit(repo_path, head)
+  status_by_path = _parse_name_status_z(await _run_git_diff(repo_path, ["--name-status", "-z", range_spec]))
 
   files: list[dict] = []
   total_additions = 0
   total_deletions = 0
-  for additions, deletions, path, old_path in _parse_numstat_z(_run_git_diff(repo_path,
-                                                                             ["--numstat", "-z", range_spec])):
+  numstat = await _run_git_diff(repo_path, ["--numstat", "-z", range_spec])
+  for additions, deletions, path, old_path in _parse_numstat_z(numstat):
     entry: dict = {
         "path": path,
         "status": status_by_path[path],
@@ -237,7 +255,7 @@ async def diff_file(
   # Restricting to a single side of a rename makes git drop the pairing and emit a
   # wholesale add/delete; passing both endpoints keeps it a rename diff.
   pathspec = [old_path, path] if old_path else [path]
-  diff_text = _run_git_diff(repo_path, [range_spec, "--", *pathspec])
+  diff_text = await _run_git_diff(repo_path, [range_spec, "--", *pathspec])
   size_bytes = len(diff_text.encode("utf-8"))
   if not force and size_bytes > _DIFF_MAX_BYTES:
     return {"too_large": True, "size_bytes": size_bytes, "path": path}

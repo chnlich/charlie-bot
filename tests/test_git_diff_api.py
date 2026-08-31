@@ -1,8 +1,11 @@
 """Tests for the file-level lazy-load diff API (src/api/git.py)."""
 
+import asyncio
 import subprocess
+import time
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -39,7 +42,7 @@ def _build_repo(workspace: Path) -> Path:
   return repo
 
 
-def _build_client(workspace: Path) -> TestClient:
+def _build_app(workspace: Path) -> FastAPI:
   cfg = CharlieBotConfig(
       charliebot_home=workspace / "charliebot-home",
       workspace_dirs=[str(workspace)],
@@ -47,7 +50,11 @@ def _build_client(workspace: Path) -> TestClient:
   app = FastAPI()
   app.include_router(git_api.router, prefix="/api/git")
   app.dependency_overrides[get_config] = lambda: cfg
-  return TestClient(app)
+  return app
+
+
+def _build_client(workspace: Path) -> TestClient:
+  return TestClient(_build_app(workspace))
 
 
 def test_diff_files_manifest(tmp_path: Path) -> None:
@@ -163,6 +170,49 @@ def test_two_dot_mode(tmp_path: Path) -> None:
   data = resp.json()
   assert data["mode"] == "two-dot"
   assert {f["path"] for f in data["files"]} == {"added.txt", "keep.txt", "renamed.txt", "todelete.txt"}
+
+
+def test_diff_files_keeps_event_loop_responsive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A slow git subprocess runs off the event loop; concurrent loop work keeps ticking."""
+  repo = _build_repo(tmp_path)
+  app = _build_app(tmp_path)
+
+  real_run = subprocess.run
+
+  def slow_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+    time.sleep(0.25)
+    return real_run(*args, **kwargs)
+
+  monkeypatch.setattr(git_api.subprocess, "run", slow_run)
+
+  async def scenario() -> tuple[httpx.Response, float]:
+    gaps: list[float] = []
+    stop = False
+
+    async def ticker() -> None:
+      prev = time.perf_counter()
+      while not stop:
+        await asyncio.sleep(0.005)
+        now = time.perf_counter()
+        gaps.append(now - prev)
+        prev = now
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+      tick_task = asyncio.create_task(ticker())
+      resp = await client.get(
+          "/api/git/diff/files",
+          params={"repo": str(repo), "base": "main", "head": "feature", "mode": "three-dot"},
+      )
+      stop = True
+      await tick_task
+    return resp, max(gaps)
+
+  resp, worst_gap = asyncio.run(scenario())
+  assert resp.status_code == 200
+  assert resp.json()["total_files"] == 4
+  # diff_files fires three subprocess.run calls (rev-parse + two diffs); inline execution would
+  # pin one tick gap near the 0.25 s fake sleep each, so 0.15 s separates offloaded from inline.
+  assert worst_gap < 0.15
 
 
 def test_repo_outside_workspace_rejected(tmp_path: Path) -> None:

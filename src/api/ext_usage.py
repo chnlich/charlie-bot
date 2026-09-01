@@ -548,6 +548,31 @@ CLAUDE_WINDOW_FIELDS = (
 # with a warning instead of guessed at from array position.
 LIMIT_GROUP_WINDOW_MINUTES = {"session": 300, "weekly": 10080}
 
+# The poller re-transforms an unchanged response every round, so one sighting of
+# an unmapped shape is the whole alarm; every later round repeats a fired alarm.
+_UNKNOWN_LIMIT_SHAPES_SEEN: set[tuple[str, str, str, str]] = set()
+
+
+def _warn_unknown_limit_shape(*, provider: str, account: str, slot: str | int, reason: str) -> None:
+  """Log an unrecognized limit shape the first time the process sees it.
+
+  A caller relies on exactly one ``ext_usage_unknown_limit_shape`` event per
+  (provider, account, slot, reason) per process: the first sighting carries the
+  full signal, and the poller's next round re-transforming the same response is
+  not a new shape. ``slot`` is a field name, or the entry index when the entry
+  does not name itself.
+  """
+  key = (provider, account, str(slot), reason)
+  if key in _UNKNOWN_LIMIT_SHAPES_SEEN:
+    return
+  _UNKNOWN_LIMIT_SHAPES_SEEN.add(key)
+  log.warning("ext_usage_unknown_limit_shape", provider=provider, account=account, slot=slot, reason=reason)
+
+
+def _reset_unknown_limit_shapes_for_tests() -> None:
+  """Clear the warn-once registry, restoring the process-start state."""
+  _UNKNOWN_LIMIT_SHAPES_SEEN.clear()
+
 
 def _as_utilization(value: Any) -> float | None:
   """Percentage used, or None when upstream did not report one.
@@ -575,23 +600,11 @@ def _codex_windows(rate_limits: dict[str, Any], *, account: str) -> list[dict[st
       continue
     window_minutes = limit.get("window_minutes")
     if isinstance(window_minutes, bool) or not isinstance(window_minutes, int):
-      log.warning(
-          "ext_usage_unknown_limit_shape",
-          provider="codex",
-          account=account,
-          slot=slot,
-          reason="missing window_minutes",
-      )
+      _warn_unknown_limit_shape(provider="codex", account=account, slot=slot, reason="missing window_minutes")
       continue
     utilization = _as_utilization(limit.get("used_percent"))
     if utilization is None:
-      log.warning(
-          "ext_usage_unknown_limit_shape",
-          provider="codex",
-          account=account,
-          slot=slot,
-          reason="missing used_percent",
-      )
+      _warn_unknown_limit_shape(provider="codex", account=account, slot=slot, reason="missing used_percent")
     resets_at = limit.get("resets_at")
     windows.append({
         "window_minutes": window_minutes,
@@ -725,14 +738,12 @@ def _scoped_windows(raw: dict[str, Any], *, account: str) -> list[dict[str, Any]
   limits = raw.get("limits")
   if not isinstance(limits, list):
     if limits is not None:
-      log.warning("ext_usage_unknown_limit_shape", provider="claude", account=account,
-                  slot="limits", reason="limits is not a list")
+      _warn_unknown_limit_shape(provider="claude", account=account, slot="limits", reason="limits is not a list")
     return windows
   for index, entry in enumerate(limits):
     slot = entry.get("kind") if isinstance(entry, dict) and isinstance(entry.get("kind"), str) else index
     if not isinstance(entry, dict):
-      log.warning("ext_usage_unknown_limit_shape", provider="claude", account=account,
-                  slot=slot, reason="entry is not an object")
+      _warn_unknown_limit_shape(provider="claude", account=account, slot=slot, reason="entry is not an object")
       continue
     scope = entry.get("scope")
     if scope is None:
@@ -740,19 +751,16 @@ def _scoped_windows(raw: dict[str, Any], *, account: str) -> list[dict[str, Any]
     group = entry.get("group")
     window_minutes = LIMIT_GROUP_WINDOW_MINUTES.get(group)
     if window_minutes is None:
-      log.warning("ext_usage_unknown_limit_shape", provider="claude", account=account,
-                  slot=slot, reason="unknown limit group")
+      _warn_unknown_limit_shape(provider="claude", account=account, slot=slot, reason="unknown limit group")
       continue
     model = scope.get("model") if isinstance(scope, dict) else None
     display_name = model.get("display_name") if isinstance(model, dict) else None
     if not isinstance(display_name, str) or not display_name:
-      log.warning("ext_usage_unknown_limit_shape", provider="claude", account=account,
-                  slot=slot, reason="missing model display_name")
+      _warn_unknown_limit_shape(provider="claude", account=account, slot=slot, reason="missing model display_name")
       continue
     utilization = _as_utilization(entry.get("percent"))
     if utilization is None:
-      log.warning("ext_usage_unknown_limit_shape", provider="claude", account=account,
-                  slot=slot, reason="missing percent")
+      _warn_unknown_limit_shape(provider="claude", account=account, slot=slot, reason="missing percent")
     windows.append({
         "window_minutes": window_minutes,
         "scope_label": display_name,
@@ -784,8 +792,7 @@ def _transform_response(raw: dict[str, Any], *, account: str = "") -> dict[str, 
   known = {name for camel, snake, _ in CLAUDE_WINDOW_FIELDS for name in (camel, snake)}
   for key, value in raw.items():
     if key not in known and isinstance(value, dict) and "utilization" in value:
-      log.warning("ext_usage_unknown_limit_shape", provider="claude", account=account, slot=key,
-                  reason="unrecognized window field")
+      _warn_unknown_limit_shape(provider="claude", account=account, slot=key, reason="unrecognized window field")
 
   return {
       "windows": windows,

@@ -30,6 +30,14 @@ from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption
 
 
+@pytest.fixture(autouse=True)
+def _fresh_unknown_limit_shape_registry():
+  """Keep the process-wide warn-once registry from leaking across tests."""
+  ext_usage_mod._reset_unknown_limit_shapes_for_tests()
+  yield
+  ext_usage_mod._reset_unknown_limit_shapes_for_tests()
+
+
 def _build_token_count_event(
     *,
     timestamp: str,
@@ -1115,6 +1123,40 @@ def test_transform_response_scoped_skip_and_warn_paths(monkeypatch) -> None:
   assert all("scope_label" not in w for w in windows)
   events = [w["event"] for w in warns if w["event"] == "ext_usage_unknown_limit_shape"]
   assert events == ["ext_usage_unknown_limit_shape", "ext_usage_unknown_limit_shape"]
+
+
+def test_transform_response_unknown_shape_warns_once_per_process(monkeypatch) -> None:
+  """An unchanged response re-transformed every poll round fires its alarm once, not every round."""
+  warns: list[dict] = []
+  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+
+  raw = {
+    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
+    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
+    "nimbus_quill": {"utilization": 3.0, "resetsAt": "2026-08-04T20:00:00+00:00"},
+    "extra_usage": {"utilization": 5.0, "resets_at": "2026-08-05T00:00:00+00:00"},
+    "limits": [
+        {"kind": "weekly_scoped", "group": "weekly", "resets_at": "",
+         "scope": {"model": {"display_name": "Nimbus"}}},
+    ],
+  }
+
+  first_windows = _transform_response(raw, account="main")["windows"]
+  first_events = [
+      (w["slot"], w["reason"]) for w in warns if w["event"] == "ext_usage_unknown_limit_shape"
+  ]
+  warns.clear()
+  for _ in range(60):
+    repeat_windows = _transform_response(raw, account="main")["windows"]
+  repeat_events = [w for w in warns if w["event"] == "ext_usage_unknown_limit_shape"]
+
+  assert repeat_windows == first_windows
+  assert sorted(first_events) == [
+      ("extra_usage", "unrecognized window field"),
+      ("nimbus_quill", "unrecognized window field"),
+      ("weekly_scoped", "missing percent"),
+  ]
+  assert repeat_events == []
 
 
 def test_transform_response_absent_limits_produces_exactly_today_windows() -> None:

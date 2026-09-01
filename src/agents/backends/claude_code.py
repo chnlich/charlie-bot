@@ -3,6 +3,7 @@
 import asyncio
 import os
 import signal
+from collections.abc import Mapping
 from pathlib import Path
 
 import structlog
@@ -59,7 +60,7 @@ CLAUDE_COMPACT_OUTPUT_RESERVE = 20_000
 CLAUDE_COMPACT_CONTEXT_RESERVE = 13_000
 
 
-def claude_supervisor_env(env: dict[str, str]) -> dict[str, str]:
+def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
   """Environment for a supervisor process whose children run Claude Code.
 
   Two pins travel together for every supervisor (master, worker): the inherited

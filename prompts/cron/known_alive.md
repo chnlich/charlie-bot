@@ -103,13 +103,14 @@ Known-alive symbols:
   backend's `run()` an async generator (the consumer's `async for` would TypeError a plain
   coroutine), as each site's inline comment states. The condition is the point; nothing to
   delete.
-- `model_config` (nine pydantic `BaseModel` classes: `ScheduledTaskConfig` in
-  `src/core/config.py`, and `DelegateInvocationMetadata`, `ImproveRequest`,
-  `ScheduleTriggerRequest`, `SessionMessageRequest`, `PlanPresentRequest`, `PlanAmendRequest`,
-  `PlanApproveRequest`, `PlanCloseRequest` in `src/core/models.py`) — the pydantic v2
+- `model_config` (twelve pydantic `BaseModel` classes: `ScheduledTaskConfig` and
+  `CharlieBotConfig` in `src/core/config.py`, and `DelegateInvocationMetadata`, `ImproveRequest`,
+  `ScheduleTriggerRequest`, `SessionMessageRequest`, `SlackReplyRequest`, `SlackAckRequest`,
+  `PlanPresentRequest`, `PlanAmendRequest`, `PlanApproveRequest`, `PlanCloseRequest` in
+  `src/core/models.py`) — the pydantic v2
   `ConfigDict` class attribute, which `ModelMetaclass` consumes by attribute name at
   class-definition time; `extra='forbid'` is what turns an unknown config or request key into a
-  validation error. Nothing in the repo reads the name (whole-repo grep finds only the nine
+  validation error. Nothing in the repo reads the name (whole-repo grep finds only the twelve
   assignments — the `model_config` substring in `src/agents/backends/codex.py` is the unrelated
   `_model_config_args` method), so vulture flags each assignment as an unused variable.
 - `backlog_label` (`src/core/config.py`, `CharlieBotConfig`) — deprecated migration field,
@@ -163,8 +164,8 @@ Known-alive symbols:
   signature fixes the arity and `dir_path` must stay to receive it; deleting the parameter
   makes each stub raise TypeError when the poll loop calls it. Vulture flags it at 100%
   confidence as an unused variable at all ten sites (`tests/test_ext_usage.py` lines
-  754–1219). Same class as the `chrome`/`art` stub-parameter entry above.
-- `rollout_paths` (`tests/test_ext_usage.py:332`, parameter of the `_broken_compute`
+  761–1260). Same class as the `chrome`/`art` stub-parameter entry above.
+- `rollout_paths` (`tests/test_ext_usage.py:339`, parameter of the `_broken_compute`
   stub installed for `CodexUsageProvider._compute_spend` via `monkeypatch.setattr`) —
   the real `_compute_spend` (src/api/ext_usage.py:266) is called with one positional
   argument (src/api/ext_usage.py:235, through `asyncio.to_thread`), so the stub's

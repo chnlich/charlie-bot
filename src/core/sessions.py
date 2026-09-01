@@ -1451,23 +1451,30 @@ class SessionManager:
     """Return the memoized message-list projection for *session_id*.
 
     Lazily builds from ``events_to_view(load_chat_events_sync(session_id))``
-    and caches per session (LRU, cap ``_PROJECTION_LRU_LIMIT``). Returns None
-    when ``archive_offset != 0`` — those sessions fall back entirely to the
-    event-index cursor path and never mix the two cursor domains.
+    and caches per session (LRU, cap ``_PROJECTION_LRU_LIMIT``); appends
+    advance the cached projection incrementally instead of rebuilding it.
+    Returns None when ``archive_offset != 0`` — those sessions fall back
+    entirely to the event-index cursor path and never mix the two cursor
+    domains.
     """
     if self._chat_events.read_archive_offset_sync(session_id) != 0:
       return None
     live = self.load_chat_events_sync(session_id)
-    snapshot = list(live)
     cached = self._projection_cache.get(session_id)
-    if cached is not None and cached.event_count == len(snapshot):
+    if cached is not None and cached.event_count == len(live):
       self._projection_cache.move_to_end(session_id)
       return cached
-    projection = MessageProjection(snapshot)
-    self._projection_cache[session_id] = projection
+    if cached is None or len(live) < cached.event_count:
+      # A shrink means the live file was rewritten; the append-incremental
+      # ingest cannot roll state back, so only this path pays a full build.
+      cached = MessageProjection(list(live))
+      self._projection_cache[session_id] = cached
+    else:
+      cached.ingest(live[cached.event_count:])
+    self._projection_cache.move_to_end(session_id)
     while len(self._projection_cache) > _PROJECTION_LRU_LIMIT:
       self._projection_cache.popitem(last=False)
-    return projection
+    return cached
 
   def _drop_session_runtime_state(self, session_id: str) -> None:
     """Drop a session's live runtime state: chat-event cache, aggregator, projection, recap memo."""

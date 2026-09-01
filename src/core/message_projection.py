@@ -8,11 +8,28 @@ ordinal-based slicing so pagination costs O(page) with zero file reads.
 Pagination is turn-aligned: a requested page start is snapped back to the
 start of the turn it falls inside, so every returned page begins with a
 complete turn (or with the whole history when it has no separator at all).
+
+The projection is append-incremental: ``stable_closed_prefix_len`` splits the
+raw event stream at the last point no open OpenCode run interval crosses, the
+closed prefix is fed to the aggregator exactly once, and the still-open tail
+is re-evaluated per call through a cloned aggregator, so presenting the view
+costs O(open tail) rather than O(history) per session append. Both halves
+feed the same ``_stable_history_projection`` + ``MessageAggregator`` pipeline
+as the whole-list reference, so the served view always equals
+``events_to_view(all_events)`` (see the per-append parity test).
+
+Vocabulary: "closed prefix" = raw events whose projected order can no longer
+change; "region" = offered events after it, whose order a completing run
+interval may still rewrite.
 """
 
 import bisect
 
-from src.api.message_utils import events_to_view
+from src.api.message_utils import (
+  _stable_history_projection,
+  stable_closed_prefix_len,
+)
+from src.core.message_aggregator import MessageAggregator
 
 __all__ = ["MessageProjection"]
 
@@ -21,24 +38,78 @@ class MessageProjection:
   """Dense, ordinal-addressable view of a session's full message history.
 
   ``committed`` and ``pending_draft`` are the two return values of
-  ``events_to_view(all_events)``. ``history`` is by definition equal to
-  ``events_to_messages(all_events)`` because it calls the same reference path.
+  ``events_to_view(all_events)`` at every ``event_count`` the projection has
+  ingested. ``history`` is by definition equal to
+  ``events_to_messages(all_events)`` because it feeds the same reference path.
 
   ``separator_ordinals`` is the precomputed table of ordinals whose message
   role is ``separator``; page starts snap to the ordinal after the nearest
-  preceding separator. The projection is immutable, so the table cannot go
-  stale — a session append produces an event-count change, which rebuilds the
-  whole projection.
+  preceding separator. The table is final up to the closed prefix and
+  re-derived over the open region on every ingest.
   """
 
-  __slots__ = ("_history", "committed", "event_count", "pending_draft", "separator_ordinals")
+  __slots__ = (
+      "_agg",
+      "_committed_final",
+      "_history",
+      "_offset",
+      "_region_events",
+      "_seps_final",
+      "committed",
+      "event_count",
+      "pending_draft",
+      "separator_ordinals",
+  )
 
   def __init__(self, events: list[dict], event_index_offset: int = 0) -> None:
-    self.event_count = event_index_offset + len(events)
-    self.committed, self.pending_draft = events_to_view(events, event_index_offset=event_index_offset)
-    self.separator_ordinals: list[int] = [
-        i for i, msg in enumerate(self.committed) if msg["role"] == "separator"
-    ]
+    self._offset = event_index_offset
+    self._agg = MessageAggregator(event_index_offset=event_index_offset)
+    self._committed_final: list[dict] = []
+    self._seps_final: list[int] = []
+    self._region_events: list[dict] = []
+    self.event_count = event_index_offset
+    self.ingest(events)
+
+  def ingest(self, events: list[dict]) -> None:
+    """Feed events appended after the last ingest and advance ``event_count``.
+
+    Events before the closed boundary commit once; events in the still-open
+    region are re-evaluated per call through a clone of the committed
+    aggregator's state, so a run interval completing later lands deferrals
+    exactly where the whole-list reference places them.
+    """
+    self._region_events.extend(events)
+    self.event_count += len(events)
+    closed = stable_closed_prefix_len(self._region_events)
+    if closed:
+      prefix = self._region_events[:closed]
+      del self._region_events[:closed]
+      fed_base = self.event_count - len(self._region_events) - closed - self._offset
+      for delta in self._agg.feed_indexed(
+          [(fed_base + idx, ev) for idx, ev in _stable_history_projection(prefix)]
+      ):
+        if delta["type"] == "message":
+          msg = delta["message"]
+          if msg["role"] == "separator":
+            self._seps_final.append(len(self._committed_final))
+          self._committed_final.append(msg)
+
+    view_agg = self._agg.clone()
+    region_committed: list[dict] = []
+    region_seps: list[int] = []
+    region_base = self.event_count - len(self._region_events) - self._offset
+    for delta in view_agg.feed_indexed(
+        [(region_base + idx, ev) for idx, ev in _stable_history_projection(self._region_events)]
+    ):
+      if delta["type"] == "message":
+        msg = delta["message"]
+        if msg["role"] == "separator":
+          region_seps.append(len(self._committed_final) + len(region_committed))
+        region_committed.append(msg)
+
+    self.committed = [*self._committed_final, *region_committed]
+    self.separator_ordinals = self._seps_final + region_seps
+    self.pending_draft = view_agg.pending_draft_message()
     if self.pending_draft is not None:
       self._history: list[dict] = [*self.committed, self.pending_draft]
     else:

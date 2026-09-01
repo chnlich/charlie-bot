@@ -419,6 +419,31 @@ async def test_projection_equals_reference_after_every_append(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_projection_equals_reference_after_every_append_with_open_run(tmp_path: Path) -> None:
+  """Parity held while a run interval spans many ingests, then closes.
+
+  The queued user inside the open run commits at its raw position while the
+  run is open and jumps behind the run when master_done closes it — the one
+  place an append reorders already-served ordinals. The reorder fixture plus
+  trailing chunks exercises the open-region view and the deferral-closing
+  ingest through the real cache path.
+  """
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  sequence = [*_reorder_events(), _assistant_event("trailing chunk", "a3")]
+
+  for i, event in enumerate(sequence):
+    with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
+      await mgr.persist_and_broadcast(session.id, dict(event))
+    projection = mgr.get_message_projection(session.id)
+    assert projection is not None
+    all_events = mgr.load_chat_events_sync(session.id)
+    reference = events_to_messages(all_events)
+    assert [_identity_tuple(m) for m in projection.history] == [_identity_tuple(m) for m in reference], (
+        f"projection diverged from the reference after event {i} ({event.get('type', 'run-marker')})")
+    assert projection.event_count == len(all_events)
+
+
+@pytest.mark.asyncio
 async def test_first_paint_surfaces_are_disjoint(tmp_path: Path) -> None:
   """The bubble list and the streaming preview never carry the same message."""
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")

@@ -148,6 +148,8 @@ function loadExtUsageScript(options = {}) {
     Date,
     document,
     localStorage: storage,
+    // config.js's shared meter-fill literal; this harness skips config.js.
+    PROGRESS_BAR_FILL_CLASS: 'h-full rounded-full transition-all duration-300',
     // Never settles: the DOMContentLoaded bootstrap chain must not resolve
     // fetches during unit tests, and must not throw out of the handler either.
     fetch() {

@@ -17,15 +17,21 @@ function isStaleSocket(socket, targetSession, generation) {
   return socket !== ws || generation !== wsGeneration || targetSession !== SESSION_ID;
 }
 
+// Every close path detaches all four handlers first, so a socket that is
+// already closing cannot fire events into the session that replaced it.
+function detachSocketHandlers(socket) {
+  socket.onopen = null;
+  socket.onmessage = null;
+  socket.onclose = null;
+  socket.onerror = null;
+}
+
 function disconnectWS() {
   wsGeneration++;
   const socket = ws;
   ws = null;
   if (!socket) return;
-  socket.onopen = null;
-  socket.onmessage = null;
-  socket.onclose = null;
-  socket.onerror = null;
+  detachSocketHandlers(socket);
   try { socket.close(); } catch {}
 }
 
@@ -40,10 +46,7 @@ function connectWS() {
 
   socket.onopen = () => {
     if (isStaleSocket(socket, targetSession, generation)) {
-      socket.onopen = null;
-      socket.onmessage = null;
-      socket.onclose = null;
-      socket.onerror = null;
+      detachSocketHandlers(socket);
       try { socket.close(); } catch {}
       return;
     }

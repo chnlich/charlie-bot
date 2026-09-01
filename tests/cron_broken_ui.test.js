@@ -3,7 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
-const { escapeHtml } = require('./escape_html_stub');
+const { escapeHtml, escapeHtmlText } = require('./escape_html_stub');
 
 const GROUPS_JS = readStatic('sidebar/groups.js');
 const MODALS_JS = readStatic('sidebar/modals.js');
@@ -47,7 +47,7 @@ function loadGroups(cronTasksPayload) {
       const payload = url.includes('/api/cron/tasks') ? cronTasksPayload : [];
       return Promise.resolve({ok: true, json: () => Promise.resolve(payload)});
     },
-    escapeHtml,
+    escapeHtml: escapeHtmlText,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     SESSION_ID: 'other-session',
     currentFilter: 'scheduled',

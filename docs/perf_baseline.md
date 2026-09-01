@@ -26,6 +26,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M13 thread-events read+transform, steady state | M13 collector below | seconds per read, worst on-disk worker log | median < 0.05 s | — (introduced with its first history row) |
 | M14 git diff API event-loop lag | M14 collector below | seconds of loop lag per diff/files run, charlie-bot root..HEAD | median < 0.05 s | — (introduced with its first history row) |
 | M15 recap-summary cache torn reads | M15 collector below | torn reads per concurrent write stream | 0 torn reads | — (introduced with its first history row) |
+| M16 trigger-file torn reads | M16 collector below | torn reads per concurrent save stream | 0 torn reads | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -480,6 +481,80 @@ print(f"{WRITES} _write_cache_entry calls, {state['reads']} concurrent reads; to
 EOF
 ```
 
+M16 — trigger-file torn reads: the invariant behind the trigger files the polls read.
+`_save_trigger` rewrites a trigger's JSON on schedule/cancel/fire while
+`list_triggers` (the 3 s workers-panel poll, the session view) and the sidebar
+probe (`pending_trigger_state_sync`) read it from executor threads with no
+coordination; a save that publishes the file truncated lets a concurrent read
+observe a half-written file, fail JSON parsing, and drop the trigger from that
+poll's list and pending count. The collector reproduces the race against the
+checkout's code with scratch state: 3000 `_save_trigger` calls on one trigger's
+file while four reader threads run the read path (`read_text` +
+`_migrate_legacy_watch_pids`). A torn read under this stream is a read the
+fixed write path cannot produce; the count is the metric. Evidence while the
+live server runs older code points the same collector at the branch checkout
+(`sys.path.insert` at the worktree root).
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, sys, tempfile, threading
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.core.config import CharlieBotConfig
+from src.core.models import PendingTrigger
+from src.core.sessions import SessionManager
+from src.core.triggers import TriggerManager, _migrate_legacy_watch_pids
+
+WRITES = 3000
+
+work = Path(tempfile.mkdtemp(prefix="m16-torn-read-"))
+cfg = CharlieBotConfig(charliebot_home=work / "home")
+sessions = SessionManager(cfg)
+triggers = TriggerManager(cfg, sessions)
+trigger = PendingTrigger(
+    session_id="m16",
+    fire_at=datetime.now(UTC) + timedelta(hours=1),
+    message="m16 torn-read probe",
+    watch_targets=[],
+)
+path = cfg.sessions_dir / "m16" / "triggers" / f"{trigger.id}.json"
+
+state = {"torn": 0, "reads": 0, "stop": False, "errors": []}
+
+async def writer():
+    for _ in range(WRITES):
+        await triggers._save_trigger(trigger)
+
+def reader():
+    while not state["stop"]:
+        raw = path.read_text(encoding="utf-8")
+        state["reads"] += 1
+        try:
+            _migrate_legacy_watch_pids(raw)
+        except ValueError:
+            state["torn"] += 1
+        except BaseException as e:
+            state["errors"].append(repr(e))
+            return
+
+async def main():
+    await triggers._save_trigger(trigger)
+    running = [threading.Thread(target=reader) for _ in range(4)]
+    for t in running:
+        t.start()
+    await writer()
+    state["stop"] = True
+    for t in running:
+        t.join()
+
+asyncio.run(main())
+if state["errors"]:
+    raise SystemExit(f"unexpected reader errors: {state['errors'][:3]}")
+print(f"{WRITES} _save_trigger calls, {state['reads']} concurrent reads; torn reads observed: {state['torn']}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -498,3 +573,4 @@ EOF
 | 2026-08-31 | #510 | M5 live median 0.026 s→ (scratch A/B on the 154-thread worst session's copied metadata corpus) list_threads steady state 14.72 ms → 0.96 ms, max 17.45 ms → 1.22 ms; list output byte-identical | per-file (mtime_ns, size) memo plus an os.scandir/str-path scan for the workers-panel threads poll |
 | 2026-08-31 | #512 | M14 loop-lag median 0.1504 s → 0.0060 s, max 0.1616 s → 0.0061 s (463 files in charlie-bot root..HEAD; diff payload identical) | git API subprocess calls moved off the event loop via asyncio.to_thread; M14 definition and healthy range introduced with this PR |
 | 2026-08-31 | #518 | M15 torn reads 24521/44026 → 0/51495 concurrent reads over 3000 _write_cache_entry calls (collector verbatim, main-checkout before vs branch after, scratch state) | recap summary-cache writes routed through the repo's atomic-write rule (write_json_atomically), mirroring the session/thread metadata paths; M15 definition and healthy range introduced with this PR |
+| 2026-08-31 | #525 | M16 torn reads 87232/128449 (PR base) and 48061/71863 (main checkout) → 0/51072 concurrent reads over 3000 _save_trigger calls (collector verbatim, scratch state) | trigger-file writes routed through the repo's atomic-write rule (atomic_write_text), mirroring the session/thread metadata and recap-cache paths; M16 definition and healthy range introduced with this PR |

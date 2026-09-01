@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import append_events as _append_events
 from conftest import make_home_session, make_one_shot_backend
 
 from src.core import recap
@@ -246,6 +247,43 @@ async def test_recap_raises_last_exception_after_error_and_empty_result() -> Non
   empty_one_shot.assert_awaited_once()
   last_one_shot.assert_awaited_once()
   mock_write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_extract_recap_memoizes_repeats_at_one_divider(tmp_path: Path) -> None:
+  """A repeat extract at the same divider does not re-scan the on-disk events.
+
+  The chat UI re-requests an open recap panel on every re-materialization;
+  without the memo each repeat re-parses the whole event range below the
+  divider. A memo that keyed on more than (session_id, divider end) would miss
+  on appends beyond the divider even though that range cannot change.
+  """
+  _cfg, mgr, session = await make_home_session(tmp_path, name="memo")
+  _append_events(
+      mgr.get_chat_events_path(session.id),
+      [
+          {"type": "user", "content": "first ask"},
+          {"type": "assistant", "message": {"content": [{"type": "text", "text": "first answer"}]}},
+      ],
+  )
+
+  with patch.object(mgr, "load_chat_events_range", wraps=mgr.load_chat_events_range) as spy:
+    divider = recap.extract_recap(mgr, session.id)
+    assert spy.call_count == 1
+    _append_events(
+        mgr.get_chat_events_path(session.id),
+        [
+            {"type": "user", "content": "second ask"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "second answer"}]}},
+        ],
+    )
+    repeat = recap.extract_recap(mgr, session.id, upto=1)
+    assert repeat == divider
+    assert spy.call_count == 1
+    grown = recap.extract_recap(mgr, session.id)
+    assert spy.call_count == 2
+    assert grown["asks"] == ["first ask", "second ask"]
+    assert grown["last"] == {"user": "second ask", "assistant": "second answer"}
 
 
 _REAL_REPLACE = os.replace

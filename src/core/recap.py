@@ -9,6 +9,7 @@ an unchanged divider costs nothing.
 
 import asyncio
 import json
+from collections import OrderedDict
 from pathlib import Path
 
 import structlog
@@ -30,6 +31,15 @@ log = structlog.get_logger()
 
 _ASK_CHARS = 80
 _LAST_CHARS = 250
+
+_EXTRACT_MEMO_CAP = 8
+
+# (session_id, end) -> extraction over the global event range [0, end). The key
+# alone proves the hit: a session's global event stream is append-only (the
+# weekly archive rotation shifts the live/archive split but never moves an
+# event's global index), and session ids are uuid4, never reused. Runs under
+# asyncio.to_thread; dict ops stay GIL-atomic.
+_extract_memo: OrderedDict[tuple[str, int], dict] = OrderedDict()
 
 # User messages auto-injected by the system are not real "asks". Matched by prefix
 # against the fork/elone bootstrap prompts; the live openers come from
@@ -89,10 +99,37 @@ def extract_recap(session_mgr: SessionManager, session_id: str, upto: int | None
         each truncated to ~80 chars.
   last: the final genuine user message + the assistant text that followed it,
         each truncated to ~250 chars; ``None`` if the session has no real asks.
+
+  Repeats of one divider are served from ``_extract_memo``: the chat UI
+  re-requests an open recap panel on every re-materialization, and a parsed
+  repeat costs a full corpus scan for the same result.
   """
+  # An explicit divider with an entry needs no range normalization: a stored
+  # end exists only when the stream already reached it, and the stream only
+  # grows -- so the count read (a full-file line count on a cold events cache)
+  # is skipped on the exact path the UI re-materialization drives.
+  if upto is not None:
+    cached = _extract_memo.get((session_id, upto + 1))
+    if cached is not None:
+      _extract_memo.move_to_end((session_id, upto + 1))
+      return cached
   count = session_mgr.get_chat_event_count_sync(session_id)
   end = count if upto is None else min(upto + 1, count)
+  cached = _extract_memo.get((session_id, end))
+  if cached is not None:
+    _extract_memo.move_to_end((session_id, end))
+    return cached
   events, _ = session_mgr.load_chat_events_range(session_id, 0, end)
+  result = _extract_from_events(events)
+  _extract_memo[(session_id, end)] = result
+  _extract_memo.move_to_end((session_id, end))
+  while len(_extract_memo) > _EXTRACT_MEMO_CAP:
+    _extract_memo.popitem(last=False)
+  return result
+
+
+def _extract_from_events(events: list[dict]) -> dict:
+  """The extract_recap scan body: events already sliced to the divider."""
   messages = events_to_messages(events)
 
   asks: list[str] = []

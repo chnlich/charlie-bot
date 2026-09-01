@@ -411,6 +411,20 @@ const planPanel = (() => {
     return resp.json();
   }
 
+  // Refetch and commit under a fresh generation. False means either the fetch
+  // failed or the commit was superseded (see the _commitRegistry guard), and
+  // the caller must bail without touching the selection or the DOM.
+  async function _refetchRegistry(sid, failLabel) {
+    var generation = ++_fetchGeneration;
+    try {
+      var data = await _fetchRegistry(sid);
+      return _commitRegistry(sid, data, generation);
+    } catch (e) {
+      console.error(failLabel, e);
+      return false;
+    }
+  }
+
   function ensureLoaded() {
     var sid = _currentSessionId();
     // Reuse an in-flight/completed load only when it is for the current
@@ -470,14 +484,7 @@ const planPanel = (() => {
   async function refresh() {
     var sid = _currentSessionId();
     if (!sid) return;
-    var generation = ++_fetchGeneration;
-    try {
-      var data = await _fetchRegistry(sid);
-      if (!_commitRegistry(sid, data, generation)) return;
-    } catch (e) {
-      console.error('plan-panel refresh failed:', e);
-      return;
-    }
+    if (!await _refetchRegistry(sid, 'plan-panel refresh failed:')) return;
     _ensureSelection();
     render();
     await _renderActionBar();
@@ -487,14 +494,7 @@ const planPanel = (() => {
     var sid = _currentSessionId();
     if (!sid) return;
     var prev = _registry;
-    var generation = ++_fetchGeneration;
-    try {
-      var data = await _fetchRegistry(sid);
-      if (!_commitRegistry(sid, data, generation)) return;
-    } catch (e) {
-      console.error('plan-panel onPlanUpdated fetch failed:', e);
-      return;
-    }
+    if (!await _refetchRegistry(sid, 'plan-panel onPlanUpdated fetch failed:')) return;
     _refreshPlanCardBadges();
     var isNew = detectNewPlanOrVersion(prev, _registry);
     if (isNew) {

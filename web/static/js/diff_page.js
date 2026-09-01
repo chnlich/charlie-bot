@@ -124,14 +124,20 @@
     ui.highlightCode();
   }
 
-  async function fetchFileDiff(params, path, force, oldPath) {
-    const qs = new URLSearchParams({
+  // Both diff endpoints take the same four comparison selectors; single-file
+  // requests add path/old_path/force on top via qs.set.
+  function diffQuery(params) {
+    return new URLSearchParams({
       repo: params.repo,
       base: params.base,
       head: params.head,
       mode: params.mode,
-      path,
     });
+  }
+
+  async function fetchFileDiff(params, path, force, oldPath) {
+    const qs = diffQuery(params);
+    qs.set('path', path);
     if (oldPath) qs.set('old_path', oldPath);
     if (force) qs.set('force', 'true');
     const resp = await fetch(`/api/git/diff/file?${qs.toString()}`);
@@ -250,12 +256,7 @@
     show(loadingEl);
     statusEl.textContent = '';
     const token = ++comparisonToken;
-    const qs = new URLSearchParams({
-      repo: params.repo,
-      base: params.base,
-      head: params.head,
-      mode: params.mode,
-    });
+    const qs = diffQuery(params);
 
     let resp;
     try {

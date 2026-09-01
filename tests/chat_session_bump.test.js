@@ -3,6 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
+const { createClassList } = require('./dom_element_stub');
 const { escapeForFakeDom } = require('./fake_dom');
 
 const COMPAT_LOADER_JS = readStatic('compat-loader.js');
@@ -10,42 +11,6 @@ const CHAT_JS = readStatic('chat.js');
 
 const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;
-
-class FakeClassList {
-  constructor(initial = '') {
-    this._classes = new Set(String(initial).split(/\s+/).filter(Boolean));
-  }
-
-  add(...classes) {
-    for (const className of classes) this._classes.add(className);
-  }
-
-  remove(...classes) {
-    for (const className of classes) this._classes.delete(className);
-  }
-
-  contains(className) {
-    return this._classes.has(className);
-  }
-
-  toggle(className, force) {
-    if (force === undefined) {
-      if (this._classes.has(className)) {
-        this._classes.delete(className);
-        return false;
-      }
-      this._classes.add(className);
-      return true;
-    }
-    if (force) this._classes.add(className);
-    else this._classes.delete(className);
-    return !!force;
-  }
-
-  toString() {
-    return Array.from(this._classes).join(' ');
-  }
-}
 
 // Height model behind FakeElement.getBoundingClientRect — see the getter.
 const FAKE_LEAF_HEIGHT = 24;
@@ -82,7 +47,7 @@ class FakeElement {
     this.parentElement = null;
     this.parentNode = null;
     this._nodes = [];
-    this.classList = new FakeClassList(className);
+    this.classList = createClassList(className);
     this._className = className;
     this.innerHTML = '';
     this.scrollTop = 0;
@@ -106,7 +71,7 @@ class FakeElement {
 
   set className(value) {
     this._className = String(value || '');
-    this.classList = new FakeClassList(this._className);
+    this.classList = createClassList(this._className);
   }
 
   get childNodes() {

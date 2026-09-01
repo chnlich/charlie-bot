@@ -128,4 +128,4 @@ function createEscapingElement(tagName) {
   return element;
 }
 
-module.exports = { createElement, createEscapingElement };
+module.exports = { createClassList, createElement, createEscapingElement };

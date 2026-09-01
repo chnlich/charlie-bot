@@ -407,3 +407,69 @@ def test_codex_cache_invalidates_on_append(tmp_path: Path) -> None:
   after = _row(_collect(None, codex, db, cache), "Codex", "gpt-a")
   assert after.total == before.total + 102  # appended event: (100 - 10) fresh + 10 read + 2 out
   assert after.calls == before.calls + 1
+
+
+def _append_opencode(path: Path, rows: list[tuple[dict, str, str]]) -> None:
+  con = sqlite3.connect(path)
+  for payload, model_id, provider in rows:
+    data = {"role": "assistant", "modelID": model_id, "providerID": provider, "tokens": payload}
+    con.execute("insert into message (data) values (?)", (json.dumps(data),))
+  con.commit()
+  con.close()
+
+
+def test_opencode_cache_serves_unchanged_db(tmp_path: Path) -> None:
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 4, "write": 2}}, "oc-m", "prov")])
+  first = _collect(None, None, db, cache)
+  assert first.scanned_bytes > 0
+
+  second = _collect(None, None, db, cache)
+  # The db contribution came from the cache: nothing re-read, same tally and note.
+  assert second.scanned_bytes == 0
+  assert _row(second, "opencode", "oc-m").total == _row(first, "opencode", "oc-m").total
+  assert ([n for n in second.notes if n.startswith("opencode")] ==
+          [n for n in first.notes if n.startswith("opencode")])
+
+
+def test_opencode_cache_invalidates_on_insert(tmp_path: Path) -> None:
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  before = _row(_collect(None, None, db, cache), "opencode", "oc-m")
+
+  # The pad forces a new db page, so the signature moves on size even if mtime_ns repeats.
+  _append_opencode(db, [
+      ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * 5000},
+       "oc-m", "prov"),
+  ])
+
+  after = _row(_collect(None, None, db, cache), "opencode", "oc-m")
+  assert after.total == before.total + 102
+  assert after.calls == before.calls + 1
+
+
+def test_opencode_cache_invalidates_on_wal_write(tmp_path: Path) -> None:
+  # A WAL-mode commit grows the -wal sidecar and leaves the main file untouched; the main
+  # file's stat alone can never see it. The writer stays open across the second collect so
+  # no checkpoint folds the sidecar into the main file first.
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  con = sqlite3.connect(db)
+  con.execute("pragma journal_mode=WAL")
+  con.execute("create table message (data text)")
+  msg = {"role": "assistant", "modelID": "oc-m", "providerID": "prov",
+         "tokens": {"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}}
+  con.execute("insert into message (data) values (?)", (json.dumps(msg),))
+  con.commit()
+  assert (db.parent / "db.sqlite-wal").exists()
+  before = _row(_collect(None, None, db, cache), "opencode", "oc-m")
+
+  msg["tokens"] = {"input": 100, "output": 2, "cache": {"read": 0, "write": 0}}
+  main_sig = (db.stat().st_mtime_ns, db.stat().st_size)
+  con.execute("insert into message (data) values (?)", (json.dumps(msg),))
+  con.commit()
+  assert (db.stat().st_mtime_ns, db.stat().st_size) == main_sig
+
+  after = _row(_collect(None, None, db, cache), "opencode", "oc-m")
+  con.close()
+  assert after.total == before.total + 102
+  assert after.calls == before.calls + 1

@@ -32,6 +32,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M19 SSE framing, chunked large-frame stream | M19 collector below | seconds per 16 MB payload (16 KB chunks, ~1 MB frames) | median < 0.2 s | — (introduced with its first history row) |
 | M20 recap extract, repeat divider | M20 collector below | seconds per extract at one divider, worst on-disk extract corpus | median < 0.05 s | — (introduced with its first history row) |
 | M21 sidebar probe sweep, steady state | M21 collector below | seconds per 10th-poll sweep over all active sessions | median < 0.05 s | — (introduced with its first history row) |
+| M22 ext-usage unknown-limit-shape warning stream, steady state | M22 collector below | warnings per 60 steady-state transform rounds | 0 warnings after the first sighting per process | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -894,6 +895,55 @@ asyncio.run(main())
 EOF
 ```
 
+M22 — ext-usage unknown-limit-shape warning stream, steady state. Every account
+fetch re-runs the response transform (`_transform_response` with
+`_scoped_windows`, `_transform_codex_response` with `_codex_windows`), and each
+unrecognized utilization-bearing field or unmappable scoped entry logs
+`ext_usage_unknown_limit_shape`; a field the upstream keeps sending re-fires the
+same warning every fetch round forever — 1536 lines in the 20.47 h live server
+log sampled 2026-09-01 (~75/h, 20 % of the log's structured lines) — while one
+sighting per process carries the whole signal. The cost is background log volume
+invisible to HTTP probes, so the collector drives the pure transform directly
+over a synthetic response shaped like the observed one (two unknown top-level
+utilization fields plus one scoped entry missing its percent): one first-sighting
+call, as at a process start, then 60 steady-state repeat rounds, counting the
+event. A warning in the repeat window is a re-fired alarm; the count is the
+metric. Evidence while the live server runs older code points the same collector
+at the branch checkout (`sys.path.insert` at the worktree root), the same shape
+as the M7 protocol:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import sys
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.api import ext_usage as ext_usage_mod
+
+raw = {
+    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
+    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
+    "nimbus_quill": {"utilization": 3.0, "resetsAt": "2026-08-04T20:00:00+00:00"},
+    "extra_usage": {"utilization": 5.0, "resets_at": "2026-08-05T00:00:00+00:00"},
+    "limits": [
+        {"kind": "weekly_scoped", "group": "weekly", "resets_at": "",
+         "scope": {"model": {"display_name": "Nimbus"}}},
+    ],
+}
+
+warns = []
+orig = ext_usage_mod.log.warning
+ext_usage_mod.log.warning = lambda event, **kw: warns.append({"event": event, **kw})
+try:
+    ext_usage_mod._transform_response(raw, account="main")  # first sighting, as at a process start; not counted
+    warns.clear()
+    for _ in range(60):  # steady-state repeat rounds of the poll's re-transform
+        ext_usage_mod._transform_response(raw, account="main")
+finally:
+    ext_usage_mod.log.warning = orig
+n = sum(1 for w in warns if w["event"] == "ext_usage_unknown_limit_shape")
+print(f"60 steady-state transform rounds; ext_usage_unknown_limit_shape warnings: {n}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -921,3 +971,4 @@ EOF
 | 2026-09-01 | #542 | M20 repeat-divider extract median 0.2026 s → 0.0000 s, max 0.2429 s → 0.0000 s (5519 events over 36.3 MB corpus, scratch CHARLIEBOT_HOME A/B; extraction digest identical bb99828aa5b6; live-before recap HTTP median 0.305 s, max 0.538 s on the same session) | (session_id, divider end) LRU memo for extract_recap with a count-free explicit-divider hit path; M20 definition and healthy range introduced with this PR |
 | 2026-09-01 | #545 | M8 median 0.2430 s → 0.0155 s, max 0.2504 s → 0.0176 s (scratch A/B, identical 147.6 MB / 33-session corpus, identical result sets; live-before median 0.235 s, max 0.259 s; remaining 15 ms is metadata loading — memoized repeats read zero corpus bytes) | per-chat-file proven-absent-needle LRU memo keyed on (mtime_ns, size); identical and superstring queries serve with one stat per file, appends re-read |
 | 2026-09-01 | #549 | M21 steady-state sweep median 0.0353 s → 0.0068 s, max 0.0358 s → 0.0070 s (33 active sessions, live corpus; 33 → 0 deep probes per sweep; cold sweep unchanged at 33; probe entries identical) | stat-only probe-input signature (thread metadata/trigger/plans (mtime_ns, size) + name sets + 30-day rollover) narrows the 10th-poll self-heal sweep; force=1 keeps the full deep probe; M21 definition and healthy range introduced with this PR |
+| 2026-09-01 | #554 | M22 180 → 0 ext_usage_unknown_limit_shape warnings per 60 steady-state transform rounds (collector verbatim, main-checkout before vs branch after; transform windows identical over the 60-round repeat; live-log corroboration 1536 lines in 20.47 h ≈ 75/h) | all eight emitters of the event routed through a (provider, account, slot, reason) warn-once guard — one alarm per unrecognized shape per process; M22 definition and healthy range introduced with this PR |

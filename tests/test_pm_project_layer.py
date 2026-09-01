@@ -19,7 +19,7 @@ import yaml
 from conftest import (
   OPUS_BACKEND_ID,
   SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
-  SCHEDULER_LOAD_CONFIG_PATCH_TARGET,
+  SCHEDULER_GET_CONFIG_PATCH_TARGET,
   SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
   SCHEDULER_TRIGGER_MASTER_PATCH_TARGET,
   build_scheduler_cfg,
@@ -152,7 +152,7 @@ async def test_master_task_fire_wakes_master_with_prompt_plus_group_line(
     task_names.append(name or "")
     coro.close()
 
-  monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(SCHEDULER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
   monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, fake_create_logged_task)
   monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, lambda **kwargs: spawned.append(kwargs) or _noop())
@@ -189,7 +189,7 @@ async def test_master_task_fire_reuses_live_session_across_fires(
   scheduler = Scheduler(cfg, session_mgr)
   task_cfg = _master_task()
 
-  monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
   monkeypatch.setattr(SCHEDULER_TRIGGER_MASTER_PATCH_TARGET, lambda *args, **kwargs: _noop())
 
@@ -209,7 +209,7 @@ async def test_master_task_backend_rotation_carries_role_and_group(
   session_mgr = SessionManager(cfg)
   scheduler = Scheduler(cfg, session_mgr)
 
-  monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
   monkeypatch.setattr(SCHEDULER_TRIGGER_MASTER_PATCH_TARGET, lambda *args, **kwargs: _noop())
 

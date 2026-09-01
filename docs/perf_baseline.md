@@ -36,6 +36,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M23 archive-range chat-event rescan, steady state | M23 collector below | seconds per 8-page backwards scroll over the biggest archived corpus | median < 0.005 s | — (introduced with its first history row) |
 | M24 trigger list, steady state | M24 collector below | seconds per list_triggers call, worst on-disk trigger corpus | median < 0.05 s | — (introduced with its first history row) |
 | M25 scheduler config reload, steady state | M25 collector below | seconds of loop lag per steady-state reload, live config corpus | median < 0.005 s | — (introduced with its first history row) |
+| M26 message-projection advance per appended event | M26 collector below | seconds per `get_message_projection` advance on one appended event, worst on-disk live-events corpus | median < 0.005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1122,6 +1123,92 @@ asyncio.run(main())
 EOF
 ```
 
+M26 — message-projection advance per appended event. The chat bootstrap
+(`GET /api/sessions/{id}/bootstrap`, session view, SPA switches) and the
+events pagination endpoint serve from the per-session message projection;
+every one of those reads on a session whose live chat file grew since the
+last read re-derived the projection from scratch — a full re-aggregation of
+every event, ~59 ms on the 20534-event worst live corpus, per SPA switch or
+page click on an appending session. The fixed projection is append-
+incremental: `stable_closed_prefix_len` splits the raw stream at the last
+point no open OpenCode run interval crosses, the closed prefix feeds the
+aggregator exactly once, and the still-open tail is re-evaluated per call
+through a cloned aggregator, so an advance costs O(open tail) instead of
+O(history) while the served view still equals `events_to_view(all_events)`.
+The split rule is sound because the stable-history projection defers queued
+users only within one completed run interval; a shrinking live file (rewind)
+still pays a full rebuild. The cost is a per-interaction latency no standing
+probe sees, so the collector copies the session with the most live chat
+events into a scratch `CHARLIEBOT_HOME` under /tmp (metadata.json and data/
+only; live home read once for the copy, never written), builds the
+projection once (cold pass, as at first view after a server start; not
+timed), then appends one event at a time and times the per-append advance,
+checking the served view against the whole-list reference digest. Evidence
+while the live server runs older code points the same collector at the
+branch checkout (`CHECKOUT` at the worktree root), the same shape as the
+M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, hashlib, json, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.api.message_utils import events_to_messages
+
+# Worst projection corpus: the session whose LIVE chat file carries the most
+# events (archive_offset > 0 sessions take the legacy path, never the projection).
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        with open(p, errors="replace") as f:
+            n = sum(1 for _ in f)
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+print(f"worst projection corpus: session {SID}, {best_n} live chat events")
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
+# session's metadata.json and data/; live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m26-proj-home-", dir="/tmp"))
+dst = home / "sessions" / SID
+dst.mkdir(parents=True)
+shutil.copy2(best / "metadata.json", dst / "metadata.json")
+shutil.copytree(best / "data", dst / "data")
+
+cfg = CharlieBotConfig(charliebot_home=home)
+mgr = SessionManager(cfg)
+
+async def main():
+    mgr.get_message_projection(SID)  # cold pass, as at first view after a server start; not timed
+    times = []
+    for i in range(8):
+        await mgr.save_chat_event(SID, {
+            "id": f"m26-probe-{i}", "type": "assistant",
+            "message": {"content": [{"type": "text", "text": f"probe chunk {i}"}]},
+            "timestamp": f"2026-09-01T19:00:{i:02d}Z",
+        })
+        t0 = time.perf_counter()
+        projection = mgr.get_message_projection(SID)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    all_events = mgr.load_chat_events_sync(SID)
+    def digest(msgs):
+        ident = [(m.get("id"), m.get("role"), len(m.get("content", "") or ""), m.get("event_index")) for m in msgs]
+        return hashlib.sha256(json.dumps(ident).encode()).hexdigest()[:12]
+    ref = events_to_messages(all_events)
+    match = digest(projection.history) == digest(ref)
+    print(f"8 single-event appends on {best_n}-event corpus; projection advance "
+          f"median {times[4] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms; parity {match} (digest {digest(projection.history)})")
+
+asyncio.run(main())
+shutil.rmtree(home)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -1153,3 +1240,4 @@ EOF
 | 2026-09-01 | #560 | M23 8-page scroll steady-state median 0.0926 s → 0.0022 s, max 0.0952 s → 0.0024 s (collector verbatim, main-checkout before vs branch after; 8.2 MB across 2 weekly archive files, archive_offset 2799, scratch CHARLIEBOT_HOME A/B under load 4.49/4.58/4.61; page contents asserted identical) | per-archive-file parsed-events memo keyed on (mtime_ns, size) with a 16-file LRU, mirroring the live events cache; M23 definition and healthy range introduced with this PR |
 | 2026-09-01 | #566 | M24 steady-state median 0.0164 s → 0.0006 s, max 0.0222 s → 0.0008 s (collector verbatim, main-checkout before vs branch after; 78-file worst trigger corpus, live state read-only; serialized list output over the top-5 trigger sessions identical) | per-trigger-file parsed-record memo keyed on (mtime_ns, size) with a name-set diff for deletions and a 32-session LRU; M24 definition and healthy range introduced with this PR |
 | 2026-09-01 | #568 | M25 steady-state loop-lag median 0.0115 s → 0.0001 s (0.000083 s wall), max 0.0116 s → 0.0001 s (0.000091 s wall) (collector verbatim, main-checkout before vs branch after at load 0.36/0.55/0.62 and 0.64/0.60/0.63; live config corpus read-only; after run under the 5 ms ticker resolution) | scheduler _reload_config routed through the fingerprint-cached get_config instead of a per-tick load_config parse; M25 definition and healthy range introduced with this PR |
+| 2026-09-01 | #572 | M26 projection advance median 46.69 ms → 0.19 ms, max 100.40 ms → 0.27 ms (collector verbatim, 8 single-event appends on the 20534-event worst live corpus, scratch CHARLIEBOT_HOME A/B, main checkout before at load 2.35/1.88/1.51 vs final branch head after at load 1.35/1.32/1.75; served-view digest identical e94c56635194) | append-incremental message projection: closed-prefix single feed plus cloned-aggregator open-region view, advanced copies swapped in atomically; M26 definition and healthy range introduced with this PR |

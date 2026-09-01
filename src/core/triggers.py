@@ -6,6 +6,7 @@ import json
 import os
 import random
 import shutil
+from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -74,6 +75,11 @@ _SLURM_TERMINAL_STATES = frozenset({
     "REVOKED",
     "SPECIAL_EXIT",
 })
+
+# LRU cap on list_triggers memos, in sessions: the workers-panel poll exercises at most a
+# handful of sessions at a time, and a fired-then-pruned session must not pin its files' parsed
+# records for the process lifetime.
+_TRIGGER_LIST_MEMO_SESSION_LIMIT = 32
 
 
 class RemoteVerifyError(Exception):
@@ -403,6 +409,8 @@ class TriggerManager:
     self._cfg = cfg
     self._session_mgr = session_mgr
     self._tasks: dict[str, asyncio.Task] = {}
+    # list_triggers memo: session id -> {file name: (mtime_ns, size, parsed record)}.
+    self._list_memo: OrderedDict[str, dict[str, tuple[int, int, PendingTrigger]]] = OrderedDict()
 
   async def create_trigger(
       self,
@@ -502,20 +510,71 @@ class TriggerManager:
       raise RemoteVerifyError("verify-on-create failed for remote SLURM host(s): " + "; ".join(bad))
     return observed
 
+  @staticmethod
+  def _stat_trigger_files(triggers_dir: Path) -> dict[str, tuple[int, int]]:
+    """One scandir snapshot of the session's trigger files: name -> (mtime_ns, size)."""
+    stats: dict[str, tuple[int, int]] = {}
+    with os.scandir(triggers_dir) as entries:
+      for entry in entries:
+        if entry.name.endswith(".json") and entry.is_file():
+          st = entry.stat()
+          stats[entry.name] = (st.st_mtime_ns, st.st_size)
+    return stats
+
   async def list_triggers(self, session_id: str) -> list[PendingTrigger]:
-    """Read all triggers for a session from disk."""
+    """Read all triggers for a session from disk, memoized per file.
+
+    Steady state (the workers-panel threads/list poll, the session view render) pays one
+    scandir per call: a file whose (mtime_ns, size) matches its memo entry reuses the parsed
+    record. The key is sound because trigger files change only through the atomic
+    ``_save_trigger`` rewrite, which always replaces the inode and bumps mtime_ns. Files that
+    fail to parse stay out of the memo, so an unreadable file keeps logging one warning per
+    call exactly as an unmemoized read would.
+    """
     triggers_dir = self._triggers_dir(session_id)
     if not triggers_dir.exists():
+      self._list_memo.pop(session_id, None)
       return []
-    files = await asyncio.to_thread(lambda: list(triggers_dir.glob("*.json")))
+    stats = await asyncio.to_thread(self._stat_trigger_files, triggers_dir)
+
+    memo = self._list_memo.get(session_id)
+    if memo is None:
+      memo = {}
+      self._list_memo[session_id] = memo
+    else:
+      self._list_memo.move_to_end(session_id)
+
     triggers: list[PendingTrigger] = []
-    for f in files:
-      try:
-        raw = await asyncio.to_thread(f.read_text, "utf-8")
-        trigger, _ = _migrate_legacy_watch_pids(raw)
+    stale = []
+    for name in memo.keys() - stats.keys():
+      del memo[name]
+    for name, sig in stats.items():
+      entry = memo.get(name)
+      if entry is not None and entry[0] == sig[0] and entry[1] == sig[1]:
+        triggers.append(entry[2])
+      else:
+        stale.append(name)
+
+    if stale:
+      def _read_stale() -> list[tuple[str, PendingTrigger]]:
+        parsed = []
+        for name in stale:
+          path = triggers_dir / name
+          try:
+            trigger, _ = _migrate_legacy_watch_pids(path.read_text(encoding="utf-8"))
+          except Exception as e:
+            log.warning("trigger_load_failed", path=str(path), error=str(e))
+            continue
+          parsed.append((name, trigger))
+        return parsed
+
+      loaded = await asyncio.to_thread(_read_stale)
+      for name, trigger in loaded:
+        memo[name] = (*stats[name], trigger)
         triggers.append(trigger)
-      except Exception as e:
-        log.warning("trigger_load_failed", path=str(f), error=str(e))
+
+    while len(self._list_memo) > _TRIGGER_LIST_MEMO_SESSION_LIMIT:
+      self._list_memo.popitem(last=False)
     triggers.sort(key=lambda t: t.created_at, reverse=True)
     return triggers
 

@@ -726,9 +726,16 @@ class SessionManager:
         raise ValueError(f"event_index {event_index} out of range for parent session {parent_id} with {count} events")
       end = event_index + 1
 
-    events, _ = await asyncio.to_thread(self.load_chat_events_range, parent_id, 0, end)
-    if len(events) != end:
-      raise ValueError(f"loaded {len(events)} parent events for requested range [0, {end})")
+    # A full-corpus reference carries every parent event, so raw lines move it
+    # verbatim; the parse-and-reserialize round trip only buys the truncation a
+    # takeover point asks for.
+    if event_index is None:
+      reference_raw = await asyncio.to_thread(self._read_reference_raw_sync, parent_id, end)
+    else:
+      events, _ = await asyncio.to_thread(self.load_chat_events_range, parent_id, 0, end)
+      if len(events) != end:
+        raise ValueError(f"loaded {len(events)} parent events for requested range [0, {end})")
+      reference_raw = await asyncio.to_thread(self._serialize_reference_events_sync, events)
 
     meta = SessionMetadata(
         name=parent.name if inherit_scheduling else f"{name_prefix}{parent.name}",
@@ -744,7 +751,7 @@ class SessionManager:
     self._create_session_dirs(session_dir)
 
     reference_path = self.parent_reference_path(meta.id)
-    await asyncio.to_thread(self._write_reference_events_sync, reference_path, events)
+    await asyncio.to_thread(self._write_reference_raw_sync, reference_path, reference_raw)
 
     events_path = self.get_chat_events_path(meta.id)
     clone_event = {
@@ -828,9 +835,73 @@ class SessionManager:
     write_json_atomically(child_plans_path, data, indent=2)
 
   @staticmethod
-  def _write_reference_events_sync(path: Path, events: list[dict]) -> None:
+  def _serialize_reference_events_sync(events: list[dict]) -> str:
+    return "".join(json.dumps(event) + "\n" for event in events)
+
+  def _read_reference_raw_sync(self, parent_id: str, end: int) -> str:
+    """Concatenate the parent's raw event lines for a full-corpus reference.
+
+    Returns the non-blank lines among the first ``archive_take`` raw archive
+    lines (``data/archives/`` in the chronological filename glob) followed by
+    the non-blank lines among the first ``end - archive_take`` raw live lines,
+    with ``archive_take`` the read-time archive offset capped at ``end``. This
+    is the event sequence ``load_chat_events_range`` parses for the range
+    ``[0, end)``: both sides read the offset when the read starts — an archive
+    pass landing between the caller's event count and this read moves lines
+    from the live file to the archive tail, changing the split but not the
+    sequence — and both spend raw lines against the budget and skip blanks.
+    The corrupt-corpus failures the parsed write surfaces through its length
+    check stay loud here without paying the parse: a non-blank line that a
+    serialized event dict cannot produce (not wrapped in ``{}``) raises, and so
+    does a take that ends short.
+    """
+    archive_take = min(self._chat_events.read_archive_offset_sync(parent_id), end)
+    live_take = end - archive_take
+    parent_dir = self._session_dir(parent_id)
+    parts: list[str] = []
+
+    def take_lines(path: Path, take: int) -> tuple[int, int]:
+      raw = 0
+      appended = 0
+      with open(path, encoding="utf-8") as stream:
+        for line in stream:
+          if raw >= take:
+            break
+          raw += 1
+          stripped = line.strip()
+          if not stripped:
+            continue
+          if not stripped.startswith("{") or not stripped.endswith("}"):
+            raise ValueError(f"parent event line is not a serialized event object: {stripped[:80]!r}")
+          parts.append(line if line.endswith("\n") else line + "\n")
+          appended += 1
+      return raw, appended
+
+    archives_dir = parent_dir / "data" / "archives"
+    raw_left = archive_take
+    archived = 0
+    if raw_left and archives_dir.is_dir():
+      for path in sorted(archives_dir.glob("chat_events.*.jsonl")):
+        if raw_left <= 0:
+          break
+        raw, appended = take_lines(path, raw_left)
+        raw_left -= raw
+        archived += appended
+    if archived != archive_take:
+      raise ValueError(f"loaded {archived} archived parent events for requested range [0, {archive_take})")
+
+    live_path = self.get_chat_events_path(parent_id)
+    live = 0
+    if live_take and live_path.exists():
+      _, live = take_lines(live_path, live_take)
+    if live != live_take:
+      raise ValueError(f"loaded {live} live parent events for requested range [0, {live_take})")
+    return "".join(parts)
+
+  @staticmethod
+  def _write_reference_raw_sync(path: Path, raw: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(path, "".join(json.dumps(event) + "\n" for event in events))
+    atomic_write_text(path, raw)
 
   @staticmethod
   def _create_session_dirs(session_dir: Path) -> None:

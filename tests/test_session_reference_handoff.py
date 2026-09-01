@@ -98,6 +98,53 @@ async def test_reference_handoff_uses_global_event_index_with_archive_offset(tmp
 
 
 @pytest.mark.asyncio
+async def test_fork_session_full_reference_copies_parent_stream(tmp_path: Path) -> None:
+  _cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
+
+  cutoff, events = _archive_cutoff_events()
+  _append_events(mgr.get_chat_events_path(parent.id), events)
+  await mgr.recycle_scheduled_session(parent.id, cutoff)
+
+  child = await mgr.fork_session(parent.id)
+
+  expected_raw = "".join(json.dumps(event) + "\n" for event in events)
+  assert _reference_path(mgr, child.id).read_text(encoding="utf-8") == expected_raw
+  assert [event["type"] for event in _read_events(mgr.get_chat_events_path(child.id))] == [ET.CLONE_START]
+
+
+@pytest.mark.asyncio
+async def test_reference_raw_uses_read_time_archive_split(tmp_path: Path) -> None:
+  _cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
+
+  cutoff, events = _archive_cutoff_events()
+  _append_events(mgr.get_chat_events_path(parent.id), events)
+  # The count behind a fork's range is taken before the reference read; an
+  # archive pass racing between the two moves lines from the live file to the
+  # archive tail without changing the event sequence.
+  end = mgr.get_chat_event_count_sync(parent.id)
+  await mgr.recycle_scheduled_session(parent.id, cutoff)
+
+  raw = mgr._read_reference_raw_sync(parent.id, end)
+  assert raw == "".join(json.dumps(event) + "\n" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_fork_session_full_reference_rejects_corrupt_line(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend=OPUS_BACKEND_ID)
+  events_path = mgr.get_chat_events_path(parent.id)
+  _append_events(events_path, [{"type": "user", "content": "ok"}])
+  with open(events_path, "a", encoding="utf-8") as f:
+    f.write("{truncated\n")
+
+  with pytest.raises(ValueError, match="not a serialized event object"):
+    await mgr.fork_session(parent.id)
+
+  assert not list(cfg.sessions_dir.glob("*/data/parent_reference.jsonl"))
+
+
+@pytest.mark.asyncio
 async def test_reference_handoff_errors_write_no_reference(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)

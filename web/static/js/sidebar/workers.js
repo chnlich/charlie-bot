@@ -15,6 +15,19 @@ function formatTriggerTimeLabel(status, fireAt) {
   return prefix + formatCardTimestamp(new Date(fireAt));
 }
 
+// One trigger card gets painted from three sites -- full render, live append,
+// and the poll-driven updateTriggerStatus -- and every site derives the card's
+// border and icon from the status. One mapping keeps an update from flashing a
+// stale palette onto a card painted by another site.
+function triggerStatusChrome(status) {
+  return {
+    border: status === 'pending' ? 'border-amber-500/50 border-dashed'
+      : status === 'fired' ? 'border-green-500/50' : 'border-slate-600',
+    icon: status === 'pending' ? 'text-amber-400'
+      : status === 'fired' ? 'text-green-400' : 'text-slate-500',
+  };
+}
+
 function workerUuidRow(id) {
   const safe = escapeHtml(id);
   return '<p class="text-xs text-slate-600 font-mono truncate" title="click to copy" data-uuid="' + safe + '" onclick="event.stopPropagation(); navigator.clipboard.writeText(this.dataset.uuid); const el=this; el.textContent=\'copied\'; if(el._copyTimer)clearTimeout(el._copyTimer); el._copyTimer=setTimeout(()=>{el.textContent=el.dataset.uuid;el._copyTimer=null;},800)">' + safe + '</p>';
@@ -40,8 +53,7 @@ function renderWorkersTab(threads, sessionId, triggers) {
   }
 
   const threadCards = (threads || []).map(t => {
-    const statusColors = {running: 'bg-blue-500', completed: 'bg-green-500', failed: 'bg-red-500', cancelled: 'bg-slate-500', idle: 'bg-slate-500'};
-    const dotColor = statusColors[t.status] || 'bg-slate-500';
+    const dotColor = STATUS_DOT_COLORS[t.status] || 'bg-slate-500';
     const pulse = t.status === 'running' ? ' animate-pulse' : '';
     const created = new Date(t.created_at);
     const timeStr = formatCardTimestamp(created);
@@ -71,18 +83,15 @@ function renderWorkersTab(threads, sessionId, triggers) {
   });
 
   const triggerCards = triggers.map(tr => {
-    const borderClass = tr.status === 'pending' ? 'border-amber-500/50 border-dashed'
-      : tr.status === 'fired' ? 'border-green-500/50' : 'border-slate-600';
-    const iconColor = tr.status === 'pending' ? 'text-amber-400'
-      : tr.status === 'fired' ? 'text-green-400' : 'text-slate-500';
+    const chrome = triggerStatusChrome(tr.status);
     const strikeClass = tr.status === 'cancelled' ? ' line-through text-slate-500' : '';
     const timeLabel = formatTriggerTimeLabel(tr.status, tr.fire_at);
     const cancelBtn = tr.status === 'pending'
       ? cancelButtonHtml("cancelTrigger('" + tr.id + "', '" + sessionId + "')", 'Cancel trigger', '')
       : '';
-    return '<div id="trigger-card-' + tr.id + '" class="bg-slate-800 rounded-xl border ' + borderClass + ' overflow-hidden">'
+    return '<div id="trigger-card-' + tr.id + '" class="bg-slate-800 rounded-xl border ' + chrome.border + ' overflow-hidden">'
       + '<div class="flex items-center gap-3 px-4 py-3">'
-      + '<svg id="trigger-dot-' + tr.id + '" class="w-4 h-4 flex-shrink-0 ' + iconColor + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+      + '<svg id="trigger-dot-' + tr.id + '" class="w-4 h-4 flex-shrink-0 ' + chrome.icon + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
       + '<circle cx="12" cy="12" r="10" stroke-width="2"/>'
       + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>'
       + '</svg>'
@@ -249,7 +258,7 @@ function addWorkerCard(threadId, description, createdAt, backend) {
   card.innerHTML = `
     <div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-750"
          onclick="toggleThreadDetail('${threadId}', '${SESSION_ID}')">
-      <span id="thread-dot-${threadId}" class="w-2 h-2 rounded-full flex-shrink-0 bg-blue-500 animate-pulse"></span>
+      <span id="thread-dot-${threadId}" class="w-2 h-2 rounded-full flex-shrink-0 ${STATUS_DOT_COLORS.running} animate-pulse"></span>
       <div class="flex-1 min-w-0">
         <p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal('Worker Description', this.dataset.full)" data-full="${escapeHtmlAttr(description)}">${escapeHtml(description || '')}</p>
         <p id="thread-status-${threadId}" class="text-xs text-slate-500">running &middot; ${nowStr}${backend ? ' &middot; ' + (BACKEND_OPTIONS[backend] || backend) : ''}</p>
@@ -281,10 +290,7 @@ function addTriggerCard(triggerId, message, fireAt, createdAt, status) {
   document.getElementById('no-workers-placeholder')?.remove();
   if (document.getElementById('trigger-dot-' + triggerId)) return;
 
-  const borderClass = status === 'pending' ? 'border-amber-500/50 border-dashed'
-    : status === 'fired' ? 'border-green-500/50' : 'border-slate-600';
-  const iconColor = status === 'pending' ? 'text-amber-400'
-    : status === 'fired' ? 'text-green-400' : 'text-slate-500';
+  const chrome = triggerStatusChrome(status);
   const strikeClass = status === 'cancelled' ? 'line-through text-slate-500' : '';
   const timeLabel = formatTriggerTimeLabel(status, fireAt);
 
@@ -293,10 +299,10 @@ function addTriggerCard(triggerId, message, fireAt, createdAt, status) {
     : '';
 
   const card = document.createElement('div');
-  card.className = 'bg-slate-800 rounded-xl border ' + borderClass + ' overflow-hidden';
+  card.className = 'bg-slate-800 rounded-xl border ' + chrome.border + ' overflow-hidden';
   card.id = 'trigger-card-' + triggerId;
   card.innerHTML = '<div class="flex items-center gap-3 px-4 py-3">'
-    + '<svg id="trigger-dot-' + triggerId + '" class="w-4 h-4 flex-shrink-0 ' + iconColor + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+    + '<svg id="trigger-dot-' + triggerId + '" class="w-4 h-4 flex-shrink-0 ' + chrome.icon + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
     + '<circle cx="12" cy="12" r="10" stroke-width="2"/>'
     + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>'
     + '</svg>'
@@ -316,15 +322,14 @@ function updateTriggerStatus(triggerId, status) {
   const card = document.getElementById('trigger-card-' + triggerId);
   if (!icon) return;
 
-  const iconColor = status === 'pending' ? 'text-amber-400'
-    : status === 'fired' ? 'text-green-400' : 'text-slate-500';
-  const iconClassName = 'w-4 h-4 flex-shrink-0 ' + iconColor;
-  if (icon.className !== iconClassName) icon.className = iconClassName;
+  const chrome = triggerStatusChrome(status);
+  const iconClassName = 'w-4 h-4 flex-shrink-0 ' + chrome.icon;
+  // SVG: className is a read-only SVGAnimatedString; the string compare and
+  // assignment must go through the attribute, or a poll update never paints.
+  if (icon.getAttribute('class') !== iconClassName) icon.setAttribute('class', iconClassName);
 
   if (card) {
-    card.className = 'bg-slate-800 rounded-xl border overflow-hidden '
-      + (status === 'pending' ? 'border-amber-500/50 border-dashed'
-        : status === 'fired' ? 'border-green-500/50' : 'border-slate-600');
+    card.className = 'bg-slate-800 rounded-xl border overflow-hidden ' + chrome.border;
   }
 
   if (text) {

@@ -12,6 +12,7 @@ from src.agents.backends.claude_code import (
   HEADLESS_CLAUDE_DEFAULT_ENV,
   headless_claude_declared_window,
 )
+from src.core import session_usage
 from src.core.codex_usage import _extract_codex_rollout_usage_event
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
@@ -950,3 +951,41 @@ async def test_empty_event_list_returns_none(tmp_path: Path) -> None:
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage is None
+
+
+# ---------------------------------------------------------------------------
+# Facts memo: rescan only on a changed events list
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_facts_memo_rescans_only_after_new_events(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-memo", name="Memo", backend=OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, [
+      _assistant_event("claude-opus-4-6", input_tokens=10_000),
+      _result_event(0.10, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
+  ])
+
+  scans = 0
+  real_scan = session_usage._scan_usage_facts
+
+  def counting_scan(events: list[dict]):
+    nonlocal scans
+    scans += 1
+    return real_scan(events)
+
+  monkeypatch.setattr(session_usage, "_scan_usage_facts", counting_scan)
+
+  first = await session_mgr.resolve_session_usage(meta.id, meta)
+  second = await session_mgr.resolve_session_usage(meta.id, meta)
+  assert scans == 1
+  assert second == first
+
+  # An appended event changes the memo key, so the next resolution rescans.
+  await session_mgr.save_chat_event(meta.id, _result_event(0.20, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=2000))
+  third = await session_mgr.resolve_session_usage(meta.id, meta)
+  assert scans == 2
+  assert third is not None
+  assert third["total_cost_usd"] == pytest.approx(0.30)

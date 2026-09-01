@@ -10,6 +10,7 @@ const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
 const { createElement, createEscapingElement } = require('./dom_element_stub');
+const { buildSidebarFilterElements } = require('./session_context_stub');
 
 const COMPAT_LOADER_JS = readStatic('compat-loader.js');
 const CHAT_JS = readStatic('chat.js');
@@ -116,11 +117,7 @@ function archivedContext(pages) {
   const {context, fetchCalls} = buildContext({
     elements: new Map([
       ['session-list', nav],
-      ['filter-all', createElement({className: 'filter-pill'})],
-      ['filter-starred', createElement({className: 'filter-pill'})],
-      ['filter-archived', createElement({className: 'filter-pill'})],
-      ['filter-scheduled', createElement({className: 'filter-pill'})],
-      ['cron-add-btn', createElement()],
+      ...buildSidebarFilterElements(),
     ]),
     fetch: async (url) => {
       assert.match(url, /^\/api\/sessions\/archived\?limit=100/);

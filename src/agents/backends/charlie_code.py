@@ -1,4 +1,10 @@
-"""CharlieCodeBackend — AgentBackend wrapping the `charlie-code --json` CLI."""
+"""CharlieCodeBackend — AgentBackend wrapping the `charlie-code --json` CLI.
+
+The task text reaches the child through a `task.md` file in the run's
+transport directory, passed via `--task-file`; it never rides argv.
+"""
+
+from pathlib import Path
 
 import structlog
 
@@ -19,14 +25,31 @@ log = structlog.get_logger()
 
 
 class CharlieCodeBackend(AgentBackend):
-  """Runs a `charlie-code --json` subprocess and translates NDJSON events to CC-compatible format."""
+  """Runs a `charlie-code --json` subprocess and translates NDJSON events to CC-compatible format.
 
-  def __init__(self, *, model: str, api_base: str | None = None, **kwargs):
+  The task text is written to ``task.md`` in the run's transport directory
+  during ``_prepare_transport()`` and handed to the CLI via ``--task-file``.
+  """
+
+  def __init__(
+      self,
+      *,
+      model: str,
+      api_base: str | None = None,
+      context_window: int | None = None,
+      **kwargs,
+  ):
     super().__init__(model=model, **kwargs)
     self._api_base = api_base
     if not self._api_base:
       raise ValueError("charlie-code backend requires api_base (set backend_options[].api_base in config.yaml)")
+    self._context_window = context_window
     self._bin = resolve_binary("charlie-code", USER_LOCAL_BIN)
+    self._transport_dir: Path | None = None
+
+  def _prepare_transport(self, log_dir: Path) -> None:
+    """Record the transport dir the task file will be written into."""
+    self._transport_dir = log_dir
 
   def _prepare_env(self, env: dict) -> dict:
     charlie_code_env = {**env}
@@ -34,13 +57,17 @@ class CharlieCodeBackend(AgentBackend):
     return charlie_code_env
 
   def _build_command(self, prompt: str) -> list[str]:
-    cmd = [self._bin, "--json", "--model", self._model]
-    if self._api_base:
-      cmd += ["--api-base", self._api_base]
+    if self._transport_dir is None:
+      raise RuntimeError("charlie-code backend: _prepare_transport must run before _build_command")
+    task_path = self._transport_dir / "task.md"
+    task_path.write_text(self._effective_prompt(prompt), encoding="utf-8")
+    cmd = [self._bin, "--json", "--model", self._model, "--api-base", self._api_base]
+    if self._context_window is not None:
+      cmd += ["--context-window", str(self._context_window)]
     if self._resume_session_id:
       cmd += ["--resume", self._resume_session_id]
     cmd += self._extra_flags
-    cmd += ["--", self._effective_prompt(prompt)]
+    cmd += ["--task-file", str(task_path)]
     return cmd
 
   def _effective_prompt(self, prompt: str) -> str:

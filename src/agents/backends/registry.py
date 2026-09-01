@@ -69,7 +69,11 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
         model_auto_compact_token_limit=option.model_auto_compact_token_limit,
         **kwargs)
   if option.type == "charlie-code":
-    return CharlieCodeBackend(model=_require_model(option), api_base=option.api_base, **kwargs)
+    return CharlieCodeBackend(
+        model=_require_model(option),
+        api_base=option.api_base,
+        context_window=option.context_window,
+        **kwargs)
   if option.type == "gemini":
     return GeminiCliBackend(model=_require_model(option), **kwargs)
   if option.type == "opencode":

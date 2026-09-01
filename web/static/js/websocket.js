@@ -17,15 +17,22 @@ function isStaleSocket(socket, targetSession, generation) {
   return socket !== ws || generation !== wsGeneration || targetSession !== SESSION_ID;
 }
 
+// Teardown paths detach all four handlers before close, so a closing socket
+// cannot fire events into the session that replaced it. The onerror leg keeps
+// its handlers attached: its onclose drives reconnect backoff.
+function detachSocketHandlers(socket) {
+  socket.onopen = null;
+  socket.onmessage = null;
+  socket.onclose = null;
+  socket.onerror = null;
+}
+
 function disconnectWS() {
   wsGeneration++;
   const socket = ws;
   ws = null;
   if (!socket) return;
-  socket.onopen = null;
-  socket.onmessage = null;
-  socket.onclose = null;
-  socket.onerror = null;
+  detachSocketHandlers(socket);
   try { socket.close(); } catch {}
 }
 
@@ -40,10 +47,7 @@ function connectWS() {
 
   socket.onopen = () => {
     if (isStaleSocket(socket, targetSession, generation)) {
-      socket.onopen = null;
-      socket.onmessage = null;
-      socket.onclose = null;
-      socket.onerror = null;
+      detachSocketHandlers(socket);
       try { socket.close(); } catch {}
       return;
     }

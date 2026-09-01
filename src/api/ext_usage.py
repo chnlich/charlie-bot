@@ -414,20 +414,6 @@ def _read_latest_token_count_event(path: Path, size: int) -> dict[str, Any] | No
   return _latest_token_count_event(path.read_text().splitlines())
 
 
-def _extract_latest_codex_usage(
-    lines: list[str],
-    *,
-    fetched_at: str | None = None,
-    account: str = "",
-) -> dict[str, Any] | None:
-  """Parse the latest Codex token_count event from a session JSONL file."""
-  effective_fetched_at = fetched_at or datetime.now(UTC).isoformat()
-  event = _latest_token_count_event(lines)
-  if event is None:
-    return None
-  return _transform_codex_response(event, fetched_at=effective_fetched_at, account=account)
-
-
 def _parse_codex_timestamp(timestamp: Any) -> datetime:
   if not isinstance(timestamp, str):
     raise ValueError(f"expected string timestamp, got {type(timestamp).__name__}")
@@ -548,36 +534,6 @@ def _sum_codex_spend_events(events_by_file: list[list[_SpendEvent]], *, now: dat
       "last_24h_usd": _sum_codex_spend(last_24h_by_model),
       "last_7d_usd": _sum_codex_spend(last_7d_by_model),
   }
-
-
-def _compute_codex_spend_windows(
-    *,
-    rollout_paths: list[Path] | None = None,
-    sessions_dir: Path | None = None,
-    now: datetime | None = None,
-) -> dict[str, float]:
-  """Compute rolling Codex spend by summing per-turn token usage from rollout logs."""
-  effective_now = now or datetime.now(UTC)
-  if effective_now.tzinfo is None:
-    raise ValueError("now must be timezone-aware")
-  effective_now = effective_now.astimezone(UTC)
-  min_mtime = (effective_now - timedelta(days=7)).timestamp()
-  if rollout_paths is None:
-    rollout_paths = _list_rollout_files(sessions_dir or (Path.home() / ".codex" / "sessions"))
-
-  events_by_file = []
-  for path in rollout_paths:
-    try:
-      if path.stat().st_mtime < min_mtime:
-        continue
-    except OSError as e:
-      log.warning("ext_usage_codex_spend_file_skip", path=str(path), error=str(e))
-      continue
-    events = _extract_codex_spend_events(path)
-    if events is not None:
-      events_by_file.append(events)
-
-  return _sum_codex_spend_events(events_by_file, now=effective_now)
 
 
 CODEX_LIMIT_SLOTS = ("primary", "secondary")

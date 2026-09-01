@@ -33,6 +33,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var COL_MAX = 300;
     var COL_MIN = 240;
     var AUTH_MESSAGE = 'log in to comment';
+    var NO_SESSION_MESSAGE = 'Cannot parse session id from this artifact URL.';
     var SECTION_SELECTOR = 'section';
     // Each shortcut owns a `kind`, which doubles as its dedup key and as the
     // persisted draft discriminator. Manual block comments keep kind 'block';
@@ -776,7 +777,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       if (!sessionId) {
         var reason = document.createElement('div');
         reason.className = GLOBAL_PREFIX + '-shortcut-reason';
-        reason.textContent = 'Cannot parse session id from this artifact URL.';
+        reason.textContent = NO_SESSION_MESSAGE;
         container.appendChild(reason);
       }
 
@@ -842,7 +843,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
       if (!sessionId) {
         addBtn.disabled = true;
-        setPopoverError(node, 'Cannot parse session id from this artifact URL.');
+        setPopoverError(node, NO_SESSION_MESSAGE);
       } else {
         addBtn.addEventListener('click', function() {
           submitComment(block, textarea);
@@ -943,7 +944,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
 
       var reason = document.createElement('div');
       reason.className = GLOBAL_PREFIX + '-tray-reason';
-      reason.textContent = 'Cannot parse session id from this artifact URL.';
+      reason.textContent = NO_SESSION_MESSAGE;
       container.appendChild(reason);
 
       var actions = document.createElement('div');

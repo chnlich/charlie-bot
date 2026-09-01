@@ -5,6 +5,7 @@ import time
 import types
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -110,6 +111,24 @@ def _build_spend_token_count_event(
       },
     },
   }
+
+
+def _write_live_quota_rollout(rollout_dir: Path, now: datetime) -> None:
+  """Seed rollout-live.jsonl: one legacy quota event timestamped *now* (8% primary, 2% secondary).
+
+  The utime pins the file's mtime to *now* — the provider's live-file selection reads mtimes.
+  """
+  live_rollout_path = rollout_dir / "rollout-live.jsonl"
+  live_rollout_path.write_text(
+      json.dumps(_build_token_count_event(
+          timestamp=now.isoformat().replace("+00:00", "Z"),
+          primary_used_percent=8.0,
+          primary_resets_at=int(now.timestamp()) + 3600,
+          secondary_used_percent=2.0,
+          secondary_resets_at=int(now.timestamp()) + 86400,
+      )) + "\n"
+  )
+  os.utime(live_rollout_path, (now.timestamp(), now.timestamp()))
 
 
 def test_codex_usage_transform_adds_token_count_observed_at() -> None:
@@ -283,17 +302,7 @@ async def test_codex_provider_fetch_keeps_quota_when_historical_spend_row_is_mal
   stale_mtime = now.timestamp() - 60
   os.utime(stale_rollout_path, (stale_mtime, stale_mtime))
 
-  live_rollout_path = rollout_dir / "rollout-live.jsonl"
-  live_rollout_path.write_text(
-      json.dumps(_build_token_count_event(
-          timestamp=now.isoformat().replace("+00:00", "Z"),
-          primary_used_percent=8.0,
-          primary_resets_at=int(now.timestamp()) + 3600,
-          secondary_used_percent=2.0,
-          secondary_resets_at=int(now.timestamp()) + 86400,
-      )) + "\n"
-  )
-  os.utime(live_rollout_path, (now.timestamp(), now.timestamp()))
+  _write_live_quota_rollout(rollout_dir, now)
 
   usage = await provider.fetch()
 
@@ -317,17 +326,7 @@ async def test_codex_provider_fetch_returns_quota_when_spend_aggregations_raises
   rollout_dir = sessions_dir / f"{today.year:04d}" / f"{today.month:02d}" / f"{today.day:02d}"
   rollout_dir.mkdir(parents=True)
 
-  live_rollout_path = rollout_dir / "rollout-live.jsonl"
-  live_rollout_path.write_text(
-      json.dumps(_build_token_count_event(
-          timestamp=now.isoformat().replace("+00:00", "Z"),
-          primary_used_percent=8.0,
-          primary_resets_at=int(now.timestamp()) + 3600,
-          secondary_used_percent=2.0,
-          secondary_resets_at=int(now.timestamp()) + 86400,
-      )) + "\n"
-  )
-  os.utime(live_rollout_path, (now.timestamp(), now.timestamp()))
+  _write_live_quota_rollout(rollout_dir, now)
 
   def _broken_compute(self, rollout_paths):
     raise RuntimeError("simulated spend failure")

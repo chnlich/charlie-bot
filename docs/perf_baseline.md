@@ -29,6 +29,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M16 trigger-file torn reads | M16 collector below | torn reads per concurrent save stream | 0 torn reads | — (introduced with its first history row) |
 | M17 session fork (clone) latency | M17 collector below | seconds per fork of the heaviest real session, scratch home | median < 2 s | — (introduced with its first history row) |
 | M18 hidden-tab periodic poll fetches | M18 collector below | poll fetches per simulated 10 hidden minutes | 0 fetches | — (introduced with its first history row) |
+| M19 SSE framing, chunked large-frame stream | M19 collector below | seconds per 16 MB payload (16 KB chunks, ~1 MB frames) | median < 0.2 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -724,6 +725,57 @@ async function tickWindow(seconds) {
 EOF
 ```
 
+M19 — SSE line framing of a chunked large-frame stream. `iter_sse_lines` frames
+both opencode master/worker event streams and the anthropic-proxy upstream, and
+its terminator-search cost is invisible to the HTTP probes above: a frame spans
+as many byte chunks as the network delivers, so when the search re-scans the
+accumulated remainder on every chunk, framing costs O(bytes × chunks) — seconds
+of blocked event-loop time per multi-MB tool payload at network chunk sizes —
+while a resumable search stays O(bytes). The collector streams a 16 MB payload
+of ~1 MB frames (terminators at frame ends only) through the adapter at a fixed
+16 KB chunking against the checkout's code, synthetic and read-only. Evidence
+points the same collector at the before and after checkouts
+(`sys.path.insert` at each root), the same shape as the M7 protocol:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, sys, time
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.core.sse import iter_sse_lines
+
+class _Stub:
+  def __init__(self, chunks):
+    self._chunks = chunks
+  async def aiter_bytes(self):
+    for c in self._chunks:
+      yield c
+
+frame = b"data: " + b"x" * 1000000 + b"\n\n"
+payload = frame * 16
+chunks = [payload[i:i + 16 * 1024] for i in range(0, len(payload), 16 * 1024)]
+
+async def run_once():
+  lines = 0
+  t0 = time.perf_counter()
+  async for _ in iter_sse_lines(_Stub(chunks)):
+    lines += 1
+  return time.perf_counter() - t0, lines
+
+async def main():
+  await run_once()  # cold pass, as at a first big frame after a server start; not timed
+  times = []
+  lines = 0
+  for _ in range(5):
+    dt, lines = await run_once()
+    times.append(dt)
+  times.sort()
+  print(f"{len(payload) / 1e6:.1f} MB payload in 16 KB chunks, ~1 MB frames, {lines} lines; "
+        f"framing median {times[2]:.4f} s, max {times[-1]:.4f} s")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -747,3 +799,4 @@ EOF
 | 2026-09-01 | #530 | M6 median 0.0119 s → 0.0046 s, max 0.0123 s → 0.0051 s (scratch TestClient A/B on the 20534-event worst session's copied corpus; live-before median 0.014 s, max 0.022 s; usage payload identical) | whole-result usage-facts memo keyed on the cached events list's identity+length (LRU cap 8); load+scan moved off the event loop into the load's to_thread |
 | 2026-09-01 | #533 | M7 live-before median 1.526-1.662 s → scratch-after warm median 0.443 s, max 1.158 s (scratch-server A/B, scratch CHARLIEBOT_HOME with empty cache, cold 10.49 s; collector-level warm 0.9105 s → 0.5261 s, warm re-scan 10.4 MB → 0 bytes; cached vs cacheless tallies byte-identical at a pinned db signature) | opencode db contribution joined the persisted tally cache, signatured on the main db file plus its WAL sidecar |
 | 2026-09-01 | #535 | M18 241 → 0 poll fetches per simulated 10 hidden min (one expanded running worker + ext-usage strip; 1 bootstrap fetch excluded; 10 s visible re-check 4 fetches before and after) | workers-panel thread-detail poll and ext-usage strip timers registered through page-timers like every other timer; M18 definition and healthy range introduced with this PR |
+| 2026-09-01 | #538 | M19 median 2.6548 s → 0.1151 s, max 2.8682 s → 0.1377 s (16.0 MB payload in 16 KB chunks, ~1 MB frames; framed line stream identical) | terminator search resumes at the proven-clean remainder cursor instead of re-scanning the whole remainder per chunk; M19 definition and healthy range introduced with this PR |

@@ -1295,6 +1295,7 @@ test('deleteSessionPermanently renders the welcome state inline when no rendered
       ['filter-archived', createElement({className: 'filter-pill'})],
       ['filter-scheduled', createElement({className: 'filter-pill'})],
       ['cron-add-btn', createElement()],
+      ['welcome-view', createElement({tagName: 'TEMPLATE', innerHTML: '<h2>Welcome to CharlieBot</h2>'})],
     ]),
     querySelector: (selector) => {
       if (selector === 'main') return main;

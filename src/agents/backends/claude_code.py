@@ -3,6 +3,7 @@
 import asyncio
 import os
 import signal
+from collections.abc import Mapping
 from pathlib import Path
 
 import structlog
@@ -57,6 +58,21 @@ HEADLESS_CLAUDE_FORWARDED_ENV_NAMES: tuple[str, ...] = (
 # reach the real compaction point (see comment above HEADLESS_CLAUDE_DEFAULT_ENV).
 CLAUDE_COMPACT_OUTPUT_RESERVE = 20_000
 CLAUDE_COMPACT_CONTEXT_RESERVE = 13_000
+
+
+def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
+  """Environment for a supervisor process whose children run Claude Code.
+
+  Two pins travel together for every supervisor (master, worker): the inherited
+  ``CLAUDECODE`` marker is stripped — a child ``claude`` refuses to launch when
+  it detects a parent session — and ``CLAUDE_CODE_DISABLE_AUTO_MEMORY`` stays
+  pinned, so a child's auto-memory writes stay off and CharlieBot's own memory
+  store remains the only one. Returns a copy; the argument is not mutated.
+  """
+  out = dict(env)
+  out.pop("CLAUDECODE", None)
+  out["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+  return out
 
 
 def headless_claude_env() -> dict[str, str]:

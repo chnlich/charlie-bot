@@ -4,7 +4,11 @@ from pathlib import Path
 import pytest
 from conftest import FLAG_LIKE_PROMPT
 
-from src.agents.backends.claude_code import BASE_COMMAND, ClaudeCodeBackend
+from src.agents.backends.claude_code import (
+  BASE_COMMAND,
+  ClaudeCodeBackend,
+  claude_supervisor_env,
+)
 
 
 def test_build_command_does_not_include_flag_like_prompt() -> None:
@@ -199,6 +203,22 @@ def test_prepare_env_applies_headless_policy_over_incoming_env(monkeypatch: pyte
   env = backend._prepare_env({"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "0"})
 
   assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
+
+def test_claude_supervisor_env_strips_nested_marker_and_pins_auto_memory() -> None:
+  env = claude_supervisor_env({"CLAUDECODE": "1", "PATH": "/usr/bin"})
+
+  assert "CLAUDECODE" not in env
+  assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+  assert env["PATH"] == "/usr/bin"
+
+
+def test_claude_supervisor_env_does_not_mutate_input() -> None:
+  source = {"CLAUDECODE": "1"}
+
+  claude_supervisor_env(source)
+
+  assert source == {"CLAUDECODE": "1"}
 
 
 def test_claude_config_dir_expands_user_and_injects_env(monkeypatch: pytest.MonkeyPatch) -> None:

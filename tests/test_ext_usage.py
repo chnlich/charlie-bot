@@ -16,10 +16,13 @@ from src.api.ext_usage import (
     ClaudeUsageProvider,
     CodexUsageProvider,
     _account_label,
-    _compute_codex_spend_windows,
     _derive_accounts,
-    _extract_latest_codex_usage,
+    _extract_codex_spend_events,
+    _latest_token_count_event,
+    _list_rollout_files,
     _poll_loop,
+    _sum_codex_spend_events,
+    _transform_codex_response,
     _transform_response,
 )
 from src.core.config import CharlieBotConfig
@@ -109,7 +112,7 @@ def _build_spend_token_count_event(
   }
 
 
-def test_extract_latest_codex_usage_adds_token_count_observed_at() -> None:
+def test_codex_usage_transform_adds_token_count_observed_at() -> None:
   fetched_at = "2026-03-27T18:30:00+00:00"
   lines = [json.dumps(_build_token_count_event(
       timestamp="2026-03-27T18:29:35.694Z",
@@ -119,7 +122,9 @@ def test_extract_latest_codex_usage_adds_token_count_observed_at() -> None:
       secondary_resets_at=1775240223,
   ))]
 
-  usage = _extract_latest_codex_usage(lines, fetched_at=fetched_at)
+  event = _latest_token_count_event(lines)
+  assert event is not None
+  usage = _transform_codex_response(event, fetched_at=fetched_at)
 
   assert usage == {
     "windows": [
@@ -141,7 +146,7 @@ def test_extract_latest_codex_usage_adds_token_count_observed_at() -> None:
   assert "rate_limits_state" not in usage
 
 
-def test_extract_latest_codex_usage_uses_latest_token_count_event() -> None:
+def test_codex_usage_transform_uses_the_latest_token_count_event() -> None:
   lines = [
     json.dumps(_build_token_count_event(
         timestamp="2026-03-27T17:00:00Z",
@@ -165,15 +170,16 @@ def test_extract_latest_codex_usage_uses_latest_token_count_event() -> None:
     }),
   ]
 
-  usage = _extract_latest_codex_usage(lines, fetched_at="2026-03-27T18:10:00+00:00")
+  event = _latest_token_count_event(lines)
+  assert event is not None
+  usage = _transform_codex_response(event, fetched_at="2026-03-27T18:10:00+00:00")
 
-  assert usage is not None
   assert [w["utilization"] for w in usage["windows"]] == [18.0, 6.0]
   assert [w["window_minutes"] for w in usage["windows"]] == [300, 10080]
   assert usage["token_count_observed_at"] == "2026-03-27T18:00:00Z"
 
 
-def test_extract_latest_codex_usage_handles_null_rate_limit_buckets() -> None:
+def test_codex_usage_transform_handles_null_rate_limit_buckets() -> None:
   fetched_at = "2026-03-27T18:40:00+00:00"
   lines = [json.dumps({
     "timestamp": "2026-03-27T18:39:35.694Z",
@@ -191,7 +197,9 @@ def test_extract_latest_codex_usage_handles_null_rate_limit_buckets() -> None:
     },
   })]
 
-  usage = _extract_latest_codex_usage(lines, fetched_at=fetched_at)
+  event = _latest_token_count_event(lines)
+  assert event is not None
+  usage = _transform_codex_response(event, fetched_at=fetched_at)
 
   assert usage == {
     "windows": [],
@@ -202,7 +210,7 @@ def test_extract_latest_codex_usage_handles_null_rate_limit_buckets() -> None:
   }
 
 
-def test_extract_latest_codex_usage_does_not_assume_business_state_without_metadata() -> None:
+def test_codex_usage_transform_does_not_assume_business_state_without_metadata() -> None:
   fetched_at = "2026-03-27T18:40:00+00:00"
   lines = [json.dumps({
     "timestamp": "2026-03-27T18:39:35.694Z",
@@ -216,7 +224,9 @@ def test_extract_latest_codex_usage_does_not_assume_business_state_without_metad
     },
   })]
 
-  usage = _extract_latest_codex_usage(lines, fetched_at=fetched_at)
+  event = _latest_token_count_event(lines)
+  assert event is not None
+  usage = _transform_codex_response(event, fetched_at=fetched_at)
 
   assert usage == {
     "windows": [],
@@ -226,11 +236,9 @@ def test_extract_latest_codex_usage_does_not_assume_business_state_without_metad
   }
 
 
-def test_compute_codex_spend_windows_prices_recent_turns_by_model(tmp_path) -> None:
+def test_spend_aggregation_prices_recent_turns_by_model(tmp_path) -> None:
   now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
-  rollout_dir = tmp_path / "2026" / "06" / "01"
-  rollout_dir.mkdir(parents=True)
-  rollout_path = rollout_dir / "rollout-recent.jsonl"
+  rollout_path = tmp_path / "rollout-recent.jsonl"
 
   events = [
     {
@@ -248,14 +256,10 @@ def test_compute_codex_spend_windows_prices_recent_turns_by_model(tmp_path) -> N
         input_tokens=5_000_000, cached_input_tokens=0, output_tokens=100_000),
   ]
   rollout_path.write_text("\n".join(json.dumps(event) for event in events) + "\n")
-  os.utime(rollout_path, (now.timestamp(), now.timestamp()))
 
-  old_rollout_path = rollout_dir / "rollout-old-mtime.jsonl"
-  old_rollout_path.write_text("{not valid json\n")
-  old_mtime = (now - timedelta(days=8)).timestamp()
-  os.utime(old_rollout_path, (old_mtime, old_mtime))
-
-  spend = _compute_codex_spend_windows(sessions_dir=tmp_path, now=now)
+  extracted = _extract_codex_spend_events(rollout_path)
+  assert extracted is not None
+  spend = _sum_codex_spend_events([extracted], now=now)
 
   assert spend["last_24h_usd"] == pytest.approx(4.85)
   assert spend["last_7d_usd"] == pytest.approx(13.20)
@@ -500,11 +504,9 @@ async def test_codex_provider_usage_scrape_full_read_on_tail_miss(tmp_path, monk
   assert scanned[1] > scanned[0]
 
 
-def test_compute_codex_spend_windows_skips_bad_rows_without_poisoning_totals(tmp_path) -> None:
+def test_spend_aggregation_skips_bad_rows_without_poisoning_totals(tmp_path) -> None:
   now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
-  rollout_dir = tmp_path / "2026" / "06" / "01"
-  rollout_dir.mkdir(parents=True)
-  rollout_path = rollout_dir / "rollout-mixed.jsonl"
+  rollout_path = tmp_path / "rollout-mixed.jsonl"
 
   events = [
     {"type": "turn_context", "payload": {"model": "gpt-5.5"}},
@@ -527,25 +529,23 @@ def test_compute_codex_spend_windows_skips_bad_rows_without_poisoning_totals(tmp
         input_tokens=500_000, cached_input_tokens=50_000, output_tokens=5_000),
   ]
   rollout_path.write_text("\n".join(json.dumps(event) if isinstance(event, dict) else event for event in events) + "\n")
-  os.utime(rollout_path, (now.timestamp(), now.timestamp()))
 
-  spend = _compute_codex_spend_windows(sessions_dir=tmp_path, now=now)
+  extracted = _extract_codex_spend_events(rollout_path)
+  assert extracted is not None
+  spend = _sum_codex_spend_events([extracted], now=now)
 
   assert spend["last_24h_usd"] == pytest.approx(7.275)
   assert spend["last_7d_usd"] == pytest.approx(7.275)
 
 
-def test_compute_codex_spend_windows_skips_unreadable_file(tmp_path) -> None:
+def test_spend_aggregation_skips_unreadable_file(tmp_path) -> None:
   now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
-  rollout_dir = tmp_path / "2026" / "06" / "01"
-  rollout_dir.mkdir(parents=True)
 
-  unreadable_path = rollout_dir / "rollout-unreadable.jsonl"
+  unreadable_path = tmp_path / "rollout-unreadable.jsonl"
   unreadable_path.write_text("should not be read\n")
-  os.utime(unreadable_path, (now.timestamp(), now.timestamp()))
   os.chmod(unreadable_path, 0o000)
 
-  readable_path = rollout_dir / "rollout-readable.jsonl"
+  readable_path = tmp_path / "rollout-readable.jsonl"
   events = [
     {"type": "turn_context", "payload": {"model": "gpt-5.5"}},
     _build_spend_token_count_event(
@@ -553,10 +553,12 @@ def test_compute_codex_spend_windows_skips_unreadable_file(tmp_path) -> None:
         input_tokens=1_000_000, cached_input_tokens=0, output_tokens=0),
   ]
   readable_path.write_text("\n".join(json.dumps(event) for event in events) + "\n")
-  os.utime(readable_path, (now.timestamp(), now.timestamp()))
 
   try:
-    spend = _compute_codex_spend_windows(sessions_dir=tmp_path, now=now)
+    assert _extract_codex_spend_events(unreadable_path) is None
+    extracted = _extract_codex_spend_events(readable_path)
+    assert extracted is not None
+    spend = _sum_codex_spend_events([extracted], now=now)
   finally:
     os.chmod(unreadable_path, 0o644)
 
@@ -919,7 +921,7 @@ def test_poll_outer_exception_still_backs_off_before_retrying(monkeypatch) -> No
   assert derive_count["i"] == 2
   assert state["sleeps"] == 2
 
-def test_extract_latest_codex_usage_reports_weekly_only_shape() -> None:
+def test_codex_usage_transform_reports_weekly_only_shape() -> None:
   """Codex now reports a single weekly window in the primary slot.
 
   The window is identified by its reported length, so it lands on a 7d entry
@@ -932,7 +934,9 @@ def test_extract_latest_codex_usage_reports_weekly_only_shape() -> None:
       resets_at=1785016000,
   ))]
 
-  usage = _extract_latest_codex_usage(lines, fetched_at=fetched_at)
+  event = _latest_token_count_event(lines)
+  assert event is not None
+  usage = _transform_codex_response(event, fetched_at=fetched_at)
 
   assert usage["windows"] == [{
       "window_minutes": 10080,
@@ -942,7 +946,7 @@ def test_extract_latest_codex_usage_reports_weekly_only_shape() -> None:
   assert "rate_limits_state" not in usage
 
 
-def test_extract_latest_codex_usage_drops_slot_without_window_minutes() -> None:
+def test_codex_usage_transform_drops_slot_without_window_minutes() -> None:
   """An unidentifiable window is dropped, never guessed at from slot order."""
   lines = [json.dumps({
     "timestamp": "2026-07-20T22:08:57.925Z",
@@ -956,12 +960,14 @@ def test_extract_latest_codex_usage_drops_slot_without_window_minutes() -> None:
     },
   })]
 
-  usage = _extract_latest_codex_usage(lines, fetched_at="2026-07-20T22:10:00+00:00")
+  event = _latest_token_count_event(lines)
+  assert event is not None
+  usage = _transform_codex_response(event, fetched_at="2026-07-20T22:10:00+00:00")
 
   assert usage["windows"] == []
 
 
-def test_extract_latest_codex_usage_marks_missing_percentage_unknown() -> None:
+def test_codex_usage_transform_marks_missing_percentage_unknown() -> None:
   """A window with no reported usage is unknown, not zero."""
   lines = [json.dumps({
     "timestamp": "2026-07-20T22:08:57.925Z",
@@ -975,7 +981,9 @@ def test_extract_latest_codex_usage_marks_missing_percentage_unknown() -> None:
     },
   })]
 
-  usage = _extract_latest_codex_usage(lines, fetched_at="2026-07-20T22:10:00+00:00")
+  event = _latest_token_count_event(lines)
+  assert event is not None
+  usage = _transform_codex_response(event, fetched_at="2026-07-20T22:10:00+00:00")
 
   assert usage["windows"] == [{
       "window_minutes": 10080,
@@ -1137,25 +1145,15 @@ async def test_codex_provider_fetch_reports_no_sessions_for_empty_home(tmp_path)
   assert provider.last_error == "no sessions found"
 
 
-def test_compute_codex_spend_windows_accepts_a_prebuilt_file_list(tmp_path) -> None:
+def test_list_rollout_files_finds_nested_rollout_logs(tmp_path) -> None:
   """The usage scrape and the spend aggregation share one directory walk."""
-  now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
-  rollout_dir = tmp_path / "2026" / "06" / "01"
+  sessions_dir = tmp_path / "sessions"
+  rollout_dir = sessions_dir / "2026" / "06" / "01"
   rollout_dir.mkdir(parents=True)
   rollout_path = rollout_dir / "rollout-shared.jsonl"
-  rollout_path.write_text("\n".join([
-      json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.3-codex"}}),
-      json.dumps(_build_spend_token_count_event(
-          timestamp=now.isoformat(), input_tokens=1000,
-          cached_input_tokens=0, output_tokens=100)),
-  ]) + "\n")
-  os.utime(rollout_path, (now.timestamp(), now.timestamp()))
+  rollout_path.write_text('{"type": "turn_context", "payload": {"model": "gpt-5.3-codex"}}\n')
 
-  from_list = _compute_codex_spend_windows(rollout_paths=[rollout_path], now=now)
-  from_walk = _compute_codex_spend_windows(sessions_dir=tmp_path, now=now)
-
-  assert from_list == from_walk
-  assert from_list["last_7d_usd"] > 0.0
+  assert _list_rollout_files(sessions_dir) == [rollout_path]
 
 
 def test_poll_seeds_pending_rows_so_no_account_is_missing_from_the_first_broadcast(monkeypatch) -> None:

@@ -33,19 +33,24 @@ def _range_spec(base: str, head: str, mode: str) -> str:
   return f"{base}...{head}" if mode == "three-dot" else f"{base}..{head}"
 
 
-def _run_git_diff_sync(repo_path: Path, args: list[str]) -> str:
-  """Run `git diff <args>` in repo_path and return stdout; raise HTTPException(500) on failure."""
+def _run_git_sync(repo_path: Path, args: list[str], timeout: float, failure_detail: str) -> str:
+  """Run `git <args>` in repo_path and return stdout; raise HTTPException(500) on failure."""
   result = subprocess.run(
-      ["git", "diff", *args],
+      ["git", *args],
       cwd=repo_path,
       capture_output=True,
       text=True,
       check=False,
-      timeout=SUBPROCESS_GIT_DIFF_TIMEOUT,
+      timeout=timeout,
   )
   if result.returncode != 0:
-    raise HTTPException(status_code=500, detail=result.stderr.strip() or "git diff failed")
+    raise HTTPException(status_code=500, detail=result.stderr.strip() or failure_detail)
   return result.stdout
+
+
+def _run_git_diff_sync(repo_path: Path, args: list[str]) -> str:
+  """Run `git diff <args>` in repo_path and return stdout; raise HTTPException(500) on failure."""
+  return _run_git_sync(repo_path, ["diff", *args], SUBPROCESS_GIT_DIFF_TIMEOUT, "git diff failed")
 
 
 async def _run_git_diff(repo_path: Path, args: list[str]) -> str:
@@ -56,17 +61,9 @@ async def _run_git_diff(repo_path: Path, args: list[str]) -> str:
 
 def _resolve_commit_sync(repo_path: Path, ref: str) -> str:
   """Resolve a git ref to its full commit SHA."""
-  result = subprocess.run(
-      ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
-      cwd=repo_path,
-      capture_output=True,
-      text=True,
-      check=False,
-      timeout=SUBPROCESS_GIT_READ_TIMEOUT,
-  )
-  if result.returncode != 0:
-    raise HTTPException(status_code=500, detail=result.stderr.strip() or "git rev-parse failed")
-  return result.stdout.strip()
+  stdout = _run_git_sync(
+      repo_path, ["rev-parse", "--verify", f"{ref}^{{commit}}"], SUBPROCESS_GIT_READ_TIMEOUT, "git rev-parse failed")
+  return stdout.strip()
 
 
 async def _resolve_commit(repo_path: Path, ref: str) -> str:
@@ -131,17 +128,12 @@ def _parse_name_status_z(output: str) -> dict[str, str]:
 
 def _list_branches_sync(repo_path: Path) -> str:
   """Run `git branch -a` in repo_path and return stdout; raise HTTPException(500) on failure."""
-  result = subprocess.run(
-      ["git", "branch", "-a", "--sort=-committerdate", "--format=%(refname:short)"],
-      cwd=repo_path,
-      capture_output=True,
-      text=True,
-      check=False,
-      timeout=SUBPROCESS_GIT_READ_TIMEOUT,
+  return _run_git_sync(
+      repo_path,
+      ["branch", "-a", "--sort=-committerdate", "--format=%(refname:short)"],
+      SUBPROCESS_GIT_READ_TIMEOUT,
+      "git branch failed",
   )
-  if result.returncode != 0:
-    raise HTTPException(status_code=500, detail=result.stderr.strip())
-  return result.stdout
 
 
 @router.get("/branches")

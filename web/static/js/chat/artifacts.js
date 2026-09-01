@@ -468,6 +468,12 @@ function _planStateLabel(plan) {
   return plan ? plan.state : '';
 }
 
+// Both plan-version lookups return this one record shape; compact-card
+// renders and badge updates read the same fields.
+function _planVersionRecord(plan, ver) {
+  return {planId: plan.id, v: ver.v, title: plan.title, state: _planStateLabel(plan), file: ver.file};
+}
+
 function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, sessionsRoot) {
   var plans = (snapshot && snapshot.plans) || [];
   var sessionDir = buildSessionDir(sessionId, sessionsRoot);
@@ -480,7 +486,7 @@ function lookupRegisteredPlanVersion(snapshot, absPath, sessionId, sessionsRoot)
       if (!ver || !ver.file) continue;
       var expected = sessionDir + '/' + ver.file;
       if (absPath === expected) {
-        return {planId: plan.id, v: ver.v, title: plan.title, state: _planStateLabel(plan), file: ver.file};
+        return _planVersionRecord(plan, ver);
       }
     }
   }
@@ -500,7 +506,7 @@ function lookupPlanVersionState(snapshot, planId, v) {
     for (var j = 0; j < versions.length; j++) {
       var ver = versions[j];
       if (Number(ver && ver.v) === Number(v)) {
-        return {planId: plan.id, v: ver.v, title: plan.title, state: _planStateLabel(plan), file: ver.file};
+        return _planVersionRecord(plan, ver);
       }
     }
   }

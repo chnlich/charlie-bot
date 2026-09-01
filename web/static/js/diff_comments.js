@@ -425,15 +425,7 @@
       refreshMarkers(anchor.filePath);
       refreshTray();
     };
-    textarea.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeEditor();
-      } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-        event.preventDefault();
-        submit();
-      }
-    });
+    bindEditorKeys(textarea, closeEditor, submit);
     cancelButton.addEventListener('click', closeEditor);
     addButton.addEventListener('click', submit);
     textarea.focus();
@@ -447,6 +439,20 @@
     editorSpacerRow = null;
     editorRow = null;
     editorBody = null;
+  }
+
+  // Every inline comment editor shares one key contract: Escape cancels,
+  // Ctrl/Meta+Enter submits, and both keys consume the event.
+  function bindEditorKeys(textarea, onCancel, onSubmit) {
+    textarea.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCancel();
+      } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault();
+        onSubmit();
+      }
+    });
   }
 
   function dragTargetFromEvent(event) {
@@ -684,15 +690,7 @@
       entry.comment = entry.isSuggestion ? textarea.value : textarea.value.trim();
       refreshTray();
     };
-    textarea.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        cancel();
-      } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-        event.preventDefault();
-        save();
-      }
-    });
+    bindEditorKeys(textarea, cancel, save);
     textarea.addEventListener('blur', save);
     preview.parentNode.replaceChild(textarea, preview);
     textarea.focus();

@@ -10,7 +10,10 @@ const { loadSidebarStatusContext } = require('./sidebar_status_context_stub');
 // browser: `classList.add`/`remove`/`toggle` count as a write on every call,
 // not only when the resulting string differs, because Chromium still queues
 // a mutation record for a redundant add/toggle. This is what makes a removed
-// write-guard show up as a nonzero count below.
+// write-guard show up as a nonzero count below. getAttribute/setAttribute on
+// 'class'/'title' are counted the same way: SVG nodes take class updates
+// through the attribute because SVGElement.className is a read-only
+// SVGAnimatedString.
 // ---------------------------------------------------------------------------
 function makeCountingElement(initialClasses, initialTitle) {
   const counts = { classWrites: 0, titleWrites: 0 };
@@ -30,6 +33,22 @@ function makeCountingElement(initialClasses, initialTitle) {
     },
     get title() { return titleValue; },
     set title(v) { counts.titleWrites++; titleValue = v; },
+    getAttribute(name) {
+      if (name === 'class') return classNameValue;
+      if (name === 'title') return titleValue;
+      return null;
+    },
+    setAttribute(name, v) {
+      if (name === 'class') {
+        counts.classWrites++;
+        classNameValue = String(v);
+        classSet.clear();
+        classNameValue.split(/\s+/).filter(Boolean).forEach((c) => classSet.add(c));
+      } else if (name === 'title') {
+        counts.titleWrites++;
+        titleValue = v;
+      }
+    },
     classList: {
       contains(c) { return classSet.has(c); },
       add(...cs) {

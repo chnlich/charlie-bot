@@ -119,6 +119,25 @@ def test_trailing_cr_at_stream_end_terminates_the_line() -> None:
   assert remainder == ""
 
 
+def test_scanned_to_resumes_past_proven_clean_bytes() -> None:
+  # First call sees no terminator: the cursor rule over its remainder keeps the
+  # held-back trailing CR inside the search range.
+  emitted, rem = split_sse_lines("abc\r", final=False)
+  assert (emitted, rem) == ([], "abc\r")
+  scanned_to = len(rem) - (1 if rem.endswith("\r") else 0)
+  # The resumed search must still split the CRLF and emit a line that spans
+  # from the buffer start, not from the cursor.
+  lines, rem = split_sse_lines(rem + "\ndef", final=False, scanned_to=scanned_to)
+  assert (lines, rem) == (["abc"], "def")
+
+
+def test_scanned_to_default_reproduces_the_full_rescan() -> None:
+  # scanned_to=0 is the full-buffer search every caller used before resumption existed.
+  buffer = "data: a\r\ndata: b\ntail"
+  assert split_sse_lines(buffer, final=False) == split_sse_lines(buffer, final=False, scanned_to=0)
+  assert split_sse_lines(buffer, final=True) == split_sse_lines(buffer, final=True, scanned_to=0)
+
+
 def test_every_two_way_chunk_split_preserves_the_whole_stream_lines() -> None:
   stream = "data: a\r\ndata: b\ndata: c\r\r\n\n"
   expected = ["data: a", "data: b", "data: c", "", ""]
@@ -178,3 +197,23 @@ async def test_adapter_flushes_unterminated_final_line() -> None:
 @pytest.mark.asyncio
 async def test_adapter_replaces_invalid_utf8_bytes() -> None:
   assert await _drain_lines([b"data: \xff\n"]) == ["data: \ufffd"]
+
+
+@pytest.mark.asyncio
+async def test_resumable_adapter_scan_matches_naive_reference_on_every_two_way_split() -> None:
+  # The adapter resumes the terminator search instead of re-scanning the whole
+  # remainder per chunk; the naive pure-splitter threading is the reference.
+  stream = "data: a\r\ndata: b\ndata: c\r\r\n\n"
+  wire = stream.encode()
+  for cut in range(len(wire) + 1):
+    assert await _drain_lines([wire[:cut], wire[cut:]]) == _split_chunked([stream[:cut], stream[cut:]]), cut
+
+
+@pytest.mark.asyncio
+async def test_large_frame_spanning_many_chunks_frames_like_one_buffer() -> None:
+  # The resumable-scan worst case in production: multi-chunk frames with the
+  # terminator only at the frame end.
+  frame = "data: " + "x" * 100_000
+  raw = (frame + "\r\n\r\n" + frame + "\n\n").encode()
+  chunks = [raw[i:i + 4096] for i in range(0, len(raw), 4096)]
+  assert await _drain_lines(chunks) == [frame, "", frame, ""]

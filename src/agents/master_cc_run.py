@@ -16,6 +16,7 @@ from src.agents.backends.base import (
   make_text_event,
   tail_follow_events,
 )
+from src.agents.backends.claude_code import claude_supervisor_env
 from src.core import event_types as ET
 from src.core import runs
 from src.core.config import CharlieBotConfig, claude_config_dir
@@ -401,11 +402,9 @@ def _route_resume_session(backend_type: str, cc_session_id: str | None) -> tuple
 
 def _build_master_env(cfg: CharlieBotConfig) -> dict[str, str]:
   """Build the environment for the master backend subprocess."""
-  env = {**os.environ}
-  env.pop("CLAUDECODE", None)
+  env = claude_supervisor_env(os.environ)
   env.pop("CHARLIEBOT_SESSION_ID", None)
   env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
-  env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
 
   venv_bin = cfg.charlie_bot_repo / ".venv" / "bin"
   if venv_bin.is_dir():

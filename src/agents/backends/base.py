@@ -385,7 +385,8 @@ class AgentBackend(ABC):
   underlying execution mechanism.
 
   Template-method pattern: subclasses override ``_build_command()`` (required),
-  and optionally ``_prepare_env()`` and ``translate_event()``.
+  and optionally ``_prepare_cwd()``, ``_prepare_transport()``, ``_prepare_env()``,
+  and ``translate_event()``.
 
   Event schema contract:
     All events yielded by run() must be JSON-serializable dicts with at
@@ -450,6 +451,16 @@ class AgentBackend(ABC):
 
   def _prepare_cwd(self, cwd: str) -> None:
     """Hook to prepare the working directory before subprocess spawn. No-op default."""
+
+  def _prepare_transport(self, log_dir: Path) -> None:
+    """Hook to prepare the transport directory before ``_build_command()`` runs.
+
+    Runs once per ``run()`` after the transport directory is resolved, created,
+    and rotated, and before ``_build_command()``; ``log_dir`` is the directory
+    that holds the raw log, so a backend that hands its task to the child
+    through a file writes it here and the file lives as long as the raw log.
+    No-op default.
+    """
 
   def _write_instructions_file(self, cwd: str, filename: str, log_event: str) -> None:
     """Write _instructions_content into <cwd>/<filename> as UTF-8, or no-op when none is set.
@@ -521,7 +532,8 @@ class AgentBackend(ABC):
   async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
     """Spawn the agent subprocess and yield parsed NDJSON event dicts.
 
-    Template method: calls _build_command() -> _prepare_env() -> subprocess
+    Template method: calls _prepare_cwd() -> transport-dir resolution ->
+    _prepare_transport() -> _build_command() -> _prepare_env() -> subprocess
     spawn with stdout/stderr redirected to the raw log files -> tail-follow
     read loop -> translate_event() -> wait for exit.
 
@@ -529,9 +541,6 @@ class AgentBackend(ABC):
     are populated.
     """
     await asyncio.to_thread(self._prepare_cwd, cwd)
-    cmd = self._build_command(prompt)
-    stdin_prompt = self._stdin_prompt(prompt)
-    final_env = self._prepare_env(env)
 
     # The raw log files are the run's transport. When the caller gave no log
     # dir (one-shot use), use a throwaway dir so every covered backend shares
@@ -542,42 +551,47 @@ class AgentBackend(ABC):
     else:
       temp_log_dir = Path(tempfile.mkdtemp(prefix="charliebot-run-"))
       log_dir = temp_log_dir
-    log_dir.mkdir(parents=True, exist_ok=True)
-    raw_path = log_dir / runs.RAW_LOG_NAME
-    stderr_path = log_dir / runs.STDERR_LOG_NAME
-    cursor_path = log_dir / runs.CURSOR_NAME
-
-    # Fresh-spawn invariant: never read or append to a previous attempt's bytes.
-    _rotate_stale_transport(log_dir, raw_path, stderr_path, cursor_path)
-
-    # Open as real FDs and hand them to the child: after spawn the writer
-    # needs no reader, so the run survives this process dying.
-    raw_fd = os.open(raw_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
     try:
-      stderr_fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-    except Exception:
-      os.close(raw_fd)
-      raise
-    try:
-      self._proc = await asyncio.create_subprocess_exec(
-          *cmd,
-          cwd=cwd,
-          stdin=asyncio.subprocess.PIPE if stdin_prompt is not None else asyncio.subprocess.DEVNULL,
-          stdout=raw_fd,
-          stderr=stderr_fd,
-          env=final_env,
-          start_new_session=True,
-      )
-    finally:
-      # The child holds its own copies of both fds.
-      os.close(raw_fd)
-      os.close(stderr_fd)
+      log_dir.mkdir(parents=True, exist_ok=True)
+      raw_path = log_dir / runs.RAW_LOG_NAME
+      stderr_path = log_dir / runs.STDERR_LOG_NAME
+      cursor_path = log_dir / runs.CURSOR_NAME
 
-    if stdin_prompt is not None:
-      self._stdin_task = asyncio.create_task(self._write_stdin_prompt(stdin_prompt))
-    await self._pin_identity_and_fire_on_spawn()
+      # Fresh-spawn invariant: never read or append to a previous attempt's bytes.
+      _rotate_stale_transport(log_dir, raw_path, stderr_path, cursor_path)
 
-    try:
+      await asyncio.to_thread(self._prepare_transport, log_dir)
+      cmd = self._build_command(prompt)
+      stdin_prompt = self._stdin_prompt(prompt)
+      final_env = self._prepare_env(env)
+
+      # Open as real FDs and hand them to the child: after spawn the writer
+      # needs no reader, so the run survives this process dying.
+      raw_fd = os.open(raw_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+      try:
+        stderr_fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+      except Exception:
+        os.close(raw_fd)
+        raise
+      try:
+        self._proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=cwd,
+            stdin=asyncio.subprocess.PIPE if stdin_prompt is not None else asyncio.subprocess.DEVNULL,
+            stdout=raw_fd,
+            stderr=stderr_fd,
+            env=final_env,
+            start_new_session=True,
+        )
+      finally:
+        # The child holds its own copies of both fds.
+        os.close(raw_fd)
+        os.close(stderr_fd)
+
+      if stdin_prompt is not None:
+        self._stdin_task = asyncio.create_task(self._write_stdin_prompt(stdin_prompt))
+      await self._pin_identity_and_fire_on_spawn()
+
       async for event in tail_follow_events(
           raw_path,
           translate=self.translate_event,

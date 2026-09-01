@@ -181,6 +181,8 @@ class BackendOption(BaseModel):
   model_reasoning_effort: str | None = None  # codex backend only: per-backend reasoning effort override
   model_auto_compact_token_limit: int | None = Field(
       default=None, gt=0)  # codex backend only: per-backend auto-compact token limit
+  context_window: int | None = Field(
+      default=None, gt=0)  # charlie-code only: compaction context window in tokens (None = charlie-code default)
   # Overlay filename (no .md) under prompts/model_overlays/. Literal "none" =
   # explicitly fenceless (silent); None = undeclared; a declared-but-unreadable
   # file degrades the wake to a fenceless run. The two latter cases emit one

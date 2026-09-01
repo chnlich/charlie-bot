@@ -1,8 +1,16 @@
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from conftest import FLAG_LIKE_PROMPT
+from pydantic import ValidationError
 
+from src.agents.backends.base import AgentBackend
 from src.agents.backends.charlie_code import CharlieCodeBackend
+from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
+from src.core.config import CharlieBotConfig
+from src.core.models import BackendOption
 
 
 def _build_backend(monkeypatch, **kwargs) -> CharlieCodeBackend:
@@ -11,7 +19,7 @@ def _build_backend(monkeypatch, **kwargs) -> CharlieCodeBackend:
       lambda name, fallback: "/usr/bin/charlie-code",
   )
   kwargs.setdefault("model", "charlie-code-test-model")
-  kwargs.setdefault("api_base", "http://test.local/v1")
+  kwargs.setdefault("api_base", "http://test.invalid/v1")
   return CharlieCodeBackend(**kwargs)
 
 
@@ -144,71 +152,205 @@ def test_translate_session_event(monkeypatch) -> None:
   }]
 
 
-def test_build_command_uses_json_model_api_base_separator_and_effective_prompt(monkeypatch) -> None:
-  backend = _build_backend(
-      monkeypatch,
-      model="charlie-code-test-model",
-      api_base="http://test.local/v1",
-      instructions_content="Use concise answers.",
-  )
+def test_build_command_writes_task_file_and_flags(monkeypatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch, instructions_content="Use concise answers.")
+  backend._prepare_transport(tmp_path)
 
   cmd = backend._build_command(FLAG_LIKE_PROMPT)
 
-  expected_prompt = (
+  assert cmd[:6] == [
+      "/usr/bin/charlie-code",
+      "--json",
+      "--model",
+      "charlie-code-test-model",
+      "--api-base",
+      "http://test.invalid/v1",
+  ]
+  assert cmd[-2:] == ["--task-file", str(tmp_path / "task.md")]
+  assert "--" not in cmd
+  assert "--resume" not in cmd
+  assert "--context-window" not in cmd
+  assert (tmp_path / "task.md").read_text(encoding="utf-8") == (
       "<system-instructions>\n"
       "Use concise answers.\n"
       "</system-instructions>\n\n" + FLAG_LIKE_PROMPT)
-  assert cmd == [
-      "/usr/bin/charlie-code",
-      "--json",
-      "--model",
-      "charlie-code-test-model",
-      "--api-base",
-      "http://test.local/v1",
-      "--",
-      expected_prompt,
-  ]
-  assert "--resume" not in cmd
+  # The task text never rides argv.
+  assert not any(FLAG_LIKE_PROMPT in arg for arg in cmd)
 
 
-def test_build_command_includes_resume_before_task_separator(monkeypatch) -> None:
+def test_build_command_resume_passes_raw_prompt_and_resume_flag(monkeypatch, tmp_path: Path) -> None:
   backend = _build_backend(
-      monkeypatch,
-      model="charlie-code-test-model",
-      api_base="http://test.local/v1",
-      resume_session_id="session-123",
-  )
-
-  cmd = backend._build_command("continue")
-
-  assert cmd == [
-      "/usr/bin/charlie-code",
-      "--json",
-      "--model",
-      "charlie-code-test-model",
-      "--api-base",
-      "http://test.local/v1",
-      "--resume",
-      "session-123",
-      "--",
-      "continue",
-  ]
-
-
-def test_effective_prompt_wraps_instructions_only_for_fresh_sessions(monkeypatch) -> None:
-  fresh_backend = _build_backend(monkeypatch, instructions_content="Use concise answers.")
-  resume_backend = _build_backend(
       monkeypatch,
       instructions_content="Use concise answers.",
       resume_session_id="session-123",
   )
+  backend._prepare_transport(tmp_path)
 
-  assert fresh_backend._effective_prompt("Hello") == (
-      "<system-instructions>\n"
-      "Use concise answers.\n"
-      "</system-instructions>\n\n"
-      "Hello")
-  assert resume_backend._effective_prompt("Hello") == "Hello"
+  cmd = backend._build_command(FLAG_LIKE_PROMPT)
+
+  resume_idx = cmd.index("--resume")
+  assert cmd[resume_idx:resume_idx + 2] == ["--resume", "session-123"]
+  assert resume_idx < cmd.index("--task-file")
+  assert (tmp_path / "task.md").read_text(encoding="utf-8") == FLAG_LIKE_PROMPT
+
+
+def test_build_command_emits_context_window_only_when_configured(monkeypatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch, context_window=262144)
+  backend._prepare_transport(tmp_path)
+
+  cmd = backend._build_command(FLAG_LIKE_PROMPT)
+
+  assert cmd.count("262144") == 1
+  idx = cmd.index("262144")
+  assert cmd[idx - 1] == "--context-window"
+
+  default_backend = _build_backend(monkeypatch)
+  default_backend._prepare_transport(tmp_path)
+  assert "--context-window" not in default_backend._build_command(FLAG_LIKE_PROMPT)
+
+
+def test_build_command_before_prepare_transport_raises(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+
+  with pytest.raises(RuntimeError, match="_prepare_transport must run before _build_command"):
+    backend._build_command(FLAG_LIKE_PROMPT)
+
+
+def test_build_command_overwrites_task_file_on_retry(monkeypatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch)
+  backend._prepare_transport(tmp_path)
+
+  backend._build_command("first task")
+  backend._build_command("second task")
+
+  assert (tmp_path / "task.md").read_text(encoding="utf-8") == "second task"
+
+
+# ---------------------------------------------------------------------------
+# base.run() template-method ordering: _prepare_transport runs after the
+# transport dir is resolved/created/rotated and before _build_command.
+# ---------------------------------------------------------------------------
+
+
+class _HaltAtSpawn(Exception):
+  """Control-flow sentinel: on_spawn raises it so the run halts at spawn time."""
+
+
+class _OrderRecordingBackend(AgentBackend):
+  """Minimal backend recording the hook order base.run() drives."""
+
+  def __init__(self, records: list, **kwargs):
+    super().__init__(**kwargs)
+    self._records = records
+
+  def _prepare_transport(self, log_dir: Path) -> None:
+    self._records.append(("transport", log_dir, log_dir.is_dir()))
+
+  def _build_command(self, prompt: str) -> list[str]:
+    self._records.append(("command",))
+    return ["/bin/sh", "-c", "exit 0"]
+
+
+async def _drive_run_halted_at_spawn(backend: AgentBackend, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """Drive backend.run() with a mocked subprocess; on_spawn raises the sentinel.
+
+  Mirrors tests/test_backend_pid_start_contract.py's base-path harness: patched
+  spawn returning a MagicMock process and a sentinel read_pid_stat.
+  """
+  monkeypatch.setattr("src.core.runs.read_pid_stat", lambda pid: ("ordering-test-start", "R"))
+  process = MagicMock()
+  process.pid = 4242
+  process.stdin = MagicMock()
+  process.stdin.drain = AsyncMock()
+  process.stdin.wait_closed = AsyncMock()
+  monkeypatch.setattr(
+      "src.agents.backends.base.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
+
+  async def on_spawn(pid: int) -> None:
+    raise _HaltAtSpawn
+
+  backend._on_spawn = on_spawn
+
+  with pytest.raises(_HaltAtSpawn):
+    async for _event in backend.run("ordering prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}):
+      pass
+
+
+@pytest.mark.asyncio
+async def test_run_calls_prepare_transport_before_build_command_with_log_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  records: list = []
+  backend = _OrderRecordingBackend(records, log_dir=tmp_path / "logs")
+
+  await _drive_run_halted_at_spawn(backend, monkeypatch, tmp_path)
+
+  assert records == [("transport", tmp_path / "logs", True), ("command",)]
+  assert (tmp_path / "logs").is_dir()
+
+
+@pytest.mark.asyncio
+async def test_run_temp_transport_dir_exists_at_hook_and_removed_after(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  records: list = []
+  backend = _OrderRecordingBackend(records)
+
+  await _drive_run_halted_at_spawn(backend, monkeypatch, tmp_path)
+
+  (kind, log_dir, existed_at_hook) = records[0]
+  assert kind == "transport"
+  assert log_dir.name.startswith("charliebot-run-")
+  assert existed_at_hook
+  assert records[1] == ("command",)
+  # The sentinel raise runs run()'s finally, which removes the throwaway dir.
+  assert not log_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# BackendOption.context_window
+# ---------------------------------------------------------------------------
+
+
+def test_backend_option_defaults_context_window_to_none() -> None:
+  option = BackendOption(id="cc-k3-test", label="t", type="charlie-code", model="test-model")
+  assert option.context_window is None
+
+
+def test_backend_option_accepts_positive_context_window() -> None:
+  option = BackendOption(
+      id="cc-k3-test", label="t", type="charlie-code", model="test-model", context_window=262144)
+  assert option.context_window == 262144
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_backend_option_rejects_nonpositive_context_window(bad: int) -> None:
+  with pytest.raises(ValidationError):
+    BackendOption(
+        id="cc-k3-test", label="t", type="charlie-code", model="test-model", context_window=bad)
+
+
+# ---------------------------------------------------------------------------
+# registry wiring
+# ---------------------------------------------------------------------------
+
+
+def test_registry_propagates_context_window_into_charlie_code_backend(monkeypatch) -> None:
+  monkeypatch.setattr(
+      "src.agents.backends.charlie_code.resolve_binary",
+      lambda name, fallback: "/usr/bin/charlie-code",
+  )
+  option = BackendOption(
+      id="cc-k3-test",
+      label="t",
+      type="charlie-code",
+      model="openai/test-model",
+      api_base="http://test.invalid/v1",
+      context_window=262144,
+  )
+
+  backend = build_backend(option, CharlieBotConfig())
+
+  assert isinstance(backend, CharlieCodeBackend)
+  assert backend._context_window == 262144
 
 
 def test_api_base_required(monkeypatch) -> None:

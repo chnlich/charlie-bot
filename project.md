@@ -230,9 +230,18 @@ Master parses this to distinguish "thinking" from "stuck" and track progress pre
 
 ### 10.1 Code Style
 - **Standard**: Google Code Style (2-space indent, 120 column limit)
-- **Python**: lint-enforced via ruff (`[tool.ruff.lint]` in `pyproject.toml`, CI runs
-  `uv run ruff check src`); indentation and column limit are review convention — no
-  formatter runs in CI.
+- **Python**: formatted by YAPF (`.style.yapf`), lint-enforced by ruff
+  (`[tool.ruff.lint]` in `pyproject.toml`, CI runs `uv run ruff check src`):
+  ```ini
+  [style]
+  based_on_style = google
+  indent_width = 2
+  split_before_first_argument = true
+  column_limit = 120
+  ```
+  The code-health cron runs `yapf --in-place --recursive src/` and verifies with
+  `yapf --diff`, so the config file is load-bearing: without it YAPF falls back to
+  pep8 defaults and reformats the tree to 4-space indent.
 
 ### 10.2 Worker Instructions (CLAUDE.md)
 Each Thread's `CLAUDE.md` contains:

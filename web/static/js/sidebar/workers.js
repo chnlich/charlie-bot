@@ -20,6 +20,14 @@ function workerUuidRow(id) {
   return '<p class="text-xs text-slate-600 font-mono truncate" title="click to copy" data-uuid="' + safe + '" onclick="event.stopPropagation(); navigator.clipboard.writeText(this.dataset.uuid); const el=this; el.textContent=\'copied\'; if(el._copyTimer)clearTimeout(el._copyTimer); el._copyTimer=setTimeout(()=>{el.textContent=el.dataset.uuid;el._copyTimer=null;},800)">' + safe + '</p>';
 }
 
+function cancelButtonHtml(jsCall, title, domId) {
+  return '<button' + (domId ? ' id="' + domId + '"' : '')
+    + ' onclick="event.stopPropagation(); ' + jsCall + '"'
+    + ' class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors"'
+    + ' title="' + title + '"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+    + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
+}
+
 function renderWorkersTab(threads, sessionId, triggers) {
   const container = document.getElementById('tab-workers');
   if (!container) return;
@@ -43,7 +51,7 @@ function renderWorkersTab(threads, sessionId, triggers) {
       duration = ' &middot; ' + Math.floor(secs / 60) + 'm' + (secs % 60) + 's';
     }
     const cancelBtn = t.status === 'running'
-      ? '<button id="cancel-btn-' + t.id + '" onclick="event.stopPropagation(); cancelThread(\'' + t.id + '\', \'' + sessionId + '\')" class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>'
+      ? cancelButtonHtml("cancelThread('" + t.id + "', '" + sessionId + "')", 'Cancel', 'cancel-btn-' + t.id)
       : '';
     return '<div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">'
       + '<div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-750" onclick="toggleThreadDetail(\'' + t.id + '\', \'' + sessionId + '\')">'
@@ -70,7 +78,7 @@ function renderWorkersTab(threads, sessionId, triggers) {
     const strikeClass = tr.status === 'cancelled' ? ' line-through text-slate-500' : '';
     const timeLabel = formatTriggerTimeLabel(tr.status, tr.fire_at);
     const cancelBtn = tr.status === 'pending'
-      ? '<button onclick="event.stopPropagation(); cancelTrigger(\'' + tr.id + '\', \'' + sessionId + '\')" class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel trigger"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>'
+      ? cancelButtonHtml("cancelTrigger('" + tr.id + "', '" + sessionId + "')", 'Cancel trigger', '')
       : '';
     return '<div id="trigger-card-' + tr.id + '" class="bg-slate-800 rounded-xl border ' + borderClass + ' overflow-hidden">'
       + '<div class="flex items-center gap-3 px-4 py-3">'
@@ -247,12 +255,7 @@ function addWorkerCard(threadId, description, createdAt, backend) {
         <p id="thread-status-${threadId}" class="text-xs text-slate-500">running &middot; ${nowStr}${backend ? ' &middot; ' + (BACKEND_OPTIONS[backend] || backend) : ''}</p>
         ${workerUuidRow(threadId)}
       </div>
-      <button id="cancel-btn-${threadId}" onclick="event.stopPropagation(); cancelThread('${threadId}', '${SESSION_ID}')"
-              class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-        </svg>
-      </button>
+      ${cancelButtonHtml(`cancelThread('${threadId}', '${SESSION_ID}')`, 'Cancel', `cancel-btn-${threadId}`)}
       <svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-${threadId}"
            fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
@@ -286,7 +289,7 @@ function addTriggerCard(triggerId, message, fireAt, createdAt, status) {
   const timeLabel = formatTriggerTimeLabel(status, fireAt);
 
   const cancelBtn = status === 'pending'
-    ? '<button onclick="event.stopPropagation(); cancelTrigger(\'' + triggerId + '\', \'' + SESSION_ID + '\')" class="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-red-400 transition-colors" title="Cancel trigger"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>'
+    ? cancelButtonHtml("cancelTrigger('" + triggerId + "', '" + SESSION_ID + "')", 'Cancel trigger', '')
     : '';
 
   const card = document.createElement('div');

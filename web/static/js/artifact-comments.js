@@ -952,7 +952,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       clearBtn.type = 'button';
       clearBtn.textContent = 'Clear';
       clearBtn.className = GLOBAL_PREFIX + '-tray-clear';
-      clearBtn.addEventListener('click', clearAll);
+      clearBtn.addEventListener('click', resetPending);
       var sendBtn = document.createElement('button');
       sendBtn.type = 'button';
       sendBtn.textContent = 'Send';
@@ -1457,10 +1457,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       pending = [];
       clearDraft(artifactPath);
       refreshTray();
-    }
-
-    function clearAll() {
-      resetPending();
     }
 
     async function sendBatch() {

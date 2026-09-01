@@ -71,6 +71,13 @@ async def _capture_proc_diagnostics(pid: int) -> dict:
   return out
 
 
+# The user-local bin dir the vendor CLI installers target (npm -g, install
+# scripts). Both the resolve_binary fallback dir and the child-PATH prepend
+# point at it, and the two must stay the same dir: a binary the resolver
+# finds there must also be on the spawned CLI's PATH.
+USER_LOCAL_BIN = str(Path.home() / ".local" / "bin")
+
+
 def resolve_binary(name: str, fallback_dir: str) -> str:
   """Resolve a CLI binary by name, falling back to a directory path.
 

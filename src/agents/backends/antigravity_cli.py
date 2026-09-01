@@ -11,6 +11,7 @@ import aiofiles
 
 from src.agents.backends.base import (
   SKIP_PERMISSIONS_FLAG,
+  USER_LOCAL_BIN,
   AgentBackend,
   make_error_event,
   make_result_event,
@@ -37,7 +38,7 @@ class AntigravityCliBackend(AgentBackend):
 
   def __init__(self, *, model: str | None = None, **kwargs):
     super().__init__(model=model, **kwargs)
-    self._agy_bin = resolve_binary("agy", str(Path.home() / ".local" / "bin"))
+    self._agy_bin = resolve_binary("agy", USER_LOCAL_BIN)
 
   def _build_command(self, prompt: str) -> list[str]:
     effective_prompt = self._effective_prompt(prompt)
@@ -59,7 +60,7 @@ class AntigravityCliBackend(AgentBackend):
     antigravity_env = {**env}
     antigravity_env.pop("GEMINI_API_KEY", None)
     antigravity_env.pop("GOOGLE_API_KEY", None)
-    prepend_path_dir(antigravity_env, str(Path.home() / ".local" / "bin"))
+    prepend_path_dir(antigravity_env, USER_LOCAL_BIN)
     return antigravity_env
 
   def _parse_envelope(self, stdout_text: str) -> dict | None:

@@ -442,6 +442,25 @@ async def _handle_event(
   return cc_session_id
 
 
+async def _report_turn_error_and_salvage(
+    tracker: _RunTimingTracker,
+    item: master_cc_state._WorkItem,
+    error_msg: str | None,
+) -> None:
+  """Terminal event pair shared by the _run_cc and _resume_cc finally blocks.
+
+  A non-None *error_msg* becomes one ASSISTANT_ERROR event; the silent-turn
+  salvage then sees the same value and suppresses itself, so an errored turn
+  never also emits salvaged thinking.
+  """
+  session_id = item.session_meta.id
+  if error_msg:
+    err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}
+    await item.callbacks.persist_and_broadcast(session_id, err_event)
+  await _salvage_silent_turn(
+      tracker, error_msg, session_id, item.callbacks.persist_and_broadcast)
+
+
 async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
   """Execute a single CC run — spawn backend, stream events.
 
@@ -687,17 +706,11 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     master_cc_state._active_procs.pop(session_meta.id, None)
     finish_extras = tracker.build_finish_extras()
 
-    if error_msg:
-      err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}
-      await item.callbacks.persist_and_broadcast(session_meta.id, err_event)
-
-    # Salvage a run that settled with only thinking and no assistant text. This
-    # sits before and outside the let-go branch below: a user-cancelled run
-    # still enters that branch, but it also still reaches a result event only
-    # when the stream genuinely settled — the salvage helper's result check is
-    # what distinguishes "finished silently" from "cancelled mid-stream".
-    await _salvage_silent_turn(
-        tracker, error_msg, session_meta.id, item.callbacks.persist_and_broadcast)
+    # The pair runs before the let-go branch below: a let-go turn still gets
+    # its error event and silent-turn salvage; only the terminal state writes
+    # (unread marker, tex snapshot, finished log) would lie about a turn that
+    # keeps running in another process.
+    await _report_turn_error_and_salvage(tracker, item, error_msg)
 
     # On the let-go path the turn is still running in another process: writing
     # any terminal state (unread marker, tex snapshot, finished log) would lie
@@ -847,11 +860,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
 
   finally:
     finish_extras = tracker.build_finish_extras()
-    if error_msg:
-      err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}
-      await item.callbacks.persist_and_broadcast(session_meta.id, err_event)
-    await _salvage_silent_turn(
-        tracker, error_msg, session_meta.id, item.callbacks.persist_and_broadcast)
+    await _report_turn_error_and_salvage(tracker, item, error_msg)
     await item.callbacks.mark_unread(session_meta.id)
     log.info(
         "master_cc_resume_finished",

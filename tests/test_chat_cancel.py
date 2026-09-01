@@ -291,5 +291,8 @@ def test_both_teardowns_call_salvage_helper() -> None:
   import inspect
   run_src = inspect.getsource(master_cc._run_cc)
   resume_src = inspect.getsource(master_cc._resume_cc)
-  assert "_salvage_silent_turn(" in run_src
-  assert "_salvage_silent_turn(" in resume_src
+  assert "_report_turn_error_and_salvage(" in run_src
+  assert "_report_turn_error_and_salvage(" in resume_src
+  pair_src = inspect.getsource(master_cc_run._report_turn_error_and_salvage)
+  assert "_salvage_silent_turn(" in pair_src
+  assert "ET.ASSISTANT_ERROR" in pair_src

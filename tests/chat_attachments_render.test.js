@@ -3,6 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
+const { createClassList } = require('./dom_element_stub');
 
 const { escapeHtml } = require('./escape_html_stub');
 
@@ -11,28 +12,10 @@ const CHAT_JS = readStatic('chat.js');
 const FILE_UPLOAD_JS = readStatic('file-upload.js');
 const SLASH_COMMANDS_JS = readStatic('slash-commands.js');
 
-class FakeClassList {
-  constructor() {
-    this._classes = new Set();
-  }
-
-  add(...classes) {
-    for (const className of classes) this._classes.add(className);
-  }
-
-  remove(...classes) {
-    for (const className of classes) this._classes.delete(className);
-  }
-
-  contains(className) {
-    return this._classes.has(className);
-  }
-}
-
 class FakeElement {
   constructor() {
     this.innerHTML = '';
-    this.classList = new FakeClassList();
+    this.classList = createClassList();
     this.attributes = new Map();
     this.textContent = '';
   }

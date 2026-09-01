@@ -1,7 +1,9 @@
 """Chat event persistence for CharlieBot sessions."""
 
 import json
+import threading
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +21,11 @@ from src.core.ndjson import (
 )
 
 log = structlog.get_logger()
+
+# Bound on _archive_events_memo in files, not sessions: one scroll spans a
+# session's few weekly archive files, so the cap bounds parsed-archive memory
+# across every session that paginates.
+_ARCHIVE_MEMO_LIMIT = 16
 
 
 def chat_events_path(session_dir: Path) -> Path:
@@ -41,6 +48,14 @@ class ChatEventStore:
     # In-memory cache: session_id -> list[dict] of parsed NDJSON events.
     # Populated on first read, kept in sync by save_chat_event().
     self._events_cache: dict[str, list[dict]] = {}
+    # Parsed-archive memo: path -> (mtime_ns, size, events). Archive files are
+    # append-only within their week and frozen after, so an unchanged
+    # (mtime_ns, size) means unchanged bytes; an append re-parses one file.
+    # All access holds the lock (the read_thread_worker_events / recap rule):
+    # get+move_to_end is not one op, and a concurrent insert's cap eviction
+    # must not pop the key mid-hit.
+    self._archive_events_memo: OrderedDict[Path, tuple[int, int, list[dict]]] = OrderedDict()
+    self._archive_memo_lock = threading.Lock()
 
   @property
   def events_cache(self) -> dict[str, list[dict]]:
@@ -150,27 +165,45 @@ class ChatEventStore:
     archives_dir = self._session_dir(session_id) / "data" / "archives"
     if not archives_dir.exists():
       return []
-    archive_files = sorted(archives_dir.glob("chat_events.*.jsonl"))
     events: list[dict] = []
-    cursor = 0
-    for path in archive_files:
-      if cursor >= end:
-        break
-      try:
-        with open(path, encoding="utf-8") as f:
-          for line in f:
-            if cursor >= end:
-              break
-            if cursor >= start:
-              stripped = line.strip()
-              if stripped:
-                try:
-                  events.append(json.loads(stripped))
-                except json.JSONDecodeError as e:
-                  log.debug("archive_parse_skip", session_id=session_id, error=str(e))
-            cursor += 1
-      except OSError as e:
-        log.debug("archive_read_failed", path=str(path), error=str(e))
+    for path in sorted(archives_dir.glob("chat_events.*.jsonl")):
+      events.extend(self._archive_file_events(path, session_id))
+    return events[start:end]
+
+  def _archive_file_events(self, path: Path, session_id: str) -> list[dict]:
+    """Return one archive file's parsed events, memoized on (mtime_ns, size).
+
+    Range reads re-enter here on every page turn; the memo keeps unchanged
+    archives at zero disk reads. An unreadable file logs and contributes
+    nothing, the pre-memo reader's behavior on open failure.
+    """
+    try:
+      st = path.stat()
+    except OSError as e:
+      log.debug("archive_read_failed", path=str(path), error=str(e))
+      return []
+    with self._archive_memo_lock:
+      memo = self._archive_events_memo.get(path)
+      if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
+        self._archive_events_memo.move_to_end(path)
+        return memo[2]
+    events: list[dict] = []
+    try:
+      with open(path, encoding="utf-8") as f:
+        for line in f:
+          stripped = line.strip()
+          if stripped:
+            try:
+              events.append(json.loads(stripped))
+            except json.JSONDecodeError as e:
+              log.debug("archive_parse_skip", session_id=session_id, error=str(e))
+    except OSError as e:
+      log.debug("archive_read_failed", path=str(path), error=str(e))
+      return []
+    with self._archive_memo_lock:
+      self._archive_events_memo[path] = (st.st_mtime_ns, st.st_size, events)
+      while len(self._archive_events_memo) > _ARCHIVE_MEMO_LIMIT:
+        self._archive_events_memo.popitem(last=False)
     return events
 
   def _chat_events_path(self, session_id: str) -> Path:

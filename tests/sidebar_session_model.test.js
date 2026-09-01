@@ -3,6 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
+const { escapeHtml } = require('./escape_html_stub');
 
 const GROUPS_JS = readStatic('sidebar/groups.js');
 
@@ -23,11 +24,8 @@ function loadGroups() {
     SESSION_ID: 'other-session',
     console: {error: () => {}},
     localStorage: {getItem: () => null, setItem: () => {}},
-    escapeHtml: (str) => String(str)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
-    escapeHtmlAttr: (str) => String(str)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
+    escapeHtml,
+    escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     relativeTime: () => 'Jul 29, 5:12 PM',
     formatLastRun: () => '',
     getSessionIndicatorState: () => 'idle',

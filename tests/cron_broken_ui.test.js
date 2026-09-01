@@ -3,14 +3,10 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
+const { escapeHtml } = require('./escape_html_stub');
 
 const GROUPS_JS = readStatic('sidebar/groups.js');
 const MODALS_JS = readStatic('sidebar/modals.js');
-
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 function makeClassList() {
   const classes = new Set();
@@ -52,7 +48,7 @@ function loadGroups(cronTasksPayload) {
       return Promise.resolve({ok: true, json: () => Promise.resolve(payload)});
     },
     escapeHtml,
-    escapeHtmlAttr: (str) => escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
+    escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     SESSION_ID: 'other-session',
     currentFilter: 'scheduled',
     sessionUnread: {},

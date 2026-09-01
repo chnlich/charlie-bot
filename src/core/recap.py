@@ -19,7 +19,11 @@ from src.core.autonamer import iter_light_backends
 from src.core.config import CharlieBotConfig
 from src.core.json_utils import write_json_atomically
 from src.core.models import utc_now
-from src.core.sessions import SessionManager
+from src.core.sessions import (
+  ELONE_BOOTSTRAP_OPENER,
+  FORK_BOOTSTRAP_OPENER,
+  SessionManager,
+)
 from src.core.timeouts import AUTONAMER_TIMEOUT
 
 log = structlog.get_logger()
@@ -28,13 +32,16 @@ _ASK_CHARS = 80
 _LAST_CHARS = 250
 
 # User messages auto-injected by the system are not real "asks". Matched by prefix
-# against the fork/elone bootstrap prompts. Scheduled-trigger self-wakes are
-# excluded by event type (ET.SCHEDULED_TRIGGER), not by this prefix list.
+# against the fork/elone bootstrap prompts; the live openers come from
+# src.core.sessions so the producers and this filter cannot drift. The two bare
+# literals have no producer left in the repo — they keep filtering the same
+# bootstraps pinned in old sessions' event logs, so they stay. Scheduled-trigger
+# self-wakes are excluded by event type (ET.SCHEDULED_TRIGGER), not by this list.
 _AUTO_INJECTED_PREFIXES = (
     "This session was cloned from a previous conversation.",
-    "This session continues a prior conversation.",
+    FORK_BOOTSTRAP_OPENER,
     "You're taking over a task from a previous session where user wasn't satisfied.",
-    "You're taking over because the user wasn't satisfied with the previous session.",
+    ELONE_BOOTSTRAP_OPENER,
 )
 
 _SUMMARY_SYSTEM_PROMPT = (

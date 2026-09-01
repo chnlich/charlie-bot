@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -51,6 +52,8 @@ from src.core.models import (
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import (
+  ELONE_BOOTSTRAP_OPENER,
+  FORK_BOOTSTRAP_OPENER,
   ScheduledSessionBusyError,
   SessionManager,
   SuccessionRefused,
@@ -569,6 +572,13 @@ async def summarize_session_recap(
   return {"summary": summary}
 
 
+def _reference_instructions(reference_path: Path) -> str:
+  return (
+      f"The full prior conversation up to the takeover point is in {reference_path}. "
+      "Entries are chronological, with newest entries at the end. The file may be large, so it does not "
+      "need to be read in full; read what is needed to reconstruct the current state.\n\n")
+
+
 @router.post('/{session_id}/fork', response_model=SessionMetadata)
 async def fork_session(
     session_id: str,
@@ -596,10 +606,8 @@ async def fork_session(
 
   reference_path = session_mgr.parent_reference_path(meta.id)
   bootstrap_prompt = (
-      "This session continues a prior conversation.\n\n"
-      f"The full prior conversation up to the takeover point is in {reference_path}. "
-      "Entries are chronological, with newest entries at the end. The file may be large, so it does not "
-      "need to be read in full; read what is needed to reconstruct the current state.\n\n"
+      f"{FORK_BOOTSTRAP_OPENER}\n\n"
+      f"{_reference_instructions(reference_path)}"
       "Get oriented from that reference, summarize where things stand, and wait for the user's next instruction.")
 
   from src.api.chat import run_and_finalize
@@ -632,11 +640,9 @@ async def elone_session(
 
   reference_path = session_mgr.parent_reference_path(meta.id)
   bootstrap_prompt = (
-      "You're taking over because the user wasn't satisfied with the previous session. "
+      f"{ELONE_BOOTSTRAP_OPENER} "
       "The dissatisfaction is usually with the most recent exchange before the takeover point.\n\n"
-      f"The full prior conversation up to the takeover point is in {reference_path}. "
-      "Entries are chronological, with newest entries at the end. The file may be large, so it does not "
-      "need to be read in full; read what is needed to reconstruct the current state.\n\n"
+      f"{_reference_instructions(reference_path)}"
       "Understand what the user wanted and where it went wrong, then give your read and a better approach. "
       "Confirm with the user before acting.")
 

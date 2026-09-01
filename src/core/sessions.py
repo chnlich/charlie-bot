@@ -49,6 +49,13 @@ _RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset({ET.ASSISTANT, ET.USE
 
 log = structlog.get_logger()
 
+# The fork/elone API routes (src/api/sessions.py) open their auto-injected
+# bootstrap prompts with these lines, and src.core.recap._AUTO_INJECTED_PREFIXES
+# filters such injected messages from recap asks by prefix match; both sides
+# import this one copy so an edit cannot drift the two apart.
+FORK_BOOTSTRAP_OPENER = "This session continues a prior conversation."
+ELONE_BOOTSTRAP_OPENER = "You're taking over because the user wasn't satisfied with the previous session."
+
 _METADATA_CACHE_TTL = 30.0  # seconds
 _SEARCH_RESULT_LIMIT = 200  # newest rows a name/content search returns; keeps the render bounded
 _PROJECTION_LRU_LIMIT = 8

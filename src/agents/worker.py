@@ -17,7 +17,7 @@ from src.agents.backends.base import (
     _read_stderr_tail,
     tail_follow_events,
 )
-from src.agents.backends.claude_code import ClaudeCodeBackend
+from src.agents.backends.claude_code import ClaudeCodeBackend, claude_supervisor_env
 from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
 from src.core import runs
@@ -121,9 +121,7 @@ class Worker:
 
   async def run(self) -> int:
     """Spawn the Worker and stream its output. Returns exit code."""
-    env = {**os.environ, **self._extra_env}
-    env.pop("CLAUDECODE", None)  # Allow worker to spawn Claude Code subprocess
-    env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+    env = claude_supervisor_env({**os.environ, **self._extra_env})
 
     async def _on_spawn(pid: int) -> None:
       self._thread.pid = pid

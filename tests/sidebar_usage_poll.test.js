@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const { readStatic } = require('./read_static');
 const { createElement } = require('./dom_element_stub');
 const { escapeHtml } = require('./escape_html_stub');
-const { baseSessionContext, buildUsageElements, createChatSidebarContext } = require('./session_context_stub');
+const { baseSessionContext, buildSidebarFilterElements, buildUsageElements, createChatSidebarContext } = require('./session_context_stub');
 
 const WEBSOCKET_JS = readStatic('websocket.js');
 
@@ -1229,11 +1229,7 @@ test('archiveSession removes the row inline and switches to the next rendered se
       ['session-list', nav],
       ['msg-input', input],
       ['session-session-a', rowA],
-      ['filter-all', createElement({className: 'filter-pill'})],
-      ['filter-starred', createElement({className: 'filter-pill'})],
-      ['filter-archived', createElement({className: 'filter-pill'})],
-      ['filter-scheduled', createElement({className: 'filter-pill'})],
-      ['cron-add-btn', createElement()],
+      ...buildSidebarFilterElements(),
     ]),
     querySelectorAll: (selector) =>
       selector === 'a[id^="session-"]' ? sessionAnchors(['session-b']) : [],
@@ -1290,11 +1286,7 @@ test('deleteSessionPermanently renders the welcome state inline when no rendered
     elements: new Map([
       ['session-list', nav],
       ['session-session-a', rowA],
-      ['filter-all', createElement({className: 'filter-pill'})],
-      ['filter-starred', createElement({className: 'filter-pill'})],
-      ['filter-archived', createElement({className: 'filter-pill'})],
-      ['filter-scheduled', createElement({className: 'filter-pill'})],
-      ['cron-add-btn', createElement()],
+      ...buildSidebarFilterElements(),
       ['welcome-view', createElement({tagName: 'TEMPLATE', innerHTML: '<h2>Welcome to CharlieBot</h2>'})],
     ]),
     querySelector: (selector) => {

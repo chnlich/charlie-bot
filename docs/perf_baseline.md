@@ -180,12 +180,15 @@ print(best.name, best_n)
 ```
 
 M7 — token-usage page load: five timed requests of the rendered page. The page builds a
-persisted per-file tally cache for the gigabyte-scale Claude logs and the hundred-megabyte
-Codex rollouts; the first load after a server start (or after bulk log churn) is a full
-scan, later loads re-scan only changed logs plus the megabyte-scale opencode source, so the
-five-request median reads the warm steady state (~2 s at the seed host's 2.2 GB + 190 MB log
-volume, measured before the Codex logs joined the cache — hence the provisional 3 s
-ceiling). Evidence while the live server runs older code is a scratch-instance
+persisted tally cache covering all three sources: per-file entries for the gigabyte-scale
+Claude logs and the hundred-megabyte Codex rollouts, and one entry for the opencode db's
+whole contribution signatured on the main file plus its `-wal` sidecar (a WAL-mode write
+leaves the main file untouched, so the main file's stat alone can never see it). The first
+load after a server start (or after bulk log churn) is a full scan, later loads re-scan
+only the sources that changed, so the five-request median reads the warm steady state
+(~2 s at the seed host's 2.2 GB + 190 MB log volume, measured before the Codex logs joined
+the cache — hence the provisional 3 s ceiling). Evidence while the live server runs older
+code is a scratch-instance
 A/B: live-before against this instance, scratch-after against a scratch server on the changed
 code with a scratch `CHARLIEBOT_HOME` (its own empty cache directory — cold-then-warm measures
 both paths):
@@ -635,3 +638,4 @@ EOF
 | 2026-08-31 | #525 | M16 torn reads 87232/128449 (PR base) and 48061/71863 (main checkout) → 0/51072 concurrent reads over 3000 _save_trigger calls (collector verbatim, scratch state) | trigger-file writes routed through the repo's atomic-write rule (atomic_write_text), mirroring the session/thread metadata and recap-cache paths; M16 definition and healthy range introduced with this PR |
 | 2026-09-01 | #526 | M17 fork median 0.4350 s → 0.2126 s, max 0.4850 s → 0.2554 s (5519 parent events over a 36.3 MB archive+live corpus, scratch CHARLIEBOT_HOME A/B; reference bytes identical to the pre-fix output) | full-corpus forks copy raw parent event lines into parent_reference.jsonl instead of parse+reserialize; first M17 history row |
 | 2026-09-01 | #530 | M6 median 0.0119 s → 0.0046 s, max 0.0123 s → 0.0051 s (scratch TestClient A/B on the 20534-event worst session's copied corpus; live-before median 0.014 s, max 0.022 s; usage payload identical) | whole-result usage-facts memo keyed on the cached events list's identity+length (LRU cap 8); load+scan moved off the event loop into the load's to_thread |
+| 2026-09-01 | #533 | M7 live-before median 1.526-1.662 s → scratch-after warm median 0.443 s, max 1.158 s (scratch-server A/B, scratch CHARLIEBOT_HOME with empty cache, cold 10.49 s; collector-level warm 0.9105 s → 0.5261 s, warm re-scan 10.4 MB → 0 bytes; cached vs cacheless tallies byte-identical at a pinned db signature) | opencode db contribution joined the persisted tally cache, signatured on the main db file plus its WAL sidecar |

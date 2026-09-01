@@ -154,13 +154,12 @@ def read_plans_tolerant(plans_path: Path, session_id: str) -> dict:
   A repeat read of an unchanged file pays one stat and serves the memoized result.
   """
   errors: list[dict] = []
-  if not plans_path.exists():
-    return {"plans": [], "errors": errors}
   try:
     st = plans_path.stat()
   except OSError:
-    # The file vanished between the existence check and the stat: same answer
-    # as for a missing file, mirroring the scan idiom in ThreadManager.
+    # One stat drives both the missing-file answer and the memo key; every
+    # stat failure maps to the missing-file answer, mirroring the scan idiom
+    # in ThreadManager.
     return {"plans": [], "errors": errors}
   memo_key = str(plans_path)
   sig = (st.st_mtime_ns, st.st_size)
@@ -169,29 +168,36 @@ def read_plans_tolerant(plans_path: Path, session_id: str) -> dict:
     if hit is not None and hit[0] == sig:
       _tolerant_read_memo.move_to_end(memo_key)
       return hit[1]
-  result = _read_plans_uncached(plans_path, session_id)
-  with _tolerant_read_memo_lock:
-    _tolerant_read_memo[memo_key] = (sig, result)
-    while len(_tolerant_read_memo) > _TOLERANT_READ_MEMO_LIMIT:
-      _tolerant_read_memo.popitem(last=False)
+  result, cacheable = _read_plans_uncached(plans_path, session_id)
+  if cacheable:
+    with _tolerant_read_memo_lock:
+      _tolerant_read_memo[memo_key] = (sig, result)
+      while len(_tolerant_read_memo) > _TOLERANT_READ_MEMO_LIMIT:
+        _tolerant_read_memo.popitem(last=False)
   return result
 
 
-def _read_plans_uncached(plans_path: Path, session_id: str) -> dict:
-  """The read+derive half of ``read_plans_tolerant``, minus the memo."""
+def _file_level_error(session_id: str, error: Exception) -> dict:
+  return {"plans": [], "errors": [{"session_id": session_id, "plan_id": None, "error": str(error)}]}
+
+
+def _read_plans_uncached(plans_path: Path, session_id: str) -> tuple[dict, bool]:
+  """The read+derive half of ``read_plans_tolerant``, minus the memo.
+
+  The bool reports cacheability: an OSError reflects the file's environment
+  (permissions, transient IO), not its bytes, and fixing the cause does not
+  move (mtime_ns, size), so it is never memoized — the same policy the
+  trigger-list memo and the search miss-memo state. Every other outcome is a
+  pure function of the file content.
+  """
   errors: list[dict] = []
   try:
     raw = plans_path.read_text(encoding="utf-8")
     data = json.loads(raw)
-  except (OSError, ValueError) as e:
-    return {
-        "plans": [],
-        "errors": [{
-            "session_id": session_id,
-            "plan_id": None,
-            "error": str(e)
-        }],
-    }
+  except OSError as e:
+    return _file_level_error(session_id, e), False
+  except ValueError as e:
+    return _file_level_error(session_id, e), True
   if not isinstance(data, dict):
     return {
         "plans": [],
@@ -203,7 +209,7 @@ def _read_plans_uncached(plans_path: Path, session_id: str) -> dict:
                     "error": f"registry top level is {type(data).__name__}, expected dict",
                 }
             ],
-    }
+    }, True
   plans_out: list[dict] = []
   for plan in data.get("plans", []):
     try:
@@ -213,7 +219,7 @@ def _read_plans_uncached(plans_path: Path, session_id: str) -> dict:
     except (OSError, ValueError) as e:
       plan_id = plan.get("id") if isinstance(plan, dict) else None
       errors.append({"session_id": session_id, "plan_id": plan_id, "error": str(e)})
-  return {"plans": plans_out, "errors": errors}
+  return {"plans": plans_out, "errors": errors}, True
 
 
 # ---------------------------------------------------------------------------

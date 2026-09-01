@@ -180,6 +180,26 @@ def _stable_history_projection(events: list[dict]) -> list[tuple[int, dict]]:
   return projected
 
 
+def stable_closed_prefix_len(events: list[dict]) -> int:
+  """Largest prefix length whose stable-history order is final under appends.
+
+  ``_stable_history_projection`` defers queued users only within one completed
+  run interval, so once the prefix ends outside every open interval no later
+  append can reorder it; the interval rule mirrors that function's own
+  ``interval_start``/``MASTER_DONE`` scan and both must move together.
+  """
+  interval_open = False
+  closed = 0
+  for idx, event in enumerate(events):
+    if event.get("type") is None and event.get("session_id"):
+      interval_open = True
+    elif event.get("type") == ET.MASTER_DONE and interval_open:
+      interval_open = False
+    if not interval_open:
+      closed = idx + 1
+  return closed
+
+
 @dataclass
 class SessionBootstrapData:
   """Critical data needed to make one chat session usable."""

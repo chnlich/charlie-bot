@@ -254,6 +254,25 @@ class MessageAggregator:
       self._processed += 1
       yield from self._feed(ev, self._idx_offset + idx)
 
+  def clone(self) -> 'MessageAggregator':
+    """Independent copy of this aggregator's feed state.
+
+    Feeding the clone continues from the same position without mutating the
+    original; the message projection uses that to evaluate its still-open
+    interval region speculatively while the fed aggregator stays clean for
+    the next ingest. ``_tools_buf`` dicts are copied because USER events
+    carrying tool_result blocks mutate them in place.
+    """
+    copied = MessageAggregator(self._idx_offset)
+    copied._processed = self._processed
+    copied._assistant_buf = self._assistant_buf
+    copied._thinking_buf = self._thinking_buf
+    copied._last_assistant_ts = self._last_assistant_ts
+    copied._last_event_idx = self._last_event_idx
+    copied._last_event_id = self._last_event_id
+    copied._tools_buf = [dict(t) for t in self._tools_buf]
+    return copied
+
   def flush_pending(self) -> Iterator[dict]:
     """Emit any pending assistant draft as a finalized message.
 

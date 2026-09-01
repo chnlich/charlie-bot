@@ -9,6 +9,7 @@ from typing import ClassVar
 import structlog
 
 from src.agents.backends.base import (
+  USER_LOCAL_BIN,
   AgentBackend,
   iter_ndjson_events,
   make_error_event,
@@ -37,7 +38,7 @@ class CodexBackend(AgentBackend):
     if not model:
       raise ValueError("codex backend requires a model (set backend_options[].model in config.yaml)")
     super().__init__(model=model, **kwargs)
-    self._codex_bin = resolve_binary("codex", str(Path.home() / ".local" / "bin"))
+    self._codex_bin = resolve_binary("codex", USER_LOCAL_BIN)
     self._codex_home = str(Path(codex_home).expanduser()) if codex_home else None
     self._model_reasoning_effort = "xhigh" if model_reasoning_effort is None else model_reasoning_effort
     self._model_auto_compact_token_limit = model_auto_compact_token_limit
@@ -97,7 +98,7 @@ class CodexBackend(AgentBackend):
 
   def _prepare_env(self, env: dict) -> dict:
     codex_env = {**env}
-    prepend_path_dir(codex_env, str(Path.home() / ".local" / "bin"))
+    prepend_path_dir(codex_env, USER_LOCAL_BIN)
     if self._codex_home:
       codex_env['CODEX_HOME'] = self._codex_home
     return codex_env

@@ -471,10 +471,10 @@ document.addEventListener('DOMContentLoaded', () => {
     .catch(err => console.warn('ext-usage fetch failed:', err));
 
   // Refresh countdown timers every 60s (client-side only)
-  setInterval(_refreshResetTimers, 60000);
+  startPageTimer('ext-usage-reset-timers', _refreshResetTimers, 60000);
 
   // Re-fetch usage data every 10 minutes
-  setInterval(() => {
+  startPageTimer('ext-usage-poll', () => {
     fetch('/api/ext-usage')
       .then(r => r.json())
       .then(data => renderExtUsage(data))

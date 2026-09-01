@@ -34,6 +34,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M21 sidebar probe sweep, steady state | M21 collector below | seconds per 10th-poll sweep over all active sessions | median < 0.05 s | — (introduced with its first history row) |
 | M22 ext-usage unknown-limit-shape warning stream, steady state | M22 collector below | warnings per 60 steady-state transform rounds | 0 warnings after the first sighting per process | — (introduced with its first history row) |
 | M23 archive-range chat-event rescan, steady state | M23 collector below | seconds per 8-page backwards scroll over the biggest archived corpus | median < 0.005 s | — (introduced with its first history row) |
+| M24 trigger list, steady state | M24 collector below | seconds per list_triggers call, worst on-disk trigger corpus | median < 0.05 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1015,6 +1016,58 @@ for _ in range(5):
 times.sort()
 print(f"archive_offset {offset}; 8-page scroll steady-state median {times[2]:.4f} s, max {times[-1]:.4f} s")
 shutil.rmtree(home)
+EOF
+```
+
+M24 — trigger list, steady state. The 3 s workers-panel poll
+(`GET /api/threads/{sid}/list`) and the session view render call
+`TriggerManager.list_triggers`, whose pre-fix form read and parsed every
+trigger file of the session on every call. The cost is invisible to the
+standing HTTP probes (panels poll the sessions they have open, not the worst
+corpus), so the collector resolves the session whose triggers directory
+carries the most files and times the manager function the poll awaits
+(read-only over the live state), from the main repo checkout: one cold pass,
+as at a server start with an empty memo, then five timed calls. The fixed
+reader memoizes each trigger file's parsed record on (mtime_ns, size): the
+steady state is one scandir and zero corpus bytes, and a `_save_trigger`
+rewrite (schedule/cancel/fire) re-reads only that file. Trigger files change
+only through that atomic rewrite, so the key is sound. Evidence while the
+live server runs older code points the same collector at the branch checkout
+(`sys.path.insert` at the worktree root), the same shape as the M7 protocol:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, sys, time
+from pathlib import Path
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core.triggers import TriggerManager
+
+# Worst trigger corpus: the session whose triggers directory carries the most files.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.glob("*/triggers"):
+    n = sum(1 for p in d.glob("*.json") if p.is_file())
+    if n > best_n:
+        best, best_n = d, n
+SID = best.parent.name
+
+async def main():
+    cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+    triggers = TriggerManager(cfg, SessionManager(cfg))
+    await triggers.list_triggers(SID)  # cold pass, as at a server start; not timed
+    times = []
+    result = None
+    for _ in range(5):
+        t0 = time.perf_counter()
+        result = await triggers.list_triggers(SID)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    print(f"session {SID}, {len(result)} triggers (worst corpus {best_n} files); "
+          f"steady-state list_triggers median {times[2]:.4f} s, max {times[-1]:.4f} s")
+
+asyncio.run(main())
 EOF
 ```
 

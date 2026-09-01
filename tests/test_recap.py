@@ -286,6 +286,23 @@ async def test_extract_recap_memoizes_repeats_at_one_divider(tmp_path: Path) -> 
     assert grown["last"] == {"user": "second ask", "assistant": "second answer"}
 
 
+@pytest.mark.asyncio
+async def test_extract_memo_drops_with_session_runtime_state(tmp_path: Path) -> None:
+  """Permanent delete evicts the session's memo entries.
+
+  Slack-thread sessions carry deterministic uuid5 ids and CreateSessionRequest
+  accepts pinned ids, so an id can return for a different conversation; without
+  the drop the new conversation would be served the deleted one's extraction.
+  """
+  _cfg, mgr, session = await make_home_session(tmp_path, name="memo-drop")
+  _append_events(mgr.get_chat_events_path(session.id), [{"type": "user", "content": "ask"}])
+
+  recap.extract_recap(mgr, session.id)
+  assert any(key[0] == session.id for key in recap._extract_memo)
+  assert await mgr.delete_session_permanently(session.id)
+  assert not any(key[0] == session.id for key in recap._extract_memo)
+
+
 _REAL_REPLACE = os.replace
 
 

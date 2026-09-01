@@ -9,6 +9,7 @@ an unchanged divider costs nothing.
 
 import asyncio
 import json
+import threading
 from collections import OrderedDict
 from pathlib import Path
 
@@ -34,12 +35,24 @@ _LAST_CHARS = 250
 
 _EXTRACT_MEMO_CAP = 8
 
-# (session_id, end) -> extraction over the global event range [0, end). The key
-# alone proves the hit: a session's global event stream is append-only (the
-# weekly archive rotation shifts the live/archive split but never moves an
-# event's global index), and session ids are uuid4, never reused. Runs under
-# asyncio.to_thread; dict ops stay GIL-atomic.
+# (session_id, end) -> extraction over the global event range [0, end). A
+# session's global event stream is append-only (the weekly archive rotation
+# shifts the live/archive split but never moves an event's global index), so a
+# stored end's content cannot change for the life of its id. Most ids are
+# uuid4; the deterministic ids (uuid5 per Slack thread, pinned
+# CreateSessionRequest ids) are covered by _drop_session_runtime_state hooking
+# drop_extract_memo. All access holds _memo_lock (mirroring
+# read_thread_worker_events in src/api/threads.py): get+move_to_end is not one
+# op, and a concurrent insert's cap eviction must not pop the key mid-hit.
 _extract_memo: OrderedDict[tuple[str, int], dict] = OrderedDict()
+_memo_lock = threading.Lock()
+
+
+def drop_extract_memo(session_id: str) -> None:
+  """Evict every memoized extraction for *session_id* (id teardown/reuse)."""
+  with _memo_lock:
+    for key in [key for key in _extract_memo if key[0] == session_id]:
+      del _extract_memo[key]
 
 # User messages auto-injected by the system are not real "asks". Matched by prefix
 # against the fork/elone bootstrap prompts; the live openers come from
@@ -109,22 +122,25 @@ def extract_recap(session_mgr: SessionManager, session_id: str, upto: int | None
   # grows -- so the count read (a full-file line count on a cold events cache)
   # is skipped on the exact path the UI re-materialization drives.
   if upto is not None:
-    cached = _extract_memo.get((session_id, upto + 1))
-    if cached is not None:
-      _extract_memo.move_to_end((session_id, upto + 1))
-      return cached
+    with _memo_lock:
+      cached = _extract_memo.get((session_id, upto + 1))
+      if cached is not None:
+        _extract_memo.move_to_end((session_id, upto + 1))
+        return cached
   count = session_mgr.get_chat_event_count_sync(session_id)
   end = count if upto is None else min(upto + 1, count)
-  cached = _extract_memo.get((session_id, end))
-  if cached is not None:
-    _extract_memo.move_to_end((session_id, end))
-    return cached
+  with _memo_lock:
+    cached = _extract_memo.get((session_id, end))
+    if cached is not None:
+      _extract_memo.move_to_end((session_id, end))
+      return cached
   events, _ = session_mgr.load_chat_events_range(session_id, 0, end)
   result = _extract_from_events(events)
-  _extract_memo[(session_id, end)] = result
-  _extract_memo.move_to_end((session_id, end))
-  while len(_extract_memo) > _EXTRACT_MEMO_CAP:
-    _extract_memo.popitem(last=False)
+  with _memo_lock:
+    _extract_memo[(session_id, end)] = result
+    _extract_memo.move_to_end((session_id, end))
+    while len(_extract_memo) > _EXTRACT_MEMO_CAP:
+      _extract_memo.popitem(last=False)
   return result
 
 

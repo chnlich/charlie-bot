@@ -31,6 +31,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M18 hidden-tab periodic poll fetches | M18 collector below | poll fetches per simulated 10 hidden minutes | 0 fetches | — (introduced with its first history row) |
 | M19 SSE framing, chunked large-frame stream | M19 collector below | seconds per 16 MB payload (16 KB chunks, ~1 MB frames) | median < 0.2 s | — (introduced with its first history row) |
 | M20 recap extract, repeat divider | M20 collector below | seconds per extract at one divider, worst on-disk extract corpus | median < 0.05 s | — (introduced with its first history row) |
+| M21 sidebar probe sweep, steady state | M21 collector below | seconds per 10th-poll sweep over all active sessions | median < 0.05 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -838,6 +839,58 @@ digest = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
 print(f"{count} events, {len(result['asks'])} asks, digest {digest}; "
       f"repeat-divider extract median {times[2]:.4f} s, max {times[-1]:.4f} s")
 shutil.rmtree(home)
+EOF
+```
+
+M21 — sidebar 10th-poll probe sweep, steady state. Every 10th `/api/sessions/status`
+poll re-selects every active session for a sidebar re-probe (the self-heal window for
+a writer that forgot its dirty mark). The pre-fix sweep deep-probed all of them — a
+scandir+stat plus a read+parse of every 30-day-window thread metadata, every trigger
+file, and every plans.json — where the fixed sweep pays one stat-only signature pass
+per session and deep-probes only sessions whose probe inputs changed (the escape
+hatch `/status?force=1` still deep-probes everything). The cost is background work
+invisible to HTTP probes, so the collector times the sweep function the poll awaits
+(read-only over the live state), with the poll's on-loop signature storage replayed
+between sweeps. The steady state is no probe input changed between sweeps; the cold
+pass, as at a server start with no signatures stored, is a full deep probe and is not
+timed. The pre-fix number used in the landing PR's evidence is the same sweep-shaped
+command against `probe_sidebar_state_sync` unconditionally (the poll's pre-fix call).
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, sys, time
+from pathlib import Path
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.core import sidebar_state
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager, selective_probe_sidebar_state
+
+async def main():
+    cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+    mgr = SessionManager(cfg)
+    metas = await asyncio.to_thread(mgr.list_active_session_metas)
+    specs = [
+        (m.id, mgr._threads_dir(m.id), mgr._session_dir(m.id) / "triggers", mgr._session_dir(m.id) / "plans.json")
+        for m in metas
+    ]
+    sidebar_state.reset_for_tests()
+
+    def sweep():
+        entries, sigs = selective_probe_sidebar_state(specs, deep=False)
+        for sid, sig in sigs.items():
+            sidebar_state.store_probe_signature(sid, sig)  # the poll's on-loop storage half
+        return entries
+
+    sweep()  # cold pass, as at a server start with no signatures stored; not timed
+    times = []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        sweep()
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    print(f"{len(specs)} active sessions; steady-state sidebar sweep median {times[2]:.4f} s, max {times[-1]:.4f} s")
+
+asyncio.run(main())
 EOF
 ```
 

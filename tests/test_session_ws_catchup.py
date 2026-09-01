@@ -51,6 +51,21 @@ async def test_replay_skips_pre_cursor_deltas_and_drops_raw_assistant_user() -> 
 
 
 @pytest.mark.asyncio
+async def test_replay_drops_raw_scheduled_trigger() -> None:
+  events = [
+      {"type": "scheduled_trigger", "content": "[Scheduled trigger fired] watch", "timestamp": "t0"},
+  ]
+  ws = FakeWebSocket()
+  sent_count = await _replay_aggregated_catchup(ws, events, cursor=0, session_id="s")
+
+  # The suppression list is shared with persist_and_broadcast, so catchup
+  # matches the live wire: scheduled_trigger flows only as a message delta.
+  assert sent_count == len(ws.sent) == 1
+  assert ws.sent[0]["type"] == "message"
+  assert ws.sent[0]["message"]["role"] == "scheduled_trigger"
+
+
+@pytest.mark.asyncio
 async def test_replay_emits_only_latest_stream_when_draft_is_dangling() -> None:
   events = [
       {"type": "assistant", "message": {"content": [{"type": "text", "text": "A"}]}, "timestamp": "t0"},

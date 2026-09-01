@@ -33,7 +33,6 @@ from src.api import (
 )
 from src.api.auth import AuthMiddleware
 from src.api.deps import get_session_manager, get_thread_manager, set_trigger_manager
-from src.core import event_types as ET
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
 from src.core.config import CharlieBotConfig, get_config
@@ -46,14 +45,10 @@ from src.core.init import (
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import SessionMetadata, utc_now
 from src.core.scheduler import Scheduler
-from src.core.sessions import SessionManager
+from src.core.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
 from src.core.streaming import streaming_manager
 from src.core.tasks import create_logged_task
 from src.core.triggers import TriggerManager
-
-# Raw event types replaced by aggregator deltas on the wire (kept in sync
-# with src.core.sessions._RAW_EVENTS_REPLACED_BY_DELTAS).
-_RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset({ET.ASSISTANT, ET.USER})
 
 log = structlog.get_logger()
 
@@ -369,9 +364,9 @@ async def _replay_aggregated_catchup(
   Walks the full event list to keep the aggregator state aligned with how the
   client's SSR/SPA aggregator processed events[0..cursor-1]; deltas from events
   before the cursor are dropped because the client has already rendered them.
-  Raw `assistant`/`user` events are suppressed because their content is
-  represented by `message`/`stream` deltas on the wire. Returns the number of
-  frames sent.
+  Raw events in `_RAW_EVENTS_REPLACED_BY_DELTAS` are suppressed because their
+  content is represented by `message`/`stream` deltas on the wire. Returns the
+  number of frames sent.
   """
   aggregator = MessageAggregator(event_index_offset=event_index_offset)
   sent = 0

@@ -566,6 +566,30 @@ def test_spend_aggregation_skips_unreadable_file(tmp_path) -> None:
   assert spend["last_7d_usd"] == pytest.approx(5.00)
 
 
+def test_codex_provider_spend_prunes_files_untouched_for_a_week(tmp_path) -> None:
+  """A fresh-looking event inside a stale-mtime file stays unpriced.
+
+  Rollout logs are append-only, so a file untouched for seven days is skipped
+  without a read, even though its events would pass the aggregation window on
+  their own timestamps.
+  """
+  provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
+  now = datetime.now(UTC)
+  rollout_path = tmp_path / "rollout-stale.jsonl"
+  rollout_path.write_text("\n".join([
+      json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.5"}}),
+      json.dumps(_build_spend_token_count_event(
+          timestamp=now.isoformat().replace("+00:00", "Z"),
+          input_tokens=1_000_000, cached_input_tokens=0, output_tokens=0)),
+  ]) + "\n")
+  stale_mtime = (now - timedelta(days=8)).timestamp()
+  os.utime(rollout_path, (stale_mtime, stale_mtime))
+
+  spend = provider._compute_spend([rollout_path])
+
+  assert spend == {"last_24h_usd": 0.0, "last_7d_usd": 0.0}
+
+
 def test_transform_response_preserves_claude_payload_shape() -> None:
   usage = _transform_response({
     "fiveHour": {

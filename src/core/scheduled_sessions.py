@@ -27,21 +27,6 @@ class ScheduledSessionStore:
   def __init__(self, session_manager: Any):
     self._session_manager = session_manager
 
-  async def create_session(self, *args, **kwargs):
-    return await self._session_manager.create_session(*args, **kwargs)
-
-  async def archive_session(self, *args, **kwargs):
-    return await self._session_manager.archive_session(*args, **kwargs)
-
-  async def save_metadata(self, *args, **kwargs):
-    return await self._session_manager.save_metadata(*args, **kwargs)
-
-  async def list_sessions(self, *args, **kwargs):
-    return await self._session_manager.list_sessions(*args, **kwargs)
-
-  async def _has_running_tasks(self, *args, **kwargs):
-    return await self._session_manager._has_running_tasks(*args, **kwargs)
-
   async def ensure_scheduled_session_backend(
       self,
       task_name: str,
@@ -65,13 +50,13 @@ class ScheduledSessionStore:
 
     old_session = active_sessions[0] if active_sessions else None
     if old_session is None:
-      meta = await self.create_session(
+      meta = await self._session_manager.create_session(
           CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role),
           backend=backend)
       if group is not None:
         meta.group = group
         meta.updated_at = utc_now()
-        await self.save_metadata(meta)
+        await self._session_manager.save_metadata(meta)
       log.info("scheduled_session_created", task=task_name, session=meta.id, backend=backend)
       if session_cache is not None:
         session_cache.setdefault(task_name, []).insert(0, meta)
@@ -92,15 +77,15 @@ class ScheduledSessionStore:
         return None
       raise ScheduledSessionBusyError(message)
 
-    await self.archive_session(old_session.id)
-    meta = await self.create_session(
+    await self._session_manager.archive_session(old_session.id)
+    meta = await self._session_manager.create_session(
         CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role),
         backend=backend)
     self.migrate_scheduler_bookkeeping(old_session, meta)
     if group is not None:
       meta.group = group
     meta.updated_at = utc_now()
-    await self.save_metadata(meta)
+    await self._session_manager.save_metadata(meta)
     if session_cache is not None:
       cached_sessions = session_cache.setdefault(task_name, [])
       for cached in cached_sessions:
@@ -126,7 +111,7 @@ class ScheduledSessionStore:
     if session_cache is not None:
       candidates = session_cache.get(task_name, [])
     else:
-      candidates = await self.list_sessions(status=SessionStatus.ACTIVE, scheduled=True)
+      candidates = await self._session_manager.list_sessions(status=SessionStatus.ACTIVE, scheduled=True)
     sessions = [
         session for session in candidates
         if session.scheduled_task == task_name and session.status == SessionStatus.ACTIVE
@@ -136,7 +121,7 @@ class ScheduledSessionStore:
 
   async def _scheduled_session_busy(self, session: SessionMetadata) -> bool:
     """Return whether a scheduled session has active master thinking or worker threads."""
-    return bool(session.thinking_since) or await self._has_running_tasks(session.id)
+    return bool(session.thinking_since) or await self._session_manager._has_running_tasks(session.id)
 
   def migrate_scheduler_bookkeeping(self, old_session: SessionMetadata, new_session: SessionMetadata) -> None:
     """Carry scheduler bookkeeping fields onto the task's next generation.

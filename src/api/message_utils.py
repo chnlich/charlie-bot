@@ -222,6 +222,27 @@ def _projection_page(
   return messages, projection.pending_draft, projection.event_count, oldest_ordinal, has_more
 
 
+async def _tail_events_page(
+    session_mgr: 'SessionManager',
+    session_id: str,
+    archive_offset: int,
+    message_limit: int,
+) -> tuple[list[dict], list[dict], dict | None, int, int, bool]:
+  """Load the last *message_limit* events and view them with global ordinals.
+
+  Returns (tail_events, messages, pending_draft, total_event_count,
+  oldest_message_ordinal, has_more). Indices are global (archive_offset +
+  line-in-live-file), matching ``load_chat_events_range``; ``has_more`` is
+  set when the tail window is full or archived events precede it.
+  """
+  tail_events, total_count, has_more = await asyncio.to_thread(
+      session_mgr.load_chat_events_tail, session_id, message_limit)
+  offset = archive_offset + total_count - len(tail_events)
+  messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
+  return (tail_events, messages, pending_draft, archive_offset + total_count,
+          offset, has_more or archive_offset > 0)
+
+
 async def _mark_read_best_effort(session_mgr: 'SessionManager', session_id: str) -> 'SessionMetadata | None':
   """mark_read whose failure degrades to a logged warning.
 
@@ -269,10 +290,9 @@ async def build_session_bootstrap_data(
           has_more=has_more,
       )
 
-  tail_events, total_count, has_more = await asyncio.to_thread(
-      session_mgr.load_chat_events_tail, session_id, message_limit)
-  offset = session_meta.archive_offset + total_count - len(tail_events)
-  messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
+  (_, messages, pending_draft, total_event_count, oldest_ordinal,
+   has_more) = await _tail_events_page(
+       session_mgr, session_id, session_meta.archive_offset, message_limit)
 
   read_meta = await _mark_read_best_effort(session_mgr, session_id)
   if read_meta is not None:
@@ -282,9 +302,9 @@ async def build_session_bootstrap_data(
       session=session_meta,
       messages=messages,
       pending_draft=pending_draft,
-      total_event_count=session_meta.archive_offset + total_count,
-      oldest_message_ordinal=offset,
-      has_more=has_more or session_meta.archive_offset > 0,
+      total_event_count=total_event_count,
+      oldest_message_ordinal=oldest_ordinal,
+      has_more=has_more,
   )
 
 
@@ -333,22 +353,12 @@ async def build_session_view_data(
       )
 
   if message_limit is not None:
-    events_task = asyncio.to_thread(session_mgr.load_chat_events_tail, session_id, message_limit)
-  else:
-    events_task = asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-  events_result = await events_task
-
-  if message_limit is not None:
-    tail_events, total_count, has_more = events_result
-    offset = session_meta.archive_offset + total_count - len(tail_events)
-    messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
+    (raw_events, messages, pending_draft, total_event_count,
+     oldest_message_ordinal, has_more) = await _tail_events_page(
+         session_mgr, session_id, session_meta.archive_offset, message_limit)
     usage = await session_mgr.resolve_session_usage(session_id, session_meta)
-    raw_events = tail_events
-    total_event_count = session_meta.archive_offset + total_count
-    oldest_message_ordinal = offset
-    has_more = has_more or session_meta.archive_offset > 0
   else:
-    raw_events = events_result
+    raw_events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
     total_event_count = session_meta.archive_offset + len(raw_events)
     oldest_message_ordinal = session_meta.archive_offset
     has_more = session_meta.archive_offset > 0

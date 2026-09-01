@@ -274,25 +274,15 @@ async def build_session_bootstrap_data(
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during bootstrap build")
 
+  page = None
   if session_meta.archive_offset == 0:
-    result = await asyncio.to_thread(_projection_page, session_mgr, session_id, message_limit)
-    if result is not None:
-      messages, pending_draft, total_event_count, oldest_ordinal, has_more = result
-      read_meta = await _mark_read_best_effort(session_mgr, session_id)
-      if read_meta is not None:
-        session_meta = read_meta
-      return SessionBootstrapData(
-          session=session_meta,
-          messages=messages,
-          pending_draft=pending_draft,
-          total_event_count=total_event_count,
-          oldest_message_ordinal=oldest_ordinal,
-          has_more=has_more,
-      )
-
-  (_, messages, pending_draft, total_event_count, oldest_ordinal,
-   has_more) = await _tail_events_page(
-       session_mgr, session_id, session_meta.archive_offset, message_limit)
+    page = await asyncio.to_thread(_projection_page, session_mgr, session_id, message_limit)
+  if page is None:
+    (_, messages, pending_draft, total_event_count,
+     oldest_ordinal, has_more) = await _tail_events_page(
+         session_mgr, session_id, session_meta.archive_offset, message_limit)
+  else:
+    messages, pending_draft, total_event_count, oldest_ordinal, has_more = page
 
   read_meta = await _mark_read_best_effort(session_mgr, session_id)
   if read_meta is not None:

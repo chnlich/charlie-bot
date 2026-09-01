@@ -59,6 +59,12 @@ ELONE_BOOTSTRAP_OPENER = "You're taking over because the user wasn't satisfied w
 _METADATA_CACHE_TTL = 30.0  # seconds
 _SEARCH_RESULT_LIMIT = 200  # newest rows a name/content search returns; keeps the render bounded
 _PROJECTION_LRU_LIMIT = 8
+# LRU cap on the content-search miss memo: chat-file path -> ((mtime_ns, size),
+# shortest absence-proven lowercase needle). Absence of N proves every
+# superstring of N absent while the file keeps that (mtime_ns, size) — the
+# append-only NDJSON signature the M9/M12 memos key on — so the debounced
+# sidebar's growing query string re-reads a file only after the file moves.
+_SEARCH_MISS_MEMO_LIMIT = 256
 # str.lower() and substring search hold the GIL for the whole input, so the
 # sidebar content search reads chat files in windows of this many characters:
 # each lower()/scan call's GIL hold stays bounded instead of scaling with the
@@ -180,6 +186,32 @@ def has_pending_plan_approval_sync(plans_path: Path, session_id: str) -> bool:
   return any(plan.get("state") == "awaiting approval" for plan in result["plans"])
 
 
+def _scan_content_for_hit(path: Path, session_id: str, query_lower: str) -> bool | None:
+  """Character-window scan of a chat-events file for *query_lower* (thread-pool work).
+
+  Returns the verdict, or None when the file could not be read: an errored
+  scan proves no absence, so the caller must not memoize it as a miss.
+  """
+  overlap = len(query_lower) - 1
+  tail = ""
+  try:
+    with path.open(encoding="utf-8") as stream:
+      while True:
+        chunk = stream.read(_SEARCH_CHUNK_CHARS)
+        if not chunk:
+          return False
+        window = tail + chunk.lower()
+        if query_lower in window:
+          return True
+        # This and the next window together cover the file with an
+        # overlap of len(query)-1 chars, so a hit straddling the chunk
+        # boundary lies whole inside exactly one window.
+        tail = window[-overlap:] if overlap else ""
+  except OSError as e:
+    log.debug("search_read_failed", session_id=session_id, error=str(e))
+    return None
+
+
 def probe_sidebar_state_sync(specs: list[tuple[str, Path, Path, Path]]) -> dict[str, dict]:
   """Probe every ``(session_id, threads_dir, triggers_dir, plans_path)`` spec serially.
 
@@ -243,6 +275,7 @@ class SessionManager:
     # hit requires the cached event_count to equal the live event count
     # (get_message_projection), so a stale projection is never served.
     self._projection_cache: OrderedDict[str, MessageProjection] = OrderedDict()
+    self._search_miss_memo: OrderedDict[str, tuple[tuple[int, int], str]] = OrderedDict()
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -580,30 +613,29 @@ class SessionManager:
 
     async def _check_content(meta: SessionMetadata, path: Path) -> SessionMetadata | None:
       """Check if a session's chat events contain the query (runs file I/O in thread pool)."""
+      memo_key = str(path)
+      memo_entry = self._search_miss_memo.get(memo_key)
 
-      def _read_and_check() -> bool:
-        if not path.exists():
-          return False
-        overlap = len(query_lower) - 1
-        tail = ""
+      def _read_and_check() -> tuple[bool, tuple[int, int] | None]:
         try:
-          with path.open(encoding="utf-8") as stream:
-            while True:
-              chunk = stream.read(_SEARCH_CHUNK_CHARS)
-              if not chunk:
-                return False
-              window = tail + chunk.lower()
-              if query_lower in window:
-                return True
-              # This and the next window together cover the file with an
-              # overlap of len(query)-1 chars, so a hit straddling the chunk
-              # boundary lies whole inside exactly one window.
-              tail = window[-overlap:] if overlap else ""
+          stat = path.stat()
         except OSError as e:
           log.debug("search_read_failed", session_id=meta.id, error=str(e))
-          return False
+          return False, None
+        sig = (stat.st_mtime_ns, stat.st_size)
+        if memo_entry is not None and memo_entry[0] == sig and query_lower.startswith(memo_entry[1]):
+          return False, None  # proven-absent memo verdict: no file read
+        verdict = _scan_content_for_hit(path, meta.id, query_lower)
+        if verdict is None:
+          return False, None
+        return verdict, sig
 
-      return _stamp_thinking_since(meta.model_copy()) if await asyncio.to_thread(_read_and_check) else None
+      hit, sig = await asyncio.to_thread(_read_and_check)
+      if hit:
+        return _stamp_thinking_since(meta.model_copy())
+      if sig is not None:
+        self._memoize_search_miss(memo_key, sig, query_lower)
+      return None
 
     content_hits = await asyncio.gather(*(_check_content(m, p) for m, p in content_candidates))
     results.extend(meta for meta in content_hits if meta is not None)
@@ -613,6 +645,22 @@ class SessionManager:
         include_pending_trigger_status=include_pending_trigger_status,
     )
     return enriched[:_SEARCH_RESULT_LIMIT]
+
+  def _memoize_search_miss(self, memo_key: str, sig: tuple[int, int], needle: str) -> None:
+    """Record a clean full-scan miss under the shorter of the known needles.
+
+    The shorter needle subsumes more superstrings, so an existing entry under
+    the same signature wins when it is no longer than the fresh one; a moved
+    signature (append) always replaces, since the old scan says nothing about
+    the new bytes.
+    """
+    existing = self._search_miss_memo.get(memo_key)
+    if existing is not None and existing[0] == sig and len(existing[1]) <= len(needle):
+      return
+    self._search_miss_memo[memo_key] = (sig, needle)
+    self._search_miss_memo.move_to_end(memo_key)
+    while len(self._search_miss_memo) > _SEARCH_MISS_MEMO_LIMIT:
+      self._search_miss_memo.popitem(last=False)
 
   async def fork_session(
       self,

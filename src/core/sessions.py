@@ -1340,10 +1340,13 @@ class SessionManager:
     return projection
 
   def _drop_session_runtime_state(self, session_id: str) -> None:
-    """Drop a session's live runtime state: chat-event cache, aggregator, projection."""
+    """Drop a session's live runtime state: chat-event cache, aggregator, projection, recap memo."""
     self._chat_events.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
     self._projection_cache.pop(session_id, None)
+    from src.core import recap  # lazy: recap imports SessionManager from this module
+
+    recap.drop_extract_memo(session_id)
 
   async def resolve_session_usage(
       self,

@@ -32,7 +32,8 @@ Known-alive symbols:
   their definitions, so vulture flags each one as an unused function; they must never be deleted on
   that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
   because its URL is built inside the Python registry rather than `web/`.
-- `_reset_config_caches` (`tests/test_charliebot_home.py`), `_clear_once_keys`
+- `_fresh_unknown_limit_shape_registry` (`tests/test_ext_usage.py`),
+  `_reset_config_caches` (`tests/test_charliebot_home.py`), `_clear_once_keys`
   (`tests/test_follow_silence_recheck.py`), `_reset_token_usage_single_flight` (`tests/test_pages.py`),
   `_worktree_paths` (`tests/test_reviewer_model_preference.py`),
   `_clean_sidebar_state` (`tests/test_sidebar_state_snapshot.py`),

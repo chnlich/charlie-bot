@@ -326,6 +326,7 @@ class SessionUsageResolver:
       return events, cached[2]
     facts = _scan_usage_facts(events)
     self._facts_memo[session_id] = (events, len(events), facts)
+    self._facts_memo.move_to_end(session_id)
     while len(self._facts_memo) > _FACTS_MEMO_CAP:
       self._facts_memo.popitem(last=False)
     return events, facts

@@ -321,7 +321,8 @@ async def test_force_param_reprobes_clean_sessions(tmp_path: Path, monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_every_tenth_poll_reprobes_all_active_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_every_tenth_poll_is_stat_only_when_probe_inputs_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, mgr, first = await make_home_session(tmp_path, name="A")
   second = await mgr.create_session(CreateSessionRequest(name="B"))
   write_thread_meta(cfg, second.id, {"id": "t1", "status": "running"})
@@ -335,5 +336,52 @@ async def test_every_tenth_poll_reprobes_all_active_sessions(tmp_path: Path, mon
     await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)
   assert calls == {"running": 0, "trigger": 0, "plan": 0}
 
-  await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)  # poll 10: forced full re-probe
-  assert calls == {"running": 2, "trigger": 2, "plan": 2}
+  # Poll 10 sweeps every active session, but the stat-only probe-input
+  # signature is unchanged, so no session pays the deep read+parse.
+  await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)
+  assert calls == {"running": 0, "trigger": 0, "plan": 0}
+
+
+@pytest.mark.asyncio
+async def test_every_tenth_poll_heals_external_write_without_dirty_mark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, mgr, first = await make_home_session(tmp_path, name="A")
+  second = await mgr.create_session(CreateSessionRequest(name="B"))
+
+  ids = f"{first.id},{second.id}"
+  await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)  # poll 1 (cold)
+
+  # An out-of-funnel writer (no mark_sidebar_dirty): the self-heal sweep must
+  # still pick the file change up, and only for the session that changed.
+  write_thread_meta(cfg, second.id, {"id": "t1", "status": "running"})
+
+  calls = _counting_probes(monkeypatch)
+  for _ in range(8):  # polls 2-9: no dirty mark -> still the stale snapshot
+    await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)
+  assert calls == {"running": 0, "trigger": 0, "plan": 0}
+
+  healed = await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)  # poll 10
+  assert calls == {"running": 1, "trigger": 1, "plan": 1}
+  assert healed[second.id]["has_running_tasks"] is True
+
+
+@pytest.mark.asyncio
+async def test_scan_window_rollover_reprobes_without_file_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, mgr, session = await make_home_session(tmp_path, name="Aging")
+  write_thread_meta(cfg, session.id, {"id": "t1", "status": "running"})
+  first = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  assert first[session.id]["has_running_tasks"] is True
+
+  # Jump the clock past the 30-day scan window with no file changing. Polls
+  # 2-9 serve the stale snapshot; the poll-10 sweep must re-probe anyway
+  # because the signature's rollover element can't vouch beyond it.
+  future = datetime.now(UTC) + timedelta(days=31)
+  monkeypatch.setattr(sessions_core, "utc_now", lambda: future)
+  monkeypatch.setattr(sessions_core.time, "time", lambda: future.timestamp())
+  for _ in range(8):
+    interim = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  assert interim[session.id]["has_running_tasks"] is True
+
+  tenth = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  assert tenth[session.id]["has_running_tasks"] is False

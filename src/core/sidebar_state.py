@@ -28,6 +28,13 @@ _dirty: set[str] = set()
 # A session without an entry is cold for that poll (probed like a dirty one),
 # so an empty dict — a fresh boot — is a full probe.
 _snapshot: dict[str, dict] = {}
+# session id -> probe-input signature (stat-only identity of every file the
+# sidebar probe reads). A selected re-probe whose signature matches the stored
+# one — and whose 30-day scan-window rollover has not passed — re-derives from
+# unchanged bytes, so the deep probe is skipped (the every-10th-poll self-heal
+# sweep drops to a stat-only pass). Built and stored by the poll in
+# src.core.sessions; the /status?force=1 escape hatch bypasses it.
+_probe_signatures: dict[str, tuple] = {}
 # populate_sidebar_state invocation counter (process lifetime).
 _poll_count = 0
 
@@ -74,6 +81,16 @@ def store_snapshot_entry(session_id: str, entry: dict) -> None:
   _snapshot[session_id] = entry
 
 
+def probe_signature(session_id: str) -> tuple | None:
+  """The stored probe-input signature for *session_id*, or None when never probed."""
+  return _probe_signatures.get(session_id)
+
+
+def store_probe_signature(session_id: str, signature: tuple) -> None:
+  """Store the probe-input signature under which *session_id* was last deep-probed."""
+  _probe_signatures[session_id] = signature
+
+
 def register_poll(force: bool) -> bool:
   """Count one populate_sidebar_state invocation; return True when it must re-probe everything.
 
@@ -87,8 +104,9 @@ def register_poll(force: bool) -> bool:
 
 
 def reset_for_tests() -> None:
-  """Clear the dirty set, the snapshot, and the poll counter (tests only)."""
+  """Clear the dirty set, the snapshot, the probe signatures, and the poll counter (tests only)."""
   global _poll_count
   _dirty.clear()
   _snapshot.clear()
+  _probe_signatures.clear()
   _poll_count = 0

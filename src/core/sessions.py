@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import shutil
 import time
 from collections import OrderedDict
@@ -16,7 +17,7 @@ from src.core import event_types as ET
 from src.core import plan_paths, sidebar_state
 from src.core.chat_events import ChatEventStore
 from src.core.config import CharlieBotConfig
-from src.core.init import iter_recent_thread_metas
+from src.core.init import RUNNING_SCAN_WINDOW, iter_recent_thread_metas
 from src.core.json_utils import atomic_write_text, load_json_meta, write_json_atomically
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection
@@ -212,12 +213,14 @@ def _scan_content_for_hit(path: Path, session_id: str, query_lower: str) -> bool
     return None
 
 
-def probe_sidebar_state_sync(specs: list[tuple[str, Path, Path, Path]]) -> dict[str, dict]:
+def probe_sidebar_state_sync(
+    specs: list[tuple[str, Path, Path, Path]],
+) -> dict[str, dict]:
   """Probe every ``(session_id, threads_dir, triggers_dir, plans_path)`` spec serially.
 
-  The execution core of a sidebar poll's re-probe: all three probe groups per
-  session, one session at a time, so re-probing N sessions costs one
-  thread-pool task instead of 3*N. Returns
+  The deep-probe core of a sidebar re-probe: all three probe groups per
+  session, one session at a time, so probing N sessions costs one thread-pool
+  task instead of 3*N. Returns
   ``{session_id: {"thread_running", "pending_trigger_count", "next_trigger_at",
   "has_pending_plan_approval"}}``.
   """
@@ -232,6 +235,85 @@ def probe_sidebar_state_sync(specs: list[tuple[str, Path, Path, Path]]) -> dict[
         "has_pending_plan_approval": has_pending_plan_approval_sync(plans_path, session_id),
     }
   return results
+
+
+def _sidebar_probe_signature(threads_dir: Path, triggers_dir: Path, plans_path: Path) -> tuple:
+  """Stat-only identity of every byte the sidebar probe reads, for one session.
+
+  A deep probe's result can change only three ways, and the signature pins all
+  three: a probed file's content changes (caught by ``(st_mtime_ns, st_size)``
+  for both atomic-rename and in-place writers), a probed file or thread dir
+  appears or disappears (caught by the sorted name sets, with ``None`` marking
+  a thread dir still missing its metadata.json), or the 30-day
+  ``RUNNING_SCAN_WINDOW`` rolls past a metadata's mtime and drops it from
+  ``has_running_tasks_sync``'s read set without any file changing (caught by
+  the rollover element: the earliest ``mtime + window`` over scanned metas, or
+  ``float('inf')`` when nothing was scanned). The stat pass mirrors the probe
+  cores' own scandir+stat phase, so a signature sweep costs the cheap half of
+  a probe and skips every content read and parse.
+  """
+  thread_sig = []
+  rollovers = []
+  if threads_dir.is_dir():
+    with os.scandir(threads_dir) as entries:
+      for entry in entries:
+        if not entry.is_dir():
+          continue
+        try:
+          st = (Path(entry.path) / "metadata.json").stat()
+        except OSError:
+          thread_sig.append((entry.name, None))
+          continue
+        thread_sig.append((entry.name, st.st_mtime_ns, st.st_size))
+        rollovers.append(st.st_mtime + RUNNING_SCAN_WINDOW.total_seconds())
+  trigger_sig = []
+  if triggers_dir.is_dir():
+    with os.scandir(triggers_dir) as entries:
+      for entry in entries:
+        if not entry.name.endswith(".json"):
+          continue
+        try:
+          st = entry.stat()
+        except OSError:
+          continue
+        trigger_sig.append((entry.name, st.st_mtime_ns, st.st_size))
+  try:
+    plans_st = plans_path.stat()
+    plans_sig: tuple | None = (plans_st.st_mtime_ns, plans_st.st_size)
+  except OSError:
+    plans_sig = None
+  rollover = min(rollovers) if rollovers else float("inf")
+  return (tuple(sorted(thread_sig)), tuple(sorted(trigger_sig)), plans_sig, rollover)
+
+
+def _sidebar_signature_fresh(session_id: str, signature: tuple, now_ts: float) -> bool:
+  """True when the stored signature equals *signature* and its scan-window rollover is still ahead."""
+  stored = sidebar_state.probe_signature(session_id)
+  return stored == signature and now_ts < signature[3]
+
+
+def selective_probe_sidebar_state(
+    specs: list[tuple[str, Path, Path, Path]],
+    *,
+    deep: bool,
+) -> tuple[dict[str, dict], dict[str, tuple]]:
+  """Deep-probe exactly the specs whose probe inputs changed since the last probe.
+
+  Composes one signature stat pass with :func:`probe_sidebar_state_sync`-shaped
+  probing of the changed specs so one thread-pool task covers selection and
+  execution. ``deep=True`` probes every spec regardless of signatures (the
+  ``/status?force=1`` escape hatch). Returns ``(entries, signatures)``; the
+  caller stores both in :mod:`src.core.sidebar_state` on the event loop.
+  """
+  sigs: dict[str, tuple] = {}
+  to_probe: list[tuple[str, Path, Path, Path]] = []
+  now_ts = time.time()
+  for session_id, threads_dir, triggers_dir, plans_path in specs:
+    sig = _sidebar_probe_signature(threads_dir, triggers_dir, plans_path)
+    sigs[session_id] = sig
+    if deep or not _sidebar_signature_fresh(session_id, sig, now_ts):
+      to_probe.append((session_id, threads_dir, triggers_dir, plans_path))
+  return probe_sidebar_state_sync(to_probe), sigs
 
 
 class SuccessionRefused(ValueError):
@@ -1628,9 +1710,11 @@ class SessionManager:
     ONE ``asyncio.to_thread`` task, serial over sessions, via the pure probe
     cores above — only the dirty sessions, or every active session on every
     10th call and whenever *force* is set (the ``/status?force=1`` escape
-    hatch). A session with no snapshot entry (cold boot, new session) is
-    probed like a dirty one, so an empty snapshot is a full probe. Archived
-    sessions keep the constant-False shortcut.
+    hatch). A selected probe first checks the stat-only probe-input
+    signature: unchanged inputs (never-probed excepted) skip the deep read in
+    every case except an explicit *force*. A session with no snapshot entry
+    (cold boot, new session) is probed like a dirty one, so an empty snapshot
+    is a full probe. Archived sessions keep the constant-False shortcut.
     """
     if not sessions:
       return
@@ -1675,7 +1759,10 @@ class SessionManager:
           for session_id in probe_ids
       ]
       try:
-        probed = await asyncio.to_thread(probe_sidebar_state_sync, specs)
+        # Explicit force keeps its teeth as the escape hatch: it deep-probes
+        # every selected session. Narrowed sweeps (the every-10th self-heal)
+        # deep-probe only sessions whose probe-input signature moved.
+        probed, probe_sigs = await asyncio.to_thread(selective_probe_sidebar_state, specs, deep=force)
       except BaseException:
         # A failed probe must not lose the dirty state it was serving.
         for session_id in probe_ids:
@@ -1683,6 +1770,8 @@ class SessionManager:
         raise
       for session_id, entry in probed.items():
         sidebar_state.store_snapshot_entry(session_id, entry)
+      for session_id, sig in probe_sigs.items():
+        sidebar_state.store_probe_signature(session_id, sig)
 
     for meta in active_sessions:
       entry = sidebar_state.required_snapshot_entry(meta.id)

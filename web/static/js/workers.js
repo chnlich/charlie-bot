@@ -2,7 +2,13 @@
 // Thread detail / events
 // ---------------------------------------------------------------------------
 const loadedThreads = new Set();
-const threadPollIntervals = new Map();
+// Threads with a registered events poll; the intervals live in the page-timers
+// registry so a hidden tab polls nothing.
+const threadPollTimers = new Set();
+
+function threadPollTimerName(threadId) {
+  return 'thread-events-' + threadId;
+}
 
 async function fetchAndRenderEvents(threadId, sessionId) {
   const [eventsRes, metadataRes] = await Promise.all([
@@ -22,7 +28,8 @@ function isWorkerRunning(threadId) {
 
 function startThreadPoll(threadId, sessionId) {
   stopThreadPoll(threadId);
-  const intervalId = setInterval(async () => {
+  threadPollTimers.add(threadId);
+  startPageTimer(threadPollTimerName(threadId), async () => {
     const detail = document.getElementById('thread-detail-' + threadId);
     if (!detail || detail.classList.contains('hidden')) {
       stopThreadPoll(threadId);
@@ -36,22 +43,19 @@ function startThreadPoll(threadId, sessionId) {
     }
     try { await fetchAndRenderEvents(threadId, sessionId); } catch (e) { console.warn('Poll fetch failed:', e); }
   }, 5000);
-  threadPollIntervals.set(threadId, intervalId);
 }
 
 function stopThreadPoll(threadId) {
-  const intervalId = threadPollIntervals.get(threadId);
-  if (intervalId != null) {
-    clearInterval(intervalId);
-    threadPollIntervals.delete(threadId);
-  }
+  if (!threadPollTimers.has(threadId)) return;
+  threadPollTimers.delete(threadId);
+  stopPageTimer(threadPollTimerName(threadId));
 }
 
 function stopAllThreadPolls() {
-  for (const [threadId, intervalId] of threadPollIntervals) {
-    clearInterval(intervalId);
+  for (const threadId of threadPollTimers) {
+    stopPageTimer(threadPollTimerName(threadId));
   }
-  threadPollIntervals.clear();
+  threadPollTimers.clear();
 }
 
 function ensureThreadAttachContainer(threadId) {

@@ -33,6 +33,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M20 recap extract, repeat divider | M20 collector below | seconds per extract at one divider, worst on-disk extract corpus | median < 0.05 s | — (introduced with its first history row) |
 | M21 sidebar probe sweep, steady state | M21 collector below | seconds per 10th-poll sweep over all active sessions | median < 0.05 s | — (introduced with its first history row) |
 | M22 ext-usage unknown-limit-shape warning stream, steady state | M22 collector below | warnings per 60 steady-state transform rounds | 0 warnings after the first sighting per process | — (introduced with its first history row) |
+| M23 archive-range chat-event rescan, steady state | M23 collector below | seconds per 8-page backwards scroll over the biggest archived corpus | median < 0.005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -941,6 +942,79 @@ finally:
     ext_usage_mod.log.warning = orig
 n = sum(1 for w in warns if w["event"] == "ext_usage_unknown_limit_shape")
 print(f"60 steady-state transform rounds; ext_usage_unknown_limit_shape warnings: {n}")
+EOF
+```
+
+M23 — archive-range chat-event rescan, steady state. Sessions with
+`archive_offset > 0` paginate backwards through `load_chat_events_range`,
+whose archive half re-read and re-scanned every archive file below the page
+end on every page click (and on every cold recap extract touching archives).
+The fixed reader memoizes each archive file's parsed events on
+(mtime_ns, size): a repeat range read over unchanged archives pays one stat
+per file and zero corpus bytes, mirroring the live events cache that
+unarchived sessions already serve from. Archive files are append-only within
+their week and frozen after, so the key is sound; a same-week recycle append
+re-parses only that file. The cost is invisible to HTTP probes of archived
+sessions (deep page turns only), so the collector copies the session whose
+`data/archives` carries the most bytes into a scratch `CHARLIEBOT_HOME`
+under /tmp (metadata.json and data/ only; live home read once for the copy,
+never written), warms the metadata cache as the live server's polls do, and
+times 8-page backwards scrolls of 200 events below the archive end — one
+cold pass, as at first scroll after a server start with an empty memo, then
+five timed repeats. Evidence while the live server runs older code points
+the same collector at the branch checkout (`sys.path.insert` at the worktree
+root), the same shape as the M15 protocol:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+# Worst archived corpus: the session whose data/archives carries the most bytes.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    arch = d / "data" / "archives"
+    if arch.is_dir():
+        n = sum(p.stat().st_size for p in arch.glob("chat_events.*.jsonl"))
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+print(f"worst archived corpus: session {SID}, {best_n / 1e6:.1f} MB in archives")
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
+# session's metadata.json and data/; live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m23-arch-home-", dir="/tmp"))
+dst = home / "sessions" / SID
+dst.mkdir(parents=True)
+shutil.copy2(best / "metadata.json", dst / "metadata.json")
+shutil.copytree(best / "data", dst / "data")
+
+cfg = CharlieBotConfig(charliebot_home=home)
+mgr = SessionManager(cfg)
+asyncio.run(mgr.get_session(SID))  # warm the metadata cache, as the live server's polls do
+offset = mgr._chat_events.read_archive_offset_sync(SID)
+
+def scroll():
+    before = offset
+    for _ in range(8):
+        if before <= 0:
+            break
+        mgr.load_chat_events_range(SID, max(0, before - 200), before)
+        before -= 200
+
+scroll()  # cold pass, as at first scroll after a server start; not timed
+times = []
+for _ in range(5):
+    t0 = time.perf_counter()
+    scroll()
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"archive_offset {offset}; 8-page scroll steady-state median {times[2]:.4f} s, max {times[-1]:.4f} s")
+shutil.rmtree(home)
 EOF
 ```
 

@@ -3,7 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
-const { createClassList } = require('./dom_element_stub');
+const { createClassList, createEscapingElement } = require('./dom_element_stub');
 
 const { escapeHtml } = require('./escape_html_stub');
 
@@ -69,15 +69,7 @@ function loadChatScript() {
             },
           };
         }
-        let text = '';
-        return {
-          set textContent(value) {
-            text = String(value);
-          },
-          get innerHTML() {
-            return escapeHtml(text);
-          },
-        };
+        return createEscapingElement(tagName);
       },
       getElementById() {
         return null;
@@ -276,17 +268,7 @@ function loadSlashCommandsScript(fetchImpl, overrides = {}) {
         if (id === 'msg-input') return input;
         return null;
       },
-      createElement() {
-        let text = '';
-        return {
-          set textContent(value) {
-            text = String(value);
-          },
-          get innerHTML() {
-            return escapeHtml(text);
-          },
-        };
-      },
+      createElement: createEscapingElement,
     },
     ...overrides,
   };

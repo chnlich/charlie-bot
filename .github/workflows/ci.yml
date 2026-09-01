@@ -32,6 +32,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The formatter config and pin were deleted twice as "unused" (#394, #396) because
+      # nothing inside the repo invokes yapf — the caller is the code-health cron on the
+      # host (~/.charliebot/config.d/cron.d/code-health.yaml), which a whole-repo grep
+      # cannot see. Without .style.yapf, `yapf --in-place --recursive src/` silently falls
+      # back to pep8 defaults and reformats the tree to 4-space indent.
+      - name: Formatter config present
+        run: |
+          test -f .style.yapf || {
+            echo "::error file=.style.yapf::.style.yapf is missing — the code-health cron runs"
+            echo "yapf against src/ and without this file it reformats the tree to 4-space indent."
+            exit 1
+          }
+          grep -q '"yapf' pyproject.toml || {
+            echo "::error file=pyproject.toml::the yapf pin is missing from [project.dependencies]"
+            exit 1
+          }
+          grep -q '^indent_width = 2$' .style.yapf || {
+            echo "::error file=.style.yapf::indent_width must stay 2 (Google style, per project.md 10.1)"
+            exit 1
+          }
+
       - name: Install uv
         uses: astral-sh/setup-uv@v9.0.0
 

@@ -135,7 +135,7 @@ def build_review_prompt(
       f"   - Are there edge cases, regressions, or interactions with other code the worker missed?\n"
       f"   - Would this change surprise someone reading the code for the first time?\n"
       f"7. Check for: correctness, bugs, unintended side effects, missing edge cases.\n"
-      f"8. Style: Google Style, 2-space indent, 120-col (only flag if egregious).\n"
+      f"8. Style: Google Style, 2-space indent, 120-col (only flag if egregious — YAPF handles most).\n"
       f"9. If you find issues, fix them and commit with descriptive messages.\n"
       f"10. Stash untracked/modified files: `git stash --include-untracked`\n"
       f"11. Fetch the latest base branch: `git fetch origin {base_branch}`\n"

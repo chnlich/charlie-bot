@@ -1,11 +1,13 @@
 """Session usage resolution — a read-only projection over the in-memory event list.
 
 Usage is computed on demand in ONE pass over the full chat-event stream; no
-incremental cache is maintained. The ``/api/sessions/<id>/usage`` endpoint is
-polled every 3 s per browser tab while the viewed session is thinking, so one
-scan per resolution keeps that recurring CPU charge proportional to the event
-count once, not to the tier count. See the plan ``panel-usage-readout-fix``
-for the tier contract.
+incremental cache is maintained. A whole-result memo, keyed on the in-memory
+events list's identity and length, serves a repeat resolution of an unchanged
+list without rescanning: the ``/api/sessions/<id>/usage`` endpoint is polled
+every 3 s per browser tab while the viewed session is thinking, so an idle
+view pays nothing and a streaming one pays one pass per new event batch. Load
+and scan run in one ``asyncio.to_thread`` so the pass never stalls the event
+loop. See the plan ``panel-usage-readout-fix`` for the tier contract.
 
 The usage dict carries four context fields plus cost and model:
 
@@ -23,6 +25,7 @@ bar). ``None`` for any context field means "unknown" — the bar is hidden.
 """
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -247,6 +250,9 @@ def _resolve_no_source_tier(facts: _UsageFacts) -> dict:
       cost=facts.cost)
 
 
+_FACTS_MEMO_CAP = 8
+
+
 class SessionUsageResolver:
   """Resolve display usage for a session as a projection over its event list."""
 
@@ -259,6 +265,13 @@ class SessionUsageResolver:
   ):
     self._load_chat_events_sync = load_chat_events_sync_fn
     self._codex_resolver = CodexUsageResolver(cfg, events_cache, chat_events_path_fn)
+    # session_id -> (events list, len at scan time, facts). Pinning the list
+    # keeps id() stable, so an identity+length match can never be an id-reuse
+    # collision with a different list; the chat-events cache mutates the list
+    # only by append (save_chat_event) or wholesale replacement, and both
+    # change the key. Runs under asyncio.to_thread, so mutating the memo there
+    # matches the load path's thread context; dict ops stay GIL-atomic.
+    self._facts_memo: OrderedDict[str, tuple[list[dict], int, _UsageFacts]] = OrderedDict()
 
   async def resolve_session_usage(
       self,
@@ -268,8 +281,9 @@ class SessionUsageResolver:
     """Resolve display usage for a session view.
 
     Loads the full event list itself (memoised by the chat-events cache, so no
-    extra disk I/O) and scans it once; the tiers then read the scan's facts,
-    selected by data availability, not backend name:
+    extra disk I/O) and rescans only when the list changed since the last
+    resolution (see the module docstring for the memo key); the tiers then
+    read the scan's facts, selected by data availability, not backend name:
 
     - claude: a main-chain ``assistant`` event with positive prompt tokens exists.
     - codex: the backend is codex and the native rollout resolves.
@@ -278,8 +292,7 @@ class SessionUsageResolver:
 
     Returns ``None`` only when the event list is empty.
     """
-    events = await asyncio.to_thread(self._load_chat_events_sync, session_id)
-    facts = _scan_usage_facts(events)
+    events, facts = await asyncio.to_thread(self._load_and_scan, session_id)
 
     usage = _resolve_claude_tier(facts)
     if usage is not None:
@@ -298,3 +311,22 @@ class SessionUsageResolver:
     if not events:
       return None
     return _resolve_no_source_tier(facts)
+
+  def _load_and_scan(self, session_id: str) -> tuple[list[dict], _UsageFacts]:
+    """Load the session's events and return them with their usage facts.
+
+    Serves the facts from the per-session memo when the cached events list is
+    unchanged since the last scan; rescans (one full pass) on any append or
+    replacement. Runs off the event loop via asyncio.to_thread.
+    """
+    events = self._load_chat_events_sync(session_id)
+    cached = self._facts_memo.get(session_id)
+    if cached is not None and cached[0] is events and cached[1] == len(events):
+      self._facts_memo.move_to_end(session_id)
+      return events, cached[2]
+    facts = _scan_usage_facts(events)
+    self._facts_memo[session_id] = (events, len(events), facts)
+    self._facts_memo.move_to_end(session_id)
+    while len(self._facts_memo) > _FACTS_MEMO_CAP:
+      self._facts_memo.popitem(last=False)
+    return events, facts

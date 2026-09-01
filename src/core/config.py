@@ -288,7 +288,9 @@ class CharlieBotConfig(BaseModel):
   # Integration keys hosts carry in config.yaml / config.d/*.yaml whose consumers read
   # the raw yaml outside this repo (skill scripts). Declared only so extra='forbid'
   # keeps those files loadable; this model never acts on the values, and the names
-  # are load-bearing yaml keys.
+  # are load-bearing yaml keys. A whole-repo grep can never find the consumer — it
+  # lives in a host skill dir — so zero matches is not evidence a field is unused.
+  # Deleting one breaks startup on every host whose config carries the key.
   feishu_app_id: str | None = None
   feishu_app_secret: str | None = None
   feishu_refresh_token: str | None = None
@@ -304,6 +306,10 @@ class CharlieBotConfig(BaseModel):
   google_refresh_token: str | None = None
   linear_api_key: str | None = None
   slack_user_token: str | None = None
+  twitter_api_key: str | None = None          # x-posting skill (OAuth 1.0a); deleted twice, see known_alive.md
+  twitter_api_secret: str | None = None
+  twitter_access_token: str | None = None
+  twitter_access_token_secret: str | None = None
   public_base_url: str | None = None
 
   @model_validator(mode="before")

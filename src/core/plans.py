@@ -12,6 +12,8 @@ consume the tolerant read in ``read_plans_tolerant`` — the single authority fo
 import asyncio
 import json
 import posixpath
+import threading
+from collections import OrderedDict
 from enum import IntEnum
 from pathlib import Path
 
@@ -124,9 +126,19 @@ def _project_registry(data: dict) -> dict:
 # Tolerant read — single authority for listing/probe surfaces
 # ---------------------------------------------------------------------------
 
+# Bound on the tolerant-read memo in sessions: plans.json path ->
+# ((mtime_ns, size), result). Registry writes go through write_json_atomically,
+# so a rewrite always moves the mtime_ns half of the key and never serves a
+# stale read. Callers (the list endpoint, the sidebar probe) only read the
+# returned structure. ~0.3 ms read+derive per call on the heaviest on-disk
+# corpus; the list endpoint serves it on every plan-panel poll.
+_TOLERANT_READ_MEMO_LIMIT = 32
+_tolerant_read_memo: OrderedDict[str, tuple[tuple[int, int], dict]] = OrderedDict()
+_tolerant_read_memo_lock = threading.Lock()
+
 
 def read_plans_tolerant(plans_path: Path, session_id: str) -> dict:
-  """Tolerant read of a session's plans.json.
+  """Tolerant read of a session's plans.json, memoized on the file signature.
 
   Returns ``{"plans": [<projected plan enriched with "state">...], "errors": [<entry>...]}``.
 
@@ -139,22 +151,53 @@ def read_plans_tolerant(plans_path: Path, session_id: str) -> dict:
 
   Catches exactly ``(OSError, ValueError)`` — ``json.JSONDecodeError`` is a ``ValueError``
   subclass. Never raises for expected corruption; the caller may iterate the result directly.
+  A repeat read of an unchanged file pays one stat and serves the memoized result.
   """
   errors: list[dict] = []
-  if not plans_path.exists():
+  try:
+    st = plans_path.stat()
+  except OSError:
+    # One stat drives both the missing-file answer and the memo key; every
+    # stat failure maps to the missing-file answer, mirroring the scan idiom
+    # in ThreadManager.
     return {"plans": [], "errors": errors}
+  memo_key = str(plans_path)
+  sig = (st.st_mtime_ns, st.st_size)
+  with _tolerant_read_memo_lock:
+    hit = _tolerant_read_memo.get(memo_key)
+    if hit is not None and hit[0] == sig:
+      _tolerant_read_memo.move_to_end(memo_key)
+      return hit[1]
+  result, cacheable = _read_plans_uncached(plans_path, session_id)
+  if cacheable:
+    with _tolerant_read_memo_lock:
+      _tolerant_read_memo[memo_key] = (sig, result)
+      while len(_tolerant_read_memo) > _TOLERANT_READ_MEMO_LIMIT:
+        _tolerant_read_memo.popitem(last=False)
+  return result
+
+
+def _file_level_error(session_id: str, error: Exception) -> dict:
+  return {"plans": [], "errors": [{"session_id": session_id, "plan_id": None, "error": str(error)}]}
+
+
+def _read_plans_uncached(plans_path: Path, session_id: str) -> tuple[dict, bool]:
+  """The read+derive half of ``read_plans_tolerant``, minus the memo.
+
+  The bool reports cacheability: an OSError reflects the file's environment
+  (permissions, transient IO), not its bytes, and fixing the cause does not
+  move (mtime_ns, size), so it is never memoized — the same policy the
+  trigger-list memo and the search miss-memo state. Every other outcome is a
+  pure function of the file content.
+  """
+  errors: list[dict] = []
   try:
     raw = plans_path.read_text(encoding="utf-8")
     data = json.loads(raw)
-  except (OSError, ValueError) as e:
-    return {
-        "plans": [],
-        "errors": [{
-            "session_id": session_id,
-            "plan_id": None,
-            "error": str(e)
-        }],
-    }
+  except OSError as e:
+    return _file_level_error(session_id, e), False
+  except ValueError as e:
+    return _file_level_error(session_id, e), True
   if not isinstance(data, dict):
     return {
         "plans": [],
@@ -166,7 +209,7 @@ def read_plans_tolerant(plans_path: Path, session_id: str) -> dict:
                     "error": f"registry top level is {type(data).__name__}, expected dict",
                 }
             ],
-    }
+    }, True
   plans_out: list[dict] = []
   for plan in data.get("plans", []):
     try:
@@ -176,7 +219,7 @@ def read_plans_tolerant(plans_path: Path, session_id: str) -> dict:
     except (OSError, ValueError) as e:
       plan_id = plan.get("id") if isinstance(plan, dict) else None
       errors.append({"session_id": session_id, "plan_id": plan_id, "error": str(e)})
-  return {"plans": plans_out, "errors": errors}
+  return {"plans": plans_out, "errors": errors}, True
 
 
 # ---------------------------------------------------------------------------

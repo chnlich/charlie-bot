@@ -27,6 +27,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M14 git diff API event-loop lag | M14 collector below | seconds of loop lag per diff/files run, charlie-bot root..HEAD | median < 0.05 s | — (introduced with its first history row) |
 | M15 recap-summary cache torn reads | M15 collector below | torn reads per concurrent write stream | 0 torn reads | — (introduced with its first history row) |
 | M16 trigger-file torn reads | M16 collector below | torn reads per concurrent save stream | 0 torn reads | — (introduced with its first history row) |
+| M17 session fork (clone) latency | M17 collector below | seconds per fork of the heaviest real session, scratch home | median < 2 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -552,6 +553,64 @@ asyncio.run(main())
 if state["errors"]:
     raise SystemExit(f"unexpected reader errors: {state['errors'][:3]}")
 print(f"{WRITES} _save_trigger calls, {state['reads']} concurrent reads; torn reads observed: {state['torn']}")
+EOF
+```
+
+M17 — session fork (clone) latency: the endpoint behind `POST /api/sessions/{id}/fork`,
+`SessionManager.fork_session`, parses the parent's archived and live chat events and
+re-serializes them into the child's `data/parent_reference.jsonl`, appends the clone event,
+and copies plan artifacts file by file, so the wall time scales with the parent's chat-event
+bytes while the `threads/` payload — often the bulk of a session's directory size — is never
+read. A fork writes state, so the live instance cannot be probed read-only; the collector
+resolves the session with the heaviest fork corpus (live chat events plus archives), copies
+only that session into a scratch `CHARLIEBOT_HOME` under /tmp, and times `fork_session` from
+the main checkout, one cold pass then five timed forks. Evidence while the live server runs
+older code points the same collector at the branch checkout (`sys.path.insert` at the
+worktree root), the same shape as the M15 protocol.
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+# Heaviest fork corpus: live chat events plus archives, the bytes fork_session parses
+# and re-serializes into the child's parent_reference.jsonl.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    data = d / "data"
+    corpus = [data / "chat_events.jsonl", *sorted((data / "archives").glob("chat_events.*.jsonl"))]
+    n = sum(p.stat().st_size for p in corpus if p.is_file())
+    if n > best_n:
+        best, best_n = d, n
+SID = best.name
+print(f"heaviest fork corpus: session {SID}, {best_n / 1e6:.1f} MB chat events")
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that session; live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m17-fork-home-", dir="/tmp"))
+dst = home / "sessions" / SID
+dst.parent.mkdir(parents=True)
+shutil.copytree(best, dst)
+
+cfg = CharlieBotConfig(charliebot_home=home)
+sessions = SessionManager(cfg)
+
+async def main():
+    await sessions.fork_session(SID)  # cold pass, as at first fork after a server start; not timed
+    times = []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        await sessions.fork_session(SID)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    n = sessions.get_chat_event_count_sync(SID)
+    print(f"{n} parent events; fork median {times[2]:.4f} s, max {times[-1]:.4f} s over 5 runs")
+
+asyncio.run(main())
+shutil.rmtree(home)
 EOF
 ```
 

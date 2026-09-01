@@ -244,15 +244,22 @@ Known-alive symbols:
   `gemini_api_key`, `gemini_model`, `google_client_id`, `google_client_secret`,
   `google_docs_client_id`, `google_docs_client_secret`, `google_docs_default_folder_id`,
   `google_docs_refresh_token`, `google_refresh_token`, `linear_api_key`, `slack_user_token`,
-  `public_base_url` (`src/core/config.py:292-307`, `CharlieBotConfig` fields) — yaml keys
-  hosts carry in `config.yaml` / `config.d/*.yaml`, kept deliberately: consumers read the
-  raw yaml outside this repo. Ten of the sixteen are quoted by name in the skill files
-  that read them (`skills/feishu/SKILL.md`, `skills/gmail/SKILL.md`,
-  `skills/google-sheets/SKILL.md`, `skills/google-docs/SKILL.md`, `skills/linear/SKILL.md`,
-  `skills/slack/SKILL.md`); the other five — `gemini_api_key`, `gemini_model`,
-  `google_docs_client_id`, `google_docs_client_secret`, `public_base_url` — have no
-  in-repo script consumer (`gemini_api_key` surfaces only in README/setup/template
-  prose). The fields exist so `extra='forbid'` keeps those host files loadable — the
+  `twitter_api_key`, `twitter_api_secret`, `twitter_access_token`,
+  `twitter_access_token_secret`, `public_base_url` (`src/core/config.py:292-311`,
+  `CharlieBotConfig` fields) — yaml keys hosts carry in `config.yaml` / `config.d/*.yaml`,
+  kept deliberately: consumers read the raw yaml outside this repo. Ten of the twenty are
+  quoted by name in the skill files that read them (`skills/feishu/SKILL.md`,
+  `skills/gmail/SKILL.md`, `skills/google-sheets/SKILL.md`, `skills/google-docs/SKILL.md`,
+  `skills/linear/SKILL.md`, `skills/slack/SKILL.md`); the other ten — `gemini_api_key`,
+  `gemini_model`, `google_docs_client_id`, `google_docs_client_secret`, the four
+  `twitter_*` keys, and `public_base_url` — have no in-repo script consumer
+  (`gemini_api_key` surfaces only in README/setup/template prose). The four `twitter_*`
+  keys are read by the host-only `x-posting` skill, which is not mirrored into `skills/`,
+  so no in-repo grep can reach it; they were deleted on zero-match evidence in PR #455 and
+  that broke startup for every command going through `load_config()`. For this whole
+  block, an absent in-repo consumer is not evidence: the consumer is out of repo by
+  construction, so the zero-match bar of `code_health.md` Step 3 can never clear it. The
+  fields exist so `extra='forbid'` keeps those host files loadable — the
   block comment directly above the fields in `config.py` states this for the whole set.
   `test_declared_integration_keys_round_trip` (`tests/test_config_fragments.py`) pins the
   full set by name. Nothing in the repo attribute-reads the values, so vulture flags

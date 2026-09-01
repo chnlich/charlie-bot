@@ -16,16 +16,22 @@ Two accounting traps this handles:
      last_token_usage is summed instead; total_token_usage only cross-checks root sessions.
 
 Cache — one JSON document of per-file Claude and Codex contributions (the gigabyte-scale and
-hundred-megabyte-scale sources), so a page load re-parses only the logs that changed; opencode
-rescans each load.
+hundred-megabyte-scale sources) plus the opencode db's whole contribution, so a page load
+re-parses only the sources that changed.
 Vocabulary:
-  signature   ``[mtime_ns, size]``; a file re-scans whole whenever either value moves
-  entry       a file's parsed contribution: ``{"sig", "records", "dupes"}`` for Claude (dupes is
-              the within-file replay count), ``{"sig", "records", "check"}`` for Codex (check is
-              the root-session self-check pair ``[walked, final_total]`` or None)
+  signature   ``[mtime_ns, size]`` for a log file; a file re-scans whole whenever either value
+              moves. The opencode db signs as ``[mtime_ns, size, wal_sig]`` with ``wal_sig`` the
+              ``-wal`` sidecar's ``[mtime_ns, size]`` or None — a WAL-mode write grows the
+              sidecar without touching the main file, so the main file pair alone cannot see it
+  entry       a source's parsed contribution: ``{"sig", "records", "dupes"}`` for a Claude file
+              (dupes is the within-file replay count), ``{"sig", "records", "check"}`` for a
+              Codex file (check is the root-session self-check pair ``[walked, final_total]`` or
+              None), ``{"sig", "records"}`` for the opencode db
   records     Claude: ``[key, model, ts, in_fresh, cache_write, cache_read, output]`` per
               response, replay-deduped within the file; Codex: ``[model, ts, in_fresh,
-              cache_read, output]`` per token_count event, model resolved by file position
+              cache_read, output]`` per token_count event, model resolved by file position;
+              opencode: ``[model, account, ts, in_fresh, cache_write, cache_read, output]`` per
+              assistant message with token counts
 Cross-file replay dedupe happens at merge (first record wins in walk order), which composed
 with within-file first-wins gives exactly the global first-wins a cacheless scan computes.
 """
@@ -189,6 +195,20 @@ class TallyCache:
     if entry.get("sig") != [st.st_mtime_ns, st.st_size]:
       return None
     self._next[source][str(path)] = entry
+    return entry
+
+  def lookup_sig(self, source: str, key: str, sig: list) -> dict | None:
+    """The cached entry for *key* when its stored signature equals *sig*, else None.
+
+    Sibling of ``lookup`` for sources whose signature is not one file's stat: the
+    caller computes *sig*.
+    """
+    entry = self._sources.get(source, {}).get(key)
+    if entry is None:
+      return None
+    if entry.get("sig") != sig:
+      return None
+    self._next[source][key] = entry
     return entry
 
   def store(self, source: str, path: Path, entry: dict) -> None:
@@ -363,45 +383,84 @@ def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -
         f"{len(check)} root sessions; /compact resets a session total, so the per-request sum leads)")
 
 
-def collect_opencode(t: _Tally, db: Path) -> None:
+def _opencode_record(raw: str) -> list | None:
+  """One message row's tally record, or None when the row contributes nothing."""
+  try:
+    d = json.loads(raw)
+  except ValueError:
+    return None
+  tok = d.get("tokens")
+  if not isinstance(tok, dict) or d.get("role") != "assistant":
+    return None
+  if not any(tok.get(key) for key in ("input", "output", "total")):
+    return None
+  created = (d.get("time") or {}).get("created")
+  ts = dt.datetime.fromtimestamp(created / 1000, dt.UTC).isoformat() if isinstance(
+      created, (int, float)) else None
+  model = d.get("modelID") or "unknown"
+  if model.startswith("/"):
+    model = f"{Path(model).name} ({d.get('providerID')})"
+  cache = tok.get("cache") or {}
+  return [
+      model, d.get("providerID") or "unknown", ts,
+      tok.get("input", 0) or 0, cache.get("write", 0) or 0,
+      cache.get("read", 0) or 0, tok.get("output", 0) or 0]
+
+
+def _opencode_db_signature(db: Path) -> list | None:
+  """The db's cache signature: main file stat plus the ``-wal`` sidecar's.
+
+  A WAL-mode write grows the sidecar without touching the main file; a checkpoint rewrites the
+  main file and truncates or removes the sidecar. Both moves change the composite, so a change
+  the read path could observe always invalidates. None signals a stat failure (no caching).
+  """
+  try:
+    st = db.stat()
+  except OSError:
+    return None
+  try:
+    wal = db.with_name(db.name + "-wal").stat()
+    wal_sig: list | None = [wal.st_mtime_ns, wal.st_size]
+  except OSError:
+    wal_sig = None
+  return [st.st_mtime_ns, st.st_size, wal_sig]
+
+
+def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> None:
   if not db.exists():
     t.notes.append("opencode: db absent")
     return
-  try:
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-  except sqlite3.Error as exc:
-    t.notes.append(f"opencode: unreadable db: {exc}")
-    return
-  n = 0
-  try:
-    for (raw,) in con.execute("select data from message where data like '%\"tokens\"%'"):
-      t.scanned_bytes += len(raw)
-      try:
-        d = json.loads(raw)
-      except ValueError:
-        continue
-      tok = d.get("tokens")
-      if not isinstance(tok, dict) or d.get("role") != "assistant":
-        continue
-      if not any(tok.get(key) for key in ("input", "output", "total")):
-        continue
-      created = (d.get("time") or {}).get("created")
-      ts = dt.datetime.fromtimestamp(created / 1000, dt.UTC).isoformat() if isinstance(
-          created, (int, float)) else None
-      model = d.get("modelID") or "unknown"
-      if model.startswith("/"):
-        model = f"{Path(model).name} ({d.get('providerID')})"
-      cache = tok.get("cache") or {}
-      t.add(
-          "opencode", model, d.get("providerID") or "unknown", ts,
-          in_fresh=tok.get("input", 0) or 0,
-          cache_write=cache.get("write", 0) or 0,
-          cache_read=cache.get("read", 0) or 0,
-          output=tok.get("output", 0) or 0)
-      n += 1
-  finally:
-    con.close()
-  t.notes.append(f"opencode: {n:,} assistant messages with token counts")
+  sig = _opencode_db_signature(db)
+  entry = cache.lookup_sig("opencode", str(db), sig) if cache is not None and sig is not None else None
+  if entry is None:
+    # The signature is taken before the read: a concurrent write mid-scan then necessarily
+    # outdates the stored sig and the next lookup re-scans, so a partial or extended read can
+    # never be served later as if complete.
+    try:
+      con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+      t.notes.append(f"opencode: unreadable db: {exc}")
+      return
+    records: list[list] = []
+    nbytes = 0
+    try:
+      for (raw,) in con.execute("select data from message where data like '%\"tokens\"%'"):
+        nbytes += len(raw)
+        rec = _opencode_record(raw)
+        if rec is not None:
+          records.append(rec)
+    finally:
+      con.close()
+    t.scanned_bytes += nbytes
+    if cache is not None and sig is not None:
+      cache.store("opencode", db, {"sig": sig, "records": records})
+  else:
+    records = entry["records"]
+  for model, account, ts, in_fresh, cache_write, cache_read, output in records:
+    t.add(
+        "opencode", model, account, ts,
+        in_fresh=in_fresh, cache_write=cache_write, cache_read=cache_read, output=output)
+  t.notes.append(f"opencode: {len(records):,} assistant messages with token counts")
 
 
 def _build(t: _Tally) -> list[dict]:
@@ -454,7 +513,7 @@ def collect_token_usage(
   cache = TallyCache.load(cache_path, t.notes) if cache_path is not None else None
   collect_claude(t, claude_homes, cache)
   collect_codex(t, codex_homes, cache)
-  collect_opencode(t, opencode_db)
+  collect_opencode(t, opencode_db, cache)
   if cache is not None:
     try:
       cache.save(cache_path)

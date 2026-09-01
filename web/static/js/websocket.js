@@ -17,8 +17,9 @@ function isStaleSocket(socket, targetSession, generation) {
   return socket !== ws || generation !== wsGeneration || targetSession !== SESSION_ID;
 }
 
-// Every close path detaches all four handlers first, so a socket that is
-// already closing cannot fire events into the session that replaced it.
+// Teardown paths detach all four handlers before close, so a closing socket
+// cannot fire events into the session that replaced it. The onerror leg keeps
+// its handlers attached: its onclose drives reconnect backoff.
 function detachSocketHandlers(socket) {
   socket.onopen = null;
   socket.onmessage = null;

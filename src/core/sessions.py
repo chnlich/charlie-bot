@@ -1452,10 +1452,10 @@ class SessionManager:
 
     Lazily builds from ``events_to_view(load_chat_events_sync(session_id))``
     and caches per session (LRU, cap ``_PROJECTION_LRU_LIMIT``); appends
-    advance the cached projection incrementally instead of rebuilding it.
-    Returns None when ``archive_offset != 0`` — those sessions fall back
-    entirely to the event-index cursor path and never mix the two cursor
-    domains.
+    advance the projection incrementally by atomically swapping in an
+    advanced copy instead of rebuilding. Returns None when
+    ``archive_offset != 0`` — those sessions fall back entirely to the
+    event-index cursor path and never mix the two cursor domains.
     """
     if self._chat_events.read_archive_offset_sync(session_id) != 0:
       return None
@@ -1466,11 +1466,14 @@ class SessionManager:
       return cached
     if cached is None or len(live) < cached.event_count:
       # A shrink means the live file was rewritten; the append-incremental
-      # ingest cannot roll state back, so only this path pays a full build.
+      # advance cannot roll state back, so only this path pays a full build.
       cached = MessageProjection(list(live))
-      self._projection_cache[session_id] = cached
     else:
-      cached.ingest(live[cached.event_count:])
+      # Swapping one reference into the cache is atomic, and published
+      # projections are immutable: concurrent advances race on copies and a
+      # loser wastes work instead of corrupting shared state.
+      cached = cached.advanced(live[cached.event_count:])
+    self._projection_cache[session_id] = cached
     self._projection_cache.move_to_end(session_id)
     while len(self._projection_cache) > _PROJECTION_LRU_LIMIT:
       self._projection_cache.popitem(last=False)

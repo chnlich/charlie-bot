@@ -443,6 +443,19 @@ async def test_projection_equals_reference_after_every_append_with_open_run(tmp_
     assert projection.event_count == len(all_events)
 
 
+def test_advanced_returns_independent_projection() -> None:
+  """Racing advances mutate nothing shared: the base stays put, copies diverge."""
+  events = _reorder_events()
+  base = MessageProjection(events[:4])
+  one = base.advanced(events[4:5])
+  two = base.advanced(events[4:6])
+  assert [_identity_tuple(m) for m in base.history] == [_identity_tuple(m) for m in events_to_messages(events[:4])]
+  assert one.event_count == 5
+  assert two.event_count == 6
+  assert [_identity_tuple(m) for m in one.history] == [_identity_tuple(m) for m in events_to_messages(events[:5])]
+  assert [_identity_tuple(m) for m in two.history] == [_identity_tuple(m) for m in events_to_messages(events[:6])]
+
+
 @pytest.mark.asyncio
 async def test_first_paint_surfaces_are_disjoint(tmp_path: Path) -> None:
   """The bubble list and the streaming preview never carry the same message."""

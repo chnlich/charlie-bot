@@ -18,6 +18,10 @@ feed the same ``_stable_history_projection`` + ``MessageAggregator`` pipeline
 as the whole-list reference, so the served view always equals
 ``events_to_view(all_events)`` (see the per-append parity test).
 
+A published projection is immutable: ``advanced`` returns a new object, so a
+cache swap is one atomic reference store and readers never tear across a
+concurrent advance.
+
 Vocabulary: "closed prefix" = raw events whose projected order can no longer
 change; "region" = offered events after it, whose order a completing run
 interval may still rewrite.
@@ -68,15 +72,33 @@ class MessageProjection:
     self._seps_final: list[int] = []
     self._region_events: list[dict] = []
     self.event_count = event_index_offset
-    self.ingest(events)
+    self._ingest(events)
 
-  def ingest(self, events: list[dict]) -> None:
+  def advanced(self, events: list[dict]) -> 'MessageProjection':
+    """Return a copy of this projection advanced by the appended *events*.
+
+    The copy shares no mutable state with the original — racing callers each
+    advance their own copy and swap it into the cache atomically, so a lost
+    race wastes work instead of serving doubled or torn views.
+    """
+    copied = MessageProjection.__new__(MessageProjection)
+    copied._offset = self._offset
+    copied._agg = self._agg.clone()
+    copied._committed_final = list(self._committed_final)
+    copied._seps_final = list(self._seps_final)
+    copied._region_events = list(self._region_events)
+    copied.event_count = self.event_count
+    copied._ingest(events)
+    return copied
+
+  def _ingest(self, events: list[dict]) -> None:
     """Feed events appended after the last ingest and advance ``event_count``.
 
     Events before the closed boundary commit once; events in the still-open
     region are re-evaluated per call through a clone of the committed
     aggregator's state, so a run interval completing later lands deferrals
-    exactly where the whole-list reference places them.
+    exactly where the whole-list reference places them. Internal: mutates the
+    receiver, so it only runs before publication (construction or ``advanced``).
     """
     self._region_events.extend(events)
     self.event_count += len(events)

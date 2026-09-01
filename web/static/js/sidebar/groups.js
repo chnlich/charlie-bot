@@ -27,6 +27,12 @@ function resetGroupLimitState() {
   groupLimitState[CRON_GROUP_LIMIT_STORAGE_KEY] = {};
 }
 
+// A corrupt stored blob degrades to no saved state rather than breaking the
+// render/toggle path, so the catch stays.
+function loadGroupCollapsedState(storageKey) {
+  try { return JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch (e) { return {}; }
+}
+
 function shouldLimitHideSession(session, index, expanded) {
   if (expanded) return false;
   if (index < GROUP_SESSION_PREVIEW_LIMIT) return false;
@@ -313,9 +319,7 @@ function renderGroupedScheduledList(sessions, options = {}) {
     if (b === '') return -1;
     return a.localeCompare(b);
   });
-  // Load collapsed state from localStorage (collapsed by default)
-  let collapsedState = {};
-  try { collapsedState = JSON.parse(localStorage.getItem('cron-group-collapsed') || '{}'); } catch (e) {}
+  const collapsedState = loadGroupCollapsedState('cron-group-collapsed');
   const limitState = loadGroupLimitState(CRON_GROUP_LIMIT_STORAGE_KEY);
 
   let html = '';
@@ -355,8 +359,7 @@ function renderGroupedScheduledList(sessions, options = {}) {
 }
 
 function toggleCronGroup(key) {
-  let collapsedState = {};
-  try { collapsedState = JSON.parse(localStorage.getItem('cron-group-collapsed') || '{}'); } catch (e) {}
+  const collapsedState = loadGroupCollapsedState('cron-group-collapsed');
   const wasCollapsed = collapsedState[key] !== false;
   collapsedState[key] = !wasCollapsed;
   localStorage.setItem('cron-group-collapsed', JSON.stringify(collapsedState));
@@ -539,9 +542,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     if (b === '') return -1;
     return a.localeCompare(b);
   });
-  // Load collapsed state from localStorage (expanded by default)
-  let collapsedState = {};
-  try { collapsedState = JSON.parse(localStorage.getItem('session-group-collapsed') || '{}'); } catch (e) {}
+  const collapsedState = loadGroupCollapsedState('session-group-collapsed');
   const limitState = loadGroupLimitState(SESSION_GROUP_LIMIT_STORAGE_KEY);
 
   let html = '';
@@ -614,8 +615,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
 }
 
 function toggleSessionGroup(key) {
-  let collapsedState = {};
-  try { collapsedState = JSON.parse(localStorage.getItem('session-group-collapsed') || '{}'); } catch (e) {}
+  const collapsedState = loadGroupCollapsedState('session-group-collapsed');
   const wasCollapsed = collapsedState[key] === true;
   collapsedState[key] = !wasCollapsed;
   localStorage.setItem('session-group-collapsed', JSON.stringify(collapsedState));

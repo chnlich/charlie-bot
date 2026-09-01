@@ -180,6 +180,24 @@ function closeCronModal() {
   document.getElementById('cron-modal').classList.add('hidden');
 }
 
+// Cron-modal mutations share one failure surface: alert on transport error or
+// non-OK response and leave the modal open. A null return means the caller
+// stops before the close-and-refresh.
+async function cronModalRequest(promise) {
+  let res;
+  try {
+    res = await promise;
+  } catch (err) {
+    alert('Failed: ' + err);
+    return null;
+  }
+  if (!res.ok) {
+    alert('Failed: ' + await res.text());
+    return null;
+  }
+  return res;
+}
+
 async function saveCronTask() {
   const name = document.getElementById('cron-name').value.trim();
   const cron = document.getElementById('cron-expr').value.trim();
@@ -190,29 +208,21 @@ async function saveCronTask() {
   const timezone = document.getElementById('cron-timezone').value.trim();
   const enabled = document.getElementById('cron-enabled').checked;
 
-  let res;
-  try {
-    if (cronEditMode === 'edit') {
-      res = await fetch(`/api/cron/tasks/${encodeURIComponent(cronOriginalName)}`, {
-        method: 'PUT',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({cron, prompt_file, repo, backend, project, timezone, enabled}),
-      });
-    } else {
-      res = await fetch('/api/cron/tasks', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: JSON.stringify({name, cron, prompt_file, repo, backend, project, timezone, enabled}),
-      });
-    }
-  } catch (err) {
-    alert('Failed: ' + err);
-    return;
+  let promise;
+  if (cronEditMode === 'edit') {
+    promise = fetch(`/api/cron/tasks/${encodeURIComponent(cronOriginalName)}`, {
+      method: 'PUT',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({cron, prompt_file, repo, backend, project, timezone, enabled}),
+    });
+  } else {
+    promise = fetch('/api/cron/tasks', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({name, cron, prompt_file, repo, backend, project, timezone, enabled}),
+    });
   }
-  if (!res.ok) {
-    alert('Failed: ' + await res.text());
-    return;
-  }
+  if ((await cronModalRequest(promise)) === null) return;
   closeCronModal();
   switchSidebarFilter('scheduled');
 }
@@ -220,17 +230,8 @@ async function saveCronTask() {
 async function deleteCronTask() {
   const name = cronOriginalName;
   if (!confirm(`Delete task "${name}"?`)) return;
-  let res;
-  try {
-    res = await fetch(`/api/cron/tasks/${encodeURIComponent(name)}`, {method: 'DELETE'});
-  } catch (err) {
-    alert('Failed: ' + err);
-    return;
-  }
-  if (!res.ok) {
-    alert('Failed: ' + await res.text());
-    return;
-  }
+  const promise = fetch(`/api/cron/tasks/${encodeURIComponent(name)}`, {method: 'DELETE'});
+  if ((await cronModalRequest(promise)) === null) return;
   closeCronModal();
   switchSidebarFilter('scheduled');
 }

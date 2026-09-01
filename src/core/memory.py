@@ -470,10 +470,5 @@ def assemble_worker(memory_dir: Path, repo_basename: str) -> str | None:
       "is one file, first line `# <title>`, stating one fact to record or one change to "
       "propose, naming the target entry in the body when proposing a change (writes staging/, "
       "never entries/).")
-  chunks: list[str] = []
-  if full_body_entries:
-    chunks.append("\n\n".join(full_text(e) for e in full_body_entries))
-  if index_entries:
-    chunks.append(_index_lines(index_entries))
-  chunks.append(usage_line)
-  return "\n\n".join(chunks)
+  block = _format_block(full_body_entries, index_entries)
+  return "\n\n".join(chunk for chunk in (block, usage_line) if chunk)

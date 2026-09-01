@@ -37,6 +37,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M24 trigger list, steady state | M24 collector below | seconds per list_triggers call, worst on-disk trigger corpus | median < 0.05 s | — (introduced with its first history row) |
 | M25 scheduler config reload, steady state | M25 collector below | seconds of loop lag per steady-state reload, live config corpus | median < 0.005 s | — (introduced with its first history row) |
 | M26 message-projection advance per appended event | M26 collector below | seconds per `get_message_projection` advance on one appended event, worst on-disk live-events corpus | median < 0.005 s | — (introduced with its first history row) |
+| M27 plans registry tolerant read, steady state | M27 collector below | seconds per `read_plans_tolerant` call, worst on-disk plans corpus | median < 0.005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1206,6 +1207,53 @@ async def main():
 
 asyncio.run(main())
 shutil.rmtree(home)
+EOF
+```
+
+M27 — plans registry tolerant read, steady state. The plan panel's poll
+endpoint (`GET /api/sessions/{id}/plans`) and the sidebar deep probe both run
+`read_plans_tolerant`, whose pre-fix form read and parsed the session's
+plans.json and re-derived every plan's state on every call. The cost is
+invisible to the standing HTTP probes (the panel polls the session it has
+open, not the worst corpus), so the collector times the function over the
+session whose plans.json carries the most bytes (read-only over the live
+state), from the checkout under test: one cold pass, as at a server start
+with an empty memo, then five timed calls. The fixed reader memoizes each
+plans.json's projected result on (mtime_ns, size): the steady state is one
+exists+stat pair and zero registry bytes, and a verb's rewrite re-reads only
+that file. Registry writes go through `write_json_atomically` and the derived
+state is a pure function of the file content, so the key is sound. Evidence
+while the live server runs older code points the same collector at the branch
+checkout (`CHECKOUT` at the worktree root), the same shape as the M7
+protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.plans import read_plans_tolerant
+
+# Worst plans corpus: the session whose plans.json carries the most bytes.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "plans.json"
+    if p.is_file():
+        n = p.stat().st_size
+        if n > best_n:
+            best, best_n = p, n
+print(f"worst plans corpus: session {best.parent.name}, {best_n / 1e3:.1f} KB plans.json")
+
+result = read_plans_tolerant(best, best.parent.name)  # cold pass, as at a server start with an empty memo; not timed
+times = []
+for _ in range(5):
+    t0 = time.perf_counter()
+    result = read_plans_tolerant(best, best.parent.name)
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"{len(result['plans'])} plans, {len(result['errors'])} errors; steady-state tolerant read "
+      f"median {times[2] * 1e6:.1f} us, max {times[-1] * 1e6:.1f} us")
 EOF
 ```
 

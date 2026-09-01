@@ -330,23 +330,16 @@
       const t0 = performance.now();
       const node = this.buildNode(entry);
       const ms = performance.now() - t0;
-      this.stats.prerenderAtoms.push({
+      const record = {
         ms,
         id: entry.msg.id != null ? String(entry.msg.id) : null,
         role: entry.msg.role,
         chars: contentChars(entry),
         sync: Boolean(sync),
-      });
+      };
+      this.stats.prerenderAtoms.push(record);
       if (ms > this.stats.prerenderAtomMaxMs) this.stats.prerenderAtomMaxMs = ms;
-      if (ms > FRAME_BUDGET_MS) {
-        this.stats.prerenderAtomsOverBudget.push({
-          ms,
-          id: entry.msg.id != null ? String(entry.msg.id) : null,
-          role: entry.msg.role,
-          chars: contentChars(entry),
-          sync: Boolean(sync),
-        });
-      }
+      if (ms > FRAME_BUDGET_MS) this.stats.prerenderAtomsOverBudget.push(record);
       entry.node = node;
       entry.ready = true;
     }

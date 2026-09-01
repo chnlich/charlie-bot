@@ -299,8 +299,8 @@ def test_without_fragments_matches_plain_config_yaml(profile_home: Path, with_em
   assert _without_home(loaded) == _without_home(plain)
 
 
-# The 16 integration keys whose consumers read the raw yaml outside this repo;
-# 15 ship in config.yaml, public_base_url in a config.d/slack.yaml fragment.
+# The 20 integration keys whose consumers read the raw yaml outside this repo;
+# 19 ship in config.yaml, public_base_url in a config.d/slack.yaml fragment.
 _DECLARED_INTEGRATION_KEYS = [
     "feishu_app_id",
     "feishu_app_secret",
@@ -317,6 +317,10 @@ _DECLARED_INTEGRATION_KEYS = [
     "google_refresh_token",
     "linear_api_key",
     "slack_user_token",
+    "twitter_api_key",
+    "twitter_api_secret",
+    "twitter_access_token",
+    "twitter_access_token_secret",
     "public_base_url",
 ]
 

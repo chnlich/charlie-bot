@@ -246,6 +246,12 @@ function renderCronGearButton(taskName, activeBtnClass) {
   </button>`;
 }
 
+// Scheduled-task clock badge shared by renderScheduledSessionItem and
+// renderSessionItem: a markup change lands here, not in one renderer.
+function renderScheduledBadge(s) {
+  return `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task || '')}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>`;
+}
+
 function renderScheduledSessionItem(s, options = {}) {
   const isActive = SESSION_ID === s.id;
   const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
@@ -265,7 +271,7 @@ function renderScheduledSessionItem(s, options = {}) {
     ${renderSessionIndicators(s)}
     ${renderPendingTriggerIndicator(s)}
     ${renderPendingPlanApprovalIndicator(s)}
-    <svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task || '')}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>
+    ${renderScheduledBadge(s)}
     ${renderTuiStatusDot(s)}
     <span class="flex-1 min-w-0">
       <span class="truncate block session-name">${escapeHtml(s.name)}</span>
@@ -717,7 +723,7 @@ function renderSessionItem(s, filter, options = {}) {
   const indicators = isArchivedRow ? '' : `${renderSessionIndicators(s)}
     ${renderPendingTriggerIndicator(s)}
     ${renderPendingPlanApprovalIndicator(s)}
-    ${s.scheduled_task ? `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtml(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>` : ''}
+    ${s.scheduled_task ? renderScheduledBadge(s) : ''}
     ${renderTuiStatusDot(s)}`;
   return `<a href="/?session=${s.id}&filter=${filter}"
      class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"

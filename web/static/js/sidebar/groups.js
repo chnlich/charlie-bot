@@ -295,6 +295,13 @@ function renderScheduledSessionItem(s, options = {}) {
   </a>`;
 }
 
+// Empty list note shared by the scheduled/grouped/search lists here and,
+// through the namespace, the archived list in archived.js: a markup change
+// lands here, not in each list's empty branch.
+function renderEmptyNote(text) {
+  return `<p class="text-slate-500 text-sm px-3 py-2">${text}</p>`;
+}
+
 function renderGroupedScheduledList(sessions, options = {}) {
   const nav = document.getElementById('session-list');
   lastScheduledRenderArgs = sessions;
@@ -303,7 +310,7 @@ function renderGroupedScheduledList(sessions, options = {}) {
   if (!options.skipRefresh) scheduleProjectManagerRefresh();
   const badgeHtml = renderCronErrorBadge();
   if (!sessions.length) {
-    nav.innerHTML = badgeHtml + '<p class="text-slate-500 text-sm px-3 py-2">No scheduled sessions</p>';
+    nav.innerHTML = badgeHtml + renderEmptyNote('No scheduled sessions');
     return;
   }
   // Group by project
@@ -524,7 +531,7 @@ function scheduleProjectManagerRefresh() {
 function renderGroupedSessionList(sessions, filter, options = {}) {
   const nav = document.getElementById('session-list');
   if (!sessions.length) {
-    nav.innerHTML = '<p class="text-slate-500 text-sm px-3 py-2">No sessions yet</p>';
+    nav.innerHTML = renderEmptyNote('No sessions yet');
     return;
   }
   lastGroupedRenderArgs = {sessions, filter};
@@ -760,7 +767,7 @@ function renderSessionList(sessions, filter) {
       scheduled: 'No scheduled sessions',
       search: 'No matching sessions',
     };
-    nav.innerHTML = `<p class="text-slate-500 text-sm px-3 py-2">${labels[filter]}</p>`;
+    nav.innerHTML = renderEmptyNote(labels[filter]);
     return;
   }
   // Always use grouped rendering for non-search tabs
@@ -769,7 +776,7 @@ function renderSessionList(sessions, filter) {
     return;
   }
   const truncationHint = filter === 'search' && sessions.length >= 200
-    ? '<p class="text-slate-500 text-sm px-3 py-2">Showing the newest 200 matches — narrow the search.</p>'
+    ? renderEmptyNote('Showing the newest 200 matches — narrow the search.')
     : '';
   nav.innerHTML = sessions.map(s => renderSessionItem(s, filter)).join('') + truncationHint;
   // Resync sessionUnread dict from fresh DOM data
@@ -782,6 +789,7 @@ function renderSessionList(sessions, filter) {
 
 Object.assign(Sidebar, {
   TRASH_SVG_PATH,
+  renderEmptyNote,
   loadGroupLimitState,
   isGroupLimitExpanded,
   setGroupLimitExpanded,
@@ -809,6 +817,7 @@ Object.assign(Sidebar, {
   renderSessionList,
 });
 Sidebar.expose([
+  'renderEmptyNote',
   'resetGroupLimitState',
   'toggleSessionGroupLimit',
   'toggleCronGroupLimit',

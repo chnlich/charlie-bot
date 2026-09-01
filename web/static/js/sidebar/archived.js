@@ -74,7 +74,7 @@ function appendArchivedRows(sessions) {
   if (!archivedState.rowsEl) return;
   if (!sessions.length) {
     if (!archivedState.renderedCount) {
-      archivedState.rowsEl.innerHTML = '<p class="text-slate-500 text-sm px-3 py-2">No archived sessions</p>';
+      archivedState.rowsEl.innerHTML = renderEmptyNote('No archived sessions');
     }
     return;
   }

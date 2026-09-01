@@ -3,16 +3,8 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
+const { escapeHtml } = require('./escape_html_stub');
 const {loadChatRenderingModules} = require('./chat_rendering_context_stub');
-
-function escapeHtml(value) {
-  return String(value || '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
 
 function fakeElement() {
   let text = '';

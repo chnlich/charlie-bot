@@ -3,6 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
+const { escapeForFakeDom } = require('./fake_dom');
 
 const COMPAT_LOADER_JS = readStatic('compat-loader.js');
 const CHAT_JS = readStatic('chat.js');
@@ -44,10 +45,6 @@ class FakeClassList {
   toString() {
     return Array.from(this._classes).join(' ');
   }
-}
-
-function escapeForFakeDom(str) {
-  return String(str).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
 // Height model behind FakeElement.getBoundingClientRect — see the getter.

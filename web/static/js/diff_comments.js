@@ -449,26 +449,28 @@
     editorBody = null;
   }
 
+  function dragTargetFromEvent(event) {
+    const cell = event.target.closest('.d2h-code-linenumber, .d2h-code-side-linenumber');
+    if (!cell) return null;
+    const row = cell.closest(`.${PREFIX}-line`);
+    if (!row) return null;
+    const body = row.closest('[data-cbdc-file-path]');
+    return { body, anchor: anchorForRow(row, body) };
+  }
+
   function startRangeDrag(event) {
     if (event.target.closest(`.${PREFIX}-add`)) return;
-    const cell = event.target.closest('.d2h-code-linenumber, .d2h-code-side-linenumber');
-    if (!cell) return;
-    const row = cell.closest(`.${PREFIX}-line`);
-    if (!row) return;
-    const body = row.closest('[data-cbdc-file-path]');
-    const anchor = anchorForRow(row, body);
-    drag = { body, start: anchor, current: anchor, moved: false, cancelled: false };
+    const target = dragTargetFromEvent(event);
+    if (!target) return;
+    drag = { body: target.body, start: target.anchor, current: target.anchor, moved: false, cancelled: false };
     event.preventDefault();
   }
 
   function continueRangeDrag(event) {
     if (!drag) return;
-    const cell = event.target.closest('.d2h-code-linenumber, .d2h-code-side-linenumber');
-    if (!cell) return;
-    const row = cell.closest(`.${PREFIX}-line`);
-    if (!row) return;
-    const body = row.closest('[data-cbdc-file-path]');
-    const anchor = anchorForRow(row, body);
+    const target = dragTargetFromEvent(event);
+    if (!target) return;
+    const { body, anchor } = target;
     if (body !== drag.body || anchor.side !== drag.start.side || anchor.hunkHeader !== drag.start.hunkHeader) {
       drag.cancelled = true;
       clearRangeSelection();

@@ -252,9 +252,16 @@ function renderScheduledBadge(s) {
   return `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtmlAttr(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>`;
 }
 
+// Session-row highlight shared by renderScheduledSessionItem,
+// renderProjectManagerRow, and renderSessionItem: a tint change lands here,
+// not in one renderer.
+function sessionRowActiveClass(isActive) {
+  return isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
+}
+
 function renderScheduledSessionItem(s, options = {}) {
   const isActive = SESSION_ID === s.id;
-  const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
+  const activeClass = sessionRowActiveClass(isActive);
   const activeBtnClass = isActive ? '!opacity-100' : '';
   const actions = `
     ${renderStarButton(s, activeBtnClass)}
@@ -401,7 +408,7 @@ const PM_BADGE_CLASS = 'px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wid
 
 function renderProjectManagerRow(pm) {
   const isActive = SESSION_ID === pm.id;
-  const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
+  const activeClass = sessionRowActiveClass(isActive);
   const timeStr = pm.updated_at ? relativeTime(pm.updated_at) : '';
   const timeIso = pm.updated_at || '';
   return `<a href="/?session=${pm.id}"
@@ -682,7 +689,7 @@ function renderSessionItem(s, filter, options = {}) {
   // tab, search results): unarchive/delete actions, and none of the live-state
   // indicators, which archived sessions cannot carry.
   const isArchivedRow = filter === 'archived' || s.status === 'archived';
-  const activeClass = isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
+  const activeClass = sessionRowActiveClass(isActive);
   const activeBtnClass = isActive ? '!opacity-100' : '';
   const timeStr = s.updated_at ? relativeTime(s.updated_at) : '';
   const timeIso = s.updated_at || '';

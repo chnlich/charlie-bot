@@ -1,6 +1,7 @@
 """Chat event persistence for CharlieBot sessions."""
 
 import json
+import threading
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable
@@ -50,7 +51,11 @@ class ChatEventStore:
     # Parsed-archive memo: path -> (mtime_ns, size, events). Archive files are
     # append-only within their week and frozen after, so an unchanged
     # (mtime_ns, size) means unchanged bytes; an append re-parses one file.
+    # All access holds the lock (the read_thread_worker_events / recap rule):
+    # get+move_to_end is not one op, and a concurrent insert's cap eviction
+    # must not pop the key mid-hit.
     self._archive_events_memo: OrderedDict[Path, tuple[int, int, list[dict]]] = OrderedDict()
+    self._archive_memo_lock = threading.Lock()
 
   @property
   def events_cache(self) -> dict[str, list[dict]]:
@@ -172,15 +177,16 @@ class ChatEventStore:
     archives at zero disk reads. An unreadable file logs and contributes
     nothing, the pre-memo reader's behavior on open failure.
     """
-    memo = self._archive_events_memo.get(path)
     try:
       st = path.stat()
     except OSError as e:
       log.debug("archive_read_failed", path=str(path), error=str(e))
       return []
-    if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
-      self._archive_events_memo.move_to_end(path)
-      return memo[2]
+    with self._archive_memo_lock:
+      memo = self._archive_events_memo.get(path)
+      if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
+        self._archive_events_memo.move_to_end(path)
+        return memo[2]
     events: list[dict] = []
     try:
       with open(path, encoding="utf-8") as f:
@@ -194,9 +200,10 @@ class ChatEventStore:
     except OSError as e:
       log.debug("archive_read_failed", path=str(path), error=str(e))
       return []
-    self._archive_events_memo[path] = (st.st_mtime_ns, st.st_size, events)
-    while len(self._archive_events_memo) > _ARCHIVE_MEMO_LIMIT:
-      self._archive_events_memo.popitem(last=False)
+    with self._archive_memo_lock:
+      self._archive_events_memo[path] = (st.st_mtime_ns, st.st_size, events)
+      while len(self._archive_events_memo) > _ARCHIVE_MEMO_LIMIT:
+        self._archive_events_memo.popitem(last=False)
     return events
 
   def _chat_events_path(self, session_id: str) -> Path:

@@ -1,10 +1,9 @@
 """CharlieCodeBackend — AgentBackend wrapping the `charlie-code --json` CLI."""
 
-from pathlib import Path
-
 import structlog
 
 from src.agents.backends.base import (
+  USER_LOCAL_BIN,
   AgentBackend,
   make_error_event,
   make_result_event,
@@ -27,11 +26,11 @@ class CharlieCodeBackend(AgentBackend):
     self._api_base = api_base
     if not self._api_base:
       raise ValueError("charlie-code backend requires api_base (set backend_options[].api_base in config.yaml)")
-    self._bin = resolve_binary("charlie-code", str(Path.home() / ".local" / "bin"))
+    self._bin = resolve_binary("charlie-code", USER_LOCAL_BIN)
 
   def _prepare_env(self, env: dict) -> dict:
     charlie_code_env = {**env}
-    prepend_path_dir(charlie_code_env, str(Path.home() / ".local" / "bin"))
+    prepend_path_dir(charlie_code_env, USER_LOCAL_BIN)
     return charlie_code_env
 
   def _build_command(self, prompt: str) -> list[str]:

@@ -1,10 +1,9 @@
 """GeminiCliBackend — AgentBackend wrapping the `gemini` CLI in stream-json mode."""
 
-from pathlib import Path
-
 import structlog
 
 from src.agents.backends.base import (
+  USER_LOCAL_BIN,
   AgentBackend,
   make_error_event,
   make_result_event,
@@ -24,7 +23,7 @@ class GeminiCliBackend(AgentBackend):
     if not model:
       raise ValueError("gemini backend requires a model")
     super().__init__(model=model, **kwargs)
-    self._gemini_bin = resolve_binary("gemini", str(Path.home() / ".local" / "bin"))
+    self._gemini_bin = resolve_binary("gemini", USER_LOCAL_BIN)
     self._text_buffer = ""
 
   def _build_command(self, prompt: str) -> list[str]:

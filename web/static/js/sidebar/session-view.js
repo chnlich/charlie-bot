@@ -556,11 +556,11 @@ function renderUsageFromData(usage) {
         // No line: fall back to today's thresholds (50% / 80% of full).
         color = pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-yellow-500' : 'bg-blue-500';
       }
-      bar.className = 'h-full rounded-full transition-all duration-300 ' + color;
+      bar.className = PROGRESS_BAR_FILL_CLASS + ' ' + color;
     } else {
       // No per-request source: hide the bar rather than draw a 0% fill.
       bar.style.width = '0%';
-      bar.className = 'h-full rounded-full transition-all duration-300 hidden';
+      bar.className = PROGRESS_BAR_FILL_CLASS + ' hidden';
     }
   }
   if (compactLine) {

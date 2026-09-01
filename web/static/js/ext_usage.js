@@ -205,7 +205,7 @@ function _providerPill(provider) {
 
 function _blankBar(bar) {
   bar.style.width = '0.0%';
-  bar.className = 'h-full rounded-full transition-all duration-300 bg-slate-600';
+  bar.className = PROGRESS_BAR_FILL_CLASS + ' bg-slate-600';
 }
 
 // Precedence: expired beats unknown beats a live number. Neither of the first
@@ -225,7 +225,7 @@ function _paintBucket(refs, win, providerData) {
   }
   const pct = win.utilization;
   refs.bar.style.width = Math.min(pct, 100).toFixed(1) + '%';
-  refs.bar.className = 'h-full rounded-full transition-all duration-300 ' + _barColor(pct);
+  refs.bar.className = PROGRESS_BAR_FILL_CLASS + ' ' + _barColor(pct);
   refs.pctEl.textContent = Math.round(pct) + '%';
   if (refs.resetEl) refs.resetEl.textContent = _formatWindowReset(providerData, win);
 }
@@ -245,7 +245,7 @@ function _buildBucket(row, win, providerData) {
   lbl.textContent = displayLabel;
   group.appendChild(lbl);
   const barWrap = _el('div', 'w-24 h-1.5 bg-slate-700 rounded-full overflow-hidden');
-  const bar = _el('div', 'h-full rounded-full transition-all duration-300');
+  const bar = _el('div', PROGRESS_BAR_FILL_CLASS);
   bar.setAttribute('data-field', fieldPrefix + '-bar');
   barWrap.appendChild(bar);
   group.appendChild(barWrap);

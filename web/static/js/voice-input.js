@@ -325,10 +325,7 @@ function closeVoiceSocket() {
   const socket = voiceSocket;
   voiceSocket = null;
   if (!socket) return;
-  socket.onopen = null;
-  socket.onmessage = null;
-  socket.onclose = null;
-  socket.onerror = null;
+  detachSocketHandlers(socket);
   if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
     socket.close();
   }

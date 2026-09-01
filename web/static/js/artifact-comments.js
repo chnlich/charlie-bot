@@ -1448,13 +1448,19 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       refreshTray();
     }
 
-    function clearAll() {
+    // The clear and send paths must leave the same final state: block markers
+    // off, queue empty, draft gone, tray repainted.
+    function resetPending() {
       for (var i = 0; i < pending.length; i++) {
         if (pending[i].kind === 'block' && pending[i].el) pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
       }
       pending = [];
       clearDraft(artifactPath);
       refreshTray();
+    }
+
+    function clearAll() {
+      resetPending();
     }
 
     async function sendBatch() {
@@ -1481,12 +1487,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       sendBtn.textContent = 'Sending';
       try {
         await postChatMessage(buildBatchMessage(ordered));
-        for (var i = 0; i < pending.length; i++) {
-          if (pending[i].kind === 'block' && pending[i].el) pending[i].el.classList.remove(GLOBAL_PREFIX + '-marked');
-        }
-        pending = [];
-        clearDraft(artifactPath);
-        refreshTray();
+        resetPending();
         showToast(count + ' comments sent to chat', false);
       } catch (err) {
         console.error('Batch comment send failed:', err);

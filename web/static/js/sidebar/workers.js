@@ -324,7 +324,9 @@ function updateTriggerStatus(triggerId, status) {
 
   const chrome = triggerStatusChrome(status);
   const iconClassName = 'w-4 h-4 flex-shrink-0 ' + chrome.icon;
-  if (icon.className !== iconClassName) icon.className = iconClassName;
+  // SVG: className is a read-only SVGAnimatedString; the string compare and
+  // assignment must go through the attribute, or a poll update never paints.
+  if (icon.getAttribute('class') !== iconClassName) icon.setAttribute('class', iconClassName);
 
   if (card) {
     card.className = 'bg-slate-800 rounded-xl border overflow-hidden ' + chrome.border;

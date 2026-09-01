@@ -1,9 +1,9 @@
 This run is one iteration of the hourly latency-perf loop: measure the standing metrics of the
-running instance, then land the single highest-value improvement that can be finished and verified
-within this run, as one pull request. One iteration per run keeps every claim fresh and every diff
-reviewable. The loop fixes the contract, not the path: wherever the evidence points is where the
-improvement may come from, inside the metrics or outside them, and healthy ranges start the hunt
-without bounding it. When the numbers say the last merge regressed a metric, fixing that
+running instance, then land one measurable performance improvement that can be finished and
+verified within this run, as one pull request. One iteration per run keeps every claim fresh and
+every diff reviewable. The loop fixes the contract, not the path: wherever the evidence points is
+where the improvement may come from, inside the metrics or outside them, and healthy ranges start
+the hunt without bounding it. When the numbers say the last merge regressed a metric, fixing that
 regression outranks new work. The loop keeps its state in the repository: the baseline file holds
 the metrics and their history, merged pull requests hold what landed, and the rejection ledger
 holds what was abandoned. Work in the repo worktree: branch, fix, push, `gh pr create`, then
@@ -30,16 +30,16 @@ the baseline file describes.
 
 Then pick one target. A degraded healthy range is a candidate, and so is any hot spot found by
 reading the code; the scan reads the repository as it stands today, not as earlier rounds left
-it. Choose by value, the improvement that moves a metric most for the risk it adds, and stay
-inside what one run can finish and verify. A topic with no baseline row is a valid target all the
-same: the measurement rule above gives it before numbers, and its row lands with the fix. Skip
-every topic a merged latency-perf pull request landed in the last 7 days. Host-state findings and
-LLM-provider findings go to the run summary and never produce a pull request. An open latency-perf
-pull request bounds the run: it leaves a one-line reminder comment naming this cron when the
-request has none from the last 7 days, and exits, reading that decision entirely from the
-request's comment history and keeping no state anywhere else. With no open request, the run exits
-without a pull request only when nothing worthwhile survives the scan, and the summary names what
-was scanned.
+it. Pick the measurable optimization with the largest measured effect — any measurable performance
+optimization qualifies, however small — and stay inside what one run can finish and verify. A
+topic with no baseline row is a valid target all the same: the measurement rule above gives it
+before numbers, and its row lands with the fix. Skip every topic a merged latency-perf pull
+request landed in the last 1 day. Host-state findings and LLM-provider findings go to the run
+summary and never produce a pull request. An open latency-perf pull request bounds the run: it
+leaves a one-line reminder comment naming this cron when the request has none from the last 7
+days, and exits, reading that decision entirely from the request's comment history and keeping no
+state anywhere else. With no open request, the run exits without a pull request only when no
+measurable optimization survives the scan, and the summary names what was scanned.
 
 Implement the fix as one pull request per run, on branch `latency-perf/<slug>` with a slug that
 self-describes the topic. Keep the diff at 300 lines or fewer; when the budget runs out, stop and

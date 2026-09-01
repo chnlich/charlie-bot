@@ -104,6 +104,20 @@ function createChatSidebarContext(context) {
   vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
 }
 
+// Map keys are the element ids web/static/js/sidebar/filters.js reaches:
+// getElementById('filter-' + name) over the registered filter names plus
+// getElementById('cron-add-btn'), and the 'filter-pill' class filterPillClass
+// stamps. An id or class rename on either side breaks the lookup.
+function buildSidebarFilterElements() {
+  return new Map([
+    ['filter-all', createElement({className: 'filter-pill'})],
+    ['filter-starred', createElement({className: 'filter-pill'})],
+    ['filter-archived', createElement({className: 'filter-pill'})],
+    ['filter-scheduled', createElement({className: 'filter-pill'})],
+    ['cron-add-btn', createElement()],
+  ]);
+}
+
 // Map keys are the element ids renderUsageFromData looks up in
 // web/static/js/sidebar/session-view.js; an id rename on either side breaks the lookup.
 function buildUsageElements() {
@@ -116,4 +130,4 @@ function buildUsageElements() {
   ]);
 }
 
-module.exports = {baseSessionContext, createChatSidebarContext, buildUsageElements};
+module.exports = {baseSessionContext, createChatSidebarContext, buildSidebarFilterElements, buildUsageElements};

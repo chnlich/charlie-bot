@@ -35,6 +35,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M22 ext-usage unknown-limit-shape warning stream, steady state | M22 collector below | warnings per 60 steady-state transform rounds | 0 warnings after the first sighting per process | — (introduced with its first history row) |
 | M23 archive-range chat-event rescan, steady state | M23 collector below | seconds per 8-page backwards scroll over the biggest archived corpus | median < 0.005 s | — (introduced with its first history row) |
 | M24 trigger list, steady state | M24 collector below | seconds per list_triggers call, worst on-disk trigger corpus | median < 0.05 s | — (introduced with its first history row) |
+| M25 scheduler config reload, steady state | M25 collector below | seconds of loop lag per steady-state reload, live config corpus | median < 0.005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1066,6 +1067,56 @@ async def main():
     times.sort()
     print(f"session {SID}, {len(result)} triggers (worst corpus {best_n} files); "
           f"steady-state list_triggers median {times[2]:.4f} s, max {times[-1]:.4f} s")
+
+asyncio.run(main())
+EOF
+```
+
+M25 — scheduler config reload, steady state. Every 60 s scheduler tick re-reads the
+config so edited cron tasks take effect without a restart; the pre-fix form ran a full
+YAML parse and model validation inline on the event loop on every tick, while the fixed
+form routes through the process-wide fingerprint-cached `get_config` — one stat-key
+comparison when nothing changed, a real reload only on a fingerprint change (which still
+lands within one tick, the same freshness the per-tick read guaranteed). Ticks are
+background work invisible to HTTP probes, so the collector drives
+`Scheduler._reload_config` over the live config corpus (read-only: a parse, never a
+write) with a concurrent 5 ms ticker, from the checkout under test: one cold pass, as
+at a server start, then five timed steady-state reloads (a reload faster than the
+ticker cadence reports its own wall time). Evidence while the live server runs older
+code points the same collector at the branch checkout (`CHECKOUT` at the worktree
+root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, time
+from unittest.mock import AsyncMock
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import get_config
+from src.core.scheduler import Scheduler
+
+async def main():
+    sched = Scheduler(get_config(), AsyncMock())
+    sched._reload_config()  # cold pass, as at a server start; not timed
+    worst = []
+    for _ in range(5):
+        gaps = []
+        stop = False
+        async def ticker():
+            prev = time.perf_counter()
+            while not stop:
+                await asyncio.sleep(0.005)
+                now = time.perf_counter()
+                gaps.append(now - prev)
+                prev = now
+        t = asyncio.create_task(ticker())
+        t0 = time.perf_counter()
+        sched._reload_config()
+        wall = time.perf_counter() - t0
+        stop = True
+        await t
+        worst.append(max(gaps) if gaps else wall)
+    worst.sort()
+    print(f"steady-state scheduler config reload loop-lag median {worst[2]:.4f} s, max {worst[-1]:.4f} s")
 
 asyncio.run(main())
 EOF

@@ -16,8 +16,8 @@ from src.core.backup import apply_retention, create_backup
 from src.core.config import (
   CharlieBotConfig,
   ScheduledTaskConfig,
+  get_config,
   get_scheduled_tasks,
-  load_config,
 )
 from src.core.master_trigger import trigger_master
 from src.core.models import (
@@ -433,9 +433,15 @@ class Scheduler:
   # ---------------------------------------------------------------------------
 
   def _reload_config(self) -> CharlieBotConfig:
-    """Re-read config.yaml from disk so new tasks are picked up dynamically."""
+    """Refresh the process-wide config so new tasks are picked up dynamically.
+
+    Routes through the fingerprint-cached ``get_config``: an unchanged
+    ``config.yaml`` costs one stat-key comparison per tick instead of a full
+    YAML parse on the event loop, and a changed file still lands within one
+    tick — the same freshness the per-tick disk read guaranteed.
+    """
     try:
-      self._cfg = load_config()
+      self._cfg = get_config()
       return self._cfg
     except Exception as e:
       log.warning("scheduler_config_reload_failed", error=str(e))

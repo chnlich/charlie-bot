@@ -334,7 +334,7 @@ async def test_manual_run_is_outside_and_leaves_handle_unchanged(
   scheduler._handles["code-health"] = scheduled_handle
 
   monkeypatch.setattr(scheduler, "_execute_task", AsyncMock(return_value={"session_id": "s", "thread_id": "t"}))
-  monkeypatch.setattr(scheduler_module, "load_config", lambda: cfg)
+  monkeypatch.setattr(scheduler_module, "get_config", lambda: cfg)
   monkeypatch.setattr(scheduler_module, "get_scheduled_tasks", lambda: [_task()])
 
   result = await scheduler.run_task_now("code-health")
@@ -385,7 +385,7 @@ async def test_master_mode_skips_rather_than_queuing_a_second_wake(
 
   monkeypatch.setattr(scheduler_module, "trigger_master", fake_trigger_master)
   monkeypatch.setattr(scheduler_module, "create_logged_task", asyncio.create_task)
-  monkeypatch.setattr(scheduler_module, "load_config", lambda: cfg)
+  monkeypatch.setattr(scheduler_module, "get_config", lambda: cfg)
 
   # First fire births the master wake and registers its in-flight handle.
   await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)

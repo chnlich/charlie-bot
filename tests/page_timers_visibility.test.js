@@ -402,6 +402,10 @@ function buildExtUsageContext() {
       return {ok: true, json: async () => []};
     },
     localStorage: {getItem: () => null, setItem() {}, removeItem() {}},
+    // config.js's shared meter-fill literal; this harness skips config.js.
+    // Today's [] payload never paints a bucket, but a provider-bearing fixture
+    // must fail on assertions, not on a missing global.
+    PROGRESS_BAR_FILL_CLASS: 'h-full rounded-full transition-all duration-300',
   };
   vm.createContext(context);
   vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});

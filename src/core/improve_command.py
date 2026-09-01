@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -718,8 +717,8 @@ async def run_improve_loop(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     thread_mgr: ThreadManager,
+    work_branch: str,
     base_branch: str | None = None,
-    work_branch: str | None = None,
     merge_back: bool = False,
     resolved_backend: str = "",
     resolved_model: str = "",
@@ -734,7 +733,6 @@ async def run_improve_loop(
   """
   previous_summaries: list[str] = []
 
-  work_branch = work_branch or f'improve/{int(time.time())}'
   resolved_repo = Path(repo_path).resolve()
   if loop_id is None:
     state = await reserve_loop_state(

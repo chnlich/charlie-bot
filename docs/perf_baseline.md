@@ -28,6 +28,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M15 recap-summary cache torn reads | M15 collector below | torn reads per concurrent write stream | 0 torn reads | — (introduced with its first history row) |
 | M16 trigger-file torn reads | M16 collector below | torn reads per concurrent save stream | 0 torn reads | — (introduced with its first history row) |
 | M17 session fork (clone) latency | M17 collector below | seconds per fork of the heaviest real session, scratch home | median < 2 s | — (introduced with its first history row) |
+| M18 hidden-tab periodic poll fetches | M18 collector below | poll fetches per simulated 10 hidden minutes | 0 fetches | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -617,6 +618,112 @@ shutil.rmtree(home)
 EOF
 ```
 
+M18 — hidden-tab periodic poll fetches: the invariant behind page-timers.js
+("a hidden tab does no periodic work at all"). A poll routined around the
+registry keeps fetching while the tab is hidden (browser throttling slows but
+never stops a raw interval). The collector loads the checkout's real
+page-timers.js, workers.js and ext_usage.js in a node vm with a stub document,
+holds the page hidden, starts one expanded running worker's thread-detail poll
+plus the ext-usage strip's DOMContentLoaded init, and fires every registered
+interval the number of times its cadence fits a simulated 10 minutes. Fetches
+issued after bootstrap settle are the metric; healthy is 0. The closing 10 s
+visible re-check must fetch again (a poll that never resumes is a finding, not
+a pass). Evidence while the live server runs older code points the same
+collector at the branch checkout (`CHECKOUT` at the worktree root):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node - <<'EOF'
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const CHECKOUT = process.env.CHECKOUT || '/home/chaoli/workspace/charlie-bot';
+const read = (name) => fs.readFileSync(path.join(CHECKOUT, 'web/static/js', name), 'utf8');
+
+const listeners = new Map();
+const elements = new Map([
+  ['thread-detail-t1', {classList: {contains: () => false}}],
+  ['thread-dot-t1', {classList: {contains: (c) => c === 'bg-blue-500'}}],
+  ['thread-events-t1', {innerHTML: '', parentElement: {querySelector: () => null, insertBefore() {}}}],
+]);
+const documentStub = {
+  hidden: true,
+  addEventListener(type, fn) {
+    if (!listeners.has(type)) listeners.set(type, []);
+    listeners.get(type).push(fn);
+  },
+  removeEventListener() {},
+  dispatch(type) {
+    (listeners.get(type) || []).forEach((fn) => fn());
+  },
+  getElementById: (id) => elements.get(id) || null,
+  querySelector: () => null,
+  querySelectorAll: () => [],
+  createElement: () => ({style: {}, classList: {add() {}, remove() {}, toggle() {}}, setAttribute() {}}),
+  body: {appendChild() {}, style: {}},
+};
+
+const intervals = new Map();
+let nextId = 1;
+let fetches = 0;
+const context = {
+  document: documentStub,
+  setInterval(fn, ms) {
+    const id = nextId++;
+    intervals.set(id, {id, fn, ms});
+    return id;
+  },
+  clearInterval(id) {
+    intervals.delete(id);
+  },
+  console: {error() {}, warn() {}, log() {}},
+  fetch: async (url) => {
+    fetches += 1;
+    return {ok: true, json: async () => []};
+  },
+  localStorage: {getItem: () => null, setItem() {}, removeItem() {}},
+};
+vm.createContext(context);
+vm.runInContext(read('page-timers.js'), context, {filename: 'page-timers.js'});
+vm.runInContext(read('workers.js'), context, {filename: 'workers.js'});
+vm.runInContext(read('ext_usage.js'), context, {filename: 'ext_usage.js'});
+
+async function tickWindow(seconds) {
+  for (const entry of Array.from(intervals.values())) {
+    const n = Math.floor((seconds * 1000) / entry.ms);
+    for (let i = 0; i < n; i++) await entry.fn();
+  }
+}
+
+(async () => {
+  documentStub.dispatch('DOMContentLoaded');
+  await new Promise((r) => setImmediate(r));
+  context.startThreadPoll('t1', 'session-a');
+  await new Promise((r) => setImmediate(r));
+  const bootstrapFetches = fetches;
+
+  fetches = 0;
+  await tickWindow(600);
+  const hiddenFetches = fetches;
+
+  documentStub.hidden = false;
+  documentStub.dispatch('visibilitychange');
+  fetches = 0;
+  await tickWindow(10);
+  const visibleFetches = fetches;
+
+  console.log(
+    `checkout ${CHECKOUT}: ${hiddenFetches} poll fetches per simulated 10 hidden min ` +
+    `(${bootstrapFetches} bootstrap fetch excluded); ${visibleFetches} fetches in the 10 s visible re-check`
+  );
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -639,3 +746,4 @@ EOF
 | 2026-09-01 | #526 | M17 fork median 0.4350 s → 0.2126 s, max 0.4850 s → 0.2554 s (5519 parent events over a 36.3 MB archive+live corpus, scratch CHARLIEBOT_HOME A/B; reference bytes identical to the pre-fix output) | full-corpus forks copy raw parent event lines into parent_reference.jsonl instead of parse+reserialize; first M17 history row |
 | 2026-09-01 | #530 | M6 median 0.0119 s → 0.0046 s, max 0.0123 s → 0.0051 s (scratch TestClient A/B on the 20534-event worst session's copied corpus; live-before median 0.014 s, max 0.022 s; usage payload identical) | whole-result usage-facts memo keyed on the cached events list's identity+length (LRU cap 8); load+scan moved off the event loop into the load's to_thread |
 | 2026-09-01 | #533 | M7 live-before median 1.526-1.662 s → scratch-after warm median 0.443 s, max 1.158 s (scratch-server A/B, scratch CHARLIEBOT_HOME with empty cache, cold 10.49 s; collector-level warm 0.9105 s → 0.5261 s, warm re-scan 10.4 MB → 0 bytes; cached vs cacheless tallies byte-identical at a pinned db signature) | opencode db contribution joined the persisted tally cache, signatured on the main db file plus its WAL sidecar |
+| 2026-09-01 | #535 | M18 241 → 0 poll fetches per simulated 10 hidden min (one expanded running worker + ext-usage strip; 1 bootstrap fetch excluded; 10 s visible re-check 4 fetches before and after) | workers-panel thread-detail poll and ext-usage strip timers registered through page-timers like every other timer; M18 definition and healthy range introduced with this PR |

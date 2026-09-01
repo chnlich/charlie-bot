@@ -156,6 +156,7 @@ function loadExtUsageScript(options = {}) {
     setInterval() {
       return 0;
     },
+    clearInterval() {},
   };
   context.window = context;
   if (options.platform !== undefined) {
@@ -164,7 +165,12 @@ function loadExtUsageScript(options = {}) {
 
   const scriptPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/static/js/ext_usage.js');
   const scriptSource = fs.readFileSync(scriptPath, 'utf8');
+  const pageTimersPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/static/js/page-timers.js');
+  const pageTimersSource = fs.readFileSync(pageTimersPath, 'utf8');
   vm.createContext(context);
+  // page-timers.js loads first, matching the script order in index.html — the
+  // strip's refresh timers register through it.
+  vm.runInContext(pageTimersSource, context, { filename: pageTimersPath });
   // Bridge the lexical module binding (same pattern as the backlogPanel bridge
   // in tailwind_class_coverage.test.js) so tests can read the one in-memory
   // collapsed boolean rather than inferring it from DOM state.

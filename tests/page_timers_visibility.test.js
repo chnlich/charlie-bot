@@ -1,8 +1,9 @@
 // ---------------------------------------------------------------------------
 // A hidden tab must do no periodic work: no session-status, TUI-status,
-// worker-list or active-session-view poll, and no thinking tick. All five
-// timers go through the page-timers registry, so this exercises the real
-// registry plus the real call sites in app.js and the sidebar modules.
+// worker-list, active-session-view, thread-detail or ext-usage poll, and no
+// thinking tick. Every timer goes through the page-timers registry, so this
+// exercises the real registry plus the real call sites in app.js, the sidebar
+// modules, workers.js and ext_usage.js.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -15,6 +16,8 @@ const COMPAT_LOADER_JS = readStatic('compat-loader.js');
 const CHAT_JS = readStatic('chat.js');
 const SIDEBAR_JS = readStatic('sidebar.js');
 const APP_JS = readStatic('app.js');
+const WORKERS_JS = readStatic('workers.js');
+const EXT_USAGE_JS = readStatic('ext_usage.js');
 
 function createFakeDocument() {
   const listeners = new Map();
@@ -303,4 +306,125 @@ test('app.js schedules no sidebar-status poll while the tab loads hidden', () =>
   assert.ok(calls.includes('refreshSessionStatusNow'), 'the sidebar scope is refreshed immediately on show');
   assert.ok(calls.includes('fetchTuiStatus'), 'TUI dots are refreshed immediately on show');
   assert.ok(calls.includes('updateThinkingTime'), 'the thinking display is recomputed on show');
+});
+
+// ---------------------------------------------------------------------------
+// The workers.js thread-detail polls and the ext_usage.js timers
+// ---------------------------------------------------------------------------
+
+function buildWorkersContext(running) {
+  const document = createFakeDocument();
+  const timers = createTimerHarness();
+  const fetches = [];
+  document.elements.set('thread-detail-t1', {classList: {contains: () => false}});
+  document.elements.set('thread-dot-t1', {classList: {contains: (cls) => running && cls === 'bg-blue-500'}});
+  document.elements.set('thread-events-t1', {
+    innerHTML: '',
+    parentElement: {querySelector: () => null, insertBefore() {}},
+  });
+  const context = {
+    document,
+    setInterval: timers.setInterval,
+    clearInterval: timers.clearInterval,
+    console: {error() {}, warn() {}, log() {}},
+    fetch: async (url) => {
+      fetches.push(url);
+      return {ok: true, json: async () => []};
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
+  vm.runInContext(WORKERS_JS, context, {filename: 'workers.js'});
+  return {context, document, timers, fetches};
+}
+
+test('a running worker detail poll stays dormant while hidden and resumes on show', async () => {
+  const {context, document, timers, fetches} = buildWorkersContext(true);
+  document.hidden = true;
+
+  context.startThreadPoll('t1', 'session-a');
+
+  assert.equal(timers.live().length, 0, 'the thread poll registers no interval in a hidden tab');
+  assert.equal(context.pageTimerRegistered('thread-events-t1'), true, 'the poll keeps its registration');
+
+  document.hidden = false;
+  document.dispatch('visibilitychange');
+  const live = timers.live();
+  assert.equal(live.length, 1);
+  assert.equal(live[0].ms, 5000, 'the 5s cadence resumes on show');
+  await live[0].fn();
+  assert.equal(fetches.length, 2, 'one tick fetches the events and metadata pair');
+
+  document.hidden = true;
+  document.dispatch('visibilitychange');
+  assert.equal(timers.live().length, 0, 'hiding suspends the poll again');
+
+  context.stopAllThreadPolls();
+  assert.equal(context.pageTimerRegistered('thread-events-t1'), false, 'session switch drops the registration');
+});
+
+test('a finished worker detail poll does the final fetch then unregisters', async () => {
+  const {context, timers, fetches} = buildWorkersContext(false);
+
+  context.startThreadPoll('t1', 'session-a');
+  assert.equal(timers.live().length, 1);
+
+  await timers.live()[0].fn();
+
+  assert.equal(fetches.length, 2, 'the finishing tick still fetches the events and metadata pair');
+  assert.equal(context.pageTimerRegistered('thread-events-t1'), false, 'the poll stops itself');
+  assert.equal(timers.live().length, 0);
+});
+
+test('a collapsed worker detail poll clears its registration', () => {
+  const {context, timers} = buildWorkersContext(true);
+
+  context.startThreadPoll('t1', 'session-a');
+  assert.equal(timers.live().length, 1);
+
+  context.stopThreadPoll('t1');
+
+  assert.equal(timers.live().length, 0);
+  assert.equal(context.pageTimerRegistered('thread-events-t1'), false);
+});
+
+function buildExtUsageContext() {
+  const document = createFakeDocument();
+  const timers = createTimerHarness();
+  const fetches = [];
+  const context = {
+    document,
+    setInterval: timers.setInterval,
+    clearInterval: timers.clearInterval,
+    console: {error() {}, warn() {}, log() {}},
+    fetch: async (url) => {
+      fetches.push(url);
+      return {ok: true, json: async () => []};
+    },
+    localStorage: {getItem: () => null, setItem() {}, removeItem() {}},
+  };
+  vm.createContext(context);
+  vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
+  vm.runInContext(EXT_USAGE_JS, context, {filename: 'ext_usage.js'});
+  return {context, document, timers, fetches};
+}
+
+test('the ext-usage strip runs no timer while hidden and both cadences resume on show', async () => {
+  const {document, timers, fetches} = buildExtUsageContext();
+  document.hidden = true;
+
+  document.dispatch('DOMContentLoaded');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(fetches.length, 1, 'the one-time bootstrap fetch still runs');
+  assert.equal(timers.live().length, 0, 'no reset tick or usage poll runs in a hidden tab');
+
+  document.hidden = false;
+  document.dispatch('visibilitychange');
+
+  assert.deepEqual(
+    timers.live().map((t) => t.ms).sort((a, b) => a - b),
+    [60000, 600000],
+    'the 60s repaint and the 10min refetch resume together'
+  );
 });

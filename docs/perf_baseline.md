@@ -41,6 +41,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M28 ndjson tail+count scan, steady state | M28 collector below | seconds per `parse_ndjson_tail` call, worst on-disk live chat file | median < 0.030 s | — (introduced with its first history row) |
 | M29 session-metadata listing preamble, steady state | M29 collector below | seconds per `_load_session_metas(ACTIVE)` call, live session-dir corpus | median < 0.005 s | — (introduced with its first history row) |
 | M30 live-half chat-event range rescan, steady state | M30 collector below | seconds per 8-page backwards scroll over the biggest archived session's live file | median < 0.005 s | — (introduced with its first history row) |
+| M31 worker-finalize events-summary read, steady state | M31 collector below | seconds per `read_events_summary` call, worst on-disk worker log | median < 0.02 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1441,6 +1442,58 @@ shutil.rmtree(home)
 EOF
 ```
 
+M31 — worker-finalize events-summary read, steady state. Every worker completion
+runs `read_events_summary` on the finalize path (and again on the
+reviewer-completion path for the original worker's log), quoting the log's last
+parseable events into the worker_summary bubble. The pre-fix reader full-parsed
+the whole events.jsonl (~41 ms measured on the 6.7 MB worst on-disk log) and
+sliced the last 80; the fixed reader walks 512 KiB segments from the end
+collecting the last 80 parseable events — identical output, blank and malformed
+lines never counting toward the budget in either form. The cost is thread-pool
+time invisible to HTTP probes, so the collector times the function the finalize
+path awaits over the largest on-disk worker log (read-only), from the checkout
+under test: one cold pass, as at first finalize after a server start, then five
+timed calls. Evidence while the live server runs older code points the same
+collector at the branch checkout (`sys.path.insert` at the worktree root), the
+same shape as the M7 protocol. The sibling review-context scan (the reviewer
+prompt's delegation lookup over the session chat log) moved from a full parse
+to stream-until-first-match in the same change; its position-dependent numbers
+ride along in the PR's Evidence section instead of carrying a standing row.
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, sys, time
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from pathlib import Path
+from src.core.config import CharlieBotConfig
+from src.core.threads import ThreadManager
+from src.core.spawner_events import read_events_summary
+
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for p in root.glob("*/threads/*/data/events.jsonl"):
+    n = p.stat().st_size
+    if n > best_n:
+        best, best_n = p, n
+SID, TID = best.parts[-5], best.parts[-3]
+
+async def main():
+    cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+    thread_mgr = ThreadManager(cfg)
+    result = await read_events_summary(SID, TID, thread_mgr)  # cold pass, as at first finalize after a server start; not timed
+    times = []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        result = await read_events_summary(SID, TID, thread_mgr)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    print(f"{best_n / 1e6:.1f} MB worker log, session {SID} thread {TID}; "
+          f"steady-state events-summary read median {times[2]:.4f} s, max {times[-1]:.4f} s")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -1479,3 +1532,4 @@ EOF
 | 2026-09-02 | #592 | M7 scratch-server warm median 0.647 s → 0.326 s, max 0.667 s → 0.344 s, cold 20.9 s → 9.4 s at load 1.3-1.9; collector-level paired medians: quiet-db 0.62 s → 0.37 s, rescan-db 1.50-1.67 s → 1.02 s; live-before median 1.721 s measured against pre-#510/#533 live code (flagged); cacheless tally rows+notes digests pairwise identical | in-process aggregate memo serves the merged Claude/Codex partial keyed on the walk signature, and the opencode db scan projects its eight tally fields through json_extract; document save moves to the miss path |
 | 2026-09-02 | #597 | M19 median 0.1072 s → 0.0247 s, max 0.1136 s → 0.0257 s (collector verbatim, main checkout before vs final branch head after back-to-back at load 0.80/0.99/1.07; framed line stream identical, 32 lines; LF-dense 1.4 MB / 64 KB-chunk production shape 0.0922 s → 0.0840 s) | chunk terminator search through cached-CR str.find passes instead of the alternation regex (re engine ~0.087 s per 16 MB measured vs memchr speed), piecewise fragment accumulation instead of concatenating the accumulated remainder per chunk |
 | 2026-09-02 | #600 | M30 8-page live-half scroll steady-state median 0.0453 s → 0.0002 s, max 0.0500 s → 0.0002 s (scratch CHARLIEBOT_HOME A/B, main checkout before vs final branch head after back-to-back at load 0.82/0.59/0.74; 6.3 MB live file of archived session 3b91d606, archive_offset 1136, total 3760 events; collector verbatim on the branch 0.0004 s median) | per-physical-line parsed-events memo on the live file keyed on (mtime_ns, size), 4-file LRU, gated to archive_offset > 0 sessions (unarchived ones paginate via the M26 projection), mirroring the M23 archive memo; M30 definition and healthy range introduced with this PR |
+| 2026-09-02 | #603 | M31 steady-state median 0.0377 s → 0.0016 s, max 0.0605 s → 0.0021 s (collector verbatim, 6.7 MB worst worker log, live state read-only, main checkout before at load 0.58/1.48/1.29 vs branch after at load 0.91/1.50/1.30; summary output identical on the worst log; sibling review-context delegation scan 159.4 → 13.4 / 60.9 / 148.2 ms medians by front/mid/tail match position, context identical) | read_events_summary collects the last-80 parseable events through 512 KiB from-the-end segments (parse_ndjson_tail_parseable) instead of full-parsing the log; extract_review_context streams to the thread's first task_delegated instead of full-parsing the chat log; M31 definition and healthy range introduced with this PR |

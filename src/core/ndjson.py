@@ -11,6 +11,7 @@ import structlog
 log = structlog.get_logger()
 
 _COUNT_CHUNK_SIZE = 1024 * 1024
+_TAIL_PARSEABLE_WINDOW = 512 * 1024
 
 
 def _count_lines(f: BinaryIO) -> int:
@@ -104,6 +105,51 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
       log.debug("ndjson_tail_parse_skip", error=str(e))
 
   return events, total, has_more
+
+
+def parse_ndjson_tail_parseable(path: Path, limit: int) -> list[dict]:
+  """Return the last *limit* parseable events of an NDJSON file, in file order.
+
+  Same result as ``parse_ndjson_file(path)[-limit:]`` — blank and malformed
+  lines are skipped and never count toward *limit* — but reads only as many
+  trailing bytes as the limit needs: 512 KiB segments from the end walk lines
+  backwards, the segment's left-truncated first line carried into the next
+  older segment, stopping once they collect *limit* events or cover the whole
+  file. Callers that must see every line (exact prefixes, global ordinals)
+  keep ``parse_ndjson_file``; this reader is for the "last N of whatever
+  parsed" budget the worker-summary readers carry. A missing file returns
+  ``[]`` and *limit* <= 0 returns ``[]``.
+  """
+  collected: list[dict] = []
+  if limit <= 0 or not path.exists():
+    return collected
+  with open(path, "rb") as f:
+    f.seek(0, 2)
+    pos = f.tell()
+    carry = b""  # the current segment's left-truncated first line, completed by the next older segment
+    while pos > 0 and len(collected) < limit:
+      start = max(0, pos - _TAIL_PARSEABLE_WINDOW)
+      f.seek(start)
+      lines = (f.read(pos - start) + carry).split(b"\n")
+      carry = b""
+      if start > 0:
+        carry = lines[0]
+        lines = lines[1:]
+      if lines and lines[-1] == b"":
+        lines = lines[:-1]
+      for raw in reversed(lines):
+        line = raw.strip()
+        if not line:
+          continue
+        try:
+          collected.append(json.loads(line))
+        except json.JSONDecodeError as e:
+          log.debug("ndjson_tail_parseable_skip", error=str(e))
+        if len(collected) >= limit:
+          break
+      pos = start
+  collected.reverse()
+  return collected
 
 
 def parse_ndjson_range(path: Path, start: int, end: int) -> tuple[list[dict], bool]:

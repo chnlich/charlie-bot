@@ -9,7 +9,12 @@ paths.
 import json
 from pathlib import Path
 
-from src.core.ndjson import count_ndjson_lines, parse_ndjson_tail
+from src.core.ndjson import (
+  count_ndjson_lines,
+  parse_ndjson_file,
+  parse_ndjson_tail,
+  parse_ndjson_tail_parseable,
+)
 
 
 def _write_ndjson(path: Path, payloads: list[dict], trailing_newline: bool = True) -> None:
@@ -88,3 +93,63 @@ def test_parse_ndjson_tail_missing_and_empty(tmp_path: Path) -> None:
   target = tmp_path / "empty.jsonl"
   target.write_text("", encoding="utf-8")
   assert parse_ndjson_tail(target, 3) == ([], 0, False)
+
+
+def _write_mixed(path: Path, chunks: list[str], trailing_newline: bool = True) -> None:
+  body = "\n".join(chunks)
+  if trailing_newline and body:
+    body += "\n"
+  path.write_text(body, encoding="utf-8")
+
+
+def test_parse_ndjson_tail_parseable_missing_and_edge_limits(tmp_path: Path) -> None:
+  assert parse_ndjson_tail_parseable(tmp_path / "absent.jsonl", 3) == []
+  target = tmp_path / "empty.jsonl"
+  target.write_text("", encoding="utf-8")
+  assert parse_ndjson_tail_parseable(target, 3) == []
+  _write_ndjson(target, [{"i": 1}])
+  assert parse_ndjson_tail_parseable(target, 0) == []
+
+
+def test_parse_ndjson_tail_parseable_matches_full_parse_tail(tmp_path: Path) -> None:
+  # Blank and malformed lines never count toward the limit; parity is against
+  # parse_ndjson_file's last-N, not the last N physical lines.
+  target = tmp_path / "events.jsonl"
+  chunks = []
+  for i in range(10):
+    chunks.append(json.dumps({"i": i}))
+    chunks.append("")
+    chunks.append("{not json")
+  _write_mixed(target, chunks)
+  assert parse_ndjson_tail_parseable(target, 3) == parse_ndjson_file(target)[-3:]
+  assert [e["i"] for e in parse_ndjson_tail_parseable(target, 3)] == [7, 8, 9]
+  assert parse_ndjson_tail_parseable(target, 50) == parse_ndjson_file(target)
+
+
+def test_parse_ndjson_tail_parseable_unterminated_last_line(tmp_path: Path) -> None:
+  target = tmp_path / "events.jsonl"
+  _write_ndjson(target, [{"i": i} for i in range(5)], trailing_newline=False)
+  assert parse_ndjson_tail_parseable(target, 2) == [{"i": 3}, {"i": 4}]
+
+
+def test_parse_ndjson_tail_parseable_malformed_final_line_loses_no_event(tmp_path: Path) -> None:
+  # A torn final line is skipped like the full parse skips it, so the reader
+  # still reaches the *limit* parseable events before it.
+  target = tmp_path / "events.jsonl"
+  _write_mixed(target, [json.dumps({"i": i}) for i in range(4)] + ['{"i": 4, "tra'], trailing_newline=False)
+  assert parse_ndjson_tail_parseable(target, 3) == [{"i": 1}, {"i": 2}, {"i": 3}]
+
+
+def test_parse_ndjson_tail_parseable_crosses_window_boundary(tmp_path: Path) -> None:
+  # 300 lines of ~3 KB each: the 512 KiB window holds fewer than the requested
+  # 200 parseable events only when malformed lines eat the slice, so this file
+  # also forces the growth path with a malformed band across the boundary.
+  target = tmp_path / "events.jsonl"
+  chunks = []
+  for i in range(300):
+    chunks.append(json.dumps({"i": i, "blob": "x" * 3000}))
+    if 100 <= i < 150:
+      chunks.append('{"malformed": ' + "y" * 3000)
+  _write_mixed(target, chunks)
+  assert parse_ndjson_tail_parseable(target, 200) == parse_ndjson_file(target)[-200:]
+  assert [e["i"] for e in parse_ndjson_tail_parseable(target, 200)] == list(range(100, 300))

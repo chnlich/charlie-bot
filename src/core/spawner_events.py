@@ -8,8 +8,12 @@ from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
 from src.core.config import HOUSE_TIMEZONE
 from src.core.models import ThreadMetadata
-from src.core.ndjson import parse_ndjson_file
+from src.core.ndjson import parse_ndjson_tail_parseable
 from src.core.threads import ThreadManager
+
+# Events budget of the worker-finish summary: the summary quotes the last parseable
+# events of the log, so the reader never needs bytes older than its own budget.
+_SUMMARY_EVENT_LIMIT = 80
 
 
 def _worker_summary_timestamp() -> str:
@@ -51,22 +55,22 @@ def _thread_worker_event(
 
 
 async def _read_thread_events(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> list[dict]:
-  """Read a thread's recorded events.jsonl, parsed off the event loop.
+  """Read a thread's recorded events.jsonl tail, parsed off the event loop.
 
   The ``asyncio.to_thread`` hop is load-bearing: parsing a long log inline
   would block the event loop.
   """
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  return await asyncio.to_thread(parse_ndjson_file, events_path)
+  return await asyncio.to_thread(parse_ndjson_tail_parseable, events_path, _SUMMARY_EVENT_LIMIT)
 
 
 async def read_events_summary(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> str:
-  """Read the last 80 events from a thread's events.jsonl for summarization."""
+  """Read the log's last parseable events, up to the summary budget, for summarization."""
   events = await _read_thread_events(session_id, thread_id, thread_mgr)
   if not events:
     return "(no events recorded)"
   parts = []
-  for ev in events[-80:]:
+  for ev in events:
     ev_type = ev.get("type", "unknown")
     content = _extract_event_content(ev, ev_type)
     if content:

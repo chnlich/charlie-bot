@@ -7,6 +7,10 @@
   const renderRoundRatingButtons = Chat.renderRoundRatingButtons;
   const embedLinkedHtmlArtifacts = Chat.embedLinkedHtmlArtifacts;
 
+// The one branch glyph: the clone_start banner's "Cloned from" marker and the
+// separator's "Clone to here" fork button below.
+const CLONE_SVG = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>';
+
 // Page depth: 'outline' (one row per finished turn, last turn open),
 // 'compact' (every turn open, `N steps` bars closed), 'expanded' (all open).
 let pageDepth = 'outline';
@@ -615,7 +619,7 @@ function renderMessage(msg, sessionId) {
     return "<div class=\"flex items-center gap-3 py-3 px-4\"" + messageIdentityAttrs(msg) + ">"
       + "<div class=\"flex-1 border-t border-purple-500/40\"></div>"
       + "<div class=\"flex items-center gap-2 text-purple-400 text-xs\">"
-      + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6\"/></svg>"
+      + CLONE_SVG
       + "<span>Cloned from <a href=\"/?session=" + encodeURIComponent(msg.parent_session_id || "")
       + "\" class=\"text-purple-300 hover:text-purple-200 underline\">"
       + escapeHtml(msg.content || "") + "</a></span></div>"
@@ -643,7 +647,7 @@ function renderMessage(msg, sessionId) {
       if (msg.event_index != null) {
         buttons = "<button onclick=\"forkSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
           + " class=\"p-0.5 text-slate-500 hover:text-green-400\" title=\"Clone to here\">"
-          + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6\"/></svg>"
+          + CLONE_SVG
           + "</button>"
           + "<button onclick=\"eloneSession(\x27" + sessionId + "\x27, " + msg.event_index + ")\""
           + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"

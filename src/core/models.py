@@ -115,6 +115,12 @@ class ThreadMetadata(BaseModel):
   keep_worktree: bool = False
   tried_backends: list[str] = Field(default_factory=list)
   task_type: TaskType | None = None
+  # Cron steps chain position (src/core/task_chain.py): chain_root is the
+  # thread id of the chain's first step (the first step points at itself);
+  # step_index is this thread's index into the task's steps list. None on every
+  # non-chain thread.
+  chain_root: str | None = None
+  step_index: int | None = None
 
 
 # ---------------------------------------------------------------------------

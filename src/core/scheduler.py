@@ -11,6 +11,7 @@ import structlog
 from croniter import croniter
 
 from src.core import event_types as ET
+from src.core import task_chain
 from src.core.backlog_loop import determine_action
 from src.core.backup import apply_retention, create_backup
 from src.core.config import (
@@ -237,6 +238,8 @@ class Scheduler:
       return await self._execute_handler_task(task_cfg)
     if task_cfg.loop:
       return await self._execute_loop_task(task_cfg, record_handle=record_handle)
+    if task_cfg.steps:
+      return await self._execute_steps_task(task_cfg, record_handle=record_handle)
     return await self._execute_prompt_task(task_cfg, record_handle=record_handle)
 
   async def _execute_master_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
@@ -308,6 +311,15 @@ class Scheduler:
         session_mgr,
         require_review=False,
         record_handle=record_handle)
+
+  async def _execute_steps_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
+    """Fire step 0 of a steps task; later steps advance from the finalize chain."""
+    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")
+    thread_mgr = ThreadManager(cfg)
+    result = await task_chain.spawn_step(session, task_cfg, 0, cfg, session_mgr, thread_mgr)
+    if record_handle:
+      self._handles[task_cfg.name] = result["handle"]
+    return result
 
   async def _execute_loop_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
     """Run an improvement-loop task: determine action, then spawn worker if needed."""

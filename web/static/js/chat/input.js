@@ -64,11 +64,7 @@ async function sendMessage() {
     return;
   }
   const contentWithCtx = applyWorkingContext(content);
-  const payloadFiles = uploadedFilesForPayload.map((file) => ({
-    filename: file.filename,
-    path: file.path,
-    size: file.size,
-  }));
+  const payloadFiles = toPayloadFiles(uploadedFilesForPayload);
   clearSentUploadedFiles(uploadedFilesForPayload.map((file) => file.id));
 
   const isVoice = voiceContributed;

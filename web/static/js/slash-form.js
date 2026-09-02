@@ -4,6 +4,15 @@
 let slashSidebarVisible = false;
 let slashSidebarCommands = [];
 
+// One class chain for the param form's select, textarea, and plain inputs keeps
+// the three control variants painting alike; the textarea site appends
+// ' resize-y' on top. Split only at token boundaries: Tailwind's content scan
+// only generates classes it sees as complete tokens, so no literal may break
+// inside a class name.
+const SLASH_FORM_INPUT_CLASS =
+  'w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200'
+  + ' focus:outline-none focus:border-blue-500';
+
 function toggleSlashSidebar() {
   slashSidebarVisible = !slashSidebarVisible;
   const sidebar = document.getElementById('slash-sidebar');
@@ -101,7 +110,7 @@ function renderSlashSidebarParams(cmd) {
     let input;
     if (p.type === 'select') {
       input = document.createElement('select');
-      input.className = 'w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500';
+      input.className = SLASH_FORM_INPUT_CLASS;
       const emptyOpt = document.createElement('option');
       emptyOpt.value = '';
       emptyOpt.textContent = p.placeholder || 'Select...';
@@ -121,14 +130,14 @@ function renderSlashSidebarParams(cmd) {
     } else if (p.type === 'text') {
       input = document.createElement('textarea');
       input.rows = 6;
-      input.className = 'w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500 resize-y';
+      input.className = SLASH_FORM_INPUT_CLASS + ' resize-y';
       if (p.placeholder) input.placeholder = p.placeholder;
       if (p.default) input.value = p.default;
       input.addEventListener('input', function() { autoResize(this); });
     } else {
       input = document.createElement('input');
       input.type = p.type === 'number' ? 'number' : 'text';
-      input.className = 'w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500';
+      input.className = SLASH_FORM_INPUT_CLASS;
       if (p.placeholder) input.placeholder = p.placeholder;
       if (p.default) input.value = p.default;
     }

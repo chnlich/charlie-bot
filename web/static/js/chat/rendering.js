@@ -11,6 +11,11 @@
 // separator's "Clone to here" fork button below.
 const CLONE_SVG = '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 3v12M6 9h6m0 0V3m0 6v6m0 0h6"/></svg>';
 
+// The one down-chevron glyph, path-only because its two sites keep different
+// <svg> wrappers: renderToolActivity's "N tool calls" toggle (w-3 h-3) and
+// buildTurnFoldBar's turn-fold chevron.
+const CHEVRON_DOWN_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>';
+
 // Page depth: 'outline' (one row per finished turn, last turn open),
 // 'compact' (every turn open, `N steps` bars closed), 'expanded' (all open).
 let pageDepth = 'outline';
@@ -70,7 +75,7 @@ function renderToolActivity(tools) {
   return '<div class="mt-2 border border-slate-600/30 rounded-lg overflow-hidden">'
     + '<button onclick="this.nextElementSibling.classList.toggle(\'hidden\')" class="w-full flex items-center justify-between px-3 py-1.5 bg-slate-800/50 hover:bg-slate-800 transition-colors text-xs text-slate-400">'
     + '<span>' + label + '</span>'
-    + '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>'
+    + '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">' + CHEVRON_DOWN_SVG_PATH + '</svg>'
     + '</button>'
     + '<div class="hidden bg-slate-800/30 px-3 py-2">' + rows + '</div>'
     + '</div>';
@@ -208,7 +213,7 @@ function buildTurnFoldBar(turnKey, count) {
   btn.onclick = function() { toggleTurnFold(this); };
   btn.innerHTML = '<span class="turn-fold-label">' + turnFoldLabel(count) + '</span>'
     + '<svg class="turn-fold-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-    + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
+    + CHEVRON_DOWN_SVG_PATH + '</svg>';
   setTurnFoldBarExpanded(btn, false);
   return btn;
 }

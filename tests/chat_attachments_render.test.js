@@ -182,9 +182,9 @@ function loadSlashCommandsScript(fetchImpl, uploadsInFlight = 0) {
   };
 
   vm.createContext(context);
-  // The real file-upload.js supplies the send gate the SUT now calls. Its
-  // top-level function declarations overwrite same-named context properties,
-  // so the upload-store doubles are installed after it runs.
+  // The real file-upload.js supplies the send gate blockIfUploadsInFlight.
+  // Its top-level function declarations overwrite same-named context
+  // properties, so the upload-store doubles are installed after it runs.
   vm.runInContext(FILE_UPLOAD_JS, context, {filename: 'file-upload.js'});
   context.getUploadedFilesForPayload = () => [];
   context.clearSentUploadedFiles = (ids) => {

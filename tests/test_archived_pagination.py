@@ -13,7 +13,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_ID, build_sessions_cfg, make_session_mgr
+from conftest import (
+  OPUS_BACKEND_ID,
+  build_sessions_cfg,
+  count_path_read_text,
+  make_session_mgr,
+)
 from conftest import make_sessions_client as _build_client
 
 from src.core.models import CreateSessionRequest, SessionMetadata, SessionStatus
@@ -40,16 +45,8 @@ async def _add_session(
 
 def _count_session_metadata_reads(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> list[Path]:
   """Count reads of sessions/<id>/metadata.json (thread metadata.json files are excluded)."""
-  real_read_text = Path.read_text
-  reads: list[Path] = []
-
-  def counting_read_text(path: Path, *args: object, **kwargs: object) -> str:
-    if path.name == "metadata.json" and path.parent.parent == sessions_dir:
-      reads.append(path)
-    return real_read_text(path, *args, **kwargs)
-
-  monkeypatch.setattr(Path, "read_text", counting_read_text)
-  return reads
+  return count_path_read_text(
+      monkeypatch, lambda path: path.name == "metadata.json" and path.parent.parent == sessions_dir)
 
 
 @pytest.mark.asyncio

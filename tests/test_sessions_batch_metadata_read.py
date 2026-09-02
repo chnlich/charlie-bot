@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import pytest
+from conftest import count_path_read_text
 from conftest import make_session_mgr as _make_session_mgr
 from structlog.testing import capture_logs
 
@@ -57,15 +58,7 @@ async def test_batch_skips_metadata_reads_when_cache_is_fresh(
     mgr = _make_session_mgr(tmp_path)
     meta = SessionMetadata(name="cached")
     await mgr.save_metadata(meta)
-    real_read_text = Path.read_text
-    metadata_reads: list[Path] = []
-
-    def count_metadata_reads(path: Path, *args: object, **kwargs: object) -> str:
-        if path.name == "metadata.json":
-            metadata_reads.append(path)
-        return real_read_text(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", count_metadata_reads)
+    metadata_reads = count_path_read_text(monkeypatch, lambda path: path.name == "metadata.json")
 
     result = await mgr._iter_session_metas()
 

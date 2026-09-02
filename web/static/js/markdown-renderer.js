@@ -133,6 +133,56 @@ function fixNestedFences(md) {
       if (typeof src === 'string' && src.startsWith('~~')) return false;
       if (typeof src === 'string' && src.startsWith('~')) return { type: 'text', raw: '~', text: '~' };
       return undefined;
+    },
+    // A chat URL is a maximal printable-ASCII run [\x21-\x7E]+: anything glued
+    // onto it that is not printable ASCII (CJK, full-width punctuation, curly
+    // quotes, emoji, any non-ASCII prose) is prose, and the link ends just
+    // before the first such character. Stock marked stops a bare URL only at
+    // whitespace, so a URL before Chinese prose swallows the tail into href and
+    // link text, and the polluted href then fails every downstream consumer
+    // (artifact-card regex, missing-file probe, click). chat/artifacts.js's
+    // FILE_SERVER_LINK_SOURCE stops at the same boundary when it scans code and
+    // text carriers for file-server links — two copies of one definition, kept
+    // in sync by the comments in both files (the modules load independently, so
+    // sharing a constant would couple their load order).
+    url(src) {
+      const cap = this.rules.inline.url.exec(src);
+      if (!cap) return undefined;
+      if (cap[2] === '@') {
+        // The email branch replicates stock marked byte-for-byte: this override
+        // shadows the stock url tokenizer, so without it emails stop autolinking.
+        return {
+          type: 'link',
+          raw: cap[0],
+          text: cap[0],
+          href: 'mailto:' + cap[0],
+          tokens: [{ type: 'text', raw: cap[0], text: cap[0] }],
+        };
+      }
+      // Interleave to a fixed point: _backpedal trims trailing ASCII punctuation
+      // (an unbalanced `)` or a sentence-final period) exactly as stock marked
+      // does, then the ASCII-boundary cut; a cut can expose a fresh ASCII
+      // punctuation tail, so iterate until neither rule moves the boundary. A
+      // pure-ASCII match never moves past the backpedal, so every ASCII
+      // behavior stays byte-identical to stock marked.
+      let run = cap[0];
+      let prev;
+      do {
+        prev = run;
+        const backpedal = this.rules.inline._backpedal.exec(run);
+        run = (backpedal && backpedal[0]) || '';
+        const cut = run.search(/[^\x21-\x7E]/);
+        if (cut !== -1) run = run.slice(0, cut);
+      } while (run !== prev);
+      // Nothing left of the match: no link; the text tokenizer takes the prose.
+      if (run === '') return undefined;
+      return {
+        type: 'link',
+        raw: run,
+        text: run,
+        href: cap[1] === 'www.' ? 'http://' + run : run,
+        tokens: [{ type: 'text', raw: run, text: run }],
+      };
     }
   }});
 })();

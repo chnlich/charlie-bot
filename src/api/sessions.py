@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.responses import Response
 
@@ -460,7 +460,8 @@ async def get_session_view(
   active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude")
   active_backend_opt = cfg.get_backend_option(active_backend)
   active_backend_type = active_backend_opt.type if active_backend_opt else ""
-  return {
+  # JSONResponse for the message-page cost reason in get_session_events_page.
+  return JSONResponse({
       "session": meta.model_dump(mode="json"),
       "messages": view.messages,
       "pending_draft": view.pending_draft,
@@ -472,7 +473,7 @@ async def get_session_view(
       "active_backend": active_backend,
       "active_backend_type": active_backend_type,
       "has_more": view.has_more,
-  }
+  })
 
 
 @router.get('/{session_id}/bootstrap')
@@ -484,7 +485,8 @@ async def get_session_bootstrap(
 ):
   """Return the minimal data needed to make one chat session usable."""
   bootstrap = await build_session_bootstrap_data(session_id, session_mgr)
-  return _bootstrap_payload(bootstrap, cfg)
+  # JSONResponse for the message-page cost reason in get_session_events_page.
+  return JSONResponse(_bootstrap_payload(bootstrap, cfg))
 
 
 @router.get('/{session_id}/usage')
@@ -526,15 +528,19 @@ async def get_session_events_page(
   and never mix the two cursor domains.
   """
   limit = max(1, min(limit, 200))
+  # JSONResponse skips the jsonable_encoder pass FastAPI runs on mapped
+  # returns; on this payload (211 messages / 559 KB) that pass measures ~3x a
+  # plain json.dumps, and every field is already a plain parsed-JSON type so
+  # the dumped body is unchanged.
   if meta.archive_offset == 0:
     projection = await asyncio.to_thread(session_mgr.get_message_projection, session_id)
     if projection is not None:
       messages, next_before, has_more = projection.slice_before(before, limit)
-      return {"messages": messages, "has_more": has_more, "next_before": next_before}
+      return JSONResponse({"messages": messages, "has_more": has_more, "next_before": next_before})
   start = max(0, before - limit)
   events, has_more = await asyncio.to_thread(session_mgr.load_chat_events_range, session_id, start, before)
   messages = events_to_messages(events, event_index_offset=start)
-  return {"messages": messages, "has_more": has_more, "next_before": start}
+  return JSONResponse({"messages": messages, "has_more": has_more, "next_before": start})
 
 
 @router.get('/{session_id}/recap')

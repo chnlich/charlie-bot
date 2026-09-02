@@ -45,6 +45,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M32 memory-store assemble, steady state | M32 collector below | seconds per `assemble_master` call, live memory corpus | median < 0.005 s | — (introduced with its first history row) |
 | M33 assistant-stream draft render, full-turn replay | M33 collector below | seconds per replay of the largest on-disk assistant draft, 200 B deltas at 40 ms virtual cadence | median < 1.0 s | — (introduced with its first history row) |
 | M34 worker-events poll fetch at rendered count | M34 collector below | seconds + response bytes per events fetch, worst on-disk worker log | after=total median < 0.02 s; empty-tail body < 200 B | — (introduced with its first history row) |
+| M35 chat message-page responses, steady state | M35 collector below | seconds per request, worst projection corpus | events page median < 0.03 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1633,6 +1634,103 @@ shutil.rmtree(home)
 EOF
 ```
 
+M35 — chat message-page responses (events/view/bootstrap), steady state. The chat
+pagination endpoint (``GET /api/sessions/{id}/events``), the SPA-switch session view,
+and the bootstrap payload return their message pages through FastAPI's default
+response path, whose jsonable_encoder walk measures ~3x a plain json.dumps on the
+211-message / 559 KB worst projection page (9 ms vs 3 ms) — the same gap the M34
+envelope documented on mapped pydantic lists — while the memoized projection behind
+the page serves O(page) (M26), so the encoder pass is the endpoint's dominant
+server-side cost. The fixed handlers return a JSONResponse over the payload
+directly; every field is already a plain parsed-JSON type or
+``model_dump(mode="json")`` output, so the dumped body is byte-identical. The cost
+is per page click / SPA switch, invisible to the standing HTTP probes, so the
+collector snapshots the worst projection corpus (the session with the most live
+chat events) into one shared scratch ``CHARLIEBOT_HOME`` (live home read once for
+the copy, never written) and drives the three endpoints through TestClient in each
+checkout's process: one cold pass per endpoint, as at first view after a server
+start, then five timed requests, with digests read off the last timed response so
+the view/bootstrap mark_read write-once cannot skew the cross-checkout comparison.
+Evidence points the same collector at the before and after checkouts (``CHECKOUT``
+at each root, shared ``M35_HOME`` snapshot), asserting byte-identical bodies, the
+same shape as the M7 protocol. Snapshot once:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import shutil, tempfile
+from pathlib import Path
+
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        with open(p, errors="replace") as f:
+            n = sum(1 for _ in f)
+        if n > best_n:
+            best, best_n = d, n
+home = Path(tempfile.mkdtemp(prefix="m35-msg-page-home-", dir="/tmp"))
+shutil.copytree(best, home / "sessions" / best.name)
+print(f"export M35_HOME={home} M35_SID={best.name} M35_N={best_n}")
+EOF
+```
+
+Then run per checkout (``eval`` the snapshot export first):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import hashlib, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+import src.api.deps as deps
+from src.api.deps import get_session_manager, get_thread_manager
+from src.api.sessions import router as sessions_router
+from src.core.config import CharlieBotConfig, get_config
+from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
+from src.core.triggers import TriggerManager
+
+home = Path(os.environ["M35_HOME"])
+SID = os.environ["M35_SID"]
+BEFORE_N = int(os.environ["M35_N"])
+
+# Scratch wiring: managers and config resolve to the snapshot; the view handler's
+# direct get_trigger_manager() call is seeded with the scratch manager too.
+cfg = CharlieBotConfig(charliebot_home=home)
+mgr = SessionManager(cfg)
+deps._trigger_manager = TriggerManager(cfg, mgr)
+app = FastAPI()
+app.include_router(sessions_router, prefix="/api/sessions")
+app.dependency_overrides[get_session_manager] = lambda: mgr
+app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
+app.dependency_overrides[get_config] = lambda: cfg
+client = TestClient(app)
+
+def timed(url, params):
+    client.get(url, params=params)  # cold pass, as at first view after a server start; not timed
+    times = []
+    body = None
+    for _ in range(5):
+        t0 = time.perf_counter()
+        r = client.get(url, params=params)
+        times.append(time.perf_counter() - t0)
+        body = r.content
+    times.sort()
+    return times, body
+
+ev_t, ev_b = timed(f"/api/sessions/{SID}/events", {"before": BEFORE_N, "limit": 200})
+vw_t, vw_b = timed(f"/api/sessions/{SID}/view", None)
+bt_t, bt_b = timed(f"/api/sessions/{SID}/bootstrap", None)
+d = lambda b: hashlib.sha256(b).hexdigest()[:12]
+print(f"events page median {ev_t[2] * 1000:.2f} ms, max {ev_t[-1] * 1000:.2f} ms ({len(ev_b)} B); "
+      f"view median {vw_t[2] * 1000:.2f} ms, max {vw_t[-1] * 1000:.2f} ms ({len(vw_b)} B); "
+      f"bootstrap median {bt_t[2] * 1000:.2f} ms, max {bt_t[-1] * 1000:.2f} ms ({len(bt_b)} B); "
+      f"digests events {d(ev_b)} view {d(vw_b)} bootstrap {d(bt_b)}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -1676,3 +1774,4 @@ EOF
 | 2026-09-02 | this PR | M33 replay wall median 2.624 s → 0.589 s, max 2.829 s → 0.649 s (collector verbatim, 98.0 KB worst on-disk assistant draft sha1 6e0cb6e8f159, 502 deltas at 40 ms virtual cadence, 502 → 102 paints, main checkout before vs final branch head after back-to-back at load 0.22/0.43/0.87; final-frame parity true both arms) | stream-draft paints coalesced to a 200 ms leading+trailing cadence, hideStreaming cancels the pending trailing paint (every terminal path hides first: committed bubble, error, session swap); M33 definition and healthy range introduced with this PR |
 | 2026-09-02 | #615 | M8 append-round absent-needle search median 0.1797 s → 0.0021 s, max 0.1901 s → 0.0025 s (scratch CHARLIEBOT_HOME A/B over the 5 biggest active sessions, 109.2 MB, one event appended to every file before each timed round; main checkout before at load 0.87/2.71/3.37 vs branch after at load 0.97/1.51/2.61; cold full scan 0.1975 s → 0.1466 s under the same load shift; absent-round and positive-round parity both arms) | proven-absent memo signature gains the inode, and a same-inode file that grew re-proves absence from a window over the appended tail (old_size − 4·len(query) − 8 seek) instead of a full re-scan — chat files mutate only by append between inode-swapping atomic archive rewrites; whole-file path keeps strict decoding |
 | 2026-09-02 | this PR | M34 events poll full fetch 0.0097 s / 860706 B → after=total 0.0035 s / 40 B (collector verbatim, 6.7 MB / 2177-event worst on-disk log, scratch CHARLIEBOT_HOME TestClient, main full arm vs branch full arm back-to-back at load 0.43/0.66/0.86, payload sha256-identical deb85be56bf4dbba; live-before corroboration 0.010 s / 860706 B warm from the running instance; prefix+tail reconstruction parity true, envelope rows byte-equal to plain-list rows) | events endpoint gains after=N envelope (append-only prefix cut on the projection, reset+full payload when the count is ahead) served through a model_dump JSONResponse — FastAPI's jsonable_encoder fallback for mapped returns measures 6x slower on the same list (48.8 ms vs 8.1 ms); client polls pass the rendered raw count and append tails via scratch paint + insertAdjacentHTML; M34 definition and healthy range introduced with this PR; M18 collector element stub gains dataset to match the real DOM |
+| 2026-09-02 | this PR | M35 events page median 21.99 ms → 14.75 ms, max 24.88 ms → 16.00 ms (558888 B, 211 msgs); view median 17.26 ms → 15.55 ms; bootstrap median 8.41 ms → 6.54 ms (collector verbatim, 20534-event worst live corpus snapshot, shared scratch CHARLIEBOT_HOME TestClient A/B, main checkout before vs final branch head after back-to-back at load 1.27/1.08/0.87 and 1.39/1.11/0.88; all three bodies sha-identical across arms: events f552ad6de73b, view 33e20ccff76d, bootstrap 61b3ca97cd5e) | events/view/bootstrap message-page handlers return JSONResponse directly, skipping FastAPI's jsonable_encoder pass (~3x a plain json.dumps on the 559 KB page); M35 definition and healthy range introduced with this PR |

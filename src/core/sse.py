@@ -85,24 +85,29 @@ class _ChunkedFramer:
     end = len(text)
     if not final and end > start and text[end - 1] == "\r":
       end -= 1
+    # The next CR's position is cached across emitted lines: a per-line CR
+    # find would re-scan the whole chunk remainder per line on CR-free
+    # streams — O(bytes x lines) instead of O(bytes).
+    cr = text.find("\r", start, end)
     while True:
-      i_cr = text.find("\r", start, end)
       i_lf = text.find("\n", start, end)
       if i_lf == -1:
-        if i_cr == -1:
+        if cr == -1:
           break
-        term_at, step = i_cr, 1
-      elif i_cr == -1 or i_lf < i_cr:
+        term_at, step = cr, 1
+      elif cr == -1 or i_lf < cr:
         term_at, step = i_lf, 1
       else:
-        term_at = i_cr
-        step = 2 if i_cr + 1 < len(text) and text[i_cr + 1] == "\n" else 1
+        term_at = cr
+        step = 2 if cr + 1 < len(text) and text[cr + 1] == "\n" else 1
       if self.pieces:
         lines.append("".join(self.pieces) + text[start:term_at])
         self.pieces.clear()
       else:
         lines.append(text[start:term_at])
       start = term_at + step
+      if cr != -1 and cr < start:
+        cr = text.find("\r", start, end)
     if start < len(text):
       self.pieces.append(text[start:])
     return lines

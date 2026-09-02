@@ -215,15 +215,19 @@ async def test_adapter_frames_random_byte_chunkings_like_one_buffer() -> None:
   # Random multi-way byte cuts exercise the piecewise accumulator paths the
   # fixed-cut cases miss: held-back CRs followed by a third chunk, terminators
   # late in a chunk with a pending partial line, and mid-multibyte cuts.
-  stream = "data: a\r\ndata: b\ndata: c\r\r\n\ndata: caf\u00e9\r\ntail"
-  expected = _split_chunked([stream])
-  wire = stream.encode()
   rng = random.Random(20260902)
-  for _ in range(100):
-    cuts = sorted(rng.sample(range(1, len(wire)), 8))
-    bounds = [0, *cuts, len(wire)]
-    chunks = [wire[a:b] for a, b in zip(bounds, bounds[1:])]
-    assert await _drain_lines(chunks) == expected
+  streams = [
+      "data: a\r\ndata: b\ndata: c\r\r\n\ndata: caf\u00e9\r\ntail",
+      "".join(f"data: token-{i}\n" for i in range(200)) + "data: [done]",
+  ]
+  for stream in streams:
+    expected = _split_chunked([stream])
+    wire = stream.encode()
+    for _ in range(50):
+      cuts = sorted(rng.sample(range(1, len(wire)), 8))
+      bounds = [0, *cuts, len(wire)]
+      chunks = [wire[a:b] for a, b in zip(bounds, bounds[1:])]
+      assert await _drain_lines(chunks) == expected
 
 
 @pytest.mark.asyncio

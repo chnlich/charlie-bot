@@ -426,7 +426,7 @@ FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 CLEAN_EXIT_OUTCOME = spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error="")
 
 # Import-path patch target shared by every test that silences or spies on streaming broadcasts.
-# Mock resolves the route through the src.core.sessions namespace (src/core/sessions.py:43 imports
+# Mock resolves the route through the src.core.sessions namespace (src/core/sessions.py imports
 # the streaming_manager singleton) and setattr's broadcast on that shared object; a move of the
 # sessions-side import updates this one string. src.core.autonamer and src.agents.worker import
 # the same singleton, so their routes reach the same attribute.
@@ -434,7 +434,7 @@ BROADCAST_PATCH_TARGET = "src.core.sessions.streaming_manager.broadcast"
 
 # Import-path patch target shared by every test that stubs the workers-running probe the master
 # consumer's teardown runs. master_cc_queue binds the class with call-time `from
-# src.core.sessions import SessionManager` (src/agents/master_cc_queue.py:207), so mock and
+# src.core.sessions import SessionManager`, so mock and
 # monkeypatch.setattr land the stand-in on the src.core.sessions module attribute and the
 # teardown's SessionManager(...) construction resolves it at call time.
 SESSIONS_SESSION_MANAGER_PATCH_TARGET = "src.core.sessions.SessionManager"

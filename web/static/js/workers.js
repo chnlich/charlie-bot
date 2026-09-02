@@ -2,6 +2,9 @@
 // Thread detail / events
 // ---------------------------------------------------------------------------
 const loadedThreads = new Set();
+// Raw projected-event counts behind the incremental fetch: a poll ships only
+// the events past what the container already renders.
+const loadedEventCounts = new Map();
 // Threads with a registered events poll; the intervals live in the page-timers
 // registry so a hidden tab polls nothing.
 const threadPollTimers = new Set();
@@ -11,14 +14,20 @@ function threadPollTimerName(threadId) {
 }
 
 async function fetchAndRenderEvents(threadId, sessionId) {
+  const known = loadedEventCounts.get(threadId) || 0;
   const [eventsRes, metadataRes] = await Promise.all([
-    fetch(`/api/threads/${sessionId}/threads/${threadId}/events`),
+    fetch(`/api/threads/${sessionId}/threads/${threadId}/events?after=${known}`),
     fetch(`/api/threads/${sessionId}/threads/${threadId}`)
   ]);
-  const events = await eventsRes.json();
+  const payload = await eventsRes.json();
   const metadata = await metadataRes.json();
   renderAttachCommand(threadId, metadata);
-  renderThreadEvents(threadId, events);
+  if (payload.reset || known === 0) {
+    renderThreadEvents(threadId, payload.events);
+  } else {
+    appendThreadEvents(threadId, payload.events);
+  }
+  loadedEventCounts.set(threadId, payload.total);
 }
 
 function isWorkerRunning(threadId) {
@@ -119,17 +128,46 @@ async function toggleThreadDetail(threadId, sessionId) {
     // Collapsing — stop poll and clear cache so re-expand fetches fresh data
     stopThreadPoll(threadId);
     loadedThreads.delete(threadId);
+    loadedEventCounts.delete(threadId);
     finalFetchDone.delete(threadId);
   }
 }
 
-function renderThreadEvents(threadId, events) {
-  const container = document.getElementById('thread-events-' + threadId);
+const THREAD_EVENT_SKIP_TYPES = new Set(['ping', 'catchup_complete', 'raw', 'system', 'rate_limit_event']);
+const NO_EVENTS_HTML = '<p class="text-xs text-slate-500">No events</p>';
 
-  // Inject refresh button toolbar above events
+function filterThreadEvents(events) {
+  return events.filter(e => {
+    if (THREAD_EVENT_SKIP_TYPES.has(e.type)) return false;
+    // skip user tool_result events
+    if (e.type === 'user') return false;
+    return true;
+  });
+}
+
+function renderThreadEvents(threadId, events) {
+  paintThreadEvents(threadId, document.getElementById('thread-events-' + threadId), events);
+}
+
+function appendThreadEvents(threadId, events) {
+  const container = document.getElementById('thread-events-' + threadId);
+  if (!container || !filterThreadEvents(events).length) return;
+  if (container.dataset.empty === '1') {
+    paintThreadEvents(threadId, container, events);
+    return;
+  }
+  // Scratch paint: insertAdjacentHTML parses only the tail, never the existing list.
+  const scratch = document.createElement('div');
+  paintThreadEvents(threadId, scratch, events);
+  container.insertAdjacentHTML('beforeend', scratch.innerHTML);
+}
+
+function paintThreadEvents(threadId, container, events) {
+  // Inject refresh button toolbar above events (the append path's scratch
+  // container has no parent; only the real list gets one).
   const refreshBtnId = 'refresh-btn-' + threadId;
-  let toolbar = container.parentElement.querySelector('.thread-events-toolbar');
-  if (!toolbar) {
+  let toolbar = container.parentElement && container.parentElement.querySelector('.thread-events-toolbar');
+  if (!toolbar && container.parentElement) {
     toolbar = document.createElement('div');
     toolbar.className = 'thread-events-toolbar flex justify-end px-3 pt-2';
     toolbar.innerHTML = `<button id="${refreshBtnId}" onclick="refreshThreadEvents('${threadId}')"
@@ -141,16 +179,11 @@ function renderThreadEvents(threadId, events) {
     container.parentElement.insertBefore(toolbar, container);
   }
 
-  const SKIP_TYPES = new Set(['ping', 'catchup_complete', 'raw', 'system', 'rate_limit_event']);
-  const filtered = events.filter(e => {
-    if (SKIP_TYPES.has(e.type)) return false;
-    // skip user tool_result events
-    if (e.type === 'user') return false;
-    return true;
-  });
+  const filtered = filterThreadEvents(events);
 
   if (!filtered.length) {
-    container.innerHTML = '<p class="text-xs text-slate-500">No events</p>';
+    container.dataset.empty = '1';
+    container.innerHTML = NO_EVENTS_HTML;
     return;
   }
 
@@ -263,11 +296,13 @@ function renderThreadEvents(threadId, events) {
     </div>`;
   });
 
+  container.dataset.empty = '';
   container.innerHTML = parts.join('');
 }
 
 async function refreshThreadEvents(threadId) {
   try {
+    loadedEventCounts.delete(threadId);
     await fetchAndRenderEvents(threadId, SESSION_ID);
   } catch (err) {
     console.error('Refresh events failed:', err);

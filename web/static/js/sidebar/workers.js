@@ -256,6 +256,7 @@ function updateWorkerStatus(threadId, status) {
   if (!finalFetchDone.has(threadId)) {
     finalFetchDone.add(threadId);
     loadedThreads.delete(threadId);
+    loadedEventCounts.delete(threadId);
     // If detail is currently expanded, do a final fetch
     const detail = document.getElementById('thread-detail-' + threadId);
     if (detail && !detail.classList.contains('hidden')) {

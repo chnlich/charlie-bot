@@ -11,9 +11,19 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
+from src.core import token_tally as tt
 from src.core.token_tally import collect_token_usage
 
 NAME = "claude-model"
+
+
+@pytest.fixture(autouse=True)
+def _clear_aggregate_memo():
+  tt._reset_aggregate_memo()
+  yield
+  tt._reset_aggregate_memo()
 
 
 def _claude_record(record_id: str, model: str, ts: str, usage: dict) -> dict:
@@ -409,6 +419,112 @@ def test_codex_cache_invalidates_on_append(tmp_path: Path) -> None:
   assert after.calls == before.calls + 1
 
 
+def test_aggregate_memo_serves_unchanged_walk(tmp_path: Path, monkeypatch) -> None:
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [
+      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  first = _collect(claude, None, db, cache)
+
+  def boom(path):
+    raise AssertionError("log re-parsed on an aggregate-memo hit")
+
+  monkeypatch.setattr(tt, "_claude_file_contribution", boom)
+  second = _collect(claude, None, db, cache)
+
+  assert second.rows == first.rows
+  assert second.notes == first.notes
+  assert second.scanned_bytes == 0
+
+
+def test_aggregate_memo_invalidates_on_append(tmp_path: Path, monkeypatch) -> None:
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [
+      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db = tmp_path / "db.sqlite"
+  before = _row(_collect(claude, None, db), "Claude Code", NAME)
+
+  calls = 0
+  real = tt._claude_file_contribution
+
+  def spy(path):
+    nonlocal calls
+    calls += 1
+    return real(path)
+
+  monkeypatch.setattr(tt, "_claude_file_contribution", spy)
+  log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
+  with log_file.open("a") as fh:
+    fh.write(json.dumps(_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))) + "\n")
+
+  after = _row(_collect(claude, None, db), "Claude Code", NAME)
+  assert calls > 0
+  assert after.total == before.total + 1002
+
+
+def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, monkeypatch) -> None:
+  # The host pattern behind the memo: the opencode db's WAL moves under plain serve traffic
+  # while the Claude/Codex logs sit unchanged, so the expensive partial must survive.
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [
+      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  first = _collect(claude, None, db, cache)
+
+  def boom(path):
+    raise AssertionError("claude log re-parsed when only the opencode db moved")
+
+  monkeypatch.setattr(tt, "_claude_file_contribution", boom)
+  _append_opencode(db, [
+      ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * 5000},
+       "oc-m", "prov"),
+  ])
+
+  second = _collect(claude, None, db, cache)
+  assert _row(second, "Claude Code", NAME).total == _row(first, "Claude Code", NAME).total
+  assert _row(second, "opencode", "oc-m").total == 6 + 102
+
+
+def test_opencode_only_change_is_not_persisted(tmp_path: Path) -> None:
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [
+      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _collect(claude, None, db, cache)
+  first_doc = json.loads(cache.read_text())
+  assert set(first_doc["sources"]) == {"claude", "opencode"}
+
+  _append_opencode(db, [
+      ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * 5000},
+       "oc-m", "prov"),
+  ])
+  tally = _collect(claude, None, db, cache)
+  assert _row(tally, "opencode", "oc-m").total == 6 + 102
+
+  second_doc = json.loads(cache.read_text())
+  # The in-process rescan served the fresh tally; the persisted document did not pay for it.
+  assert second_doc["sources"] == first_doc["sources"]
+
+
+def test_non_opencode_change_still_persists(tmp_path: Path) -> None:
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [
+      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _collect(claude, None, db, cache)
+
+  claude.write(claude.work, "sess2", [
+      _claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))])
+  _collect(claude, None, db, cache)
+
+  doc = json.loads(cache.read_text())
+  sess2 = str(claude.work / "projects" / "rel" / "sess2" / "sess2.jsonl")
+  assert sess2 in doc["sources"]["claude"]
+
+
 def _append_opencode(path: Path, rows: list[tuple[dict, str, str]]) -> None:
   con = sqlite3.connect(path)
   for payload, model_id, provider in rows:
@@ -430,6 +546,44 @@ def test_opencode_cache_serves_unchanged_db(tmp_path: Path) -> None:
   assert _row(second, "opencode", "oc-m").total == _row(first, "opencode", "oc-m").total
   assert ([n for n in second.notes if n.startswith("opencode")] ==
           [n for n in first.notes if n.startswith("opencode")])
+
+
+def test_opencode_scan_row_filters(tmp_path: Path) -> None:
+  # Every row shape the LIKE prefilter admits must land exactly where the old fetch-and-parse
+  # path put it: counted, skipped as non-contributing, or skipped as malformed.
+  db = tmp_path / "db.sqlite"
+  con = sqlite3.connect(db)
+  con.execute("create table message (data text)")
+  rows = [
+      {"role": "assistant", "modelID": "oc-full", "providerID": "prov",
+       "time": {"created": 1700000000000},
+       "tokens": {"input": 10, "output": 2, "cache": {"read": 4, "write": 1}}},
+      {"role": "assistant", "modelID": "/models/oc-local", "providerID": "lmstudio",
+       "tokens": {"input": 0, "output": 3, "total": 3}},
+      {"role": "assistant", "modelID": "oc-nocache", "providerID": "prov",
+       "tokens": {"input": 5, "output": 1, "total": 6}},
+      # skipped rows below: non-assistant role; all counters zero; tokens not an object;
+      # malformed JSON that still matches the LIKE prefilter
+      {"role": "user", "modelID": "oc-user",
+       "tokens": {"input": 99, "output": 99, "total": 99}},
+      {"role": "assistant", "modelID": "oc-zero", "tokens": {"input": 0, "output": 0, "total": 0}},
+      {"role": "assistant", "modelID": "oc-lit", "tokens": "final"},
+      '{"role":"assistant","tokens":{"input": 5,',
+  ]
+  for data in rows:
+    con.execute("insert into message (data) values (?)",
+                (json.dumps(data) if isinstance(data, dict) else data,))
+  con.commit()
+  con.close()
+
+  tally = _collect(None, None, db)
+  by_model = {r.model: r for r in tally.rows if r.source == "opencode"}
+  assert set(by_model) == {"oc-full", "oc-local (lmstudio)", "oc-nocache"}
+  full = by_model["oc-full"]
+  assert (full.in_fresh, full.output) == (10, 2)
+  assert (full.cache_read, full.cache_write) == (4, 1)
+  assert full.last == "2023-11-14"
+  assert by_model["oc-local (lmstudio)"].output == 3
 
 
 def test_opencode_cache_invalidates_on_insert(tmp_path: Path) -> None:

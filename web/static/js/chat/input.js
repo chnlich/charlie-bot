@@ -52,7 +52,7 @@ function postChatMessage(content, extra) {
 
 async function sendMessage() {
   if (uploadsInFlight > 0) {
-    showToast('Please wait for uploads to finish', true);
+    showToast(UPLOADS_IN_FLIGHT_MESSAGE, true);
     return;
   }
   const input = document.getElementById('msg-input');

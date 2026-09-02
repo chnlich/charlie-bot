@@ -113,7 +113,7 @@ async function showGroupSelector(sessionId, currentGroup) {
 
   const overlay = document.createElement('div');
   overlay.id = 'group-modal-overlay';
-  overlay.className = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
+  overlay.className = MODAL_OVERLAY_CLASS;
 
   const groupButtons = groups.map(g => {
     const isActive = g === currentGroup;
@@ -122,7 +122,7 @@ async function showGroupSelector(sessionId, currentGroup) {
   }).join('');
 
   overlay.innerHTML = `
-    <div class="bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72"
+    <div class="${MODAL_DIALOG_CLASS}"
          onclick="event.stopPropagation()">
       <p class="text-sm text-slate-300 mb-3 font-semibold">Set Group</p>
       <div class="flex flex-col gap-1.5 mb-3 max-h-48 overflow-y-auto">
@@ -223,6 +223,13 @@ const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" str
 // namespace, status.js's worker indicator (Sidebar.GEAR_SVG_PATH). Each
 // call site keeps its own center markup.
 const GEAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>`;
+
+// The one modal chrome for the sidebar's JS-built overlays: showGroupSelector's
+// group modal below and, through the namespace, filters.js's delete-confirm
+// modal (Sidebar.MODAL_OVERLAY_CLASS / Sidebar.MODAL_DIALOG_CLASS). Each dialog
+// keeps its own extras (filters.js's adds text-center) and inner markup.
+const MODAL_OVERLAY_CLASS = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
+const MODAL_DIALOG_CLASS = 'bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72';
 
 function renderStarButton(s, activeBtnClass) {
   const starFill = s.starred ? 'currentColor' : 'none';
@@ -795,6 +802,8 @@ function renderSessionList(sessions, filter) {
 Object.assign(Sidebar, {
   TRASH_SVG_PATH,
   GEAR_SVG_PATH,
+  MODAL_OVERLAY_CLASS,
+  MODAL_DIALOG_CLASS,
   renderEmptyNote,
   loadGroupLimitState,
   isGroupLimitExpanded,

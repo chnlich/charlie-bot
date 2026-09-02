@@ -38,6 +38,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M25 scheduler config reload, steady state | M25 collector below | seconds of loop lag per steady-state reload, live config corpus | median < 0.005 s | — (introduced with its first history row) |
 | M26 message-projection advance per appended event | M26 collector below | seconds per `get_message_projection` advance on one appended event, worst on-disk live-events corpus | median < 0.005 s | — (introduced with its first history row) |
 | M27 plans registry tolerant read, steady state | M27 collector below | seconds per `read_plans_tolerant` call, worst on-disk plans corpus | median < 0.005 s | — (introduced with its first history row) |
+| M28 ndjson tail+count scan, steady state | M28 collector below | seconds per `parse_ndjson_tail` call, worst on-disk live chat file | median < 0.030 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1257,6 +1258,58 @@ print(f"{len(result['plans'])} plans, {len(result['errors'])} errors; steady-sta
 EOF
 ```
 
+M28 — ndjson tail+count scan, steady state. The chat paging paths for sessions
+without a message projection (``archive_offset > 0`` — bootstrap, view, and events
+pages) call ``parse_ndjson_tail`` on every request, and its count half must scan
+the whole live file to report ``total_line_count`` (``count_ndjson_lines`` is the
+same scan for the recap default divider and the session GET). The pre-fix form
+walked the file line by line in Python — and even ``bytes.count`` measures only
+~0.7 GB/s on this host — while the fixed form counts newlines per 1 MiB chunk
+through a numpy SIMD compare (~3.4 GB/s measured), keeping the file-iteration
+count contract (an unterminated final line counts) that the tail result's global
+ordinal math depends on. The cost is per page view, invisible to the standing
+HTTP probes, so the collector times both functions over the largest live chat
+file on disk (read-only), from the checkout under test: one cold pass, as at a
+first page view after a server start, then seven timed calls. Evidence while the
+live server runs older code points the same collector at the branch checkout
+(``CHECKOUT`` at the worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.ndjson import parse_ndjson_tail, count_ndjson_lines
+
+# Worst tail+count corpus: the session whose LIVE chat file carries the most bytes.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        n = p.stat().st_size
+        if n > best_n:
+            best, best_n = p, n
+
+parse_ndjson_tail(best, 200)  # cold pass, as at a first page view after a server start; not timed
+times = []
+for _ in range(7):
+    t0 = time.perf_counter()
+    events, total, has_more = parse_ndjson_tail(best, 200)
+    times.append(time.perf_counter() - t0)
+times.sort()
+ctimes = []
+for _ in range(7):
+    t0 = time.perf_counter()
+    n = count_ndjson_lines(best)
+    ctimes.append(time.perf_counter() - t0)
+ctimes.sort()
+print(f"{best_n / 1e6:.1f} MB file, {total} lines, tail events {len(events)}; "
+      f"parse_ndjson_tail median {times[3] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms; "
+      f"count_ndjson_lines median {ctimes[3] * 1000:.2f} ms")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -1290,3 +1343,4 @@ EOF
 | 2026-09-01 | #568 | M25 steady-state loop-lag median 0.0115 s → 0.0001 s (0.000083 s wall), max 0.0116 s → 0.0001 s (0.000091 s wall) (collector verbatim, main-checkout before vs branch after at load 0.36/0.55/0.62 and 0.64/0.60/0.63; live config corpus read-only; after run under the 5 ms ticker resolution) | scheduler _reload_config routed through the fingerprint-cached get_config instead of a per-tick load_config parse; M25 definition and healthy range introduced with this PR |
 | 2026-09-01 | #572 | M26 projection advance median 46.69 ms → 0.19 ms, max 100.40 ms → 0.27 ms (collector verbatim, 8 single-event appends on the 20534-event worst live corpus, scratch CHARLIEBOT_HOME A/B, main checkout before at load 2.35/1.88/1.51 vs final branch head after at load 1.35/1.32/1.75; served-view digest identical e94c56635194) | append-incremental message projection: closed-prefix single feed plus cloned-aggregator open-region view, advanced copies swapped in atomically; M26 definition and healthy range introduced with this PR |
 | 2026-09-01 | #576 | M27 steady-state tolerant read median 319.3 µs → 10.6 µs, max 355.6 µs → 41.5 µs (collector verbatim, main checkout before at load 1.28/1.17/1.15 vs final branch head after at load 0.91/0.97/1.02; worst plans corpus 15.4 KB / 12 plans, live state read-only; projected payload identical) | per-file (mtime_ns, size) memo with a 32-path LRU for read_plans_tolerant, mirroring the M24 trigger-list memo; OSError reads answered fresh every call per the sibling memo policy; M27 definition and healthy range introduced with this PR |
+| 2026-09-02 | #581 | M28 parse_ndjson_tail median 50.20 ms → 17.34 ms, max 52.47 ms → 18.35 ms; count_ndjson_lines median 46.68 ms → 13.13 ms (collector verbatim, 36.3 MB / 5519-line worst live chat file, main checkout before vs final branch head after at load 0.54-0.71; tail events and line counts identical) | newline counting per 1 MiB chunk through a numpy SIMD compare replacing Python per-line iteration (~3.4 GB/s vs ~0.7 GB/s measured on this host), file-iteration count contract preserved; M28 definition and healthy range introduced with this PR |

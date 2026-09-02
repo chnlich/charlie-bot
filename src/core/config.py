@@ -95,6 +95,23 @@ def master_task_project_error(mode: str | None, project: str | None) -> str | No
   return None
 
 
+class StepConfig(BaseModel):
+  """One step of a ``steps`` cron task: a named worker in an ordered chain.
+
+  ``prompt_file`` is the pre-resolution path string the host cron.d file
+  declared — an in-process field for transport to the API and UI only, exactly
+  like the task-level ``prompt_file``; ``prompt`` is the body the loader
+  resolved from it on this load.
+  """
+
+  model_config = ConfigDict(extra='forbid')
+
+  name: str = Field(min_length=1)
+  prompt_file: str | None = None
+  prompt: str | None = None
+  backend: str | None = None
+
+
 class ScheduledTaskConfig(BaseModel):
   """Configuration for a single scheduled (cron-like) task.
 
@@ -114,6 +131,9 @@ class ScheduledTaskConfig(BaseModel):
   prompt_file: str | None = None
   handler: str | None = None
   loop: ImprovementLoopConfig | None = None
+  # Ordered worker chain: each step spawns after the previous one exits 0, and
+  # the session master is woken once at the end (src/core/task_chain.py).
+  steps: list[StepConfig] | None = None
   repo: str | None = None
   backend: str | None = None
   timezone: str = DEFAULT_TIMEZONE
@@ -130,14 +150,29 @@ class ScheduledTaskConfig(BaseModel):
 
   @model_validator(mode='after')
   def check_prompt_or_handler_or_loop(self) -> 'ScheduledTaskConfig':
-    sources = sum([bool(self.prompt), bool(self.handler), bool(self.loop)])
+    sources = sum([bool(self.prompt), bool(self.steps), bool(self.handler), bool(self.loop)])
     if sources != 1:
       raise ValueError(
-          "task must have exactly one of 'prompt', 'prompt_file', 'handler', or 'loop'")
+          "task must have exactly one of 'prompt', 'prompt_file', 'steps', 'handler', or 'loop'")
+    if self.steps is not None and not self.steps:
+      raise ValueError("steps must be a non-empty list")
+    if self.steps:
+      seen: set[str] = set()
+      for step in self.steps:
+        if step.name in seen:
+          raise ValueError(f"duplicate step name '{step.name}'")
+        seen.add(step.name)
+        if not step.prompt:
+          raise ValueError(
+              f"step '{step.name}' has no prompt body; the loader resolves each step's "
+              "'prompt_file' before validation")
     # A prompt_file-style entry is resolved into prompt before model
     # validation, so an empty prompt here means master woke up with no message
     # at all — including the master+handler and master+loop combinations the
     # exactly-one rule allows.
+    if self.mode == 'master' and self.steps:
+      raise ValueError(
+          "mode 'master' requires a prompt source ('prompt' or 'prompt_file'), not 'steps'")
     if self.mode == 'master' and not self.prompt:
       raise ValueError("mode 'master' requires a prompt source ('prompt' or 'prompt_file')")
     if self.notify and self.notify != 'telegram':
@@ -721,12 +756,34 @@ def _valid_cron_name(name: str) -> bool:
   return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name))
 
 
+def _resolve_prompt_pointer(entry: dict, repo: Path, prompt_mtimes: dict[Path, float]) -> None:
+  """Resolve one mapping's ``prompt_file`` into ``prompt`` in place.
+
+  Restores the raw pointer on the mapping afterwards (the pointer is what the
+  API and UI display) and records the resolved file's mtime into
+  *prompt_mtimes* for the hot-reload fingerprint. Applies to a task body and
+  to each ``steps`` entry alike; a mapping without a pointer is a no-op.
+  """
+  prompt_file = entry.get("prompt_file")
+  if not prompt_file:
+    return
+  resolved = _resolve_prompt_file(entry, repo)
+  entry["prompt_file"] = prompt_file  # preserve the raw pointer for the API/UI
+  try:
+    prompt_mtimes[resolved] = resolved.stat().st_mtime
+  except OSError:
+    # The file existed moments ago (we just read it); a transient race falls
+    # back to a sentinel so the next tick re-reads.
+    prompt_mtimes[resolved] = 0.0
+
+
 def _validate_cron_body(body: dict, repo: Path, stem: str) -> tuple[ScheduledTaskConfig, dict[Path, float]]:
   """Resolve and validate one cron job body into a ``ScheduledTaskConfig``.
 
   Mutates *body* in place — resolves ``prompt_file`` (setting ``prompt`` to the
-  referenced file's body and preserving the raw pointer on the model), rewrites
-  a literal ``timezone: local`` to the host IANA zone, and expands ``~`` in
+  referenced file's body and preserving the raw pointer on the model), resolves
+  each ``steps`` entry's ``prompt_file`` the same way, rewrites a literal
+  ``timezone: local`` to the host IANA zone, and expands ``~`` in
   ``repo`` — matching the :func:`_resolve_prompt_file` mutate-in-place
   convention. The pointer owns the prompt body; the body carries only the path
   to it, and the loader reads that file on every load. Any caller that needs
@@ -738,16 +795,10 @@ def _validate_cron_body(body: dict, repo: Path, stem: str) -> tuple[ScheduledTas
   error) on any failure.
   """
   prompt_mtimes: dict[Path, float] = {}
-  prompt_file = body.get("prompt_file")
-  if prompt_file:
-    resolved = _resolve_prompt_file(body, repo)
-    body["prompt_file"] = prompt_file  # preserve the raw pointer for the API/UI
-    try:
-      prompt_mtimes[resolved] = resolved.stat().st_mtime
-    except OSError:
-      # The file existed moments ago (we just read it); a transient race falls
-      # back to a sentinel so the next tick re-reads.
-      prompt_mtimes[resolved] = 0.0
+  _resolve_prompt_pointer(body, repo, prompt_mtimes)
+  for step in body.get("steps") or []:
+    if isinstance(step, dict):
+      _resolve_prompt_pointer(step, repo, prompt_mtimes)
   _resolve_local_timezone(body)
   if body.get("repo"):
     body["repo"] = os.path.expanduser(body["repo"])
@@ -782,6 +833,12 @@ def _load_cron_file(path: Path, repo: Path, stem: str) -> tuple[ScheduledTaskCon
         "a cron.d host file must not carry an inline 'prompt'; it holds the "
         "path to the prompt source under 'prompt_file', and the loader reads "
         "that file on every load")
+  for step in body.get("steps") or []:
+    if isinstance(step, dict) and "prompt" in step:
+      raise ValueError(
+          "a cron.d host file must not carry an inline 'prompt'; a step holds the "
+          "path to its prompt source under 'prompt_file', and the loader reads "
+          "that file on every load")
   return _validate_cron_body(body, repo, stem)
 
 
@@ -837,8 +894,17 @@ def _reload_cron_snapshot() -> _CronSnapshot:
         except Exception as read_error:
           log.debug("cron_failed_file_prompt_path_unreadable", path=str(path), error=str(read_error))
         else:
-          failed_prompt_file = failed_body.get("prompt_file") if isinstance(failed_body, dict) else None
-          if isinstance(failed_prompt_file, str) and failed_prompt_file:
+          failed_pointers: list[str] = []
+          if isinstance(failed_body, dict):
+            top_pointer = failed_body.get("prompt_file")
+            if isinstance(top_pointer, str) and top_pointer:
+              failed_pointers.append(top_pointer)
+            for step in failed_body.get("steps") or []:
+              if isinstance(step, dict):
+                step_pointer = step.get("prompt_file")
+                if isinstance(step_pointer, str) and step_pointer:
+                  failed_pointers.append(step_pointer)
+          for failed_prompt_file in failed_pointers:
             if failed_prompt_file.startswith("~") or Path(failed_prompt_file).is_absolute():
               failed_prompt_path = Path(os.path.expanduser(failed_prompt_file))
             else:

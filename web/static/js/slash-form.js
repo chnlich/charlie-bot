@@ -13,6 +13,11 @@ const SLASH_FORM_INPUT_CLASS =
   'w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200'
   + ' focus:outline-none focus:border-blue-500';
 
+// Element ids defined in web/templates/index.html; the sidebar select and the
+// params container each have several consumers below.
+const SLASH_SIDEBAR_SELECT_ID = 'slash-sidebar-select';
+const SLASH_SIDEBAR_PARAMS_ID = 'slash-sidebar-params';
+
 function toggleSlashSidebar() {
   slashSidebarVisible = !slashSidebarVisible;
   const sidebar = document.getElementById('slash-sidebar');
@@ -47,7 +52,7 @@ async function populateSlashSidebarSelect() {
       return;
     }
   }
-  const select = document.getElementById('slash-sidebar-select');
+  const select = document.getElementById(SLASH_SIDEBAR_SELECT_ID);
   if (!select) return;
   select.innerHTML = '<option value="">Select a command...</option>';
   for (const cmd of slashSidebarCommands.filter(c => !c.frontendOnly)) {
@@ -59,7 +64,7 @@ async function populateSlashSidebarSelect() {
 }
 
 function onSlashSidebarCommandChange() {
-  const select = document.getElementById('slash-sidebar-select');
+  const select = document.getElementById(SLASH_SIDEBAR_SELECT_ID);
   const name = select ? select.value : '';
   const cmd = slashSidebarCommands.find(c => c.name === name);
   renderSlashSidebarParams(cmd);
@@ -67,7 +72,7 @@ function onSlashSidebarCommandChange() {
 }
 
 function renderSlashSidebarParams(cmd) {
-  const container = document.getElementById('slash-sidebar-params');
+  const container = document.getElementById(SLASH_SIDEBAR_PARAMS_ID);
   const runBtn = document.getElementById('slash-sidebar-run');
   if (!container) return;
   container.innerHTML = '';
@@ -150,7 +155,7 @@ function renderSlashSidebarParams(cmd) {
 }
 
 function getSlashSidebarFormValues() {
-  const container = document.getElementById('slash-sidebar-params');
+  const container = document.getElementById(SLASH_SIDEBAR_PARAMS_ID);
   if (!container) return {};
   const values = {};
   container.querySelectorAll('[data-param-name]').forEach(el => {
@@ -176,7 +181,7 @@ function assembleSlashArgs(cmdName, values) {
 
 function updateSlashSidebarPreview() {
   const preview = document.getElementById('slash-sidebar-preview');
-  const select = document.getElementById('slash-sidebar-select');
+  const select = document.getElementById(SLASH_SIDEBAR_SELECT_ID);
   if (!preview || !select) return;
   const name = select.value;
   if (!name) {
@@ -190,7 +195,7 @@ function updateSlashSidebarPreview() {
 }
 
 function submitSlashSidebarForm() {
-  const select = document.getElementById('slash-sidebar-select');
+  const select = document.getElementById(SLASH_SIDEBAR_SELECT_ID);
   if (!select || !select.value) return;
   const name = select.value;
   const values = getSlashSidebarFormValues();
@@ -199,7 +204,7 @@ function submitSlashSidebarForm() {
   closeSlashSidebar();
   // Reset form
   select.value = '';
-  const container = document.getElementById('slash-sidebar-params');
+  const container = document.getElementById(SLASH_SIDEBAR_PARAMS_ID);
   if (container) container.innerHTML = '';
   const preview = document.getElementById('slash-sidebar-preview');
   if (preview) preview.textContent = '';

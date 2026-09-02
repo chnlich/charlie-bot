@@ -24,6 +24,17 @@ function getUploadedFilesForPayload() {
   return uploadedFiles.filter((file) => file.status === 'uploaded');
 }
 
+// The chat-message and slash-execute send paths both post entries validated
+// against UploadedFileRef in src/core/models.py; one projection keeps the two
+// wire payloads identical.
+function toPayloadFiles(files) {
+  return files.map((file) => ({
+    filename: file.filename,
+    path: file.path,
+    size: file.size,
+  }));
+}
+
 function clearSentUploadedFiles(ids) {
   if (!Array.isArray(ids) || !ids.length) return;
   const sentIds = new Set(ids);

@@ -69,11 +69,7 @@ async function executeSlashCommand(name, args, options = {}) {
   if (DRAFT_KEY) localStorage.removeItem(DRAFT_KEY);
   const displayText = options.displayText || (args ? `/${name} ${args}` : `/${name}`);
   const uploadedFiles = Array.isArray(options.uploadedFiles) ? options.uploadedFiles : getUploadedFilesForPayload();
-  const payloadFiles = uploadedFiles.map((file) => ({
-    filename: file.filename,
-    path: file.path,
-    size: file.size,
-  }));
+  const payloadFiles = toPayloadFiles(uploadedFiles);
   pendingUserMsg = true;
   try {
     const res = await fetch(`/api/slash/${SESSION_ID}/execute`, {

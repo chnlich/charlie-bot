@@ -68,7 +68,7 @@ function fixNestedFences(md) {
 // Marked.js renderer: highlight.js syntax highlighting + code block headers
 // ---------------------------------------------------------------------------
 (function() {
-  // This file loads before chat/shared.js (index.html:503 vs :512), so escapeHtml
+  // This file loads before chat/shared.js (index.html:472 vs :482), so escapeHtml
   // is unavailable here. Local text/attribute escapers keep message-text tags and
   // attributes from ever becoming DOM nodes (invariant: rendered chat message body
   // contains no tag and no attribute that originated from the message text itself).

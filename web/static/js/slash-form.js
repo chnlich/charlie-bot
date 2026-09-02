@@ -6,10 +6,12 @@ let slashSidebarCommands = [];
 
 // One class chain for the param form's select, textarea, and plain inputs keeps
 // the three control variants painting alike; the textarea site appends
-// ' resize-y' on top. The chain stays a full literal: Tailwind's content scan
-// only generates classes it sees as complete tokens.
+// ' resize-y' on top. Split only at token boundaries: Tailwind's content scan
+// only generates classes it sees as complete tokens, so no literal may break
+// inside a class name.
 const SLASH_FORM_INPUT_CLASS =
-  'w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500';
+  'w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200'
+  + ' focus:outline-none focus:border-blue-500';
 
 function toggleSlashSidebar() {
   slashSidebarVisible = !slashSidebarVisible;

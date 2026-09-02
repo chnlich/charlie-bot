@@ -320,9 +320,15 @@ function insertHtmlArtifactCard(prose, card, ordinal) {
 var MISSING_FILE_MARKER_TEXT = '\u26A0 missing';
 var MISSING_FILE_MARKER_TITLE = 'The file server found nothing at this path';
 // A run of text naming a path under either prefix, with or without a scheme and host in front.
-// The class ends the run at whitespace and at the closers markdown and prose put after a URL.
+// The class ends the run at whitespace, at the closers markdown and prose put after a URL, and
+// at everything outside printable ASCII: a chat URL is a maximal printable-ASCII run
+// [\x21-\x7E]+, so a glued CJK character, full-width mark or emoji is prose, not the tail of
+// the link. \x7F-\uFFFF also covers astral characters, whose UTF-16 surrogate code units fall
+// inside that range. markdown-renderer.js's tokenizer.url override cuts bare URLs at the same
+// boundary — two copies of one definition, kept in sync by the comments in both files; the
+// modules load independently, so sharing a constant would couple their load order.
 var FILE_SERVER_LINK_SOURCE =
-  '(?:https?:\\/\\/[^\\s]+?)?' + FILE_SERVER_PREFIX_GROUP + '\\/[^\\s\\)\\]"\'`<>]+';
+  '(?:https?:\\/\\/[^\\s]+?)?' + FILE_SERVER_PREFIX_GROUP + '\\/[^\\s\\)\\]"\'`<>\\x7F-\\uFFFF]+';
 var LINK_TRAILING_PUNCTUATION_RE = /[.,;:!?*]+$/;
 
 function buildMissingMarker() {

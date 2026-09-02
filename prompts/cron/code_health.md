@@ -30,8 +30,7 @@ annotation hygiene), or a stale or duplicated test. Choose from what the working
 never from where recent cleanups landed. For a deduplicated literal or cloned fragment, the shared
 definition may live outside the file you started from when that module is the natural owner,
 provided the started-from copy is the anchor being merged into it and the diff stays focused on
-that one unification. Wholesale restructures (moving whole files, split-mode moves) are out of
-scope for this cron; they travel as their own programs.
+that one unification.
 
 Skip every topic named in the rejected-topic ledger, and report which ones you skipped. A rejected
 topic is a closed `code-health/*` pull request carrying a comment that starts

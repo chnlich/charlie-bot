@@ -17,7 +17,17 @@ Two accounting traps this handles:
 
 Cache — one JSON document of per-file Claude and Codex contributions (the gigabyte-scale and
 hundred-megabyte-scale sources) plus the opencode db's whole contribution, so a page load
-re-parses only the sources that changed.
+re-parses only the sources that changed. On top of that document, an in-process aggregate
+memo holds the merged Claude+Codex partial of the last collect, keyed on the walk signature:
+the home pairs, every log file's (path, mtime_ns, size), and the walk's own error strings.
+A hit serves the sums, spans and notes without replaying a single cached record; misses to
+the full path follow the per-file cache's own visibility contract: appends, deletes, renames
+and directory-permission changes all move the signature, while a file-level chmod that
+leaves (mtime_ns, size) untouched keeps serving the cached parse. The memo is order-safe
+under an unstable walk order: cross-file dedupe arbitrates verbatim replays, which carry
+identical token values, so first-wins cannot move a sum. The opencode db stays outside the
+memo: its WAL sidecar moves under plain serve traffic, so its entry always round-trips the
+persisted document.
 Vocabulary:
   signature   ``[mtime_ns, size]`` for a log file; a file re-scans whole whenever either value
               moves. The opencode db signs as ``[mtime_ns, size, wal_sig]`` with ``wal_sig`` the
@@ -46,6 +56,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 from src.core.config import get_config
 from src.core.json_utils import write_json_atomically
@@ -114,6 +125,34 @@ class _Tally:
       span = self.span[(source, model)]
       span[0] = ts if span[0] is None or ts < span[0] else span[0]
       span[1] = ts if span[1] is None or ts > span[1] else span[1]
+
+
+class _SourceAggregate(NamedTuple):
+  """The merged Claude+Codex partial of one collect; see the module docstring for the memo."""
+
+  by_model: dict
+  by_account: dict
+  span: dict
+  notes: list
+
+  @classmethod
+  def snapshot(cls, t: _Tally, notes_from: int) -> _SourceAggregate:
+    """Copy the source partial out of the accumulator; notes before ``notes_from`` are not its."""
+    return cls(
+        by_model={k: dict(v) for k, v in t.by_model.items()},
+        by_account={k: dict(v) for k, v in t.by_account.items()},
+        span={k: tuple(v) for k, v in t.span.items()},
+        notes=list(t.notes[notes_from:]),
+    )
+
+  def apply(self, t: _Tally) -> None:
+    """Merge a snapshot into a fresh accumulator, copying so later adds never alias the memo."""
+    for tgt, src in ((t.by_model, self.by_model), (t.by_account, self.by_account)):
+      for key, val in src.items():
+        tgt[key] = dict(val)
+    for key, val in self.span.items():
+      t.span[key] = list(val)
+    t.notes.extend(self.notes)
 
 
 def discover_homes(claude_default: Path, codex_default: Path) -> tuple[dict[str, Path], dict[str, Path]]:
@@ -233,6 +272,38 @@ def _iter_jsonl(root: Path, t: _Tally, source: str, label: str):
     for name in filenames:
       if name.endswith(".jsonl"):
         yield Path(dirpath) / name
+
+
+def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path]) -> tuple:
+  """Walk signature of the Claude+Codex corpus: home pairs, every jsonl's stat pair, and the
+  walk's own error strings. Any corpus or permission move changes the tuple."""
+  sig = []
+  for source, homes, sub in (("Claude Code", claude_homes, "projects"),
+                             ("Codex", codex_homes, "sessions")):
+    probe = _Tally()
+    entries = []
+    for label, home in homes.items():
+      per_home = []
+      for path in _iter_jsonl(home / sub, probe, source, label):
+        try:
+          st = path.stat()
+          per_home.append((str(path), st.st_mtime_ns, st.st_size))
+        except OSError as exc:
+          per_home.append((str(path), None, repr(exc)))
+      entries.append((label, tuple(sorted(per_home))))
+    home_pairs = tuple(sorted((label, str(path)) for label, path in homes.items()))
+    sig.append((source, home_pairs, tuple(entries), tuple(probe.notes)))
+  return tuple(sig)
+
+
+# The aggregate memo pair (walk signature, partial); see the module docstring.
+_aggregate_memo: tuple[tuple, _SourceAggregate] | None = None
+
+
+def _reset_aggregate_memo() -> None:
+  """Drop the aggregate memo (test isolation)."""
+  global _aggregate_memo
+  _aggregate_memo = None
 
 
 def _claude_file_contribution(path: Path) -> tuple[dict, int]:
@@ -383,28 +454,37 @@ def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -
         f"{len(check)} root sessions; /compact resets a session total, so the per-request sum leads)")
 
 
-def _opencode_record(raw: str) -> list | None:
-  """One message row's tally record, or None when the row contributes nothing."""
-  try:
-    d = json.loads(raw)
-  except ValueError:
+# The scan projects each matching row's tally fields inside SQLite: one json_extract parse
+# per row there beats fetching every matching row's whole data blob and parsing in Python
+# (~0.5 s vs ~0.8 s over this host's 27.9k-row message table). json_valid keeps the old
+# json.loads failure mode: the LIKE prefilter can match a malformed row, and skipping it
+# must not error the query. Non-object tokens project NULLs, dropped by the filter below.
+_OPENCODE_SCAN_SQL = """
+select json_extract(data, '$.modelID'), json_extract(data, '$.providerID'),
+       json_extract(data, '$.time.created'),
+       json_extract(data, '$.tokens.input'), json_extract(data, '$.tokens.output'),
+       json_extract(data, '$.tokens.total'),
+       json_extract(data, '$.tokens.cache.write'), json_extract(data, '$.tokens.cache.read'),
+       length(data)
+from message
+where data like '%"tokens"%'
+  and json_valid(data)
+  and json_extract(data, '$.role') = 'assistant'
+"""
+
+
+def _opencode_row(row: tuple) -> list | None:
+  """Tally record for one projected message row, or None when it contributes nothing."""
+  model, provider, created, in_fresh, output, total, cache_write, cache_read = row
+  if not (in_fresh or output or total):
     return None
-  tok = d.get("tokens")
-  if not isinstance(tok, dict) or d.get("role") != "assistant":
-    return None
-  if not any(tok.get(key) for key in ("input", "output", "total")):
-    return None
-  created = (d.get("time") or {}).get("created")
+  model = model or "unknown"
+  if model.startswith("/"):
+    model = f"{Path(model).name} ({provider})"
   ts = dt.datetime.fromtimestamp(created / 1000, dt.UTC).isoformat() if isinstance(
       created, (int, float)) else None
-  model = d.get("modelID") or "unknown"
-  if model.startswith("/"):
-    model = f"{Path(model).name} ({d.get('providerID')})"
-  cache = tok.get("cache") or {}
-  return [
-      model, d.get("providerID") or "unknown", ts,
-      tok.get("input", 0) or 0, cache.get("write", 0) or 0,
-      cache.get("read", 0) or 0, tok.get("output", 0) or 0]
+  return [model, provider or "unknown", ts,
+          in_fresh or 0, cache_write or 0, cache_read or 0, output or 0]
 
 
 def _opencode_db_signature(db: Path) -> list | None:
@@ -444,9 +524,9 @@ def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> None:
     records: list[list] = []
     nbytes = 0
     try:
-      for (raw,) in con.execute("select data from message where data like '%\"tokens\"%'"):
-        nbytes += len(raw)
-        rec = _opencode_record(raw)
+      for row in con.execute(_OPENCODE_SCAN_SQL):
+        nbytes += row[8]
+        rec = _opencode_row(row[:8])
         if rec is not None:
           records.append(rec)
     finally:
@@ -510,11 +590,22 @@ def collect_token_usage(
   if opencode_db is None:
     opencode_db = DEFAULT_OPENCODE_DB
 
+  global _aggregate_memo
+  signature = _corpus_signature(claude_homes, codex_homes)
   cache = TallyCache.load(cache_path, t.notes) if cache_path is not None else None
-  collect_claude(t, claude_homes, cache)
-  collect_codex(t, codex_homes, cache)
+  memo = _aggregate_memo
+  fresh_sources = memo is None or memo[0] != signature
+  if fresh_sources:
+    notes_from = len(t.notes)
+    collect_claude(t, claude_homes, cache)
+    collect_codex(t, codex_homes, cache)
+    _aggregate_memo = (signature, _SourceAggregate.snapshot(t, notes_from))
+  else:
+    memo[1].apply(t)
   collect_opencode(t, opencode_db, cache)
-  if cache is not None:
+  # Save only on the source-walk path: its lookups refreshed the next document. A memo hit's
+  # only fresh entry is the opencode db's, whose WAL sig the next load recomputes anyway.
+  if cache is not None and fresh_sources:
     try:
       cache.save(cache_path)
     except OSError as exc:

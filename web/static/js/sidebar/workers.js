@@ -41,6 +41,30 @@ function cancelButtonHtml(jsCall, title, domId) {
     + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
 }
 
+// The card class chain is written by all three paint/update sites; the border
+// segment comes from triggerStatusChrome(status).
+function triggerCardClass(borderClass) {
+  return 'bg-slate-800 rounded-xl border ' + borderClass + ' overflow-hidden';
+}
+
+function triggerCardBodyHtml(triggerId, status, message, fireAt, sessionId) {
+  const chrome = triggerStatusChrome(status);
+  const strikeClass = status === 'cancelled' ? ' line-through text-slate-500' : '';
+  const cancelBtn = status === 'pending'
+    ? cancelButtonHtml("cancelTrigger('" + triggerId + "', '" + sessionId + "')", 'Cancel trigger', '')
+    : '';
+  return '<div class="flex items-center gap-3 px-4 py-3">'
+    + '<svg id="trigger-dot-' + triggerId + '" class="w-4 h-4 flex-shrink-0 ' + chrome.icon + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+    + Sidebar.CLOCK_SVG_BODY
+    + '</svg>'
+    + '<div class="flex-1 min-w-0">'
+    + '<p class="text-sm truncate' + strikeClass + '">' + escapeHtml(message || '') + '</p>'
+    + '<p id="trigger-status-' + triggerId + '" class="text-xs text-slate-500" data-fire-at="' + escapeHtml(fireAt || '') + '">' + formatTriggerTimeLabel(status, fireAt) + '</p>'
+    + '</div>'
+    + cancelBtn
+    + '</div>';
+}
+
 function renderWorkersTab(threads, sessionId, triggers) {
   const container = document.getElementById('tab-workers');
   if (!container) return;
@@ -86,22 +110,9 @@ function renderWorkersTab(threads, sessionId, triggers) {
 
   const triggerCards = triggers.map(tr => {
     const chrome = triggerStatusChrome(tr.status);
-    const strikeClass = tr.status === 'cancelled' ? ' line-through text-slate-500' : '';
-    const timeLabel = formatTriggerTimeLabel(tr.status, tr.fire_at);
-    const cancelBtn = tr.status === 'pending'
-      ? cancelButtonHtml("cancelTrigger('" + tr.id + "', '" + sessionId + "')", 'Cancel trigger', '')
-      : '';
-    return '<div id="trigger-card-' + tr.id + '" class="bg-slate-800 rounded-xl border ' + chrome.border + ' overflow-hidden">'
-      + '<div class="flex items-center gap-3 px-4 py-3">'
-      + '<svg id="trigger-dot-' + tr.id + '" class="w-4 h-4 flex-shrink-0 ' + chrome.icon + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-      + Sidebar.CLOCK_SVG_BODY
-      + '</svg>'
-      + '<div class="flex-1 min-w-0">'
-      + '<p class="text-sm truncate' + strikeClass + '">' + escapeHtml(tr.message || '') + '</p>'
-      + '<p id="trigger-status-' + tr.id + '" class="text-xs text-slate-500" data-fire-at="' + escapeHtml(tr.fire_at || '') + '">' + timeLabel + '</p>'
-      + '</div>'
-      + cancelBtn
-      + '</div></div>';
+    return '<div id="trigger-card-' + tr.id + '" class="' + triggerCardClass(chrome.border) + '">'
+      + triggerCardBodyHtml(tr.id, tr.status, tr.message, tr.fire_at, sessionId)
+      + '</div>';
   });
 
   container.innerHTML = threadCards.join('') + triggerCards.join('');
@@ -292,26 +303,11 @@ function addTriggerCard(triggerId, message, fireAt, createdAt, status) {
   if (document.getElementById('trigger-dot-' + triggerId)) return;
 
   const chrome = triggerStatusChrome(status);
-  const strikeClass = status === 'cancelled' ? 'line-through text-slate-500' : '';
-  const timeLabel = formatTriggerTimeLabel(status, fireAt);
-
-  const cancelBtn = status === 'pending'
-    ? cancelButtonHtml("cancelTrigger('" + triggerId + "', '" + SESSION_ID + "')", 'Cancel trigger', '')
-    : '';
 
   const card = document.createElement('div');
-  card.className = 'bg-slate-800 rounded-xl border ' + chrome.border + ' overflow-hidden';
+  card.className = triggerCardClass(chrome.border);
   card.id = 'trigger-card-' + triggerId;
-  card.innerHTML = '<div class="flex items-center gap-3 px-4 py-3">'
-    + '<svg id="trigger-dot-' + triggerId + '" class="w-4 h-4 flex-shrink-0 ' + chrome.icon + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-    + Sidebar.CLOCK_SVG_BODY
-    + '</svg>'
-    + '<div class="flex-1 min-w-0">'
-    + '<p class="text-sm truncate ' + strikeClass + '">' + escapeHtml(message) + '</p>'
-    + '<p id="trigger-status-' + triggerId + '" class="text-xs text-slate-500" data-fire-at="' + escapeHtml(fireAt || '') + '">' + timeLabel + '</p>'
-    + '</div>'
-    + cancelBtn
-    + '</div>';
+  card.innerHTML = triggerCardBodyHtml(triggerId, status, message, fireAt, SESSION_ID);
   container.appendChild(card);
   updateWorkersTabBadge();
 }
@@ -329,7 +325,7 @@ function updateTriggerStatus(triggerId, status) {
   if (icon.getAttribute('class') !== iconClassName) icon.setAttribute('class', iconClassName);
 
   if (card) {
-    card.className = 'bg-slate-800 rounded-xl border overflow-hidden ' + chrome.border;
+    card.className = triggerCardClass(chrome.border);
   }
 
   if (text) {

@@ -40,6 +40,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M27 plans registry tolerant read, steady state | M27 collector below | seconds per `read_plans_tolerant` call, worst on-disk plans corpus | median < 0.005 s | — (introduced with its first history row) |
 | M28 ndjson tail+count scan, steady state | M28 collector below | seconds per `parse_ndjson_tail` call, worst on-disk live chat file | median < 0.030 s | — (introduced with its first history row) |
 | M29 session-metadata listing preamble, steady state | M29 collector below | seconds per `_load_session_metas(ACTIVE)` call, live session-dir corpus | median < 0.005 s | — (introduced with its first history row) |
+| M30 live-half chat-event range rescan, steady state | M30 collector below | seconds per 8-page backwards scroll over the biggest archived session's live file | median < 0.005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1355,6 +1356,91 @@ asyncio.run(main())
 EOF
 ```
 
+M30 — live-half chat-event range rescan, steady state. Archived sessions
+(``archive_offset > 0``) paginate backwards through ``load_chat_events_range``,
+whose live half re-read the live file from byte 0 on every page click (and on
+every cold recap extract touching the live tail) while the archive half already
+served repeats from the M23 memo. The fixed reader memoizes the live file's
+per-physical-line parsed events on (mtime_ns, size) for archived sessions —
+the range index domain is physical lines (blank and malformed lines consume an
+index, mirroring ``parse_ndjson_range``) — so a repeat scroll over an unchanged
+live file pays one stat per page and zero corpus bytes; an append re-parses
+once. The memo is gated to archived sessions: unarchived ones paginate through
+the M26 message projection, so their range callers never reuse a moving live
+corpus. The cost is invisible to HTTP probes of archived sessions (deep page
+turns only), so the collector copies the archived session whose live
+``chat_events.jsonl`` carries the most bytes into a scratch
+``CHARLIEBOT_HOME`` under /tmp (metadata.json and data/ only; live home read
+once for the copy, never written), warms the metadata cache as the live
+server's polls do, and times 8-page backwards scrolls of 200 events over the
+live half — one cold pass, as at first scroll after a server start with an
+empty memo, then five timed repeats. Evidence while the live server runs older
+code points the same collector at the branch checkout (``CHECKOUT`` at the
+worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, json, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+# Worst live-half range corpus: the archived session whose LIVE chat file
+# carries the most bytes; its live-half range reads re-parse per page click.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    meta_p = d / "metadata.json"
+    if not meta_p.is_file():
+        continue
+    try:
+        off = json.loads(meta_p.read_text()).get("archive_offset", 0)
+    except Exception:
+        continue
+    live = d / "data" / "chat_events.jsonl"
+    if off and off > 0 and live.is_file():
+        n = live.stat().st_size
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+print(f"worst live-half range corpus: session {SID}, live {best_n / 1e6:.1f} MB")
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
+# session's metadata.json and data/; live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m30-live-half-home-", dir="/tmp"))
+dst = home / "sessions" / SID
+dst.mkdir(parents=True)
+shutil.copy2(best / "metadata.json", dst / "metadata.json")
+shutil.copytree(best / "data", dst / "data")
+
+cfg = CharlieBotConfig(charliebot_home=home)
+mgr = SessionManager(cfg)
+asyncio.run(mgr.get_session(SID))  # warm the metadata cache, as the live server's polls do
+offset = mgr._chat_events.read_archive_offset_sync(SID)
+total = mgr.get_chat_event_count_sync(SID)
+
+def scroll():
+    before = total
+    for _ in range(8):
+        if before <= offset:
+            break
+        mgr.load_chat_events_range(SID, max(offset, before - 200), before)
+        before -= 200
+
+scroll()  # cold pass, as at first scroll after a server start with an empty memo; not timed
+times = []
+for _ in range(5):
+    t0 = time.perf_counter()
+    scroll()
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"archive_offset {offset}, total {total}; 8-page live-half scroll steady-state "
+      f"median {times[2]:.4f} s, max {times[-1]:.4f} s")
+shutil.rmtree(home)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -1392,3 +1478,4 @@ EOF
 | 2026-09-02 | #588 | M29 steady-state listing median 9.59 ms → 2.03 ms, max 11.64 ms → 2.30 ms (collector verbatim, 34 active sessions / 976 session dirs, live corpus read-only, main checkout before vs branch after back-to-back at load 0.84/0.90/0.87; full listing byte-identical) | os.scandir DirEntry names with d_type is_dir replacing Path.iterdir()+per-entry stat in the _load_session_metas preamble; M29 definition and healthy range introduced with this PR |
 | 2026-09-02 | #592 | M7 scratch-server warm median 0.647 s → 0.326 s, max 0.667 s → 0.344 s, cold 20.9 s → 9.4 s at load 1.3-1.9; collector-level paired medians: quiet-db 0.62 s → 0.37 s, rescan-db 1.50-1.67 s → 1.02 s; live-before median 1.721 s measured against pre-#510/#533 live code (flagged); cacheless tally rows+notes digests pairwise identical | in-process aggregate memo serves the merged Claude/Codex partial keyed on the walk signature, and the opencode db scan projects its eight tally fields through json_extract; document save moves to the miss path |
 | 2026-09-02 | #597 | M19 median 0.1072 s → 0.0247 s, max 0.1136 s → 0.0257 s (collector verbatim, main checkout before vs final branch head after back-to-back at load 0.80/0.99/1.07; framed line stream identical, 32 lines; LF-dense 1.4 MB / 64 KB-chunk production shape 0.0922 s → 0.0840 s) | chunk terminator search through cached-CR str.find passes instead of the alternation regex (re engine ~0.087 s per 16 MB measured vs memchr speed), piecewise fragment accumulation instead of concatenating the accumulated remainder per chunk |
+| 2026-09-02 | #600 | M30 8-page live-half scroll steady-state median 0.0453 s → 0.0002 s, max 0.0500 s → 0.0002 s (scratch CHARLIEBOT_HOME A/B, main checkout before vs final branch head after back-to-back at load 0.82/0.59/0.74; 6.3 MB live file of archived session 3b91d606, archive_offset 1136, total 3760 events; collector verbatim on the branch 0.0004 s median) | per-physical-line parsed-events memo on the live file keyed on (mtime_ns, size), 4-file LRU, gated to archive_offset > 0 sessions (unarchived ones paginate via the M26 projection), mirroring the M23 archive memo; M30 definition and healthy range introduced with this PR |

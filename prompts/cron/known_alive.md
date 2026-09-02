@@ -3,7 +3,8 @@
 `prompts/cron/code_health.md` Step 4 points here. These symbols look dead to static tools
 but are reached by string reference or kept deliberately. Never delete them on static-tool
 evidence alone. Append an entry whenever a code-health run confirms a symbol is reached by
-string, and land that edit in the same PR.
+string, and land that edit in the same PR. Entries anchor each symbol by name and file only;
+code_health.md Step 1 bans coordinate citations, so no line numbers appear here.
 
 Known-alive symbols:
 - `kill_tmux_session` — documented `# noqa` re-export, reached by string reference.
@@ -162,27 +163,26 @@ Known-alive symbols:
   stub-parameter entry above.
 - `dir_path` (ten `create_provider(provider, label, dir_path)` stubs in
   `tests/test_ext_usage.py`, installed for `ext_usage_mod._create_provider` via
-  `monkeypatch.setattr`) — the real `_create_provider` (src/api/ext_usage.py:343) is called
-  with three positional arguments (src/api/ext_usage.py:333), so the stubs' replaced
+  `monkeypatch.setattr`) — the real `_create_provider` (src/api/ext_usage.py) is called
+  with three positional arguments, so the stubs' replaced
   signature fixes the arity and `dir_path` must stay to receive it; deleting the parameter
   makes each stub raise TypeError when the poll loop calls it. Vulture flags it at 100%
-  confidence as an unused variable at all ten sites (`tests/test_ext_usage.py` lines
-  761–1260). Same class as the `chrome`/`art` stub-parameter entry above.
-- `rollout_paths` (`tests/test_ext_usage.py:339`, parameter of the `_broken_compute`
+  confidence as an unused variable at all ten sites in `tests/test_ext_usage.py`. Same class as the `chrome`/`art` stub-parameter entry above.
+- `rollout_paths` (`tests/test_ext_usage.py`, parameter of the `_broken_compute`
   stub installed for `CodexUsageProvider._compute_spend` via `monkeypatch.setattr`) —
-  the real `_compute_spend` (src/api/ext_usage.py:266) is called with one positional
-  argument (src/api/ext_usage.py:235, through `asyncio.to_thread`), so the stub's
+  the real `_compute_spend` (src/api/ext_usage.py) is called with one positional
+  argument (through `asyncio.to_thread`), so the stub's
   replaced signature fixes the arity and `rollout_paths` must stay to receive it;
   deleting the parameter makes the stub raise TypeError when `fetch()` calls it.
   Vulture flags it at 100% confidence as an unused variable. Same class as the
   `dir_path` arity-fixed entry above.
 - `verify_report`, `on_spawned` (`tests/conftest.py`, parameters of the
   `fake_notify_completion` and `CapturingWorker.__init__` stubs), `entry_id`
-  (`tests/core/test_artifact_check.py:751`, the `get_backend_option` lambda), `host_boot`
-  (`tests/test_master_restart_transport_unit.py:448`, the `is_run_alive` lambda),
+  (`tests/core/test_artifact_check.py`, the `get_backend_option` lambda), `host_boot`
+  (`tests/test_master_restart_transport_unit.py`, the `is_run_alive` lambda),
   `scheduled`, `include_running_status`, `include_pending_trigger_status`
-  (`tests/test_pages.py:30-32` and `:225-227`, the two `list_sessions` overrides), and
-  `exclude_thread_id` (`tests/test_reviewer_model_preference.py:339`, the `fake_spawn_review`
+  (`tests/test_pages.py`, the two `list_sessions` overrides), and
+  `exclude_thread_id` (`tests/test_reviewer_model_preference.py`, the `fake_spawn_review`
   parameter) — stub parameters whose keyword name or arity is fixed by the production call
   each stub replaces. Finalize passes `verify_report=` by keyword
   (`_run_finalize_effects` in src/core/spawner_finalize.py). The production `Worker`
@@ -196,7 +196,7 @@ Known-alive symbols:
   confidence as an unused variable. Same class as the `art`/`t_mgr`/`dir_path`
   stub-parameter entries above.
 - `check` (`tests/conftest.py`, keyword parameter of the `fake_run_tmux` stub) and `format`
-  (`tests/test_cli_restart_contract.py:437`, the `log_message` override's second parameter)
+  (`tests/test_cli_restart_contract.py`, the `log_message` override's second parameter)
   — signature-mirror parameters kept deliberately, not fixed by any call: no caller passes
   `check=` to `pty_common._run_tmux`, and the stdlib invokes `log_message(format, *args)`
   positionally into the override's trailing `*args`, so deleting either parameter stays
@@ -204,42 +204,42 @@ Known-alive symbols:
   `fake_run_tmux` factory docstring states that drop-in contract, and `format` mirrors the
   stdlib `BaseHTTPRequestHandler.log_message(self, format, *args)` signature). Vulture flags
   each at 100% confidence as an unused variable.
-- `bundle` (`tests/test_transcriber_sampling.py:83` and `:105`, first parameter of the two
+- `bundle` (`tests/test_transcriber_sampling.py`, first parameter of the two
   `fake_decode` stubs installed for `transcriber._decode_samples` via `monkeypatch.setattr`)
-  — the real `_decode_samples` (src/agents/transcriber.py:274) is called with two positional
+  — the real `_decode_samples` (src/agents/transcriber.py) is called with two positional
   arguments from `_drain_closed_segments` and `_decode_live_segment_if_due`
-  (src/agents/transcriber.py:359 and :379), so `bundle` must stay to receive `self._bundle`;
+  (the two decode call sites in the same file), so `bundle` must stay to receive `self._bundle`;
   deleting the parameter makes the stub raise TypeError on the first decode. Vulture flags
   it at 100% confidence as an unused variable at both sites. Same class as the `art`/`t_mgr`
   stub-parameter entries above.
-- `interrupt_reason` (`tests/test_worktree_quarantine.py:685`, keyword parameter of the
+- `interrupt_reason` (`tests/test_worktree_quarantine.py`, keyword parameter of the
   `fake_resume_worker` stub installed for `spawner.resume_worker` via `monkeypatch.setattr`)
-  — all three production call sites in `src/core/init_worker_recovery.py` (:301, :338, :350)
+  — all three production call sites in `src/core/init_worker_recovery.py`
   pass `interrupt_reason=` by keyword, and the stalled-run test asserts the fake ran
   (`resume_calls == [True]`), so deleting the parameter makes the stub raise TypeError on
   the unexpected keyword. Vulture flags it at 100% confidence as an unused variable. Same
   class as the `verify_report` keyword-fixed stub-parameter entry above.
-- `cls` (`src/core/config.py:317`, first parameter of `migrate_and_expand`, the
+- `cls` (`src/core/config.py`, first parameter of `migrate_and_expand`, the
   `@model_validator(mode="before")` `@classmethod` on `CharlieBotConfig`) — the pydantic
   classmethod-validator protocol passes the class as the first positional argument, so the
   arity is framework-fixed even though the body reads only `values`; deleting `cls` turns
   every `CharlieBotConfig` construction into a TypeError. Vulture flags it at 100%
   confidence as an unused variable. Same framework-fixed class as the `model_config` entry
   above.
-- `sig` (`tests/test_worktree_quarantine.py:597`, `:637`, `:681`, second parameter of the
+- `sig` (`tests/test_worktree_quarantine.py`, second parameter of the
   three identical `lambda pid, sig: killed.append(pid)` stubs installed for
   `worker_recovery_module.kill_process_group` via `monkeypatch.setattr`) — signature-mirror
   parameter kept deliberately: all three tests assert the recorded list stays empty (no
   tested recovery path reaches `kill_process_group`), so deleting `sig` stays green, but it
   keeps the lambda a drop-in mirror of `kill_process_group(pid, sig=signal.SIGTERM)`
-  (src/core/process.py:38), which `src/core/init_worker_recovery.py:358` already calls with
+  (src/core/process.py), which `src/core/init_worker_recovery.py` already calls with
   two positional arguments. Vulture flags each site at 100% confidence as an unused
   variable. Same class as the `check`/`format` signature-mirror entry above.
-- `check` (`tests/test_terminal_backend.py:196`, keyword parameter of the inline
+- `check` (`tests/test_terminal_backend.py`, keyword parameter of the inline
   `fake_run_tmux` stub installed for `terminal._run_tmux` via `monkeypatch.setattr`) —
   second site of the signature-mirror class: the stub mirrors
-  `pty_common._run_tmux(*args, check: bool = False)` (src/agents/backends/pty_common.py:68,
-  imported at src/agents/backends/terminal.py:17), the reuse test's only stub call is
+  `pty_common._run_tmux(*args, check: bool = False)` (src/agents/backends/pty_common.py,
+  imported in src/agents/backends/terminal.py), the reuse test's only stub call is
   `("has-session", "-t", "charliebot-terminal")` with no `check=`, so deleting the parameter
   stays green; the mirror keeps the stub a faithful drop-in. Vulture flags it at 100%
   confidence as an unused variable.
@@ -248,7 +248,7 @@ Known-alive symbols:
   `google_docs_client_id`, `google_docs_client_secret`, `google_docs_default_folder_id`,
   `google_docs_refresh_token`, `google_refresh_token`, `linear_api_key`, `slack_user_token`,
   `twitter_api_key`, `twitter_api_secret`, `twitter_access_token`,
-  `twitter_access_token_secret`, `public_base_url` (`src/core/config.py:294-313`,
+  `twitter_access_token_secret`, `public_base_url` (`src/core/config.py`,
   `CharlieBotConfig` fields) — yaml keys hosts carry in `config.yaml` / `config.d/*.yaml`,
   kept deliberately: consumers read the raw yaml outside this repo. Ten of the twenty are
   quoted by name in the skill files that read them (`skills/feishu/SKILL.md`,

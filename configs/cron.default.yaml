@@ -3,8 +3,19 @@
 # becomes the file name, and the host file body carries no `name` key), and
 # never touches a file that is already there. Host-specific fields (backend,
 # schedule) belong in the host files, not here.
+#
+# The prompt source is exactly one of `prompt_file`, `steps`, `handler`, or
+# `loop`. `steps` is an ordered worker list: each step declares `name`,
+# `prompt_file`, and an optional `backend` (a step without one uses the
+# task-level `backend`), starts after the previous step exits 0 with that
+# step's result, and the session master is woken once at the end with one
+# summary block per step.
 scheduled_tasks:
   - name: memory-curator
     cron: "27 6 * * *"
     timezone: local
-    prompt_file: prompts/cron/memory_curator/memory_curator.md
+    steps:
+      - name: selector
+        prompt_file: prompts/cron/memory_curator/memory_selector.md
+      - name: reviewer
+        prompt_file: prompts/cron/memory_curator/memory_reviewer.md

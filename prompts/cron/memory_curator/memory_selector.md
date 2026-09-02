@@ -48,9 +48,12 @@ default action is a merge, not a new entry:
 Run `charliebot memory lint`; it must pass before you present. If lint reports violations, fix
 the working tree until it is clean.
 
-Step 4: report to the user.
-Render the report from `prompts/memory_report_template.html`. Do not commit. Wait for explicit
-user approval.
+Step 4: deliver the handoff sheet.
+The final message is the handoff sheet: one line per staging file with its disposition
+(`revise <entry path>`, `admit <entry path>`, or `reject: <one-sentence reason>`) followed by
+that entry's three proof lines. The selector renders no report.
+
+## After approval (session master)
 
 Step 5: land only after approval.
 Only after the user explicitly approves: commit the working tree with the prefixed messages

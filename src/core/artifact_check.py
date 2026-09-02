@@ -15,6 +15,9 @@ order) and returns the attempts, the answering backend, and its verbatim answer.
 The goal-length and page-height measurements (with their budgets and the headless-chrome
 probe page) live here as the goal-budget / page-height assertions; the plan registration
 gate (src/core/plans.py) enforces exactly the set ``run_assertions("plan", ...)`` returns.
+
+``ordinal-named`` is the lexical check for the master prompt's Naming rule: a label pointing
+off the page carries a content name at first use.
 """
 
 import asyncio
@@ -417,6 +420,216 @@ def _check_page_height(ctx: _Context) -> list[AssertionOutcome]:
   return [_ok(name, f"{height} px (budget {PAGE_HEIGHT_BUDGET})")]
 
 
+# ---------------------------------------------------------------------------
+# ordinal-named — lexical check for the Naming rule, ported from the prototype
+# ---------------------------------------------------------------------------
+
+# An ordinal label is a bare numbered reference (plan 3, 第 2 节, Trade-off 5, 4.1). The Chinese
+# label words are the language of the checked pages and stay as the prototype wrote them.
+ORD = re.compile(
+    r"(?<![A-Za-z0-9_.])(?:(?:Trade-offs?|sections?|Section|fork|Fork|round|Round|divergence|Divergence|question|Question|item|Item|plan|Plan)(?:\s+\(|\s*)(\d+)\)?(?!\w)"
+    r"|第\s*([0-9一二三四五六七八九十]+)\s*(?:节|章|题|轮|条|项|问)"
+    r"|分歧\s*([0-9一二三四五六七八九十]+)"
+    r"|(?:(?<=§)|(?<=section )|(?<=Section ))\s*([1-9])\.(\d)(?![\d.%])|(?<![\d.])([1-9])\.(\d)(?=\s*(?:节|Schema|Design Details|reading note))"
+    r")")
+# Labels that order the page's own sequence (rounds, items, questions) are internal unless a document word qualifies them.
+INTERNAL_UNLESS_QUALIFIED = re.compile(r"round|Round|question|Question|item|Item|轮|条|项|题|问")
+# Document words: a label directly after one of these points off the page.
+QUAL = re.compile(
+    r"(计划|plan|Plan|sitrep|战况|理解页|understanding|任务书|debug|explain|讲解页|上一?份|上一?版|前一?份|那份|另一份|earlier|previous)(?:\s*的|\s*'s|\s*里|\s*中)?\s*$")
+# Content-name forms: a sentence carrying one of these has a name in reach.
+ANCHOR = re.compile(
+    r"(https?://\S+"                                     # URL
+    r"|(?<![\w/])(?:~|\.{1,2})?/[\w.~-]+(?:/[\w.~-]+)*"  # rooted path: /a, ~/a/b, ./a
+    r"|\b[\w.~-]+(?:/[\w.~-]+){2,}"                      # relative path with two or more slashes
+    r"|\b[\w-]+\.(?:html|md|py|json|yaml|txt)\b"         # file name with a document extension
+    r"|\b[A-Z]{2,}-\d+\b"                                # ticket id
+    r")")
+SENT_SPLIT = re.compile(r"(?<=[。!?！？])")  # clauses joined by semicolons share one sentence: a name in one covers the other
+QUOTE = re.compile(r"[「“][^」”]{1,80}[」”]|\"[^\"]{1,80}\"")  # a label inside quotes is a mention, not a use
+GLOSS = re.compile(r"^\s*(?:v\d+\s*)?(?:[（(][^（）()]{2,}[）)]|·\s*\S{2,}|v\d+\s+[\w-]{6,})")
+COLON_GLOSS = re.compile(r"^\s*(?:v\d+\s*)?[:：]\s*\S{2,}")
+TITLE_ANCHOR = re.compile(r"(?:标题|题为|题目|titled?|named|called)\s*[:：]?\s*[「“][^」”]{2,}[」”]")
+
+_CODE_START = "\x01"
+_CODE_END = "\x02"
+
+# Elements whose text the ordinal scan reads, one block per element; span.mtag is a header meta chip,
+# the only block kind whose chip-value rule applies.
+_ORDINAL_BLOCK_TAGS = frozenset(
+    {"p", "li", "td", "th", "h1", "h2", "h3", "h4", "summary", "blockquote", "dt", "dd", "figcaption"})
+# Literal-only subtrees: nothing inside them is scanned, not even nested blocks.
+_ORDINAL_SKIP_TAGS = frozenset({"style", "script", "pre"})
+
+_CJK_DIGITS = {c: i for i, c in enumerate("零一二三四五六七八九", 0)}
+
+
+def _toint(n: "str | None") -> "int | None":
+  """ASCII-digit or Chinese-numeral label number to int; unknown forms read as out of every range."""
+  if n is None:
+    return None
+  if n.isdigit():
+    return int(n)
+  if n == "十":
+    return 10
+  if "十" in n:
+    a, b = n.split("十")
+    return (_CJK_DIGITS.get(a, 1) if a else 1) * 10 + (_CJK_DIGITS.get(b, 0) if b else 0)
+  return _CJK_DIGITS.get(n, 99) if len(n) == 1 else 99
+
+
+def _ordinal_label(kind: str) -> str:
+  """Normalized label key for the named set: whitespace collapsed, ends trimmed."""
+  return re.sub(r"\s+", " ", kind).strip()
+
+
+def _ordinal_blocks(root: _Element):
+  """Yield every ordinal-scan block element in document order: block tags plus span.mtag chips.
+  Nested blocks are yielded after their enclosing block and again on their own."""
+
+  def walk(el: _Element):
+    for child in el.children:
+      if not isinstance(child, _Element):
+        continue
+      if child.tag in _ORDINAL_SKIP_TAGS:
+        continue
+      if child.tag in _ORDINAL_BLOCK_TAGS or (child.tag == "span" and "mtag" in child.classes):
+        yield child
+      yield from walk(child)
+
+  yield from walk(root)
+
+
+def _block_scan_text(block: _Element) -> str:
+  """A block's text in document order with <code> content fenced by sentinel chars: nested blocks
+  (visited as their own blocks) and style/script/pre subtrees are excluded, code text is kept."""
+
+  def walk(el: _Element) -> None:
+    for child in el.children:
+      if isinstance(child, str):
+        parts.append(child)
+      elif child.tag in _ORDINAL_SKIP_TAGS:
+        continue
+      elif child.tag in _ORDINAL_BLOCK_TAGS or (child.tag == "span" and "mtag" in child.classes):
+        continue
+      elif child.tag == "code":
+        parts.append(_CODE_START)
+        walk(child)
+        parts.append(_CODE_END)
+      else:
+        walk(child)
+
+  parts: list[str] = []
+  walk(block)
+  return "".join(parts)
+
+
+def split_code_spans(s: str) -> tuple[str, list[tuple[int, int]]]:
+  """Strip the code sentinels, returning the plain text and the [start, end) ranges that were inside <code>."""
+  out: list[str] = []
+  spans: list[tuple[int, int]] = []
+  start: "int | None" = None
+  for ch in s:
+    if ch == _CODE_START:
+      start = len(out)
+    elif ch == _CODE_END:
+      if start is not None:
+        spans.append((start, len(out)))
+        start = None
+    else:
+      out.append(ch)
+  if start is not None:
+    spans.append((start, len(out)))
+  return "".join(out), spans
+
+
+def _ordinal_named_scan(ctx: _Context) -> tuple[set[str], list[tuple[_Element, list[str], str]]]:
+  """Scan the page for bare ordinal labels pointing off it; return the set of labels that received a
+  content name (carried forward across blocks in document order) and one (block, labels, sentence)
+  triple per failing sentence."""
+
+  def named_add(kind: str) -> None:
+    named.add(_ordinal_label(kind))
+
+  root = ctx.root
+  h2_count = len(_find(root, "h2"))
+  fork_count = len(_find(root, "div", ("fork",)))
+  sn_set = {" ".join(_text(sn).split()) for sn in _find(root, "span", ("sn",))}
+  named: set[str] = set()
+  flagged: list[tuple[_Element, list[str], str]] = []
+  for block in _ordinal_blocks(root):
+    text = html.unescape(re.sub(r"\s+", " ", _block_scan_text(block)))
+    for sentence in SENT_SPLIT.split(text):
+      sentence = sentence.strip()
+      if not sentence:
+        continue
+      sentence = QUOTE.sub("「…」", sentence)
+      sentence, code_spans = split_code_spans(sentence)
+      hits: list[str] = []
+      for m in ORD.finditer(sentence):
+        # A label match starting inside a code range is a mention; the code text still serves below.
+        if any(start <= m.start() < end for start, end in code_spans):
+          continue
+        kind = m.group(0)
+        n = next((g for g in m.groups()[:3] if g), None)
+        before = sentence[:m.start()]
+        external = bool(QUAL.search(before))
+        own = False
+        if not external:
+          if INTERNAL_UNLESS_QUALIFIED.search(kind):
+            continue
+          dotted = (m.group(4), m.group(5)) if m.group(4) else ((m.group(6), m.group(7)) if m.group(6) else None)
+          if dotted:
+            own = f"{dotted[0]}.{dotted[1]}" in sn_set or 1 <= int(dotted[0]) <= h2_count
+          elif re.search(r"节|章|section|Section", kind):
+            own = n is not None and 0 <= _toint(n) <= h2_count  # 0 admits pages whose first section is numbered 0
+          elif re.search(r"项|条|题|问|Trade|fork|Fork|divergence|Divergence|分歧|item|Item|question|Question", kind):
+            own = n is not None and 1 <= _toint(n) <= max(fork_count, 0)
+        if own:
+          continue
+        # Appositive: the label sits inside a parenthetical that follows a content run, e.g. 页面检查流水线（plan 3）.
+        op = max(before.rfind("（"), before.rfind("("))
+        cl = max(before.rfind("）"), before.rfind(")"))
+        if op > cl and len(before[:op].strip()) >= 2:
+          named_add(kind)
+          continue
+        if GLOSS.match(sentence[m.end():]) or (
+            not before.strip(" -—·1234567890.") and COLON_GLOSS.match(sentence[m.end():])):
+          named_add(kind)
+          continue
+        # Inside a header meta chip the text after the label is the chip's value.
+        if block.tag == "span" and len(sentence[m.end():].strip(" ·")) >= 2:
+          named_add(kind)
+          continue
+        hits.append(kind)
+      if not hits:
+        continue
+      if ANCHOR.search(sentence) or TITLE_ANCHOR.search(sentence):
+        for h in hits:
+          named_add(h)
+        continue
+      rest = [h for h in hits if _ordinal_label(h) not in named]
+      if rest:
+        flagged.append((block, rest, sentence))
+  return named, flagged
+
+
+def _check_ordinal_named(ctx: _Context) -> list[AssertionOutcome]:
+  name = "ordinal-named"
+  named, flagged = _ordinal_named_scan(ctx)
+  if not flagged:
+    return [_ok(name, f"{len(named)} external labels named in reach")]
+  failures: list[AssertionOutcome] = []
+  for block, labels, sentence in flagged:
+    joined = labels[0] if len(labels) == 1 else ", ".join(labels)
+    failures.append(
+        _fail(
+            name,
+            f"(section {_section_heading(block)!r}) {joined!r} names something outside this page and no content name "
+            f"is in reach; name it at first use (path, title, ticket, or a parenthetical): {sentence[:160]}"))
+  return failures
+
+
 _ASSERTION_RUNNERS = {
     "style-verbatim": _check_style_verbatim,
     "sections-numbered": _check_sections_numbered,
@@ -428,18 +641,22 @@ _ASSERTION_RUNNERS = {
     "req-chips": _check_req_chips,
     "goal-budget": _check_goal_budget,
     "page-height": _check_page_height,
+    "ordinal-named": _check_ordinal_named,
 }
 
 # The genre -> assertion-set table: the only place genres and their sets are stated.
 _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
     "plan":
-        ("style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "goal-budget", "page-height"),
+        ("style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "goal-budget", "page-height",
+         "ordinal-named"),
     "understanding":
-        ("style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "fork-explainer", "page-height"),
+        ("style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "fork-explainer", "page-height",
+         "ordinal-named"),
     "sitrep":
-        ("style-verbatim", "sections-numbered", "fork-open-shape", "fork-explainer", "fact-anchored", "req-chips"),
-    "debug": ("style-verbatim", "sections-numbered", "fork-open-shape", "fact-anchored"),
-    "explain": ("style-verbatim", "sections-numbered", "explain-triad", "fork-open-shape"),
+        ("style-verbatim", "sections-numbered", "fork-open-shape", "fork-explainer", "fact-anchored", "req-chips",
+         "ordinal-named"),
+    "debug": ("style-verbatim", "sections-numbered", "fork-open-shape", "fact-anchored", "ordinal-named"),
+    "explain": ("style-verbatim", "sections-numbered", "explain-triad", "fork-open-shape", "ordinal-named"),
 }
 
 GENRES: tuple[str, ...] = tuple(_ASSERTION_SETS)

@@ -74,33 +74,29 @@ const backlogPanel = (() => {
     const modLabel    = _moduleLabel(item._source);
     const repo = _currentRepo || '';
 
+    // updateStatus takes the target status between id and the identity triple
+    // (id, source, repo) that every other action handler takes.
+    const identityArgs = [item.id, item._source || '', repo];
+    const actionBtn = (handler, color, label, status) => {
+      const args = status ? [item.id, status, item._source || '', repo] : identityArgs;
+      const onclick = `backlogPanel.${handler}(${args.map(a => `'${a}'`).join(',')})`;
+      return `<button onclick="${onclick}" class="${ACTION_BTN_CLASS[color]}">${label}</button>`;
+    };
+
     let actions = '';
     if (item.status === 'pending') {
-      actions = `
-        <button onclick="backlogPanel.updateStatus('${item.id}','approved','${item._source || ''}','${repo}')"
-                class="${ACTION_BTN_CLASS.green}">Approve</button>
-        <button onclick="backlogPanel.requestRevision('${item.id}','${item._source || ''}','${repo}')"
-                class="${ACTION_BTN_CLASS.yellow}">Revise</button>
-        <button onclick="backlogPanel.rejectWithReason('${item.id}','${item._source || ''}','${repo}')"
-                class="${ACTION_BTN_CLASS.red}">Reject</button>`;
+      actions = actionBtn('updateStatus', 'green', 'Approve', 'approved')
+        + ' ' + actionBtn('requestRevision', 'yellow', 'Revise')
+        + ' ' + actionBtn('rejectWithReason', 'red', 'Reject');
     } else if (item.status === 'revision_requested') {
-      actions = `
-        <button onclick="backlogPanel.updateStatus('${item.id}','approved','${item._source || ''}','${repo}')"
-                class="${ACTION_BTN_CLASS.green}">Approve</button>
-        <button onclick="backlogPanel.rejectWithReason('${item.id}','${item._source || ''}','${repo}')"
-                class="${ACTION_BTN_CLASS.red}">Reject</button>`;
+      actions = actionBtn('updateStatus', 'green', 'Approve', 'approved')
+        + ' ' + actionBtn('rejectWithReason', 'red', 'Reject');
     } else if (item.status === 'approved') {
-      actions = `
-        <button onclick="backlogPanel.updateStatus('${item.id}','pending','${item._source || ''}','${repo}')"
-                class="${ACTION_BTN_CLASS.gray}">Revoke</button>`;
+      actions = actionBtn('updateStatus', 'gray', 'Revoke', 'pending');
     } else if (item.status === 'rejected') {
-      actions = `
-        <button onclick="backlogPanel.updateStatus('${item.id}','pending','${item._source || ''}','${repo}')"
-                class="${ACTION_BTN_CLASS.gray}">Reopen</button>`;
+      actions = actionBtn('updateStatus', 'gray', 'Reopen', 'pending');
     } else if (item.status === 'failed') {
-      actions = `
-        <button onclick="backlogPanel.retryItem('${item.id}','${item._source || ''}','${repo}')"
-                class="${ACTION_BTN_CLASS.orange}">Retry</button>`;
+      actions = actionBtn('retryItem', 'orange', 'Retry');
     }
 
     let backtestHtml = '';

@@ -7,15 +7,12 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
-import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.core.config import CharlieBotConfig, get_config
 from src.core.http import get_http_client
 from src.core.sse import iter_sse_lines
-
-log = structlog.get_logger()
 
 router = APIRouter()
 

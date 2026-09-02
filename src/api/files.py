@@ -8,14 +8,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
-import structlog
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 from src.api.auth import request_has_access_key
 from src.core.config import get_config
 
-log = structlog.get_logger()
 router = APIRouter()
 
 _ARTIFACT_SCRIPT_TAG = "<script src=/static/js/artifact-comments.js></script>"

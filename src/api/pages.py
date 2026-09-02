@@ -384,8 +384,6 @@ async def perfetto_merged(
     if not discovered:
       raise HTTPException(status_code=400, detail="Provide at least one trace path; 'dir' matched no files.")
     paths.extend(discovered)
-  if not paths:
-    raise HTTPException(status_code=400, detail="Provide at least one trace path with 'trace' or 'dir'.")
 
   resolved_paths: list[Path] = []
   for path in paths:

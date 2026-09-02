@@ -136,11 +136,10 @@ class CodexUsageResolver:
     self._codex_rollout_usage_cache: dict[str, tuple[int, int, dict | None]] = {}
 
   def is_codex_backend(self, backend_id: str) -> bool:
-    option_getter = getattr(self._cfg, "get_backend_option", None)
-    if callable(option_getter):
-      option = option_getter(backend_id)
-      if option is not None:
-        return option.type == "codex"
+    option = self._cfg.get_backend_option(backend_id)
+    if option is not None:
+      return option.type == "codex"
+    # A session pinned to a backend id since removed from config admits by prefix.
     return backend_id.startswith("codex")
 
   def resolve(

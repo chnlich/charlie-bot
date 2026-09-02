@@ -75,7 +75,7 @@ const WORKER_CARD_CLASS = 'bg-slate-800 rounded-xl border border-slate-700 overf
 // CSS-truncated line), so its full-text modal fetches the thread row on click
 // instead of holding the whole text in an attribute.
 function fetchWorkerDescription(threadId, sessionId) {
-  fetch('/api/threads/' + sessionId + '/threads/' + threadId)
+  return fetch('/api/threads/' + sessionId + '/threads/' + threadId)
     .then(r => {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
@@ -367,6 +367,7 @@ function cancelTrigger(triggerId, sessionId) {
 
 
 Object.assign(Sidebar, {
+  fetchWorkerDescription,
   renderWorkersTab,
   renderWorkersTabUnknown,
   restartWorkersPolling,
@@ -379,6 +380,7 @@ Object.assign(Sidebar, {
   cancelTrigger,
 });
 Sidebar.expose([
+  'fetchWorkerDescription',
   'renderWorkersTab',
   'renderWorkersTabUnknown',
   'restartWorkersPolling',

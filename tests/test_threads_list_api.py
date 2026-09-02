@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from src.api.deps import get_thread_manager, get_trigger_manager
 from src.api.threads import _LIST_DESCRIPTION_CAP, router as threads_router
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, get_config
 from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
@@ -34,6 +34,7 @@ def _seeded_client(tmp_path: Path):
   app.include_router(threads_router, prefix="/api/threads")
   app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
   app.dependency_overrides[get_trigger_manager] = lambda: TriggerManager(cfg, sessions)
+  app.dependency_overrides[get_config] = lambda: cfg
   return TestClient(app), session_id, long_thread_id
 
 

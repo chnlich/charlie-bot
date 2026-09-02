@@ -36,6 +36,10 @@ log = structlog.get_logger()
 
 router = APIRouter()
 
+# Cap on the description prefix shipped in the workers-panel list rows;
+# generously past the one truncated line the card paints at any sidebar width.
+_LIST_DESCRIPTION_CAP = 240
+
 
 class ThreadMetadataResponse(ThreadMetadata):
   attach_command: str | None = None
@@ -138,6 +142,29 @@ async def _attach_available(thread: ThreadMetadata, cfg: CharlieBotConfig) -> bo
   return False
 
 
+def _thread_list_item(t: ThreadMetadata) -> dict:
+  """One thread row of the workers-panel list payload.
+
+  The description ships as a prefix: the card it backs paints one CSS-truncated
+  line and the full-text modal fetches the thread row on click, so the 3 s
+  poll never ships task-spec-length descriptions (~KB each). A truncated row
+  carries ``description_full_len`` so the client knows to fetch.
+  """
+  description = t.description or ""
+  item = {
+      "type": "thread",
+      "id": t.id,
+      "description": description[:_LIST_DESCRIPTION_CAP],
+      "status": t.status.value,
+      "created_at": t.created_at.isoformat(),
+      "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+      "backend": t.backend,
+  }
+  if len(description) > _LIST_DESCRIPTION_CAP:
+    item["description_full_len"] = len(description)
+  return item
+
+
 @router.get("/{session_id}/list")
 async def list_threads(
     session_id: str,
@@ -146,17 +173,7 @@ async def list_threads(
 ) -> list[dict]:
   """Return mixed list of thread and trigger summaries, sorted by created_at descending."""
   threads = await thread_mgr.list_threads(session_id)
-  thread_items = [
-      {
-          "type": "thread",
-          "id": t.id,
-          "description": t.description,
-          "status": t.status.value,
-          "created_at": t.created_at.isoformat(),
-          "completed_at": t.completed_at.isoformat() if t.completed_at else None,
-          "backend": t.backend,
-      } for t in threads
-  ]
+  thread_items = [_thread_list_item(t) for t in threads]
 
   triggers = await trigger_mgr.list_triggers(session_id)
   trigger_items = [

@@ -71,6 +71,19 @@ const WORKER_CARD_CLASS = 'bg-slate-800 rounded-xl border border-slate-700 overf
 // and the live addWorkerCard append -- and updateWorkerStatus rewrites the
 // dot, status line, and cancel button by id. One body builder keeps both
 // painters on the ids and class chains the updater looks up.
+// A truncated list row ships only the description prefix (the card paints one
+// CSS-truncated line), so its full-text modal fetches the thread row on click
+// instead of holding the whole text in an attribute.
+function fetchWorkerDescription(threadId, sessionId) {
+  return fetch('/api/threads/' + sessionId + '/threads/' + threadId)
+    .then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(meta => showTextModal('Worker Description', meta.description || ''))
+    .catch(err => console.error('fetchWorkerDescription failed:', err));
+}
+
 function workerCardBodyHtml(t, sessionId) {
   const dotColor = STATUS_DOT_COLORS[t.status] || 'bg-slate-500';
   const pulse = t.status === 'running' ? ' animate-pulse' : '';
@@ -83,10 +96,15 @@ function workerCardBodyHtml(t, sessionId) {
   const cancelBtn = t.status === 'running'
     ? cancelButtonHtml("cancelThread('" + t.id + "', '" + sessionId + "')", 'Cancel', 'cancel-btn-' + t.id)
     : '';
+  const descTruncated = typeof t.description_full_len === 'number';
+  const descClick = descTruncated
+    ? "fetchWorkerDescription('" + t.id + "', '" + sessionId + "')"
+    : "showTextModal('Worker Description', this.dataset.full)";
+  const descFullAttr = descTruncated ? '' : ' data-full="' + escapeHtmlAttr(t.description) + '"';
   return '<div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-750" onclick="toggleThreadDetail(\'' + t.id + '\', \'' + sessionId + '\')">'
     + '<span id="thread-dot-' + t.id + '" class="w-2 h-2 rounded-full flex-shrink-0 ' + dotColor + pulse + '"></span>'
     + '<div class="flex-1 min-w-0">'
-    + '<p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal(\'Worker Description\', this.dataset.full)" data-full="' + escapeHtmlAttr(t.description) + '">' + escapeHtml(t.description || '') + '</p>'
+    + '<p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); ' + descClick + '"' + descFullAttr + '>' + escapeHtml(t.description || '') + '</p>'
     + '<p id="thread-status-' + t.id + '" class="text-xs text-slate-500">' + (t.status || 'idle') + ' &middot; ' + formatCardTimestamp(created) + duration + (t.backend ? ' &middot; ' + (BACKEND_OPTIONS[t.backend] || t.backend) : '') + '</p>'
     + workerUuidRow(t.id)
     + '</div>'
@@ -193,7 +211,7 @@ function pollWorkers() {
         } else {
           const existing = document.getElementById('thread-dot-' + item.id);
           if (!existing) {
-            addWorkerCard(item.id, item.description, item.created_at, item.backend || '');
+            addWorkerCard(item.id, item.description, item.created_at, item.backend || '', item.description_full_len);
             if (item.status !== 'running') updateWorkerStatus(item.id, item.status);
           } else {
             updateWorkerStatus(item.id, item.status);
@@ -265,7 +283,7 @@ function updateWorkerStatus(threadId, status) {
   }
 }
 
-function addWorkerCard(threadId, description, createdAt, backend) {
+function addWorkerCard(threadId, description, createdAt, backend, descriptionFullLen) {
   const container = document.getElementById('tab-workers');
   if (!container) return;
   // Remove placeholder if present
@@ -277,6 +295,7 @@ function addWorkerCard(threadId, description, createdAt, backend) {
   card.innerHTML = workerCardBodyHtml({
     id: threadId, status: 'running', description: description,
     created_at: createdAt || new Date().toISOString(), backend: backend,
+    description_full_len: descriptionFullLen,
   }, SESSION_ID);
   container.prepend(card);
   updateWorkersTabBadge();
@@ -348,6 +367,7 @@ function cancelTrigger(triggerId, sessionId) {
 
 
 Object.assign(Sidebar, {
+  fetchWorkerDescription,
   renderWorkersTab,
   renderWorkersTabUnknown,
   restartWorkersPolling,
@@ -360,6 +380,7 @@ Object.assign(Sidebar, {
   cancelTrigger,
 });
 Sidebar.expose([
+  'fetchWorkerDescription',
   'renderWorkersTab',
   'renderWorkersTabUnknown',
   'restartWorkersPolling',

@@ -350,8 +350,8 @@ async def _reconcile_one(
                             is_alive=lambda: False, interrupt_reason=resolution.reason, on_silence=None),
       name=f"resume-drain-{thread_id[:8]}")
 
-  # Row 5: descendants that outlived the run while holding its raw-log fd are
-  # killed via the existing kill_process_group and named in the report.
+  # Descendants that outlived the run while holding its raw-log fd are killed
+  # via the existing kill_process_group and named in the report.
   if resolution.leftover_holders:
     named = ", ".join(f"pid {h.pid} ({h.cmdline or 'unknown command'})" for h in resolution.leftover_holders)
     for holder in resolution.leftover_holders:

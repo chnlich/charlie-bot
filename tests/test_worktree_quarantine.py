@@ -658,7 +658,7 @@ async def test_reconcile_pre_boot_run_without_raw_log_and_verifiable_death_drain
 @pytest.mark.asyncio
 async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """STALLED (outcome row 4) at the init layer: a run whose recorded pid is alive but
+  """STALLED at the init layer: a run whose recorded pid is alive but
   whose raw log has been silent beyond NO_OUTPUT_REPORT_THRESHOLD is re-attached, never
   killed, and produces a suspected-hang report on the session chat stream.
   """

@@ -607,7 +607,7 @@ def test_assemble_worker_missing_dir_returns_none(tmp_path: Path) -> None:
 
 
 # Import-path patch target for the memory CLI's config read: src/cli/memory.py binds the name
-# with `from src.core.config import get_config` (src/cli/memory.py:18), so mock setattrs the
+# with `from src.core.config import get_config`, so mock setattrs the
 # stand-in on the src.cli.memory module attribute and the CLI's entry points read it at call time.
 _CLI_MEMORY_GET_CONFIG_PATCH_TARGET = "src.cli.memory.get_config"
 

@@ -39,6 +39,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M26 message-projection advance per appended event | M26 collector below | seconds per `get_message_projection` advance on one appended event, worst on-disk live-events corpus | median < 0.005 s | — (introduced with its first history row) |
 | M27 plans registry tolerant read, steady state | M27 collector below | seconds per `read_plans_tolerant` call, worst on-disk plans corpus | median < 0.005 s | — (introduced with its first history row) |
 | M28 ndjson tail+count scan, steady state | M28 collector below | seconds per `parse_ndjson_tail` call, worst on-disk live chat file | median < 0.030 s | — (introduced with its first history row) |
+| M29 session-metadata listing preamble, steady state | M29 collector below | seconds per `_load_session_metas(ACTIVE)` call, live session-dir corpus | median < 0.005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1307,6 +1308,50 @@ ctimes.sort()
 print(f"{best_n / 1e6:.1f} MB file, {total} lines, tail events {len(events)}; "
       f"parse_ndjson_tail median {times[3] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms; "
       f"count_ndjson_lines median {ctimes[3] * 1000:.2f} ms")
+EOF
+```
+
+M29 — session-metadata listing preamble, steady state. The status poll
+(`GET /api/sessions/status`), the sessions list, the archived pages, and search
+all route through `_load_session_metas`, whose first step lists the session
+directories; this host's sessions root holds ~1000 dirs, so the pre-fix
+`Path.iterdir()` + `is_dir()` form rebuilt a Path per entry and paid one stat()
+each (~6 ms measured), while the fixed `os.scandir` pass answers `is_dir()` from
+the directory record itself (~1 ms). The cost is a slice of every listing call
+and stays invisible to the standing HTTP probes (a poll's total keeps its own
+budget), so the collector times the manager function the listings await
+(read-only over the live state), from the checkout under test: one cold pass,
+as at a server start with an empty metadata cache, then nine timed calls. The
+steady state is every metadata cache entry fresh (TTL-fresh or archived), so a
+call pays the dir scan plus cache lookups and zero file reads. Evidence while
+the live server runs older code points the same collector at the branch
+checkout (`CHECKOUT` at the worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.models import SessionStatus
+from src.core.sessions import SessionManager
+
+async def main():
+    cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+    mgr = SessionManager(cfg)
+    await mgr._load_session_metas()  # cold pass, as at a server start with an empty metadata cache; not timed
+    times = []
+    n = 0
+    for _ in range(9):
+        t0 = time.perf_counter()
+        metas = await mgr._load_session_metas(SessionStatus.ACTIVE)
+        times.append(time.perf_counter() - t0)
+        n = len(metas)
+    times.sort()
+    print(f"{n} active sessions in listing; steady-state _load_session_metas "
+          f"median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms")
+
+asyncio.run(main())
 EOF
 ```
 

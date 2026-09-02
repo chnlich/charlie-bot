@@ -29,7 +29,10 @@ All logic lives here; the CLI (``src/cli/memory.py``) is a thin wrapper, and the
 spawn paths (``master_cc``, ``spawner``) call the assemble functions directly.
 """
 
+import os
 import re
+import threading
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +44,15 @@ log = structlog.get_logger()
 _TOPICS_FILENAME = "topics"
 _ENTRIES_DIRNAME = "entries"
 _STAGING_DIRNAME = "staging"
+
+# Bound on _store_memo in memory dirs, not entries: a host serves one memory
+# dir in steady state (tests hold several), so a small cap bounds memoized
+# Store payloads. An entry holds the stat-only signature alongside the Store
+# because get+move_to_end is not one op, and a concurrent insert's cap
+# eviction must not pop the key mid-hit — the chat_events memo's lock rule.
+_STORE_MEMO_LIMIT = 8
+_store_memo: OrderedDict[Path, tuple[tuple[tuple[str, int, int], ...], "Store"]] = OrderedDict()
+_store_memo_lock = threading.Lock()
 
 # Header line: ``field: value`` where field is lower_snake. Value charset is
 # validated per field below (slug-charset for most, free text for ``title``).
@@ -298,6 +310,46 @@ def _iter_entry_files(memory_dir: Path) -> list[Path]:
   return files
 
 
+def _store_signature(memory_dir: Path) -> tuple[tuple[str, int, int], ...] | None:
+  """Stat-only signature of every byte :func:`load_store` parses.
+
+  One (relative path, mtime_ns, size) triple per parsed file — the topics
+  vocabulary plus every entries/<topic>/*.md — so any rewrite, append, new
+  entry, or deletion changes the signature. Returns None when a file cannot
+  be stat'ed (missing topics file, a race with a writer): that call must not
+  memoize, and the load itself surfaces or tolerates the missing file exactly
+  as the uncached path does.
+
+  Walked with os.scandir and string joins: Path.glob/Path.relative_to would
+  rebuild a Path per entry, and that allocation cost dominates the stats the
+  signature exists to pay (the _load_session_metas preamble's lesson).
+  """
+  sig: list[tuple[str, int, int]] = []
+  try:
+    st = os.stat(os.path.join(memory_dir, _TOPICS_FILENAME))
+  except OSError:
+    return None
+  sig.append((_TOPICS_FILENAME, st.st_mtime_ns, st.st_size))
+  try:
+    topic_names = sorted(
+        e.name for e in os.scandir(os.path.join(memory_dir, _ENTRIES_DIRNAME)) if e.is_dir())
+  except OSError:
+    topic_names = []  # a missing entries/ loads as the valid empty store
+  for topic in topic_names:
+    topic_path = os.path.join(memory_dir, _ENTRIES_DIRNAME, topic)
+    try:
+      md_names = sorted(e.name for e in os.scandir(topic_path) if e.name.endswith(".md"))
+    except OSError:
+      return None
+    for name in md_names:
+      try:
+        st = os.stat(os.path.join(topic_path, name))
+      except OSError:
+        return None
+      sig.append((f"{topic}/{name}", st.st_mtime_ns, st.st_size))
+  return tuple(sig)
+
+
 def load_store(memory_dir: Path) -> Store:
   """Read the topics vocabulary and all entries; raise on any violation.
 
@@ -308,7 +360,42 @@ def load_store(memory_dir: Path) -> Store:
   ``created``/``source``/``both``/body-title entries still load (only lint is
   v2-strict). A missing ``entries/`` directory yields an empty (but valid)
   store; a missing ``topics`` file raises.
+
+  Repeat loads of an unchanged store are served from a process-wide memo
+  keyed on :func:`_store_signature`'s (path, mtime_ns, size) read of every
+  parsed file: the master run's per-message instruction build and the worker
+  spawn path re-enter here many times a minute under the same bytes, and
+  entry writes go through file rewrites that bump the signature. Only
+  successful loads memoize; a malformed store keeps raising on every call.
+  The memoized Store is shared with callers, whose contract is read-only.
+  A rewrite to a malformed store drops the stale hit, so the failure never
+  lingers as an entry the next call could confuse with the current bytes.
   """
+  sig = _store_signature(memory_dir)
+  if sig is not None:
+    with _store_memo_lock:
+      hit = _store_memo.get(memory_dir)
+      if hit is not None and hit[0] == sig:
+        _store_memo.move_to_end(memory_dir)
+        return hit[1]
+  try:
+    store = _load_store_uncached(memory_dir)
+  except BaseException:
+    if sig is not None:
+      with _store_memo_lock:
+        _store_memo.pop(memory_dir, None)
+    raise
+  if sig is not None:
+    with _store_memo_lock:
+      _store_memo[memory_dir] = (sig, store)
+      _store_memo.move_to_end(memory_dir)
+      while len(_store_memo) > _STORE_MEMO_LIMIT:
+        _store_memo.popitem(last=False)
+  return store
+
+
+def _load_store_uncached(memory_dir: Path) -> Store:
+  """Parse the store from disk; the work :func:`load_store` memoizes."""
   topics = _load_topics(memory_dir)
   entries: list[Entry] = []
   for md_file in _iter_entry_files(memory_dir):

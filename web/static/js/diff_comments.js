@@ -1,6 +1,7 @@
 // Line-anchored review comments for the /diff page.
 (() => {
   const PREFIX = 'cbdc';
+  const FILE_BODY_SELECTOR = '[data-cbdc-file-path]';
   const AUTH_MESSAGE = 'log in to comment';
   const outputEl = document.getElementById('diff-output');
 
@@ -300,7 +301,7 @@
     button.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const body = row.closest('[data-cbdc-file-path]');
+      const body = row.closest(FILE_BODY_SELECTOR);
       openEditor(anchorForRow(row, body), row, body);
     });
     numberCell.appendChild(button);
@@ -460,7 +461,7 @@
     if (!cell) return null;
     const row = cell.closest(`.${PREFIX}-line`);
     if (!row) return null;
-    const body = row.closest('[data-cbdc-file-path]');
+    const body = row.closest(FILE_BODY_SELECTOR);
     return { body, anchor: anchorForRow(row, body) };
   }
 
@@ -516,7 +517,7 @@
   }
 
   function refreshMarkers(filePath) {
-    outputEl.querySelectorAll('[data-cbdc-file-path]').forEach((body) => {
+    outputEl.querySelectorAll(FILE_BODY_SELECTOR).forEach((body) => {
       if (body.dataset.cbdcFilePath !== filePath) return;
       body.querySelectorAll(`.${PREFIX}-marked`).forEach((row) => row.classList.remove(`${PREFIX}-marked`));
       pending.filter((entry) => entry.filePath === filePath).forEach((entry) => {
@@ -528,7 +529,7 @@
   }
 
   function refreshAllMarkers() {
-    const paths = new Set(Array.from(outputEl.querySelectorAll('[data-cbdc-file-path]'))
+    const paths = new Set(Array.from(outputEl.querySelectorAll(FILE_BODY_SELECTOR))
       .map((body) => body.dataset.cbdcFilePath));
     paths.forEach(refreshMarkers);
   }

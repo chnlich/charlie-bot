@@ -320,6 +320,7 @@ function buildWorkersContext(running) {
   document.elements.set('thread-dot-t1', {classList: {contains: (cls) => running && cls === 'bg-blue-500'}});
   document.elements.set('thread-events-t1', {
     innerHTML: '',
+    dataset: {},
     parentElement: {querySelector: () => null, insertBefore() {}},
   });
   const context = {

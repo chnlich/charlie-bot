@@ -66,6 +66,12 @@ class FakeElement {
     return child;
   }
 
+  insertAdjacentHTML(position, html) {
+    if (position !== 'beforeend') throw new Error(`FakeElement only fakes beforeend, got ${position}`);
+    // The real call leaves existing nodes untouched; the getter concatenates _html back.
+    this._html += html;
+  }
+
   insertBefore(child, ref) {
     child.parentElement = this;
     if (!ref) {

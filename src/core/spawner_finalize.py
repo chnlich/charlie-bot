@@ -9,7 +9,7 @@ import structlog
 
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import event_types as ET
-from src.core import finalize_effects, review, runs, spawner_events
+from src.core import finalize_effects, review, runs, spawner_events, task_chain
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
 from src.core.git import git_worktree_remove_reporting
 from src.core.models import TaskType, ThreadMetadata, ThreadStatus
@@ -439,6 +439,21 @@ async def _notify_completion(
             break
       except Exception as tg_err:
         log.warning("telegram_notify_failed", session=session_id, error=str(tg_err))
+
+    # A chain thread (a cron steps task) is owned end to end by the chain:
+    # it advances the next step or wakes the master once, and never enters the
+    # reviewer path. Threads without step_index take today's path unchanged.
+    if await task_chain.handle_step_completion(
+        session_id,
+        thread,
+        outcome.exit_code,
+        events_summary,
+        full_summary,
+        thread_mgr,
+        session_mgr,
+        cfg,
+    ):
+      return
 
     await review.maybe_spawn_reviewer(
         session_id, thread, outcome.exit_code, events_summary, full_summary, thread_mgr, session_mgr, cfg)

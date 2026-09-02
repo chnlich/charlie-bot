@@ -32,6 +32,11 @@ definition may live outside the file you started from when that module is the na
 provided the started-from copy is the anchor being merged into it and the diff stays focused on
 that one unification.
 
+Comments and docs never cite code coordinates (line numbers, call-site offsets): a coordinate
+drifts with every unrelated edit, so anchoring one to today's numbers is churn without value. A
+stale coordinate in a comment or doc is stale-annotation hygiene: delete the coordinate, keep
+the durable fact; never replace the numbers. No PR introduces coordinate citations.
+
 Skip every topic named in the rejected-topic ledger, and report which ones you skipped. A rejected
 topic is a closed `code-health/*` pull request carrying a comment that starts
 `code-health-abandoned:`, which is the entire record of that rejection:

@@ -17,8 +17,6 @@ from collections import OrderedDict
 from enum import IntEnum
 from pathlib import Path
 
-import structlog
-
 from src.core import plan_paths
 from src.core.artifact_check import run_assertions
 from src.core.config import CharlieBotConfig
@@ -26,8 +24,6 @@ from src.core.json_utils import write_json_atomically
 from src.core.models import utc_now
 from src.core.sessions import SessionManager
 from src.core.sidebar_state import mark_sidebar_dirty
-
-log = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
 # DerivedState — internal enum (0 = UNKNOWN reserved); API use strings

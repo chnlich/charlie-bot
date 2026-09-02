@@ -4,14 +4,10 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
-import structlog
-
 from src.core.config import ImprovementLoopConfig
 from src.core.git import git_add_commit_push
 from src.core.models import parse_utc_datetime
 from src.core.yaml_utils import load_yaml, save_yaml
-
-log = structlog.get_logger()
 
 _PRIORITY_ORDER = {'high': 0, 'medium': 1, 'low': 2}
 _BACKLOG_DESCRIPTION_RULE = (

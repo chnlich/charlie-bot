@@ -339,14 +339,7 @@ function renderSessionView(data) {
     : null;
   if (!turnEngine) renderMessagesIntoContainer(container, messages, session.id);
 
-  if (sessionHasMore) {
-    const sentinel = document.createElement('div');
-    sentinel.id = 'load-more-sentinel';
-    sentinel.className = 'flex justify-center py-3 text-xs text-slate-500';
-    sentinel.setAttribute('data-state', 'idle');
-    sentinel.innerHTML = 'Scroll up for older messages';
-    container.prepend(sentinel);
-  }
+  if (sessionHasMore) ensureSentinel(container, 'idle');
 
   // Initialize streaming preview from pending draft (in-progress assistant
   // response carried over from a tail-loaded session).

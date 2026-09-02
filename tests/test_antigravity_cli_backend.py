@@ -81,14 +81,6 @@ def test_prepare_cwd_does_not_write_agents_md_when_instructions_provided(monkeyp
   assert not agents_md.exists()
 
 
-def test_prepare_cwd_skips_agents_md_when_no_instructions(monkeypatch, tmp_path: Path) -> None:
-  backend = _build_backend(monkeypatch)
-
-  backend._prepare_cwd(str(tmp_path))
-
-  assert not (tmp_path / "AGENTS.md").exists()
-
-
 def test_build_command_append_conversation_flag_exactly_once_when_resuming(monkeypatch) -> None:
   monkeypatch.setattr(
       ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,

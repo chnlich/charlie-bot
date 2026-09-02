@@ -23,8 +23,9 @@ log = structlog.get_logger()
 
 _ATTACHED_FILES_MARKER = "\n\n[Attached files]\n"
 
-# Re-export so existing call sites (src.core.spawner, src.core.improve_command,
-# tests) keep importing extract_text_from_message from this module.
+# Re-export so existing call sites (src.core.spawner_events, src.core.improve_command,
+# src.core.verify_trailer, src.api.chat, src.api.threads) keep importing the
+# extract_* helpers from this module.
 __all__ = [
   "SessionBootstrapData",
   "SessionViewData",

@@ -138,13 +138,15 @@ function loadFileUploadScript(fetchImpl) {
   return {context, fileChips, sendButton};
 }
 
-function loadSlashCommandsScript(fetchImpl, overrides = {}) {
+function loadSlashCommandsScript(fetchImpl, uploadsInFlight = 0) {
   const messages = [];
   const toasts = [];
   const clearedIds = [];
   const input = {
     value: '/help',
     style: {height: '42px'},
+    // file-upload.js's load-time initPasteUpload attaches a paste listener.
+    addEventListener() {},
   };
   const localStorage = {
     removed: [],
@@ -155,21 +157,14 @@ function loadSlashCommandsScript(fetchImpl, overrides = {}) {
   const context = {
     SESSION_ID: 'session-a',
     DRAFT_KEY: 'draft-session-a',
-    uploadsInFlight: 0,
     pendingUserMsg: false,
     console: {error: () => {}},
     // This harness skips config.js: stand in for its shared header literal.
     JSON_HEADERS: {'Content-Type': 'application/json'},
-    // Likewise for file-upload.js's shared uploads-in-flight toast literal.
-    UPLOADS_IN_FLIGHT_MESSAGE: 'Please wait for uploads to finish',
     fetch: fetchImpl,
     localStorage,
     showToast: (message, isError) => {
       toasts.push({message, isError: !!isError});
-    },
-    getUploadedFilesForPayload: () => [],
-    clearSentUploadedFiles: (ids) => {
-      clearedIds.push(ids);
     },
     appendMessage: (role, content, isVoice, timestamp, uploadedFiles) => {
       messages.push({role, content, isVoice: !!isVoice, timestamp, uploadedFiles});
@@ -184,11 +179,21 @@ function loadSlashCommandsScript(fetchImpl, overrides = {}) {
       },
       createElement: createEscapingElement,
     },
-    ...overrides,
   };
 
   vm.createContext(context);
+  // The real file-upload.js supplies the send gate blockIfUploadsInFlight.
+  // Its top-level function declarations overwrite same-named context
+  // properties, so the upload-store doubles are installed after it runs.
+  vm.runInContext(FILE_UPLOAD_JS, context, {filename: 'file-upload.js'});
+  context.getUploadedFilesForPayload = () => [];
+  context.clearSentUploadedFiles = (ids) => {
+    clearedIds.push(ids);
+  };
   vm.runInContext(SLASH_COMMANDS_JS, context, {filename: 'slash-commands.js'});
+  // uploadsInFlight is file-upload.js's top-level `let`: a context property
+  // written from outside cannot reach it, only code run in the context can.
+  vm.runInContext('uploadsInFlight = ' + Number(uploadsInFlight) + ';', context);
   return {context, messages, toasts, clearedIds, input, localStorage};
 }
 
@@ -291,7 +296,7 @@ test('executeSlashCommand blocks submission while uploads are still in flight', 
   const {context, toasts} = loadSlashCommandsScript(async () => {
     fetchCalls += 1;
     return {async json() { return {type: 'help', commands: []}; }};
-  }, {uploadsInFlight: 1});
+  }, 1);
 
   await context.executeSlashCommand('help', '');
 

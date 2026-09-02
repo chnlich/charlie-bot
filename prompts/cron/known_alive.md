@@ -178,8 +178,8 @@ Known-alive symbols:
   `dir_path` arity-fixed entry above.
 - `verify_report`, `on_spawned` (`tests/conftest.py`, parameters of the
   `fake_notify_completion` and `CapturingWorker.__init__` stubs), `entry_id`
-  (`tests/core/test_artifact_check.py:601`, the `get_backend_option` lambda), `host_boot`
-  (`tests/test_master_restart_transport_unit.py:447`, the `is_run_alive` lambda),
+  (`tests/core/test_artifact_check.py:751`, the `get_backend_option` lambda), `host_boot`
+  (`tests/test_master_restart_transport_unit.py:448`, the `is_run_alive` lambda),
   `scheduled`, `include_running_status`, `include_pending_trigger_status`
   (`tests/test_pages.py:30-32` and `:225-227`, the two `list_sessions` overrides), and
   `exclude_thread_id` (`tests/test_reviewer_model_preference.py:339`, the `fake_spawn_review`
@@ -219,7 +219,7 @@ Known-alive symbols:
   (`resume_calls == [True]`), so deleting the parameter makes the stub raise TypeError on
   the unexpected keyword. Vulture flags it at 100% confidence as an unused variable. Same
   class as the `verify_report` keyword-fixed stub-parameter entry above.
-- `cls` (`src/core/config.py:311`, first parameter of `migrate_and_expand`, the
+- `cls` (`src/core/config.py:317`, first parameter of `migrate_and_expand`, the
   `@model_validator(mode="before")` `@classmethod` on `CharlieBotConfig`) — the pydantic
   classmethod-validator protocol passes the class as the first positional argument, so the
   arity is framework-fixed even though the body reads only `values`; deleting `cls` turns
@@ -248,7 +248,7 @@ Known-alive symbols:
   `google_docs_client_id`, `google_docs_client_secret`, `google_docs_default_folder_id`,
   `google_docs_refresh_token`, `google_refresh_token`, `linear_api_key`, `slack_user_token`,
   `twitter_api_key`, `twitter_api_secret`, `twitter_access_token`,
-  `twitter_access_token_secret`, `public_base_url` (`src/core/config.py:292-311`,
+  `twitter_access_token_secret`, `public_base_url` (`src/core/config.py:294-313`,
   `CharlieBotConfig` fields) — yaml keys hosts carry in `config.yaml` / `config.d/*.yaml`,
   kept deliberately: consumers read the raw yaml outside this repo. Ten of the twenty are
   quoted by name in the skill files that read them (`skills/feishu/SKILL.md`,

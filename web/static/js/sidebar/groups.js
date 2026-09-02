@@ -253,10 +253,18 @@ const CLOCK_SVG_BODY = `<circle cx="12" cy="12" r="10" stroke-width="2"/><path s
 const MODAL_OVERLAY_CLASS = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
 const MODAL_DIALOG_CLASS = 'bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72';
 
+// The one construction of the star button's onclick body: rendered below for
+// a fresh list render and, through the namespace, re-applied by filters.js's
+// toggleSessionStar after a star toggle (Sidebar.starButtonOnclick). The
+// starred argument is the state the next click should toggle away from.
+function starButtonOnclick(id, starred) {
+  return `event.preventDefault(); event.stopPropagation(); toggleSessionStar('${id}', ${starred})`;
+}
+
 function renderStarButton(s, activeBtnClass) {
   const starFill = s.starred ? 'currentColor' : 'none';
   const starClass = s.starred ? 'text-yellow-400 !opacity-100' : 'hover:text-yellow-400';
-  return `<button onclick="event.preventDefault(); event.stopPropagation(); toggleSessionStar('${s.id}', ${s.starred})"
+  return `<button onclick="${starButtonOnclick(s.id, s.starred)}"
           class="opacity-0 group-hover:opacity-100 p-1 transition-opacity flex-shrink-0 star-btn ${starClass} ${activeBtnClass}" title="Star" id="star-${s.id}">
     <svg class="w-3.5 h-3.5" fill="${starFill}" stroke="currentColor" viewBox="0 0 24 24">${STAR_SVG_PATH}</svg>
   </button>`;
@@ -832,6 +840,7 @@ function renderSessionList(sessions, filter) {
 
 Object.assign(Sidebar, {
   TRASH_SVG_PATH,
+  starButtonOnclick,
   GEAR_SVG_PATH,
   CHEVRON_SVG_PATH,
   CLOCK_SVG_BODY,

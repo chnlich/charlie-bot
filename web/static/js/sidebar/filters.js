@@ -284,21 +284,16 @@ function handleSidebarSearch(query) {
 
 async function toggleSessionStar(id, currentlyStarred) {
   const endpoint = currentlyStarred ? 'unstar' : 'star';
-  // Optimistic UI update
+  // Optimistic UI update: repaint the button into the new state; groups.js's
+  // renderStarButton paints the same state from the same two literals.
   const btn = document.getElementById('star-' + id);
   if (btn) {
-    const svg = btn.querySelector('svg');
-    if (currentlyStarred) {
-      svg.setAttribute('fill', 'none');
-      btn.classList.remove('text-yellow-400', '!opacity-100');
-      btn.classList.add('hover:text-yellow-400');
-      btn.setAttribute('onclick', `event.preventDefault(); event.stopPropagation(); toggleSessionStar('${id}', false)`);
-    } else {
-      svg.setAttribute('fill', 'currentColor');
-      btn.classList.add('text-yellow-400', '!opacity-100');
-      btn.classList.remove('hover:text-yellow-400');
-      btn.setAttribute('onclick', `event.preventDefault(); event.stopPropagation(); toggleSessionStar('${id}', true)`);
-    }
+    const starred = !currentlyStarred;
+    btn.querySelector('svg').setAttribute('fill', starred ? 'currentColor' : 'none');
+    btn.classList.toggle('text-yellow-400', starred);
+    btn.classList.toggle('!opacity-100', starred);
+    btn.classList.toggle('hover:text-yellow-400', !starred);
+    btn.setAttribute('onclick', Sidebar.starButtonOnclick(id, starred));
   }
   try {
     await fetch(`/api/sessions/${id}/${endpoint}`, { method: 'POST' });

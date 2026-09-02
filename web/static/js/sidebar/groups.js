@@ -224,6 +224,20 @@ const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" str
 // call site keeps its own center markup.
 const GEAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>`;
 
+// The one right-chevron outline: the cron-group and session-group collapse
+// toggles below and, through the namespace, workers.js's thread-card chevron
+// (Sidebar.CHEVRON_SVG_PATH). Each call site keeps its own <svg> wrapper.
+const CHEVRON_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>`;
+
+// The one pencil outline: the session-row rename button below and the
+// session-group rename button.
+const PENCIL_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>`;
+
+// The one clock-badge body (face plus hands): renderScheduledBadge below
+// and, through the namespace, workers.js's trigger-card icon
+// (Sidebar.CLOCK_SVG_BODY). Each call site keeps its own <svg> wrapper.
+const CLOCK_SVG_BODY = `<circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>`;
+
 // The one modal chrome for the sidebar's JS-built overlays: showGroupSelector's
 // group modal below and, through the namespace, filters.js's delete-confirm
 // modal (Sidebar.MODAL_OVERLAY_CLASS / Sidebar.MODAL_DIALOG_CLASS). Each dialog
@@ -243,7 +257,7 @@ function renderStarButton(s, activeBtnClass) {
 function renderRenameButton(s, activeBtnClass) {
   return `<button onclick="event.preventDefault(); event.stopPropagation(); startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
           class="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Rename">
-    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${PENCIL_SVG_PATH}</svg>
   </button>`;
 }
 
@@ -267,7 +281,7 @@ function renderCronGearButton(taskName, activeBtnClass) {
 // Scheduled-task clock badge shared by renderScheduledSessionItem and
 // renderSessionItem: a markup change lands here, not in one renderer.
 function renderScheduledBadge(s) {
-  return `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtmlAttr(s.scheduled_task)}"><circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/></svg>`;
+  return `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtmlAttr(s.scheduled_task)}">${CLOCK_SVG_BODY}</svg>`;
 }
 
 // Session-row highlight shared by renderScheduledSessionItem,
@@ -356,7 +370,7 @@ function renderGroupedScheduledList(sessions, options = {}) {
       <div class="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-slate-700/30 rounded-lg select-none"
            onclick="toggleCronGroup('${safeKey}')">
         <svg class="w-3 h-3 text-slate-500 transition-transform cron-group-chevron ${chevronClass}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+          ${CHEVRON_SVG_PATH}
         </svg>
         <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">${escapeHtml(label)}</span>
         <span class="text-xs text-slate-500 ml-auto">${enabledCount}/${totalCount} enabled</span>
@@ -594,7 +608,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); renameGroup(this.dataset.groupName)"
               class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-blue-400 transition-opacity" title="Rename group">
-        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${PENCIL_SVG_PATH}</svg>
       </button>
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); deleteGroup(this.dataset.groupName)"
@@ -607,7 +621,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
            data-sgroup-toggle-key="${safeKey}"
            onclick="toggleSessionGroup(this.dataset.sgroupToggleKey)">
         <svg class="w-3 h-3 text-slate-500 transition-transform session-group-chevron ${chevronClass}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+          ${CHEVRON_SVG_PATH}
         </svg>
         <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">${escapeHtml(label)}</span>
         ${groupActions}
@@ -802,6 +816,8 @@ function renderSessionList(sessions, filter) {
 Object.assign(Sidebar, {
   TRASH_SVG_PATH,
   GEAR_SVG_PATH,
+  CHEVRON_SVG_PATH,
+  CLOCK_SVG_BODY,
   MODAL_OVERLAY_CLASS,
   MODAL_DIALOG_CLASS,
   renderEmptyNote,

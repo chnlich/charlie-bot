@@ -74,7 +74,9 @@ function renderWorkersTab(threads, sessionId, triggers) {
       + workerUuidRow(t.id)
       + '</div>'
       + cancelBtn
-      + '<svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-' + t.id + '" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>'
+      + '<svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-' + t.id + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+      + Sidebar.CHEVRON_SVG_PATH
+      + '</svg>'
       + '</div>'
       + '<div id="thread-detail-' + t.id + '" class="hidden border-t border-slate-700">'
       + '<div id="thread-attach-' + t.id + '" class="px-4 pt-4 hidden"></div>'
@@ -92,8 +94,7 @@ function renderWorkersTab(threads, sessionId, triggers) {
     return '<div id="trigger-card-' + tr.id + '" class="bg-slate-800 rounded-xl border ' + chrome.border + ' overflow-hidden">'
       + '<div class="flex items-center gap-3 px-4 py-3">'
       + '<svg id="trigger-dot-' + tr.id + '" class="w-4 h-4 flex-shrink-0 ' + chrome.icon + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-      + '<circle cx="12" cy="12" r="10" stroke-width="2"/>'
-      + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>'
+      + Sidebar.CLOCK_SVG_BODY
       + '</svg>'
       + '<div class="flex-1 min-w-0">'
       + '<p class="text-sm truncate' + strikeClass + '">' + escapeHtml(tr.message || '') + '</p>'
@@ -267,7 +268,7 @@ function addWorkerCard(threadId, description, createdAt, backend) {
       ${cancelButtonHtml(`cancelThread('${threadId}', '${SESSION_ID}')`, 'Cancel', `cancel-btn-${threadId}`)}
       <svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-${threadId}"
            fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        ${Sidebar.CHEVRON_SVG_PATH}
       </svg>
     </div>
     <div id="thread-detail-${threadId}" class="hidden border-t border-slate-700">
@@ -303,8 +304,7 @@ function addTriggerCard(triggerId, message, fireAt, createdAt, status) {
   card.id = 'trigger-card-' + triggerId;
   card.innerHTML = '<div class="flex items-center gap-3 px-4 py-3">'
     + '<svg id="trigger-dot-' + triggerId + '" class="w-4 h-4 flex-shrink-0 ' + chrome.icon + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-    + '<circle cx="12" cy="12" r="10" stroke-width="2"/>'
-    + '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>'
+    + Sidebar.CLOCK_SVG_BODY
     + '</svg>'
     + '<div class="flex-1 min-w-0">'
     + '<p class="text-sm truncate ' + strikeClass + '">' + escapeHtml(message) + '</p>'

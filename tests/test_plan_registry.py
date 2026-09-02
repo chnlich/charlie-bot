@@ -784,6 +784,17 @@ async def test_present_rejects_missing_section_number_naming_the_assertion(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_present_rejects_bare_ordinal_reference_naming_the_assertion(tmp_path: Path) -> None:
+  """A plan page that names something outside it by a bare ordinal label fails ordinal-named; the
+  registration gate refuses it through run_assertions with no gate change."""
+  offending = plan_page_html().replace("</body></html>", f"<p>计划 section 1 的措辞怎么收？</p></body></html>")
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=offending)
+  with pytest.raises(ValueError, match="ordinal-named"):
+    await plan_mgr.present(meta.id, file=file_rel, title="P1")
+
+
+@pytest.mark.asyncio
 async def test_present_rejection_lists_every_failed_assertion(tmp_path: Path) -> None:
   """Deprived of its footer and numbered sections, one failure message names both defects."""
   broken = plan_page_html().replace('<span class="n">2</span>', '<span class="n">9</span>').replace(

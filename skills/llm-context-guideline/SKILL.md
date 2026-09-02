@@ -40,6 +40,11 @@ kinds of entry, and only these:
 Everything else stays out by default; when in doubt, reject and name the candidate in the
 report. Knowledge the model derives with no context (general engineering or statistical
 reasoning) is never admitted: the cheapest home is the model itself (user ruling 2026-08-26).
+An entry records what holds across models, fixes, and runs: rules, mechanisms, and contracts.
+A phenomenon observed in the present (how the system behaves now, a measured rate, an open
+regression, one incident's detail) expires with the next change and then misleads its reader:
+it stays in the capture, the run dir, or `LESSONS.md`, and the entry keeps only the rule or
+method the observation taught (user ruling 2026-09-01).
 
 Every admit and every revise carries three proof lines in the report, each headed by the
 question it answers; a question that finds no answer is the signal to rethink whether the

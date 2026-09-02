@@ -55,6 +55,11 @@ _SUBMISSION_CONFIRMATION_TIMEOUT_SECONDS = 30.0
 _TURN_TIMEOUT_SECONDS = 7200.0
 _TERMINATE_TIMEOUT_SECONDS = 5.0
 _IDLE_NOTIFICATION_THRESHOLD_MS = 1000
+_MANAGED_NOTIFICATION_SETTINGS: dict[str, Any] = {
+    "messageIdleNotifThresholdMs": _IDLE_NOTIFICATION_THRESHOLD_MS,
+    "inputNeededNotifEnabled": True,
+    "preferredNotifChannel": "terminal_bell",
+}
 _CAPABILITY_MARKERS = ("--plugin-dir", "--settings", "--session-id", "--resume")
 _VERSION_RE = re.compile(r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")
 _SESSION_CONFIG_DIR_NAME = "configs"
@@ -468,9 +473,7 @@ async def _prepare_tmux_session(session_id: str, cwd: Path, requested_resume: bo
 def _session_settings(args: ClaudeSubArgs) -> str:
   merged: dict[str, Any] = {
       "skipDangerousModePermissionPrompt": True,
-      "messageIdleNotifThresholdMs": _IDLE_NOTIFICATION_THRESHOLD_MS,
-      "inputNeededNotifEnabled": True,
-      "preferredNotifChannel": "terminal_bell",
+      **_MANAGED_NOTIFICATION_SETTINGS,
   }
   for raw in args.settings:
     try:
@@ -482,9 +485,7 @@ def _session_settings(args: ClaudeSubArgs) -> str:
     merged.update(value)
   # Inline managed settings must be last so the completion threshold cannot be
   # overridden by the fast-mode setting passed by ClaudeCodeBackend.
-  merged["messageIdleNotifThresholdMs"] = _IDLE_NOTIFICATION_THRESHOLD_MS
-  merged["inputNeededNotifEnabled"] = True
-  merged["preferredNotifChannel"] = "terminal_bell"
+  merged.update(_MANAGED_NOTIFICATION_SETTINGS)
   return json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
 
 

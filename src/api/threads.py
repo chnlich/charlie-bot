@@ -12,7 +12,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from src.agents.backends.pty_common import (
   _TMUX_SOCKET,
@@ -299,10 +300,30 @@ async def get_thread_events(
     session_id: str,
     thread_id: str,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
+    after: int | None = Query(default=None, ge=0),
 ):
-  """Return historical Worker events from the on-disk events.jsonl log."""
+  """Return historical Worker events from the on-disk events.jsonl log.
+
+  Without ``after`` the response is the full projected list. With ``after``
+  (the client's rendered raw count) it is an envelope ``{"events", "total",
+  "reset"}`` carrying only the events past that count; ``reset`` marks the
+  count as ahead of the projection (log replaced), so the client re-renders
+  the envelope's full payload. The projection is append-only
+  (_append_worker_events never rewrites an emitted row), so a count inside
+  it is a sound prefix cut.
+  """
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  return await asyncio.to_thread(read_thread_worker_events, events_path)
+  events = await asyncio.to_thread(read_thread_worker_events, events_path)
+  if after is None:
+    return events
+  reset = after > len(events)
+  start = 0 if reset else after
+  # A returned Response skips response_model validation; model_dump(mode="json") is
+  # ~6x faster than the jsonable_encoder pass FastAPI runs on mapped returns.
+  return JSONResponse(
+      {"events": [e.model_dump(mode="json") for e in events[start:]], "total": len(events), "reset": reset})
+
+
 
 
 @router.post("/{session_id}/threads/{thread_id}/cancel")

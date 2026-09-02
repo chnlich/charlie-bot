@@ -44,6 +44,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M31 worker-finalize events-summary read, steady state | M31 collector below | seconds per `read_events_summary` call, worst on-disk worker log | median < 0.02 s | — (introduced with its first history row) |
 | M32 memory-store assemble, steady state | M32 collector below | seconds per `assemble_master` call, live memory corpus | median < 0.005 s | — (introduced with its first history row) |
 | M33 assistant-stream draft render, full-turn replay | M33 collector below | seconds per replay of the largest on-disk assistant draft, 200 B deltas at 40 ms virtual cadence | median < 1.0 s | — (introduced with its first history row) |
+| M34 worker-events poll fetch at rendered count | M34 collector below | seconds + response bytes per events fetch, worst on-disk worker log | after=total median < 0.02 s; empty-tail body < 200 B | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -660,7 +661,7 @@ const listeners = new Map();
 const elements = new Map([
   ['thread-detail-t1', {classList: {contains: () => false}}],
   ['thread-dot-t1', {classList: {contains: (c) => c === 'bg-blue-500'}}],
-  ['thread-events-t1', {innerHTML: '', parentElement: {querySelector: () => null, insertBefore() {}}}],
+  ['thread-events-t1', {innerHTML: '', dataset: {}, parentElement: {querySelector: () => null, insertBefore() {}}}],
 ]);
 const documentStub = {
   hidden: true,
@@ -1557,6 +1558,81 @@ worktree root, live state read-only), the same shape as the M18 protocol:
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node /home/chaoli/workspace/charlie-bot/tests/stream_render_collector.js
 ```
 
+M34 — worker-events poll fetch at the client's rendered count. The 5 s
+workers-panel events poll served the whole projected history every round —
+860706 B and 2177 events for the worst on-disk log; the projection itself
+is memoized (M13), but serialization, transfer, and the client's full
+innerHTML rebuild stayed O(history) per poll. The endpoint's ``after=N``
+returns only the events past the client's rendered raw count (a sound
+prefix cut: ``_append_worker_events`` never rewrites an emitted row) and
+answers ``reset`` + the full payload when the count runs ahead; the client
+appends tails through a scratch paint plus ``insertAdjacentHTML``. The
+steady state (the metric) is a poll with nothing new. The collector copies
+the worst on-disk worker log into a scratch ``CHARLIEBOT_HOME`` (live home
+read once, never written), warms the memo, and times five full fetches (the
+pre-fix behavior, a byte-identical code path) and five ``after=total``
+fetches, asserting the empty-tail shape; the pytest suite pins prefix+tail
+parity. Evidence points the same collector at the branch checkout
+(``CHECKOUT`` at the worktree root), the same shape as the M7 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from src.api.deps import get_thread_manager
+from src.api.threads import router as threads_router
+from src.core.config import CharlieBotConfig
+from src.core.threads import ThreadManager
+
+# Worst worker-events corpus: the largest events.jsonl on disk; live home
+# read once for the copy, never written; the endpoint reads only the copy.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for p in root.glob("*/threads/*/data/events.jsonl"):
+    n = p.stat().st_size
+    if n > best_n:
+        best, best_n = p, n
+SID, TID = best.parts[-5], best.parts[-3]
+home = Path(tempfile.mkdtemp(prefix="m34-events-home-", dir="/tmp"))
+dst = home / "sessions" / SID / "threads" / TID / "data" / "events.jsonl"
+dst.parent.mkdir(parents=True)
+shutil.copy2(best, dst)
+
+app = FastAPI()
+app.include_router(threads_router, prefix="/api/threads")
+cfg = CharlieBotConfig(charliebot_home=home)
+app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
+client = TestClient(app)
+url = f"/api/threads/{SID}/threads/{TID}/events"
+
+full = client.get(url)  # cold pass, as at first panel open after a server start; not timed
+total = len(full.json())
+full_times, full_bytes = [], 0
+for _ in range(5):
+    t0 = time.perf_counter()
+    r = client.get(url)
+    full_times.append(time.perf_counter() - t0)
+    full_bytes = len(r.content)
+full_times.sort()
+inc_times, inc_bytes = [], 0
+for _ in range(5):
+    t0 = time.perf_counter()
+    r = client.get(url, params={"after": total})
+    inc_times.append(time.perf_counter() - t0)
+    inc_bytes = len(r.content)
+inc_times.sort()
+env = r.json()
+assert env["reset"] is False and env["total"] == total and env["events"] == []
+print(f"{best_n / 1e6:.1f} MB log, {total} events; full fetch median {full_times[2]:.4f} s, "
+      f"max {full_times[-1]:.4f} s ({full_bytes} B); after=total median {inc_times[2]:.4f} s, "
+      f"max {inc_times[-1]:.4f} s ({inc_bytes} B)")
+shutil.rmtree(home)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -1599,3 +1675,4 @@ CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node /home/chaoli/works
 | 2026-09-02 | this PR | M32 steady-state median 3.88 ms → 0.57 ms, max 3.95 ms → 0.67 ms (collector verbatim, 68 entry files, live memory corpus read-only, main checkout before at load 0.92/0.71/0.69 vs branch after at load 0.47/0.62/0.66, back-to-back; assembled block sha256-identical c561298a159a) | load_store memoized on a stat-only (path, mtime_ns, size) signature over every parsed file, walked with os.scandir + string joins (Path.glob/relative_to allocation would dominate the stats); only successful loads memoize, a corrupt rewrite drops the stale hit; M32 definition and healthy range introduced with this PR |
 | 2026-09-02 | this PR | M33 replay wall median 2.624 s → 0.589 s, max 2.829 s → 0.649 s (collector verbatim, 98.0 KB worst on-disk assistant draft sha1 6e0cb6e8f159, 502 deltas at 40 ms virtual cadence, 502 → 102 paints, main checkout before vs final branch head after back-to-back at load 0.22/0.43/0.87; final-frame parity true both arms) | stream-draft paints coalesced to a 200 ms leading+trailing cadence, hideStreaming cancels the pending trailing paint (every terminal path hides first: committed bubble, error, session swap); M33 definition and healthy range introduced with this PR |
 | 2026-09-02 | #615 | M8 append-round absent-needle search median 0.1797 s → 0.0021 s, max 0.1901 s → 0.0025 s (scratch CHARLIEBOT_HOME A/B over the 5 biggest active sessions, 109.2 MB, one event appended to every file before each timed round; main checkout before at load 0.87/2.71/3.37 vs branch after at load 0.97/1.51/2.61; cold full scan 0.1975 s → 0.1466 s under the same load shift; absent-round and positive-round parity both arms) | proven-absent memo signature gains the inode, and a same-inode file that grew re-proves absence from a window over the appended tail (old_size − 4·len(query) − 8 seek) instead of a full re-scan — chat files mutate only by append between inode-swapping atomic archive rewrites; whole-file path keeps strict decoding |
+| 2026-09-02 | this PR | M34 events poll full fetch 0.0097 s / 860706 B → after=total 0.0035 s / 40 B (collector verbatim, 6.7 MB / 2177-event worst on-disk log, scratch CHARLIEBOT_HOME TestClient, main full arm vs branch full arm back-to-back at load 0.43/0.66/0.86, payload sha256-identical deb85be56bf4dbba; live-before corroboration 0.010 s / 860706 B warm from the running instance; prefix+tail reconstruction parity true, envelope rows byte-equal to plain-list rows) | events endpoint gains after=N envelope (append-only prefix cut on the projection, reset+full payload when the count is ahead) served through a model_dump JSONResponse — FastAPI's jsonable_encoder fallback for mapped returns measures 6x slower on the same list (48.8 ms vs 8.1 ms); client polls pass the rendered raw count and append tails via scratch paint + insertAdjacentHTML; M34 definition and healthy range introduced with this PR; M18 collector element stub gains dataset to match the real DOM |

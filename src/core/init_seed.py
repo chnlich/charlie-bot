@@ -128,11 +128,12 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
   Creates ``config.d/cron.d/`` when absent. Writes through
   :func:`src.core.yaml_utils.save_yaml` (the same writer ``src/api/cron.py``
   uses). Validates every default entry before writing: each must construct a
-  :class:`ScheduledTaskConfig` after ``prompt_file``/``local`` resolution and
-  every ``prompt_file`` must resolve to an existing file. Fails loudly without
-  writing if validation fails, and fails loudly (writing nothing) when a legacy
-  ``config.d/cron.yaml`` exists — migration to the per-job layout is a human
-  action, never automatic.
+  :class:`ScheduledTaskConfig` after ``prompt_file``/``local`` resolution (an
+  entry with ``steps`` resolves each step's ``prompt_file`` exactly like the
+  task-level pointer) and every ``prompt_file`` must resolve to an existing
+  file. Fails loudly without writing if validation fails, and fails loudly
+  (writing nothing) when a legacy ``config.d/cron.yaml`` exists — migration to
+  the per-job layout is a human action, never automatic.
 
   Returns a per-entry report: ``[{"name": str, "status": "created"|"exists"}, ...]``.
 
@@ -152,6 +153,9 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
     resolved = copy.deepcopy(entry)
     resolved.pop("name", None)
     _resolve_prompt_file(resolved, repo_root)  # raises ValueError
+    for step in resolved.get("steps") or []:
+      if isinstance(step, dict):
+        _resolve_prompt_file(step, repo_root)  # raises ValueError
     _resolve_local_timezone(resolved)
     ScheduledTaskConfig(name=entry.get("name"), **resolved)  # raises on validation error
 

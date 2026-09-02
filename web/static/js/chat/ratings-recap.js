@@ -105,6 +105,10 @@ async function rateRound(sessionId, roundId, rating) {
 // ---------------------------------------------------------------------------
 const RECAP_ASK_CAP = 6;
 
+// The one small action-button style for the recap panel's text buttons:
+// renderRecapAsks's show-all toggle and recapRerunButton's re-summarize.
+const RECAP_ACTION_CLASS = 'mt-1 text-[11px] text-sky-400 hover:text-sky-300';
+
 function toggleRecapPanel(btn, sessionId, eventIndex) {
   const sep = btn.closest('.separator-line');
   if (!sep) return;
@@ -155,7 +159,7 @@ function renderRecapAsks(asks) {
   ).join('');
   let html = '<ul class="list-disc pl-5 space-y-0.5 text-xs text-slate-300">' + items + '</ul>';
   if (asks.length > RECAP_ASK_CAP) {
-    html += '<button class="mt-1 text-[11px] text-sky-400 hover:text-sky-300" onclick="toggleRecapAsks(this)">'
+    html += '<button class="' + RECAP_ACTION_CLASS + '" onclick="toggleRecapAsks(this)">'
       + 'Show all (' + asks.length + ')</button>';
   }
   return html;
@@ -188,7 +192,7 @@ function recapSummaryText(text) {
 }
 
 function recapRerunButton() {
-  return '<button class="mt-1 text-[11px] text-sky-400 hover:text-sky-300" onclick="rerunRecapSummary(this)">↻ Re-summarize</button>';
+  return '<button class="' + RECAP_ACTION_CLASS + '" onclick="rerunRecapSummary(this)">↻ Re-summarize</button>';
 }
 
 function rerunRecapSummary(btn) {

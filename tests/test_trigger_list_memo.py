@@ -1,12 +1,11 @@
 """Unit tests for the TriggerManager.list_triggers per-file memo."""
 from __future__ import annotations
 
-import unittest.mock
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config
+from conftest import count_path_read_text, make_home_config
 
 import src.core.triggers as triggers_module
 from src.core.models import PendingTrigger, TriggerStatus
@@ -32,26 +31,18 @@ async def _save(mgr: TriggerManager, session_id: str, message: str) -> PendingTr
 
 
 @pytest.mark.asyncio
-async def test_list_triggers_steady_state_reads_no_files(tmp_path: Path) -> None:
+async def test_list_triggers_steady_state_reads_no_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   mgr = _make_manager(tmp_path)
   saved = [await _save(mgr, "s1", f"trigger {i}") for i in range(3)]
 
   first = await mgr.list_triggers("s1")
   assert {t.id for t in first} == {t.id for t in saved}
 
-  reads = 0
-  real_read_text = Path.read_text
-
-  def counting_read_text(self: Path, *args, **kwargs):
-    nonlocal reads
-    reads += 1
-    return real_read_text(self, *args, **kwargs)
-
-  with unittest.mock.patch.object(Path, "read_text", counting_read_text):
-    for _ in range(3):
-      again = await mgr.list_triggers("s1")
-      assert [t.id for t in again] == [t.id for t in first]
-  assert reads == 0
+  reads = count_path_read_text(monkeypatch, lambda path: True)
+  for _ in range(3):
+    again = await mgr.list_triggers("s1")
+    assert [t.id for t in again] == [t.id for t in first]
+  assert reads == []
 
 
 @pytest.mark.asyncio

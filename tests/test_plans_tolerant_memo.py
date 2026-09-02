@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
-import unittest.mock
 from pathlib import Path
 
 import pytest
+from conftest import count_path_read_text
 
 import src.core.plans as plans_module
 from src.core.plans import read_plans_tolerant
@@ -37,25 +37,17 @@ def _write_registry(path: Path, count: int) -> None:
   path.write_text(json.dumps({"plans": plans}), encoding="utf-8")
 
 
-def test_steady_state_read_pays_no_file_read(tmp_path: Path) -> None:
+def test_steady_state_read_pays_no_file_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   p = tmp_path / "plans.json"
   _write_registry(p, 3)
   first = read_plans_tolerant(p, "sess")
   assert len(first["plans"]) == 3
 
-  reads = 0
-  real_read_text = Path.read_text
-
-  def counting_read_text(self: Path, *args, **kwargs):
-    nonlocal reads
-    reads += 1
-    return real_read_text(self, *args, **kwargs)
-
-  with unittest.mock.patch.object(Path, "read_text", counting_read_text):
-    for _ in range(3):
-      again = read_plans_tolerant(p, "sess")
-      assert again == first
-  assert reads == 0
+  reads = count_path_read_text(monkeypatch, lambda path: True)
+  for _ in range(3):
+    again = read_plans_tolerant(p, "sess")
+    assert again == first
+  assert reads == []
 
 
 def test_rewrite_rereads_and_serves_new_content(tmp_path: Path) -> None:

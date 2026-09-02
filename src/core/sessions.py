@@ -9,9 +9,10 @@ import time
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import aiofiles
+import numpy as np
 import structlog
 
 from src.core import event_types as ET
@@ -19,7 +20,12 @@ from src.core import plan_paths, sidebar_state
 from src.core.chat_events import ChatEventStore
 from src.core.config import CharlieBotConfig
 from src.core.init import RUNNING_SCAN_WINDOW, iter_recent_thread_metas
-from src.core.json_utils import atomic_write_text, load_json_meta, write_json_atomically
+from src.core.json_utils import (
+  atomic_write_stream,
+  atomic_write_text,
+  load_json_meta,
+  write_json_atomically,
+)
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection
 from src.core.models import (
@@ -325,6 +331,99 @@ def selective_probe_sidebar_state(
     if deep or not _sidebar_signature_fresh(session_id, sig, now_ts):
       to_probe.append((session_id, threads_dir, triggers_dir, plans_path))
   return probe_sidebar_state_sync(to_probe), sigs
+
+
+_REFERENCE_LINE_WS = b" \t\r\n\x0b\x0c"
+
+
+def _fast_reference_frames(data: bytes, take: int) -> tuple[int, int, int, bool] | None:
+  """Vectorized frame check for the first ``take`` raw lines of ``data``.
+
+  Returns ``(raw, start, end, needs_newline)`` when every in-budget frame is a
+  non-blank ``{}``-wrapped line: the count of raw frames consumed and the
+  ``[start, end)`` byte window whose content — plus one ``\\n`` when
+  ``needs_newline`` — equals what a per-frame pass would append. ``None`` when
+  any in-budget frame is blank, CR-terminated, or not ``{}``-wrapped; the
+  caller's per-frame pass reports or folds those one by one.
+  """
+  arr = np.frombuffer(data, dtype=np.uint8)
+  nls = np.flatnonzero(arr == 0x0A)
+  if take <= 0:
+    return (0, 0, 0, False)
+  terminated = nls[:take]
+  starts = np.concatenate(([0], terminated[:-1] + 1)) if terminated.size else terminated
+  ends = terminated
+  needs_newline = False
+  if terminated.size < take:
+    tail_start = int(terminated[-1]) + 1 if terminated.size else 0
+    if tail_start < len(data):
+      starts = np.concatenate((starts, [tail_start]))
+      ends = np.concatenate((ends, [len(data)]))
+      needs_newline = True
+  raw = starts.size
+  if raw == 0:
+    return (0, 0, 0, False)
+  frame_ok = (ends > starts) & (arr[starts] == 0x7B) & (arr[ends - 1] == 0x7D)  # '{' ... '}'
+  if not frame_ok.all():
+    return None
+  # Frame bytes plus their on-disk terminators are one contiguous window; only
+  # an unterminated final frame lacks its separator inside it.
+  end = int(ends[-1]) + (0 if needs_newline else 1)
+  return (raw, int(starts[0]), end, needs_newline)
+
+
+def _stream_reference_lines(out: BinaryIO, data: bytes, take: int) -> tuple[int, int]:
+  """Copy the non-blank lines among the first ``take`` raw line frames of ``data`` into ``out``.
+
+  Returns ``(raw, appended)``: raw frames spent against the budget (blank
+  frames included, mirroring the text-mode line iteration this replaces) and
+  lines written. Bytes move without per-line copies: a bulk vectorized pass
+  answers the common all-``{}`` shape with one window write, and the per-frame
+  fallback keeps CR folding and corrupt-line rejection exact. A corrupt corpus
+  stays loud exactly as the text-mode read did: a non-blank frame whose
+  stripped content is not wrapped in ``{}`` raises, and so do undecodable
+  bytes anywhere in the file.
+  """
+  # Validity parity with the text-mode read this replaces: it raised the same
+  # UnicodeDecodeError on undecodable bytes, so the decoded result is unused.
+  data.decode("utf-8")
+  fast = _fast_reference_frames(data, take)
+  if fast is not None:
+    raw, start, end, needs_newline = fast
+    if end > start:
+      out.write(memoryview(data)[start:end])
+      if needs_newline:
+        out.write(b"\n")
+    return raw, raw
+
+  view = memoryview(data)
+  pos = 0
+  raw = 0
+  appended = 0
+  end_of_data = len(data)
+  while raw < take and pos < end_of_data:
+    newline = data.find(b"\n", pos)
+    end = end_of_data if newline < 0 else newline
+    raw += 1
+    first = pos
+    while first < end and data[first] in _REFERENCE_LINE_WS:
+      first += 1
+    if first < end:
+      last = end - 1
+      while data[last] in _REFERENCE_LINE_WS:
+        last -= 1
+      if data[first] != ord("{") or data[last] != ord("}"):
+        snippet = data[pos:end].decode("utf-8", errors="replace").strip()[:80]
+        raise ValueError(f"parent event line is not a serialized event object: {snippet!r}")
+      # The CR of a CRLF pair folds before the write, matching the
+      # universal-newline translation of the text-mode read; every other
+      # original byte (edge whitespace included) is kept.
+      write_end = end - 1 if end > pos and data[end - 1] == 0x0D else end
+      out.write(view[pos:write_end])
+      out.write(b"\n")
+      appended += 1
+    pos = end + 1
+  return raw, appended
 
 
 class SuccessionRefused(ValueError):
@@ -883,17 +982,9 @@ class SessionManager:
         raise ValueError(f"event_index {event_index} out of range for parent session {parent_id} with {count} events")
       end = event_index + 1
 
-    # A full-corpus reference carries every parent event, so raw lines move it
-    # verbatim; the parse-and-reserialize round trip only buys the truncation a
-    # takeover point asks for.
-    if event_index is None:
-      reference_raw = await asyncio.to_thread(self._read_reference_raw_sync, parent_id, end)
-    else:
-      events, _ = await asyncio.to_thread(self.load_chat_events_range, parent_id, 0, end)
-      if len(events) != end:
-        raise ValueError(f"loaded {len(events)} parent events for requested range [0, {end})")
-      reference_raw = await asyncio.to_thread(self._serialize_reference_events_sync, events)
-
+    # A full-corpus reference carries every parent event, so raw lines stream
+    # into it verbatim; the parse-and-reserialize round trip only buys the
+    # truncation a takeover point asks for.
     meta = SessionMetadata(
         name=parent.name if inherit_scheduling else f"{name_prefix}{parent.name}",
         parent_session_id=parent_id,
@@ -908,7 +999,14 @@ class SessionManager:
     self._create_session_dirs(session_dir)
 
     reference_path = self.parent_reference_path(meta.id)
-    await asyncio.to_thread(self._write_reference_raw_sync, reference_path, reference_raw)
+    if event_index is None:
+      await asyncio.to_thread(self._write_reference_from_sources_sync, reference_path, parent_id, end)
+    else:
+      events, _ = await asyncio.to_thread(self.load_chat_events_range, parent_id, 0, end)
+      if len(events) != end:
+        raise ValueError(f"loaded {len(events)} parent events for requested range [0, {end})")
+      reference_raw = await asyncio.to_thread(self._serialize_reference_events_sync, events)
+      await asyncio.to_thread(self._write_reference_raw_sync, reference_path, reference_raw)
 
     events_path = self.get_chat_events_path(meta.id)
     clone_event = {
@@ -995,65 +1093,52 @@ class SessionManager:
   def _serialize_reference_events_sync(events: list[dict]) -> str:
     return "".join(json.dumps(event) + "\n" for event in events)
 
-  def _read_reference_raw_sync(self, parent_id: str, end: int) -> str:
-    """Concatenate the parent's raw event lines for a full-corpus reference.
+  def _write_reference_from_sources_sync(self, path: Path, parent_id: str, end: int) -> None:
+    """Write the parent's raw event lines for a full-corpus reference into ``path``.
 
-    Returns the non-blank lines among the first ``archive_take`` raw archive
+    Streams the non-blank lines among the first ``archive_take`` raw archive
     lines (``data/archives/`` in the chronological filename glob) followed by
     the non-blank lines among the first ``end - archive_take`` raw live lines,
-    with ``archive_take`` the read-time archive offset capped at ``end``. This
+    with ``archive_take`` the write-time archive offset capped at ``end``. This
     is the event sequence ``load_chat_events_range`` parses for the range
     ``[0, end)``: both sides read the offset when the read starts — an archive
-    pass landing between the caller's event count and this read moves lines
+    pass landing between the caller's event count and this write moves lines
     from the live file to the archive tail, changing the split but not the
     sequence — and both spend raw lines against the budget and skip blanks.
     The corrupt-corpus failures the parsed write surfaces through its length
-    check stay loud here without paying the parse: a non-blank line that a
-    serialized event dict cannot produce (not wrapped in ``{}``) raises, and so
-    does a take that ends short.
+    check stay loud here without paying the parse
+    (:func:`_stream_reference_lines`), and so does a take that ends short.
     """
     archive_take = min(self._chat_events.read_archive_offset_sync(parent_id), end)
     live_take = end - archive_take
     parent_dir = self._session_dir(parent_id)
-    parts: list[str] = []
+    path.parent.mkdir(parents=True, exist_ok=True)
 
-    def take_lines(path: Path, take: int) -> tuple[int, int]:
-      raw = 0
-      appended = 0
-      with open(path, encoding="utf-8") as stream:
-        for line in stream:
-          if raw >= take:
+    def _write(out: BinaryIO) -> None:
+      archives_dir = parent_dir / "data" / "archives"
+      raw_left = archive_take
+      archived = 0
+      if raw_left and archives_dir.is_dir():
+        for source in sorted(archives_dir.glob("chat_events.*.jsonl")):
+          if raw_left <= 0:
             break
-          raw += 1
-          stripped = line.strip()
-          if not stripped:
-            continue
-          if not stripped.startswith("{") or not stripped.endswith("}"):
-            raise ValueError(f"parent event line is not a serialized event object: {stripped[:80]!r}")
-          parts.append(line if line.endswith("\n") else line + "\n")
-          appended += 1
-      return raw, appended
+          # A full-corpus budget spans nearly the whole file (only an archive
+          # pass mid-fork shrinks a take below the line count), so read_bytes
+          # over-reads no bytes worth chunk-accumulating against.
+          raw, appended = _stream_reference_lines(out, source.read_bytes(), raw_left)
+          raw_left -= raw
+          archived += appended
+      if archived != archive_take:
+        raise ValueError(f"loaded {archived} archived parent events for requested range [0, {archive_take})")
 
-    archives_dir = parent_dir / "data" / "archives"
-    raw_left = archive_take
-    archived = 0
-    if raw_left and archives_dir.is_dir():
-      for path in sorted(archives_dir.glob("chat_events.*.jsonl")):
-        if raw_left <= 0:
-          break
-        raw, appended = take_lines(path, raw_left)
-        raw_left -= raw
-        archived += appended
-    if archived != archive_take:
-      raise ValueError(f"loaded {archived} archived parent events for requested range [0, {archive_take})")
+      live_path = self.get_chat_events_path(parent_id)
+      live = 0
+      if live_take and live_path.exists():
+        _, live = _stream_reference_lines(out, live_path.read_bytes(), live_take)
+      if live != live_take:
+        raise ValueError(f"loaded {live} live parent events for requested range [0, {live_take})")
 
-    live_path = self.get_chat_events_path(parent_id)
-    live = 0
-    if live_take and live_path.exists():
-      _, live = take_lines(live_path, live_take)
-    if live != live_take:
-      raise ValueError(f"loaded {live} live parent events for requested range [0, {live_take})")
-    return "".join(parts)
+    atomic_write_stream(path, _write)
 
   @staticmethod
   def _write_reference_raw_sync(path: Path, raw: str) -> None:

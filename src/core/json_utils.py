@@ -4,7 +4,9 @@ import contextlib
 import json
 import os
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+from typing import BinaryIO
 
 import structlog
 
@@ -46,6 +48,28 @@ def atomic_write_text(path: Path, text: str, *, private: bool = False) -> None:
       # the payload is never briefly wider-readable before the swap.
       temporary.touch(mode=0o600)
     temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, path)
+  except BaseException:
+    with contextlib.suppress(OSError):
+      temporary.unlink()
+    raise
+
+
+def atomic_write_stream(path: Path, write: Callable[[BinaryIO], None], *, private: bool = False) -> None:
+  """Stream the payload ``write`` emits into *path* atomically.
+
+  ``write`` receives the uniquely named tmp sibling open for binary writing
+  and runs to completion before the swap; the tmp-naming, ``os.replace``
+  publish, and mid-write cleanup rules are :func:`atomic_write_text`'s,
+  byte-shaped so a large payload never materializes as one object.
+  ``private=True`` marks the file 0600 (see :func:`atomic_write_text`).
+  """
+  temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+  try:
+    if private:
+      temporary.touch(mode=0o600)
+    with temporary.open("wb") as stream:
+      write(stream)
     os.replace(temporary, path)
   except BaseException:
     with contextlib.suppress(OSError):

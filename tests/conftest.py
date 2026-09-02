@@ -132,6 +132,25 @@ def read_chat_events(home: Path, session_id: str) -> list[dict]:
   return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+def count_path_read_text(monkeypatch: pytest.MonkeyPatch, include: Callable[[Path], bool]) -> list[Path]:
+  """Patch ``Path.read_text`` to collect every read path that *include* accepts; returns the live list.
+
+  The patch starts where the helper is called, so stage warmup reads first; the returned list grows
+  with each matching read until monkeypatch reverts at teardown. An empty-list assert is the
+  "steady state pays no file read" check the per-file memo suites share.
+  """
+  real_read_text = Path.read_text
+  reads: list[Path] = []
+
+  def counting_read_text(path: Path, *args: object, **kwargs: object) -> str:
+    if include(path):
+      reads.append(path)
+    return real_read_text(path, *args, **kwargs)
+
+  monkeypatch.setattr(Path, "read_text", counting_read_text)
+  return reads
+
+
 def assistant_event(content: str, event_id: str = "assistant") -> dict:
   """An ASSISTANT event whose message is a single text block; projection and aggregator tests build on this
   shape, and a test needing extra fields (timestamp, token usage) builds its own or merges them in."""

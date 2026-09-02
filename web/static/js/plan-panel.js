@@ -162,14 +162,20 @@ const planPanel = (() => {
     return _filesUrl(file, sessionId, sessionsRoot, 'plan panel files fetch');
   }
 
+  // Full literal class strings: Tailwind's content scan only generates
+  // classes it sees as complete tokens, so these stay whole literals, never
+  // `bg-${color}-900`-style fragments.
+  var STATE_BADGE_APPROVED = 'bg-green-900 text-green-300';
+  var STATE_BADGE_NEUTRAL = 'bg-gray-700 text-gray-400';
+
   function stateBadgeClass(stateStr) {
     var s = String(stateStr || '');
-    if (s === 'approved') return 'bg-green-900 text-green-300';
+    if (s === 'approved') return STATE_BADGE_APPROVED;
     if (s === 'awaiting approval') return 'bg-blue-900 text-blue-300';
     if (s === 'in flight') return 'bg-slate-700 text-slate-300';
-    if (s.indexOf('approved') === 0) return 'bg-green-900 text-green-300';
-    if (s === 'superseded' || s === 'abandoned') return 'bg-gray-700 text-gray-400';
-    return 'bg-gray-700 text-gray-400';
+    if (s.indexOf('approved') === 0) return STATE_BADGE_APPROVED;
+    if (s === 'superseded' || s === 'abandoned') return STATE_BADGE_NEUTRAL;
+    return STATE_BADGE_NEUTRAL;
   }
 
   // -- DOM helpers --------------------------------------------------------

@@ -148,9 +148,9 @@ function confirmDeletePermanently(sessionId) {
 
   const overlay = document.createElement('div');
   overlay.id = 'delete-confirm-overlay';
-  overlay.className = 'fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center';
+  overlay.className = Sidebar.MODAL_OVERLAY_CLASS;
   overlay.innerHTML = `
-    <div class="bg-slate-800 rounded-xl shadow-xl border border-slate-700 p-5 w-72 text-center"
+    <div class="${Sidebar.MODAL_DIALOG_CLASS} text-center"
          onclick="event.stopPropagation()">
       <svg class="w-8 h-8 text-red-400 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         ${Sidebar.TRASH_SVG_PATH}

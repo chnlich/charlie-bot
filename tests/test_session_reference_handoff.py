@@ -124,8 +124,9 @@ async def test_reference_raw_uses_read_time_archive_split(tmp_path: Path) -> Non
   end = mgr.get_chat_event_count_sync(parent.id)
   await mgr.recycle_scheduled_session(parent.id, cutoff)
 
-  raw = mgr._read_reference_raw_sync(parent.id, end)
-  assert raw == "".join(json.dumps(event) + "\n" for event in events)
+  reference = tmp_path / "reference.jsonl"
+  mgr._write_reference_from_sources_sync(reference, parent.id, end)
+  assert reference.read_text(encoding="utf-8") == "".join(json.dumps(event) + "\n" for event in events)
 
 
 @pytest.mark.asyncio

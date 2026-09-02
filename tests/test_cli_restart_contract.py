@@ -1,6 +1,6 @@
 """CLI restart-crossing contract: bounded connect retry, server rejection, and
-readback determinism (plan r11 section 4.1 CLI table + the two readback
-scenarios from section 4.2 that nothing else in the tree constructs).
+readback determinism, incl. the two readback scenarios that nothing else in
+the tree constructs.
 
 All tests here are in-process: no CLI subprocess, no real CharlieBot server.
 Network-shaped tests either mock ``requests.post``/``requests.get`` directly

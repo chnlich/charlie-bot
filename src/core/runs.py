@@ -77,7 +77,7 @@ def backend_type(cfg: CharlieBotConfig, backend_id: str | None) -> str | None:
 
 
 class RunOutcome(StrEnum):
-  """The six outcome-table rows for an interrupted run (plan r11 section 4.1)."""
+  """Outcome rows for an interrupted run."""
   COMPLETED = "completed"  # last result event exists -> finalize from it
   RUNNING = "running"  # alive and producing output -> re-attach
   DIED = "died"  # gone without a result event -> fail, keep worktree
@@ -100,7 +100,7 @@ class RunResolution:
   # Raw log's final mtime — the run's true completion time, independent of
   # downtime. Present whenever the raw log exists.
   completed_at: datetime | None = None
-  # Descendants that outlived the run while holding its raw-log fd (row 5).
+  # Descendants that outlived the run while holding its raw-log fd.
   leftover_holders: tuple[HolderProcess, ...] = ()
 
 

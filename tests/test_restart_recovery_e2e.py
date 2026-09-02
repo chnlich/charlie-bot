@@ -266,7 +266,7 @@ async def _recover(
 
 
 def _assert_run_converged(home: Path, ids: dict) -> dict:
-  """Terminal state both scenarios must reach, straight from the contract."""
+  """Terminal state both scenarios must reach."""
   meta = _read_meta(home, ids["session"], ids["thread"])
   assert meta["status"] == "completed"
   assert meta["exit_code"] == 0
@@ -411,7 +411,7 @@ async def test_projection_exact_equality_at_deterministic_line_boundary(
 
 
 # ---------------------------------------------------------------------------
-# Finalize idempotency across repeated restarts (contract line 38)
+# Finalize idempotency across repeated restarts
 # ---------------------------------------------------------------------------
 
 
@@ -458,7 +458,7 @@ async def _settle_finalize_window(home: Path, session_id: str, original_id: str)
 
 @pytest.mark.asyncio
 async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Contract line 38: drive the reconcile N (>=3) times over the same terminal,
+  """Drive the reconcile N (>=3) times over the same terminal,
   review-needing thread and assert the finalize effects — terminal worker_summary,
   master wake, reviewer thread, and the reviewer's commits reaching origin — each
   land exactly once (per ONE reviewer run), not once per reconcile. The server

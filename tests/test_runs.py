@@ -150,7 +150,7 @@ def test_raw_cursor_roundtrip_and_fallbacks(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# resolve_run: the six outcome rows
+# resolve_run: the outcome rows
 # ---------------------------------------------------------------------------
 
 
@@ -274,7 +274,7 @@ def test_resolve_drops_torn_final_line_from_the_result_scan(tmp_path: Path) -> N
 
 
 # ---------------------------------------------------------------------------
-# Leftover fd holders (row 5)
+# Leftover fd holders
 # ---------------------------------------------------------------------------
 
 

@@ -82,7 +82,7 @@ charlie-bot/
 | **Worker Agent** | Claude Code CLI (`src/agents/worker.py`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
 | **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto base branch, merges (ff-only), and cleans up the worktree. Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `model_preference` config). |
 
-**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`), with implementations for Claude Code, Kimi, Codex, Gemini, and OpenCode. Backend selection is configured via `backend_options` and `model_preference` in `config.yaml`.
+**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`), with implementations for Claude Code, Kimi, Codex, Gemini, OpenCode, and charlie-code. Backend selection is configured via `backend_options` and `model_preference` in `config.yaml`.
 
 ### 4.2 Session & Thread Model
 - **Session**: Represents a project/workspace. Each Session has:

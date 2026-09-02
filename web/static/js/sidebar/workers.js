@@ -65,6 +65,42 @@ function triggerCardBodyHtml(triggerId, status, message, fireAt, sessionId) {
     + '</div>';
 }
 
+const WORKER_CARD_CLASS = 'bg-slate-800 rounded-xl border border-slate-700 overflow-hidden';
+
+// A thread card gets painted from two sites -- the full renderWorkersTab pass
+// and the live addWorkerCard append -- and updateWorkerStatus rewrites the
+// dot, status line, and cancel button by id. One body builder keeps both
+// painters on the ids and class chains the updater looks up.
+function workerCardBodyHtml(t, sessionId) {
+  const dotColor = STATUS_DOT_COLORS[t.status] || 'bg-slate-500';
+  const pulse = t.status === 'running' ? ' animate-pulse' : '';
+  const created = new Date(t.created_at);
+  let duration = '';
+  if (t.completed_at) {
+    const secs = Math.floor((new Date(t.completed_at) - created) / 1000);
+    duration = ' &middot; ' + Math.floor(secs / 60) + 'm' + (secs % 60) + 's';
+  }
+  const cancelBtn = t.status === 'running'
+    ? cancelButtonHtml("cancelThread('" + t.id + "', '" + sessionId + "')", 'Cancel', 'cancel-btn-' + t.id)
+    : '';
+  return '<div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-750" onclick="toggleThreadDetail(\'' + t.id + '\', \'' + sessionId + '\')">'
+    + '<span id="thread-dot-' + t.id + '" class="w-2 h-2 rounded-full flex-shrink-0 ' + dotColor + pulse + '"></span>'
+    + '<div class="flex-1 min-w-0">'
+    + '<p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal(\'Worker Description\', this.dataset.full)" data-full="' + escapeHtmlAttr(t.description) + '">' + escapeHtml(t.description || '') + '</p>'
+    + '<p id="thread-status-' + t.id + '" class="text-xs text-slate-500">' + (t.status || 'idle') + ' &middot; ' + formatCardTimestamp(created) + duration + (t.backend ? ' &middot; ' + (BACKEND_OPTIONS[t.backend] || t.backend) : '') + '</p>'
+    + workerUuidRow(t.id)
+    + '</div>'
+    + cancelBtn
+    + '<svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-' + t.id + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+    + Sidebar.CHEVRON_SVG_PATH
+    + '</svg>'
+    + '</div>'
+    + '<div id="thread-detail-' + t.id + '" class="hidden border-t border-slate-700">'
+    + '<div id="thread-attach-' + t.id + '" class="px-4 pt-4 hidden"></div>'
+    + '<div id="thread-events-' + t.id + '" class="p-4 max-h-96 overflow-y-auto"><p class="text-xs text-slate-500">Loading events...</p></div>'
+    + '</div>';
+}
+
 function renderWorkersTab(threads, sessionId, triggers) {
   const container = document.getElementById('tab-workers');
   if (!container) return;
@@ -76,37 +112,8 @@ function renderWorkersTab(threads, sessionId, triggers) {
     return;
   }
 
-  const threadCards = (threads || []).map(t => {
-    const dotColor = STATUS_DOT_COLORS[t.status] || 'bg-slate-500';
-    const pulse = t.status === 'running' ? ' animate-pulse' : '';
-    const created = new Date(t.created_at);
-    const timeStr = formatCardTimestamp(created);
-    let duration = '';
-    if (t.completed_at) {
-      const secs = Math.floor((new Date(t.completed_at) - created) / 1000);
-      duration = ' &middot; ' + Math.floor(secs / 60) + 'm' + (secs % 60) + 's';
-    }
-    const cancelBtn = t.status === 'running'
-      ? cancelButtonHtml("cancelThread('" + t.id + "', '" + sessionId + "')", 'Cancel', 'cancel-btn-' + t.id)
-      : '';
-    return '<div class="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">'
-      + '<div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-750" onclick="toggleThreadDetail(\'' + t.id + '\', \'' + sessionId + '\')">'
-      + '<span id="thread-dot-' + t.id + '" class="w-2 h-2 rounded-full flex-shrink-0 ' + dotColor + pulse + '"></span>'
-      + '<div class="flex-1 min-w-0">'
-      + '<p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal(\'Worker Description\', this.dataset.full)" data-full="' + escapeHtmlAttr(t.description) + '">' + escapeHtml(t.description || '') + '</p>'
-      + '<p id="thread-status-' + t.id + '" class="text-xs text-slate-500">' + (t.status || 'idle') + ' &middot; ' + timeStr + duration + (t.backend ? ' &middot; ' + (BACKEND_OPTIONS[t.backend] || t.backend) : '') + '</p>'
-      + workerUuidRow(t.id)
-      + '</div>'
-      + cancelBtn
-      + '<svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-' + t.id + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-      + Sidebar.CHEVRON_SVG_PATH
-      + '</svg>'
-      + '</div>'
-      + '<div id="thread-detail-' + t.id + '" class="hidden border-t border-slate-700">'
-      + '<div id="thread-attach-' + t.id + '" class="px-4 pt-4 hidden"></div>'
-      + '<div id="thread-events-' + t.id + '" class="p-4 max-h-96 overflow-y-auto"><p class="text-xs text-slate-500">Loading events...</p></div>'
-      + '</div></div>';
-  });
+  const threadCards = (threads || []).map(t =>
+    '<div class="' + WORKER_CARD_CLASS + '">' + workerCardBodyHtml(t, sessionId) + '</div>');
 
   const triggerCards = triggers.map(tr => {
     const chrome = triggerStatusChrome(tr.status);
@@ -265,29 +272,11 @@ function addWorkerCard(threadId, description, createdAt, backend) {
   // Don't add duplicate
   if (document.getElementById('thread-dot-' + threadId)) return;
   const card = document.createElement('div');
-  card.className = 'bg-slate-800 rounded-xl border border-slate-700 overflow-hidden';
-  const nowStr = formatCardTimestamp(createdAt ? new Date(createdAt) : new Date());
-  card.innerHTML = `
-    <div class="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-slate-750"
-         onclick="toggleThreadDetail('${threadId}', '${SESSION_ID}')">
-      <span id="thread-dot-${threadId}" class="w-2 h-2 rounded-full flex-shrink-0 ${STATUS_DOT_COLORS.running} animate-pulse"></span>
-      <div class="flex-1 min-w-0">
-        <p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); showTextModal('Worker Description', this.dataset.full)" data-full="${escapeHtmlAttr(description)}">${escapeHtml(description || '')}</p>
-        <p id="thread-status-${threadId}" class="text-xs text-slate-500">running &middot; ${nowStr}${backend ? ' &middot; ' + (BACKEND_OPTIONS[backend] || backend) : ''}</p>
-        ${workerUuidRow(threadId)}
-      </div>
-      ${cancelButtonHtml(`cancelThread('${threadId}', '${SESSION_ID}')`, 'Cancel', `cancel-btn-${threadId}`)}
-      <svg class="w-4 h-4 text-slate-500 transition-transform thread-chevron" id="chevron-${threadId}"
-           fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        ${Sidebar.CHEVRON_SVG_PATH}
-      </svg>
-    </div>
-    <div id="thread-detail-${threadId}" class="hidden border-t border-slate-700">
-      <div id="thread-attach-${threadId}" class="px-4 pt-4 hidden"></div>
-      <div id="thread-events-${threadId}" class="p-4 max-h-96 overflow-y-auto">
-        <p class="text-xs text-slate-500">Loading events...</p>
-      </div>
-    </div>`;
+  card.className = WORKER_CARD_CLASS;
+  card.innerHTML = workerCardBodyHtml({
+    id: threadId, status: 'running', description: description,
+    created_at: createdAt || new Date().toISOString(), backend: backend,
+  }, SESSION_ID);
   container.prepend(card);
   updateWorkersTabBadge();
 }

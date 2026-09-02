@@ -7,6 +7,8 @@ const { createClassList, createEscapingElement } = require('./dom_element_stub')
 
 const { escapeHtml } = require('./escape_html_stub');
 
+const { makeAnchor, makeProseRoot } = require('./chat_prose_stub');
+
 const COMPAT_LOADER_JS = readStatic('compat-loader.js');
 const CHAT_JS = readStatic('chat.js');
 const FILE_UPLOAD_JS = readStatic('file-upload.js');
@@ -86,57 +88,6 @@ function loadChatScript() {
   return context;
 }
 
-function makeAnchor(href) {
-  return {
-    dataset: {},
-    isConnected: true,
-    href,
-    getAttribute(name) {
-      return name === 'href' ? this.href : null;
-    },
-    setAttribute(name, value) {
-      if (name === 'href') this.href = value;
-    },
-    closest(selector) {
-      return selector === '.prose-msg' ? this.prose : null;
-    },
-  };
-}
-
-function makeProseRoot(anchors) {
-  const parent = {
-    inserted: [],
-    insertBefore(child) {
-      this.inserted.push(child);
-      child.parentNode = this;
-      return child;
-    },
-  };
-  const prose = {
-    id: '',
-    parentNode: parent,
-    nextSibling: null,
-    nextElementSibling: null,
-    closest() {
-      return null;
-    },
-    querySelectorAll(selector) {
-      if (selector === 'a[href]') return anchors;
-      if (selector === 'code') return [];
-      return [];
-    },
-  };
-  for (const anchor of anchors) anchor.prose = prose;
-  return {
-    parent,
-    root: {
-      querySelectorAll(selector) {
-        return selector === '.prose-msg' ? [prose] : [];
-      },
-    },
-  };
-}
-
 function makeText(value) {
   return {nodeType: 3, nodeValue: value};
 }
@@ -151,45 +102,6 @@ function makeCodeEl(value) {
     isConnected: true,
     closest(selector) {
       return selector === '.prose-msg' ? this.prose : null;
-    },
-  };
-}
-
-function makeProseRootWithChildren(opts) {
-  opts = opts || {};
-  const parent = {
-    inserted: [],
-    insertBefore(child) {
-      this.inserted.push(child);
-      child.parentNode = this;
-      return child;
-    },
-  };
-  const prose = {
-    id: opts.id || '',
-    isConnected: true,
-    nodeType: 1,
-    tagName: 'DIV',
-    childNodes: opts.childNodes || [],
-    parentNode: parent,
-    nextSibling: null,
-    nextElementSibling: null,
-    closest() {
-      return null;
-    },
-    querySelectorAll(selector) {
-      if (selector === 'a[href]') return opts.anchors || [];
-      if (selector === 'code') return opts.codes || [];
-      return [];
-    },
-  };
-  for (const el of [...(opts.anchors || []), ...(opts.codes || [])]) el.prose = prose;
-  return {
-    parent,
-    root: {
-      querySelectorAll(selector) {
-        return selector === '.prose-msg' ? [prose] : [];
-      },
     },
   };
 }
@@ -420,7 +332,7 @@ test('embedLinkedHtmlArtifacts stamps artifact prose links and rendered card ope
   context.SESSION_ID = 'view-session';
   const artifactAnchor = makeAnchor('/files/%2Ftmp%2Freport/artifacts/plot.html#old');
   const plainAnchor = makeAnchor('/files/%2Ftmp%2Freport/readme.txt#keep');
-  const {root, parent} = makeProseRoot([artifactAnchor, plainAnchor]);
+  const {root, parent} = makeProseRoot({anchors: [artifactAnchor, plainAnchor]});
 
   context.Chat.embedLinkedHtmlArtifacts(root);
   assert.equal(
@@ -456,7 +368,7 @@ test('findArtifactLinkInCode extracts artifact URLs from inline code text', () =
 test('embedLinkedHtmlArtifacts embeds a bare artifact path in plain prose text', async () => {
   const context = loadChatScript();
   const barePath = '/files/home/x/.charliebot/sessions/abc/artifacts/report.html';
-  const {root, parent} = makeProseRootWithChildren({childNodes: [makeText(barePath)]});
+  const {root, parent} = makeProseRoot({childNodes: [makeText(barePath)]});
 
   context.Chat.embedLinkedHtmlArtifacts(root);
   await new Promise((resolve) => setImmediate(resolve));
@@ -473,7 +385,7 @@ test('embedLinkedHtmlArtifacts embeds an artifact path inside a <code> span', as
   const context = loadChatScript();
   const path = '/files/home/x/.charliebot/sessions/abc/artifacts/report.html';
   const codeSpan = makeCodeEl(path);
-  const {root, parent} = makeProseRootWithChildren({childNodes: [codeSpan], codes: [codeSpan]});
+  const {root, parent} = makeProseRoot({childNodes: [codeSpan], codes: [codeSpan]});
 
   context.Chat.embedLinkedHtmlArtifacts(root);
   await new Promise((resolve) => setImmediate(resolve));
@@ -485,7 +397,7 @@ test('embedLinkedHtmlArtifacts does not double-embed a path in both plain text a
   const context = loadChatScript();
   const path = '/files/home/x/.charliebot/sessions/abc/artifacts/report.html';
   const codeSpan = makeCodeEl(path);
-  const {root, parent} = makeProseRootWithChildren({
+  const {root, parent} = makeProseRoot({
     childNodes: [makeText(path), codeSpan],
     codes: [codeSpan],
   });
@@ -498,7 +410,7 @@ test('embedLinkedHtmlArtifacts does not double-embed a path in both plain text a
 
 test('embedLinkedHtmlArtifacts ignores plain text that does not match the artifact pattern', async () => {
   const context = loadChatScript();
-  const {root, parent} = makeProseRootWithChildren({
+  const {root, parent} = makeProseRoot({
     childNodes: [makeText('See /files/home/x/readme.txt and arbitrary /files/some/random/path')],
   });
 
@@ -512,7 +424,7 @@ test('embedLinkedHtmlArtifacts does not double-embed a path in both plain text a
   const context = loadChatScript();
   const path = '/files/home/x/.charliebot/sessions/abc/artifacts/report.html';
   const anchor = makeAnchor(path);
-  const {root, parent} = makeProseRootWithChildren({anchors: [anchor], childNodes: [makeText(path)]});
+  const {root, parent} = makeProseRoot({anchors: [anchor], childNodes: [makeText(path)]});
 
   context.Chat.embedLinkedHtmlArtifacts(root);
   await new Promise((resolve) => setImmediate(resolve));
@@ -523,7 +435,7 @@ test('embedLinkedHtmlArtifacts does not double-embed a path in both plain text a
 test('embedLinkedHtmlArtifacts does not embed bare paths in the streaming message', async () => {
   const context = loadChatScript();
   const barePath = '/files/home/x/.charliebot/sessions/abc/artifacts/report.html';
-  const {root, parent} = makeProseRootWithChildren({id: 'streaming-msg', childNodes: [makeText(barePath)]});
+  const {root, parent} = makeProseRoot({id: 'streaming-msg', childNodes: [makeText(barePath)]});
 
   context.Chat.embedLinkedHtmlArtifacts(root);
   await new Promise((resolve) => setImmediate(resolve));

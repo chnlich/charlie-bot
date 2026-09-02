@@ -14,6 +14,8 @@ const { escapeHtml } = require('./escape_html_stub');
 
 const { SESSIONS_ROOT, SESSION_ID, SESSION_DIR } = require('./sessions_root_stub');
 
+const { makeAnchor, makeProseRoot } = require('./chat_prose_stub');
+
 const NAMESPACE_JS = readStatic('chat/namespace.js');
 const ARTIFACTS_JS = readStatic('chat/artifacts.js');
 
@@ -85,42 +87,6 @@ function makeCard(absPath, fetchUrl) {
   return card;
 }
 
-function makeAnchor(href, prose) {
-  return {
-    dataset: {},
-    isConnected: true,
-    href,
-    getAttribute: (name) => (name === 'href' ? href : null),
-    setAttribute(name, value) { if (name === 'href') this.href = value; },
-    closest: (selector) => (selector === '.prose-msg' ? prose : null),
-  };
-}
-
-function makeProseRoot(hrefs) {
-  const parent = {
-    inserted: [],
-    insertBefore(child) {
-      this.inserted.push(child);
-      return child;
-    },
-  };
-  const prose = {
-    id: '',
-    parentNode: parent,
-    nextSibling: null,
-    nextElementSibling: null,
-    closest: () => null,
-    childNodes: [],
-    querySelectorAll: (selector) => (selector === 'a[href]' ? anchors : []),
-  };
-  const anchors = hrefs.map((href) => makeAnchor(href, prose));
-  return {
-    parent,
-    prose,
-    root: {querySelectorAll: (selector) => (selector === '.prose-msg' ? [prose] : [])},
-  };
-}
-
 const ARTIFACT_HREF = '/files' + SESSION_DIR + '/artifacts/report.html';
 const ARTIFACT_ABS = SESSION_DIR + '/artifacts/report.html';
 
@@ -130,7 +96,7 @@ const ARTIFACT_ABS = SESSION_DIR + '/artifacts/report.html';
 
 test('rendering a message with an artifact link creates a card, not an iframe', async () => {
   const {context, fetches} = loadArtifactsScript();
-  const {root, parent} = makeProseRoot([ARTIFACT_HREF]);
+  const {root, parent} = makeProseRoot({anchors: [makeAnchor(ARTIFACT_HREF)]});
 
   context.Chat.embedLinkedHtmlArtifacts(root);
   await new Promise((resolve) => setImmediate(resolve));
@@ -148,7 +114,7 @@ test('rendering a message with an artifact link creates a card, not an iframe', 
 
 test('the rendered card carries the abs path and fetch url the expand needs', async () => {
   const {context} = loadArtifactsScript();
-  const {root, parent} = makeProseRoot([ARTIFACT_HREF]);
+  const {root, parent} = makeProseRoot({anchors: [makeAnchor(ARTIFACT_HREF)]});
 
   context.Chat.embedLinkedHtmlArtifacts(root);
   await new Promise((resolve) => setImmediate(resolve));
@@ -173,7 +139,7 @@ test('a registered plan version still renders the plan card and no iframe', asyn
     getRegistrySnapshot: () => snapshot,
   };
   const {context, fetches} = loadArtifactsScript({planPanel});
-  const {root, parent} = makeProseRoot(['/files' + SESSION_DIR + '/artifacts/plan_01.html']);
+  const {root, parent} = makeProseRoot({anchors: [makeAnchor('/files' + SESSION_DIR + '/artifacts/plan_01.html')]});
 
   context.Chat.embedLinkedHtmlArtifacts(root);
   await new Promise((resolve) => setImmediate(resolve));
@@ -190,7 +156,7 @@ test('a delayed registry still embeds an artifact in a detached engine fragment'
   let resolveReady;
   const planPanel = {ready: () => new Promise((resolve) => { resolveReady = resolve; })};
   const {context} = loadArtifactsScript({planPanel});
-  const {root, parent, prose} = makeProseRoot([ARTIFACT_HREF]);
+  const {root, parent, prose} = makeProseRoot({anchors: [makeAnchor(ARTIFACT_HREF)]});
   const anchor = prose.querySelectorAll('a[href]')[0];
   anchor.isConnected = false;
   prose.__turnEngineReadyFragment = true;

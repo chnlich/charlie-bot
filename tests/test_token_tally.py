@@ -20,7 +20,7 @@ NAME = "claude-model"
 
 
 @pytest.fixture(autouse=True)
-def _clear_aggregate_memo():
+def _clear_aggregate_memo() -> None:
   tt._reset_aggregate_memo()
   yield
   tt._reset_aggregate_memo()
@@ -419,14 +419,14 @@ def test_codex_cache_invalidates_on_append(tmp_path: Path) -> None:
   assert after.calls == before.calls + 1
 
 
-def test_aggregate_memo_serves_unchanged_walk(tmp_path: Path, monkeypatch) -> None:
+def test_aggregate_memo_serves_unchanged_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   claude = Claude(tmp_path)
   claude.write(claude.work, "sess1", [
       _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   first = _collect(claude, None, db, cache)
 
-  def boom(path):
+  def boom(path: Path) -> None:
     raise AssertionError("log re-parsed on an aggregate-memo hit")
 
   monkeypatch.setattr(tt, "_claude_file_contribution", boom)
@@ -437,7 +437,7 @@ def test_aggregate_memo_serves_unchanged_walk(tmp_path: Path, monkeypatch) -> No
   assert second.scanned_bytes == 0
 
 
-def test_aggregate_memo_invalidates_on_append(tmp_path: Path, monkeypatch) -> None:
+def test_aggregate_memo_invalidates_on_append(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   claude = Claude(tmp_path)
   claude.write(claude.work, "sess1", [
       _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
@@ -447,7 +447,7 @@ def test_aggregate_memo_invalidates_on_append(tmp_path: Path, monkeypatch) -> No
   calls = 0
   real = tt._claude_file_contribution
 
-  def spy(path):
+  def spy(path: Path) -> tuple[dict, int]:
     nonlocal calls
     calls += 1
     return real(path)
@@ -462,7 +462,7 @@ def test_aggregate_memo_invalidates_on_append(tmp_path: Path, monkeypatch) -> No
   assert after.total == before.total + 1002
 
 
-def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, monkeypatch) -> None:
+def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The host pattern behind the memo: the opencode db's WAL moves under plain serve traffic
   # while the Claude/Codex logs sit unchanged, so the expensive partial must survive.
   claude = Claude(tmp_path)
@@ -472,7 +472,7 @@ def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, m
   _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
   first = _collect(claude, None, db, cache)
 
-  def boom(path):
+  def boom(path: Path) -> None:
     raise AssertionError("claude log re-parsed when only the opencode db moved")
 
   monkeypatch.setattr(tt, "_claude_file_contribution", boom)

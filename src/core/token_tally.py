@@ -20,8 +20,10 @@ hundred-megabyte-scale sources) plus the opencode db's whole contribution, so a 
 re-parses only the sources that changed. On top of that document, an in-process aggregate
 memo holds the merged Claude+Codex partial of the last collect, keyed on the walk signature:
 the home pairs, every log file's (path, mtime_ns, size), and the walk's own error strings.
-A hit serves the sums, spans and notes without replaying a single cached record; any corpus
-or permission move changes the signature and misses to the full path. The memo is order-safe
+A hit serves the sums, spans and notes without replaying a single cached record; misses to
+the full path follow the per-file cache's own visibility contract: appends, deletes, renames
+and directory-permission changes all move the signature, while a file-level chmod that
+leaves (mtime_ns, size) untouched keeps serving the cached parse. The memo is order-safe
 under an unstable walk order: cross-file dedupe arbitrates verbatim replays, which carry
 identical token values, so first-wins cannot move a sum. The opencode db stays outside the
 memo: its WAL sidecar moves under plain serve traffic, so its entry always round-trips the
@@ -463,7 +465,7 @@ select json_extract(data, '$.modelID'), json_extract(data, '$.providerID'),
        json_extract(data, '$.tokens.input'), json_extract(data, '$.tokens.output'),
        json_extract(data, '$.tokens.total'),
        json_extract(data, '$.tokens.cache.write'), json_extract(data, '$.tokens.cache.read'),
-       length(cast(data as blob))
+       length(data)
 from message
 where data like '%"tokens"%'
   and json_valid(data)

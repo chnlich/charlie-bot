@@ -787,7 +787,7 @@ async def test_present_rejects_missing_section_number_naming_the_assertion(tmp_p
 async def test_present_rejects_bare_ordinal_reference_naming_the_assertion(tmp_path: Path) -> None:
   """A plan page that names something outside it by a bare ordinal label fails ordinal-named; the
   registration gate refuses it through run_assertions with no gate change."""
-  offending = plan_page_html().replace("</body></html>", f"<p>计划 section 1 的措辞怎么收？</p></body></html>")
+  offending = plan_page_html().replace("</body></html>", "<p>计划 section 1 的措辞怎么收？</p></body></html>")
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=offending)
   with pytest.raises(ValueError, match="ordinal-named"):

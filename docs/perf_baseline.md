@@ -46,6 +46,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M33 assistant-stream draft render, full-turn replay | M33 collector below | seconds per replay of the largest on-disk assistant draft, 200 B deltas at 40 ms virtual cadence | median < 1.0 s | — (introduced with its first history row) |
 | M34 worker-events poll fetch at rendered count | M34 collector below | seconds + response bytes per events fetch, worst on-disk worker log | after=total median < 0.02 s; empty-tail body < 200 B | — (introduced with its first history row) |
 | M35 chat message-page responses, steady state | M35 collector below | seconds per request, worst projection corpus | events page median < 0.03 s | — (introduced with its first history row) |
+| M36 worker list poll payload and handler time, steady state | M36 collector below | seconds per list request + response body bytes, worst thread-metadata corpus | median < 0.02 s; body < 200 KB | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1731,6 +1732,75 @@ print(f"events page median {ev_t[2] * 1000:.2f} ms, max {ev_t[-1] * 1000:.2f} ms
 EOF
 ```
 
+M36 — worker list poll payload and handler time, steady state. The 3 s
+workers-panel poll (``GET /api/threads/{sid}/list``) ships every thread's
+description; task descriptions embed whole task specs, so the worst on-disk
+session's body measured 1.80 MB with ~16 ms of warm handler time, and the
+client pays a same-size JSON.parse every round. The panel paints one
+CSS-truncated line per card and reads the full text only in the click modal,
+so the fixed rows ship a 240-char prefix plus a ``description_full_len``
+marker that sends the modal to the thread row's fetch. The cost rides every
+poll while a panel is open, so the collector drives the endpoint through
+TestClient over the session whose threads directory carries the most metadata
+bytes (live state read-only), with the thread and trigger managers built once
+as the server's dependency singletons are — per-request manager instances
+would rebuild the M5/M24 memos on every call and drown the measured path in a
+memo-cold scan the live server never pays. One cold pass, as at first panel
+paint after a server start, then seven timed requests. Evidence while the
+live server runs older code points the same collector at the branch checkout
+(``CHECKOUT`` at the worktree root), the same shape as the M7 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from src.api.deps import get_thread_manager, get_trigger_manager
+from src.api.threads import router as threads_router
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
+from src.core.triggers import TriggerManager
+
+# Worst worker-list corpus: the session whose threads carry the most metadata
+# bytes; the endpoint reads live state read-only. Managers are built once, as
+# the server's dependency singletons are.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    t = d / "threads"
+    if t.is_dir():
+        n = sum((p / "metadata.json").stat().st_size for p in t.iterdir() if (p / "metadata.json").is_file())
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+
+cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+thread_mgr = ThreadManager(cfg)
+trigger_mgr = TriggerManager(cfg, SessionManager(cfg))
+app = FastAPI()
+app.include_router(threads_router, prefix="/api/threads")
+app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
+app.dependency_overrides[get_trigger_manager] = lambda: trigger_mgr
+client = TestClient(app)
+url = f"/api/threads/{SID}/list"
+
+r = client.get(url)  # cold pass, as at first panel paint after a server start; not timed
+times = []
+for _ in range(7):
+    t0 = time.perf_counter()
+    r = client.get(url)
+    times.append(time.perf_counter() - t0)
+times.sort()
+rows = r.json()
+trunc = sum(1 for row in rows if "description_full_len" in row)
+print(f"{best_n / 1e3:.0f} KB thread metadata over {len(rows)} rows in session {SID} ({trunc} truncated); "
+      f"poll median {times[3] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms, body {len(r.content)} B")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -1776,3 +1846,4 @@ EOF
 | 2026-09-02 | this PR | M34 events poll full fetch 0.0097 s / 860706 B → after=total 0.0035 s / 40 B (collector verbatim, 6.7 MB / 2177-event worst on-disk log, scratch CHARLIEBOT_HOME TestClient, main full arm vs branch full arm back-to-back at load 0.43/0.66/0.86, payload sha256-identical deb85be56bf4dbba; live-before corroboration 0.010 s / 860706 B warm from the running instance; prefix+tail reconstruction parity true, envelope rows byte-equal to plain-list rows) | events endpoint gains after=N envelope (append-only prefix cut on the projection, reset+full payload when the count is ahead) served through a model_dump JSONResponse — FastAPI's jsonable_encoder fallback for mapped returns measures 6x slower on the same list (48.8 ms vs 8.1 ms); client polls pass the rendered raw count and append tails via scratch paint + insertAdjacentHTML; M34 definition and healthy range introduced with this PR; M18 collector element stub gains dataset to match the real DOM |
 | 2026-09-02 | this PR | M35 events page median 21.99 ms → 14.75 ms, max 24.88 ms → 16.00 ms (558888 B, 211 msgs); view median 17.26 ms → 15.55 ms; bootstrap median 8.41 ms → 6.54 ms (collector verbatim, 20534-event worst live corpus snapshot, shared scratch CHARLIEBOT_HOME TestClient A/B, main checkout before vs final branch head after back-to-back at load 1.27/1.08/0.87 and 1.39/1.11/0.88; all three bodies sha-identical across arms: events f552ad6de73b, view 33e20ccff76d, bootstrap 61b3ca97cd5e) | events/view/bootstrap message-page handlers return JSONResponse directly, skipping FastAPI's jsonable_encoder pass (~3x a plain json.dumps on the 559 KB page); M35 definition and healthy range introduced with this PR |
 | 2026-09-02 | #628 | M17 fork median 0.2178 s → 0.1769 s, medians of three interleaved verbatim-collector rounds (5519 parent events, 36.3 MB corpus, scratch CHARLIEBOT_HOME A/B, main checkout before vs final branch head after at load 4.7-5.8; every paired round faster: 0.324 → 0.211, 0.218 → 0.177, 0.190 → 0.140; reference bytes byte-identical across arms on the corpus and on 12 synthetic framing shapes; earlier light-load phase profile: per-line str strip+join+encode ~190 ms of the fork's 140 ms) | full-corpus reference streams raw line bytes per source file into the atomic tmp sibling (new atomic_write_stream in json_utils) instead of decode→strip→join→encode in one big str: bulk numpy `{}`-shape check answers the common all-plain shape with one window write, per-frame fallback keeps CR folding and corrupt-line rejection; utf-8 validity keeps the text-mode read's UnicodeDecodeError parity |
+| 2026-09-02 | this PR | M36 poll median 15.60 ms → 7.98 ms, max 48.64 ms → 8.75 ms, body 1799215 B → 131896 B (collector verbatim, 1963 KB / 266-row worst worker-list corpus, 265 rows truncated after; main checkout before vs final branch head after back-to-back at load 0.91/0.98/1.02 and 1.00/1.00/1.02; card renders the identical one-line prefix; full text fetches on modal click only; earlier same-corpus round median 16.37 ms before vs 8.27 ms after at load ≤1.0) | workers-panel list rows ship a 240-char description prefix plus a description_full_len marker instead of whole task-spec-length descriptions; the full-text modal fetches the thread row on demand; M36 definition and healthy range introduced with this PR |

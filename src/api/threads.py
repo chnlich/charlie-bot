@@ -324,8 +324,6 @@ async def get_thread_events(
       {"events": [e.model_dump(mode="json") for e in events[start:]], "total": len(events), "reset": reset})
 
 
-
-
 @router.post("/{session_id}/threads/{thread_id}/cancel")
 async def cancel_thread(
     session_id: str,

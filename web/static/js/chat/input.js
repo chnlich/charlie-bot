@@ -51,10 +51,7 @@ function postChatMessage(content, extra) {
 }
 
 async function sendMessage() {
-  if (uploadsInFlight > 0) {
-    showToast(UPLOADS_IN_FLIGHT_MESSAGE, true);
-    return;
-  }
+  if (blockIfUploadsInFlight()) return;
   const input = document.getElementById('msg-input');
   const content = input.value.trim();
   const uploadedFilesForPayload = getUploadedFilesForPayload();

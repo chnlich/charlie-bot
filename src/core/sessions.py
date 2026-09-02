@@ -1,6 +1,7 @@
 """Session management for CharlieBot."""
 
 import asyncio
+import io
 import json
 import os
 import shutil
@@ -60,11 +61,13 @@ ELONE_BOOTSTRAP_OPENER = "You're taking over because the user wasn't satisfied w
 _METADATA_CACHE_TTL = 30.0  # seconds
 _SEARCH_RESULT_LIMIT = 200  # newest rows a name/content search returns; keeps the render bounded
 _PROJECTION_LRU_LIMIT = 8
-# LRU cap on the content-search miss memo: chat-file path -> ((mtime_ns, size),
+# LRU cap on the content-search miss memo: chat-file path -> ((mtime_ns, size, ino),
 # shortest absence-proven lowercase needle). Absence of N proves every
-# superstring of N absent while the file keeps that (mtime_ns, size) — the
-# append-only NDJSON signature the M9/M12 memos key on — so the debounced
+# superstring of N absent while the file keeps that signature, so the debounced
 # sidebar's growing query string re-reads a file only after the file moves.
+# Chat files mutate only by append between atomic archive rewrites (inode
+# swap), so a same-inode file that grew kept its old bytes: a query the stored
+# needle prefixes re-proves absence by scanning the appended tail alone.
 _SEARCH_MISS_MEMO_LIMIT = 256
 # str.lower() and substring search hold the GIL for the whole input, so the
 # sidebar content search reads chat files in windows of this many characters:
@@ -187,27 +190,35 @@ def has_pending_plan_approval_sync(plans_path: Path, session_id: str) -> bool:
   return any(plan.get("state") == "awaiting approval" for plan in result["plans"])
 
 
-def _scan_content_for_hit(path: Path, session_id: str, query_lower: str) -> bool | None:
+def _scan_content_for_hit(path: Path, session_id: str, query_lower: str, start: int) -> bool | None:
   """Character-window scan of a chat-events file for *query_lower* (thread-pool work).
 
-  Returns the verdict, or None when the file could not be read: an errored
-  scan proves no absence, so the caller must not memoize it as a miss.
+  *start* is a byte offset the scan begins at; the caller uses it to re-scan
+  only the bytes appended after a proven-absent prefix. The offset can split
+  a UTF-8 sequence, so a nonzero start decodes with ``errors="replace"`` and
+  the verdict equals a full strict scan's for every file a full scan can
+  decode. A zero start keeps strict decoding: a corrupt file fails loud as
+  before. Returns the verdict, or None when the file could not be read: an
+  errored scan proves no absence, so the caller must not memoize it as a miss.
   """
   overlap = len(query_lower) - 1
   tail = ""
   try:
-    with path.open(encoding="utf-8") as stream:
-      while True:
-        chunk = stream.read(_SEARCH_CHUNK_CHARS)
-        if not chunk:
-          return False
-        window = tail + chunk.lower()
-        if query_lower in window:
-          return True
-        # This and the next window together cover the file with an
-        # overlap of len(query)-1 chars, so a hit straddling the chunk
-        # boundary lies whole inside exactly one window.
-        tail = window[-overlap:] if overlap else ""
+    with path.open("rb") as raw:
+      if start:
+        raw.seek(start)
+      with io.TextIOWrapper(raw, encoding="utf-8", errors="replace" if start else "strict") as stream:
+        while True:
+          chunk = stream.read(_SEARCH_CHUNK_CHARS)
+          if not chunk:
+            return False
+          window = tail + chunk.lower()
+          if query_lower in window:
+            return True
+          # This and the next window together cover the file with an
+          # overlap of len(query)-1 chars, so a hit straddling the chunk
+          # boundary lies whole inside exactly one window.
+          tail = window[-overlap:] if overlap else ""
   except OSError as e:
     log.debug("search_read_failed", session_id=session_id, error=str(e))
     return None
@@ -357,7 +368,7 @@ class SessionManager:
     # hit requires the cached event_count to equal the live event count
     # (get_message_projection), so a stale projection is never served.
     self._projection_cache: OrderedDict[str, MessageProjection] = OrderedDict()
-    self._search_miss_memo: OrderedDict[str, tuple[tuple[int, int], str]] = OrderedDict()
+    self._search_miss_memo: OrderedDict[str, tuple[tuple[int, int, int], str]] = OrderedDict()
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -698,16 +709,25 @@ class SessionManager:
       memo_key = str(path)
       memo_entry = self._search_miss_memo.get(memo_key)
 
-      def _read_and_check() -> tuple[bool, tuple[int, int] | None]:
+      def _read_and_check() -> tuple[bool, tuple[int, int, int] | None]:
         try:
           stat = path.stat()
         except OSError as e:
           log.debug("search_read_failed", session_id=meta.id, error=str(e))
           return False, None
-        sig = (stat.st_mtime_ns, stat.st_size)
-        if memo_entry is not None and memo_entry[0] == sig and query_lower.startswith(memo_entry[1]):
-          return False, None  # proven-absent memo verdict: no file read
-        verdict = _scan_content_for_hit(path, meta.id, query_lower)
+        sig = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+        start = 0
+        if memo_entry is not None and query_lower.startswith(memo_entry[1]):
+          if memo_entry[0] == sig:
+            return False, None  # proven-absent memo verdict: no file read
+          old_size, old_ino = memo_entry[0][1], memo_entry[0][2]
+          if old_ino == stat.st_ino and stat.st_size > old_size:
+            # Same inode and larger: appends only, so the stored needle's
+            # absence still holds over the old bytes. A query occurrence
+            # crossing the old size starts at most 4 bytes per char earlier,
+            # hence the seek window; +8 covers decode resync at the offset.
+            start = max(0, old_size - (4 * len(query_lower) + 8))
+        verdict = _scan_content_for_hit(path, meta.id, query_lower, start)
         if verdict is None:
           return False, None
         return verdict, sig
@@ -728,13 +748,13 @@ class SessionManager:
     )
     return enriched[:_SEARCH_RESULT_LIMIT]
 
-  def _memoize_search_miss(self, memo_key: str, sig: tuple[int, int], needle: str) -> None:
-    """Record a clean full-scan miss under the shorter of the known needles.
+  def _memoize_search_miss(self, memo_key: str, sig: tuple[int, int, int], needle: str) -> None:
+    """Record a clean-scan miss under the shorter of the known needles.
 
     The shorter needle subsumes more superstrings, so an existing entry under
     the same signature wins when it is no longer than the fresh one; a moved
-    signature (append) always replaces, since the old scan says nothing about
-    the new bytes.
+    signature (append) always replaces with the new tail scan's signature,
+    since the old entry says nothing about the appended bytes.
     """
     existing = self._search_miss_memo.get(memo_key)
     if existing is not None and existing[0] == sig and len(existing[1]) <= len(needle):

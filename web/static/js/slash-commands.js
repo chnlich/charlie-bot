@@ -64,7 +64,7 @@ function navigateSlashPopup(direction) {
 async function executeSlashCommand(name, args, options = {}) {
   if (!SESSION_ID) return;
   if (uploadsInFlight > 0) {
-    showToast('Please wait for uploads to finish', true);
+    showToast(UPLOADS_IN_FLIGHT_MESSAGE, true);
     return;
   }
   const input = document.getElementById('msg-input');

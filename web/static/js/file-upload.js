@@ -5,6 +5,11 @@ let uploadedFiles = []; // Array of {id, filename, path, size, status, error}
 let uploadsInFlight = 0;
 let nextUploadId = 1;
 
+// The chat-input and slash-command send paths both refuse submission with this
+// toast while an upload is in flight; one constant keeps the two user-visible
+// copies from drifting.
+const UPLOADS_IN_FLIGHT_MESSAGE = 'Please wait for uploads to finish';
+
 function getUploadedFileById(id) {
   return uploadedFiles.find((file) => file.id === id) || null;
 }

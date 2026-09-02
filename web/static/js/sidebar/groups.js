@@ -4,6 +4,8 @@
 const GROUP_SESSION_PREVIEW_LIMIT = 5;
 const SESSION_GROUP_LIMIT_STORAGE_KEY = 'session-group-list-expanded';
 const CRON_GROUP_LIMIT_STORAGE_KEY = 'cron-group-list-expanded';
+const SESSION_GROUP_COLLAPSED_STORAGE_KEY = 'session-group-collapsed';
+const CRON_GROUP_COLLAPSED_STORAGE_KEY = 'cron-group-collapsed';
 const groupLimitState = {
   [SESSION_GROUP_LIMIT_STORAGE_KEY]: {},
   [CRON_GROUP_LIMIT_STORAGE_KEY]: {},
@@ -96,6 +98,12 @@ function toggleCronGroupLimit(key) {
   updateGroupLimitDom('cron', key, expanded);
 }
 
+const GROUP_MODAL_OVERLAY_ID = 'group-modal-overlay';
+
+function closeGroupModal() {
+  document.getElementById(GROUP_MODAL_OVERLAY_ID)?.remove();
+}
+
 async function showGroupSelector(sessionId, currentGroup) {
   // Fetch existing groups
   let groups = [];
@@ -109,10 +117,10 @@ async function showGroupSelector(sessionId, currentGroup) {
   }
 
   // Remove any existing modal
-  document.getElementById('group-modal-overlay')?.remove();
+  closeGroupModal();
 
   const overlay = document.createElement('div');
-  overlay.id = 'group-modal-overlay';
+  overlay.id = GROUP_MODAL_OVERLAY_ID;
   overlay.className = MODAL_OVERLAY_CLASS;
 
   const groupButtons = groups.map(g => {
@@ -140,7 +148,7 @@ async function showGroupSelector(sessionId, currentGroup) {
   overlay.querySelectorAll('[data-group]').forEach(btn => {
     btn.addEventListener('click', () => {
       const group = btn.dataset.group || null;
-      document.getElementById('group-modal-overlay')?.remove();
+      closeGroupModal();
       setSessionGroup(sessionId, group);
     });
   });
@@ -150,13 +158,13 @@ async function showGroupSelector(sessionId, currentGroup) {
     const input = document.getElementById('new-group-input');
     const name = input.value.trim();
     if (!name) return;
-    document.getElementById('group-modal-overlay')?.remove();
+    closeGroupModal();
     setSessionGroup(sessionId, name);
   };
   overlay.querySelector('#new-group-btn').addEventListener('click', addNewGroup);
   overlay.querySelector('#new-group-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') addNewGroup();
-    if (e.key === 'Escape') document.getElementById('group-modal-overlay')?.remove();
+    if (e.key === 'Escape') closeGroupModal();
   });
 
   // Close on overlay click
@@ -166,7 +174,7 @@ async function showGroupSelector(sessionId, currentGroup) {
   // Close on Escape
   const escHandler = (e) => {
     if (e.key === 'Escape') {
-      document.getElementById('group-modal-overlay')?.remove();
+      closeGroupModal();
       document.removeEventListener('keydown', escHandler);
     }
   };
@@ -361,7 +369,7 @@ function renderGroupedScheduledList(sessions, options = {}) {
     if (b === '') return -1;
     return a.localeCompare(b);
   });
-  const collapsedState = loadGroupCollapsedState('cron-group-collapsed');
+  const collapsedState = loadGroupCollapsedState(CRON_GROUP_COLLAPSED_STORAGE_KEY);
   const limitState = loadGroupLimitState(CRON_GROUP_LIMIT_STORAGE_KEY);
 
   let html = '';
@@ -401,10 +409,10 @@ function renderGroupedScheduledList(sessions, options = {}) {
 }
 
 function toggleCronGroup(key) {
-  const collapsedState = loadGroupCollapsedState('cron-group-collapsed');
+  const collapsedState = loadGroupCollapsedState(CRON_GROUP_COLLAPSED_STORAGE_KEY);
   const wasCollapsed = collapsedState[key] !== false;
   collapsedState[key] = !wasCollapsed;
-  localStorage.setItem('cron-group-collapsed', JSON.stringify(collapsedState));
+  localStorage.setItem(CRON_GROUP_COLLAPSED_STORAGE_KEY, JSON.stringify(collapsedState));
 
   const items = document.querySelector(`[data-group-items="${key}"]`);
   if (items) items.classList.toggle('hidden');
@@ -584,7 +592,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     if (b === '') return -1;
     return a.localeCompare(b);
   });
-  const collapsedState = loadGroupCollapsedState('session-group-collapsed');
+  const collapsedState = loadGroupCollapsedState(SESSION_GROUP_COLLAPSED_STORAGE_KEY);
   const limitState = loadGroupLimitState(SESSION_GROUP_LIMIT_STORAGE_KEY);
 
   let html = '';
@@ -657,10 +665,10 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
 }
 
 function toggleSessionGroup(key) {
-  const collapsedState = loadGroupCollapsedState('session-group-collapsed');
+  const collapsedState = loadGroupCollapsedState(SESSION_GROUP_COLLAPSED_STORAGE_KEY);
   const wasCollapsed = collapsedState[key] === true;
   collapsedState[key] = !wasCollapsed;
-  localStorage.setItem('session-group-collapsed', JSON.stringify(collapsedState));
+  localStorage.setItem(SESSION_GROUP_COLLAPSED_STORAGE_KEY, JSON.stringify(collapsedState));
 
   const items = Array.from(document.querySelectorAll('.session-group-items'))
     .find(el => el.dataset.sgroupItems === key);

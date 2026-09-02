@@ -14,6 +14,12 @@ let voiceFlushResolvers = new Map();
 
 const VOICE_CHUNK_SAMPLES = 2048;
 
+// Discard toasts name their failure mode through one constant each: the stop
+// path and the close race report the same closed connection, and both
+// undecodable server frames report the same invalid response.
+const VOICE_CONNECTION_CLOSED_MESSAGE = 'Voice connection closed before transcription finished';
+const VOICE_INVALID_RESPONSE_MESSAGE = 'Invalid voice response from server';
+
 const VOICE_WORKLET_SOURCE = `
 class VoiceCaptureProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -165,7 +171,7 @@ async function stopRecording() {
       voiceSocket.send(JSON.stringify({type: 'stop'}));
       showVoiceOverlay('Finalizing...');
     } else {
-      discardVoiceRecording('Voice connection closed before transcription finished');
+      discardVoiceRecording(VOICE_CONNECTION_CLOSED_MESSAGE);
     }
   } catch (err) {
     console.error('Voice stop failed:', err);
@@ -199,7 +205,7 @@ function setupVoiceSocketHandlers(socket, targetSession) {
       data = JSON.parse(event.data);
     } catch (err) {
       console.error('Invalid voice message:', err);
-      discardVoiceRecording('Invalid voice response from server');
+      discardVoiceRecording(VOICE_INVALID_RESPONSE_MESSAGE);
       return;
     }
 
@@ -216,13 +222,13 @@ function setupVoiceSocketHandlers(socket, targetSession) {
       discardVoiceRecording(data.text || 'Voice transcription failed');
       return;
     }
-    discardVoiceRecording('Invalid voice response from server');
+    discardVoiceRecording(VOICE_INVALID_RESPONSE_MESSAGE);
   };
 
   socket.onclose = () => {
     if (socket !== voiceSocket) return;
     if (isRecording || voiceStopping || voiceAwaitingFinal) {
-      discardVoiceRecording('Voice connection closed before transcription finished');
+      discardVoiceRecording(VOICE_CONNECTION_CLOSED_MESSAGE);
     }
   };
 

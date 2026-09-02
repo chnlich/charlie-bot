@@ -508,9 +508,8 @@ def _block_scan_text(block: _Element) -> str:
     for child in el.children:
       if isinstance(child, str):
         parts.append(child)
-      elif child.tag in _ORDINAL_SKIP_TAGS:
-        continue
-      elif child.tag in _ORDINAL_BLOCK_TAGS or (child.tag == "span" and "mtag" in child.classes):
+      elif child.tag in _ORDINAL_SKIP_TAGS or child.tag in _ORDINAL_BLOCK_TAGS or (
+          child.tag == "span" and "mtag" in child.classes):
         continue
       elif child.tag == "code":
         parts.append(_CODE_START)
@@ -528,7 +527,7 @@ def split_code_spans(s: str) -> tuple[str, list[tuple[int, int]]]:
   """Strip the code sentinels, returning the plain text and the [start, end) ranges that were inside <code>."""
   out: list[str] = []
   spans: list[tuple[int, int]] = []
-  start: "int | None" = None
+  start: int | None = None
   for ch in s:
     if ch == _CODE_START:
       start = len(out)

@@ -482,12 +482,14 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     option = cfg.get_backend_option(session_meta.backend)
   if option is None:
     if session_meta.backend:
-      # The session pins a backend id config.yaml no longer defines. Substituting a
-      # different backend would silently run on another model and another account.
+      # The session pins a backend id config.yaml no longer defines.
+      # lazy: spawner_backends→review→master_trigger→master_cc would close a cycle
+      # through this module if imported at top level.
+      from src.core.spawner_backends import unknown_backend_pin_refusal
       fallback_id = cfg.backend_options[0].id if cfg.backend_options else "(none)"
       msg = (
-          f"backend '{session_meta.backend}' is not in config.yaml backend_options — "
-          f"refusing to substitute '{fallback_id}'; this run did not execute.")
+          f"backend {unknown_backend_pin_refusal(session_meta.backend, fallback_id)}; "
+          "this run did not execute.")
       log.error(
           "master_cc_backend_unresolved",
           session=session_meta.id,

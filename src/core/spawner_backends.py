@@ -40,17 +40,28 @@ def _option_default_backend_model(option: BackendOption, *, source: str) -> tupl
   return option.id, option.model
 
 
+def unknown_backend_pin_refusal(backend_id: str, fallback_id: str) -> str:
+  """Core wording of the refusal for a session pinned to an unknown backend id.
+
+  Substituting a different backend would silently run on another model and another
+  account, so every refusal path wraps this core in its own frame instead of
+  rewording it.
+  """
+  return (
+      f"'{backend_id}' is not in config.yaml backend_options — "
+      f"refusing to substitute '{fallback_id}'")
+
+
 def _resolve_session_default_backend_model(
     cfg: CharlieBotConfig,
     session_meta: SessionMetadata,
 ) -> tuple[str, str | None]:
   """Resolve backend+model from a session's default.
 
-  A session with no backend recorded takes cfg.backend_options[0] as its default. A session
-  pinned to an id that cfg.backend_options no longer defines (e.g. after a config.yaml rename)
-  is a hard error: substituting a different backend would run the worker on another model and
-  another account without the operator knowing. Raises when cfg.backend_options is empty, when
-  the pinned id is unknown, or when the selected option has no default model.
+  A session with no backend recorded takes cfg.backend_options[0] as its default. A pinned
+  id that backend_options no longer defines (e.g. after a config.yaml rename) is a hard
+  error. Raises when cfg.backend_options is empty, when the pinned id is unknown, or when
+  the selected option has no default model.
   """
   option = cfg.get_backend_option(session_meta.backend) if session_meta.backend else None
   if option is None:
@@ -64,8 +75,7 @@ def _resolve_session_default_backend_model(
           session_id=session_meta.id,
       )
       raise ValueError(
-          f"session backend '{session_meta.backend}' is not in config.yaml backend_options — "
-          f"refusing to substitute '{cfg.backend_options[0].id}'")
+          f"session backend {unknown_backend_pin_refusal(session_meta.backend, cfg.backend_options[0].id)}")
     option = cfg.backend_options[0]
   return _option_default_backend_model(option, source="session")
 

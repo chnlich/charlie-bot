@@ -19,7 +19,7 @@ from typing import Any
 import structlog
 from fastapi import WebSocket
 
-from src.agents.backends.base import SKIP_PERMISSIONS_FLAG
+from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, SKIP_PERMISSIONS_SETTINGS
 from src.agents.backends.pty_common import (
   PTY_EXIT,
   PtyAttachment,
@@ -33,7 +33,7 @@ from src.agents.backends.pty_common import (
 
 log = structlog.get_logger()
 
-_CLAUDE_TUI_SETTINGS = json.dumps({"skipDangerousModePermissionPrompt": True}, separators=(",", ":"))
+_CLAUDE_TUI_SETTINGS = json.dumps(SKIP_PERMISSIONS_SETTINGS, separators=(",", ":"))
 _BUSY_THRESHOLD_SECONDS = 3.0
 
 

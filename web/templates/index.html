@@ -54,11 +54,13 @@
   </script>
 </head>
 <body class="dark bg-slate-900 text-slate-100 overflow-hidden" style="height:var(--app-h,100dvh)">
-  {# One form-label chrome for the slash-command/context sidebar labels and the
-     scheduled-task modal labels below. The literal stays a complete token run:
-     Tailwind extracts class candidates from source text, never split across
-     template syntax. #}
+  {# Shared chrome literals: form_label_class for the slash-command/context
+     sidebar labels and the scheduled-task modal labels below, close_btn_class
+     for the six panel/modal close buttons below. Each literal stays a complete
+     token run: Tailwind extracts class candidates from source text, never
+     split across template syntax. #}
   {% set form_label_class = 'block text-xs text-slate-400 mb-1' %}
+  {% set close_btn_class = 'text-slate-500 hover:text-slate-300 p-1' %}
   <!-- Auth overlay (shown when access key is required but not yet provided) -->
   <div id="auth-overlay" class="fixed inset-0 z-[9999] bg-slate-900 flex items-center justify-center" style="display:none">
     <div class="w-full max-w-sm px-6">
@@ -318,7 +320,7 @@
           <span id="compile-status" class="text-xs text-slate-500"></span>
           <span id="latex-git-info" class="text-xs text-slate-400 font-mono" title=""></span>
           <div class="flex-1"></div>
-          <button onclick="toggleLatexPanel()" class="text-slate-500 hover:text-slate-300 p-1" title="Close panel">
+          <button onclick="toggleLatexPanel()" class="{{ close_btn_class }}" title="Close panel">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
           </button>
         </div>
@@ -396,7 +398,7 @@
         <button id="sidebar-tab-commands" class="sidebar-tab active" onclick="switchSidebarTab('commands')">Commands</button>
         <button id="sidebar-tab-context" class="sidebar-tab" onclick="switchSidebarTab('context')">Context</button>
       </div>
-      <button onclick="toggleSlashSidebar()" class="text-slate-500 hover:text-slate-300 p-1" title="Close (Esc)">
+      <button onclick="toggleSlashSidebar()" class="{{ close_btn_class }}" title="Close (Esc)">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
     </div>
@@ -440,7 +442,7 @@
     <div class="w-full max-w-md mx-4 rounded-xl border border-slate-700 bg-slate-800 shadow-xl" onclick="event.stopPropagation()">
       <div class="flex items-center justify-between px-5 py-4 border-b border-slate-700">
         <h3 id="session-action-modal-title" class="text-sm font-semibold text-slate-100">Clone Session</h3>
-        <button onclick="closeSessionActionModal()" class="text-slate-500 hover:text-slate-300 p-1" title="Close">
+        <button onclick="closeSessionActionModal()" class="{{ close_btn_class }}" title="Close">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
@@ -510,7 +512,7 @@
     <div class="diff-modal" style="width: 90vw; max-width: 900px; height: 85vh;">
       <div class="diff-modal-header">
         <span class="text-sm font-semibold text-slate-200" id="cron-modal-title">Edit Scheduled Task</span>
-        <button onclick="closeCronModal()" class="text-slate-500 hover:text-slate-300 p-1">✕</button>
+        <button onclick="closeCronModal()" class="{{ close_btn_class }}">✕</button>
       </div>
       <div class="diff-modal-body" style="padding: 1rem; overflow-y: auto; flex: 1;">
         <form class="flex flex-col gap-3 h-full">
@@ -567,7 +569,7 @@
     <div class="diff-modal" style="max-width:700px" onclick="event.stopPropagation()">
       <div class="diff-modal-header">
         <span id="text-modal-title" class="text-sm font-semibold text-slate-200">Worker Description</span>
-        <button onclick="closeTextModal()" class="text-slate-500 hover:text-slate-300 p-1" title="Close">&#x2715;</button>
+        <button onclick="closeTextModal()" class="{{ close_btn_class }}" title="Close">&#x2715;</button>
       </div>
       <div class="diff-modal-body p-4">
         <div id="text-modal-content" class="text-sm text-slate-300 whitespace-pre-wrap break-words"></div>
@@ -579,7 +581,7 @@
     <div class="diff-modal">
       <div class="diff-modal-header">
         <span class="text-sm font-semibold text-slate-200">AI proposed changes to TeX source</span>
-        <button onclick="rejectTexEdit()" class="text-slate-500 hover:text-slate-300 p-1" title="Close">✕</button>
+        <button onclick="rejectTexEdit()" class="{{ close_btn_class }}" title="Close">✕</button>
       </div>
       <div class="diff-modal-body" id="diff-modal-body"></div>
       <div class="diff-modal-footer">

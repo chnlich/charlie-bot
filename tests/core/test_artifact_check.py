@@ -92,6 +92,7 @@ def test_genre_list_matches_the_assertion_set_table() -> None:
   assert set(artifact_check.GENRES) == set(artifact_check._ASSERTION_SETS)
   for names in artifact_check._ASSERTION_SETS.values():
     assert set(names) <= set(artifact_check._ASSERTION_RUNNERS)
+    assert "ordinal-named" in names
 
 
 def test_unknown_genre_is_refused(tmp_path: Path) -> None:
@@ -362,6 +363,154 @@ def test_page_height_rejects_missing_renderer(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ordinal-named
+# ---------------------------------------------------------------------------
+
+_ORDINAL_SENTENCE = "计划 section 1 的措辞怎么收？"
+
+
+def _ordinal_doc(body: str, *, numbered_h2: int = 5, sn: tuple[str, ...] = ()) -> str:
+  """Debug-genre page for one ordinal-named sentence: *numbered_h2* numbered sections, optional
+  span.sn subsection markers, and *body* as one trailing paragraph."""
+  return _genre_doc(
+      "debug",
+      _sections([f"S{i}" for i in range(1, numbered_h2 + 1)]) +
+      "".join(f'<span class="sn">{s}</span>' for s in sn) + f"<p>{body}</p>")
+
+
+def _ordinal_outcome(tmp_path: Path, body: str, **kwargs) -> artifact_check.AssertionOutcome:
+  (outcome,) = _run("debug", _write(tmp_path, _ordinal_doc(body, **kwargs)))["ordinal-named"]
+  return outcome
+
+
+def test_ordinal_named_own_structure_depends_on_h2_count(tmp_path: Path) -> None:
+  """The same sentence 「见第 3 节」 is the page's own structure with 3 numbered h2 and an outside
+  reference with 2."""
+  assert _ordinal_outcome(tmp_path, "见第 3 节", numbered_h2=3).passed
+  outcome = _ordinal_outcome(tmp_path, "见第 3 节", numbered_h2=2)
+  assert not outcome.passed
+  assert "见第 3 节" in outcome.detail
+
+
+def test_ordinal_named_document_word_marks_external(tmp_path: Path) -> None:
+  """「计划第 2 节」 points off the page even when the number is inside the page's own structure;
+  adding a path parenthetical names it."""
+  outcome = _ordinal_outcome(tmp_path, "计划第 2 节", numbered_h2=6)
+  assert not outcome.passed
+  assert _ordinal_outcome(tmp_path, "计划第 2 节（artifacts/plan_01.html）", numbered_h2=6).passed
+
+
+def test_ordinal_named_first_use_order(tmp_path: Path) -> None:
+  """A naming sentence before a bare use passes; the bare use before the naming sentence fails on
+  the earlier sentence alone."""
+  named_first = _genre_doc(
+      "debug", _sections([f"S{i}" for i in range(1, 6)]) + "<p>plan 3：这样收</p><p>plan 3 的收法</p>")
+  assert _run("debug", _write(tmp_path, named_first))["ordinal-named"][0].passed
+  bare_first = _genre_doc(
+      "debug", _sections([f"S{i}" for i in range(1, 6)]) + "<p>plan 3 的收法</p><p>plan 3：这样收</p>")
+  (outcome,) = _run("debug", _write(tmp_path, bare_first))["ordinal-named"]
+  assert not outcome.passed
+  assert "plan 3 的收法" in outcome.detail
+
+
+@pytest.mark.parametrize(
+    ("sentence", "kwargs"),
+    [
+        ("plan 3 见 https://example.com/a", {}),  # URL
+        ("计划 section 1 改 ~/a/b", {}),  # rooted path
+        ("见 plan 3 与 a/b/c 的差异", {}),  # relative path with two or more slashes
+        ("见 plan 3 与 plan.md", {}),  # file name with a document extension
+        ("见 plan 3 与 ABC-12", {}),  # ticket id
+        ("见 plan 3，标题：「" + "一" * 81 + "」", {}),  # quoted title long enough to stay unmasked
+        ("计划第 2 节（见下）", {
+            "numbered_h2": 6
+        }),  # parenthetical gloss right after the label
+        ("section 1 · 计划目标", {
+            "numbered_h2": 0
+        }),  # 「 · 」 value after the label
+        ("plan 3：这样收", {}),  # opening label with colon gloss
+        ("页面检查流水线（plan 3）", {}),  # label inside a parenthetical following content
+    ])
+def test_ordinal_named_content_name_forms_pass(tmp_path: Path, sentence: str, kwargs: dict) -> None:
+  assert _ordinal_outcome(tmp_path, sentence, **kwargs).passed
+
+
+def test_ordinal_named_chip_value_names_the_label(tmp_path: Path) -> None:
+  """Inside a span.mtag chip the text after the label is the chip's value."""
+  doc = _genre_doc("debug", _sections([f"S{i}" for i in range(1, 6)]) + '<span class="mtag">主题 · plan 3 v2</span>')
+  assert _run("debug", _write(tmp_path, doc))["ordinal-named"][0].passed
+
+
+@pytest.mark.parametrize("sentence", ["见 plan 3 与 A/B 的差异", "见 plan 3 与 TFLOP/s 的关系"])
+def test_ordinal_named_single_slash_forms_are_not_paths(tmp_path: Path, sentence: str) -> None:
+  assert not _ordinal_outcome(tmp_path, sentence).passed
+
+
+@pytest.mark.parametrize("quote", [("「", "」"), ('"', '"')])
+def test_ordinal_named_quoted_label_is_a_mention(tmp_path: Path, quote: tuple[str, str]) -> None:
+  assert _ordinal_outcome(tmp_path, f"拿{quote[0]}计划 section 1{quote[1]}这类编号指代").passed
+
+
+@pytest.mark.parametrize("sentence", ["第 2 轮", "round 2", "item 5"])
+def test_ordinal_named_own_sequence_labels_pass(tmp_path: Path, sentence: str) -> None:
+  assert _ordinal_outcome(tmp_path, sentence).passed
+
+
+def test_ordinal_named_document_word_qualifies_own_sequence(tmp_path: Path) -> None:
+  assert not _ordinal_outcome(tmp_path, "plan 的 round 2").passed
+
+
+def test_ordinal_named_dotted_labels_and_digit_boundaries(tmp_path: Path) -> None:
+  """4.1 is the page's own subsection only through span.sn (two numbered h2 alone cannot cover it);
+  decimals, hashes, and batch counts are not labels."""
+  assert _ordinal_outcome(tmp_path, "其 4.1 节", numbered_h2=2, sn=("4.1",)).passed
+  assert not _ordinal_outcome(tmp_path, "其 4.1 节", numbered_h2=2).passed
+  assert not _ordinal_outcome(tmp_path, "计划的 4.1 节", numbered_h2=2, sn=("4.1",)).passed
+  for sentence in ["共 4.9 MB", "的 0.1", "fork 2a92675f", "plan(3)"]:
+    assert _ordinal_outcome(tmp_path, sentence, numbered_h2=2).passed, sentence
+
+
+def test_ordinal_named_pre_and_code_literals(tmp_path: Path) -> None:
+  """pre subtrees are not scanned, a label inside code is a mention, and code text in the same
+  sentence still anchors a bare label outside the code."""
+  sections = _sections([f"S{i}" for i in range(1, 6)])
+  assert _run("debug", _write(tmp_path, _genre_doc("debug", sections + "<pre>计划 section 1</pre>")))["ordinal-named"][
+      0].passed
+  assert _run("debug", _write(tmp_path, _genre_doc("debug", sections + "<p>见 <code>plan 3</code> 的输出</p>")))[
+      "ordinal-named"][0].passed
+  assert _run("debug", _write(tmp_path, _genre_doc("debug", sections + "<p>plan 3 见 <code>/a/b/c</code> 下的说明</p>")))[
+      "ordinal-named"][0].passed
+
+
+def _genre_ok_doc(genre: str) -> str:
+  """Minimal page that passes its genre's pre-existing assertions."""
+  if genre == "plan":
+    return plan_page_html()
+  if genre == "understanding":
+    return _genre_doc("understanding", _sections([f"S{i}" for i in range(1, 6)]) + '<div class="foot"><p>x</p></div>')
+  if genre == "sitrep":
+    return _sitrep_ok_doc()
+  if genre == "debug":
+    return _debug_ok_doc()
+  return _genre_doc(
+      "explain",
+      '<section><div class="triad"><div class="row"><span class="k">You know</span>X</div></div></section>' +
+      _sections([f"S{i}" for i in range(1, 6)]))
+
+
+@pytest.mark.parametrize("genre", ["plan", "understanding", "sitrep", "debug", "explain"])
+def test_ordinal_named_runs_in_every_genre(tmp_path: Path, genre: str) -> None:
+  """The sentence fails ordinal-named on a minimal compliant page of every genre and passes without it."""
+  cfg = _chrome_cfg(tmp_path)
+  assert [o.passed for o in _run(genre, _write(tmp_path, _genre_ok_doc(genre), name=f"{genre}-clean.html"),
+                                 cfg)["ordinal-named"]] == [True]
+  offending = _genre_ok_doc(genre).replace("</body></html>", f"<p>{_ORDINAL_SENTENCE}</p></body></html>")
+  outcomes = _run(genre, _write(tmp_path, offending, name=f"{genre}-offending.html"), cfg)["ordinal-named"]
+  assert [o.passed for o in outcomes] == [False]
+  assert _ORDINAL_SENTENCE in outcomes[0].detail
+
+
+# ---------------------------------------------------------------------------
 # Shipped templates pass their own genre
 # ---------------------------------------------------------------------------
 
@@ -414,6 +563,7 @@ def test_cli_plan_template_assertions_only_passes_and_prints_ok_lines(
       "ok fork-open-shape",
       f"ok goal-budget 13 weighted chars (budget {artifact_check.GOAL_WEIGHTED_BUDGET})",
       f"ok page-height 800 px (budget {artifact_check.PAGE_HEIGHT_BUDGET})",
+      "ok ordinal-named 0 external labels named in reach",
   ]
 
 

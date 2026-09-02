@@ -205,6 +205,68 @@ async def test_archive_range_reparses_after_archive_append(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_live_range_repeat_reads_reuse_memo(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, events = _archive_cutoff_events()
+  live_path = mgr.get_chat_events_path(session.id)
+  _append_events(live_path, events)
+  await mgr.recycle_scheduled_session(session.id, cutoff)
+
+  first, _ = mgr.load_chat_events_range(session.id, 5, 8)
+
+  real_open = open
+  live_opens = []
+
+  def counting_open(file, *args, **kwargs):
+    if str(file).endswith("chat_events.jsonl") and "archives" not in str(file):
+      live_opens.append(str(file))
+    return real_open(file, *args, **kwargs)
+
+  with patch("builtins.open", counting_open):
+    second, _ = mgr.load_chat_events_range(session.id, 5, 8)
+
+  assert [e["content"] for e in second] == [e["content"] for e in first] == ["f0", "f1", "f2"]
+  assert live_opens == []
+
+
+@pytest.mark.asyncio
+async def test_live_range_reparses_after_append(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, events = _archive_cutoff_events()
+  live_path = mgr.get_chat_events_path(session.id)
+  _append_events(live_path, events)
+  await mgr.recycle_scheduled_session(session.id, cutoff)
+
+  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
+  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+
+  # An appended live file's changed (mtime, size) must invalidate the memo.
+  _append_events(live_path, [{"type": "user", "content": "f3", "timestamp": (cutoff + timedelta(days=2)).isoformat()}])
+
+  after, _ = mgr.load_chat_events_range(session.id, 5, 9)
+  assert [e["content"] for e in after] == ["f0", "f1", "f2", "f3"]
+
+
+@pytest.mark.asyncio
+async def test_live_range_counts_physical_lines(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, events = _archive_cutoff_events()
+  live_path = mgr.get_chat_events_path(session.id)
+  _append_events(live_path, events)
+  await mgr.recycle_scheduled_session(session.id, cutoff)
+
+  # blank/malformed lines consume a range index, mirroring parse_ndjson_range.
+  live_path.write_text(
+      '{"content": "f0_first"}\n\n{bad json\n{"content": "f1"}\n{"content": "f2"}\n',
+      encoding="utf-8")
+
+  got, _ = mgr.load_chat_events_range(session.id, 5, 7)
+  assert [e["content"] for e in got] == ["f0_first"]
+  got, _ = mgr.load_chat_events_range(session.id, 5, 10)
+  assert [e["content"] for e in got] == ["f0_first", "f1", "f2"]
+
+
+@pytest.mark.asyncio
 async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 

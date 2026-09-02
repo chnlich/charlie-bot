@@ -26,6 +26,12 @@ log = structlog.get_logger()
 # session's few weekly archive files, so the cap bounds parsed-archive memory
 # across every session that paginates.
 _ARCHIVE_MEMO_LIMIT = 16
+# Bound on _live_range_memo in files, not bytes: one scroll touches one live
+# file, so the cap bounds parsed-corpus memory across sessions paginating
+# concurrently. An entry holds one slot per physical line because
+# parse_ndjson_range numbers ranges over physical lines (blank and malformed
+# lines consume an index).
+_LIVE_RANGE_MEMO_LIMIT = 4
 
 
 def chat_events_path(session_dir: Path) -> Path:
@@ -56,6 +62,14 @@ class ChatEventStore:
     # must not pop the key mid-hit.
     self._archive_events_memo: OrderedDict[Path, tuple[int, int, list[dict]]] = OrderedDict()
     self._archive_memo_lock = threading.Lock()
+    # Live-file range memo: path -> (mtime_ns, size, per-physical-line events
+    # with None holes for blank/malformed lines). Gated to archive_offset > 0
+    # sessions: unarchived sessions paginate through the message projection,
+    # so their range callers (recap extract, bulk reads) would pay a whole-file
+    # parse to retain a list a moving divider never reuses. Same lock rule as
+    # the archive memo.
+    self._live_range_memo: OrderedDict[Path, tuple[int, int, list[dict | None]]] = OrderedDict()
+    self._live_range_memo_lock = threading.Lock()
 
   @property
   def events_cache(self) -> dict[str, list[dict]]:
@@ -124,11 +138,15 @@ class ChatEventStore:
     if start >= archive_offset:
       rel_start = start - archive_offset
       rel_end = end - archive_offset
+      if archive_offset > 0:
+        lines = self._live_range_lines(live_path, session_id)
+        return [e for e in lines[rel_start:rel_end] if e is not None], start > 0
       events, _ = parse_ndjson_range(live_path, rel_start, rel_end)
       return events, start > 0
     archive_events = self._load_archive_range(session_id, start, archive_offset)
     live_end = end - archive_offset
-    live_events, _ = parse_ndjson_range(live_path, 0, live_end)
+    lines = self._live_range_lines(live_path, session_id)
+    live_events = [e for e in lines[:live_end] if e is not None]
     return archive_events + live_events, start > 0
 
   def read_archive_offset_sync(self, session_id: str) -> int:
@@ -205,6 +223,46 @@ class ChatEventStore:
       while len(self._archive_events_memo) > _ARCHIVE_MEMO_LIMIT:
         self._archive_events_memo.popitem(last=False)
     return events
+
+  def _live_range_lines(self, path: Path, session_id: str) -> list[dict | None]:
+    """Return the live file's per-physical-line parsed events, memoized on (mtime_ns, size).
+
+    A scroll through an archived session's live half re-enters here on every
+    page turn; the memo keeps an unchanged file at one stat per turn. An
+    unreadable file logs and contributes nothing, the pre-memo reader's
+    behavior on open failure.
+    """
+    try:
+      st = path.stat()
+    except OSError as e:
+      log.debug("live_range_read_failed", path=str(path), error=str(e))
+      return []
+    with self._live_range_memo_lock:
+      memo = self._live_range_memo.get(path)
+      if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
+        self._live_range_memo.move_to_end(path)
+        return memo[2]
+    lines: list[dict | None] = []
+    try:
+      with open(path, encoding="utf-8") as f:
+        for raw_line in f:
+          stripped = raw_line.strip()
+          if not stripped:
+            lines.append(None)
+            continue
+          try:
+            lines.append(json.loads(stripped))
+          except json.JSONDecodeError as e:
+            log.debug("live_range_parse_skip", session_id=session_id, error=str(e))
+            lines.append(None)
+    except OSError as e:
+      log.debug("live_range_read_failed", path=str(path), error=str(e))
+      return []
+    with self._live_range_memo_lock:
+      self._live_range_memo[path] = (st.st_mtime_ns, st.st_size, lines)
+      while len(self._live_range_memo) > _LIVE_RANGE_MEMO_LIMIT:
+        self._live_range_memo.popitem(last=False)
+    return lines
 
   def _chat_events_path(self, session_id: str) -> Path:
     return chat_events_path(self._session_dir(session_id))

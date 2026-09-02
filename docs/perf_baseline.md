@@ -43,6 +43,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M30 live-half chat-event range rescan, steady state | M30 collector below | seconds per 8-page backwards scroll over the biggest archived session's live file | median < 0.005 s | — (introduced with its first history row) |
 | M31 worker-finalize events-summary read, steady state | M31 collector below | seconds per `read_events_summary` call, worst on-disk worker log | median < 0.02 s | — (introduced with its first history row) |
 | M32 memory-store assemble, steady state | M32 collector below | seconds per `assemble_master` call, live memory corpus | median < 0.005 s | — (introduced with its first history row) |
+| M33 assistant-stream draft render, full-turn replay | M33 collector below | seconds per replay of the largest on-disk assistant draft, 200 B deltas at 40 ms virtual cadence | median < 1.0 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1532,6 +1533,30 @@ print(f"{n_files} entry files; steady-state assemble_master "
 EOF
 ```
 
+M33 — assistant-stream draft render, full-turn replay. Every `stream` WebSocket
+delta carries the whole accumulated draft, and the pre-fix `showStreaming`
+(usage.js) painted it on every delta — `marked.parse(fixNestedFences(whole
+draft))` plus a KaTeX re-walk and a bubble DOM swap — so a turn with N deltas
+over an S-byte draft costs O(N × S) of main-thread markdown work, the chat UI's
+jank source during long streamed turns; the fixed form coalesces paints to a
+200 ms leading+trailing cadence, and `hideStreaming` cancels the pending paint
+(every terminal path — committed bubble, error, session swap — hides first).
+The cost is client-side, invisible to every HTTP probe, so the collector
+(tests/stream_render_collector.js + the shared stream_render_harness.js) replays
+a full turn in a node vm against the checkout's real usage.js/markdown-renderer.js
+and the page-pinned marked build: the largest single assistant text block across
+live chat files (a block cannot exceed its file's size, so smaller files skip),
+fed as 200 B deltas at a 40 ms virtual cadence against a stub DOM/clock, one
+cold pass then five timed replays wall-clocking only render work; KaTeX's
+per-paint re-walk is stubbed identically in both arms, understating rather than
+overstating the win (parity: the last frame equals a direct full-draft render).
+Evidence points the collector at the branch checkout (`CHECKOUT` at the
+worktree root, live state read-only), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node /home/chaoli/workspace/charlie-bot/tests/stream_render_collector.js
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -1572,3 +1597,4 @@ EOF
 | 2026-09-02 | #600 | M30 8-page live-half scroll steady-state median 0.0453 s → 0.0002 s, max 0.0500 s → 0.0002 s (scratch CHARLIEBOT_HOME A/B, main checkout before vs final branch head after back-to-back at load 0.82/0.59/0.74; 6.3 MB live file of archived session 3b91d606, archive_offset 1136, total 3760 events; collector verbatim on the branch 0.0004 s median) | per-physical-line parsed-events memo on the live file keyed on (mtime_ns, size), 4-file LRU, gated to archive_offset > 0 sessions (unarchived ones paginate via the M26 projection), mirroring the M23 archive memo; M30 definition and healthy range introduced with this PR |
 | 2026-09-02 | #603 | M31 steady-state median 0.0377 s → 0.0016 s, max 0.0605 s → 0.0021 s (collector verbatim, 6.7 MB worst worker log, live state read-only, main checkout before at load 0.58/1.48/1.29 vs branch after at load 0.91/1.50/1.30; summary output identical on the worst log; sibling review-context delegation scan 159.4 → 13.4 / 60.9 / 148.2 ms medians by front/mid/tail match position, context identical) | read_events_summary collects the last-80 parseable events through 512 KiB from-the-end segments (parse_ndjson_tail_parseable) instead of full-parsing the log; extract_review_context streams to the thread's first task_delegated instead of full-parsing the chat log; M31 definition and healthy range introduced with this PR |
 | 2026-09-02 | this PR | M32 steady-state median 3.88 ms → 0.57 ms, max 3.95 ms → 0.67 ms (collector verbatim, 68 entry files, live memory corpus read-only, main checkout before at load 0.92/0.71/0.69 vs branch after at load 0.47/0.62/0.66, back-to-back; assembled block sha256-identical c561298a159a) | load_store memoized on a stat-only (path, mtime_ns, size) signature over every parsed file, walked with os.scandir + string joins (Path.glob/relative_to allocation would dominate the stats); only successful loads memoize, a corrupt rewrite drops the stale hit; M32 definition and healthy range introduced with this PR |
+| 2026-09-02 | this PR | M33 replay wall median 2.624 s → 0.589 s, max 2.829 s → 0.649 s (collector verbatim, 98.0 KB worst on-disk assistant draft sha1 6e0cb6e8f159, 502 deltas at 40 ms virtual cadence, 502 → 102 paints, main checkout before vs final branch head after back-to-back at load 0.22/0.43/0.87; final-frame parity true both arms) | stream-draft paints coalesced to a 200 ms leading+trailing cadence, hideStreaming cancels the pending trailing paint (every terminal path hides first: committed bubble, error, session swap); M33 definition and healthy range introduced with this PR |

@@ -41,6 +41,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M28 ndjson tail+count scan, steady state | M28 collector below | seconds per `parse_ndjson_tail` call, worst on-disk live chat file | median < 0.030 s | — (introduced with its first history row) |
 | M29 session-metadata listing preamble, steady state | M29 collector below | seconds per `_load_session_metas(ACTIVE)` call, live session-dir corpus | median < 0.005 s | — (introduced with its first history row) |
 | M30 live-half chat-event range rescan, steady state | M30 collector below | seconds per 8-page backwards scroll over the biggest archived session's live file | median < 0.005 s | — (introduced with its first history row) |
+| M31 worker-finalize events-summary read, steady state | M31 collector below | seconds per `read_events_summary` call, worst on-disk worker log | median < 0.02 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1438,6 +1439,58 @@ times.sort()
 print(f"archive_offset {offset}, total {total}; 8-page live-half scroll steady-state "
       f"median {times[2]:.4f} s, max {times[-1]:.4f} s")
 shutil.rmtree(home)
+EOF
+```
+
+M31 — worker-finalize events-summary read, steady state. Every worker completion
+runs `read_events_summary` on the finalize path (and again on the
+reviewer-completion path for the original worker's log), quoting the log's last
+parseable events into the worker_summary bubble. The pre-fix reader full-parsed
+the whole events.jsonl (~41 ms measured on the 6.7 MB worst on-disk log) and
+sliced the last 80; the fixed reader walks 512 KiB segments from the end
+collecting the last 80 parseable events — identical output, blank and malformed
+lines never counting toward the budget in either form. The cost is thread-pool
+time invisible to HTTP probes, so the collector times the function the finalize
+path awaits over the largest on-disk worker log (read-only), from the checkout
+under test: one cold pass, as at first finalize after a server start, then five
+timed calls. Evidence while the live server runs older code points the same
+collector at the branch checkout (`sys.path.insert` at the worktree root), the
+same shape as the M7 protocol. The sibling review-context scan (the reviewer
+prompt's delegation lookup over the session chat log) moved from a full parse
+to stream-until-first-match in the same change; its position-dependent numbers
+ride along in the PR's Evidence section instead of carrying a standing row.
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, sys, time
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from pathlib import Path
+from src.core.config import CharlieBotConfig
+from src.core.threads import ThreadManager
+from src.core.spawner_events import read_events_summary
+
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for p in root.glob("*/threads/*/data/events.jsonl"):
+    n = p.stat().st_size
+    if n > best_n:
+        best, best_n = p, n
+SID, TID = best.parts[-5], best.parts[-3]
+
+async def main():
+    cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+    thread_mgr = ThreadManager(cfg)
+    result = await read_events_summary(SID, TID, thread_mgr)  # cold pass, as at first finalize after a server start; not timed
+    times = []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        result = await read_events_summary(SID, TID, thread_mgr)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    print(f"{best_n / 1e6:.1f} MB worker log, session {SID} thread {TID}; "
+          f"steady-state events-summary read median {times[2]:.4f} s, max {times[-1]:.4f} s")
+
+asyncio.run(main())
 EOF
 ```
 

@@ -1,6 +1,7 @@
 """Review pipeline — builds prompts, selects backends, and spawns review workers."""
 
 import asyncio
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -145,6 +146,36 @@ def build_review_prompt(
   )
 
 
+def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:
+  """First task_delegated description naming *thread_id*, in file order, or None.
+
+  Streams the log and stops at the first matching event whether its description
+  carries text or not — the first-match contract of the full-parse loop this
+  replaced. Blank and malformed lines are skipped exactly like
+  ``parse_ndjson_file``; a missing file means no match, never an error.
+  """
+  if not chat_log.exists():
+    return None
+  with open(chat_log, encoding="utf-8") as stream:
+    for raw_line in stream:
+      line = raw_line.strip()
+      if not line:
+        continue
+      try:
+        event = json.loads(line)
+      except json.JSONDecodeError as e:
+        log.debug("ndjson_parse_skip", error=str(e))
+        continue
+      if event.get("type") == ET.TASK_DELEGATED and event.get("thread_id") == thread_id:
+        value = event.get("description")
+        if isinstance(value, str):
+          normalized = value.strip()
+          if normalized:
+            return normalized
+        return None
+  return None
+
+
 async def extract_review_context(
     session_id: str,
     thread_id: str,
@@ -163,16 +194,10 @@ async def extract_review_context(
 
   try:
     chat_log = chat_events_path(session_dir)
-    events = await asyncio.to_thread(parse_ndjson_file, chat_log)
-    for ev in events:
-      if ev.get("type") == ET.TASK_DELEGATED and ev.get("thread_id") == thread_id:
-        user_request_value = ev.get("description")
-        if isinstance(user_request_value, str):
-          normalized_request = user_request_value.strip()
-          if normalized_request:
-            user_request = normalized_request
-            has_user_request = True
-        break
+    description = await asyncio.to_thread(_first_delegation_description, chat_log, thread_id)
+    if description is not None:
+      user_request = description
+      has_user_request = True
   except Exception as e:
     log.warning("review_context_chat_events_failed", session=session_id, thread=thread_id, error=str(e))
   if not has_user_request:

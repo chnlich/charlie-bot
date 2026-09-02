@@ -42,6 +42,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M29 session-metadata listing preamble, steady state | M29 collector below | seconds per `_load_session_metas(ACTIVE)` call, live session-dir corpus | median < 0.005 s | — (introduced with its first history row) |
 | M30 live-half chat-event range rescan, steady state | M30 collector below | seconds per 8-page backwards scroll over the biggest archived session's live file | median < 0.005 s | — (introduced with its first history row) |
 | M31 worker-finalize events-summary read, steady state | M31 collector below | seconds per `read_events_summary` call, worst on-disk worker log | median < 0.02 s | — (introduced with its first history row) |
+| M32 memory-store assemble, steady state | M32 collector below | seconds per `assemble_master` call, live memory corpus | median < 0.005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1494,6 +1495,43 @@ asyncio.run(main())
 EOF
 ```
 
+M32 — memory-store assemble, steady state. The master run builds the
+instruction block on every user message (``master_cc_run`` via
+``_build_instructions_content``), and every worker spawn calls
+``assemble_worker``; both full-parse the whole memory store (~68 entry files
+plus the topics vocabulary) through ``load_store`` on every call. The cost is
+to_thread time invisible to HTTP probes, so the collector times
+``assemble_master`` over the live memory corpus (read-only), from the
+checkout under test: one cold pass, as at a server start, then nine timed
+calls. The fixed loader memoizes the parsed Store on a stat-only signature
+((relative path, mtime_ns, size) of every parsed file): the steady state is
+~69 stats and zero store bytes, and any rewrite, append, new entry, or
+deletion re-parses. Only successful loads memoize — a malformed store keeps
+raising on every call. Evidence while the live server runs older code points
+the same collector at the branch checkout (``CHECKOUT`` at the worktree
+root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.memory import assemble_master
+
+memory_dir = Path.home() / ".charliebot" / "memory"
+assemble_master(memory_dir)  # cold pass, as at a server start; not timed
+times = []
+for _ in range(9):
+    t0 = time.perf_counter()
+    assemble_master(memory_dir)
+    times.append(time.perf_counter() - t0)
+times.sort()
+n_files = sum(1 for p in (memory_dir / "entries").rglob("*.md"))
+print(f"{n_files} entry files; steady-state assemble_master "
+      f"median {times[4] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -1533,3 +1571,4 @@ EOF
 | 2026-09-02 | #597 | M19 median 0.1072 s → 0.0247 s, max 0.1136 s → 0.0257 s (collector verbatim, main checkout before vs final branch head after back-to-back at load 0.80/0.99/1.07; framed line stream identical, 32 lines; LF-dense 1.4 MB / 64 KB-chunk production shape 0.0922 s → 0.0840 s) | chunk terminator search through cached-CR str.find passes instead of the alternation regex (re engine ~0.087 s per 16 MB measured vs memchr speed), piecewise fragment accumulation instead of concatenating the accumulated remainder per chunk |
 | 2026-09-02 | #600 | M30 8-page live-half scroll steady-state median 0.0453 s → 0.0002 s, max 0.0500 s → 0.0002 s (scratch CHARLIEBOT_HOME A/B, main checkout before vs final branch head after back-to-back at load 0.82/0.59/0.74; 6.3 MB live file of archived session 3b91d606, archive_offset 1136, total 3760 events; collector verbatim on the branch 0.0004 s median) | per-physical-line parsed-events memo on the live file keyed on (mtime_ns, size), 4-file LRU, gated to archive_offset > 0 sessions (unarchived ones paginate via the M26 projection), mirroring the M23 archive memo; M30 definition and healthy range introduced with this PR |
 | 2026-09-02 | #603 | M31 steady-state median 0.0377 s → 0.0016 s, max 0.0605 s → 0.0021 s (collector verbatim, 6.7 MB worst worker log, live state read-only, main checkout before at load 0.58/1.48/1.29 vs branch after at load 0.91/1.50/1.30; summary output identical on the worst log; sibling review-context delegation scan 159.4 → 13.4 / 60.9 / 148.2 ms medians by front/mid/tail match position, context identical) | read_events_summary collects the last-80 parseable events through 512 KiB from-the-end segments (parse_ndjson_tail_parseable) instead of full-parsing the log; extract_review_context streams to the thread's first task_delegated instead of full-parsing the chat log; M31 definition and healthy range introduced with this PR |
+| 2026-09-02 | this PR | M32 steady-state median 3.88 ms → 0.57 ms, max 3.95 ms → 0.67 ms (collector verbatim, 68 entry files, live memory corpus read-only, main checkout before at load 0.92/0.71/0.69 vs branch after at load 0.47/0.62/0.66, back-to-back; assembled block sha256-identical c561298a159a) | load_store memoized on a stat-only (path, mtime_ns, size) signature over every parsed file, walked with os.scandir + string joins (Path.glob/relative_to allocation would dominate the stats); only successful loads memoize, a corrupt rewrite drops the stale hit; M32 definition and healthy range introduced with this PR |

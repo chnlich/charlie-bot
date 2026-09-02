@@ -1,5 +1,6 @@
-"""Tests for shared CLI session resolution."""
+"""Tests for the shared CLI helpers (session resolution, --repo validation, API posting)."""
 
+import argparse
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -8,6 +9,7 @@ import pytest
 from conftest import (
   CLI_COMMON_GET_CONFIG_PATCH_TARGET,
   CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+  assert_cli_reject_exit2,
   make_json_response,
 )
 
@@ -113,6 +115,27 @@ def test_resolve_session_id_requires_source_outside_session_dir(
   assert exc_info.value.code == 2
   error = json.loads(capsys.readouterr().err)["error"]
   assert "--session required" in error
+
+
+def test_validate_repo_path_accepts_existing_absolute_dir(tmp_path: Path) -> None:
+  common.validate_repo_path(argparse.ArgumentParser(), str(tmp_path))
+
+
+def test_validate_repo_path_rejects_relative_path(capsys: pytest.CaptureFixture[str]) -> None:
+  with pytest.raises(SystemExit) as exc_info:
+    common.validate_repo_path(argparse.ArgumentParser(), "meshy-research")
+
+  assert_cli_reject_exit2(exc_info, capsys, "must be an absolute path", "meshy-research")
+
+
+def test_validate_repo_path_rejects_nonexistent_dir(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+  nonexistent = str(tmp_path / "nonexistent")
+
+  with pytest.raises(SystemExit) as exc_info:
+    common.validate_repo_path(argparse.ArgumentParser(), nonexistent)
+
+  assert_cli_reject_exit2(exc_info, capsys, "does not exist", nonexistent)
 
 
 @pytest.mark.parametrize(

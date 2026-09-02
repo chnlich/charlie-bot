@@ -121,36 +121,6 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert exc_info.value.code == 1
 
 
-def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  goal_file = tmp_path / "goal.md"
-  goal_file.write_text("fix")
-  resp_mock = make_json_response({"status": "started"})
-
-  with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file)), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp_mock) as post_mock:
-    main()
-
-  payload = post_mock.call_args.kwargs["json"]
-  assert payload["session_id"] == "abc"
-
-
-def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  goal_file = tmp_path / "goal.md"
-  goal_file.write_text("fix")
-  resp_mock = make_json_response({"status": "started"})
-
-  with patch("sys.argv", _improve_argv("abc", str(tmp_path), goal_file)), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp_mock) as post_mock:
-    main()
-
-  payload = post_mock.call_args.kwargs["json"]
-  assert payload["session_id"] == "abc"
-
-
 def test_main_rejects_missing_goal_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """A nonexistent --goal-file exits non-zero before any request is made."""
@@ -218,41 +188,6 @@ def test_main_rejects_empty_plan_file(
     main()
 
   assert_cli_reject(exc_info, capsys, "plan-file", "empty")
-  post_mock.assert_not_called()
-
-
-def test_main_rejects_relative_repo_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """A relative --repo is rejected before any network call to the internal API."""
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  goal_file = tmp_path / "goal.md"
-  goal_file.write_text("fix")
-
-  with patch("sys.argv", _improve_argv("s1", "meshy-research", goal_file)), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
-       pytest.raises(SystemExit) as exc_info:
-    main()
-
-  assert_cli_reject(exc_info, capsys, "must be an absolute path", "meshy-research")
-  post_mock.assert_not_called()
-
-
-def test_main_rejects_nonexistent_repo_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """An absolute but non-existent --repo is rejected before any network call to the internal API."""
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  goal_file = tmp_path / "goal.md"
-  goal_file.write_text("fix")
-  nonexistent = str(tmp_path / "nonexistent")
-
-  with patch("sys.argv", _improve_argv("s1", nonexistent, goal_file)), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
-       pytest.raises(SystemExit) as exc_info:
-    main()
-
-  assert_cli_reject(exc_info, capsys, "does not exist", nonexistent)
   post_mock.assert_not_called()
 
 

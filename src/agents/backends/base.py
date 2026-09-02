@@ -43,6 +43,12 @@ _STDERR_TAIL_BYTES = 64 * 1024
 # opencode) must pass the same literal.
 SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
 
+# Settings-side companion of SKIP_PERMISSIONS_FLAG: with the flag passed, an
+# interactive launch still pops a one-time dangerous-mode confirmation unless
+# this key is set. Same vendor-fixed spelling, so the claude TUI and
+# claude-sub both pin the same dict.
+SKIP_PERMISSIONS_SETTINGS = {"skipDangerousModePermissionPrompt": True}
+
 # Poll cadence of the tail-follow read loop. Event volume is low (median
 # inter-event gap ~54 s measured), so a fixed poll beats an inotify dependency.
 _TAIL_POLL_INTERVAL = 0.15

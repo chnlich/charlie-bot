@@ -23,7 +23,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from src.agents.backends.base import SKIP_PERMISSIONS_FLAG
+from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, SKIP_PERMISSIONS_SETTINGS
 from src.agents.backends.claude_code import headless_claude_env
 from src.agents.backends.pty_common import (
   _TMUX_SOCKET,
@@ -472,7 +472,7 @@ async def _prepare_tmux_session(session_id: str, cwd: Path, requested_resume: bo
 
 def _session_settings(args: ClaudeSubArgs) -> str:
   merged: dict[str, Any] = {
-      "skipDangerousModePermissionPrompt": True,
+      **SKIP_PERMISSIONS_SETTINGS,
       **_MANAGED_NOTIFICATION_SETTINGS,
   }
   for raw in args.settings:

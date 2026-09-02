@@ -208,24 +208,14 @@ class CodexBackend(AgentBackend):
           )
       ]
 
-    # --- turn.failed ---
-    if ev_type == "turn.failed":
+    # --- turn.failed / top-level error ---
+    if ev_type in ("turn.failed", "error"):
       error = ev.get("error", {})
       msg = error.get("message") if isinstance(error, dict) else str(error)
       if not msg:
         msg = ev.get("message")
       if not msg:
-        msg = f"Codex turn.failed with no message. Full event: {json.dumps(ev, default=str)}"
-      return [make_error_event(msg)]
-
-    # --- top-level error ---
-    if ev_type == "error":
-      error = ev.get("error", {})
-      msg = error.get("message") if isinstance(error, dict) else str(error)
-      if not msg:
-        msg = ev.get("message")
-      if not msg:
-        msg = f"Codex error event with no message. Full event: {json.dumps(ev, default=str)}"
+        msg = f"Codex {ev_type} with no message. Full event: {json.dumps(ev, default=str)}"
       return [make_error_event(msg)]
 
     # --- item.started / item.updated / item.completed ---

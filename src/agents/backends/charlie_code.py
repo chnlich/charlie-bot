@@ -60,6 +60,10 @@ class CharlieCodeBackend(AgentBackend):
       charlie_code_env["CHARLIE_CODE_API_KEY"] = self._api_key
     return charlie_code_env
 
+  def _prepare_cwd(self, cwd: str) -> None:
+    """Write AGENTS.md into the cwd so charlie-code appends it to its system message."""
+    self._write_instructions_file(cwd, "AGENTS.md", "charlie_code_wrote_agents_md")
+
   def _build_command(self, prompt: str) -> list[str]:
     if self._transport_dir is None:
       raise RuntimeError("charlie-code backend: _prepare_transport must run before _build_command")
@@ -75,9 +79,11 @@ class CharlieCodeBackend(AgentBackend):
     return cmd
 
   def _effective_prompt(self, prompt: str) -> str:
-    if self._resume_session_id:
-      return prompt
-    return super()._effective_prompt(prompt)
+    # Identity override: base's _effective_prompt re-adds the <system-instructions>
+    # frame whenever instructions_content is set, so deleting this override would
+    # re-enable it; instructions ride the cwd AGENTS.md system channel instead
+    # (see _prepare_cwd) and task.md must carry the bare prompt.
+    return prompt
 
   def translate_event(self, event: dict) -> list[dict]:
     """Translate a single charlie-code NDJSON event into CC-compatible event(s)."""

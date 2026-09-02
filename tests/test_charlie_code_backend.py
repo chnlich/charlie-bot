@@ -154,6 +154,9 @@ def test_translate_session_event(monkeypatch) -> None:
 
 def test_build_command_writes_task_file_and_flags(monkeypatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch, instructions_content="Use concise answers.")
+  session_cwd = tmp_path / "cwd"
+  session_cwd.mkdir()
+  backend._prepare_cwd(str(session_cwd))
   backend._prepare_transport(tmp_path)
 
   cmd = backend._build_command(FLAG_LIKE_PROMPT)
@@ -170,12 +173,30 @@ def test_build_command_writes_task_file_and_flags(monkeypatch, tmp_path: Path) -
   assert "--" not in cmd
   assert "--resume" not in cmd
   assert "--context-window" not in cmd
-  assert (tmp_path / "task.md").read_text(encoding="utf-8") == (
-      "<system-instructions>\n"
-      "Use concise answers.\n"
-      "</system-instructions>\n\n" + FLAG_LIKE_PROMPT)
+  # Master instructions ride the cwd AGENTS.md system channel, byte-identical
+  # to the assembled instructions string.
+  agents_md = session_cwd / "AGENTS.md"
+  assert agents_md.read_bytes() == "Use concise answers.".encode("utf-8")
+  # task.md carries the bare prompt: no <system-instructions> frame anywhere.
+  task_md = tmp_path / "task.md"
+  assert task_md.read_bytes() == FLAG_LIKE_PROMPT.encode("utf-8")
+  assert b"<system-instructions>" not in task_md.read_bytes()
   # The task text never rides argv.
   assert not any(FLAG_LIKE_PROMPT in arg for arg in cmd)
+
+
+def test_no_instructions_skips_agents_md_and_writes_bare_task_file(
+    monkeypatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch)
+  session_cwd = tmp_path / "cwd"
+  session_cwd.mkdir()
+  backend._prepare_transport(tmp_path)
+
+  backend._prepare_cwd(str(session_cwd))
+  backend._build_command(FLAG_LIKE_PROMPT)
+
+  assert not (session_cwd / "AGENTS.md").exists()
+  assert (tmp_path / "task.md").read_bytes() == FLAG_LIKE_PROMPT.encode("utf-8")
 
 
 def test_build_command_resume_passes_raw_prompt_and_resume_flag(monkeypatch, tmp_path: Path) -> None:

@@ -123,8 +123,7 @@ class _Tally:
   """Mutable accumulator shared while a collection is in flight."""
 
   by_model: defaultdict = field(default_factory=lambda: defaultdict(lambda: dict.fromkeys(FIELDS, 0)))
-  by_account: defaultdict = field(
-      default_factory=lambda: defaultdict(lambda: dict.fromkeys(FIELDS, 0)))
+  by_account: defaultdict = field(default_factory=lambda: defaultdict(lambda: dict.fromkeys(FIELDS, 0)))
   span: defaultdict = field(default_factory=lambda: defaultdict(lambda: [None, None]))
   notes: list[str] = field(default_factory=list)
   scanned_bytes: int = 0
@@ -152,9 +151,15 @@ class _SourceAggregate(NamedTuple):
   def snapshot(cls, t: _Tally, notes_from: int) -> _SourceAggregate:
     """Copy the source partial out of the accumulator; notes before ``notes_from`` are not its."""
     return cls(
-        by_model={k: dict(v) for k, v in t.by_model.items()},
-        by_account={k: dict(v) for k, v in t.by_account.items()},
-        span={k: tuple(v) for k, v in t.span.items()},
+        by_model={
+            k: dict(v) for k, v in t.by_model.items()
+        },
+        by_account={
+            k: dict(v) for k, v in t.by_account.items()
+        },
+        span={
+            k: tuple(v) for k, v in t.span.items()
+        },
         notes=list(t.notes[notes_from:]),
     )
 
@@ -291,8 +296,7 @@ def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path
   """Walk signature of the Claude+Codex corpus: home pairs, every jsonl's stat pair, and the
   walk's own error strings. Any corpus or permission move changes the tuple."""
   sig = []
-  for source, homes, sub in (("Claude Code", claude_homes, "projects"),
-                             ("Codex", codex_homes, "sessions")):
+  for source, homes, sub in (("Claude Code", claude_homes, "projects"), ("Codex", codex_homes, "sessions")):
     probe = _Tally()
     entries = []
     for label, home in homes.items():
@@ -354,12 +358,15 @@ def _claude_file_contribution(path: Path) -> tuple[dict, int]:
         dupes += 1
         continue
       seen.add(key)
-      records.append([
-          key, model, rec.get("timestamp"),
-          usage.get("input_tokens", 0) or 0,
-          usage.get("cache_creation_input_tokens", 0) or 0,
-          usage.get("cache_read_input_tokens", 0) or 0,
-          usage.get("output_tokens", 0) or 0])
+      records.append(
+          [
+              key, model,
+              rec.get("timestamp"),
+              usage.get("input_tokens", 0) or 0,
+              usage.get("cache_creation_input_tokens", 0) or 0,
+              usage.get("cache_read_input_tokens", 0) or 0,
+              usage.get("output_tokens", 0) or 0
+          ])
   return {"sig": [st.st_mtime_ns, st.st_size], "records": records, "dupes": dupes}, nbytes
 
 
@@ -385,8 +392,14 @@ def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) 
           continue
         seen.add(key)
         t.add(
-            "Claude Code", model, account, ts,
-            in_fresh=in_fresh, cache_write=cache_write, cache_read=cache_read, output=output)
+            "Claude Code",
+            model,
+            account,
+            ts,
+            in_fresh=in_fresh,
+            cache_write=cache_write,
+            cache_read=cache_read,
+            output=output)
   t.notes.append(
       f"Claude Code: {len(seen):,} unique API responses over {len(homes)} config dirs, "
       f"{dupes:,} replayed lines skipped")
@@ -420,9 +433,7 @@ def _codex_file_contribution(path: Path) -> tuple[dict, int]:
       (
           (rec.get("payload") or {}).get("model")
           for rec in recs
-          if rec.get("type") in ("session_meta", "turn_context")
-          and (rec.get("payload") or {}).get("model")
-      ),
+          if rec.get("type") in ("session_meta", "turn_context") and (rec.get("payload") or {}).get("model")),
       None,
   )
   walked, final_total = 0, 0
@@ -509,10 +520,8 @@ def _opencode_row(row: tuple) -> list | None:
   model = model or "unknown"
   if model.startswith("/"):
     model = f"{Path(model).name} ({provider})"
-  ts = dt.datetime.fromtimestamp(created / 1000, dt.UTC).isoformat() if isinstance(
-      created, (int, float)) else None
-  return [model, provider or "unknown", ts,
-          in_fresh or 0, cache_write or 0, cache_read or 0, output or 0]
+  ts = dt.datetime.fromtimestamp(created / 1000, dt.UTC).isoformat() if isinstance(created, (int, float)) else None
+  return [model, provider or "unknown", ts, in_fresh or 0, cache_write or 0, cache_read or 0, output or 0]
 
 
 def _strict_json_constant(name: str) -> None:
@@ -540,10 +549,10 @@ def _opencode_row_data(data: str) -> tuple[list | None, int]:
   cache = cache if isinstance(cache, dict) else {}
   created = obj.get("time")
   created = created.get("created") if isinstance(created, dict) else None
-  rec = _opencode_row((
-      obj.get("modelID"), obj.get("providerID"), created,
-      tokens.get("input"), tokens.get("output"), tokens.get("total"),
-      cache.get("write"), cache.get("read")))
+  rec = _opencode_row(
+      (
+          obj.get("modelID"), obj.get("providerID"), created, tokens.get("input"), tokens.get("output"),
+          tokens.get("total"), cache.get("write"), cache.get("read")))
   return rec, len(data)
 
 
@@ -594,8 +603,14 @@ def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> None:
     records = entry["records"]
   for model, account, ts, in_fresh, cache_write, cache_read, output in records:
     t.add(
-        "opencode", model, account, ts,
-        in_fresh=in_fresh, cache_write=cache_write, cache_read=cache_read, output=output)
+        "opencode",
+        model,
+        account,
+        ts,
+        in_fresh=in_fresh,
+        cache_write=cache_write,
+        cache_read=cache_read,
+        output=output)
   t.notes.append(f"opencode: {len(records):,} assistant messages with token counts")
 
 
@@ -634,8 +649,7 @@ def _build(t: _Tally) -> list[dict]:
   rows: list[dict] = []
   for (source, model), c in t.by_model.items():
     lo, hi = t.span[(source, model)]
-    accts: dict[str, dict] = {
-        a: dict(v) for (s, m, a), v in t.by_account.items() if s == source and m == model}
+    accts: dict[str, dict] = {a: dict(v) for (s, m, a), v in t.by_account.items() if s == source and m == model}
     total = c["in_fresh"] + c["cache_write"] + c["cache_read"] + c["output"]
     acct_rows = [
         AccountRow(
@@ -643,14 +657,22 @@ def _build(t: _Tally) -> list[dict]:
             calls=v["calls"],
             output=v["output"],
             total=v["in_fresh"] + v["cache_write"] + v["cache_read"] + v["output"],
-        )
-        for a, v in sorted(accts.items(), key=lambda kv: -(
-            kv[1]["in_fresh"] + kv[1]["cache_write"] + kv[1]["cache_read"] + kv[1]["output"]))
+        ) for a, v in sorted(
+            accts.items(),
+            key=lambda kv: -(kv[1]["in_fresh"] + kv[1]["cache_write"] + kv[1]["cache_read"] + kv[1]["output"]))
     ]
-    rows.append({
-        "source": source, "model": model, **{k: c[k] for k in FIELDS},
-        "total": total, "first": (lo or "")[:10], "last": (hi or "")[:10], "accounts": acct_rows,
-    })
+    rows.append(
+        {
+            "source": source,
+            "model": model,
+            **{
+                k: c[k] for k in FIELDS
+            },
+            "total": total,
+            "first": (lo or "")[:10],
+            "last": (hi or "")[:10],
+            "accounts": acct_rows,
+        })
   rows.sort(key=lambda r: -r["total"])
   return rows
 

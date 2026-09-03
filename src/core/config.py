@@ -10,13 +10,13 @@ from zoneinfo import ZoneInfo
 
 import structlog
 from pydantic import (
-  AliasChoices,
-  AliasPath,
-  BaseModel,
-  ConfigDict,
-  Field,
-  ValidationError,
-  model_validator,
+    AliasChoices,
+    AliasPath,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    model_validator,
 )
 
 from src.core.models import BackendOption
@@ -63,8 +63,7 @@ def charliebot_home_dir() -> Path:
   if not raw:
     return default_charliebot_home()
   if not raw.startswith(("~", "/")):
-    raise ValueError(
-        f"{CHARLIEBOT_HOME_ENV} must be an absolute path or start with '~'; got {raw!r}")
+    raise ValueError(f"{CHARLIEBOT_HOME_ENV} must be an absolute path or start with '~'; got {raw!r}")
   return Path(raw).expanduser().resolve()
 
 
@@ -152,8 +151,7 @@ class ScheduledTaskConfig(BaseModel):
   def check_prompt_or_handler_or_loop(self) -> 'ScheduledTaskConfig':
     sources = sum([bool(self.prompt), bool(self.steps), bool(self.handler), bool(self.loop)])
     if sources != 1:
-      raise ValueError(
-          "task must have exactly one of 'prompt', 'prompt_file', 'steps', 'handler', or 'loop'")
+      raise ValueError("task must have exactly one of 'prompt', 'prompt_file', 'steps', 'handler', or 'loop'")
     if self.steps is not None and not self.steps:
       raise ValueError("steps must be a non-empty list")
     if self.steps:
@@ -171,8 +169,7 @@ class ScheduledTaskConfig(BaseModel):
     # at all — including the master+handler and master+loop combinations the
     # exactly-one rule allows.
     if self.mode == 'master' and self.steps:
-      raise ValueError(
-          "mode 'master' requires a prompt source ('prompt' or 'prompt_file'), not 'steps'")
+      raise ValueError("mode 'master' requires a prompt source ('prompt' or 'prompt_file'), not 'steps'")
     if self.mode == 'master' and not self.prompt:
       raise ValueError("mode 'master' requires a prompt source ('prompt' or 'prompt_file')")
     if self.notify and self.notify != 'telegram':
@@ -316,9 +313,9 @@ class CharlieBotConfig(BaseModel):
   telegram_chat_id: str | None = None
 
   # Slack summon entrypoint
-  slack_bot_token: str | None = None          # xoxb-…, chat:write + history scopes
-  slack_app_token: str | None = None          # xapp-…, connections:write, Socket Mode only
-  slack_allowed_user_ids: list[str] = []      # Slack user ids allowed to summon; empty = nobody
+  slack_bot_token: str | None = None  # xoxb-…, chat:write + history scopes
+  slack_app_token: str | None = None  # xapp-…, connections:write, Socket Mode only
+  slack_allowed_user_ids: list[str] = []  # Slack user ids allowed to summon; empty = nobody
 
   # Integration keys hosts carry in config.yaml / config.d/*.yaml whose consumers read
   # the raw yaml outside this repo (skill scripts). Declared only so extra='forbid'
@@ -341,7 +338,7 @@ class CharlieBotConfig(BaseModel):
   google_refresh_token: str | None = None
   linear_api_key: str | None = None
   slack_user_token: str | None = None
-  twitter_api_key: str | None = None          # x-posting skill (OAuth 1.0a); deleted twice, see known_alive.md
+  twitter_api_key: str | None = None  # x-posting skill (OAuth 1.0a); deleted twice, see known_alive.md
   twitter_api_secret: str | None = None
   twitter_access_token: str | None = None
   twitter_access_token_secret: str | None = None
@@ -393,9 +390,7 @@ class CharlieBotConfig(BaseModel):
       known |= _alias_field_names(field.alias) | _alias_field_names(field.validation_alias)
     unknown = sorted(set(values) - known)
     if unknown:
-      raise TypeError(
-          f"{cls.__name__}.model_construct() got unexpected keyword argument(s): "
-          + ", ".join(unknown))
+      raise TypeError(f"{cls.__name__}.model_construct() got unexpected keyword argument(s): " + ", ".join(unknown))
     return super().model_construct(_fields_set, **values)
 
   def with_home(self, path: str | Path) -> "CharlieBotConfig":
@@ -416,8 +411,7 @@ class CharlieBotConfig(BaseModel):
     """
     home = Path(path).expanduser()
     if not home.is_absolute():
-      raise ValueError(
-          f"with_home() requires an absolute path or a '~' path; got {path!r}")
+      raise ValueError(f"with_home() requires an absolute path or a '~' path; got {path!r}")
     return self.model_copy(update={"charliebot_home": home})
 
   @property
@@ -490,9 +484,10 @@ class CharlieBotConfig(BaseModel):
       if not parent.is_dir():
         continue
       repos.extend(
-          {"name": child.name, "path": str(child)}
-          for child in sorted(parent.iterdir())
-          if child.is_dir() and (child / ".git").exists())
+          {
+              "name": child.name,
+              "path": str(child)
+          } for child in sorted(parent.iterdir()) if child.is_dir() and (child / ".git").exists())
     return repos
 
 
@@ -508,8 +503,7 @@ def _config_fragments(home: Path) -> list[Path]:
   if not config_d.is_dir():
     return []
   return sorted(
-      (p for p in config_d.glob("*.yaml")
-       if p.is_file() and not p.name.startswith(".") and p.name != "cron.yaml"),
+      (p for p in config_d.glob("*.yaml") if p.is_file() and not p.name.startswith(".") and p.name != "cron.yaml"),
       key=lambda p: p.name)
 
 
@@ -580,16 +574,12 @@ def load_config() -> CharlieBotConfig:
   except ValidationError as e:
     # extra='forbid' raises naming the key only; key_origin tracks which file each
     # key came from, so the startup error names both.
-    extras = [
-        err["loc"][0] for err in e.errors()
-        if err["type"] == "extra_forbidden" and len(err["loc"]) == 1
-    ]
+    extras = [err["loc"][0] for err in e.errors() if err["type"] == "extra_forbidden" and len(err["loc"]) == 1]
     if not extras:
       raise
     raise ValueError(
-        "unknown config key(s) "
-        + ", ".join(f"{key!r} ({key_origin[key]})" for key in extras)
-        + "; declare the key(s) on CharlieBotConfig or remove them") from e
+        "unknown config key(s) " + ", ".join(f"{key!r} ({key_origin[key]})" for key in extras) +
+        "; declare the key(s) on CharlieBotConfig or remove them") from e
 
 
 def get_config() -> CharlieBotConfig:
@@ -877,11 +867,12 @@ def _reload_cron_snapshot() -> _CronSnapshot:
         continue
       stem = path.stem
       if not _valid_cron_name(stem):
-        errors.append(ScheduledTaskError(
-            name=stem,
-            path=str(path),
-            error="file name is not a valid cron task name",
-            enabled=_read_cron_file_enabled(path)))
+        errors.append(
+            ScheduledTaskError(
+                name=stem,
+                path=str(path),
+                error="file name is not a valid cron task name",
+                enabled=_read_cron_file_enabled(path)))
         continue
       try:
         task, file_prompt_mtimes = _load_cron_file(path, repo, stem)
@@ -915,8 +906,8 @@ def _reload_cron_snapshot() -> _CronSnapshot:
               prompt_mtimes[failed_prompt_path] = 0.0
             except ValueError as stat_error:
               log.debug("cron_failed_prompt_path_unstatable", path=str(failed_prompt_path), error=str(stat_error))
-        errors.append(ScheduledTaskError(
-            name=stem, path=str(path), error=str(e), enabled=_read_cron_file_enabled(path)))
+        errors.append(
+            ScheduledTaskError(name=stem, path=str(path), error=str(e), enabled=_read_cron_file_enabled(path)))
         log.error("cron_task_load_failed", name=stem, path=str(path), error=str(e))
         continue
       tasks.append(task)
@@ -925,11 +916,12 @@ def _reload_cron_snapshot() -> _CronSnapshot:
   # Legacy tripwire: a leftover config.d/cron.yaml is a loud error, never a
   # silent fallback. None of its entries are loaded.
   if legacy_file.exists():
-    errors.append(ScheduledTaskError(
-        name="cron.yaml (legacy)",
-        path=str(legacy_file),
-        error="legacy config.d/cron.yaml present; entries not loaded — "
-              "split into config.d/cron.d/<name>.yaml"))
+    errors.append(
+        ScheduledTaskError(
+            name="cron.yaml (legacy)",
+            path=str(legacy_file),
+            error="legacy config.d/cron.yaml present; entries not loaded — "
+            "split into config.d/cron.d/<name>.yaml"))
     log.error("cron_legacy_file_present", path=str(legacy_file))
 
   tasks.sort(key=lambda t: t.name)

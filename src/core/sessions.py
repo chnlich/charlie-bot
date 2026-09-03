@@ -704,11 +704,16 @@ class SessionManager:
       include_pending_trigger_status: bool = False,
       include_pending_plan_approval: bool = False,
   ) -> list[SessionMetadata]:
-    """List sessions, newest first. Optionally filter by status, starred, and/or scheduled."""
-    all_meta = await self._iter_session_metas(status=status)
+    """List sessions, newest first. Optionally filter by status, starred, and/or scheduled.
+
+    The starred/scheduled filters run against the shared cached metas (read-only),
+    so only surviving rows pay the model_copy and thinking stamp that mark a meta
+    as having left the manager.
+    """
+    metas = await self._load_session_metas(status)
     sessions = [
-        meta for meta in all_meta
-        if (starred is None or meta.starred == starred) and (scheduled is None or bool(meta.scheduled_task) == scheduled)
+        _stamp_thinking_since(meta.model_copy()) for meta in metas if (starred is None or meta.starred == starred) and
+        (scheduled is None or bool(meta.scheduled_task) == scheduled)
     ]
     return await self._enrich_and_sort(
         sessions,
@@ -716,6 +721,14 @@ class SessionManager:
         include_pending_trigger_status=include_pending_trigger_status,
         include_pending_plan_approval=include_pending_plan_approval,
     )
+
+  async def list_group_names(self) -> list[str]:
+    """Return sorted distinct group names across all sessions.
+
+    The name set is a read-only reduction of the shared cached metas, so no row
+    copies or thinking stamps leave the manager, unlike ``list_sessions``.
+    """
+    return sorted({meta.group for meta in await self._load_session_metas() if meta.group})
 
   async def list_archived_page(
       self,

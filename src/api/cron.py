@@ -11,17 +11,17 @@ from pydantic import BaseModel
 
 from src.api.deps import get_session_manager
 from src.core.config import (
-  DEFAULT_TIMEZONE,
-  CharlieBotConfig,
-  ScheduledTaskConfig,
-  _load_cron_file,
-  _validate_cron_body,
-  cron_dir,
-  cron_path,
-  get_config,
-  get_scheduled_task_errors,
-  get_scheduled_tasks,
-  master_task_project_error,
+    DEFAULT_TIMEZONE,
+    CharlieBotConfig,
+    ScheduledTaskConfig,
+    _load_cron_file,
+    _validate_cron_body,
+    cron_dir,
+    cron_path,
+    get_config,
+    get_scheduled_task_errors,
+    get_scheduled_tasks,
+    master_task_project_error,
 )
 from src.core.models import PROJECT_ROLE, SessionMetadata
 from src.core.scheduler import effective_scheduled_task_backend
@@ -145,8 +145,14 @@ async def list_cron_tasks():
   """
   valid = [t.model_dump() for t in get_scheduled_tasks()]
   broken = [
-      {'name': e.name, 'error': e.error, 'broken': True, 'path': e.path, 'enabled': e.enabled}
-      for e in get_scheduled_task_errors()]
+      {
+          'name': e.name,
+          'error': e.error,
+          'broken': True,
+          'path': e.path,
+          'enabled': e.enabled
+      } for e in get_scheduled_task_errors()
+  ]
   return valid + broken
 
 
@@ -189,8 +195,7 @@ async def apply_task_yaml_update(
   # reloadable and file-format-only keys like `prompt_file` can never surface
   # as an unhandled ValidationError.
   try:
-    cand_model, _ = await asyncio.to_thread(
-        _validate_cron_body, copy.deepcopy(candidate), cfg.charlie_bot_repo, name)
+    cand_model, _ = await asyncio.to_thread(_validate_cron_body, copy.deepcopy(candidate), cfg.charlie_bot_repo, name)
   except Exception as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
 
@@ -231,8 +236,7 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   payload = req.model_dump()
   if not payload.get('backend'):
     payload.pop('backend', None)
-  body = {k: v for k, v in payload.items()
-          if k != 'name' and (v is not None or k in ('cron', 'enabled'))}
+  body = {k: v for k, v in payload.items() if k != 'name' and (v is not None or k in ('cron', 'enabled'))}
   # Validate the assembled body through the exact same body-processing code
   # the production loader uses, on a deep copy (that code mutates its argument
   # in place — see _validate_cron_body), exactly as the update route does, so
@@ -241,8 +245,7 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   # unreadable prompt_file or a master task without a prompt source becomes a
   # 409 with the loader's error text, and nothing is written to disk.
   try:
-    await asyncio.to_thread(
-        _validate_cron_body, copy.deepcopy(body), cfg.charlie_bot_repo, req.name)
+    await asyncio.to_thread(_validate_cron_body, copy.deepcopy(body), cfg.charlie_bot_repo, req.name)
   except Exception as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
   cron_dir().mkdir(parents=True, exist_ok=True)

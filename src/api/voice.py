@@ -13,10 +13,10 @@ import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
 from src.agents.transcriber import (
-  SAMPLE_RATE,
-  SimulatedStreamingTranscriptionSession,
-  SpeechModelsNotReady,
-  create_transcription_session,
+    SAMPLE_RATE,
+    SimulatedStreamingTranscriptionSession,
+    SpeechModelsNotReady,
+    create_transcription_session,
 )
 from src.core.config import CharlieBotConfig, get_config
 

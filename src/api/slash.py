@@ -10,8 +10,8 @@ from pydantic import BaseModel, Field
 from src.api.chat import launch_prompt_dispatch
 from src.api.deps import get_session_manager, require_session
 from src.api.message_utils import (
-  build_user_event,
-  serialize_uploaded_files,
+    build_user_event,
+    serialize_uploaded_files,
 )
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks

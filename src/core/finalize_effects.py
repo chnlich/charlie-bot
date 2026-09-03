@@ -30,10 +30,8 @@ _MASTER_OUTPUT_TYPES = frozenset({ET.ASSISTANT, ET.MASTER_DONE, ET.ASSISTANT_ERR
 
 def _is_terminal_worker_summary(event: dict, thread_id: str) -> bool:
   return (
-      event.get("type") == ET.WORKER_SUMMARY
-      and event.get("thread_id") == thread_id
-      and event.get("status") != "running"
-  )
+      event.get("type") == ET.WORKER_SUMMARY and event.get("thread_id") == thread_id and
+      event.get("status") != "running")
 
 
 def terminal_summary_present(chat_events: list[dict], thread_id: str) -> bool:
@@ -64,5 +62,4 @@ def reviewer_thread_exists(
   the failed-reviewer retry path the FAILED reviewer itself matches the
   review_of check, and it must not block its own replacement.
   """
-  return any(
-      t.review_of == original_thread_id and t.id != exclude_thread_id for t in threads)
+  return any(t.review_of == original_thread_id and t.id != exclude_thread_id for t in threads)

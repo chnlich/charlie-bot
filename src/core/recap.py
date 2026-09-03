@@ -22,9 +22,9 @@ from src.core.config import CharlieBotConfig
 from src.core.json_utils import write_json_atomically
 from src.core.models import utc_now
 from src.core.sessions import (
-  ELONE_BOOTSTRAP_OPENER,
-  FORK_BOOTSTRAP_OPENER,
-  SessionManager,
+    ELONE_BOOTSTRAP_OPENER,
+    FORK_BOOTSTRAP_OPENER,
+    SessionManager,
 )
 from src.core.timeouts import AUTONAMER_TIMEOUT
 
@@ -53,6 +53,7 @@ def drop_extract_memo(session_id: str) -> None:
   with _memo_lock:
     for key in [key for key in _extract_memo if key[0] == session_id]:
       del _extract_memo[key]
+
 
 # User messages auto-injected by the system are not real "asks". Matched by prefix
 # against the fork/elone bootstrap prompts; the live openers come from

@@ -24,12 +24,12 @@ from src.core import finalize_effects, runs
 from src.core.git import git_quarantine_worktree, git_worktree_dir_name
 from src.core.json_utils import load_json_meta
 from src.core.models import (
-  TERMINAL_THREAD_STATUSES,
-  SessionStatus,
-  TaskType,
-  ThreadMetadata,
-  parse_utc_datetime,
-  utc_now,
+    TERMINAL_THREAD_STATUSES,
+    SessionStatus,
+    TaskType,
+    ThreadMetadata,
+    parse_utc_datetime,
+    utc_now,
 )
 from src.core.process import kill_process_group
 from src.core.tasks import create_logged_task
@@ -107,7 +107,6 @@ class _InterruptedRun:
   session_id: str
   thread_dir: Path
   meta: dict
-
 
 
 def _session_archived(session_dir: Path) -> bool:
@@ -197,7 +196,7 @@ async def _reconcile_interrupted_runs(
   if not interrupted:
     return 0
   from src.core import (
-    spawner,  # lazy: spawner imports sessions, sessions imports this module
+      spawner,  # lazy: spawner imports sessions, sessions imports this module
   )
 
   host_boot = await asyncio.to_thread(runs.read_host_boot_time)
@@ -230,9 +229,8 @@ async def _reconcile_interrupted_runs(
   return recovered
 
 
-def _liveness_probe(
-    pid: int | None, pid_start: str | None, started_at: datetime | None, host_boot: datetime
-) -> Callable[[], bool]:
+def _liveness_probe(pid: int | None, pid_start: str | None, started_at: datetime | None,
+                    host_boot: datetime) -> Callable[[], bool]:
   """The liveness probe a boot re-attach mounts with, by input completeness.
 
   A missing input (pid/pid_start/started_at) makes death unprovable, so the
@@ -266,8 +264,7 @@ async def _reconcile_one(
 
   if meta.get("status") in TERMINAL_THREAD_STATUSES:
     await _complete_finalize_effects(
-        cfg, session_mgr, thread_mgr, spawner, item,
-        chat_events=chat_events, session_threads=session_threads)
+        cfg, session_mgr, thread_mgr, spawner, item, chat_events=chat_events, session_threads=session_threads)
     return False
 
   resolution = runs.resolve_run(
@@ -290,21 +287,28 @@ async def _reconcile_one(
   )
 
   if resolution.outcome is runs.RunOutcome.NEVER_STARTED:
-    respawned = await _maybe_respawn(
-        cfg, session_mgr, thread_mgr, spawner, item, chat_events=chat_events)
+    respawned = await _maybe_respawn(cfg, session_mgr, thread_mgr, spawner, item, chat_events=chat_events)
     if respawned:
       return True
     # Reviewers are replaced by the retry chain, improve iterations by nothing
     # (loop continuation is a non-goal): drain-finalize them as failed.
     create_logged_task(
-        spawner.resume_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr,
-                              is_alive=lambda: False, interrupt_reason="", on_silence=None),
+        spawner.resume_worker(
+            session_id,
+            description,
+            thread_id,
+            cfg,
+            session_mgr,
+            thread_mgr,
+            is_alive=lambda: False,
+            interrupt_reason="",
+            on_silence=None),
         name=f"resume-drain-{thread_id[:8]}")
     return True
 
   if resolution.outcome in (runs.RunOutcome.RUNNING, runs.RunOutcome.STALLED):
-    if resolution.outcome is runs.RunOutcome.RUNNING and resolution.reason in (
-        runs.UNCOVERED_ALIVE_REASON, runs.RAW_MISSING_ALIVE_REASON):
+    if resolution.outcome is runs.RunOutcome.RUNNING and resolution.reason in (runs.UNCOVERED_ALIVE_REASON,
+                                                                               runs.RAW_MISSING_ALIVE_REASON):
       # Treated as alive but nothing followable (uncovered transport / no raw
       # log): report only — no re-attach, nothing torn down, judged again on
       # the next restart.
@@ -340,8 +344,16 @@ async def _reconcile_one(
   # …) into the finalize error, so the master's summary states why the run
   # failed instead of a bare exit -1; COMPLETED has no reason and is unaffected.
   create_logged_task(
-      spawner.resume_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr,
-                            is_alive=lambda: False, interrupt_reason=resolution.reason, on_silence=None),
+      spawner.resume_worker(
+          session_id,
+          description,
+          thread_id,
+          cfg,
+          session_mgr,
+          thread_mgr,
+          is_alive=lambda: False,
+          interrupt_reason=resolution.reason,
+          on_silence=None),
       name=f"resume-drain-{thread_id[:8]}")
 
   # Descendants that outlived the run while holding its raw-log fd are killed
@@ -520,14 +532,8 @@ def _effects_maybe_missing(meta: dict, chat_events: list[dict], session_threads:
     return True
   if not finalize_effects.master_woke_after_summary(chat_events, thread_id):
     return True
-  if (
-      meta.get("status") == "completed"
-      and meta.get("require_review", True)
-      and not meta.get("review_of")
-      and meta.get("repo_path")
-      and meta.get("branch_name")
-      and meta.get("worktree_path")
-  ):
+  if (meta.get("status") == "completed" and meta.get("require_review", True) and not meta.get("review_of") and
+      meta.get("repo_path") and meta.get("branch_name") and meta.get("worktree_path")):
     return not finalize_effects.reviewer_thread_exists(session_threads, thread_id, exclude_thread_id=thread_id)
   return False
 
@@ -618,8 +624,7 @@ async def _quarantine_stale_failed_worktrees(cfg: CharlieBotConfig, threads: lis
             trash_dir=trash_path,
         )
       except Exception as e:
-        log.exception(
-            "quarantine_worktree_failed", thread=meta.get("id"), worktree=worktree_path, error=str(e))
+        log.exception("quarantine_worktree_failed", thread=meta.get("id"), worktree=worktree_path, error=str(e))
     except Exception:
       log.exception("quarantine_thread_sweep_failed", thread=meta.get("id"))
       continue

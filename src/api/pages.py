@@ -46,11 +46,26 @@ _FILE_SERVER_PREFIXES = ("/files", "/absolute_filepath")
 # host, so they live in code rather than config; each renders as a card linking
 # straight to the page.
 _HOME_DESTINATIONS: tuple[dict[str, str], ...] = (
-    {"name": "Chat", "url": "/", "description": "The CharlieBot chat and session UI."},
-    {"name": "Token usage by model", "url": "/token-usage",
-     "description": "Tokens per model across every agent log on this host."},
-    {"name": "Diff viewer", "url": "/diff", "description": "Browse a repository diff between two refs."},
-    {"name": "File browser", "url": "/files/", "description": "Browse any file on this host's filesystem."},
+    {
+        "name": "Chat",
+        "url": "/",
+        "description": "The CharlieBot chat and session UI."
+    },
+    {
+        "name": "Token usage by model",
+        "url": "/token-usage",
+        "description": "Tokens per model across every agent log on this host."
+    },
+    {
+        "name": "Diff viewer",
+        "url": "/diff",
+        "description": "Browse a repository diff between two refs."
+    },
+    {
+        "name": "File browser",
+        "url": "/files/",
+        "description": "Browse any file on this host's filesystem."
+    },
 )
 
 _HOME_PROBE_TIMEOUT_S = 0.3
@@ -78,6 +93,7 @@ def _probe_home_service(url: str) -> bool:
       return True
   except OSError:
     return False
+
 
 # Single-flight holder for the current in-flight token-usage collection. Concurrent requests
 # await the same task and share one scan; it is cleared on completion so the next request scans
@@ -131,6 +147,7 @@ _RUNTIME_GIT_VERSION = _get_git_version()
 def _static_asset_version() -> str:
   """Cache-bust token for static assets, derived from the pinned runtime git version."""
   return _RUNTIME_GIT_VERSION.replace(" · ", "-").replace(" ", "-")
+
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent.parent / "web" / "templates"))
@@ -354,8 +371,8 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
   """
   with path.open("rb") as validate_file:
     json.load(validate_file)
-  with (path.open("rb") as source_file, open(out_path, "wb") as raw_output,
-        gzip.GzipFile(fileobj=raw_output, mode="wb", compresslevel=6) as gzip_output):
+  with (path.open("rb") as source_file, open(out_path, "wb") as
+        raw_output, gzip.GzipFile(fileobj=raw_output, mode="wb", compresslevel=6) as gzip_output):
     shutil.copyfileobj(source_file, gzip_output, length=65536)
 
 
@@ -490,10 +507,8 @@ def _token_usage_context(tally: TokenTally) -> dict:
       "calls": sum(r.calls for r in rows),
   }
   window = (
-      (min(r.first for r in rows if r.first), max(r.last for r in rows if r.last))
-      if rows and any(r.first for r in rows)
-      else ("", "")
-  )
+      (min(r.first for r in rows if r.first),
+       max(r.last for r in rows if r.last)) if rows and any(r.first for r in rows) else ("", ""))
   cache_share = tot["cache_read"] / tot["total"] * 100 if tot["total"] else 0.0
   out_share = tot["output"] / tot["total"] if tot["total"] else 0.0
   top = max(rows, key=lambda r: r.total) if rows else None
@@ -508,20 +523,32 @@ def _token_usage_context(tally: TokenTally) -> dict:
         "share": sum(r.total for r in sub) / tot["total"] * 100 if tot["total"] else 0.0,
     }
   payload = {
-      "rows": [
-          {
-              "model": r.model, "source": r.source, "total": r.total, "output": r.output,
-              "in_fresh": r.in_fresh, "cache_write": r.cache_write, "cache_read": r.cache_read,
-              "calls": r.calls,
-              "accounts": [
-                  {"name": a.name, "calls": a.calls, "output": a.output, "total": a.total}
-                  for a in r.accounts
-              ],
-              "slot": {"Claude Code": 1, "Codex": 2, "opencode": 3}[r.source],
-              "window": f"{r.first} → {r.last}",
-          }
-          for r in rows
-      ],
+      "rows":
+          [
+              {
+                  "model": r.model,
+                  "source": r.source,
+                  "total": r.total,
+                  "output": r.output,
+                  "in_fresh": r.in_fresh,
+                  "cache_write": r.cache_write,
+                  "cache_read": r.cache_read,
+                  "calls": r.calls,
+                  "accounts":
+                      [{
+                          "name": a.name,
+                          "calls": a.calls,
+                          "output": a.output,
+                          "total": a.total
+                      } for a in r.accounts],
+                  "slot": {
+                      "Claude Code": 1,
+                      "Codex": 2,
+                      "opencode": 3
+                  }[r.source],
+                  "window": f"{r.first} → {r.last}",
+              } for r in rows
+          ],
   }
   payload = json.dumps(payload, ensure_ascii=False)
   ctx = {
@@ -607,8 +634,7 @@ async def home_page(request: Request, cfg: CharlieBotConfig = Depends(get_config
           "description": service.description,
           "url": service.url,
           "status": "up" if up else "down",
-      }
-      for service, up in zip(cfg.home_services, statuses, strict=True)
+      } for service, up in zip(cfg.home_services, statuses, strict=True)
   ]
   return templates.TemplateResponse(
       request,

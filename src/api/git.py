@@ -2,6 +2,8 @@
 
 import asyncio
 import subprocess
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Literal
 
@@ -15,6 +17,56 @@ router = APIRouter()
 # Per-file diff cap (bytes). A single file whose diff exceeds this is returned as
 # a content-free stub so one giant generated/lockfile/binary file can't wedge the page.
 _DIFF_MAX_BYTES = 5 * 1024 * 1024
+
+# Bound on _diff_files_memo in manifest entries: a /diff page watches one
+# freshly-resolved range at a time, so the cap covers every branch pair open
+# across tabs.
+_DIFF_FILES_MEMO_LIMIT = 64
+
+# Memo key for one diff/files manifest: repo, both resolved SHAs, range mode,
+# and the .gitattributes signature (git reads diff drivers from the worktree
+# attributes file, and they feed --numstat's line counts). The remaining pieces
+# of repo state (refs) enter the key through the resolved SHAs; host git config
+# (rename detection) is static on this host.
+_ManifestKey = tuple[str, str, str, str, tuple[int, int] | None]
+
+# (repo, base_sha, head_sha, mode, attributes signature) -> (rows,
+# total_additions, total_deletions). A diff between two commits is immutable —
+# SHAs are content-addressed — so a repeat view of the same resolved range
+# (every /diff refresh until a branch moves) re-runs zero git diff
+# subprocesses. Served rows are shared across responses, the no-defensive-copy
+# idiom of the sibling memos. Handler and collector callers reach this through
+# executor threads, so get+move_to_end and insert+cap-eviction each hold the
+# lock, matching the sibling memo rule in chat_events.py.
+_diff_files_memo: OrderedDict[_ManifestKey, tuple[list[dict], int, int]] = OrderedDict()
+_diff_files_memo_lock = threading.Lock()
+
+
+def _diff_files_memo_get(key: _ManifestKey) -> tuple[list[dict], int, int] | None:
+  """Return the memoized manifest under *key*, or None on a miss."""
+  with _diff_files_memo_lock:
+    entry = _diff_files_memo.get(key)
+    if entry is not None:
+      _diff_files_memo.move_to_end(key)
+    return entry
+
+
+def _diff_files_memo_store(key: _ManifestKey, entry: tuple[list[dict], int, int]) -> None:
+  """Store the manifest under *key* and cap the memo."""
+  with _diff_files_memo_lock:
+    _diff_files_memo[key] = entry
+    _diff_files_memo.move_to_end(key)
+    while len(_diff_files_memo) > _DIFF_FILES_MEMO_LIMIT:
+      _diff_files_memo.popitem(last=False)
+
+
+def _attributes_signature(repo_path: Path) -> tuple[int, int] | None:
+  """Return (mtime_ns, size) of the repo's .gitattributes, or None when it has none."""
+  try:
+    st = (repo_path / ".gitattributes").stat()
+  except FileNotFoundError:
+    return None
+  return (st.st_mtime_ns, st.st_size)
 
 
 def _resolve_repo_under_workspace(repo: str, cfg: CharlieBotConfig) -> Path:
@@ -59,16 +111,17 @@ async def _run_git_diff(repo_path: Path, args: list[str]) -> str:
   return await asyncio.to_thread(_run_git_diff_sync, repo_path, args)
 
 
-def _resolve_commit_sync(repo_path: Path, ref: str) -> str:
-  """Resolve a git ref to its full commit SHA."""
+def _resolve_commits_sync(repo_path: Path, refs: list[str]) -> list[str]:
+  """Resolve each git ref to its full commit SHA, in order, in one rev-parse call."""
   stdout = _run_git_sync(
-      repo_path, ["rev-parse", "--verify", f"{ref}^{{commit}}"], SUBPROCESS_GIT_READ_TIMEOUT, "git rev-parse failed")
-  return stdout.strip()
+      repo_path, ["rev-parse", *[f"{ref}^{{commit}}" for ref in refs]], SUBPROCESS_GIT_READ_TIMEOUT,
+      "git rev-parse failed")
+  return stdout.split()
 
 
-async def _resolve_commit(repo_path: Path, ref: str) -> str:
+async def _resolve_commits(repo_path: Path, refs: list[str]) -> list[str]:
   """Async front for the blocking rev-parse; keeps the lookup off the event loop."""
-  return await asyncio.to_thread(_resolve_commit_sync, repo_path, ref)
+  return await asyncio.to_thread(_resolve_commits_sync, repo_path, refs)
 
 
 def _parse_numstat_z(output: str) -> list[tuple[int, int, str, str | None]]:
@@ -192,33 +245,48 @@ async def diff_files(
   """
   repo_path = _resolve_repo_under_workspace(repo, cfg)
   range_spec = _range_spec(base, head, mode)
-  head_sha = await _resolve_commit(repo_path, head)
-  status_by_path = _parse_name_status_z(await _run_git_diff(repo_path, ["--name-status", "-z", range_spec]))
-
-  files: list[dict] = []
-  total_additions = 0
-  total_deletions = 0
-  numstat = await _run_git_diff(repo_path, ["--numstat", "-z", range_spec])
-  for additions, deletions, path, old_path in _parse_numstat_z(numstat):
-    entry: dict = {
-        "path": path,
-        "status": status_by_path[path],
-        "additions": additions,
-        "deletions": deletions,
-    }
-    if old_path is not None:
-      entry["old_path"] = old_path
-    files.append(entry)
-    total_additions += additions
-    total_deletions += deletions
+  base_sha, head_sha = await _resolve_commits(repo_path, [base, head])
+  key = (str(repo_path), base_sha, head_sha, mode, _attributes_signature(repo_path))
+  memoized = _diff_files_memo_get(key)
+  if memoized is None:
+    # Two independent manifest subprocesses over the same frozen range; they run
+    # concurrently and a failure surfaces in the same order the sequential form
+    # raised it (name-status, then numstat).
+    name_status, numstat = await asyncio.gather(
+        _run_git_diff(repo_path, ["--name-status", "-z", range_spec]),
+        _run_git_diff(repo_path, ["--numstat", "-z", range_spec]),
+        return_exceptions=True,
+    )
+    for outcome in (name_status, numstat):
+      if isinstance(outcome, BaseException):
+        raise outcome
+    status_by_path = _parse_name_status_z(name_status)
+    rows: list[dict] = []
+    total_additions = 0
+    total_deletions = 0
+    for additions, deletions, path, old_path in _parse_numstat_z(numstat):
+      entry: dict = {
+          "path": path,
+          "status": status_by_path[path],
+          "additions": additions,
+          "deletions": deletions,
+      }
+      if old_path is not None:
+        entry["old_path"] = old_path
+      rows.append(entry)
+      total_additions += additions
+      total_deletions += deletions
+    memoized = (rows, total_additions, total_deletions)
+    _diff_files_memo_store(key, memoized)
+  rows, total_additions, total_deletions = memoized
 
   return {
-      "files": files,
+      "files": rows,
       "base": base,
       "head": head,
       "head_sha": head_sha,
       "mode": mode,
-      "total_files": len(files),
+      "total_files": len(rows),
       "total_additions": total_additions,
       "total_deletions": total_deletions,
   }

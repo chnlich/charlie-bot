@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 
 from src.agents.backends.pty_common import (
@@ -165,13 +165,65 @@ def _thread_list_item(t: ThreadMetadata) -> dict:
   return item
 
 
+# Whole-body memo for the 3 s workers-panel list poll: body bytes per session
+# keyed on the union file signature. Every row field derives from thread
+# metadata.json and trigger *.json files, and every writer rewrites those
+# files atomically (a rename always moves mtime_ns), so an unchanged signature
+# proves the built body is still current. Single slot per session with an LRU
+# cap: one slot holds the ~140 KB worst body, and deeper caps buy nothing
+# because a session's poll reuses its one slot.
+_LIST_BODY_MEMO_LIMIT = 8
+_list_body_memo: OrderedDict[str, tuple[tuple[tuple[str, int, int], ...], bytes]] = OrderedDict()
+
+
+def _list_body_signature(threads_dir: str, triggers_dir: str) -> tuple[tuple[str, int, int], ...]:
+  """(path, mtime_ns, size) of every row-source file of the list payload.
+
+  A missing directory contributes nothing, mirroring the managers' empty-list
+  verdict for it; a vanished file mid-scan is skipped the way ThreadManager's
+  scan skips it.
+  """
+  sig: list[tuple[str, int, int]] = []
+  try:
+    for entry in os.scandir(threads_dir):
+      if not entry.is_dir():
+        continue
+      path = entry.path + "/metadata.json"
+      try:
+        st = os.stat(path)
+      except OSError:
+        continue
+      sig.append((path, st.st_mtime_ns, st.st_size))
+  except OSError:
+    pass
+  try:
+    for entry in os.scandir(triggers_dir):
+      if not entry.is_file() or not entry.name.endswith(".json"):
+        continue
+      st = entry.stat()
+      sig.append((entry.path, st.st_mtime_ns, st.st_size))
+  except OSError:
+    pass
+  sig.sort()
+  return tuple(sig)
+
+
 @router.get("/{session_id}/list")
 async def list_threads(
     session_id: str,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     trigger_mgr: TriggerManager = Depends(get_trigger_manager),
-) -> list[dict]:
+    cfg: CharlieBotConfig = Depends(get_config),
+) -> Response:
   """Return mixed list of thread and trigger summaries, sorted by created_at descending."""
+  session_dir = cfg.sessions_dir / session_id
+  sig = await asyncio.to_thread(
+      _list_body_signature, str(session_dir / "threads"), str(session_dir / "triggers"))
+  hit = _list_body_memo.get(session_id)
+  if hit is not None and hit[0] == sig:
+    _list_body_memo.move_to_end(session_id)
+    return Response(content=hit[1], media_type="application/json")
+
   threads = await thread_mgr.list_threads(session_id)
   thread_items = [_thread_list_item(t) for t in threads]
 
@@ -189,7 +241,14 @@ async def list_threads(
 
   combined = thread_items + trigger_items
   combined.sort(key=lambda x: x["created_at"], reverse=True)
-  return combined
+  # The dumps flags reproduce starlette JSONResponse.render byte for byte, so a
+  # memo hit and a fresh build ship identical bodies.
+  body = json.dumps(combined, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+  _list_body_memo[session_id] = (sig, body)
+  _list_body_memo.move_to_end(session_id)
+  while len(_list_body_memo) > _LIST_BODY_MEMO_LIMIT:
+    _list_body_memo.popitem(last=False)
+  return Response(content=body, media_type="application/json")
 
 
 @router.get("/{session_id}/threads/{thread_id}", response_model=ThreadMetadataResponse)

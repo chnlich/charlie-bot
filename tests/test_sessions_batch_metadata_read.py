@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
 import time
 from pathlib import Path
 
@@ -260,3 +262,43 @@ async def test_batch_output_matches_sequential_get_session_for_mixed_fixture(
         meta.model_dump(mode="json") for meta in sequential_result
     ]
     assert {meta.id for meta in batch_result} == {active.id, archived.id, legacy.id}
+
+
+@pytest.mark.asyncio
+async def test_dir_names_memo_rescans_only_when_root_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mgr = _make_session_mgr(tmp_path)
+    first = SessionMetadata(name="first")
+    _write_metadata(mgr, first)
+    await mgr._iter_session_metas()
+
+    real_scandir = os.scandir
+    root_scans: list[str] = []
+
+    def counting_scandir(path):
+        # shutil.rmtree scans by fd; only the sessions-root path counts.
+        if isinstance(path, (str, os.PathLike)) and os.fspath(path) == os.fspath(mgr._cfg.sessions_dir):
+            root_scans.append(os.fspath(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", counting_scandir)
+
+    steady = await mgr._iter_session_metas()
+    assert [meta.id for meta in steady] == [first.id]
+    assert not root_scans
+
+    second = SessionMetadata(name="second")
+    _write_metadata(mgr, second)
+    grown = await mgr._iter_session_metas()
+    assert {meta.id for meta in grown} == {first.id, second.id}
+    assert len(root_scans) == 1
+
+    assert await mgr._iter_session_metas()
+    assert len(root_scans) == 1
+
+    shutil.rmtree(mgr._session_dir(second.id))
+    shrunk = await mgr._iter_session_metas()
+    assert [meta.id for meta in shrunk] == [first.id]
+    assert len(root_scans) == 2

@@ -93,7 +93,7 @@ def _create_message_table(con: sqlite3.Connection) -> None:
       "time_created integer not null, time_updated integer not null, data text not null)")
 
 
-def _insert_opencode_raw(con: sqlite3.Connection, rows: list[tuple[str, dict | str]]) -> None:
+def _insert_opencode_raw(con: sqlite3.Connection, rows: list[tuple[dict | str, tuple]]) -> None:
   """Insert rows as (data-dict-or-raw-string, account-model-provider payload pair) with
   minted ids and forward-only audit times, mirroring opencode's upsert contract."""
   for data, (payload, model_id, provider) in rows:
@@ -671,7 +671,7 @@ def test_opencode_row_memo_rereads_only_moved_rows(tmp_path: Path, monkeypatch: 
   projected: list[str] = []
   orig = tt._opencode_row_data
 
-  def spy(data: str):
+  def spy(data: str) -> tuple[list | None, int]:
     projected.append(data)
     return orig(data)
 

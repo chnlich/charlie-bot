@@ -54,8 +54,7 @@ def _cfg(tmp_path: Path) -> SimpleNamespace:
 
 def test_resident_body_present_non_resident_index_only(tmp_path: Path) -> None:
   cfg = _cfg(tmp_path)
-  out = master_cc._build_instructions_content(
-      SimpleNamespace(id="session-1", role=None, group=None), cfg, None)
+  out = master_cc._build_instructions_content(SimpleNamespace(id="session-1", role=None, group=None), cfg, None)
   assert out is not None
   assert "BASE PROMPT" in out
   # Resident entry: full body injected, heading synthesized from the frontmatter title.
@@ -70,8 +69,7 @@ def test_resident_body_present_non_resident_index_only(tmp_path: Path) -> None:
 
 def test_staging_content_absent(tmp_path: Path) -> None:
   cfg = _cfg(tmp_path)
-  out = master_cc._build_instructions_content(
-      SimpleNamespace(id="session-1", role=None, group=None), cfg, None)
+  out = master_cc._build_instructions_content(SimpleNamespace(id="session-1", role=None, group=None), cfg, None)
   assert out is not None
   # Staging candidates are never injected.
   assert "STAGED BODY" not in out
@@ -90,8 +88,7 @@ def test_missing_memory_dir_still_builds(tmp_path: Path) -> None:
       claude_md_file=home / "MASTER_AGENT_PROMPT.md",
       memory_dir=home / "memory",  # does not exist
   )
-  out = master_cc._build_instructions_content(
-      SimpleNamespace(id="session-1", role=None, group=None), cfg, None)
+  out = master_cc._build_instructions_content(SimpleNamespace(id="session-1", role=None, group=None), cfg, None)
   assert out is not None
   assert "BASE PROMPT" in out
   assert "User prefers dark UI." not in out

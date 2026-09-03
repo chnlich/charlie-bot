@@ -7,10 +7,10 @@ from collections.abc import Callable
 from src.agents.backends.base import AgentBackend
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  BackendOption,
-  MasterRunRecord,
-  SessionCallbacks,
-  SessionMetadata,
+    BackendOption,
+    MasterRunRecord,
+    SessionCallbacks,
+    SessionMetadata,
 )
 
 # Per-session FIFO queue for serializing run_message calls.

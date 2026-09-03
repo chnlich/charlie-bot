@@ -114,7 +114,9 @@ def _merge_one_trace(
                 "pid": remapped_pid,
                 "tid": synthetic_tid,
                 "name": "thread_name",
-                "args": {"name": f"{rank_label}/{original_tid}"},
+                "args": {
+                    "name": f"{rank_label}/{original_tid}"
+                },
             },
             first_event,
         )
@@ -131,7 +133,13 @@ def _merge_one_trace(
     ):
       first_event = _write_event(
           output,
-          {"ph": "M", "pid": synthetic_pid, "tid": meta_tid, "name": name, "args": args},
+          {
+              "ph": "M",
+              "pid": synthetic_pid,
+              "tid": meta_tid,
+              "name": name,
+              "args": args
+          },
           first_event,
       )
 

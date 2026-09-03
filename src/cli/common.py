@@ -187,9 +187,8 @@ def _is_connect_failure(exc: requests.RequestException) -> bool:
   if isinstance(exc, requests.exceptions.ConnectionError):
     msg = str(exc)
     return (
-        "Failed to establish a new connection" in msg
-        or "Connection refused" in msg
-        or "NameResolutionError" in msg  # DNS never resolved — nothing was sent
+        "Failed to establish a new connection" in msg or "Connection refused" in msg or
+        "NameResolutionError" in msg  # DNS never resolved — nothing was sent
     )
   return False
 

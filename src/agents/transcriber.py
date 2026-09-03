@@ -39,8 +39,7 @@ QWEN3_ASR_DIR_NAME = "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
 QWEN3_ASR_ARCHIVE_NAME = f"{QWEN3_ASR_DIR_NAME}.tar.bz2"
 QWEN3_ASR_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
-    "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2"
-)
+    "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2")
 QWEN3_ASR_SHA256 = "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96"
 
 SILERO_VAD_NAME = "silero_vad.onnx"

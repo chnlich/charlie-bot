@@ -58,6 +58,7 @@ async def test_set_group_broadcasts_sidebar_event() -> None:
 # Group inheritance: fork (clone) and elone
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_fork_session_inherits_group(tmp_path: Path) -> None:
   mgr = _make_session_mgr(tmp_path)

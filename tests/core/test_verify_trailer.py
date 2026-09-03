@@ -5,8 +5,7 @@ from src.core.verify_trailer import verify_result_trailer_error
 EMPTY_ERROR = "Verifier final report is empty; expected a final `RESULT: (?:clean|[1-9][0-9]* mismatch(?:es)? \\([0-9]+ approval\\))` line."
 MALFORMED_ERROR = (
     "Verifier final report has a missing or malformed `RESULT:` trailer; expected a final "
-    '`RESULT: (?:clean|[1-9][0-9]* mismatch(?:es)? \\([0-9]+ approval\\))` line.'
-)
+    '`RESULT: (?:clean|[1-9][0-9]* mismatch(?:es)? \\([0-9]+ approval\\))` line.')
 
 
 def test_bare_clean_last_line_is_valid() -> None:

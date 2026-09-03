@@ -42,7 +42,7 @@ def test_repeated_reads_with_appends_match_one_full_read(tmp_path: Path) -> None
     f.write(_tool_result_block("t1", "out"))
   second = threads_api.read_thread_worker_events(path)
 
-  assert [e.model_dump() for e in second][: len(first)] == [e.model_dump() for e in first]
+  assert [e.model_dump() for e in second][:len(first)] == [e.model_dump() for e in first]
 
   threads_api._thread_events_cache.clear()
   full = threads_api.read_thread_worker_events(path)

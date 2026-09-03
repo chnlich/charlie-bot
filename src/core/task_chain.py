@@ -104,8 +104,7 @@ async def _chain_summary_blocks(
   """
   threads = await thread_mgr.list_threads(session_id)
   chain = sorted(
-      (t for t in threads if t.chain_root == chain_root and t.step_index is not None),
-      key=lambda t: t.step_index)
+      (t for t in threads if t.chain_root == chain_root and t.step_index is not None), key=lambda t: t.step_index)
   blocks: list[str] = []
   for t in chain:
     _, result = await review.extract_review_context(session_id, t.id, cfg.sessions_dir)
@@ -162,8 +161,7 @@ async def handle_step_completion(
         f"scheduled task '{task_name}' no longer exists"
         if task is None else f"scheduled task '{task_name}' no longer declares steps")
     log.info("chain_stopped_task_gone", session=session_id, thread=thread.id, cause=cause)
-    await _wake_master_with_chain(
-        session_id, thread, task, f"Chain stopped: {cause}.", thread_mgr, session_mgr, cfg)
+    await _wake_master_with_chain(session_id, thread, task, f"Chain stopped: {cause}.", thread_mgr, session_mgr, cfg)
     return True
 
   steps = task.steps

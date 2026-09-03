@@ -11,12 +11,12 @@ import structlog
 from src.core.config import CharlieBotConfig
 from src.core.json_utils import write_model_json_atomically
 from src.core.models import (
-  TERMINAL_THREAD_STATUSES,
-  SessionMetadata,
-  TaskType,
-  ThreadMetadata,
-  ThreadStatus,
-  utc_now,
+    TERMINAL_THREAD_STATUSES,
+    SessionMetadata,
+    TaskType,
+    ThreadMetadata,
+    ThreadStatus,
+    utc_now,
 )
 from src.core.sidebar_state import mark_sidebar_dirty
 

@@ -24,6 +24,7 @@ def backup_dir() -> Path:
   home = charliebot_home_dir()
   return home.with_name(home.name + '_backup')
 
+
 _TIMESTAMP_FMT = '%Y%m%d-%H%M%S'
 _BACKUP_PREFIX = 'charliebot-'
 _BACKUP_SUFFIX = '.tar.gz'

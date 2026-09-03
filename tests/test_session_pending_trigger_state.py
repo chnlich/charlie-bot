@@ -9,10 +9,10 @@ from conftest import make_home_config, write_trigger
 
 from src.api import sessions as sessions_api
 from src.core.models import (
-  CreateSessionRequest,
-  PendingTrigger,
-  SessionStatus,
-  TriggerStatus,
+    CreateSessionRequest,
+    PendingTrigger,
+    SessionStatus,
+    TriggerStatus,
 )
 from src.core.sessions import SessionManager
 

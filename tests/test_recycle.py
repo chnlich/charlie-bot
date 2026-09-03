@@ -256,9 +256,7 @@ async def test_live_range_counts_physical_lines(tmp_path: Path) -> None:
   await mgr.recycle_scheduled_session(session.id, cutoff)
 
   # blank/malformed lines consume a range index, mirroring parse_ndjson_range.
-  live_path.write_text(
-      '{"content": "f0_first"}\n\n{bad json\n{"content": "f1"}\n{"content": "f2"}\n',
-      encoding="utf-8")
+  live_path.write_text('{"content": "f0_first"}\n\n{bad json\n{"content": "f1"}\n{"content": "f2"}\n', encoding="utf-8")
 
   got, _ = mgr.load_chat_events_range(session.id, 5, 7)
   assert [e["content"] for e in got] == ["f0_first"]

@@ -72,9 +72,7 @@ async def test_worker_writes_hang_diagnostics_and_emits_event(tmp_path: Path) ->
   assert "timestamp" in diag_event
 
   broadcast_payloads = [c.args[1] for c in mock_broadcast.await_args_list]
-  assert any(
-      e.get("type") == "system" and e.get("subtype") == "hang_diagnostics" for e in broadcast_payloads
-  )
+  assert any(e.get("type") == "system" and e.get("subtype") == "hang_diagnostics" for e in broadcast_payloads)
 
 
 @pytest.mark.asyncio

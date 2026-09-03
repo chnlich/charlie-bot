@@ -5,10 +5,11 @@
 
 Local only: no session resolution, no HTTP, no registry write. ``check`` runs the genre's
 mechanical DOM assertions, prints one line per assertion (``ok <name>[ <measurement>]`` or
-``FAIL <name>: <location>``), and — for sitrep/debug/explain, once every assertion passed —
-runs the cold-read probe unless ``--assertions-only`` was given. Exit codes: 0 = every
-assertion passed (probe answers print verbatim and are never judged), 1 = any assertion
-failed or the probe could not run, 2 = usage error.
+``FAIL <name>: <location>``), and — for every genre, once every assertion passed — runs
+the cold-read probe unless ``--assertions-only`` was given; ``--trigger`` is required for
+every genre unless ``--assertions-only``. Exit codes: 0 = every assertion passed (probe
+answers print verbatim and are never judged), 1 = any assertion failed or the probe could
+not run, 2 = usage error.
 """
 
 import argparse
@@ -31,18 +32,15 @@ def _build_parser() -> argparse.ArgumentParser:
   check.add_argument(
       "--trigger",
       default=None,
-      help="Chat message that triggered the page (question 6 verbatim); required for probe genres "
-      "unless --assertions-only, rejected for plan and understanding")
+      help="Chat message that triggered the page (question 6 verbatim); required for every genre "
+      "unless --assertions-only is given")
   check.add_argument(
-      "--assertions-only", action="store_true", help="Skip the cold-read probe even on a probe genre")
+      "--assertions-only", action="store_true", help="Run the assertions alone, skipping the cold-read probe")
   return parser
 
 
 def _run_check(args: argparse.Namespace) -> int:
-  if args.genre not in artifact_check.PROBE_GENRES and args.trigger is not None:
-    exit_usage_error(f"--trigger is rejected for --genre {args.genre}: it is only used by the cold-read probe genres "
-                     f"({', '.join(artifact_check.PROBE_GENRES)})")
-  if args.genre in artifact_check.PROBE_GENRES and args.trigger is None and not args.assertions_only:
+  if args.trigger is None and not args.assertions_only:
     exit_usage_error(f"--genre {args.genre} requires --trigger unless --assertions-only is given")
   artifact = Path(args.file).resolve()
   if not artifact.is_file():
@@ -58,7 +56,7 @@ def _run_check(args: argparse.Namespace) -> int:
       print(f"FAIL {outcome.name}: {outcome.detail}")
   if failed:
     return 1
-  if args.genre not in artifact_check.PROBE_GENRES or args.assertions_only:
+  if args.assertions_only:
     return 0
   print("--- cold read ---")
   try:

@@ -11,17 +11,10 @@ those two thread fields.
 
 import structlog
 
-from src.core import event_types as ET
 from src.core import review
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, get_scheduled_tasks
-from src.core.models import (
-  SessionMetadata,
-  SpawnRequest,
-  TaskType,
-  ThreadMetadata,
-)
+from src.core.models import SessionMetadata, ThreadMetadata
 from src.core.sessions import SessionManager
-from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
@@ -42,18 +35,16 @@ async def spawn_step(
 
   The thread description is ``<task name> · <step name>`` with
   ``require_review=False``; ``chain_root`` defaults to the new thread's own id
-  (the first step points at itself). The backend is the step's ``backend`` or
-  the task-level resolution, validated through the same
-  resolve-requested-backend path ``_spawn_scheduled_worker`` uses, so an id
-  absent from ``backend_options`` raises ValueError naming it. For
-  ``step_index > 0`` the worker prompt appends the previous step's result under
-  a heading. Returns ``{"session_id", "thread_id", "handle"}``.
+  (the first step points at itself). The backend is the step's ``backend`` when
+  set, else the task-level resolution; resolution, the spawn request, and the
+  TASK_DELEGATED broadcast all run through ``fire_scheduled_worker``, the
+  scheduler's single scheduled-worker spawn block. For ``step_index > 0`` the
+  worker prompt appends the previous step's result under a heading. Returns
+  ``{"session_id", "thread_id", "handle"}``.
   """
-  # Lazy: src.core.scheduler imports this module, and the spawner facade
-  # imports spawner_finalize, which imports this module — import-scope
-  # bindings would close either cycle.
-  from src.core.scheduler import effective_scheduled_task_backend
-  from src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker
+  # Lazy: src.core.scheduler imports this module at import scope, so importing
+  # it back here would close the cycle.
+  from src.core.scheduler import fire_scheduled_worker
 
   step = task_cfg.steps[step_index]
   description = f"{task_cfg.name} · {step.name}"
@@ -62,44 +53,22 @@ async def spawn_step(
   thread.step_index = step_index
   await thread_mgr.save_metadata(thread)
 
-  effective_backend = step.backend or effective_scheduled_task_backend(task_cfg, cfg)
-  resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
-      session.id, cfg, session_mgr, requested_backend=effective_backend)
-
   prompt = step.prompt
   if step_index > 0:
     previous_name = task_cfg.steps[step_index - 1].name
     prompt = f"{prompt.rstrip()}\n\n## Result of the previous step ({previous_name})\n{previous_result}"
 
-  handle = create_logged_task(
-      spawn_worker(
-          session_id=session.id,
-          description=description,
-          thread_id=thread.id,
-          cfg=cfg,
-          session_mgr=session_mgr,
-          thread_mgr=thread_mgr,
-          request=SpawnRequest(
-              repo_path=task_cfg.repo,
-              prompt_override=prompt,
-              resolved_backend=resolved_backend,
-              resolved_model=resolved_model,
-              task_type=TaskType.IMPLEMENT,
-          ),
-      ),
-      name=f"scheduled_worker_{task_cfg.name}_{thread.id[:8]}",
-  )
+  handle = await fire_scheduled_worker(
+      session,
+      task_cfg,
+      thread,
+      description,
+      cfg,
+      session_mgr,
+      thread_mgr,
+      backend_override=step.backend,
+      prompt_override=prompt)
 
-  event = {
-      "type": ET.TASK_DELEGATED,
-      "task": task_cfg.name,
-      "description": description,
-      "session_id": session.id,
-      "thread_id": thread.id,
-      "backend": resolved_backend or "",
-      "model": resolved_model or "",
-  }
-  await session_mgr.persist_and_broadcast(session.id, event)
   log.info(
       "scheduled_task_step_fired",
       task=task_cfg.name,

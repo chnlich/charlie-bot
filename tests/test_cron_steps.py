@@ -23,8 +23,9 @@ from conftest import (
   OPUS_BACKEND_ID,
   OPUS_BACKEND_OPTION,
   REVIEW_TRIGGER_MASTER_PATCH_TARGET,
+  SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
   SCHEDULER_GET_CONFIG_PATCH_TARGET,
-  SPAWNER_SPAWN_WORKER_PATCH_TARGET,
+  SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
   build_scheduler_cfg,
   close_create_logged_task,
   read_chat_events,
@@ -245,10 +246,12 @@ def _capture_spawn(calls: list[dict[str, Any]]) -> Callable[..., Coroutine[Any, 
 
 
 def _patch_chain_pipes(monkeypatch: pytest.MonkeyPatch, spawns: list[dict[str, Any]]) -> None:
-  """Patch the chain's three external seams: the task list, the spawn, and the task handle."""
-  monkeypatch.setattr(task_chain, "create_logged_task", close_create_logged_task)
+  """Patch the chain's three external seams: the task list (task_chain's own binding), and the
+  spawn plus the task handle (scheduler's fire_scheduled_worker namespace, which spawn_step
+  delegates to)."""
+  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
   monkeypatch.setattr(task_chain, "get_scheduled_tasks", lambda: [_steps_task_cfg()])
-  monkeypatch.setattr(SPAWNER_SPAWN_WORKER_PATCH_TARGET, _capture_spawn(spawns))
+  monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, _capture_spawn(spawns))
 
 
 async def _make_chain_session(cfg: Any, session_mgr: SessionManager) -> SessionMetadata:

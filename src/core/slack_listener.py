@@ -1037,9 +1037,8 @@ def _lost_summons(events: list[dict], *, owned: set[str], running: str | None) -
   answered = {ev.get("input_event_id") for ev in events if ev.get("type") == ET.MASTER_DONE}
   marked = {ev["slack_backfill"].get("input_event_id") for ev in events if "slack_backfill" in ev}
   return [
-      ev for ev in events
-      if ev.get("type") == ET.AGENT_MESSAGE and "slack" in ev and ev["id"] not in answered
-      and ev["id"] not in marked and ev["id"] not in owned and ev["id"] != running
+      ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE and "slack" in ev and ev["id"] not in answered and
+      ev["id"] not in marked and ev["id"] not in owned and ev["id"] != running
   ]
 
 
@@ -1070,18 +1069,24 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
     for ev in lost:
       # Persist the marker before posting: a crash in between costs one notice,
       # while posting first would re-post it on every boot until the marker landed.
-      await session_mgr.persist_and_broadcast(meta.id, {
-          "type": ET.ASSISTANT_ERROR,
-          "content": _LOST_SUMMON_CONTENT,
-          "slack_backfill": {"input_event_id": ev["id"]},
-      })
+      await session_mgr.persist_and_broadcast(
+          meta.id, {
+              "type": ET.ASSISTANT_ERROR,
+              "content": _LOST_SUMMON_CONTENT,
+              "slack_backfill": {
+                  "input_event_id": ev["id"]
+              },
+          })
       slack = ev["slack"]
-      await _post_with_retry(
-          client, slack["channel_id"], slack["thread_ts"], _LOST_SUMMON_NOTICE, session_id=meta.id)
+      await _post_with_retry(client, slack["channel_id"], slack["thread_ts"], _LOST_SUMMON_NOTICE, session_id=meta.id)
       _ack_clear(client, slack, meta.id)
       reported += 1
-      logger.info("slack_backfill_lost_summon", session=meta.id, channel=slack["channel_id"],
-                  thread_ts=slack["thread_ts"], input_event_id=ev["id"])
+      logger.info(
+          "slack_backfill_lost_summon",
+          session=meta.id,
+          channel=slack["channel_id"],
+          thread_ts=slack["thread_ts"],
+          input_event_id=ev["id"])
     if lost:
       events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
 
@@ -1146,17 +1151,29 @@ async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> No
             slack_user = inner.get("user")
             try:
               sid = await handle_app_mention(inner, cfg, session_mgr, client, trigger_mgr)
-              logger.info("slack_listener_app_mention_handled", channel=channel, thread_ts=thread_ts,
-                          slack_user=slack_user, session=sid)
+              logger.info(
+                  "slack_listener_app_mention_handled",
+                  channel=channel,
+                  thread_ts=thread_ts,
+                  slack_user=slack_user,
+                  session=sid)
             except Exception as e:
-              logger.exception("slack_listener_app_mention_handle_failed", channel=channel,
-                               thread_ts=thread_ts, slack_user=slack_user, error=str(e))
+              logger.exception(
+                  "slack_listener_app_mention_handle_failed",
+                  channel=channel,
+                  thread_ts=thread_ts,
+                  slack_user=slack_user,
+                  error=str(e))
           elif inner and inner.get("type") == "message":
             try:
               await handle_thread_message(inner, cfg, session_mgr, client, trigger_mgr)
             except Exception as e:
-              logger.exception("slack_listener_message_handle_failed", channel=inner.get("channel"),
-                               thread_ts=inner.get("thread_ts"), slack_user=inner.get("user"), error=str(e))
+              logger.exception(
+                  "slack_listener_message_handle_failed",
+                  channel=inner.get("channel"),
+                  thread_ts=inner.get("thread_ts"),
+                  slack_user=inner.get("user"),
+                  error=str(e))
     except Exception as e:
       logger.warning("slack_listener_connection_dropped", error=str(e))
 

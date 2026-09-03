@@ -30,8 +30,8 @@ interval may still rewrite.
 import bisect
 
 from src.api.message_utils import (
-  _stable_history_projection,
-  stable_closed_prefix_len,
+    _stable_history_projection,
+    stable_closed_prefix_len,
 )
 from src.core.message_aggregator import MessageAggregator
 
@@ -107,9 +107,7 @@ class MessageProjection:
       prefix = self._region_events[:closed]
       del self._region_events[:closed]
       fed_base = self.event_count - len(self._region_events) - closed - self._offset
-      for delta in self._agg.feed_indexed(
-          [(fed_base + idx, ev) for idx, ev in _stable_history_projection(prefix)]
-      ):
+      for delta in self._agg.feed_indexed([(fed_base + idx, ev) for idx, ev in _stable_history_projection(prefix)]):
         if delta["type"] == "message":
           msg = delta["message"]
           if msg["role"] == "separator":
@@ -120,9 +118,9 @@ class MessageProjection:
     region_committed: list[dict] = []
     region_seps: list[int] = []
     region_base = self.event_count - len(self._region_events) - self._offset
-    for delta in view_agg.feed_indexed(
-        [(region_base + idx, ev) for idx, ev in _stable_history_projection(self._region_events)]
-    ):
+    for delta in view_agg.feed_indexed([
+        (region_base + idx, ev) for idx, ev in _stable_history_projection(self._region_events)
+    ]):
       if delta["type"] == "message":
         msg = delta["message"]
         if msg["role"] == "separator":

@@ -17,8 +17,8 @@ from src.core.notifications import send_telegram
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.verify_trailer import (
-  read_verify_final_report,
-  verify_result_trailer_error,
+    read_verify_final_report,
+    verify_result_trailer_error,
 )
 
 log = structlog.get_logger()
@@ -171,14 +171,7 @@ async def _run_finalize_effects(
   if skip_notify:
     return
   await _notify_completion(
-      session_id,
-      description,
-      thread,
-      outcome,
-      thread_mgr,
-      session_mgr,
-      cfg,
-      verify_report=verify_report)
+      session_id, description, thread, outcome, thread_mgr, session_mgr, cfg, verify_report=verify_report)
 
 
 async def _thread_cancelled(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> bool:
@@ -426,13 +419,7 @@ async def _notify_completion(
       await session_mgr.save_metadata(session_meta)
       scheduled_task_name = session_meta.scheduled_task
     events_summary, full_summary = await _broadcast_completion(
-        session_id,
-        description,
-        thread,
-        outcome,
-        thread_mgr,
-        session_mgr,
-        verify_report=verify_report)
+        session_id, description, thread, outcome, thread_mgr, session_mgr, verify_report=verify_report)
 
     if scheduled_task_name:
       try:

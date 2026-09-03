@@ -415,8 +415,7 @@ def resolve_run(
     # row and completes normally; this row only judges runs without one.
     if effectively_alive:
       return RunResolution(outcome=RunOutcome.RUNNING, reason=UNCOVERED_ALIVE_REASON, completed_at=completed_at)
-    return RunResolution(
-        outcome=RunOutcome.DIED, reason=TRANSPORT_NOT_COVERED_REASON, completed_at=completed_at)
+    return RunResolution(outcome=RunOutcome.DIED, reason=TRANSPORT_NOT_COVERED_REASON, completed_at=completed_at)
   if not raw_exists:
     if effectively_alive:
       return RunResolution(outcome=RunOutcome.RUNNING, reason=RAW_MISSING_ALIVE_REASON)
@@ -435,9 +434,8 @@ def resolve_run(
   if effectively_alive:
     silent_for = (now - completed_at).total_seconds() if completed_at else 0.0
     if silent_for > NO_OUTPUT_REPORT_THRESHOLD:
-      reason = (
-          f"alive but no raw output for {int(silent_for)}s "
-          f"(>{NO_OUTPUT_REPORT_THRESHOLD}s threshold)")
+      reason = (f"alive but no raw output for {int(silent_for)}s "
+                f"(>{NO_OUTPUT_REPORT_THRESHOLD}s threshold)")
       if missing_note:
         reason = f"{reason}; {missing_note}"
       return RunResolution(

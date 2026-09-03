@@ -128,8 +128,7 @@ async def git_remote_default_branch(repo_path: Path) -> str:
       timeout_label="git ls-remote",
   )
   if not ok:
-    raise BaseBranchResolutionError(
-        f"cannot read origin's default branch in {repo_path} via git ls-remote: {err}")
+    raise BaseBranchResolutionError(f"cannot read origin's default branch in {repo_path} via git ls-remote: {err}")
   symref_prefix = "ref: refs/heads/"
   for line in out.splitlines():
     if line.startswith(symref_prefix):
@@ -212,8 +211,7 @@ async def resolve_base_branch(repo_path: Path, base_branch: str) -> BaseResoluti
       raise BaseBranchResolutionError(f"git fetch origin {branch} failed: {fetch_err}")
     remote_sha = await _git_rev_parse(repo_path, f"refs/remotes/origin/{branch}")
     if remote_sha is None:
-      raise BaseBranchResolutionError(
-          f"origin/{branch} listed by ls-remote but missing after fetch in {repo_path}")
+      raise BaseBranchResolutionError(f"origin/{branch} listed by ls-remote but missing after fetch in {repo_path}")
     local_sha = await _git_rev_parse(repo_path, f"refs/heads/{branch}")
     if not explicit_remote and local_sha is not None and local_sha != remote_sha:
       raise BaseBranchResolutionError(
@@ -222,9 +220,7 @@ async def resolve_base_branch(repo_path: Path, base_branch: str) -> BaseResoluti
           f"local branch, pass origin/{branch} to use the remote explicitly, "
           "or pass a full commit SHA to pin the base.")
     return BaseResolution(
-        canonical=branch,
-        start_point=f"origin/{branch}",
-        detail=f"branch {branch} at origin tip {remote_sha[:12]}")
+        canonical=branch, start_point=f"origin/{branch}", detail=f"branch {branch} at origin tip {remote_sha[:12]}")
 
   # Remote branch absent (or no origin remote configured): unpublished-branch path.
   if explicit_remote:

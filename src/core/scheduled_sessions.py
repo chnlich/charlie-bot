@@ -7,10 +7,10 @@ import structlog
 
 from src.core.config import cron_path
 from src.core.models import (
-  CreateSessionRequest,
-  SessionMetadata,
-  SessionStatus,
-  utc_now,
+    CreateSessionRequest,
+    SessionMetadata,
+    SessionStatus,
+    utc_now,
 )
 from src.core.yaml_utils import load_yaml, save_yaml
 
@@ -51,8 +51,7 @@ class ScheduledSessionStore:
     old_session = active_sessions[0] if active_sessions else None
     if old_session is None:
       meta = await self._session_manager.create_session(
-          CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role),
-          backend=backend)
+          CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role), backend=backend)
       if group is not None:
         meta.group = group
         meta.updated_at = utc_now()
@@ -79,8 +78,7 @@ class ScheduledSessionStore:
 
     await self._session_manager.archive_session(old_session.id)
     meta = await self._session_manager.create_session(
-        CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role),
-        backend=backend)
+        CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role), backend=backend)
     self.migrate_scheduler_bookkeeping(old_session, meta)
     if group is not None:
       meta.group = group

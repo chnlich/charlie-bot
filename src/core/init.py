@@ -15,22 +15,22 @@ is bound by reference: the code and the tests must mutate one shared set.
 
 import src.core.init_worker_recovery as _init_worker_recovery
 from src.core.init_master_recovery import (  # noqa: F401  # re-export: facade import list (see module docstring)
-  reconcile_master_identity,
-  run_crash_recovery,
-  unanswered_user_events,
+    reconcile_master_identity,
+    run_crash_recovery,
+    unanswered_user_events,
 )
 from src.core.init_seed import (  # noqa: F401  # re-export: facade import list (see module docstring)
-  init_charliebot_home,
-  seed_default_cron_tasks,
+    init_charliebot_home,
+    seed_default_cron_tasks,
 )
 from src.core.init_worker_recovery import (  # noqa: F401  # re-export: facade import list (see module docstring)
-  _follow_silence_recheck,
-  _InterruptedRun,
-  _maybe_respawn,
-  _quarantine_stale_failed_worktrees,
-  _report_recovery_event,
-  _scan_interrupted_runs,
-  iter_recent_thread_metas,
+    _follow_silence_recheck,
+    _InterruptedRun,
+    _maybe_respawn,
+    _quarantine_stale_failed_worktrees,
+    _report_recovery_event,
+    _scan_interrupted_runs,
+    iter_recent_thread_metas,
 )
 
 # Serve module-level names reachable through this module pre-split; the once-key

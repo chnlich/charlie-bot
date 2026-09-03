@@ -10,14 +10,14 @@ from src.agents.worker import Worker
 from src.core import spawner_backends, spawner_prompt
 from src.core.config import CharlieBotConfig
 from src.core.git import (
-  git_create_worktree,
-  git_remote_default_branch,
-  git_worktree_dir_name,
+    git_create_worktree,
+    git_remote_default_branch,
+    git_worktree_dir_name,
 )
 from src.core.models import (
-  SpawnRequest,
-  TaskType,
-  ThreadMetadata,
+    SpawnRequest,
+    TaskType,
+    ThreadMetadata,
 )
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
@@ -137,8 +137,7 @@ async def _create_worktree_and_process(
     )
     raise RuntimeError("refusing to run subagent in repo root; worktree isolation required")
 
-  return await _construct_worker(
-      session_id, thread, worktree_path, worker_prompt, cfg, thread_mgr, request)
+  return await _construct_worker(session_id, thread, worktree_path, worker_prompt, cfg, thread_mgr, request)
 
 
 async def _create_repoless_process(

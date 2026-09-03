@@ -41,6 +41,39 @@ _ManifestKey = tuple[str, str, str, str, tuple[int, int] | None]
 _diff_files_memo: OrderedDict[_ManifestKey, tuple[list[dict], int, int]] = OrderedDict()
 _diff_files_memo_lock = threading.Lock()
 
+# Bound on _diff_file_memo in per-file bodies: a review pass expands files one
+# at a time across the branch pairs open in tabs, and an evicted entry simply
+# re-runs the diff.
+_DIFF_FILE_MEMO_LIMIT = 64
+
+# Memo key for one diff/file body: the manifest key (see _ManifestKey) plus the
+# pathspec the handler passes git. Same immutability argument as the manifest:
+# repeat expands — expand/collapse re-fetches, tab refreshes — of one resolved
+# ref pair re-run zero git diff subprocesses. Lock discipline mirrors
+# _diff_files_memo.
+_FileDiffKey = tuple[str, str, str, str, tuple[int, int] | None, tuple[str, ...]]
+
+_diff_file_memo: OrderedDict[_FileDiffKey, str] = OrderedDict()
+_diff_file_memo_lock = threading.Lock()
+
+
+def _diff_file_memo_get(key: _FileDiffKey) -> str | None:
+  """Return the memoized per-file diff under *key*, or None on a miss."""
+  with _diff_file_memo_lock:
+    entry = _diff_file_memo.get(key)
+    if entry is not None:
+      _diff_file_memo.move_to_end(key)
+    return entry
+
+
+def _diff_file_memo_store(key: _FileDiffKey, entry: str) -> None:
+  """Store the per-file diff under *key* and cap the memo."""
+  with _diff_file_memo_lock:
+    _diff_file_memo[key] = entry
+    _diff_file_memo.move_to_end(key)
+    while len(_diff_file_memo) > _DIFF_FILE_MEMO_LIMIT:
+      _diff_file_memo.popitem(last=False)
+
 
 def _diff_files_memo_get(key: _ManifestKey) -> tuple[list[dict], int, int] | None:
   """Return the memoized manifest under *key*, or None on a miss."""
@@ -311,11 +344,17 @@ async def diff_file(
   file can't wedge the page; the caller re-requests with force=true to load it anyway.
   """
   repo_path = _resolve_repo_under_workspace(repo, cfg)
-  range_spec = _range_spec(base, head, mode)
   # Restricting to a single side of a rename makes git drop the pairing and emit a
   # wholesale add/delete; passing both endpoints keeps it a rename diff.
-  pathspec = [old_path, path] if old_path else [path]
-  diff_text = await _run_git_diff(repo_path, [range_spec, "--", *pathspec])
+  pathspec = tuple([old_path, path] if old_path else [path])
+  base_sha, head_sha = await _resolve_commits(repo_path, [base, head])
+  key = (str(repo_path), base_sha, head_sha, mode, _attributes_signature(repo_path), pathspec)
+  diff_text = _diff_file_memo_get(key)
+  if diff_text is None:
+    # The range over resolved SHAs, so a ref that moves before the subprocess
+    # starts cannot key one pair's body under another pair.
+    diff_text = await _run_git_diff(repo_path, [_range_spec(base_sha, head_sha, mode), "--", *pathspec])
+    _diff_file_memo_store(key, diff_text)
   size_bytes = len(diff_text.encode("utf-8"))
   if not force and size_bytes > _DIFF_MAX_BYTES:
     return {"too_large": True, "size_bytes": size_bytes, "path": path}

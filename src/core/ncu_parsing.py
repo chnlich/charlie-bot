@@ -60,31 +60,38 @@ _ROOFLINE_PLACEHOLDER = "本报告未采集 roofline 数据 (需要 --set full/d
 
 _ROOFLINE_DEFINITIONS = [
     {
-        "id": "fp32",
-        "label": "Single Precision Roofline",
-        "precision": "FP32",
-        "peak_work_metric": "derived__sm__sass_thread_inst_executed_op_ffma_pred_on_x2",
-        "required_achieved_work_metrics": [
-            "smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed",
-            "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed",
-            "derived__smsp__sass_thread_inst_executed_op_ffma_pred_on_x2",
-        ],
-        "optional_achieved_work_metrics": [
-            "derived__smsp__sass_thread_inst_executed_op_fadd2_pred_on_x2",
-            "derived__smsp__sass_thread_inst_executed_op_fmul2_pred_on_x2",
-            "derived__smsp__sass_thread_inst_executed_op_ffma2_pred_on_x4",
-        ],
+        "id":
+            "fp32",
+        "label":
+            "Single Precision Roofline",
+        "precision":
+            "FP32",
+        "peak_work_metric":
+            "derived__sm__sass_thread_inst_executed_op_ffma_pred_on_x2",
+        "required_achieved_work_metrics":
+            [
+                "smsp__sass_thread_inst_executed_op_fadd_pred_on.sum.per_cycle_elapsed",
+                "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum.per_cycle_elapsed",
+                "derived__smsp__sass_thread_inst_executed_op_ffma_pred_on_x2",
+            ],
+        "optional_achieved_work_metrics":
+            [
+                "derived__smsp__sass_thread_inst_executed_op_fadd2_pred_on_x2",
+                "derived__smsp__sass_thread_inst_executed_op_fmul2_pred_on_x2",
+                "derived__smsp__sass_thread_inst_executed_op_ffma2_pred_on_x4",
+            ],
     },
     {
         "id": "fp64",
         "label": "Double Precision Roofline",
         "precision": "FP64",
         "peak_work_metric": "derived__sm__sass_thread_inst_executed_op_dfma_pred_on_x2",
-        "required_achieved_work_metrics": [
-            "smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_cycle_elapsed",
-            "smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_cycle_elapsed",
-            "derived__smsp__sass_thread_inst_executed_op_dfma_pred_on_x2",
-        ],
+        "required_achieved_work_metrics":
+            [
+                "smsp__sass_thread_inst_executed_op_dadd_pred_on.sum.per_cycle_elapsed",
+                "smsp__sass_thread_inst_executed_op_dmul_pred_on.sum.per_cycle_elapsed",
+                "derived__smsp__sass_thread_inst_executed_op_dfma_pred_on_x2",
+            ],
         "optional_achieved_work_metrics": [],
     },
 ]
@@ -563,8 +570,7 @@ def _sections_from_csv(abspath: str) -> dict[int, list[dict]] | None:
   """
   cmd = ["ncu", "--import", abspath, "--csv", "--page", "details"]
   try:
-    proc = subprocess.run(
-        cmd, capture_output=True, text=True, check=False, timeout=SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT)
   except (FileNotFoundError, subprocess.TimeoutExpired):
     log.warning("ncu_sections_csv_unavailable")
     return None

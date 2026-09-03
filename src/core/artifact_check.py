@@ -98,8 +98,7 @@ def _measure_page_height(chrome_bin: Path, artifact: Path) -> int:
   """Render *artifact* headlessly through a session-unique probe page; return its scroll height."""
   probe = artifact.parent / f".page-height-probe-{uuid.uuid4().hex}.html"
   probe.write_text(
-      _PAGE_PROBE_TEMPLATE.format(width=_PAGE_PROBE_WIDTH_PX, src=artifact.resolve().as_uri()),
-      encoding="utf-8")
+      _PAGE_PROBE_TEMPLATE.format(width=_PAGE_PROBE_WIDTH_PX, src=artifact.resolve().as_uri()), encoding="utf-8")
   try:
     try:
       proc = subprocess.run(
@@ -400,10 +399,11 @@ def _check_goal_budget(ctx: _Context) -> list[AssertionOutcome]:
   except ValueError as e:
     return [_fail(name, str(e))]
   if weighted > GOAL_WEIGHTED_BUDGET:
-    return [_fail(
-        name,
-        f"plan goal is {weighted} weighted chars (budget {GOAL_WEIGHTED_BUDGET}): keep the goal "
-        "and non-goals; demote diagnosis, thresholds, paths, and justifications to Context or 4.1")]
+    return [
+        _fail(
+            name, f"plan goal is {weighted} weighted chars (budget {GOAL_WEIGHTED_BUDGET}): keep the goal "
+            "and non-goals; demote diagnosis, thresholds, paths, and justifications to Context or 4.1")
+    ]
   return [_ok(name, f"{weighted} weighted chars (budget {GOAL_WEIGHTED_BUDGET})")]
 
 
@@ -414,10 +414,11 @@ def _check_page_height(ctx: _Context) -> list[AssertionOutcome]:
   except ValueError as e:
     return [_fail(name, str(e))]
   if height > PAGE_HEIGHT_BUDGET:
-    return [_fail(
-        name,
-        f"plan page measures {height} px as it opens: {height - PAGE_HEIGHT_BUDGET} px over the "
-        f"{PAGE_HEIGHT_BUDGET} px budget")]
+    return [
+        _fail(
+            name, f"plan page measures {height} px as it opens: {height - PAGE_HEIGHT_BUDGET} px over the "
+            f"{PAGE_HEIGHT_BUDGET} px budget")
+    ]
   return [_ok(name, f"{height} px (budget {PAGE_HEIGHT_BUDGET})")]
 
 
@@ -437,16 +438,18 @@ ORD = re.compile(
 INTERNAL_UNLESS_QUALIFIED = re.compile(r"round|Round|question|Question|item|Item|轮|条|项|题|问")
 # Document words: a label directly after one of these points off the page.
 QUAL = re.compile(
-    r"(计划|plan|Plan|sitrep|战况|理解页|understanding|任务书|debug|explain|讲解页|上一?份|上一?版|前一?份|那份|另一份|earlier|previous)(?:\s*的|\s*'s|\s*里|\s*中)?\s*$")
+    r"(计划|plan|Plan|sitrep|战况|理解页|understanding|任务书|debug|explain|讲解页|上一?份|上一?版|前一?份|那份|另一份|earlier|previous)(?:\s*的|\s*'s|\s*里|\s*中)?\s*$"
+)
 # Content-name forms: a sentence carrying one of these has a name in reach.
 ANCHOR = re.compile(
-    r"(https?://\S+"                                     # URL
+    r"(https?://\S+"  # URL
     r"|(?<![\w/])(?:~|\.{1,2})?/[\w.~-]+(?:/[\w.~-]+)*"  # rooted path: /a, ~/a/b, ./a
-    r"|\b[\w.~-]+(?:/[\w.~-]+){2,}"                      # relative path with two or more slashes
-    r"|\b[\w-]+\.(?:html|md|py|json|yaml|txt)\b"         # file name with a document extension
-    r"|\b[A-Z]{2,}-\d+\b"                                # ticket id
+    r"|\b[\w.~-]+(?:/[\w.~-]+){2,}"  # relative path with two or more slashes
+    r"|\b[\w-]+\.(?:html|md|py|json|yaml|txt)\b"  # file name with a document extension
+    r"|\b[A-Z]{2,}-\d+\b"  # ticket id
     r")")
-SENT_SPLIT = re.compile(r"(?<=[。!?！？])")  # clauses joined by semicolons share one sentence: a name in one covers the other
+SENT_SPLIT = re.compile(
+    r"(?<=[。!?！？])")  # clauses joined by semicolons share one sentence: a name in one covers the other
 QUOTE = re.compile(r"[「“][^」”]{1,80}[」”]|\"[^\"]{1,80}\"")  # a label inside quotes is a mention, not a use
 GLOSS = re.compile(r"^\s*(?:v\d+\s*)?(?:[（(][^（）()]{2,}[）)]|·\s*\S{2,}|v\d+\s+[\w-]{6,})")
 COLON_GLOSS = re.compile(r"^\s*(?:v\d+\s*)?[:：]\s*\S{2,}")
@@ -509,8 +512,8 @@ def _block_scan_text(block: _Element) -> str:
     for child in el.children:
       if isinstance(child, str):
         parts.append(child)
-      elif child.tag in _ORDINAL_SKIP_TAGS or child.tag in _ORDINAL_BLOCK_TAGS or (
-          child.tag == "span" and "mtag" in child.classes):
+      elif child.tag in _ORDINAL_SKIP_TAGS or child.tag in _ORDINAL_BLOCK_TAGS or (child.tag == "span" and
+                                                                                   "mtag" in child.classes):
         continue
       elif child.tag == "code":
         parts.append(_CODE_START)
@@ -593,8 +596,8 @@ def _ordinal_named_scan(ctx: _Context) -> tuple[set[str], list[tuple[_Element, l
         if op > cl and len(before[:op].strip()) >= 2:
           named_add(kind)
           continue
-        if GLOSS.match(sentence[m.end():]) or (
-            not before.strip(" -—·1234567890.") and COLON_GLOSS.match(sentence[m.end():])):
+        if GLOSS.match(sentence[m.end():]) or (not before.strip(" -—·1234567890.") and
+                                               COLON_GLOSS.match(sentence[m.end():])):
           named_add(kind)
           continue
         # Inside a header meta chip the text after the label is the chip's value.
@@ -647,14 +650,17 @@ _ASSERTION_RUNNERS = {
 # The genre -> assertion-set table: the only place genres and their sets are stated.
 _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
     "plan":
-        ("style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "goal-budget", "page-height",
-         "ordinal-named"),
+        (
+            "style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "goal-budget", "page-height",
+            "ordinal-named"),
     "understanding":
-        ("style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "fork-explainer", "page-height",
-         "ordinal-named"),
+        (
+            "style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "fork-explainer", "page-height",
+            "ordinal-named"),
     "sitrep":
-        ("style-verbatim", "sections-numbered", "fork-open-shape", "fork-explainer", "fact-anchored", "req-chips",
-         "ordinal-named"),
+        (
+            "style-verbatim", "sections-numbered", "fork-open-shape", "fork-explainer", "fact-anchored", "req-chips",
+            "ordinal-named"),
     "debug": ("style-verbatim", "sections-numbered", "fork-open-shape", "fact-anchored", "ordinal-named"),
     "explain": ("style-verbatim", "sections-numbered", "explain-triad", "fork-open-shape", "ordinal-named"),
 }
@@ -725,8 +731,7 @@ def run_probe(cfg: CharlieBotConfig, artifact: Path, trigger: str) -> ProbeResul
   for option in options:
     try:
       answer = asyncio.run(
-          build_backend(option, cfg).one_shot_text(
-              prompt, _PROBE_SYSTEM_PROMPT, timeout=ARTIFACT_PROBE_TIMEOUT))
+          build_backend(option, cfg).one_shot_text(prompt, _PROBE_SYSTEM_PROMPT, timeout=ARTIFACT_PROBE_TIMEOUT))
       return ProbeResult(attempts=attempts, backend_id=option.id, answer=answer)
     except Exception as e:
       attempts.append((option.id, str(e)))

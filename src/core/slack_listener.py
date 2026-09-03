@@ -53,13 +53,13 @@ from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
 from src.core.http import get_http_client
 from src.core.master_trigger import trigger_master
 from src.core.models import (
-  CreateSessionRequest,
-  PendingTrigger,
-  SessionMetadata,
-  SessionStatus,
-  SlackOrigin,
-  TriggerStatus,
-  utc_now,
+    CreateSessionRequest,
+    PendingTrigger,
+    SessionMetadata,
+    SessionStatus,
+    SlackOrigin,
+    TriggerStatus,
+    utc_now,
 )
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
@@ -74,9 +74,7 @@ SLACK_NS = uuid.UUID("1b4e28ba-2fa1-4d7a-9f0c-8d5e7a3b6c11")
 
 # Fixed citation boundary appended to every Slack-sourced prompt so the master
 # scopes its citations to the channel/thread and public content only.
-CITATION_BOUNDARY = (
-    "引用边界：只引用这条频道／线程本身、公开仓库、公开频道；现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。"
-)
+CITATION_BOUNDARY = ("引用边界：只引用这条频道／线程本身、公开仓库、公开频道；现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。")
 
 _ACCEPTANCE_REACTION = "eyes"
 
@@ -104,8 +102,7 @@ _RETRY_DELAYS = (1.0, 4.0)
 
 _LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。"
 
-_LOST_SUMMON_CONTENT = (
-    "这条 Slack 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。")
+_LOST_SUMMON_CONTENT = ("这条 Slack 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。")
 
 # Nudge event content: the summon round ended without a reply, so the master is
 # asked once whether the thread should hear something.
@@ -116,8 +113,9 @@ _NUDGE_TEMPLATE = (
     "gets a one-line notice pointing to this session.")
 
 # Thread-visible end state after a summon round and its nudge round both posted nothing.
-_NO_REPLY_NOTICE = ("No reply was posted for this mention; the details are in the session log. "
-                    "Mention me again for a thread answer.")
+_NO_REPLY_NOTICE = (
+    "No reply was posted for this mention; the details are in the session log. "
+    "Mention me again for a thread answer.")
 
 # Session-log content of the notice marker; its ``slack_notice`` payload names the summon it closes.
 _NO_REPLY_CONTENT = "This Slack mention got no reply from its round or the nudge round; the thread was told so."
@@ -173,8 +171,7 @@ class SlackClient:
 
   async def open_connection(self) -> str:
     """POST apps.connections.open and return the wss: socket url."""
-    resp = await self._http.post(
-        "https://slack.com/api/apps.connections.open", headers=self._app_headers)
+    resp = await self._http.post("https://slack.com/api/apps.connections.open", headers=self._app_headers)
     return self._checked_payload(resp, "apps.connections.open")["url"]
 
   async def post_message(self, channel: str, text: str, thread_ts: str | None = None) -> dict:
@@ -182,15 +179,13 @@ class SlackClient:
     body: dict[str, Any] = {"channel": channel, "text": text}
     if thread_ts is not None:
       body["thread_ts"] = thread_ts
-    resp = await self._http.post(
-        "https://slack.com/api/chat.postMessage", headers=self._bot_headers, json=body)
+    resp = await self._http.post("https://slack.com/api/chat.postMessage", headers=self._bot_headers, json=body)
     return self._checked_payload(resp, "chat.postMessage")
 
   async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
     """Add one emoji reaction to a message; returns the API payload."""
     body: dict[str, Any] = {"channel": channel, "name": name, "timestamp": ts}
-    resp = await self._http.post(
-        "https://slack.com/api/reactions.add", headers=self._bot_headers, json=body)
+    resp = await self._http.post("https://slack.com/api/reactions.add", headers=self._bot_headers, json=body)
     return self._checked_payload(resp, "reactions.add")
 
   async def remove_reaction(self, channel: str, name: str, ts: str) -> dict:
@@ -200,8 +195,7 @@ class SlackClient:
     idempotent; any other ok=false payload raises.
     """
     body: dict[str, Any] = {"channel": channel, "name": name, "timestamp": ts}
-    resp = await self._http.post(
-        "https://slack.com/api/reactions.remove", headers=self._bot_headers, json=body)
+    resp = await self._http.post("https://slack.com/api/reactions.remove", headers=self._bot_headers, json=body)
     resp.raise_for_status()
     payload = resp.json()
     if not payload.get("ok") and payload.get("error") != "no_reaction":
@@ -213,7 +207,10 @@ class SlackClient:
     resp = await self._http.get(
         "https://slack.com/api/chat.getPermalink",
         headers=self._bot_headers,
-        params={"channel": channel, "message_ts": ts},
+        params={
+            "channel": channel,
+            "message_ts": ts
+        },
     )
     return self._checked_payload(resp, "chat.getPermalink")["permalink"]
 
@@ -222,7 +219,10 @@ class SlackClient:
     resp = await self._http.get(
         "https://slack.com/api/conversations.replies",
         headers=self._bot_headers,
-        params={"channel": channel, "ts": thread_ts},
+        params={
+            "channel": channel,
+            "ts": thread_ts
+        },
     )
     return self._checked_payload(resp, "conversations.replies")["messages"]
 
@@ -248,8 +248,7 @@ class SlackClient:
       if payload.get("ok"):
         name = payload["channel"]["name"]
       else:
-        logger.warning("slack_channel_name_unresolved", channel=channel_id,
-                       error=payload.get("error"))
+        logger.warning("slack_channel_name_unresolved", channel=channel_id, error=payload.get("error"))
     except Exception as e:
       logger.warning("slack_channel_name_resolve_failed", channel=channel_id, error=str(e))
     self._channel_name_cache[channel_id] = name
@@ -284,14 +283,17 @@ def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
   prompt without both docs is never built.
   """
   red_line = _load_prompt_doc(
-      cfg.charlie_bot_repo, "slack_reply_redline.md",
+      cfg.charlie_bot_repo,
+      "slack_reply_redline.md",
       likely_cause="the repo checkout most likely predates the slack-reply-redline extraction commit")
   reply_format = _load_prompt_doc(
-      cfg.charlie_bot_repo, "slack_reply_format.md",
+      cfg.charlie_bot_repo,
+      "slack_reply_format.md",
       likely_cause="the repo checkout most likely predates the slack-reply-format extraction commit")
-  return (f"Slack 线程召唤：{permalink}\n\n"
-          "用 slack 技能按链接读线程（conversations.replies，channel 与 thread_ts 从链接解析）。\n\n"
-          f"{CITATION_BOUNDARY}\n{red_line}\n{reply_format}")
+  return (
+      f"Slack 线程召唤：{permalink}\n\n"
+      "用 slack 技能按链接读线程（conversations.replies，channel 与 thread_ts 从链接解析）。\n\n"
+      f"{CITATION_BOUNDARY}\n{red_line}\n{reply_format}")
 
 
 def _local_time() -> str:
@@ -362,15 +364,15 @@ async def handle_app_mention(
             session_id=sid,
             name=session_name,
             slack_origin=SlackOrigin(team_id=team_id, channel_id=channel_id, thread_ts=thread_ts)))
-    logger.info("slack_mention_session_created", channel=channel_id, thread_ts=thread_ts,
-                slack_user=slack_user, session=sid)
+    logger.info(
+        "slack_mention_session_created", channel=channel_id, thread_ts=thread_ts, slack_user=slack_user, session=sid)
   elif session_meta.status == SessionStatus.ARCHIVED:
     await session_mgr.unarchive_session(sid)
-    logger.info("slack_mention_session_unarchived", channel=channel_id, thread_ts=thread_ts,
-                slack_user=slack_user, session=sid)
+    logger.info(
+        "slack_mention_session_unarchived", channel=channel_id, thread_ts=thread_ts, slack_user=slack_user, session=sid)
   else:
-    logger.info("slack_mention_session_existing", channel=channel_id, thread_ts=thread_ts,
-                slack_user=slack_user, session=sid)
+    logger.info(
+        "slack_mention_session_existing", channel=channel_id, thread_ts=thread_ts, slack_user=slack_user, session=sid)
 
   await _consume_mention(session_mgr, trigger_mgr, sid, event["ts"])
 
@@ -387,15 +389,17 @@ async def handle_app_mention(
   }
   await session_mgr.persist_and_broadcast(sid, evt)
   round_event_id = evt.get("id")
-  logger.info("slack_mention_round_started", channel=channel_id, thread_ts=thread_ts,
-              slack_user=slack_user, session=sid, user_event_id=round_event_id)
+  logger.info(
+      "slack_mention_round_started",
+      channel=channel_id,
+      thread_ts=thread_ts,
+      slack_user=slack_user,
+      session=sid,
+      user_event_id=round_event_id)
 
   create_logged_task(
-      trigger_master(sid, content, cfg, session_mgr, user_event_id=round_event_id),
-      name=f"slack-round-{sid}")
-  create_logged_task(
-      client.add_reaction(channel_id, _ACCEPTANCE_REACTION, event["ts"]),
-      name=f"slack-ack-{sid}")
+      trigger_master(sid, content, cfg, session_mgr, user_event_id=round_event_id), name=f"slack-round-{sid}")
+  create_logged_task(client.add_reaction(channel_id, _ACCEPTANCE_REACTION, event["ts"]), name=f"slack-ack-{sid}")
   return sid
 
 
@@ -411,8 +415,7 @@ def _eligible_thread_message(message: dict, allowed_user_ids: list[str]) -> bool
   message from an allowed user. Gate eligibility equals guard eligibility, so
   nothing is demanded of an ack that the session would never consume.
   """
-  return (message.get("subtype") is None and message.get("bot_id") is None
-          and message.get("user") in allowed_user_ids)
+  return (message.get("subtype") is None and message.get("bot_id") is None and message.get("user") in allowed_user_ids)
 
 
 def _unread_eligible(messages: list[dict], allowed_user_ids: list[str], watermark_ts: str | None) -> list[dict]:
@@ -445,12 +448,13 @@ def _build_follow_wake_message(floor_ts: str, permalink: str) -> str:
   so the wake always reads from the chain's oldest unacked message, independent
   of watermark state.
   """
-  return (f"{_FOLLOW_TRIGGER_PREFIX} floor={floor_ts}\n"
-          f"Slack 线程跟帖唤醒：{permalink}\n"
-          "用 slack 技能从上面 floor 标注的消息读起（conversations.replies，channel 与 thread_ts 从链接解析）；"
-          "回复之前从仓库重读 prompts/slack_reply_redline.md 与 prompts/slack_reply_format.md；"
-          "读到的消息用 `charliebot slack ack --message-id <ts> [...]` 确认，本轮沉默也要 ack；"
-          "只在值得时回复。")
+  return (
+      f"{_FOLLOW_TRIGGER_PREFIX} floor={floor_ts}\n"
+      f"Slack 线程跟帖唤醒：{permalink}\n"
+      "用 slack 技能从上面 floor 标注的消息读起（conversations.replies，channel 与 thread_ts 从链接解析）；"
+      "回复之前从仓库重读 prompts/slack_reply_redline.md 与 prompts/slack_reply_format.md；"
+      "读到的消息用 `charliebot slack ack --message-id <ts> [...]` 确认，本轮沉默也要 ack；"
+      "只在值得时回复。")
 
 
 async def _arm_follow_trigger(
@@ -479,13 +483,18 @@ async def _arm_follow_trigger(
     await trigger_mgr.cancel_trigger(session_id, old.id)
   now = utc_now()
   start = chain_start or now
-  fire_at = min(now + timedelta(seconds=_FOLLOW_QUIET_SECONDS),
-                start + timedelta(seconds=_FOLLOW_CHAIN_CAP_SECONDS))
+  fire_at = min(now + timedelta(seconds=_FOLLOW_QUIET_SECONDS), start + timedelta(seconds=_FOLLOW_CHAIN_CAP_SECONDS))
   delay = max(0, int((fire_at - now).total_seconds()))
   trigger = await trigger_mgr.create_trigger(
       session_id, delay, _build_follow_wake_message(floor_ts, permalink), created_at=start)
-  logger.info("slack_follow_trigger_armed", session=session_id, channel=channel_id, thread_ts=thread_ts,
-              floor_ts=floor_ts, fire_at=trigger.fire_at.isoformat(), chain_start=start.isoformat())
+  logger.info(
+      "slack_follow_trigger_armed",
+      session=session_id,
+      channel=channel_id,
+      thread_ts=thread_ts,
+      floor_ts=floor_ts,
+      fire_at=trigger.fire_at.isoformat(),
+      chain_start=start.isoformat())
   return trigger
 
 
@@ -542,8 +551,8 @@ async def handle_thread_message(
   team_id = event.get("team") or event.get("team_id")
   sid = summon_session_id(team_id, channel_id, thread_ts)
   meta = await session_mgr.get_session(sid)
-  if (meta is None or meta.status != SessionStatus.ACTIVE or meta.slack_origin is None
-      or meta.slack_origin.channel_id != channel_id):
+  if (meta is None or meta.status != SessionStatus.ACTIVE or meta.slack_origin is None or
+      meta.slack_origin.channel_id != channel_id):
     return None
   if meta.slack_watermark_ts is not None and not (ts > meta.slack_watermark_ts):
     return None
@@ -576,12 +585,15 @@ async def _backfill_followed_threads(
       if not unread:
         continue
       permalink = await client.get_permalink(origin.channel_id, origin.thread_ts)
-      await _arm_follow_trigger(trigger_mgr, meta.id, origin.channel_id, origin.thread_ts, permalink,
-                                unread[0]["ts"])
+      await _arm_follow_trigger(trigger_mgr, meta.id, origin.channel_id, origin.thread_ts, permalink, unread[0]["ts"])
       armed += 1
     except Exception as e:
-      logger.warning("slack_follow_backfill_thread_failed", session=meta.id, channel=origin.channel_id,
-                     thread_ts=origin.thread_ts, error=str(e))
+      logger.warning(
+          "slack_follow_backfill_thread_failed",
+          session=meta.id,
+          channel=origin.channel_id,
+          thread_ts=origin.thread_ts,
+          error=str(e))
   if armed:
     logger.info("slack_follow_backfill_armed", sessions=armed)
   return armed
@@ -597,8 +609,7 @@ def _bot_client(cfg: CharlieBotConfig) -> SlackClient:
   return SlackClient(get_http_client(), bot_token=cfg.slack_bot_token, app_token=cfg.slack_app_token)
 
 
-async def _post_with_retry(client: SlackClient, channel: str, thread_ts: str, text: str, *,
-                           session_id: str) -> bool:
+async def _post_with_retry(client: SlackClient, channel: str, thread_ts: str, text: str, *, session_id: str) -> bool:
   """Post one thread reply, retrying on failure; True when Slack accepted it.
 
   Exhausting the retries logs an error and returns False instead of raising:
@@ -612,11 +623,21 @@ async def _post_with_retry(client: SlackClient, channel: str, thread_ts: str, te
       return True
     except Exception as e:
       if attempt == attempts - 1:
-        logger.error("slack_post_gave_up", session=session_id, channel=channel, thread_ts=thread_ts,
-                     attempts=attempts, error=str(e))
+        logger.error(
+            "slack_post_gave_up",
+            session=session_id,
+            channel=channel,
+            thread_ts=thread_ts,
+            attempts=attempts,
+            error=str(e))
         return False
-      logger.warning("slack_post_retry", session=session_id, channel=channel, thread_ts=thread_ts,
-                     attempt=attempt + 1, error=str(e))
+      logger.warning(
+          "slack_post_retry",
+          session=session_id,
+          channel=channel,
+          thread_ts=thread_ts,
+          attempt=attempt + 1,
+          error=str(e))
       await asyncio.sleep(_RETRY_DELAYS[attempt])
   raise AssertionError("unreachable: the last loop iteration returns (attempt == attempts - 1)")
 
@@ -744,8 +765,7 @@ async def _require_slack_thread_session(session_id: str, session_mgr: SessionMan
   return meta
 
 
-async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig,
-                              session_mgr: SessionManager) -> None:
+async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
   """Refuse the reply when eligible thread messages sit above the session's watermark.
 
   The reply-path gate, run by the slack/reply endpoint before ``post_reply``:
@@ -759,19 +779,23 @@ async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig,
   unread = await _fetch_unread_eligible(_bot_client(cfg), meta.slack_origin, cfg, meta.slack_watermark_ts)
   if not unread:
     return
-  raise SlackReplyError(412, {
-      "error": "stale_thread",
-      "new_messages": [{
-          "ts": m["ts"],
-          "user": m.get("user"),
-          "text_preview": (m.get("text") or "")[:_TEXT_PREVIEW_CHARS],
-      } for m in unread],
-      "watermark_ts": meta.slack_watermark_ts,
-  })
+  raise SlackReplyError(
+      412, {
+          "error": "stale_thread",
+          "new_messages":
+              [
+                  {
+                      "ts": m["ts"],
+                      "user": m.get("user"),
+                      "text_preview": (m.get("text") or "")[:_TEXT_PREVIEW_CHARS],
+                  } for m in unread
+              ],
+          "watermark_ts": meta.slack_watermark_ts,
+      })
 
 
-async def ack_messages(session_id: str, message_ids: list[str], cfg: CharlieBotConfig,
-                       session_mgr: SessionManager) -> dict:
+async def ack_messages(
+    session_id: str, message_ids: list[str], cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
   """Advance the session's read watermark over *message_ids*; return the readback the CLI prints.
 
   The follow round's proof-of-read. Refusals raise ``SlackReplyError``: 404
@@ -795,9 +819,7 @@ async def ack_messages(session_id: str, message_ids: list[str], cfg: CharlieBotC
     raise SlackReplyError(422, f"Unknown or ineligible message id: {unknown[0]}")
   watermark = meta.slack_watermark_ts
   ceiling = ids[-1]
-  skipped = [
-      ts for ts in sorted(eligible) if (watermark is None or ts > watermark) and ts <= ceiling and ts not in ids
-  ]
+  skipped = [ts for ts in sorted(eligible) if (watermark is None or ts > watermark) and ts <= ceiling and ts not in ids]
   if skipped:
     raise SlackReplyError(422, f"Skipped eligible message id at or below {ceiling}: {skipped[0]}")
   watermark = meta.slack_watermark_ts
@@ -806,17 +828,20 @@ async def ack_messages(session_id: str, message_ids: list[str], cfg: CharlieBotC
     meta.slack_watermark_ts = watermark
     meta.updated_at = utc_now()
     await session_mgr.save_metadata(meta)
-  await session_mgr.persist_and_broadcast(session_id, {
-      "type": _ACK_EVENT_TYPE,
-      "content": f"Slack thread ack: {len(ids)} message(s) read through {ceiling}",
-      "slack_ack": {"message_ids": ids, "watermark_ts": watermark},
-  })
+  await session_mgr.persist_and_broadcast(
+      session_id, {
+          "type": _ACK_EVENT_TYPE,
+          "content": f"Slack thread ack: {len(ids)} message(s) read through {ceiling}",
+          "slack_ack": {
+              "message_ids": ids,
+              "watermark_ts": watermark
+          },
+      })
   logger.info("slack_thread_acked", session=session_id, acked=len(ids), watermark_ts=watermark)
   return {"acked": len(ids), "watermark_ts": watermark}
 
 
-async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig,
-                     session_mgr: SessionManager) -> dict:
+async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
   """Post *text* to the session's Slack thread and return the readback the CLI prints.
 
   Refusals raise ``SlackReplyError``: 404 unknown session, 409 no Slack thread,
@@ -855,19 +880,30 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig,
           502, f"Slack did not accept chunk {index} of {len(bodies)} after {len(_RETRY_DELAYS) + 1} "
           "attempts; nothing was persisted")
 
-  await session_mgr.persist_and_broadcast(session_id, {
-      "type": ET.SLACK_REPLY,
-      "content": text,
-      "slack_reply": {"answers": answers, "chars": len(text), "chunks": len(bodies)},
-  })
+  await session_mgr.persist_and_broadcast(
+      session_id, {
+          "type": ET.SLACK_REPLY,
+          "content": text,
+          "slack_reply": {
+              "answers": answers,
+              "chars": len(text),
+              "chunks": len(bodies)
+          },
+      })
   if bound is not None:
     _ack_clear(client, bound[1], session_id)
   over_budget = len(text) > _REPLY_BUDGET_CHARS
-  logger.info("slack_reply_posted", session=session_id, channel=origin.channel_id,
-              thread_ts=origin.thread_ts, chars=len(text), chunks=len(bodies), over_budget=over_budget,
-              budget=_REPLY_BUDGET_CHARS, answers=answers)
-  return {"posted": True, "chars": len(text), "chunks": len(bodies), "over_budget": over_budget,
-          "answers": answers}
+  logger.info(
+      "slack_reply_posted",
+      session=session_id,
+      channel=origin.channel_id,
+      thread_ts=origin.thread_ts,
+      chars=len(text),
+      chunks=len(bodies),
+      over_budget=over_budget,
+      budget=_REPLY_BUDGET_CHARS,
+      answers=answers)
+  return {"posted": True, "chars": len(text), "chunks": len(bodies), "over_budget": over_budget, "answers": answers}
 
 
 # ---------------------------------------------------------------------------
@@ -877,14 +913,12 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig,
 
 def _replied(events: list[dict], summon_id: str) -> bool:
   return any(
-      ev.get("type") == ET.SLACK_REPLY and (ev.get("slack_reply") or {}).get("answers") == summon_id
-      for ev in events)
+      ev.get("type") == ET.SLACK_REPLY and (ev.get("slack_reply") or {}).get("answers") == summon_id for ev in events)
 
 
 def _nudged(events: list[dict], summon_id: str) -> bool:
   return any(
-      ev.get("type") == ET.AGENT_MESSAGE and (ev.get("slack") or {}).get("nudge_of") == summon_id
-      for ev in events)
+      ev.get("type") == ET.AGENT_MESSAGE and (ev.get("slack") or {}).get("nudge_of") == summon_id for ev in events)
 
 
 def _noticed(events: list[dict], summon_id: str) -> bool:
@@ -899,8 +933,9 @@ def _thread_link(summon: dict | None, slack_block: dict) -> str:
   return f"(channel {slack_block['channel_id']}, thread {slack_block['thread_ts']})"
 
 
-async def _audit_round(session_id: str, events: list[dict], target: dict, input_event_id: str,
-                       cfg: CharlieBotConfig, session_mgr: SessionManager, client: SlackClient) -> bool:
+async def _audit_round(
+    session_id: str, events: list[dict], target: dict, input_event_id: str, cfg: CharlieBotConfig,
+    session_mgr: SessionManager, client: SlackClient) -> bool:
   """Act on one finished round whose input carried a slack block; True when it acted.
 
   Reads the log for the round's summon: a reply answering it ends the audit. A
@@ -929,8 +964,13 @@ async def _audit_round(session_id: str, events: list[dict], target: dict, input_
     create_logged_task(
         trigger_master(session_id, content, cfg, session_mgr, user_event_id=nudge["id"]),
         name=f"slack-nudge-{session_id}")
-    logger.info("slack_reply_nudge", session=session_id, channel=target["channel_id"],
-                thread_ts=target["thread_ts"], summon_id=summon_id, nudge_id=nudge["id"])
+    logger.info(
+        "slack_reply_nudge",
+        session=session_id,
+        channel=target["channel_id"],
+        thread_ts=target["thread_ts"],
+        summon_id=summon_id,
+        nudge_id=nudge["id"])
     return True
 
   if _noticed(events, summon_id):
@@ -939,19 +979,25 @@ async def _audit_round(session_id: str, events: list[dict], target: dict, input_
       client, target["channel_id"], target["thread_ts"], _NO_REPLY_NOTICE, session_id=session_id)
   if not ok:
     return False  # slack_post_gave_up is logged; no marker, so the boot audit posts it later
-  await session_mgr.persist_and_broadcast(session_id, {
-      "type": ET.ASSISTANT_ERROR,
-      "content": _NO_REPLY_CONTENT,
-      "slack_notice": {"input_event_id": summon_id},
-  })
+  await session_mgr.persist_and_broadcast(
+      session_id, {
+          "type": ET.ASSISTANT_ERROR,
+          "content": _NO_REPLY_CONTENT,
+          "slack_notice": {
+              "input_event_id": summon_id
+          },
+      })
   _ack_clear(client, target, session_id)
-  logger.info("slack_reply_notice", session=session_id, channel=target["channel_id"],
-              thread_ts=target["thread_ts"], summon_id=summon_id)
+  logger.info(
+      "slack_reply_notice",
+      session=session_id,
+      channel=target["channel_id"],
+      thread_ts=target["thread_ts"],
+      summon_id=summon_id)
   return True
 
 
-async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig,
-                       session_mgr: SessionManager) -> bool:
+async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
   Called as a fire-and-forget task from ``persist_and_broadcast`` for every

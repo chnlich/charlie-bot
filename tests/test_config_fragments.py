@@ -337,7 +337,9 @@ def test_declared_integration_keys_round_trip(profile_home: Path) -> None:
   """The declared integration keys load from config.yaml and the slack fragment and are reachable."""
   values = {key: f"value-{key}" for key in _DECLARED_INTEGRATION_KEYS}
   save_yaml(
-      profile_home / "config.yaml", {key: values[key] for key in _DECLARED_INTEGRATION_KEYS if key != "public_base_url"})
+      profile_home / "config.yaml",
+      {key: values[key] for key in _DECLARED_INTEGRATION_KEYS if key != "public_base_url"},
+  )
   _write_key_set(profile_home, "config.d/slack.yaml", ["public_base_url"], values)
 
   cfg = core_config.load_config()

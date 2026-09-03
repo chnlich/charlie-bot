@@ -397,13 +397,15 @@ async def tui_status_all(
 
   from src.agents.backends.tui import _claude_jsonl_busy, tmux_session_exists
   statuses = await asyncio.gather(*(tmux_session_exists(meta.id) for meta in tui_sessions))
-  busy_flags = await asyncio.gather(*(
-      asyncio.to_thread(_claude_jsonl_busy, meta.id) if running else _not_busy()
-      for meta, running in zip(tui_sessions, statuses, strict=True)
-  ))
+  busy_flags = await asyncio.gather(
+      *(
+          asyncio.to_thread(_claude_jsonl_busy, meta.id) if running else _not_busy()
+          for meta, running in zip(tui_sessions, statuses, strict=True)))
   return {
-      meta.id: {"running": running, "busy": busy}
-      for meta, running, busy in zip(tui_sessions, statuses, busy_flags, strict=True)
+      meta.id: {
+          "running": running,
+          "busy": busy
+      } for meta, running, busy in zip(tui_sessions, statuses, busy_flags, strict=True)
   }
 
 

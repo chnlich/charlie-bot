@@ -8,16 +8,21 @@ import signal
 import sys
 import time
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import Any, TypeVar
 
 import structlog
 
 from src.core.timeouts import (
-  KILL_ESCALATION_GRACE_SECONDS,
-  KILL_ESCALATION_POLL_SECONDS,
+    KILL_ESCALATION_GRACE_SECONDS,
+    KILL_ESCALATION_POLL_SECONDS,
 )
 
 log = structlog.get_logger()
+
+# Named TypeVar instead of PEP 695 ``wait_or_kill_group[T]``: yapf's pinned
+# lib2to3 parser rejects PEP 695 type-parameter lists, and the inline form
+# makes the whole tree unparseable to ``yapf -r``.
+_T = TypeVar("_T")
 
 # linux/prctl.h option number; not exposed by the stdlib.
 _PR_SET_PDEATHSIG = 1
@@ -66,9 +71,8 @@ async def kill_group_escalating(pid: int, is_alive: Callable[[], bool]) -> None:
     kill_process_group(pid, signal.SIGKILL)
 
 
-async def wait_or_kill_group[T](
-    coro: Coroutine[Any, Any, T], timeout: float, pid: int, stderr_task: asyncio.Task[bytes]
-) -> T:
+async def wait_or_kill_group(
+    coro: Coroutine[Any, Any, _T], timeout: float, pid: int, stderr_task: asyncio.Task[bytes]) -> _T:
   """Await *coro* for at most *timeout* seconds; cancel and drain *stderr_task* on every exit.
 
   On timeout the process group of *pid* is SIGKILLed before the TimeoutError

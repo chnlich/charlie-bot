@@ -9,7 +9,7 @@ import aiofiles
 import structlog
 
 from src.core.config import CharlieBotConfig
-from src.core.json_utils import atomic_write_text
+from src.core.json_utils import write_model_json_atomically
 from src.core.models import (
   TERMINAL_THREAD_STATUSES,
   SessionMetadata,
@@ -160,14 +160,10 @@ class ThreadManager:
   # ---------------------------------------------------------------------------
 
   async def _save_metadata(self, meta: ThreadMetadata) -> None:
-    path = self._metadata_path(meta.session_id, meta.id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = meta.model_dump_json(indent=2)
-    # Atomic per the write rule in src/core/json_utils.py: list_threads reads
-    # this file from an executor thread with no coordination, and a plain
-    # truncate-write lets it observe a half-written file (validation failure
-    # 500s the whole list endpoint).
-    await asyncio.to_thread(atomic_write_text, path, serialized)
+    # list_threads reads this file from an executor thread with no
+    # coordination, so the write must stay atomic (a validation failure 500s
+    # the whole list endpoint).
+    await write_model_json_atomically(self._metadata_path(meta.session_id, meta.id), meta)
     # Single funnel behind create_thread/update_status/save_metadata: thread
     # status transitions (running -> terminal) land here.
     mark_sidebar_dirty(meta.session_id)

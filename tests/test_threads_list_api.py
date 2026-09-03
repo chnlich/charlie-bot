@@ -1,4 +1,5 @@
-"""Description prefix contract of the workers-panel list payload (src/api/threads.py list_threads)."""
+"""Description prefix + body-memo contract of the workers-panel list payload
+(src/api/threads.py list_threads)."""
 
 import asyncio
 from pathlib import Path
@@ -7,10 +8,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.deps import get_thread_manager, get_trigger_manager
+from src.api import threads as threads_api
 from src.api.threads import _LIST_DESCRIPTION_CAP
 from src.api.threads import router as threads_router
 from src.core.config import CharlieBotConfig, get_config
-from src.core.models import CreateSessionRequest
+from src.core.models import CreateSessionRequest, ThreadStatus
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
@@ -60,3 +62,22 @@ def test_thread_detail_still_serves_the_full_description(tmp_path: Path) -> None
   meta = client.get(f"/api/threads/{session_id}/threads/{long_thread_id}").json()
 
   assert meta["description"] == LONG_DESCRIPTION
+
+
+def test_list_body_memo_invalidates_on_metadata_rewrite(tmp_path: Path) -> None:
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._list_body_memo.clear()
+  url = f"/api/threads/{session_id}/list"
+
+  first = client.get(url)
+  second = client.get(url)
+  assert second.content == first.content
+
+  rows = {row["id"]: row for row in first.json()}
+  any_id = next(iter(rows))
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
+
+  third = client.get(url)
+  assert third.json()[next(i for i, row in enumerate(third.json()) if row["id"] == any_id)]["status"] == "running"
+  assert third.content != first.content

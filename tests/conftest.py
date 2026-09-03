@@ -1170,8 +1170,8 @@ def patch_improve_git_ops(monkeypatch: pytest.MonkeyPatch) -> None:
 
   monkeypatch.setattr(improve_command, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
   monkeypatch.setattr(improve_command, "git_push_branch", fake_git_push_branch)
-  monkeypatch.setattr(improve_command, "git_worktree_remove", fake_git_worktree_remove)
-  monkeypatch.setattr(improve_command, "git_worktree_prune", fake_git_worktree_prune)
+  monkeypatch.setattr("src.core.git.git_worktree_remove", fake_git_worktree_remove)
+  monkeypatch.setattr("src.core.git.git_worktree_prune", fake_git_worktree_prune)
 
 
 def build_worker_prompt(

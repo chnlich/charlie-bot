@@ -48,6 +48,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M35 chat message-page responses, steady state | M35 collector below | seconds per request, worst projection corpus | events page median < 0.03 s | — (introduced with its first history row) |
 | M36 worker list poll payload and handler time, steady state | M36 collector below | seconds per list request + response body bytes, worst thread-metadata corpus | median < 0.02 s; body < 200 KB | — (introduced with its first history row) |
 | M37 archived-session chat tail page, steady state | M37 collector below | seconds per `parse_ndjson_tail(200)` call, worst on-disk archived live file | median < 0.005 s | — (introduced with its first history row) |
+| M38 session stream-broadcast fan-out, worst on-disk turn replay | M38 collector below | stream frames and json.dumps calls/seconds per turn replay, instant feed, one subscriber | dumps total < 0.02 s; final-frame parity true | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1867,6 +1868,109 @@ print(f"{total} lines, tail events {len(events)}; steady-state parse_ndjson_tail
 EOF
 ```
 
+M38 — session stream-broadcast fan-out, worst on-disk turn replay. Every stream part
+feeds ``persist_and_broadcast``, whose aggregator emits a ``stream`` preview carrying the
+whole accumulated draft; the pre-fix fan-out serialized that draft per delta per
+subscriber (O(deltas × draft) of event-loop json.dumps: 78 ms / 174 frames on the worst
+on-disk turn), and the fixed StreamingManager coalesces previews per channel (leading +
+200 ms trailing windows at the client's showStreaming paint cadence, pending dropped only
+on the preview-hiding types) and serializes once per fan-out. The collector resolves the
+worst stream turn on disk (events between bare user events whose stream deltas carry the
+most preview bytes; only files ≥ 2 MB contend), replays it instant-feed through the real
+``MessageAggregator`` and ``StreamingManager`` into a stub socket mirroring starlette's
+send_json (json.dumps wrapped process-wide so both arms count), stopping before
+``master_done`` so both arms must deliver the final preview. Evidence points the same
+collector at the before and after checkouts (``CHECKOUT`` at each root), the same shape
+as the M7 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, json, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.message_aggregator import MessageAggregator
+from src.core.streaming import StreamingManager
+
+class Probe:
+  def __init__(self):
+    self.frames = []
+  async def send_json(self, data):
+    self.frames.append(data)
+    json.dumps(data, separators=(",", ":"), ensure_ascii=False)  # starlette send_json's cost
+  async def send_text(self, text):
+    self.frames.append(json.loads(text))
+
+stats = {"calls": 0, "time": 0.0}
+real_dumps = json.dumps
+def timed_dumps(*a, **kw):
+  t0 = time.perf_counter()
+  out = real_dumps(*a, **kw)
+  stats["calls"] += 1
+  stats["time"] += time.perf_counter() - t0
+  return out
+
+def worst_stream_turn():
+  # Turn: events between bare user events; score: summed stream-preview bytes
+  # (the serialization driver); only files >= 2 MB can hold a contender.
+  best = (-1, None, None)
+  for p in Path.home().glob(".charliebot/sessions/*/data/chat_events.jsonl"):
+    if p.stat().st_size < 2e6:
+      continue
+    events = []
+    with open(p, errors="replace") as f:
+      for line in f:
+        try: events.append(json.loads(line))
+        except json.JSONDecodeError: pass
+    turns, cur = [], []
+    for ev in events:
+      if ev.get("type") == "user" and "message" not in ev:
+        if cur:
+          turns.append(cur)
+        cur = [ev]
+      else:
+        cur.append(ev)
+    if cur:
+      turns.append(cur)
+    for turn in turns:
+      agg, score = MessageAggregator(), 0
+      for i, ev in enumerate(turn):
+        for d in agg.feed_indexed([(i, ev)]):
+          if d["type"] == "stream":
+            score += len(d["message"].get("content", "")) + len(d["message"].get("thinking", ""))
+      if score > best[0]:
+        best = (score, turn, p.parts[-3])
+  return best[1], best[2]
+
+async def main():
+  turn, sid = worst_stream_turn()
+  probe = Probe()
+  manager = StreamingManager()
+  await manager.subscribe("m38", probe)
+  agg = MessageAggregator()
+  final = None
+  json.dumps = timed_dumps
+  t0 = time.perf_counter()
+  for i, ev in enumerate(turn):
+    if ev.get("type") == "master_done":
+      break  # stop before the commit; both arms must deliver the final preview first
+    for d in agg.feed_indexed([(i, ev)]):
+      if d["type"] == "stream":
+        final = d
+      await manager.broadcast("m38", d)
+    if ev.get("type") not in ("assistant", "user", "scheduled_trigger"):
+      await manager.broadcast("m38", ev)
+  wall = time.perf_counter() - t0
+  await asyncio.sleep(0.5)  # settle: lets the fixed arm's trailing flush land
+  json.dumps = real_dumps
+  streams = [f for f in probe.frames if f.get("type") == "stream"]
+  parity = bool(streams) and final is not None and streams[-1] == final
+  print(f"session {sid}; turn replay {wall:.2f} s, {len(streams)} stream frames, "
+        f"{stats['calls']} json.dumps calls {stats['time'] * 1000:.0f} ms; final-frame parity {parity}")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -1916,3 +2020,4 @@ EOF
 | 2026-09-03 | this PR | M7 live-before median 15.884 s, max 21.738 s (busy host, load 5.53/7.30/11.03; 16.4 GB db whose WAL moves every ~5 s, so the file-signature entry misses every load) and max 16.801 s in the quiet re-pair → scratch-after warm median 0.422 s, max 0.437 s (scratch server on the branch with an empty scratch CHARLIEBOT_HOME, cold 20.996 s; verbatim M7 commands back-to-back at load 1.07/0.91; collector-level over the live cache doc: opencode rescan 12.928 s → 0.164 s, warm collect total 16.996 s → 0.49 s) | per-row (id, time_updated) memo over the opencode message table: a leaf-page key diff plus per-id fetch of moved rows replaces the whole-table re-scan per WAL-invalidated load; rows the scan SQL filters out memoize as non-contributors; record parity pinned by the suite |
 | 2026-09-03 | this PR | M37 steady-state median 9.12 ms → 0.01 ms, max 12.30 ms → 0.03 ms (collector verbatim, 7.4 MB / 3081-line worst archived-session live file of session 3b91d606, live state read-only, main checkout before at load 1.72/2.44/2.12 vs branch-after at load 1.23/1.69/1.86, back-to-back; served tail page repeat-identical in both arms) | whole-page (mtime_ns, size) memo for parse_ndjson_tail plus a shared (mtime_ns, size) memo for count_ndjson_lines, both keyed on the pre-read signature so an entry recorded during a concurrent append can never be served for the newer bytes; M37 definition and healthy range introduced with this PR |
 | 2026-09-03 | #646 | M36 poll median 13.92 ms → 5.46 ms, max 18.28 ms → 6.43 ms, body 137363 B in both arms (collector verbatim, 2051 KB / 277-row worst worker-list corpus, live state read-only, main checkout before vs branch head after back-to-back at load 3.81/2.27/1.64 and 2.76/2.17/1.63; 100-rep interleaved corroboration min 5.79 ms → 3.19 ms) | whole-body memo for the 3 s workers-panel list poll keyed on the union (path, mtime_ns, size) signature of every thread metadata.json and trigger *.json behind the rows (all writers rename atomically, so an unchanged signature proves the body current); steady-state polls skip row building and JSON serialization |
+| 2026-09-03 | this PR | M38 turn replay 174 → 2 stream frames, 286 → 114 json.dumps calls, 78 ms → 5 ms dumps total, replay wall 0.08 s → 0.01 s (collector verbatim, session ebace12d worst on-disk stream turn by preview bytes, instant feed, one subscriber, main checkout before at load 3.02/5.02/5.05 vs branch head after at load 1.74/4.20/4.76; final-frame parity true both arms) | per-channel leading+trailing coalescing of stream preview frames in StreamingManager at the client's 200 ms paint cadence, pending draft dropped only on preview-hiding frame types (message/assistant_error/error), one json.dumps per fan-out replacing one per subscriber, subscriber-less channels short-circuited to a dict lookup; M38 definition and healthy range introduced with this PR |

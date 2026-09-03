@@ -53,6 +53,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M40 session-list filtered listing + group reduction, steady state | M40 collector below | seconds per `list_sessions(starred=True, …)` call and per group-name reduction, live session corpus | both medians < 0.005 s | — (introduced with its first history row) |
 | M41 git diff/files repeat view, steady state | M41 collector below | seconds per repeat `diff_files` call over the charlie-bot root..HEAD range | median < 0.02 s | — (introduced with its first history row) |
 | M42 scheduler tick, steady state | M42 collector below | seconds of loop lag per 60 s tick with no task due, live config + session corpus (loop lag reads the 5 ms ticker floor like M14) | median < 0.01 s | — (introduced with its first history row) |
+| M43 git diff/file repeat expand, steady state | M43 collector below | seconds per repeat `diff_file` call over the heaviest file of the charlie-bot root..HEAD manifest | median < 0.02 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2189,6 +2190,64 @@ asyncio.run(main())
 EOF
 ```
 
+M43 — git diff/file repeat expand, steady state. The /diff viewer fetches
+``GET /api/git/diff/file`` on every file expand, and a collapse drops the
+rendered body, so every re-expand, second tab, or refresh re-runs one
+``git diff`` subprocess over the range (~44 ms on the heaviest file of the
+charlie-bot root..HEAD manifest) to recompute an immutable result: a per-file
+diff between two commits never changes (SHAs are content-addressed). The fixed
+handler memoizes the body on the M41 manifest key plus the pathspec — repo,
+resolved base/head SHAs, mode, .gitattributes signature (diff drivers feed the
+emitted hunks), (old_path, path) — and builds the miss path's range spec from
+the resolved SHAs, so a ref moving mid-request can never key one pair's body
+under another; a repeat pays only the ref resolution. The cost is per file
+expand, invisible to the standing HTTP probes, so the collector drives
+``diff_file`` over the heaviest file of the charlie-bot checkout's root..HEAD
+manifest (read-only, scratch ``CHARLIEBOT_HOME``), from the checkout under
+test: the first expand, as at page open with a cold memo, then seven timed
+repeats, asserting bodies repeat-identical. Evidence while the live server
+runs older code points the same collector at the branch checkout (``CHECKOUT``
+at the worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, subprocess, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.api.git import diff_files, diff_file
+
+REPO = Path("/home/chaoli/workspace/charlie-bot")
+BASE = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
+                      cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()[0]
+cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m43-home-")),
+                       workspace_dirs=["/home/chaoli/workspace"])
+
+async def main():
+    manifest = await diff_files(repo=str(REPO), base=BASE, head="HEAD", mode="three-dot", cfg=cfg)
+    row = max(manifest["files"], key=lambda f: f["additions"] + f["deletions"])
+    path, old_path = row["path"], row.get("old_path")
+    t0 = time.perf_counter()
+    first = await diff_file(repo=str(REPO), base=BASE, head="HEAD", mode="three-dot",
+                            path=path, old_path=old_path, force=False, cfg=cfg)
+    cold = time.perf_counter() - t0
+    times = []
+    repeat = None
+    for _ in range(7):
+        t0 = time.perf_counter()
+        repeat = await diff_file(repo=str(REPO), base=BASE, head="HEAD", mode="three-dot",
+                                 path=path, old_path=old_path, force=False, cfg=cfg)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    assert repeat == first, "served file diff differs between repeat calls"
+    print(f"heaviest manifest file {path} (+{row['additions']}/-{row['deletions']}), "
+          f"size_bytes {first['size_bytes']}; first view {cold:.4f} s; "
+          f"repeat-view median {times[3]:.4f} s, max {times[-1]:.4f} s")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2244,3 +2303,4 @@ EOF
 | 2026-09-03 | #665 | M40 starred list median 12.80 ms → 3.25 ms, group-name reduction median 13.63 ms → 3.05 ms; maxima 35.92 ms → 25.02 ms / 14.20 ms → 3.82 ms (collector verbatim, main checkout before vs branch head after back-to-back at load 2.90/2.82/2.16 and 3.15/2.90/2.22; live 1012-meta corpus read-only, 10 starred rows, 25 groups; list outputs identical; the residual starred maxima are dirty deep-probe spikes in the unchanged enrich path) | starred/scheduled filters run against the shared cached metas (read-only) before the model_copy+thinking stamp, so only surviving rows pay the leaving-the-manager copy; /api/sessions/groups and the autonamer's group list go through list_group_names, a copy-free read-only reduction of the cached metas; M40 definition and healthy range introduced with this PR |
 | 2026-09-03 | this PR | M41 first view 0.1781 s → 0.1217 s, repeat-view median 0.1766 s → 0.0063 s, max 0.1874 s → 0.0069 s (collector verbatim, 492 files in the charlie-bot root..HEAD diff, main checkout before at load 1.20/1.21/0.98 vs branch after at load 0.49/0.89/0.93, back-to-back; manifest body sha256-identical ed990917efcc across arms; M14 loop-lag re-measured unchanged, 0.0058 s → 0.0060 s at the 5 ms ticker floor) | git diff/files manifest memoized on (repo, resolved base/head SHAs, mode, .gitattributes signature) — a commit-pair diff is immutable — plus both refs resolved in one rev-parse and the two manifest diffs run concurrently on a miss; M41 definition and healthy range introduced with this PR |
 | 2026-09-03 | this PR | M42 steady-state tick loop-lag median 0.0135 s → 0.0060 s (the 5 ms ticker floor), max 0.0146 s → 0.0071 s (collector verbatim, 12 enabled tasks over the 1012-session live corpus, fire stub awaited 0x in both arms, main checkout before vs final branch head after back-to-back at load 1.06/1.16/1.16; first standalone round 0.0102 s before) | scheduler tick's per-task session cache built via the M40 scheduled=True pre-copy filter: only the 52 scheduled rows pay model_copy+thinking stamp instead of all ~1012 cached metas; M42 definition and healthy range introduced with this PR |
+| 2026-09-03 | this PR | M43 repeat-expand median 0.0441 s → 0.0061 s, max 0.0541 s → 0.0063 s; first expand 0.0549 s → 0.0503 s (collector verbatim, heaviest charlie-bot root..HEAD manifest file web/static/css/tailwind.css +2515/-0, 45756 B, main checkout before vs branch head after back-to-back at load 1.20/1.13/1.02; bodies repeat-identical in both arms; live log corroboration 8 diff/file requests in the 24.4 h server log, one a re-expand) | per-file diff body memoized on the M41 manifest key plus the pathspec, miss-path range spec built from the resolved SHAs; M43 definition and healthy range introduced with this PR |

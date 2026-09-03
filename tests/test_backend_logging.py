@@ -52,8 +52,7 @@ async def test_normal_completion_writes_raw_log_no_diagnostics(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_subprocess_hang_after_result_captures_diagnostics(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Subprocess writes result then hangs without closing stdout — diagnostics captured + SIGTERM."""
   monkeypatch.setattr(AgentBackend, "_POST_RESULT_TIMEOUT", 1.0)
   monkeypatch.setattr(AgentBackend, "_CLEANUP_TIMEOUT", 1.0)
@@ -88,8 +87,7 @@ async def test_stderr_streams_live(tmp_path: Path) -> None:
       'echo "err line $i" 1>&2; sleep 0.1; '
       "done\n"
       'printf \'{"type": "result", "result": "", "usage": {}}\\n\'\n'
-      "exit 0\n"
-  )
+      "exit 0\n")
 
   backend = _ScriptedBackend(script, log_dir=log_dir)
   stderr_log = log_dir / "agent.stderr.log"
@@ -120,11 +118,9 @@ async def test_stderr_streams_live(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_no_log_dir_still_populates_stderr_text(tmp_path: Path) -> None:
   """Construct backend without log_dir; stderr_text still populated, no crash."""
-  script = (
-      'echo "on stderr" 1>&2\n'
-      'printf \'{"type": "result", "result": "", "usage": {}}\\n\'\n'
-      "exit 0\n"
-  )
+  script = ('echo "on stderr" 1>&2\n'
+            'printf \'{"type": "result", "result": "", "usage": {}}\\n\'\n'
+            "exit 0\n")
   backend = _ScriptedBackend(script)
   await _consume(backend, tmp_path)
   assert "on stderr" in backend.stderr_text

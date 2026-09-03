@@ -11,11 +11,11 @@ import sys
 from pathlib import Path
 
 from src.core.backup import (
-  apply_retention,
-  backup_dir,
-  create_backup,
-  list_backups,
-  restore_backup,
+    apply_retention,
+    backup_dir,
+    create_backup,
+    list_backups,
+    restore_backup,
 )
 
 
@@ -59,8 +59,7 @@ def main() -> None:
   sub.add_parser('list', help='List available backups')
   restore_parser = sub.add_parser('restore', help='Restore from a backup file')
   restore_parser.add_argument('file', help='Backup filename or path')
-  restore_parser.add_argument(
-      '--target', help="Target directory (default: this profile's state directory)")
+  restore_parser.add_argument('--target', help="Target directory (default: this profile's state directory)")
 
   args = parser.parse_args()
   {'create': _cmd_create, 'list': _cmd_list, 'restore': _cmd_restore}[args.command](args)

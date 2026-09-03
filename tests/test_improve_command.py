@@ -9,9 +9,9 @@ from unittest.mock import MagicMock
 
 import pytest
 from conftest import (
-  OPUS_BACKEND_ID,
-  SPAWNER_SPAWN_WORKER_PATCH_TARGET,
-  patch_improve_git_ops,
+    OPUS_BACKEND_ID,
+    SPAWNER_SPAWN_WORKER_PATCH_TARGET,
+    patch_improve_git_ops,
 )
 
 from src.core import improve_command
@@ -363,8 +363,10 @@ def _completed_thread_mgr(
   """
   overrides = results or {}
   events = {
-      f"thread-{n}": [{"type": "result", "result": overrides.get(n, f"iter{n} done")}]
-      for n in range(1, iterations + 1)
+      f"thread-{n}": [{
+          "type": "result",
+          "result": overrides.get(n, f"iter{n} done")
+      }] for n in range(1, iterations + 1)
   }
   statuses = {f"thread-{n}": ThreadStatus.COMPLETED for n in range(1, iterations + 1)}
   return _FakeImproveThreadManager(tmp_path, events, statuses)
@@ -799,8 +801,7 @@ async def test_run_improve_loop_injects_previous_summaries_in_next_description(
   """Iteration N>1 sees summaries sourced from earlier iteration report files."""
   cfg = _make_cfg(tmp_path)
   session_mgr = _FakeImproveSessionManager()
-  thread_mgr = _completed_thread_mgr(
-      tmp_path, 2, results={1: "iter1 event text that must NOT be the summary"})
+  thread_mgr = _completed_thread_mgr(tmp_path, 2, results={1: "iter1 event text that must NOT be the summary"})
   _patch_improve_loop_io(monkeypatch)
   _patch_git(monkeypatch, count="1")
 

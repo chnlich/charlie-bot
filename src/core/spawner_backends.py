@@ -5,10 +5,10 @@ import structlog
 from src.core import review
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  BackendOption,
-  SessionMetadata,
-  ThreadMetadata,
-  backend_type_allows_missing_model,
+    BackendOption,
+    SessionMetadata,
+    ThreadMetadata,
+    backend_type_allows_missing_model,
 )
 from src.core.sessions import SessionManager
 
@@ -47,9 +47,8 @@ def unknown_backend_pin_refusal(backend_id: str, fallback_id: str) -> str:
   account, so every refusal path wraps this core in its own frame instead of
   rewording it.
   """
-  return (
-      f"'{backend_id}' is not in config.yaml backend_options — "
-      f"refusing to substitute '{fallback_id}'")
+  return (f"'{backend_id}' is not in config.yaml backend_options — "
+          f"refusing to substitute '{fallback_id}'")
 
 
 def _resolve_session_default_backend_model(

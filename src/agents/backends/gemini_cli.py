@@ -3,14 +3,14 @@
 import structlog
 
 from src.agents.backends.base import (
-  USER_LOCAL_BIN,
-  AgentBackend,
-  make_error_event,
-  make_result_event,
-  make_text_event,
-  make_tool_result_event,
-  make_tool_use_event,
-  resolve_binary,
+    USER_LOCAL_BIN,
+    AgentBackend,
+    make_error_event,
+    make_result_event,
+    make_text_event,
+    make_tool_result_event,
+    make_tool_use_event,
+    resolve_binary,
 )
 
 log = structlog.get_logger()

@@ -124,10 +124,10 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
 
 One coherent fact or rule set per entry. The title lives in frontmatter; the body is pure
 content. Timeless phrasing: state the standing reality. Dates, session ids, commit hashes,
-quoted rulings, event history, and case enumerations belong in `LESSONS.md`. Said once, in one
-language, lines 120 columns or fewer; surpass entries may be written in Chinese (user ruling
-2026-08-24). Entry prose follows the Writing Style section of
-prompts/master.md. Apply the
+quoted rulings, event history, and case enumerations belong in `LESSONS.md`. Said once, in one language, lines
+120 columns or fewer; new entry prose is written in Chinese (code, paths,
+identifiers, and commands stay English; user rulings 2026-08-24, 2026-08-31); pre-existing prose keeps its
+language until its next substantive edit. Entry prose follows the Writing Style section of prompts/master.md. Apply the
 admission test line by line as well as entry by entry: a line that changes no future action
 leaves.
 Brevity is part of the admission bar: lead with the action and keep only the mechanism the action

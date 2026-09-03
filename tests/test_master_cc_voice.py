@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
-  BUILD_BACKEND_PATCH_TARGET,
-  SESSIONS_SESSION_MANAGER_PATCH_TARGET,
-  make_work_item,
-  mock_session_callbacks,
-  patch_instructions_content,
+    BUILD_BACKEND_PATCH_TARGET,
+    SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    make_work_item,
+    mock_session_callbacks,
+    patch_instructions_content,
 )
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state

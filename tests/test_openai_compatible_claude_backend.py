@@ -156,8 +156,7 @@ def _anthropic_payload() -> dict:
   }
 
 
-def test_route_forwards_upstream_model_and_bearer_auth_and_translates_response(
-    monkeypatch: pytest.MonkeyPatch) -> None:
+def test_route_forwards_upstream_model_and_bearer_auth_and_translates_response(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setenv("GLM_INTERNAL_KEY", "secret-token")
   cfg = _cfg(_option(api_key_env="GLM_INTERNAL_KEY"))
   captured: dict[str, Any] = {}

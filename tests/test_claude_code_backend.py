@@ -5,9 +5,9 @@ import pytest
 from conftest import FLAG_LIKE_PROMPT
 
 from src.agents.backends.claude_code import (
-  BASE_COMMAND,
-  ClaudeCodeBackend,
-  claude_supervisor_env,
+    BASE_COMMAND,
+    ClaudeCodeBackend,
+    claude_supervisor_env,
 )
 
 
@@ -184,9 +184,7 @@ def test_prepare_env_defaults_auto_compact_window(monkeypatch: pytest.MonkeyPatc
   assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
 
 
-def test_prepare_env_host_export_beats_auto_compact_window_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_prepare_env_host_export_beats_auto_compact_window_default(monkeypatch: pytest.MonkeyPatch,) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "1000000")
   backend = ClaudeCodeBackend()
 

@@ -42,8 +42,7 @@ def test_tailwind_css_build_matches_committed_output() -> None:
 
   committed = COMMITTED_CSS.read_bytes()
   assert rebuilt == committed, (
-      'committed web/static/css/tailwind.css is stale — rerun scripts/build-css.sh and commit the result'
-  )
+      'committed web/static/css/tailwind.css is stale — rerun scripts/build-css.sh and commit the result')
 
 
 def test_package_lock_not_rewritten_by_npm_build() -> None:
@@ -78,5 +77,4 @@ def test_package_lock_not_rewritten_by_npm_build() -> None:
 
   assert COMMITTED_LOCK.read_bytes() == committed, (
       'npm run inside build-css.sh rewrote package-lock.json — '
-      'ensure package.json declares explicit "name": "charlie-bot"'
-  )
+      'ensure package.json declares explicit "name": "charlie-bot"')

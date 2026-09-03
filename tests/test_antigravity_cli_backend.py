@@ -386,9 +386,7 @@ printf '%s' '{"response":"not an envelope"}'
 
 
 @pytest.mark.asyncio
-async def test_bare_session_id_event_is_adopted_as_anchor_by_handle_event(
-    monkeypatch, tmp_path: Path
-) -> None:
+async def test_bare_session_id_event_is_adopted_as_anchor_by_handle_event(monkeypatch, tmp_path: Path) -> None:
   _install_fake_agy(
       monkeypatch,
       tmp_path,

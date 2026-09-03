@@ -140,7 +140,8 @@ async def trigger_master(
       last_sat_1am_pt = now_pt.replace(hour=1, minute=0, second=0, microsecond=0) - timedelta(days=days_since_sat)
       last_sat_1am_utc = last_sat_1am_pt.astimezone(UTC)
       if session_meta.cc_session_started_at < last_sat_1am_utc < datetime.now(UTC):
-        log.info('scheduled_cc_session_expired', session=resolved.id, started_at=str(session_meta.cc_session_started_at))
+        log.info(
+            'scheduled_cc_session_expired', session=resolved.id, started_at=str(session_meta.cc_session_started_at))
         session_meta.cc_session_id = None
         session_meta.cc_session_started_at = None
         await session_mgr.save_metadata(session_meta)
@@ -162,7 +163,10 @@ async def trigger_master(
           f"{summary}")
 
     await run_message_with_resume_recovery(
-        cfg, session_meta, master_summary, session_mgr,
+        cfg,
+        session_meta,
+        master_summary,
+        session_mgr,
         expect_fresh_session=expect_fresh_session,
         user_event_id=user_event_id)
   except Exception as e:

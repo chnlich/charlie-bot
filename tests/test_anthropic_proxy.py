@@ -380,10 +380,7 @@ async def test_iter_anthropic_sse_translates_frame_with_raw_splitline_chars() ->
   cut_ls = raw.index(ls.encode("utf-8"))
   chunks = [raw[:cut_nel], raw[cut_nel:cut_ls], raw[cut_ls:]]
 
-  blobs = [
-      blob
-      async for blob in _iter_anthropic_sse(FakeChunkedResponse(chunks), "test-model")
-  ]
+  blobs = [blob async for blob in _iter_anthropic_sse(FakeChunkedResponse(chunks), "test-model")]
 
   parsed = []
   for blob in blobs:

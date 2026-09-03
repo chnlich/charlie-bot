@@ -45,5 +45,4 @@ def test_status_values_valid(backlog_items: list[dict]) -> None:
   for item in backlog_items:
     status = item['status']
     assert status in VALID_STATUSES, (
-        f"item {item['id']} has invalid status '{status}'; expected one of {sorted(VALID_STATUSES)}"
-    )
+        f"item {item['id']} has invalid status '{status}'; expected one of {sorted(VALID_STATUSES)}")

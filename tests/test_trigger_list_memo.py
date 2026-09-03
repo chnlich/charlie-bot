@@ -77,8 +77,7 @@ async def test_list_triggers_missing_dir_returns_empty(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_triggers_memo_lru_evicts_oldest_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_list_triggers_memo_lru_evicts_oldest_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(triggers_module, "_TRIGGER_LIST_MEMO_SESSION_LIMIT", 2)
   mgr = _make_manager(tmp_path)
   for sid in ("a", "b", "c"):

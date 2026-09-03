@@ -53,8 +53,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
     for value in unknown:
       pre_slash = value.split("/", 1)[0] if "/" in value else None
       if pre_slash is not None and pre_slash in store.topics:
-        print(
-            f"error: unknown topic: {value} (index lines are topic/slug; try --topic {pre_slash})", file=sys.stderr)
+        print(f"error: unknown topic: {value} (index lines are topic/slug; try --topic {pre_slash})", file=sys.stderr)
       else:
         print(f"error: unknown topic: {value}", file=sys.stderr)
     sys.exit(1)

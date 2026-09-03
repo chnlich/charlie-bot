@@ -213,7 +213,6 @@ def backend_type_allows_missing_model(backend_type: str) -> bool:
 # Session Models
 # ---------------------------------------------------------------------------
 
-
 # Role carried by the dedicated session of a mode: master cron task — the
 # Project Manager for the task's ``project`` (group) value.
 PROJECT_ROLE = "project"

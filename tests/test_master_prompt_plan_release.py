@@ -15,8 +15,7 @@ from src.core import spawner
 EXPECTED_PLAN_REGISTRATION_BULLET = (
     "- Register before presenting via `charliebot plan present` (verbs per `charliebot plan --help`). The"
     " artifact's status chip is a presentation-time snapshot; the plan registry is the live truth. Record the"
-    " code baseline when the plan pins one."
-)
+    " code baseline when the plan pins one.")
 
 _PLAN_APPROVAL_SKILL_PATH = "skills/plan-approval/SKILL.md"
 
@@ -76,8 +75,7 @@ def test_plan_registration_includes_present_registration_step() -> None:
 def test_plan_registration_states_chip_is_snapshot_and_registry_is_live_truth() -> None:
   plan = _normalized(_skill_section("Plan"))
 
-  assert ("The artifact's status chip is a presentation-time snapshot; the plan registry is the live truth."
-          in plan)
+  assert ("The artifact's status chip is a presentation-time snapshot; the plan registry is the live truth." in plan)
 
 
 def test_plan_registration_includes_unconditional_approve_after_takeoff() -> None:
@@ -101,8 +99,9 @@ def test_verify_worker_prompt_documents_read_only_network_contract() -> None:
 
   assert "You are a read-only plan verifier." in preamble
   assert "Retrieve evidence through allowed local and network reads, and report findings." in preamble
-  assert ("Refuse and report any requested part that would mutate local or external state instead of executing it."
-          in preamble)
+  assert (
+      "Refuse and report any requested part that would mutate local or external state instead of executing it."
+      in preamble)
   assert "the boundary is semantic read-only behavior, not a transport or HTTP-method allowlist" in preamble
 
 

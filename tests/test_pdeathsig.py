@@ -70,7 +70,8 @@ def _spawn_intermediate(tmp_path: Path, *, use_helper: bool) -> tuple[subprocess
   script = tmp_path / f"intermediate_{'helper' if use_helper else 'plain'}.py"
   script.write_text(_INTERMEDIATE, encoding="utf-8")
   intermediate = subprocess.Popen(
-      [sys.executable, str(script), str(REPO_ROOT), "with-helper" if use_helper else "plain"],
+      [sys.executable, str(script),
+       str(REPO_ROOT), "with-helper" if use_helper else "plain"],
       stdout=subprocess.PIPE,
       stderr=subprocess.PIPE,
       text=True,
@@ -158,5 +159,4 @@ def test_control_without_helper_child_survives_parent_death(tmp_path: Path) -> N
     alive_after_wait = _pid_alive(child_pid)
   finally:
     _cleanup(intermediate, child_pid)
-  assert alive_after_wait, (
-      "control child was reaped without the helper — the reap is not authored by PDEATHSIG")
+  assert alive_after_wait, ("control child was reaped without the helper — the reap is not authored by PDEATHSIG")

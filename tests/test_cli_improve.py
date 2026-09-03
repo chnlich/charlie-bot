@@ -4,10 +4,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
-  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-  CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
-  assert_cli_reject,
-  make_json_response,
+    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+    assert_cli_reject,
+    make_json_response,
 )
 from conftest import setup_session_cwd as _setup_session_cwd
 from pydantic import ValidationError
@@ -17,8 +17,7 @@ from src.core.models import ImproveRequest
 
 _INTERNAL_GET_CONFIG_PATCH_TARGET = "src.api.internal.get_config"
 _INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET = "src.api.internal.check_takeoff_gate"
-_INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = (
-    "src.api.internal.resolve_requested_subagent_backend_model")
+_INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.api.internal.resolve_requested_subagent_backend_model")
 _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET = "src.api.internal.reserve_loop_state"
 
 

@@ -162,8 +162,7 @@ class CodexUsageResolver:
     (``calculate_codex_usage_cost_usd``).
     """
     backend_id = session_meta.backend
-    native_thread_id = self._resolve_codex_thread_id(
-        session_id, session_meta.cc_session_id, events)
+    native_thread_id = self._resolve_codex_thread_id(session_id, session_meta.cc_session_id, events)
     if not native_thread_id:
       return None
 
@@ -179,8 +178,7 @@ class CodexUsageResolver:
         "context_tokens": native_usage["context_tokens"],
         "context_full": native_usage["context_full"],
         "context_compact_at": context_compact_at,
-        "total_cost_usd": (
-            calculate_codex_usage_cost_usd(model, total_token_usage) if total_token_usage else None),
+        "total_cost_usd": (calculate_codex_usage_cost_usd(model, total_token_usage) if total_token_usage else None),
         "model": model,
     }
     return merged_usage

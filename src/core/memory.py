@@ -331,8 +331,7 @@ def _store_signature(memory_dir: Path) -> tuple[tuple[str, int, int], ...] | Non
     return None
   sig.append((_TOPICS_FILENAME, st.st_mtime_ns, st.st_size))
   try:
-    topic_names = sorted(
-        e.name for e in os.scandir(os.path.join(memory_dir, _ENTRIES_DIRNAME)) if e.is_dir())
+    topic_names = sorted(e.name for e in os.scandir(os.path.join(memory_dir, _ENTRIES_DIRNAME)) if e.is_dir())
   except OSError:
     topic_names = []  # a missing entries/ loads as the valid empty store
   for topic in topic_names:

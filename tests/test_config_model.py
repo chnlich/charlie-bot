@@ -65,6 +65,7 @@ def _path_properties(cfg: CharlieBotConfig) -> dict[str, Path]:
 # The two properties derived from the repo/config rather than charliebot_home;
 # everything else returning a Path must follow the redirected home.
 
+
 def test_with_home_redirects_every_derived_path(tmp_path: Path) -> None:
   """Every home-derived Path property resolves under the new home, nothing else moves.
 
@@ -79,9 +80,7 @@ def test_with_home_redirects_every_derived_path(tmp_path: Path) -> None:
 
   props, redirected_props = _path_properties(cfg), _path_properties(redirected)
   assert set(props) == set(redirected_props)
-  home_derived = {
-      name for name, path in props.items() if home_a == path or home_a in path.parents
-  }
+  home_derived = {name for name, path in props.items() if home_a == path or home_a in path.parents}
   assert home_derived == {"sessions_dir", "claude_md_file", "memory_dir", "config_file", "config_d_dir"}
   for name, path in props.items():
     if name in home_derived:

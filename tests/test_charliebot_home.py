@@ -176,8 +176,7 @@ def test_no_new_hardcoded_state_paths():
         offenders.append(f"{path.relative_to(repo_root)}:{lineno}: {line.strip()}")
 
   assert not offenders, (
-      "state paths must come from CharlieBotConfig, not from the user's home directory:\n"
-      + "\n".join(offenders))
+      "state paths must come from CharlieBotConfig, not from the user's home directory:\n" + "\n".join(offenders))
 
 
 def test_terminal_session_name_separates_profiles(monkeypatch, tmp_path):

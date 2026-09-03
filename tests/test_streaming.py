@@ -16,7 +16,10 @@ async def test_compact_boundary_still_emits_context_compacted_unchanged() -> Non
   event = {
       "type": "system",
       "subtype": "compact_boundary",
-      "compact_metadata": {"trigger": "manual", "pre_tokens": 239_708},
+      "compact_metadata": {
+          "trigger": "manual",
+          "pre_tokens": 239_708
+      },
   }
 
   await handle_compaction_events(event, lambda ev: _record(persisted, ev), {"session": "s1"})

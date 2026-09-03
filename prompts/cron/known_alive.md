@@ -41,7 +41,8 @@ Known-alive symbols:
   `_clear_events_cache` (`tests/test_thread_worker_events.py`),
   `_clear_tolerant_read_memo` (`tests/test_plans_tolerant_memo.py`),
   `_clear_store_memo` (`tests/test_memory_store_memo.py`),
-  `_clear_aggregate_memo` (`tests/test_token_tally.py`) — pytest `autouse=True` fixtures,
+  `_clear_aggregate_memo` (`tests/test_token_tally.py`),
+  `_clear_jsonl_memo` (`tests/test_tui_backend.py`) — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
   definitions, so vulture flags them as unused functions. Vulture also flags
   `pidfd_open_available` (`tests/conftest.py`, shared skip gate for the pid/slurm watch

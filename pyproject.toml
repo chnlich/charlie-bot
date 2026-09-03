@@ -1,7 +1,7 @@
 [project]
 name = "charlie-bot"
 version = "0.1.0"
-description = "Add your description here"
+description = "Self-hosted multi-agent orchestration system: master/worker/reviewer agents on pluggable LLM CLI backends, operated through a web UI"
 requires-python = ">=3.12"
 dependencies = [
     "aiofiles>=25.1.0",

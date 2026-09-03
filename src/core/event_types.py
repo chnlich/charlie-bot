@@ -90,6 +90,14 @@ RATE_LIMIT_EVENT = "rate_limit_event"
 # -- Session backend switching ----------------------------------------------
 BACKEND_SWITCHED = "backend_switched"
 
+# -- Turn-end model attribution ----------------------------------------------
+# Synthetic round-end notice from the master run detector — never a CLI stream
+# event (same CharlieBot-synthesized top-level-type family as
+# backend_overlay_inactive): a pinned cc-family backend's visible reply was
+# served by model(s) outside the configured model's family. Fields: backend,
+# configured_model, served_models (raw model names, first-appearance order).
+MODEL_FALLBACK_NOTICE = "model_fallback_notice"
+
 # -- Overlay declaration -----------------------------------------------------
 # One alert for every fenceless run: undeclared prompt_overlay and
 # declared-but-unreadable emit the same backend_overlay_inactive event, told

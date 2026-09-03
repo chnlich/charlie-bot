@@ -126,6 +126,20 @@ def _backend_overlay_inactive_msg(ev: dict) -> dict:
   }
 
 
+def _fallback_notice_text(configured_model: str, served_models: list[str]) -> str:
+  """The rendered notice line: the models that actually served the round vs the pin."""
+  served = ", ".join(served_models)
+  return f"Served by {served} (configured {configured_model})"
+
+
+def _model_fallback_notice_msg(ev: dict) -> dict:
+  served_models = ev.get("served_models") or []
+  return {
+      "role": "system",
+      "content": _fallback_notice_text(ev.get("configured_model") or "", served_models),
+  }
+
+
 def _scheduled_run_skipped_msg(ev: dict) -> dict:
   task = ev.get('task', '')
   skipped_at = ev.get('skipped_at', '')
@@ -223,6 +237,8 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
     # the same handler (they carry no reason field, so they fall to undeclared).
     ET.BACKEND_OVERLAY_UNDECLARED:
         _backend_overlay_inactive_msg,
+    ET.MODEL_FALLBACK_NOTICE:
+        _model_fallback_notice_msg,
     ET.SCHEDULED_RUN_SKIPPED:
         _scheduled_run_skipped_msg,
 }

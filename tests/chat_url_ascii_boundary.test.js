@@ -10,15 +10,12 @@
 // raw text, and (c) the ASCII control battery tokenizes byte-identically to
 // stock marked. See chat/artifacts.js FILE_SERVER_LINK_SOURCE for the scanner
 // side of the same boundary, and chat_file_link_prefixes.test.js for probe
-// cleanliness against it. Harness mirrors chat_single_tilde_literal.test.js:
-// fetch the real CDN marked, load the real markdown-renderer.js in a vm.
+// cleanliness against it.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
-const https = require('node:https');
 
-const { readStatic } = require('./read_static');
+const { loadRenderer, loadStockMarked } = require('./marked_renderer_harness');
 
 const {
   FakeText,
@@ -27,70 +24,6 @@ const {
   render,
   statusResponder,
 } = require('./file_link_dom_stub');
-
-// Fetch the exact marked build the browser serves (web/templates/index.html).
-// No version is pinned, so resolving the range today and caching it keeps this
-// test stable while tracking whatever marked ships.
-const MARKED_URL = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
-
-let markedSrcCache = null;
-function fetchMarkedSrc() {
-  if (markedSrcCache) return Promise.resolve(markedSrcCache);
-  return new Promise((resolve, reject) => {
-    https.get(MARKED_URL, (res) => {
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        markedSrcCache = data;
-        resolve(data);
-      });
-    }).on('error', reject);
-  });
-}
-
-// Load the REAL markdown-renderer.js against the REAL marked in a shared vm
-// context, mirroring the browser page order: marked.min.js defines the global
-// marked first, then markdown-renderer.js registers its renderer + tokenizer
-// via marked.use. Stubs cover only the non-marked globals (hljs, document,
-// platform) that the file touches.
-async function loadRenderer() {
-  const markedSrc = await loadMarkedSrc();
-  const context = {
-    console,
-    hljs: {
-      getLanguage: () => null,
-      highlightAuto: (s) => ({ value: String(s) }),
-      highlight: (s) => ({ value: String(s) }),
-    },
-    document: { querySelectorAll: () => [] },
-    platform: {},
-  };
-  vm.createContext(context);
-  vm.runInContext(markedSrc, context, { filename: 'marked.min.js' });
-  const src = readStatic('markdown-renderer.js');
-  vm.runInContext(src, context, { filename: 'markdown-renderer.js' });
-  return context.marked;
-}
-
-// The control for the ASCII battery: the same marked build with no repo
-// renderer loaded, so its tokenizer is pristine stock.
-async function loadStockMarked() {
-  const markedSrc = await loadMarkedSrc();
-  const context = { console };
-  vm.createContext(context);
-  vm.runInContext(markedSrc, context, { filename: 'marked.min.js' });
-  return context.marked;
-}
-
-async function loadMarkedSrc() {
-  try {
-    return await fetchMarkedSrc();
-  } catch (err) {
-    // CDN unreachable in an offline sandbox; fail fast rather than silently pass.
-    throw new Error(`could not fetch ${MARKED_URL}: ${err.message}`);
-  }
-}
 
 const SCHEME_URL = 'https://host.example/absolute_filepath/tmp/run-17/debug_x_v1.html';
 const SCHEME_PATHNAME = '/absolute_filepath/tmp/run-17/debug_x_v1.html';

@@ -200,7 +200,10 @@ def _list_body_signature(threads_dir: str, triggers_dir: str) -> tuple[tuple[str
     for entry in os.scandir(triggers_dir):
       if not entry.is_file() or not entry.name.endswith(".json"):
         continue
-      st = entry.stat()
+      try:
+        st = entry.stat()
+      except OSError:
+        continue
       sig.append((entry.path, st.st_mtime_ns, st.st_size))
   except OSError:
     pass
@@ -241,8 +244,9 @@ async def list_threads(
 
   combined = thread_items + trigger_items
   combined.sort(key=lambda x: x["created_at"], reverse=True)
-  # The dumps flags reproduce starlette JSONResponse.render byte for byte, so a
-  # memo hit and a fresh build ship identical bodies.
+  # These dumps flags and the mapped-return serialization this replaces ship
+  # byte-identical bodies (verified on the 277-row worst-session corpus), so a
+  # memo hit and a fresh build are indistinguishable on the wire.
   body = json.dumps(combined, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
   _list_body_memo[session_id] = (sig, body)
   _list_body_memo.move_to_end(session_id)

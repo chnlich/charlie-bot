@@ -49,6 +49,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M36 worker list poll payload and handler time, steady state | M36 collector below | seconds per list request + response body bytes, worst thread-metadata corpus | median < 0.02 s; body < 200 KB | — (introduced with its first history row) |
 | M37 archived-session chat tail page, steady state | M37 collector below | seconds per `parse_ndjson_tail(200)` call, worst on-disk archived live file | median < 0.005 s | — (introduced with its first history row) |
 | M38 session stream-broadcast fan-out, worst on-disk turn replay | M38 collector below | stream frames and json.dumps calls/seconds per turn replay, instant feed, one subscriber | dumps total < 0.02 s; final-frame parity true | — (introduced with its first history row) |
+| M39 tui/status busy check, steady state | M39 collector below | seconds of loop lag + wall per per-session busy check, live ~/.claude/projects corpus (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.01 s; wall median < 0.001 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1970,6 +1971,67 @@ asyncio.run(main())
 EOF
 ```
 
+M39 — tui/status busy check, steady state. The 3 s tui-status poll
+(`fetchTuiStatus`, per visible tab) runs `_claude_jsonl_busy` per running tui
+session, whose pre-fix form globbed all of `~/.claude/projects` inline on the
+event loop on every call — ~15 ms of loop stall per check at this host's
+942-dir projects corpus, delaying every concurrent request and WebSocket. The
+fixed form memoizes the transcript path per session id (a hit is stable for
+the session's life; a miss re-globs at a 30 s TTL) and awaits the check in a
+thread. The collector drives the endpoint's fixed call shape
+(`asyncio.to_thread` of `_claude_jsonl_busy`) with a concurrent 5 ms ticker
+over a synthetic never-present session id — the glob cost is corpus-shaped,
+identical for a real hit — from the checkout under test: one cold pass, as at
+a server start with an empty memo, then nine timed steady-state checks (all
+inside the miss TTL, so a glob would fire on every call were the memo absent).
+The pre-fix number is the same command with `_claude_jsonl_busy(SID)` called
+inline (the endpoint's pre-fix call shape) against an unmemoized import.
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.agents.backends.tui import _claude_jsonl_busy
+
+# Synthetic never-present id; the glob cost is corpus-shaped (~/.claude/projects
+# dir count), identical for a real hit and this miss-shaped stand-in.
+SID = "00000000-0000-0000-0000-000000000000"
+
+async def run_once():
+    gaps = []
+    stop = False
+    async def ticker():
+        prev = time.perf_counter()
+        while not stop:
+            await asyncio.sleep(0.005)
+            now = time.perf_counter()
+            gaps.append(now - prev)
+            prev = now
+    t = asyncio.create_task(ticker())
+    t0 = time.perf_counter()
+    busy = await asyncio.to_thread(_claude_jsonl_busy, SID)  # the endpoint's call shape
+    wall = time.perf_counter() - t0
+    stop = True
+    await t
+    return busy, (max(gaps) if gaps else wall), wall
+
+async def main():
+    await run_once()  # cold pass, as at a server start with an empty memo; not timed
+    results = []
+    for _ in range(9):
+        results.append(await run_once())
+    lags = sorted(r[1] for r in results)
+    walls = sorted(r[2] for r in results)
+    n_dirs = sum(1 for _ in (Path.home() / ".claude" / "projects").iterdir())
+    print(f"{n_dirs} project dirs; busy={results[0][0]}; "
+          f"loop-lag median {lags[4]*1000:.2f} ms, max {lags[-1]*1000:.2f} ms; "
+          f"busy-check wall median {walls[4]*1000:.2f} ms, max {walls[-1]*1000:.2f} ms")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2021,3 +2083,4 @@ EOF
 | 2026-09-03 | #646 | M36 poll median 13.92 ms → 5.46 ms, max 18.28 ms → 6.43 ms, body 137363 B in both arms (collector verbatim, 2051 KB / 277-row worst worker-list corpus, live state read-only, main checkout before vs branch head after back-to-back at load 3.81/2.27/1.64 and 2.76/2.17/1.63; 100-rep interleaved corroboration min 5.79 ms → 3.19 ms) | whole-body memo for the 3 s workers-panel list poll keyed on the union (path, mtime_ns, size) signature of every thread metadata.json and trigger *.json behind the rows (all writers rename atomically, so an unchanged signature proves the body current); steady-state polls skip row building and JSON serialization |
 | 2026-09-03 | this PR | M38 turn replay 174 → 2 stream frames, 286 → 114 json.dumps calls, 78 ms → 5 ms dumps total, replay wall 0.08 s → 0.01 s (collector verbatim, session ebace12d worst on-disk stream turn by preview bytes, instant feed, one subscriber, main checkout before at load 3.02/5.02/5.05 vs branch head after at load 1.74/4.20/4.76; final-frame parity true both arms) | per-channel leading+trailing coalescing of stream preview frames in StreamingManager at the client's 200 ms paint cadence, pending draft dropped only on preview-hiding frame types (message/assistant_error/error), one json.dumps per fan-out replacing one per subscriber, subscriber-less channels short-circuited to a dict lookup; M38 definition and healthy range introduced with this PR |
 | 2026-09-03 | this PR | M21 steady-state sweep median 0.0088 s → 0.0045 s, max 0.0092 s → 0.0048 s (collector verbatim, 38 active sessions, live state read-only, main checkout before vs branch head after back-to-back at load 0.76/1.50/1.31; signature-pass microbench 8.8 ms → 4.0 ms with signatures identical over every active session) | os.scandir + str-joined os.stat in the sidebar probe-input signature pass, replacing per-entry Path()/__truediv__ allocation whose parse overhead measured ~half the sweep, mirroring the M29/M32 str-stat pattern |
+| 2026-09-03 | this PR | M39 inline loop-lag median 15.34 ms → 5.34 ms (5 ms ticker floor), max 16.24 ms → 5.47 ms; busy-check wall median 15.34 ms → 0.26 ms, max 16.24 ms → 0.43 ms (collector verbatim, 942-dir ~/.claude/projects corpus, synthetic never-present id, main checkout before at load 0.25/0.34/0.74 vs branch head after at load 0.84/0.80/0.82; busy result False in both arms) | per-session transcript-path memo in _find_existing_claude_jsonl (stable hit memoized for the process life with an exists() recheck, miss re-globbed at a 30 s TTL) plus the tui/status busy check awaited in a thread instead of inline on the event loop; M39 definition and healthy range introduced with this PR |

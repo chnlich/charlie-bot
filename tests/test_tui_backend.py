@@ -8,6 +8,13 @@ from conftest import make_fake_run_tmux
 from src.agents.backends import pty_common, tui
 
 
+@pytest.fixture(autouse=True)
+def _clear_jsonl_memo() -> None:
+  # tmp-home monkeypatching differs per test; a stale memo entry would resolve
+  # against another test's home.
+  tui.reset_jsonl_memo_for_tests()
+
+
 def test_build_claude_argv_joins_disallowed_tools_into_single_flag() -> None:
   argv = tui._build_claude_argv(
       "session-id",
@@ -161,6 +168,21 @@ def test_find_existing_claude_jsonl_returns_first_match(monkeypatch: pytest.Monk
   monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
 
   assert tui._find_existing_claude_jsonl("session-id") == first
+
+
+def test_find_existing_claude_jsonl_memoizes_hit_and_miss(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  home_dir = tmp_path / "home"
+  monkeypatch.setattr(tui.Path, "home", staticmethod(lambda: home_dir))
+
+  assert tui._find_existing_claude_jsonl("session-id") is None
+  jsonl = home_dir / ".claude" / "projects" / "a" / "session-id.jsonl"
+  jsonl.parent.mkdir(parents=True)
+  jsonl.write_text("", encoding="utf-8")
+  assert tui._find_existing_claude_jsonl("session-id") is None  # memoized miss, inside the TTL
+  tui.reset_jsonl_memo_for_tests()
+  assert tui._find_existing_claude_jsonl("session-id") == jsonl  # memoized hit
+  jsonl.unlink()
+  assert tui._find_existing_claude_jsonl("session-id") is None  # exists() recheck re-globs after deletion
 
 
 def test_claude_jsonl_busy_uses_recent_mtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

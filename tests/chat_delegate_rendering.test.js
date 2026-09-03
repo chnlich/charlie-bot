@@ -2,9 +2,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
 const { escapeHtml } = require('./escape_html_stub');
 const {loadChatRenderingModules} = require('./chat_rendering_context_stub');
+const {loadSidebarWorkersContext} = require('./sidebar_workers_context_stub');
 
 function fakeElement() {
   let text = '';
@@ -80,26 +80,13 @@ function assertWellFormedMarkup(html, label = 'html') {
 }
 
 function loadSidebarWorkers(elements) {
-  const context = {
-    SESSION_ID: 'session-a',
-    BACKEND_OPTIONS: {},
+  return loadSidebarWorkersContext({
     document: {
       createElement: () => fakeElement(),
       getElementById: (id) => elements.get(id) || null,
       querySelectorAll: () => [],
     },
-    escapeHtml,
-    escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
-    fetch: () => Promise.resolve({ok: true}),
-    loadedThreads: {delete() {}},
-    stopThreadPoll: () => {},
-    fetchAndRenderEvents: () => Promise.resolve(),
-    console: {warn: () => {}, error: () => {}},
-  };
-  vm.createContext(context);
-  vm.runInContext(readStatic('sidebar/namespace.js'), context, {filename: 'sidebar/namespace.js'});
-  vm.runInContext(readStatic('sidebar/workers.js'), context, {filename: 'sidebar/workers.js'});
-  return context;
+  });
 }
 
 test('task_delegated renders CLI-style metadata without full task spec', () => {

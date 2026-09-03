@@ -26,6 +26,7 @@ from src.core.models import (
   SessionMetadata,
   SpawnRequest,
   TaskType,
+  ThreadMetadata,
   parse_utc_datetime,
 )
 from src.core.sessions import SessionManager
@@ -61,6 +62,61 @@ def effective_scheduled_task_backend(task_cfg: ScheduledTaskConfig, cfg: Charlie
   if not cfg.backend_options:
     raise ValueError("scheduled task backend resolution requires a configured backend_options entry")
   return cfg.backend_options[0].id
+
+
+async def fire_scheduled_worker(
+    session: SessionMetadata,
+    task_cfg: ScheduledTaskConfig,
+    thread: ThreadMetadata,
+    event_description: str,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+    *,
+    backend_override: str | None,
+    prompt_override: str | None,
+) -> asyncio.Task:
+  """Fire one scheduled task's worker on an already-created thread and broadcast its
+  TASK_DELEGATED event; return the worker task's handle.
+
+  The single spawn block every scheduled worker goes through — the cron tick
+  (``_spawn_scheduled_worker``) and the steps-chain advance
+  (``task_chain.spawn_step``) — so the spawn request, the ``scheduled_worker_*``
+  task name, and the TASK_DELEGATED keys cannot drift between paths; the sidebar
+  workers panel renders that one event shape.
+  """
+  effective_backend = backend_override or effective_scheduled_task_backend(task_cfg, cfg)
+  resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
+      session.id, cfg, session_mgr, requested_backend=effective_backend)
+  handle = create_logged_task(
+      spawn_worker(
+          session_id=session.id,
+          description=thread.description,
+          thread_id=thread.id,
+          cfg=cfg,
+          session_mgr=session_mgr,
+          thread_mgr=thread_mgr,
+          request=SpawnRequest(
+              repo_path=task_cfg.repo,
+              prompt_override=prompt_override,
+              resolved_backend=resolved_backend,
+              resolved_model=resolved_model,
+              task_type=TaskType.IMPLEMENT,
+          ),
+      ),
+      name=f"scheduled_worker_{task_cfg.name}_{thread.id[:8]}",
+  )
+  event = {
+      "type": ET.TASK_DELEGATED,
+      "task": task_cfg.name,
+      "description": event_description,
+      "session_id": session.id,
+      "thread_id": thread.id,
+      "backend": resolved_backend or "",
+      "model": resolved_model or "",
+  }
+  await session_mgr.persist_and_broadcast(session.id, event)
+  return handle
 
 
 class Scheduler:
@@ -365,46 +421,22 @@ class Scheduler:
       record_handle: bool = False,
       **log_extra: str,
   ) -> dict:
-    """Create thread, spawn worker, broadcast task_delegated, and return result dict."""
+    """Create thread, fire its worker through the shared spawn block, and return the result dict."""
     thread_mgr = ThreadManager(cfg)
     thread = await thread_mgr.create_thread(session, description, require_review=require_review)
-    effective_backend = effective_scheduled_task_backend(task_cfg, cfg)
-
-    resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
-        session.id, cfg, session_mgr, requested_backend=effective_backend)
-
-    handle = create_logged_task(
-        spawn_worker(
-            session_id=session.id,
-            description=description,
-            thread_id=thread.id,
-            cfg=cfg,
-            session_mgr=session_mgr,
-            thread_mgr=thread_mgr,
-            request=SpawnRequest(
-                repo_path=task_cfg.repo,
-                resolved_backend=resolved_backend,
-                resolved_model=resolved_model,
-                task_type=TaskType.IMPLEMENT,
-            ),
-        ),
-        name=f"scheduled_worker_{task_cfg.name}_{thread.id[:8]}",
-    )
+    handle = await fire_scheduled_worker(
+        session,
+        task_cfg,
+        thread,
+        event_description,
+        cfg,
+        session_mgr,
+        thread_mgr,
+        backend_override=None,
+        prompt_override=None)
     if record_handle:
       self._handles[task_cfg.name] = handle
-
-    event = {
-        "type": ET.TASK_DELEGATED,
-        "task": task_cfg.name,
-        "description": event_description,
-        "session_id": session.id,
-        "thread_id": thread.id,
-        "backend": resolved_backend or "",
-        "model": resolved_model or "",
-    }
-    await session_mgr.persist_and_broadcast(session.id, event)
     log.info(log_event, task=task_cfg.name, session=session.id, thread=thread.id, **log_extra)
-
     return {"session_id": session.id, "thread_id": thread.id}
 
   # ---------------------------------------------------------------------------

@@ -49,7 +49,8 @@ def _overlay_dir(cfg: core_config.CharlieBotConfig) -> Path:
 def _rendered_overlay_alert(event: dict) -> list[dict]:
   """Feed a persisted event through the aggregator; return visible message deltas."""
   return [
-      delta["message"] for delta in MessageAggregator().feed_all([event])
+      delta["message"]
+      for delta in MessageAggregator().feed_all([event])
       if delta.get("type") == "message" and delta.get("message", {}).get("role") == "system"
   ]
 
@@ -94,7 +95,8 @@ async def test_wake_path_overlay_four_states(
 
   if expects_alert:
     alert_events = [
-        c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list
+        c.args[1]
+        for c in item.callbacks.persist_and_broadcast.await_args_list
         if c.args[1].get("type") == ET.BACKEND_OVERLAY_INACTIVE
     ]
     assert len(alert_events) == 1
@@ -107,7 +109,8 @@ async def test_wake_path_overlay_four_states(
     assert "prompt_overlay" in rendered[0]["content"]
   else:
     assert not [
-        c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list
+        c.args[1]
+        for c in item.callbacks.persist_and_broadcast.await_args_list
         if c.args[1].get("type") == ET.BACKEND_OVERLAY_INACTIVE
     ]
 
@@ -135,7 +138,8 @@ async def test_declared_overlay_missing_file_degrades(tmp_path: Path, monkeypatc
   assert captured["instructions_content"] == "BASE PROMPT"
 
   alert_events = [
-      c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list
+      c.args[1]
+      for c in item.callbacks.persist_and_broadcast.await_args_list
       if c.args[1].get("type") == ET.BACKEND_OVERLAY_INACTIVE
   ]
   assert len(alert_events) == 1
@@ -172,8 +176,7 @@ async def test_model_string_has_zero_impact_on_wake_path(tmp_path: Path, monkeyp
 
   products: list[str | None] = []
   monkeypatch.setattr(
-      registry, "build_backend",
-      lambda *a, **kw: products.append(kw.get("instructions_content")) or FakeBackend())
+      registry, "build_backend", lambda *a, **kw: products.append(kw.get("instructions_content")) or FakeBackend())
 
   for model in ("vendor/one", "vendor/two"):
     option = BackendOption(id="opt", label="Opt", type="codex", model=model, prompt_overlay="shared")

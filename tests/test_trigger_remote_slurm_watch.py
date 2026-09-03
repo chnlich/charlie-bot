@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-  TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
-  TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET,
-  FakeAsyncProcess,
-  assert_trigger_fired_completed,
-  assert_trigger_fired_timeout,
-  patch_trigger_fire,
+    TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET,
+    FakeAsyncProcess,
+    assert_trigger_fired_completed,
+    assert_trigger_fired_timeout,
+    patch_trigger_fire,
 )
 from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep

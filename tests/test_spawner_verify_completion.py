@@ -9,12 +9,12 @@ from src.core import event_types as ET
 from src.core import review, spawner, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  BackendOption,
-  SessionMetadata,
-  SpawnRequest,
-  TaskType,
-  ThreadMetadata,
-  ThreadStatus,
+    BackendOption,
+    SessionMetadata,
+    SpawnRequest,
+    TaskType,
+    ThreadMetadata,
+    ThreadStatus,
 )
 from src.core.verify_trailer import read_verify_final_report
 
@@ -110,6 +110,7 @@ def _install_worker_fakes(
     worker_runs: list[tuple[str, str]],
     stream_result: spawner._WorkerRunOutcome,
 ) -> None:
+
   async def fake_stream_worker_events(worker: _FakeWorker, *args: Any) -> spawner._WorkerRunOutcome:
     del args
     worker_runs.append((worker.thread_id, worker.backend))
@@ -194,7 +195,9 @@ async def test_verify_final_report_falls_back_to_untruncated_last_assistant_mess
         ("confirmed | claim | anchor | evidence\nRESULT: clean-ish", "backend shutdown", ThreadStatus.FAILED, -1),
         ("mismatch | claim | anchor | evidence\nRESULT: 1 mismatch", "", ThreadStatus.FAILED, -1),
         ("mismatch | claim | anchor | evidence\nRESULT: 3 mismatches", "", ThreadStatus.FAILED, -1),
-        ("mismatch | claim | anchor | evidence\nRESULT: 2 mismatches (1 approval); CONTRACT-TOUCHING", "", ThreadStatus.FAILED, -1),
+        (
+            "mismatch | claim | anchor | evidence\nRESULT: 2 mismatches (1 approval); CONTRACT-TOUCHING", "",
+            ThreadStatus.FAILED, -1),
         ('{"status": "clean", "mismatches": []}', "", ThreadStatus.FAILED, -1),
     ])
 async def test_verify_result_trailer_controls_completion_without_retry(

@@ -21,14 +21,14 @@ from fastapi import WebSocket
 
 from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, SKIP_PERMISSIONS_SETTINGS
 from src.agents.backends.pty_common import (
-  PTY_EXIT,
-  PtyAttachment,
-  _run_pty_relay,
-  _start_tmux_session,
-  _tmux_binary,
-  kill_tmux_session,  # noqa: F401  # re-export: imported from this module by src/api/sessions.py + src/core/sessions.py and monkeypatched here by tests
-  tmux_session_exists,
-  tmux_session_name,
+    PTY_EXIT,
+    PtyAttachment,
+    _run_pty_relay,
+    _start_tmux_session,
+    _tmux_binary,
+    kill_tmux_session,  # noqa: F401  # re-export: imported from this module by src/api/sessions.py + src/core/sessions.py and monkeypatched here by tests
+    tmux_session_exists,
+    tmux_session_name,
 )
 
 log = structlog.get_logger()

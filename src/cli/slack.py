@@ -22,11 +22,11 @@ import json
 import sys
 
 from src.cli.common import (
-  add_session_arg,
-  exit_usage_error,
-  post_internal_api,
-  read_required_text_file,
-  resolve_session_id,
+    add_session_arg,
+    exit_usage_error,
+    post_internal_api,
+    read_required_text_file,
+    resolve_session_id,
 )
 
 
@@ -67,8 +67,7 @@ def _cmd_reply(args: argparse.Namespace) -> None:
 
 def _cmd_ack(args: argparse.Namespace) -> None:
   session_id = resolve_session_id(args.session)
-  result = post_internal_api("/api/internal/slack/ack",
-                             {"session_id": session_id, "message_ids": args.message_id})
+  result = post_internal_api("/api/internal/slack/ack", {"session_id": session_id, "message_ids": args.message_id})
   print(json.dumps(result))
 
 

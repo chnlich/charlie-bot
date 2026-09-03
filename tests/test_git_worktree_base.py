@@ -132,8 +132,7 @@ async def test_local_behind_origin_raises(repo_setup: dict[str, Path]) -> None:
   assert local_tip != origin_tip  # sanity
 
   with pytest.raises(BaseBranchResolutionError) as excinfo:
-    await git_create_worktree(
-        main_checkout, "feature", "charliebot/task-behind", repo_setup["tmp_path"] / "wt-behind")
+    await git_create_worktree(main_checkout, "feature", "charliebot/task-behind", repo_setup["tmp_path"] / "wt-behind")
   _expect_hard_error(excinfo, "differs from origin/feature", local_tip[:12], origin_tip[:12], "origin/feature")
 
 
@@ -147,8 +146,7 @@ async def test_local_ahead_of_origin_raises(repo_setup: dict[str, Path]) -> None
   assert local_tip != origin_tip
 
   with pytest.raises(BaseBranchResolutionError) as excinfo:
-    await git_create_worktree(
-        main_checkout, "feature", "charliebot/task-ahead", repo_setup["tmp_path"] / "wt-ahead")
+    await git_create_worktree(main_checkout, "feature", "charliebot/task-ahead", repo_setup["tmp_path"] / "wt-ahead")
   _expect_hard_error(excinfo, "differs from origin/feature", local_tip[:12], origin_tip[:12])
 
 
@@ -260,11 +258,7 @@ async def test_full_sha_pins_base(repo_setup: dict[str, Path]) -> None:
 async def test_unknown_sha_raises(repo_setup: dict[str, Path]) -> None:
   main_checkout = repo_setup["main_checkout"]
   with pytest.raises(BaseBranchResolutionError) as excinfo:
-    await git_create_worktree(
-        main_checkout,
-        "0" * 40,
-        "charliebot/task-badsha",
-        repo_setup["tmp_path"] / "wt-badsha")
+    await git_create_worktree(main_checkout, "0" * 40, "charliebot/task-badsha", repo_setup["tmp_path"] / "wt-badsha")
   _expect_hard_error(excinfo, "not found")
 
 
@@ -273,8 +267,7 @@ async def test_unknown_sha_raises(repo_setup: dict[str, Path]) -> None:
 async def test_garbage_input_raises(repo_setup: dict[str, Path], raw: str) -> None:
   main_checkout = repo_setup["main_checkout"]
   with pytest.raises(BaseBranchResolutionError):
-    await git_create_worktree(
-        main_checkout, raw, "charliebot/task-garbage", repo_setup["tmp_path"] / "wt-garbage")
+    await git_create_worktree(main_checkout, raw, "charliebot/task-garbage", repo_setup["tmp_path"] / "wt-garbage")
 
 
 # --- launch path: base-less fallback resolves to the remote's default branch ------
@@ -403,6 +396,7 @@ async def _run_spawn_request(
   The local-branch read is tripwired: if the launch fallback ever consults
   git_current_branch again, the AssertionError fails the test.
   """
+
   async def _forbidden_current_branch(repo_path: Path) -> str:
     raise AssertionError("launch fallback consulted git_current_branch (the local checkout)")
 

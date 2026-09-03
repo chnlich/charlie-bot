@@ -11,18 +11,18 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-  TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET,
-  FakeAsyncProcess,
-  assert_trigger_fired_completed,
-  patch_trigger_fire,
+    TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET,
+    FakeAsyncProcess,
+    assert_trigger_fired_completed,
+    patch_trigger_fire,
 )
 from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
 
 from src.core.models import (
-  LocalPid,
-  PendingTrigger,
-  SlurmJob,
+    LocalPid,
+    PendingTrigger,
+    SlurmJob,
 )
 from src.core.triggers import TriggerManager
 

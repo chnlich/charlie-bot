@@ -14,10 +14,10 @@ import argparse
 import json
 
 from src.cli.common import (
-  exit_usage_error,
-  post_internal_api,
-  read_required_text_file,
-  resolve_session_id,
+    exit_usage_error,
+    post_internal_api,
+    read_required_text_file,
+    resolve_session_id,
 )
 
 
@@ -37,10 +37,7 @@ def _build_parser() -> argparse.ArgumentParser:
   source.add_argument("--message", default=None, help="Message text")
   source.add_argument("--file", default=None, help="Read the message text from this file")
   send.add_argument(
-      "--session",
-      required=False,
-      default=None,
-      help="Caller session id (optional; auto-derived from cwd)")
+      "--session", required=False, default=None, help="Caller session id (optional; auto-derived from cwd)")
   return parser
 
 
@@ -65,8 +62,7 @@ def _cmd_send(args: argparse.Namespace) -> None:
   else:
     exit_usage_error("one of --message or --file is required")
   result = post_internal_api(
-      "/api/internal/session-message",
-      {
+      "/api/internal/session-message", {
           "session_id": session_id,
           "target_session_id": args.target,
           "content": content,

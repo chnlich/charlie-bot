@@ -40,12 +40,16 @@ def _thread_worker_event(
   content and a full_content quoting it stay byte-consistent (one wall-clock read).
   """
   event = {
-      "type": ET.WORKER_SUMMARY,
-      "thread_id": thread.id,
-      "content": content if content is not None
-      else _worker_locator_summary(thread.id, status, _worker_summary_timestamp()),
-      "status": status,
-      "full_content": full_content,
+      "type":
+          ET.WORKER_SUMMARY,
+      "thread_id":
+          thread.id,
+      "content":
+          content if content is not None else _worker_locator_summary(thread.id, status, _worker_summary_timestamp()),
+      "status":
+          status,
+      "full_content":
+          full_content,
   }
   if thread.backend:
     event["resolved_backend"] = thread.backend

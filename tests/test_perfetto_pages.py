@@ -20,14 +20,19 @@ from src.core.trace_merge import merge_traces as real_merge_traces
 
 def _write_trace(path: Path, marker: str = "event") -> None:
   path.write_text(
-      json.dumps({"traceEvents": [{"ph": "X", "pid": 1, "tid": 1, "name": marker}]}),
+      json.dumps({"traceEvents": [{
+          "ph": "X",
+          "pid": 1,
+          "tid": 1,
+          "name": marker
+      }]}),
       encoding="utf-8",
   )
 
 
-def _make_blocking_merge(
-    calls: list[int], started: threading.Event, release: threading.Event
-) -> Callable[[list[Path], Path, bool], None]:
+def _make_blocking_merge(calls: list[int], started: threading.Event,
+                         release: threading.Event) -> Callable[[list[Path], Path, bool], None]:
+
   def blocking_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
     calls.append(1)
     real_merge_traces(paths, out_path, slim)
@@ -405,8 +410,7 @@ def test_single_flight_progress_independently(monkeypatch: pytest.MonkeyPatch, t
   monkeypatch.setattr(pages, "merge_traces", counting_merge)
 
   async def run() -> None:
-    result_a, result_b = await asyncio.gather(
-        pages._cached_merge(key_a, False), pages._cached_merge(key_b, False))
+    result_a, result_b = await asyncio.gather(pages._cached_merge(key_a, False), pages._cached_merge(key_b, False))
     assert result_a.is_file() and result_b.is_file()
     assert result_a != result_b
     assert len(calls) == 2

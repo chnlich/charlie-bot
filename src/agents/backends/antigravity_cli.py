@@ -10,14 +10,14 @@ from pathlib import Path
 import aiofiles
 
 from src.agents.backends.base import (
-  SKIP_PERMISSIONS_FLAG,
-  USER_LOCAL_BIN,
-  AgentBackend,
-  make_error_event,
-  make_result_event,
-  make_text_event,
-  prepend_path_dir,
-  resolve_binary,
+    SKIP_PERMISSIONS_FLAG,
+    USER_LOCAL_BIN,
+    AgentBackend,
+    make_error_event,
+    make_result_event,
+    make_text_event,
+    prepend_path_dir,
+    resolve_binary,
 )
 
 _PRINT_TIMEOUT = "24h"

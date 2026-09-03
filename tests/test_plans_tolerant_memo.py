@@ -23,13 +23,16 @@ def _write_registry(path: Path, count: int) -> None:
       {
           "id": i,
           "title": f"plan {i}",
-          "versions": [{
-              "v": 1,
-              "file": f"plan_{i}_v1.html",
-              "created_at": "2026-09-01T00:00:00+00:00",
-              "trigger": "initial",
-              "base": None,
-          }],
+          "versions":
+              [
+                  {
+                      "v": 1,
+                      "file": f"plan_{i}_v1.html",
+                      "created_at": "2026-09-01T00:00:00+00:00",
+                      "trigger": "initial",
+                      "base": None,
+                  }
+              ],
           "takeoff": None,
           "closed": None,
       } for i in range(count)

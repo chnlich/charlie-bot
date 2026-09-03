@@ -11,11 +11,11 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-  BUILD_BACKEND_PATCH_TARGET,
-  OPUS_BACKEND_OPTION,
-  FakeBackend,
-  build_two_backend_cfg,
-  patch_instructions_content,
+    BUILD_BACKEND_PATCH_TARGET,
+    OPUS_BACKEND_OPTION,
+    FakeBackend,
+    build_two_backend_cfg,
+    patch_instructions_content,
 )
 
 from src.agents import master_cc
@@ -117,8 +117,7 @@ async def test_unresolvable_codex_pin_lands_on_none_of_several_codex_options(tmp
 
 
 @pytest.mark.asyncio
-async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_zero(
-    tmp_path: Path, monkeypatch) -> None:
+async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_zero(tmp_path: Path, monkeypatch) -> None:
   """replay_user_message never passes backend_option — the only caller that
   doesn't. A resolvable pin that isn't backend_options[0] must still win."""
   cfg = build_two_backend_cfg(tmp_path)

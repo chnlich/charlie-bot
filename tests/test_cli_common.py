@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from conftest import (
-  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-  CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
-  assert_cli_reject_exit2,
-  make_json_response,
+    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+    assert_cli_reject_exit2,
+    make_json_response,
 )
 
 from src.cli import common
@@ -128,8 +128,7 @@ def test_validate_repo_path_rejects_relative_path(capsys: pytest.CaptureFixture[
   assert_cli_reject_exit2(exc_info, capsys, "must be an absolute path", "meshy-research")
 
 
-def test_validate_repo_path_rejects_nonexistent_dir(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_validate_repo_path_rejects_nonexistent_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   nonexistent = str(tmp_path / "nonexistent")
 
   with pytest.raises(SystemExit) as exc_info:
@@ -149,8 +148,7 @@ def test_post_internal_api_bearer_header(access_key: str, expect_header: bool) -
 
   with (
       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
-      patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
-            return_value=make_json_response({"ok": True})) as mock_post,
+      patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=make_json_response({"ok": True})) as mock_post,
   ):
     assert common.post_internal_api("/api/internal/x", {"a": 1}) == {"ok": True}
 

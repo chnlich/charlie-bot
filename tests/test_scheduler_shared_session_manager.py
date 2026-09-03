@@ -12,22 +12,20 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
-  OPUS_BACKEND_ID,
-  OPUS_BACKEND_OPTION,
-  SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
-  SCHEDULER_GET_CONFIG_PATCH_TARGET,
-  SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
-  SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
-  SCHEDULER_THREAD_MANAGER_PATCH_TARGET,
-  FakeThreadManager,
-  close_create_logged_task,
+    OPUS_BACKEND_ID,
+    OPUS_BACKEND_OPTION,
+    SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
+    SCHEDULER_GET_CONFIG_PATCH_TARGET,
+    SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
+    SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
+    SCHEDULER_THREAD_MANAGER_PATCH_TARGET,
+    FakeThreadManager,
+    close_create_logged_task,
 )
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig
-from src.core.models import (
-  CreateSessionRequest,
-)
+from src.core.models import CreateSessionRequest
 from src.core.scheduler import TASK_HANDLERS, Scheduler
 from src.core.sessions import SessionManager
 

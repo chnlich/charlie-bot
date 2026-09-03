@@ -15,12 +15,9 @@ from src.agents import transcriber
 from src.api import voice
 from src.core.config import CharlieBotConfig
 
-SAMPLE_WAV = Path(
-    "/home/chaoli/.charliebot/sessions/8ad514a7-e599-4ce2-ad17-2ab351362e3b/acceptance_sample.wav"
-)
+SAMPLE_WAV = Path("/home/chaoli/.charliebot/sessions/8ad514a7-e599-4ce2-ad17-2ab351362e3b/acceptance_sample.wav")
 GROUNDTRUTH_TXT = Path(
-    "/home/chaoli/.charliebot/sessions/8ad514a7-e599-4ce2-ad17-2ab351362e3b/acceptance_sample_groundtruth.txt"
-)
+    "/home/chaoli/.charliebot/sessions/8ad514a7-e599-4ce2-ad17-2ab351362e3b/acceptance_sample_groundtruth.txt")
 AUDIO_DURATION_SECONDS = 48.06
 CHUNK_SAMPLES = 2048
 
@@ -65,12 +62,11 @@ def _edit_distance(a: str, b: str) -> int:
   for i, ca in enumerate(a, start=1):
     current = [i]
     for j, cb in enumerate(b, start=1):
-      current.append(
-          min(
-              previous[j] + 1,
-              current[j - 1] + 1,
-              previous[j - 1] + (ca != cb),
-          ))
+      current.append(min(
+          previous[j] + 1,
+          current[j - 1] + 1,
+          previous[j - 1] + (ca != cb),
+      ))
     previous = current
   return previous[-1]
 
@@ -101,7 +97,8 @@ def test_sherpa_simulated_streaming_acceptance_baseline() -> None:
   print(f"RTF: {rtf:.4f}")
 
 
-def test_voice_websocket_streams_partials_final_and_persists_dump(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_voice_websocket_streams_partials_final_and_persists_dump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = make_home_config(tmp_path)
   cfg.charliebot_home.mkdir(parents=True)
   model_cache = CharlieBotConfig().charliebot_home / "models"

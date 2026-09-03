@@ -15,9 +15,26 @@ from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
 EVENTS = [
-  {"type": "assistant", "message": {"content": [{"type": "text", "text": "hello"}]}, "timestamp": "2026-09-02T10:00:00Z"},
-  {"type": "ping", "timestamp": "2026-09-02T10:00:01Z"},
-  {"type": "complete", "status": "completed", "message": "done", "timestamp": "2026-09-02T10:00:02Z"},
+    {
+        "type": "assistant",
+        "message": {
+            "content": [{
+                "type": "text",
+                "text": "hello"
+            }]
+        },
+        "timestamp": "2026-09-02T10:00:00Z"
+    },
+    {
+        "type": "ping",
+        "timestamp": "2026-09-02T10:00:01Z"
+    },
+    {
+        "type": "complete",
+        "status": "completed",
+        "message": "done",
+        "timestamp": "2026-09-02T10:00:02Z"
+    },
 ]
 
 

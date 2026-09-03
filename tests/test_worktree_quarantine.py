@@ -8,11 +8,10 @@ from typing import Any
 import pytest
 from conftest import (
   OPUS_BACKEND_ID,
-  RECOVERY_TASK_PREFIXES,
   SPAWNER_RESUME_WORKER_PATCH_TARGET,
-  await_recovery_tasks,
   spy_on_load_json_meta,
 )
+from test_restart_recovery_e2e import _await_recovery_tasks
 
 from src.core import git as git_module
 from src.core import init as init_module
@@ -437,10 +436,6 @@ def _write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Pa
   meta_path = thread_dir / "metadata.json"
   meta_path.write_text(json.dumps(meta), encoding="utf-8")
   return meta_path
-
-
-async def _await_recovery_tasks() -> None:
-  await await_recovery_tasks(RECOVERY_TASK_PREFIXES)
 
 
 @pytest.mark.asyncio

@@ -452,6 +452,10 @@ class SessionManager:
     # update_thinking_state), which both load meta, mutate disjoint fields, and
     # save back — without a lock the second save overwrites the first's change.
     self._metadata_locks: dict[str, asyncio.Lock] = {}
+    # Listing-preamble memo: ((mtime_ns, size) of the sessions root, its subdirectory names).
+    # The root's own mtime moves exactly when a session entry is created or removed (metadata
+    # writes land one level below), so an unchanged signature proves the name set current.
+    self._dir_names_memo: tuple[tuple[int, int], list[str]] | None = None
     self._chat_events = ChatEventStore(self._session_dir, self._metadata_path, self._metadata_cache)
     self._session_usage = SessionUsageResolver(
         cfg,
@@ -1706,9 +1710,19 @@ class SessionManager:
       # DirEntry.is_dir() answers from the directory record itself on
       # d_type-aware filesystems, while Path.iterdir() rebuilds a Path per
       # entry and pays one stat() each: ~1 ms vs ~6 ms measured at ~1000
-      # session dirs, per listing call.
+      # session dirs, per listing call. The signature is taken BEFORE the
+      # scan: a create/delete racing it moves the root's mtime after the
+      # stamp, so the memo keys a possibly-stale name list under a stale
+      # signature and the next call rescans; a hit pays one stat (~5 us)
+      # and skips the scandir (~1 ms at ~1000 dirs) on every listing call.
+      root = os.stat(self._cfg.sessions_dir)
+      sig = (root.st_mtime_ns, root.st_size)
+      if self._dir_names_memo is not None and self._dir_names_memo[0] == sig:
+        return self._dir_names_memo[1]
       with os.scandir(self._cfg.sessions_dir) as entries:
-        return [entry.name for entry in entries if entry.is_dir()]
+        names = [entry.name for entry in entries if entry.is_dir()]
+      self._dir_names_memo = (sig, names)
+      return names
 
     dir_names = await asyncio.to_thread(_session_dir_names)
 

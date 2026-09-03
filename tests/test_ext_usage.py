@@ -121,21 +121,25 @@ def _build_spend_token_count_event(
   }
 
 
+def _token_count_line(now: datetime, primary_used_percent: float) -> str:
+  """One jsonl line: a legacy token_count event stamped *now*, resets 1h/1d out, 2% secondary."""
+  return json.dumps(
+      _build_token_count_event(
+          timestamp=now.isoformat().replace("+00:00", "Z"),
+          primary_used_percent=primary_used_percent,
+          primary_resets_at=int(now.timestamp()) + 3600,
+          secondary_used_percent=2.0,
+          secondary_resets_at=int(now.timestamp()) + 86400,
+      ))
+
+
 def _write_live_quota_rollout(rollout_dir: Path, now: datetime) -> None:
   """Seed rollout-live.jsonl: one legacy quota event timestamped *now* (8% primary, 2% secondary).
 
   The utime pins the file's mtime to *now* — the provider's live-file selection reads mtimes.
   """
   live_rollout_path = rollout_dir / "rollout-live.jsonl"
-  live_rollout_path.write_text(
-      json.dumps(_build_token_count_event(
-          timestamp=now.isoformat().replace("+00:00", "Z"),
-          primary_used_percent=8.0,
-          primary_resets_at=int(now.timestamp()) + 3600,
-          secondary_used_percent=2.0,
-          secondary_resets_at=int(now.timestamp()) + 86400,
-      )) + "\n"
-  )
+  live_rollout_path.write_text(_token_count_line(now, 8.0) + "\n")
   os.utime(live_rollout_path, (now.timestamp(), now.timestamp()))
 
 
@@ -431,16 +435,7 @@ async def test_codex_provider_usage_scrape_skips_read_for_unchanged_file(tmp_pat
   now, rollout_dir = _seed_rollout_dir(tmp_path)
   rollout_path = rollout_dir / "rollout-live.jsonl"
 
-  def event_line(percent: float) -> str:
-    return json.dumps(_build_token_count_event(
-        timestamp=now.isoformat().replace("+00:00", "Z"),
-        primary_used_percent=percent,
-        primary_resets_at=int(now.timestamp()) + 3600,
-        secondary_used_percent=2.0,
-        secondary_resets_at=int(now.timestamp()) + 86400,
-    ))
-
-  rollout_path.write_text(event_line(8.0) + "\n")
+  rollout_path.write_text(_token_count_line(now, 8.0) + "\n")
   scanned = _counting_scan(monkeypatch)
 
   first = await provider.fetch()
@@ -452,7 +447,7 @@ async def test_codex_provider_usage_scrape_skips_read_for_unchanged_file(tmp_pat
   assert [w["utilization"] for w in again["windows"]] == [8.0, 2.0]
 
   with rollout_path.open("a") as stream:
-    stream.write(event_line(9.0) + "\n")
+    stream.write(_token_count_line(now, 9.0) + "\n")
   moved = await provider.fetch()
   assert scanned == [1, 2]
   assert [w["utilization"] for w in moved["windows"]] == [9.0, 2.0]
@@ -465,17 +460,8 @@ async def test_codex_provider_usage_scrape_reads_tail_only_on_hit(tmp_path, monk
   now, rollout_dir = _seed_rollout_dir(tmp_path)
   rollout_path = rollout_dir / "rollout-big.jsonl"
 
-  def event_line(percent: float) -> str:
-    return json.dumps(_build_token_count_event(
-        timestamp=now.isoformat().replace("+00:00", "Z"),
-        primary_used_percent=percent,
-        primary_resets_at=int(now.timestamp()) + 3600,
-        secondary_used_percent=2.0,
-        secondary_resets_at=int(now.timestamp()) + 86400,
-    ))
-
   filler = _filler_lines(ext_usage_mod._USAGE_TAIL_BYTES * 2)
-  rollout_path.write_text("\n".join([event_line(99.0), *filler, event_line(8.0)]) + "\n")
+  rollout_path.write_text("\n".join([_token_count_line(now, 99.0), *filler, _token_count_line(now, 8.0)]) + "\n")
   full_lines = len(filler) + 2
   scanned = _counting_scan(monkeypatch)
 
@@ -493,13 +479,7 @@ async def test_codex_provider_usage_scrape_full_read_on_tail_miss(tmp_path, monk
   now, rollout_dir = _seed_rollout_dir(tmp_path)
   rollout_path = rollout_dir / "rollout-stale.jsonl"
 
-  event_line = json.dumps(_build_token_count_event(
-      timestamp=now.isoformat().replace("+00:00", "Z"),
-      primary_used_percent=99.0,
-      primary_resets_at=int(now.timestamp()) + 3600,
-      secondary_used_percent=2.0,
-      secondary_resets_at=int(now.timestamp()) + 86400,
-  ))
+  event_line = _token_count_line(now, 99.0)
   filler = _filler_lines(ext_usage_mod._USAGE_TAIL_BYTES * 2)
   rollout_path.write_text("\n".join([event_line, *filler]) + "\n")
   scanned = _counting_scan(monkeypatch)

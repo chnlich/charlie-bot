@@ -9,15 +9,15 @@ from pathlib import Path
 import structlog
 
 from src.agents.backends.base import (
-  USER_LOCAL_BIN,
-  AgentBackend,
-  make_error_event,
-  make_result_event,
-  make_text_event,
-  make_tool_result_event,
-  make_tool_use_event,
-  prepend_path_dir,
-  resolve_binary,
+    USER_LOCAL_BIN,
+    AgentBackend,
+    make_error_event,
+    make_result_event,
+    make_text_event,
+    make_tool_result_event,
+    make_tool_use_event,
+    prepend_path_dir,
+    resolve_binary,
 )
 from src.core import event_types as ET
 
@@ -119,14 +119,16 @@ class CharlieCodeBackend(AgentBackend):
       return [make_error_event(event.get("message", ""))]
 
     if event_type == "compact":
-      return [{
-          "type": ET.SYSTEM,
-          "subtype": ET.COMPACT_BOUNDARY,
-          ET.COMPACT_METADATA: {
-              "trigger": event["trigger"],
-              "pre_tokens": event["pre_tokens"],
-          },
-      }]
+      return [
+          {
+              "type": ET.SYSTEM,
+              "subtype": ET.COMPACT_BOUNDARY,
+              ET.COMPACT_METADATA: {
+                  "trigger": event["trigger"],
+                  "pre_tokens": event["pre_tokens"],
+              },
+          }
+      ]
 
     log.debug("charlie_code_unknown_event", event_type=event_type)
     return []

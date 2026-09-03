@@ -90,8 +90,9 @@ def main() -> None:
   parser.add_argument(
       "--backend",
       default=None,
-      help=("Configured backend option id from ~/.charliebot/config.yaml; omit unless the user "
-            "explicitly named a backend for this delegation (see epilog)"))
+      help=(
+          "Configured backend option id from ~/.charliebot/config.yaml; omit unless the user "
+          "explicitly named a backend for this delegation (see epilog)"))
   parser.add_argument(
       "--reviewer-context-file",
       dest="reviewer_context_file",
@@ -147,15 +148,16 @@ def main() -> None:
       "description": task_spec,
       "keep_worktree": bool(args.keep_worktree),
       "task_type": args.task_type,
-      "delegate_invocation": {
-          "task_type": args.task_type,
-          "repo_path": args.repo,
-          "base_branch": args.base_branch,
-          "task_spec_file": args.task_spec_file,
-          "reviewer_context_file": args.reviewer_context_file,
-          "keep_worktree": bool(args.keep_worktree),
-          "backend": args.backend,
-      },
+      "delegate_invocation":
+          {
+              "task_type": args.task_type,
+              "repo_path": args.repo,
+              "base_branch": args.base_branch,
+              "task_spec_file": args.task_spec_file,
+              "reviewer_context_file": args.reviewer_context_file,
+              "keep_worktree": bool(args.keep_worktree),
+              "backend": args.backend,
+          },
   }
   if args.base_branch is not None:
     payload["base_branch"] = args.base_branch

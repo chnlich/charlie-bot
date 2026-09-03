@@ -660,9 +660,8 @@ async def test_create_repoless_worker_prepends_verify_preamble(
   assert str(canonical_template_path) in prompt
   assert "Check exactly the scope the task spec declares. A spec that declares neither scope is verified as full." in prompt
   assert "Full verification (the spec declares full)" in prompt
-  artifact_only_index = prompt.index("artifact-only standalone-comprehension pass")
-  anchors_index = prompt.index("then read the canonical plan template")
-  assert artifact_only_index < anchors_index
+  assert "standalone-comprehension" not in prompt
+  assert "read the canonical plan template at" in prompt
   assert "check the plan against every canonical rule in the template's BLOCK KIT" in prompt
   assert "Delta verification (the spec declares delta)" in prompt
   assert "check exactly the declared terms, their dependent claims, prior mismatches (including whether previously reported findings are closed), and document structure" in prompt

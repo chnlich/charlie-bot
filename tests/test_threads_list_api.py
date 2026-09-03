@@ -7,7 +7,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.deps import get_thread_manager, get_trigger_manager
-from src.api.threads import _LIST_DESCRIPTION_CAP, router as threads_router
+from src.api.threads import _LIST_DESCRIPTION_CAP
+from src.api.threads import router as threads_router
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager

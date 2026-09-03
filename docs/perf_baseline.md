@@ -47,6 +47,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M34 worker-events poll fetch at rendered count | M34 collector below | seconds + response bytes per events fetch, worst on-disk worker log | after=total median < 0.02 s; empty-tail body < 200 B | — (introduced with its first history row) |
 | M35 chat message-page responses, steady state | M35 collector below | seconds per request, worst projection corpus | events page median < 0.03 s | — (introduced with its first history row) |
 | M36 worker list poll payload and handler time, steady state | M36 collector below | seconds per list request + response body bytes, worst thread-metadata corpus | median < 0.02 s; body < 200 KB | — (introduced with its first history row) |
+| M37 archived-session chat tail page, steady state | M37 collector below | seconds per `parse_ndjson_tail(200)` call, worst on-disk archived live file | median < 0.005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -1801,6 +1802,71 @@ print(f"{best_n / 1e3:.0f} KB thread metadata over {len(rows)} rows in session {
 EOF
 ```
 
+M37 — archived-session chat tail page, steady state. Sessions with
+``archive_offset > 0`` serve the chat view and bootstrap from
+``load_chat_events_tail`` → ``parse_ndjson_tail`` (unarchived sessions use the
+M26 message projection), and the pre-fix reader paid a full-file line count
+plus the 512 KiB tail-window parse on every SPA switch — repeat work against
+an unchanged file. The fixed reader memoizes the whole page and,
+independently, the line count on (mtime_ns, size): a repeat over an
+unchanged file pays one stat and zero file bytes; an append re-reads the
+count and window. Each signature is taken before its read, so an entry
+recorded during a concurrent append keys the older signature and can never
+be served for the newer bytes (chat files only append; archive rewrites
+replace the whole file). The line-count memo is shared with
+``count_ndjson_lines``, the ``get_chat_event_count_sync`` path behind the
+recap default divider. The cost is a per-view latency no standing HTTP
+probe isolates (the biggest live files belong to unarchived sessions, which
+route through the projection — the heaviest tail-page corpus on disk is the
+7.4 MB archived-session live file), so the collector times the function the
+view awaits over the worst on-disk archived live file (read-only), from the
+checkout under test: one cold pass, as at first view of the session, then
+nine timed repeats, asserting the served page is repeat-call identical.
+Evidence while the live server runs older code points the same collector at
+the branch checkout (``CHECKOUT`` at the worktree root), the same shape as
+the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import json, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.ndjson import parse_ndjson_tail
+
+# Worst tail-page corpus: the archived session whose LIVE chat file carries
+# the most bytes; view/bootstrap tail pages count and parse it per call.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    meta_p = d / "metadata.json"
+    if not meta_p.is_file():
+        continue
+    try:
+        off = json.loads(meta_p.read_text()).get("archive_offset", 0)
+    except Exception:
+        continue
+    live = d / "data" / "chat_events.jsonl"
+    if off and off > 0 and live.is_file():
+        n = live.stat().st_size
+        if n > best_n:
+            best, best_n = live, n
+print(f"worst archived live tail corpus: session {best.parts[-3]}, {best_n / 1e6:.1f} MB")
+
+first = parse_ndjson_tail(best, 200)  # cold pass, as at first view of the session; not timed
+times = []
+result = None
+for _ in range(9):
+    t0 = time.perf_counter()
+    result = parse_ndjson_tail(best, 200)
+    times.append(time.perf_counter() - t0)
+times.sort()
+assert result == first, "served tail page differs between repeat calls"
+events, total, has_more = result
+print(f"{total} lines, tail events {len(events)}; steady-state parse_ndjson_tail(200) "
+      f"median {times[4] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -1848,3 +1914,4 @@ EOF
 | 2026-09-02 | #628 | M17 fork median 0.2178 s → 0.1769 s, medians of three interleaved verbatim-collector rounds (5519 parent events, 36.3 MB corpus, scratch CHARLIEBOT_HOME A/B, main checkout before vs final branch head after at load 4.7-5.8; every paired round faster: 0.324 → 0.211, 0.218 → 0.177, 0.190 → 0.140; reference bytes byte-identical across arms on the corpus and on 12 synthetic framing shapes; earlier light-load phase profile: per-line str strip+join+encode ~190 ms of the fork's 140 ms) | full-corpus reference streams raw line bytes per source file into the atomic tmp sibling (new atomic_write_stream in json_utils) instead of decode→strip→join→encode in one big str: bulk numpy `{}`-shape check answers the common all-plain shape with one window write, per-frame fallback keeps CR folding and corrupt-line rejection; utf-8 validity keeps the text-mode read's UnicodeDecodeError parity |
 | 2026-09-02 | this PR | M36 poll median 15.60 ms → 7.98 ms, max 48.64 ms → 8.75 ms, body 1799215 B → 131896 B (collector verbatim, 1963 KB / 266-row worst worker-list corpus, 265 rows truncated after; main checkout before vs final branch head after back-to-back at load 0.91/0.98/1.02 and 1.00/1.00/1.02; card renders the identical one-line prefix; full text fetches on modal click only; earlier same-corpus round median 16.37 ms before vs 8.27 ms after at load ≤1.0) | workers-panel list rows ship a 240-char description prefix plus a description_full_len marker instead of whole task-spec-length descriptions; the full-text modal fetches the thread row on demand; M36 definition and healthy range introduced with this PR |
 | 2026-09-03 | this PR | M7 live-before median 15.884 s, max 21.738 s (busy host, load 5.53/7.30/11.03; 16.4 GB db whose WAL moves every ~5 s, so the file-signature entry misses every load) and max 16.801 s in the quiet re-pair → scratch-after warm median 0.422 s, max 0.437 s (scratch server on the branch with an empty scratch CHARLIEBOT_HOME, cold 20.996 s; verbatim M7 commands back-to-back at load 1.07/0.91; collector-level over the live cache doc: opencode rescan 12.928 s → 0.164 s, warm collect total 16.996 s → 0.49 s) | per-row (id, time_updated) memo over the opencode message table: a leaf-page key diff plus per-id fetch of moved rows replaces the whole-table re-scan per WAL-invalidated load; rows the scan SQL filters out memoize as non-contributors; record parity pinned by the suite |
+| 2026-09-03 | this PR | M37 steady-state median 9.12 ms → 0.01 ms, max 12.30 ms → 0.03 ms (collector verbatim, 7.4 MB / 3081-line worst archived-session live file of session 3b91d606, live state read-only, main checkout before at load 1.72/2.44/2.12 vs branch-after at load 1.23/1.69/1.86, back-to-back; served tail page repeat-identical in both arms) | whole-page (mtime_ns, size) memo for parse_ndjson_tail plus a shared (mtime_ns, size) memo for count_ndjson_lines, both keyed on the pre-read signature so an entry recorded during a concurrent append can never be served for the newer bytes; M37 definition and healthy range introduced with this PR |

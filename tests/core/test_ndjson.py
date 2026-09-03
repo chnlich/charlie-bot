@@ -9,11 +9,14 @@ paths.
 import json
 from pathlib import Path
 
+import pytest
+
 from src.core.ndjson import (
-  count_ndjson_lines,
-  parse_ndjson_file,
-  parse_ndjson_tail,
-  parse_ndjson_tail_parseable,
+    _COUNT_MEMO_LIMIT,
+    count_ndjson_lines,
+    parse_ndjson_file,
+    parse_ndjson_tail,
+    parse_ndjson_tail_parseable,
 )
 
 
@@ -153,3 +156,83 @@ def test_parse_ndjson_tail_parseable_crosses_window_boundary(tmp_path: Path) -> 
   _write_mixed(target, chunks)
   assert parse_ndjson_tail_parseable(target, 200) == parse_ndjson_file(target)[-200:]
   assert [e["i"] for e in parse_ndjson_tail_parseable(target, 200)] == list(range(100, 300))
+
+
+def _spy_opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+  calls: list[str] = []
+  real_open = open
+
+  def spy(file, mode="r", *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
+    calls.append(str(file))
+    return real_open(file, mode, *args, **kwargs)
+
+  monkeypatch.setattr("builtins.open", spy)
+  return calls
+
+
+def test_count_ndjson_lines_memo_hit_skips_the_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  target = tmp_path / "events.jsonl"
+  _write_ndjson(target, [{"i": i} for i in range(5)])
+  assert count_ndjson_lines(target) == 5
+  calls = _spy_opens(monkeypatch)
+  assert count_ndjson_lines(target) == 5
+  assert str(target) not in calls
+
+
+def test_count_ndjson_lines_memo_recounts_after_append(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  target = tmp_path / "events.jsonl"
+  _write_ndjson(target, [{"i": i} for i in range(5)])
+  assert count_ndjson_lines(target) == 5
+  calls = _spy_opens(monkeypatch)
+  with open(target, "a", encoding="utf-8") as f:
+    f.write(json.dumps({"i": 5}) + "\n")
+  assert count_ndjson_lines(target) == 6
+  assert str(target) in calls
+
+
+def test_count_ndjson_lines_memo_missing_file_never_memoized(tmp_path: Path) -> None:
+  target = tmp_path / "absent.jsonl"
+  assert count_ndjson_lines(target) == 0
+  _write_ndjson(target, [{"i": 1}, {"i": 2}])
+  assert count_ndjson_lines(target) == 2
+
+
+def test_parse_ndjson_tail_memo_hit_parity_and_zero_opens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  target = tmp_path / "events.jsonl"
+  _write_ndjson(target, [{"i": i} for i in range(50)])
+  first = parse_ndjson_tail(target, 3)
+  calls = _spy_opens(monkeypatch)
+  # A steady-state repeat pays one stat and zero opens: the count and the
+  # tail window both come from the memos instead of re-reading the bytes.
+  for _ in range(5):
+    assert parse_ndjson_tail(target, 3) == first
+  assert str(target) not in calls
+
+
+def test_parse_ndjson_tail_memo_recomputes_after_append(tmp_path: Path) -> None:
+  target = tmp_path / "events.jsonl"
+  _write_ndjson(target, [{"i": i} for i in range(50)])
+  first = parse_ndjson_tail(target, 3)
+  with open(target, "a", encoding="utf-8") as f:
+    f.write(json.dumps({"i": 50}) + "\n")
+  events, total, has_more = parse_ndjson_tail(target, 3)
+  assert (total, has_more) == (51, True)
+  assert events == [{"i": 48}, {"i": 49}, {"i": 50}]
+  assert events != first[0]
+
+
+def test_count_memo_lru_eviction_bounds_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  first_path = tmp_path / "f0.jsonl"
+  _write_ndjson(first_path, [{"i": 0}])
+  assert count_ndjson_lines(first_path) == 1
+  for i in range(1, _COUNT_MEMO_LIMIT + 1):
+    _write_ndjson(tmp_path / f"f{i}.jsonl", [{"i": i}])
+    count_ndjson_lines(tmp_path / f"f{i}.jsonl")
+  calls = _spy_opens(monkeypatch)
+  # The oldest entry was evicted and re-reads; every entry still resident
+  # answers without touching its file.
+  assert count_ndjson_lines(first_path) == 1
+  assert str(first_path) in calls
+  calls.clear()
+  assert count_ndjson_lines(tmp_path / f"f{_COUNT_MEMO_LIMIT}.jsonl") == 1
+  assert not calls

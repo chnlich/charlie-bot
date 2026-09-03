@@ -606,13 +606,16 @@ def _codex_windows(rate_limits: dict[str, Any], *, account: str) -> list[dict[st
     if utilization is None:
       _warn_unknown_limit_shape(provider="codex", account=account, slot=slot, reason="missing used_percent")
     resets_at = limit.get("resets_at")
-    windows.append({
-        "window_minutes": window_minutes,
-        "utilization": utilization,
-        "resets_at":
-            datetime.fromtimestamp(resets_at, tz=UTC).isoformat()
-            if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool) else "",
-    })
+    windows.append(
+        {
+            "window_minutes":
+                window_minutes,
+            "utilization":
+                utilization,
+            "resets_at":
+                datetime.fromtimestamp(resets_at, tz=UTC).isoformat()
+                if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool) else "",
+        })
   windows.sort(key=lambda w: w["window_minutes"])
   return windows
 
@@ -761,12 +764,13 @@ def _scoped_windows(raw: dict[str, Any], *, account: str) -> list[dict[str, Any]
     utilization = _as_utilization(entry.get("percent"))
     if utilization is None:
       _warn_unknown_limit_shape(provider="claude", account=account, slot=slot, reason="missing percent")
-    windows.append({
-        "window_minutes": window_minutes,
-        "scope_label": display_name,
-        "utilization": utilization,
-        "resets_at": entry.get("resets_at") or "",
-    })
+    windows.append(
+        {
+            "window_minutes": window_minutes,
+            "scope_label": display_name,
+            "utilization": utilization,
+            "resets_at": entry.get("resets_at") or "",
+        })
   return windows
 
 
@@ -781,11 +785,12 @@ def _transform_response(raw: dict[str, Any], *, account: str = "") -> dict[str, 
   windows: list[dict[str, Any]] = []
   for camel, snake, window_minutes in CLAUDE_WINDOW_FIELDS:
     bucket = raw.get(camel, raw.get(snake)) or {}
-    windows.append({
-        "window_minutes": window_minutes,
-        "utilization": _as_utilization(bucket.get("utilization")),
-        "resets_at": bucket.get("resetsAt", bucket.get("resets_at", "")),
-    })
+    windows.append(
+        {
+            "window_minutes": window_minutes,
+            "utilization": _as_utilization(bucket.get("utilization")),
+            "resets_at": bucket.get("resetsAt", bucket.get("resets_at", "")),
+        })
   windows.extend(_scoped_windows(raw, account=account))
   windows.sort(key=lambda w: (w["window_minutes"], w.get("scope_label", "")))
 

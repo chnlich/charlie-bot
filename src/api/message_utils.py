@@ -9,9 +9,9 @@ import structlog
 
 from src.core import event_types as ET
 from src.core.message_aggregator import (
-  MessageAggregator,
-  extract_text_from_message,
-  extract_tool_result_text,
+    MessageAggregator,
+    extract_text_from_message,
+    extract_tool_result_text,
 )
 
 if TYPE_CHECKING:
@@ -27,21 +27,21 @@ _ATTACHED_FILES_MARKER = "\n\n[Attached files]\n"
 # src.core.verify_trailer, src.api.chat, src.api.threads) keep importing the
 # extract_* helpers from this module.
 __all__ = [
-  "SessionBootstrapData",
-  "SessionViewData",
-  "build_agent_input_content",
-  "build_agent_message_event",
-  "build_scheduled_trigger_event",
-  "build_session_bootstrap_data",
-  "build_session_view_data",
-  "build_user_event",
-  "events_to_messages",
-  "events_to_view",
-  "extract_text_from_message",
-  "extract_tool_result_text",
-  "normalize_user_message_event",
-  "serialize_uploaded_files",
-  "strip_attached_files_block",
+    "SessionBootstrapData",
+    "SessionViewData",
+    "build_agent_input_content",
+    "build_agent_message_event",
+    "build_scheduled_trigger_event",
+    "build_session_bootstrap_data",
+    "build_session_view_data",
+    "build_user_event",
+    "events_to_messages",
+    "events_to_view",
+    "extract_text_from_message",
+    "extract_tool_result_text",
+    "normalize_user_message_event",
+    "serialize_uploaded_files",
+    "strip_attached_files_block",
 ]
 
 
@@ -260,8 +260,7 @@ async def _tail_events_page(
       session_mgr.load_chat_events_tail, session_id, message_limit)
   offset = archive_offset + total_count - len(tail_events)
   messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
-  return (tail_events, messages, pending_draft, archive_offset + total_count,
-          offset, has_more or archive_offset > 0)
+  return (tail_events, messages, pending_draft, archive_offset + total_count, offset, has_more or archive_offset > 0)
 
 
 async def _mark_read_best_effort(session_mgr: 'SessionManager', session_id: str) -> 'SessionMetadata | None':
@@ -299,9 +298,8 @@ async def build_session_bootstrap_data(
   if session_meta.archive_offset == 0:
     page = await asyncio.to_thread(_projection_page, session_mgr, session_id, message_limit)
   if page is None:
-    (_, messages, pending_draft, total_event_count,
-     oldest_ordinal, has_more) = await _tail_events_page(
-         session_mgr, session_id, session_meta.archive_offset, message_limit)
+    (_, messages, pending_draft, total_event_count, oldest_ordinal,
+     has_more) = await _tail_events_page(session_mgr, session_id, session_meta.archive_offset, message_limit)
   else:
     messages, pending_draft, total_event_count, oldest_ordinal, has_more = page
 
@@ -364,9 +362,8 @@ async def build_session_view_data(
       )
 
   if message_limit is not None:
-    (raw_events, messages, pending_draft, total_event_count,
-     oldest_message_ordinal, has_more) = await _tail_events_page(
-         session_mgr, session_id, session_meta.archive_offset, message_limit)
+    (raw_events, messages, pending_draft, total_event_count, oldest_message_ordinal,
+     has_more) = await _tail_events_page(session_mgr, session_id, session_meta.archive_offset, message_limit)
     usage = await session_mgr.resolve_session_usage(session_id, session_meta)
   else:
     raw_events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
@@ -393,9 +390,7 @@ async def build_session_view_data(
 def _committed_messages(agg: MessageAggregator, events: list[dict]) -> list[dict]:
   """Feed events through the aggregator and collect the committed message deltas."""
   return [
-      delta["message"]
-      for delta in agg.feed_indexed(_stable_history_projection(events))
-      if delta["type"] == "message"
+      delta["message"] for delta in agg.feed_indexed(_stable_history_projection(events)) if delta["type"] == "message"
   ]
 
 

@@ -32,13 +32,25 @@ def load_json_meta(
 
 
 def atomic_write_text(path: Path, text: str, *, private: bool = False) -> None:
-  """Write *text* to *path* atomically: a uniquely named tmp sibling swapped in by ``os.replace``.
+  """Write *text* to *path* atomically, UTF-8 encoded.
 
-  The uuid suffix keeps concurrent writers of one path from interleaving their
-  bytes, and ``os.replace`` publishes the payload whole, so a crash mid-write
-  leaves the previous content intact and no half-written tmp behind.
-  ``private=True`` marks the file 0600, so a secret never appears at its final
-  path readable by anyone but the owner.
+  The tmp-naming, 0600, swap, and mid-write cleanup rules are
+  :func:`atomic_write_stream`'s; this adapter fixes its payload as encoded
+  text.
+  """
+  atomic_write_stream(path, lambda stream: stream.write(text.encode("utf-8")), private=private)
+
+
+def atomic_write_stream(path: Path, write: Callable[[BinaryIO], None], *, private: bool = False) -> None:
+  """Stream the payload ``write`` emits into *path* atomically: a uniquely named tmp sibling swapped in by ``os.replace``.
+
+  ``write`` receives the tmp sibling open for binary writing and runs to
+  completion before the swap, so a large payload never materializes as one
+  object. The uuid suffix keeps concurrent writers of one path from
+  interleaving their bytes. ``os.replace`` publishes the payload whole: a
+  crash mid-write leaves the previous content intact and no half-written tmp
+  behind. ``private=True`` marks the file 0600, so a secret never appears at
+  its final path readable by anyone but the owner.
 
   The swap must stay an ``os.replace`` attribute lookup on this module's ``os``:
   tests hook the swap by patching ``os.replace`` here.
@@ -48,27 +60,6 @@ def atomic_write_text(path: Path, text: str, *, private: bool = False) -> None:
     if private:
       # 0600 at creation: a umask can strip permission bits, never add them, so
       # the payload is never briefly wider-readable before the swap.
-      temporary.touch(mode=0o600)
-    temporary.write_text(text, encoding="utf-8")
-    os.replace(temporary, path)
-  except BaseException:
-    with contextlib.suppress(OSError):
-      temporary.unlink()
-    raise
-
-
-def atomic_write_stream(path: Path, write: Callable[[BinaryIO], None], *, private: bool = False) -> None:
-  """Stream the payload ``write`` emits into *path* atomically.
-
-  ``write`` receives the uniquely named tmp sibling open for binary writing
-  and runs to completion before the swap; the tmp-naming, ``os.replace``
-  publish, and mid-write cleanup rules are :func:`atomic_write_text`'s,
-  byte-shaped so a large payload never materializes as one object.
-  ``private=True`` marks the file 0600 (see :func:`atomic_write_text`).
-  """
-  temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-  try:
-    if private:
       temporary.touch(mode=0o600)
     with temporary.open("wb") as stream:
       write(stream)

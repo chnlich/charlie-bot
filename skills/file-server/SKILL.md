@@ -77,27 +77,37 @@ Generated HTML artifacts (reports, plans, dashboards) must satisfy:
 
 ### Cold-Read Gate
 
-Applied one step before delivery for sitrep, debugging, and explain pages.
+The gate applies to every genre one step before the page leaves the author: before each
+`charliebot plan present` or `amend` for a plan page, and before sharing for
+understanding, sitrep, debug, and explain pages.
 
 Cold-read gate: the page first passes its genre's mechanical DOM assertions, then one
-zero-context model pass reads the file alone and answers (1) the problem, (2) the
-conclusion and its epistemic state, (3) what is asked of the reader, (4) the section
-where the problem first became clear, (5) up to five re-read points, and (6) whether
-the page answers the chat message that triggered it, quoted verbatim in the probe
-prompt. Ship when answers (1) through (3) match the author's intent, (4) names the
-first content section, the epistemic state in (2) matches the page's own labels, and
-(6) is a yes on every part of the trigger message; a re-read point in (5) naming
+zero-context model pass reads the file alone and answers seven questions: (1) the
+problem, (2) the conclusion and its epistemic state, (3) what is asked of the reader,
+(4) the section where the problem first became clear, (5) up to five re-read points,
+(6) whether the page answers the trigger quoted in the prompt, and (7) the terms,
+abbreviations, or names the page uses without explaining. Ship when answers (1)
+through (3) match the author's intent, (4) names the first content section, the
+epistemic state in (2) matches the page's own labels, (6) is a yes on every part of
+the trigger message, and (7) is none; for plan and understanding pages, (3) names the
+decisions the page asks for (Trade-offs or divergences). A re-read point in (5) naming
 section 1's forks, or a jump between a fork and another section, also means revise
 and re-run. Judge on these signals alone.
+
+The trigger quoted in question 6 is the chat message that asked for the page; a plan
+quotes the confirmed understanding's goal sentence verbatim and falls back to the
+originating request when no understanding exists.
 
 Invocation (the genre's assertions run first; the probe only fires once every one of
 them passed):
 
 ```bash
-charliebot artifact check <page-file> --genre <sitrep|debug|explain> --trigger "<trigger message verbatim>"
+charliebot artifact check <page-file> --genre <plan|understanding|sitrep|debug|explain> --trigger "<trigger message verbatim>"
 ```
 
-The six-question prompt, the backend order, and the timeout live in
+`--assertions-only` runs the assertions alone and mirrors the plan registration gate.
+
+The seven-question prompt, the backend order, and the timeout live in
 `src/core/artifact_check.py`; the command prints each tried backend's failure, then the
-answering backend's id and the six answers verbatim. Exit 0 means every assertion
+answering backend's id and the seven answers verbatim. Exit 0 means every assertion
 passed; judging the answers stays with the reader of this gate.

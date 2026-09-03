@@ -10,7 +10,7 @@ Adequacy findings use the labelled block form defined in the plan scope block in
 <!-- section: scope -->
 Verification scope:
 Check exactly the scope the task spec declares. A spec that declares neither scope is verified as full.
-- Full verification (the spec declares full): read the plan artifact by itself and complete an artifact-only standalone-comprehension pass first, then read the canonical plan template at `{{canonical_template_path}}` and all task-provided evidence, and check the plan against every canonical rule in the template's BLOCK KIT.
+- Full verification (the spec declares full): read the canonical plan template at `{{canonical_template_path}}` and all task-provided evidence, and check the plan against every canonical rule in the template's BLOCK KIT.
 - Delta verification (the spec declares delta): check exactly the declared terms, their dependent claims, prior mismatches (including whether previously reported findings are closed), and document structure; unchanged content keeps its verdict from the round that checked it.
 - Adequacy (full scope only): assume the plan's claims are true and its design implemented as written, then test each outcome its section 1 claims by attempted refutation. Report one labelled block per claimed outcome, one aspect per line:
   `mismatch:` or `confirmed:` — the outcome being judged

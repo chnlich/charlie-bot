@@ -259,6 +259,49 @@ def test_diff_files_head_move_busts_memo(tmp_path: Path) -> None:
   assert by_path["added.txt"]["additions"] == 3
 
 
+def test_diff_file_repeat_view_uses_memo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A repeat expand of the same file re-runs zero git diff subprocesses."""
+  repo = _build_repo(tmp_path)
+  client = _build_client(tmp_path)
+  calls: list[list[str]] = []
+  real_run = subprocess.run
+
+  def counting_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+    calls.append(args[0])
+    return real_run(*args, **kwargs)
+
+  monkeypatch.setattr(git_api.subprocess, "run", counting_run)
+
+  params = {"repo": str(repo), "base": "main", "head": "feature", "path": "keep.txt"}
+  first = client.get("/api/git/diff/file", params=params)
+  assert first.status_code == 200
+  # One rev-parse resolving both refs, plus the per-file diff.
+  assert [c[1] for c in calls] == ["rev-parse", "diff"]
+
+  calls.clear()
+  second = client.get("/api/git/diff/file", params=params)
+  assert second.status_code == 200
+  assert second.json() == first.json()
+  # The repeat view pays only the ref resolution.
+  assert [c[1] for c in calls] == ["rev-parse"]
+
+
+def test_diff_file_head_move_busts_memo(tmp_path: Path) -> None:
+  """A moved ref resolves to a new SHA key, so its per-file diff re-computes."""
+  repo = _build_repo(tmp_path)
+  client = _build_client(tmp_path)
+  params = {"repo": str(repo), "base": "main", "head": "feature", "path": "added.txt"}
+  first = client.get("/api/git/diff/file", params=params).json()
+
+  (repo / "added.txt").write_text("brand new\nfile\nthird\n")
+  _git(repo, "add", "-A")
+  _git(repo, "commit", "-qm", "advance feature")
+
+  second = client.get("/api/git/diff/file", params=params).json()
+  assert "+third" in second["diff"]
+  assert second["diff"] != first["diff"]
+
+
 def test_repo_outside_workspace_rejected(tmp_path: Path) -> None:
   repo = _build_repo(tmp_path)
   # Point the workspace somewhere else so the repo fails the under-workspace check.

@@ -7,53 +7,53 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import (
-  get_plan_manager,
-  get_session_manager,
-  get_thread_manager,
-  get_trigger_manager,
-  require_found,
+    get_plan_manager,
+    get_session_manager,
+    get_thread_manager,
+    get_trigger_manager,
+    require_found,
 )
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
 from src.core.improve_command import (
-  ImproveLoopAlreadyRunningError,
-  loop_goal_path,
-  loop_plan_path,
-  reserve_loop_state,
-  run_improve_loop,
+    ImproveLoopAlreadyRunningError,
+    loop_goal_path,
+    loop_plan_path,
+    reserve_loop_state,
+    run_improve_loop,
 )
 from src.core.master_trigger import trigger_master
 from src.core.models import (
-  DelegateInvocationMetadata,
-  DelegateRequest,
-  ImproveRequest,
-  PlanAmendRequest,
-  PlanApproveRequest,
-  PlanCloseRequest,
-  PlanPresentRequest,
-  ScheduleTriggerRequest,
-  SessionMessageRequest,
-  SessionMetadata,
-  SessionStatus,
-  SlackAckRequest,
-  SlackReplyRequest,
-  SpawnRequest,
-  TaskType,
-  WatchKind,
+    DelegateInvocationMetadata,
+    DelegateRequest,
+    ImproveRequest,
+    PlanAmendRequest,
+    PlanApproveRequest,
+    PlanCloseRequest,
+    PlanPresentRequest,
+    ScheduleTriggerRequest,
+    SessionMessageRequest,
+    SessionMetadata,
+    SessionStatus,
+    SlackAckRequest,
+    SlackReplyRequest,
+    SpawnRequest,
+    TaskType,
+    WatchKind,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
-  SlackReplyError,
-  ack_messages,
-  assert_thread_fresh,
-  post_reply,
+    SlackReplyError,
+    ack_messages,
+    assert_thread_fresh,
+    post_reply,
 )
 from src.core.spawner import (
-  resolve_requested_subagent_backend_model,
-  select_verify_backend,
-  spawn_worker,
+    resolve_requested_subagent_backend_model,
+    select_verify_backend,
+    spawn_worker,
 )
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 from src.core.tasks import create_logged_task

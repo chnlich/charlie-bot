@@ -1545,13 +1545,16 @@ class SessionManager:
     )
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
-    """Read all chat events for catch-up. Uses in-memory cache after first read."""
+    """Read all chat events for catch-up.
+
+    See ``src/core/chat_events.py`` for the cache contract.
+    """
     return self._chat_events.load_chat_events_sync(session_id)
 
   def load_chat_events_tail(self, session_id: str, limit: int = 200) -> tuple[list[dict], int, bool]:
-    """Load only the last *limit* events from disk. Does NOT populate _events_cache.
+    """Load only the last *limit* events from disk, bypassing the read-through cache.
 
-    Returns (events, total_line_count, has_more).
+    See ``src/core/chat_events.py`` for the return shape.
     """
     return self._chat_events.load_chat_events_tail(session_id, limit)
 
@@ -1560,11 +1563,9 @@ class SessionManager:
     return self._chat_events.get_chat_event_count_sync(session_id, session_meta)
 
   def load_chat_events_range(self, session_id: str, start: int, end: int) -> tuple[list[dict], bool]:
-    """Load events in GLOBAL index range [start, end). Returns (events, has_more).
+    """Load events in GLOBAL index range [start, end).
 
-    Indices are global (archive_offset + line_in_live_file). When the requested
-    range starts before the live file, archived chat_events files under
-    ``data/archives/`` are read in chronological order to fill the gap.
+    See ``src/core/chat_events.py`` for the index and archive contract.
     """
     return self._chat_events.load_chat_events_range(session_id, start, end)
 

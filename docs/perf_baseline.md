@@ -51,6 +51,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M38 session stream-broadcast fan-out, worst on-disk turn replay | M38 collector below | stream frames and json.dumps calls/seconds per turn replay, instant feed, one subscriber | dumps total < 0.02 s; final-frame parity true | — (introduced with its first history row) |
 | M39 tui/status busy check, steady state | M39 collector below | seconds of loop lag + wall per per-session busy check, live ~/.claude/projects corpus (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.01 s; wall median < 0.001 s | — (introduced with its first history row) |
 | M40 session-list filtered listing + group reduction, steady state | M40 collector below | seconds per `list_sessions(starred=True, …)` call and per group-name reduction, live session corpus | both medians < 0.005 s | — (introduced with its first history row) |
+| M41 git diff/files repeat view, steady state | M41 collector below | seconds per repeat `diff_files` call over the charlie-bot root..HEAD range | median < 0.02 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2085,6 +2086,56 @@ asyncio.run(main())
 EOF
 ```
 
+M41 — git diff/files repeat view, steady state. The /diff viewer fetches
+``GET /api/git/diff/files`` on every page open and on every refresh of a review
+loop's pinned /diff link; each fetch ran one ``rev-parse`` and two sequential
+``git diff`` subprocesses over the range (~0.18 s on the root..HEAD worst
+corpus) to recompute an immutable result: a diff between two commits never
+changes (SHAs are content-addressed). The fixed handler resolves both refs in
+one rev-parse, runs the two manifest diffs concurrently on a miss, and serves
+a repeat view of the same (repo, base_sha, head_sha, mode, .gitattributes
+signature) from the manifest memo with zero diff subprocesses — the
+attributes signature keys git's worktree diff drivers, which feed
+``--numstat``'s counts. The cost is per page view, invisible to the standing
+HTTP probes, so the collector drives ``diff_files`` over the charlie-bot
+checkout's full history (root commit .. HEAD — the largest range this host's
+workspace carries; read-only, with a scratch ``CHARLIEBOT_HOME``), from the
+checkout under test: the first view, as at page open with a cold memo, then
+seven timed repeats. Evidence while the live server runs older code points the
+same collector at the branch checkout (``CHECKOUT`` at the worktree root), the
+same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, subprocess, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.api.git import diff_files
+
+REPO = Path("/home/chaoli/workspace/charlie-bot")
+BASE = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
+                      cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()[0]
+cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m41-home-")),
+                       workspace_dirs=["/home/chaoli/workspace"])
+
+async def main():
+    t0 = time.perf_counter()
+    result = await diff_files(repo=str(REPO), base=BASE, head="HEAD", mode="three-dot", cfg=cfg)  # first view, as at page open; not a repeat
+    cold = time.perf_counter() - t0
+    times = []
+    for _ in range(7):
+        t0 = time.perf_counter()
+        result = await diff_files(repo=str(REPO), base=BASE, head="HEAD", mode="three-dot", cfg=cfg)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    print(f"{result['total_files']} files in root..HEAD diff; first view {cold:.4f} s; "
+          f"repeat-view median {times[3]:.4f} s, max {times[-1]:.4f} s")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2138,3 +2189,4 @@ EOF
 | 2026-09-03 | this PR | M21 steady-state sweep median 0.0088 s → 0.0045 s, max 0.0092 s → 0.0048 s (collector verbatim, 38 active sessions, live state read-only, main checkout before vs branch head after back-to-back at load 0.76/1.50/1.31; signature-pass microbench 8.8 ms → 4.0 ms with signatures identical over every active session) | os.scandir + str-joined os.stat in the sidebar probe-input signature pass, replacing per-entry Path()/__truediv__ allocation whose parse overhead measured ~half the sweep, mirroring the M29/M32 str-stat pattern |
 | 2026-09-03 | this PR | M39 inline loop-lag median 15.34 ms → 5.34 ms (5 ms ticker floor), max 16.24 ms → 5.47 ms; busy-check wall median 15.34 ms → 0.26 ms, max 16.24 ms → 0.43 ms (collector verbatim, 942-dir ~/.claude/projects corpus, synthetic never-present id, main checkout before at load 0.25/0.34/0.74 vs branch head after at load 0.84/0.80/0.82; busy result False in both arms) | per-session transcript-path memo in _find_existing_claude_jsonl (stable hit memoized for the process life with an exists() recheck, miss re-globbed at a 30 s TTL) plus the tui/status busy check awaited in a thread instead of inline on the event loop; M39 definition and healthy range introduced with this PR |
 | 2026-09-03 | #665 | M40 starred list median 12.80 ms → 3.25 ms, group-name reduction median 13.63 ms → 3.05 ms; maxima 35.92 ms → 25.02 ms / 14.20 ms → 3.82 ms (collector verbatim, main checkout before vs branch head after back-to-back at load 2.90/2.82/2.16 and 3.15/2.90/2.22; live 1012-meta corpus read-only, 10 starred rows, 25 groups; list outputs identical; the residual starred maxima are dirty deep-probe spikes in the unchanged enrich path) | starred/scheduled filters run against the shared cached metas (read-only) before the model_copy+thinking stamp, so only surviving rows pay the leaving-the-manager copy; /api/sessions/groups and the autonamer's group list go through list_group_names, a copy-free read-only reduction of the cached metas; M40 definition and healthy range introduced with this PR |
+| 2026-09-03 | this PR | M41 first view 0.1781 s → 0.1217 s, repeat-view median 0.1766 s → 0.0063 s, max 0.1874 s → 0.0069 s (collector verbatim, 492 files in the charlie-bot root..HEAD diff, main checkout before at load 1.20/1.21/0.98 vs branch after at load 0.49/0.89/0.93, back-to-back; manifest body sha256-identical ed990917efcc across arms; M14 loop-lag re-measured unchanged, 0.0058 s → 0.0060 s at the 5 ms ticker floor) | git diff/files manifest memoized on (repo, resolved base/head SHAs, mode, .gitattributes signature) — a commit-pair diff is immutable — plus both refs resolved in one rev-parse and the two manifest diffs run concurrently on a miss; M41 definition and healthy range introduced with this PR |

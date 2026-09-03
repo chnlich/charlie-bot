@@ -13,26 +13,26 @@ _PROMPT_SECTION_MARKER_SUFFIX = " -->"
 # an absent key fails loud below rather than selecting a wrong workflow body.
 # The id set lives only here: _REQUIRED_WORKER_PROMPT_SECTIONS derives it.
 _WORKFLOW_PROMPT_SECTION = {
-  TaskType.IMPLEMENT: "workflow_implement",
-  TaskType.QUICK_EDIT: "workflow_quick_edit",
-  TaskType.SCRIPT_RUN: "workflow_script_run",
+    TaskType.IMPLEMENT: "workflow_implement",
+    TaskType.QUICK_EDIT: "workflow_quick_edit",
+    TaskType.SCRIPT_RUN: "workflow_script_run",
 }
 
 _REQUIRED_WORKER_PROMPT_SECTIONS = (
-  "session_info",
-  "coding_principles",
-  "skills_discovery",
-  "remote_scratch",
-  "role",
-  "intro_new",
-  "intro_continuation",
-  "worktree_workflow_header",
-  *_WORKFLOW_PROMPT_SECTION.values(),
-  "task_spec_source_files",
-  "task",
-  "iteration_reports",
-  "worktree_persistence",
-  "memory",
+    "session_info",
+    "coding_principles",
+    "skills_discovery",
+    "remote_scratch",
+    "role",
+    "intro_new",
+    "intro_continuation",
+    "worktree_workflow_header",
+    *_WORKFLOW_PROMPT_SECTION.values(),
+    "task_spec_source_files",
+    "task",
+    "iteration_reports",
+    "worktree_persistence",
+    "memory",
 )
 
 _REQUIRED_VERIFY_PROMPT_SECTIONS = ("preamble", "scope")

@@ -12,16 +12,16 @@ from src.core import finalize_effects
 from src.core.chat_events import chat_events_path
 from src.core.config import CharlieBotConfig
 from src.core.git import (
-  git_current_branch,
-  git_worktree_remove_reporting,
+    git_current_branch,
+    git_worktree_remove_reporting,
 )
 from src.core.master_trigger import trigger_master
 from src.core.message_aggregator import extract_text_from_message
 from src.core.models import (
-  BackendOption,
-  SpawnRequest,
-  ThreadMetadata,
-  backend_type_allows_missing_model,
+    BackendOption,
+    SpawnRequest,
+    ThreadMetadata,
+    backend_type_allows_missing_model,
 )
 from src.core.ndjson import parse_ndjson_file
 from src.core.sessions import SessionManager
@@ -73,7 +73,10 @@ async def finalize_review_chain(
       original_thread.branch_name,
       original_thread.id,
       worktree_parent,
-      log_fields={"thread_id": original_thread.id, "session": session_id},
+      log_fields={
+          "thread_id": original_thread.id,
+          "session": session_id
+      },
       label="Review worktree",
       fail_event="review_chain_cleanup_failed",
       remove_failed_event="review_chain_cleanup_remove_failed",
@@ -426,8 +429,7 @@ async def spawn_review_worker(
   # thread, so the merge happens exactly once (the reviewer pushes; the server
   # only removes the worktree, so no merge-side dedupe key is needed).
   session_threads = await thread_mgr.list_threads(session_id)
-  if finalize_effects.reviewer_thread_exists(
-      session_threads, original_thread.id, exclude_thread_id=exclude_thread_id):
+  if finalize_effects.reviewer_thread_exists(session_threads, original_thread.id, exclude_thread_id=exclude_thread_id):
     log.info(
         "reviewer_skip_already_exists",
         session=session_id,
@@ -552,8 +554,7 @@ async def maybe_spawn_reviewer(
       await _trigger_master_judged(session_id, full_summary, thread_meta.id, cfg, session_mgr)
       return
     # Successful worker needing review -> spawn reviewer
-    await spawn_review_worker(
-        session_id, thread_meta, cfg, session_mgr, thread_mgr, exclude_thread_id=thread_meta.id)
+    await spawn_review_worker(session_id, thread_meta, cfg, session_mgr, thread_mgr, exclude_thread_id=thread_meta.id)
     return
 
   if thread_meta.review_of:

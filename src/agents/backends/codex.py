@@ -9,16 +9,16 @@ from typing import ClassVar
 import structlog
 
 from src.agents.backends.base import (
-  USER_LOCAL_BIN,
-  AgentBackend,
-  iter_ndjson_events,
-  make_error_event,
-  make_result_event,
-  make_text_event,
-  make_tool_result_event,
-  make_tool_use_event,
-  prepend_path_dir,
-  resolve_binary,
+    USER_LOCAL_BIN,
+    AgentBackend,
+    iter_ndjson_events,
+    make_error_event,
+    make_result_event,
+    make_text_event,
+    make_tool_result_event,
+    make_tool_use_event,
+    prepend_path_dir,
+    resolve_binary,
 )
 from src.core import event_types as ET
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
@@ -32,9 +32,14 @@ _MAX_ONE_SHOT_STDERR_BYTES = 4 * 1024
 class CodexBackend(AgentBackend):
   """Runs a `codex exec --json` subprocess and translates NDJSON events to CC-compatible format."""
 
-  def __init__(self, *, model: str, codex_home: str | None = None,
-               model_reasoning_effort: str | None = None,
-               model_auto_compact_token_limit: int | None = None, **kwargs):
+  def __init__(
+      self,
+      *,
+      model: str,
+      codex_home: str | None = None,
+      model_reasoning_effort: str | None = None,
+      model_auto_compact_token_limit: int | None = None,
+      **kwargs):
     if not model:
       raise ValueError("codex backend requires a model (set backend_options[].model in config.yaml)")
     super().__init__(model=model, **kwargs)

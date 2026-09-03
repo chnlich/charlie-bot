@@ -11,10 +11,10 @@ import structlog
 
 from src.agents import master_cc_state
 from src.agents.backends.base import (
-  AgentBackend,
-  _read_stderr_tail,
-  make_text_event,
-  tail_follow_events,
+    AgentBackend,
+    _read_stderr_tail,
+    make_text_event,
+    tail_follow_events,
 )
 from src.agents.backends.claude_code import claude_supervisor_env
 from src.core import event_types as ET
@@ -23,11 +23,11 @@ from src.core.config import CharlieBotConfig, claude_config_dir
 from src.core.latex import check_tex_changed, clear_snapshot
 from src.core.memory import assemble_master
 from src.core.models import (
-  PROJECT_ROLE,
-  BackendOption,
-  MasterRunRecord,
-  SessionMetadata,
-  backend_type_allows_missing_model,
+    PROJECT_ROLE,
+    BackendOption,
+    MasterRunRecord,
+    SessionMetadata,
+    backend_type_allows_missing_model,
 )
 from src.core.process import kill_group_escalating
 from src.core.streaming import handle_compaction_events
@@ -48,10 +48,8 @@ def _is_manual_compact_boundary(event: dict) -> bool:
   unknown/absent triggers fail loud — neither may exempt the turn.
   """
   return (
-      event.get("type") == ET.SYSTEM
-      and event.get("subtype") == ET.COMPACT_BOUNDARY
-      and (event.get(ET.COMPACT_METADATA) or {}).get("trigger") == "manual"
-  )
+      event.get("type") == ET.SYSTEM and event.get("subtype") == ET.COMPACT_BOUNDARY and
+      (event.get(ET.COMPACT_METADATA) or {}).get("trigger") == "manual")
 
 
 class _RunTimingTracker:
@@ -111,8 +109,7 @@ class _RunTimingTracker:
       usage = event.get("usage")
       if isinstance(usage, dict) and all(
           usage.get(k, 0) == 0
-          for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
-      ):
+          for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")):
         self._saw_zero_usage = True
 
     # Fresh-path evidence channel for the manual-compaction observation (the
@@ -178,13 +175,8 @@ class _RunTimingTracker:
     exempts a silent turn.
     """
     return (
-        self._saw_result
-        and self._saw_zero_usage
-        and not self._saw_first_assistant
-        and not self._saw_thinking
-        and not self._saw_tool_use
-        and not self._saw_manual_compact
-    )
+        self._saw_result and self._saw_zero_usage and not self._saw_first_assistant and not self._saw_thinking and
+        not self._saw_tool_use and not self._saw_manual_compact)
 
   def build_finish_extras(self) -> dict:
     total_ms = int((time.monotonic() - self._t_start) * 1000)
@@ -252,7 +244,6 @@ _NATIVE_RESUME_SESSION_BACKEND_TYPES = {"codex", "gemini", "opencode", "charlie-
 # The pre-flight anchor-missing alarm fires only for these.
 _RESUME_CAPABLE_BACKEND_TYPES = _CLAUDE_RESUME_FLAG_BACKEND_TYPES | _NATIVE_RESUME_SESSION_BACKEND_TYPES
 
-
 # Ambient Project Manager identity: appended after the memory block for
 # role=project sessions bound to a group, so the behavior contract travels with
 # every master turn in the session (user messages, agent relays, triggers),
@@ -277,7 +268,8 @@ class _Instructions(str):
   overlay_error: OSError | UnicodeDecodeError | None = None
 
 
-def _build_instructions_content(session_meta: SessionMetadata, cfg: CharlieBotConfig, prompt_overlay: str | None) -> str | None:
+def _build_instructions_content(
+    session_meta: SessionMetadata, cfg: CharlieBotConfig, prompt_overlay: str | None) -> str | None:
   """Build master agent instructions: base prompt + per-host override + memory store.
 
   The memory block is assembled from the labeled-entry store via
@@ -456,8 +448,7 @@ async def _report_turn_error_and_salvage(
   if error_msg:
     err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}
     await item.callbacks.persist_and_broadcast(session_id, err_event)
-  await _salvage_silent_turn(
-      tracker, error_msg, session_id, item.callbacks.persist_and_broadcast)
+  await _salvage_silent_turn(tracker, error_msg, session_id, item.callbacks.persist_and_broadcast)
 
 
 async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
@@ -487,9 +478,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       # through this module if imported at top level.
       from src.core.spawner_backends import unknown_backend_pin_refusal
       fallback_id = cfg.backend_options[0].id if cfg.backend_options else "(none)"
-      msg = (
-          f"backend {unknown_backend_pin_refusal(session_meta.backend, fallback_id)}; "
-          "this run did not execute.")
+      msg = (f"backend {unknown_backend_pin_refusal(session_meta.backend, fallback_id)}; "
+             "this run did not execute.")
       log.error(
           "master_cc_backend_unresolved",
           session=session_meta.id,
@@ -566,8 +556,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   # id, when the session already has an anchor on disk or a completed round, is
   # about to start a zero-context conversation. Fail loudly unless the caller
   # declared a fresh start (the scheduled-session weekly-recycle path).
-  if (option.type in _RESUME_CAPABLE_BACKEND_TYPES and not resume_id
-      and not item.expect_fresh_session):
+  if (option.type in _RESUME_CAPABLE_BACKEND_TYPES and not resume_id and not item.expect_fresh_session):
     anchor_on_disk = session_meta.cc_session_id
     if anchor_on_disk or await item.callbacks.has_completed_round(session_meta.id):
       reason = "transcript_missing" if anchor_on_disk else "anchor_missing"
@@ -684,8 +673,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     # Uncovered transports die with their transport process, and a process
     # whose record never hit disk can never be found by a boot, so both are
     # still terminated.
-    let_go = (backend is not None and option.type not in runs.UNCOVERED_BACKEND_TYPES
-              and record_persisted)
+    let_go = (backend is not None and option.type not in runs.UNCOVERED_BACKEND_TYPES and record_persisted)
     log.warning(
         "master_cc_cancelled",
         session=session_meta.id,
@@ -799,8 +787,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
   cc_session_id: str | None = session_meta.cc_session_id
   exit_code = -1
   error_msg: str | None = None
-  tracker = _RunTimingTracker(
-      session_meta.id, option.type if option else "unknown", option.model if option else None)
+  tracker = _RunTimingTracker(session_meta.id, option.type if option else "unknown", option.model if option else None)
 
   try:
     stream_translate = _build_fresh_translate(cfg, option)
@@ -819,8 +806,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
     # translates may not reuse the one that consumed the stream tail). -1
     # matches the worker side's "no result event" code for died-mid-run.
     if raw_path.is_file():
-      events = runs.project_raw_events(
-          runs.parse_raw_lines(raw_path.read_bytes()), _build_fresh_translate(cfg, option))
+      events = runs.project_raw_events(runs.parse_raw_lines(raw_path.read_bytes()), _build_fresh_translate(cfg, option))
     else:
       events = []
     # Recover the manual-compaction observation from the same whole-file

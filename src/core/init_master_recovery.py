@@ -18,11 +18,11 @@ if TYPE_CHECKING:
   from src.core.threads import ThreadManager
 
 from src.core.init_worker_recovery import (
-  _liveness_probe,
-  _quarantine_stale_failed_worktrees,
-  _reconcile_interrupted_runs,
-  _report_recovery_event,
-  _scan_interrupted_runs,
+    _liveness_probe,
+    _quarantine_stale_failed_worktrees,
+    _reconcile_interrupted_runs,
+    _report_recovery_event,
+    _scan_interrupted_runs,
 )
 from src.core.tasks import create_logged_task
 
@@ -117,8 +117,7 @@ def unanswered_user_events(chat_events: list[dict], exclude_ids: set[str]) -> li
       last_done = idx
   return [
       ev for ev in chat_events[last_done + 1:]
-      if ev.get("type") == ET.USER and isinstance(ev.get("content"), str)
-      and ev.get("id") not in exclude_ids
+      if ev.get("type") == ET.USER and isinstance(ev.get("content"), str) and ev.get("id") not in exclude_ids
   ]
 
 
@@ -149,9 +148,8 @@ def _master_alive_unfollowable_message(reason: str) -> str:
       "again on the next restart.")
 
 
-async def reconcile_master_identity(
-    cfg: CharlieBotConfig, session_mgr: SessionManager, boot_time: datetime
-) -> dict[str, set[str]]:
+async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionManager,
+                                    boot_time: datetime) -> dict[str, set[str]]:
   """Resolve each active session's recorded master turn; return the replay exclusion set.
 
   master_run is a single slot per session that a new turn's _on_spawn
@@ -212,9 +210,7 @@ async def reconcile_master_identity(
             reason=f"backend option {meta.backend!r} unresolved, record alive",
         )
         await _report_recovery_event(
-            session_mgr,
-            meta.id,
-            _master_alive_unfollowable_message(f"backend option {meta.backend!r} unresolved"))
+            session_mgr, meta.id, _master_alive_unfollowable_message(f"backend option {meta.backend!r} unresolved"))
         if record.user_event_id:
           excluded.setdefault(meta.id, set()).add(record.user_event_id)
         continue
@@ -247,14 +243,13 @@ async def reconcile_master_identity(
         reason=resolution.reason,
     )
 
-    if (resolution.outcome is runs.RunOutcome.RUNNING
-        and resolution.reason in (runs.UNCOVERED_ALIVE_REASON, runs.RAW_MISSING_ALIVE_REASON)):
+    if (resolution.outcome is runs.RunOutcome.RUNNING and
+        resolution.reason in (runs.UNCOVERED_ALIVE_REASON, runs.RAW_MISSING_ALIVE_REASON)):
       # Same rule as the worker branch: treated as alive but nothing
       # followable — report only. The record is kept (the turn still owns its
       # user message until a real outcome lands) and the message stays out of
       # this boot's replay set.
-      await _report_recovery_event(
-          session_mgr, meta.id, _master_alive_unfollowable_message(resolution.reason))
+      await _report_recovery_event(session_mgr, meta.id, _master_alive_unfollowable_message(resolution.reason))
       if record.user_event_id:
         excluded.setdefault(meta.id, set()).add(record.user_event_id)
       continue
@@ -264,11 +259,9 @@ async def reconcile_master_identity(
             runs.RunOutcome.COMPLETED,
             runs.RunOutcome.RUNNING,
             runs.RunOutcome.STALLED,
-        )
-        or (
-            resolution.outcome is runs.RunOutcome.DIED
-            and resolution.reason == runs.DIED_WITHOUT_RESULT_REASON
-            and not record.user_event_id))
+        ) or (
+            resolution.outcome is runs.RunOutcome.DIED and resolution.reason == runs.DIED_WITHOUT_RESULT_REASON and
+            not record.user_event_id))
     if follow:
       future = await master_cc.enqueue_master_resume(
           cfg,
@@ -292,8 +285,7 @@ async def reconcile_master_identity(
 
 
 async def _replay_unanswered_user_messages(
-    cfg: CharlieBotConfig, session_mgr: SessionManager, excluded: dict[str, set[str]]
-) -> None:
+    cfg: CharlieBotConfig, session_mgr: SessionManager, excluded: dict[str, set[str]]) -> None:
   """Replay every real user message the identity pass left unanswered.
 
   Every real user event after the last MASTER_DONE, minus the identity
@@ -313,15 +305,12 @@ async def _replay_unanswered_user_messages(
       for ev in unanswered_user_events(events, skip):
         log.warning("master_replaying_user_message", session=meta.id, event_id=ev.get("id"))
         create_logged_task(
-            master_cc.replay_user_message(cfg, meta, ev, session_mgr.callbacks()),
-            name=f"master-replay-{meta.id[:8]}")
+            master_cc.replay_user_message(cfg, meta, ev, session_mgr.callbacks()), name=f"master-replay-{meta.id[:8]}")
     except Exception:
       log.exception("master_replay_dispatch_failed", session=meta.id)
 
 
-async def _reconcile_master_runs(
-    cfg: CharlieBotConfig, session_mgr: SessionManager, boot_time: datetime
-) -> None:
+async def _reconcile_master_runs(cfg: CharlieBotConfig, session_mgr: SessionManager, boot_time: datetime) -> None:
   """Thin wrapper kept for existing callers: identity pass, then replay pass.
 
   New code should run :func:`reconcile_master_identity` once (before any door

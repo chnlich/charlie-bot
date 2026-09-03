@@ -9,6 +9,7 @@ VOICE_KEY = "is_" + "voice"
 
 
 class _CountOnlySessionManager:
+
   def __init__(self, count: int) -> None:
     self.count = count
     self.full_load_called = False
@@ -26,10 +27,31 @@ class _CountOnlySessionManager:
 @pytest.mark.asyncio
 async def test_replay_skips_pre_cursor_deltas_and_drops_raw_assistant_user() -> None:
   events = [
-      {"type": "user", "content": "hi", "timestamp": "t0"},
-      {"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello"}]}, "timestamp": "t1"},
-      {"type": "master_done", "thinking_seconds": 2, "timestamp": "t2"},
-      {"type": "user", "content": "again", "timestamp": "t3"},
+      {
+          "type": "user",
+          "content": "hi",
+          "timestamp": "t0"
+      },
+      {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "Hello"
+              }]
+          },
+          "timestamp": "t1"
+      },
+      {
+          "type": "master_done",
+          "thinking_seconds": 2,
+          "timestamp": "t2"
+      },
+      {
+          "type": "user",
+          "content": "again",
+          "timestamp": "t3"
+      },
   ]
   ws = FakeWebSocket()
   sent_count = await _replay_aggregated_catchup(ws, events, cursor=2, session_id="s")
@@ -53,7 +75,11 @@ async def test_replay_skips_pre_cursor_deltas_and_drops_raw_assistant_user() -> 
 @pytest.mark.asyncio
 async def test_replay_drops_raw_scheduled_trigger() -> None:
   events = [
-      {"type": "scheduled_trigger", "content": "[Scheduled trigger fired] watch", "timestamp": "t0"},
+      {
+          "type": "scheduled_trigger",
+          "content": "[Scheduled trigger fired] watch",
+          "timestamp": "t0"
+      },
   ]
   ws = FakeWebSocket()
   sent_count = await _replay_aggregated_catchup(ws, events, cursor=0, session_id="s")
@@ -68,8 +94,26 @@ async def test_replay_drops_raw_scheduled_trigger() -> None:
 @pytest.mark.asyncio
 async def test_replay_emits_only_latest_stream_when_draft_is_dangling() -> None:
   events = [
-      {"type": "assistant", "message": {"content": [{"type": "text", "text": "A"}]}, "timestamp": "t0"},
-      {"type": "assistant", "message": {"content": [{"type": "text", "text": "B"}]}, "timestamp": "t1"},
+      {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "A"
+              }]
+          },
+          "timestamp": "t0"
+      },
+      {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "B"
+              }]
+          },
+          "timestamp": "t1"
+      },
   ]
   ws = FakeWebSocket()
   await _replay_aggregated_catchup(ws, events, cursor=0, session_id="s")
@@ -88,8 +132,21 @@ async def test_replay_emits_only_latest_stream_when_draft_is_dangling() -> None:
 @pytest.mark.asyncio
 async def test_replay_with_cursor_at_end_sends_nothing() -> None:
   events = [
-      {"type": "user", "content": "hi", "timestamp": "t0"},
-      {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}, "timestamp": "t1"},
+      {
+          "type": "user",
+          "content": "hi",
+          "timestamp": "t0"
+      },
+      {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "ok"
+              }]
+          },
+          "timestamp": "t1"
+      },
   ]
   ws = FakeWebSocket()
   sent = await _replay_aggregated_catchup(ws, events, cursor=len(events), session_id="s")
@@ -101,8 +158,16 @@ async def test_replay_with_cursor_at_end_sends_nothing() -> None:
 @pytest.mark.asyncio
 async def test_replay_uses_global_cursor_after_archive_offset() -> None:
   events = [
-      {"type": "user", "content": "old-live", "timestamp": "t0"},
-      {"type": "user", "content": "missed", "timestamp": "t1"},
+      {
+          "type": "user",
+          "content": "old-live",
+          "timestamp": "t0"
+      },
+      {
+          "type": "user",
+          "content": "missed",
+          "timestamp": "t1"
+      },
   ]
   ws = FakeWebSocket()
 
@@ -118,12 +183,10 @@ async def test_replay_uses_global_cursor_after_archive_offset() -> None:
   }
   expected_message[VOICE_KEY] = False
   assert sent == 1
-  assert ws.sent == [
-      {
-          "type": "message",
-          "message": expected_message,
-      }
-  ]
+  assert ws.sent == [{
+      "type": "message",
+      "message": expected_message,
+  }]
 
 
 @pytest.mark.asyncio

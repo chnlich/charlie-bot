@@ -4,6 +4,7 @@ const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
 const { loadSidebarStatusContext } = require('./sidebar_status_context_stub');
+const { loadSidebarWorkersContext } = require('./sidebar_workers_context_stub');
 
 // ---------------------------------------------------------------------------
 // A DOM node that counts every write to `class`/`title`, mirroring the real
@@ -168,17 +169,11 @@ test('refreshTuiDots writes class and title when the dot status actually changed
 // sidebar/workers.js: updateTriggerStatus
 // ---------------------------------------------------------------------------
 function loadWorkersContext(elements) {
-  const context = {
+  return loadSidebarWorkersContext({
     document: {
       getElementById: (id) => elements.get(id) || null,
     },
-    console: { error: () => {} },
-    SESSION_ID: 'session-a',
-  };
-  vm.createContext(context);
-  vm.runInContext(readStatic('sidebar/namespace.js'), context, { filename: 'sidebar/namespace.js' });
-  vm.runInContext(readStatic('sidebar/workers.js'), context, { filename: 'sidebar/workers.js' });
-  return context;
+  });
 }
 
 test('updateTriggerStatus writes nothing to icon.className when the status is unchanged', () => {

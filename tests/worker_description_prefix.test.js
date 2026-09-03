@@ -1,9 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
-const { escapeHtml } = require('./escape_html_stub');
+const {loadSidebarWorkersContext} = require('./sidebar_workers_context_stub');
 
 function fakeElement() {
   return {
@@ -20,27 +18,15 @@ function fakeElement() {
 }
 
 function loadSidebarWorkers(elements, modalCalls) {
-  const context = {
-    SESSION_ID: 'session-a',
-    BACKEND_OPTIONS: {},
+  return loadSidebarWorkersContext({
     document: {
       createElement: () => fakeElement(),
       getElementById: (id) => elements.get(id) || null,
       querySelectorAll: () => [],
     },
-    escapeHtml,
-    escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     showTextModal: (title, text) => { modalCalls.push({ title, text }); },
     fetch: () => Promise.resolve({ ok: true, json: async () => ({ description: 'FULL DESCRIPTION' }) }),
-    loadedThreads: { delete() {} },
-    stopThreadPoll: () => {},
-    fetchAndRenderEvents: () => Promise.resolve(),
-    console: { warn: () => {}, error: () => {} },
-  };
-  vm.createContext(context);
-  vm.runInContext(readStatic('sidebar/namespace.js'), context, { filename: 'sidebar/namespace.js' });
-  vm.runInContext(readStatic('sidebar/workers.js'), context, { filename: 'sidebar/workers.js' });
-  return context;
+  });
 }
 
 const FULL_THREAD = {

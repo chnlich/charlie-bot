@@ -14,12 +14,12 @@ import pytest
 
 from src.core import memory
 from src.core.memory import (
-  MemoryFormatError,
-  assemble_master,
-  assemble_worker,
-  lint,
-  load_store,
-  parse_entry,
+    MemoryFormatError,
+    assemble_master,
+    assemble_worker,
+    lint,
+    load_store,
+    parse_entry,
 )
 
 _DEFAULT_TOPICS = [
@@ -605,7 +605,6 @@ def test_assemble_worker_missing_dir_returns_none(tmp_path: Path) -> None:
 
 # --- CLI add creates exactly one staging file, never touches entries/ -------
 
-
 # Import-path patch target for the memory CLI's config read: src/cli/memory.py binds the name
 # with `from src.core.config import get_config`, so mock setattrs the
 # stand-in on the src.cli.memory module attribute and the CLI's entry points read it at call time.
@@ -718,8 +717,7 @@ def test_cli_query_unknown_topic_slash_value_known_pre_slash_hints(
   assert exc.value.code == 1
   out, err = capsys.readouterr()
   assert out == ""
-  assert err == (
-      "error: unknown topic: charliebot/some-slug (index lines are topic/slug; try --topic charliebot)\n")
+  assert err == ("error: unknown topic: charliebot/some-slug (index lines are topic/slug; try --topic charliebot)\n")
 
 
 def test_cli_query_unknown_topic_slash_value_unknown_pre_slash_is_plain(
@@ -743,8 +741,7 @@ def test_cli_query_unknown_topic_mixed_invocation_hints_only_slash_value(
   cfg = _fake_cfg(tmp_path)
   monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   import src.cli.memory as cli
-  monkeypatch.setattr(
-      "sys.argv", ["charliebot memory", "query", "--topic", "nope", "--topic", "charliebot/some-slug"])
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "nope", "--topic", "charliebot/some-slug"])
   with pytest.raises(SystemExit) as exc:
     cli.main()
   assert exc.value.code == 1

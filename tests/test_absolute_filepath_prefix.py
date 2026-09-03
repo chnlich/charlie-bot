@@ -28,7 +28,8 @@ ARTIFACT_SCRIPT = "artifact-comments.js"
 def _mounted_prefixes() -> list[str]:
   """Every prefix `server.py` mounts the file router under, taken from the app's routes."""
   return sorted(
-      route.path.removesuffix("/{path:path}") for route in server.app.routes
+      route.path.removesuffix("/{path:path}")
+      for route in server.app.routes
       if getattr(route, "endpoint", None) is files_api.serve_file)
 
 
@@ -47,13 +48,14 @@ async def _served(request: Request) -> Response:
 
 
 def _navigation(path: str) -> Request:
-  return Request({
-      "type": "http",
-      "method": "GET",
-      "path": path,
-      "headers": [(b"accept", b"text/html")],
-      "query_string": b"",
-  })
+  return Request(
+      {
+          "type": "http",
+          "method": "GET",
+          "path": path,
+          "headers": [(b"accept", b"text/html")],
+          "query_string": b"",
+      })
 
 
 def test_one_handler_is_mounted_under_both_prefixes() -> None:

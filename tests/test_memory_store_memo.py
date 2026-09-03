@@ -28,15 +28,16 @@ def _write_entry(memory_dir: Path, slug: str, *, title: str | None = None, body:
   topic_dir.mkdir(parents=True, exist_ok=True)
   p = topic_dir / f"{slug}.md"
   p.write_text(
-      "\n".join([
-          "---",
-          "scope: user",
-          "topic: profile",
-          "audience: master, worker",
-          f"title: {title or slug.replace('-', ' ').title()}",
-          "---",
-          body or f"body for {slug}\n",
-      ]),
+      "\n".join(
+          [
+              "---",
+              "scope: user",
+              "topic: profile",
+              "audience: master, worker",
+              f"title: {title or slug.replace('-', ' ').title()}",
+              "---",
+              body or f"body for {slug}\n",
+          ]),
       encoding="utf-8")
   return p
 

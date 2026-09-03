@@ -4,22 +4,16 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import (
-  make_plan_setup as _setup,
-)
+from conftest import make_plan_setup as _setup
 from conftest import plan_page_html
-from conftest import (
-  write_plan_artifact as _write_artifact,
-)
-from conftest import (
-  write_stub_chrome as _write_stub_chrome,
-)
+from conftest import write_plan_artifact as _write_artifact
+from conftest import write_stub_chrome as _write_stub_chrome
 
 from src.core.plans import (
-  PlanRegistryManager,
-  _DerivedState,
-  derive_state_str,
-  read_plans_tolerant,
+    PlanRegistryManager,
+    _DerivedState,
+    derive_state_str,
+    read_plans_tolerant,
 )
 
 # ---------------------------------------------------------------------------

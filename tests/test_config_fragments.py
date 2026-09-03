@@ -43,9 +43,14 @@ def _without_home(cfg: CharlieBotConfig) -> dict:
 # gets the earlier half so any accidental precedence would be observable.
 _PARTITIONS: dict[str, Callable[[list[str]], dict[str, list[str]]]] = {
     "everything in config.yaml":
-        lambda keys: {"config.yaml": keys},
+        lambda keys: {
+            "config.yaml": keys
+        },
     "everything in one fragment":
-        lambda keys: {"config.yaml": [], "config.d/all.yaml": keys},
+        lambda keys: {
+            "config.yaml": [],
+            "config.d/all.yaml": keys
+        },
     "split across two fragments":
         lambda keys: {
             "config.yaml": [],
@@ -53,7 +58,10 @@ _PARTITIONS: dict[str, Callable[[list[str]], dict[str, list[str]]]] = {
             "config.d/b.yaml": keys[len(keys) // 2:],
         },
     "interleaved split across config.yaml and a fragment":
-        lambda keys: {"config.yaml": keys[1::2], "config.d/even.yaml": keys[::2]},
+        lambda keys: {
+            "config.yaml": keys[1::2],
+            "config.d/even.yaml": keys[::2]
+        },
     "empty fragment file alongside a split":
         lambda keys: {
             "config.yaml": keys[::2],
@@ -328,8 +336,8 @@ _DECLARED_INTEGRATION_KEYS = [
 def test_declared_integration_keys_round_trip(profile_home: Path) -> None:
   """The declared integration keys load from config.yaml and the slack fragment and are reachable."""
   values = {key: f"value-{key}" for key in _DECLARED_INTEGRATION_KEYS}
-  save_yaml(profile_home / "config.yaml", {
-      key: values[key] for key in _DECLARED_INTEGRATION_KEYS if key != "public_base_url"})
+  save_yaml(
+      profile_home / "config.yaml", {key: values[key] for key in _DECLARED_INTEGRATION_KEYS if key != "public_base_url"})
   _write_key_set(profile_home, "config.d/slack.yaml", ["public_base_url"], values)
 
   cfg = core_config.load_config()

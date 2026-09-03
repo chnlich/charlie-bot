@@ -5,19 +5,13 @@ from typing import Any
 
 import pytest
 from conftest import (
-  OPUS_BACKEND_ID,
-  OPUS_BACKEND_OPTION,
-  capture_create_logged_task,
+    OPUS_BACKEND_ID,
+    OPUS_BACKEND_OPTION,
+    capture_create_logged_task,
 )
-from conftest import (
-  build_plan_cfg as _build_cfg,
-)
-from conftest import (
-  make_plan_setup as _setup,
-)
-from conftest import (
-  write_plan_artifact as _write_artifact,
-)
+from conftest import build_plan_cfg as _build_cfg
+from conftest import make_plan_setup as _setup
+from conftest import write_plan_artifact as _write_artifact
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -26,8 +20,8 @@ from src.api.internal import router as internal_router
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  CreateSessionRequest,
-  TaskType,
+    CreateSessionRequest,
+    TaskType,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager

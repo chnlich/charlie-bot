@@ -27,13 +27,13 @@ from pathlib import Path
 import pytest
 from conftest import build_recovery_cfg
 from test_restart_recovery_e2e import (
-  _assert_failed_with_transport_reason,
-  _kill_driver_mid_run,
-  _launch_driver,
-  _read_meta,
-  _recover,
-  _recovery_reports,
-  _terminal_summaries,
+    _assert_failed_with_transport_reason,
+    _kill_driver_mid_run,
+    _launch_driver,
+    _read_meta,
+    _recover,
+    _recovery_reports,
+    _terminal_summaries,
 )
 
 from src.agents.backends.base import AgentBackend
@@ -111,8 +111,7 @@ async def test_uncovered_effective_alive_run_reported_not_attached(
   data_dir = home / "sessions" / session_meta.id / "threads" / thread.id / "data"
   data_dir.mkdir(parents=True, exist_ok=True)
   (data_dir / runs.RAW_LOG_NAME).write_text(
-      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n',
-      encoding="utf-8")
+      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n', encoding="utf-8")
 
   recovered, alive_at_reattach, _master_wakes, outcomes = await _recover(monkeypatch, home, cfg=cfg)
 
@@ -153,8 +152,7 @@ async def test_uncovered_dead_pinned_worker_finalized_failed_with_reason(
   data_dir = home / "sessions" / session_meta.id / "threads" / thread.id / "data"
   data_dir.mkdir(parents=True, exist_ok=True)
   (data_dir / runs.RAW_LOG_NAME).write_text(
-      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n',
-      encoding="utf-8")
+      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n', encoding="utf-8")
 
   recovered, alive_at_reattach, _master_wakes, outcomes = await _recover(monkeypatch, home, cfg=cfg)
 

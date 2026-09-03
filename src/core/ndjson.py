@@ -1,6 +1,8 @@
 """NDJSON (newline-delimited JSON) file utilities."""
 
 import json
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import BinaryIO
 
@@ -12,6 +14,60 @@ log = structlog.get_logger()
 
 _COUNT_CHUNK_SIZE = 1024 * 1024
 _TAIL_PARSEABLE_WINDOW = 512 * 1024
+
+# Bound on _count_memo in files, not bytes: the chat tail page (archived
+# sessions) and the event-count callers cycle one live file per view, so a
+# small cap covers every concurrently viewed session.
+_COUNT_MEMO_LIMIT = 64
+
+# path -> (mtime_ns, size, line_count) and (path, limit) -> (mtime_ns, size,
+# events, total, has_more). Readers run in asyncio executor threads, so
+# get+move_to_end and insert+cap-eviction each hold the lock, matching the
+# sibling memo rule in chat_events.py. Tail entries share their event dicts
+# with every caller, the no-defensive-copy idiom of the chat_events memos.
+_count_memo: OrderedDict[Path, tuple[int, int, int]] = OrderedDict()
+_count_memo_lock = threading.Lock()
+_tail_memo: OrderedDict[tuple[Path, int], tuple[int, int, list[dict], int, bool]] = OrderedDict()
+_tail_memo_lock = threading.Lock()
+
+
+def _count_memo_get(path: Path, mtime_ns: int, size: int) -> int | None:
+  """Return the memoized line count when the file's signature is unchanged."""
+  with _count_memo_lock:
+    memo = _count_memo.get(path)
+    if memo is not None and memo[0] == mtime_ns and memo[1] == size:
+      _count_memo.move_to_end(path)
+      return memo[2]
+  return None
+
+
+def _count_memo_store(path: Path, mtime_ns: int, size: int, total: int) -> None:
+  """Store a line count under the file's pre-read signature.
+
+  The signature is taken before the scan on purpose: an append during the
+  scan stores a count of newer bytes under the older signature, which no
+  later stat can match, so the entry is never served stale — the next call
+  re-stats, misses, and recounts. A post-scan signature could instead key a
+  stale count under bytes the scan never reached, and that entry would serve
+  until the file changed again. Chat event files only append; their atomic
+  archive rewrites replace the whole file.
+  """
+  with _count_memo_lock:
+    _count_memo[path] = (mtime_ns, size, total)
+    _count_memo.move_to_end(path)
+    while len(_count_memo) > _COUNT_MEMO_LIMIT:
+      _count_memo.popitem(last=False)
+
+
+def _tail_memo_get(path: Path, limit: int, mtime_ns: int, size: int) -> tuple[list[dict], int, bool] | None:
+  """Return the memoized tail page when the file's signature is unchanged."""
+  key = (path, limit)
+  with _tail_memo_lock:
+    memo = _tail_memo.get(key)
+    if memo is not None and memo[0] == mtime_ns and memo[1] == size:
+      _tail_memo.move_to_end(key)
+      return memo[2], memo[3], memo[4]
+  return None
 
 
 def _count_lines(f: BinaryIO) -> int:
@@ -48,33 +104,51 @@ def parse_ndjson_file(path: Path) -> list[dict]:
 
 
 def count_ndjson_lines(path: Path) -> int:
-  """Return the number of persisted NDJSON lines without parsing JSON."""
+  """Return the number of persisted NDJSON lines without parsing JSON.
+
+  Memoized on the file's (mtime_ns, size): a repeat call over an unchanged
+  file pays one stat and zero file bytes. A missing file answers 0 fresh
+  every call — it has no signature to memoize, matching the sibling memo
+  policy in plans.py.
+  """
   if not path.exists():
     return 0
+  st = path.stat()
+  memoized = _count_memo_get(path, st.st_mtime_ns, st.st_size)
+  if memoized is not None:
+    return memoized
   with open(path, "rb") as f:
-    return _count_lines(f)
+    total = _count_lines(f)
+  _count_memo_store(path, st.st_mtime_ns, st.st_size, total)
+  return total
 
 
 def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bool]:
   """Read the last *limit* lines from an NDJSON file using seek-from-end.
 
-  Returns (events, total_line_count, has_more).
+  Returns (events, total_line_count, has_more). The whole page memoizes on
+  (mtime_ns, size): the chat tail page is re-requested per view of an
+  unchanged file (SPA switches, re-materializations), where a repeat pays
+  one stat and zero file bytes; an append re-reads the count and window.
   """
   if not path.exists():
     return [], 0, False
+  st = path.stat()
+  memoized = _tail_memo_get(path, limit, st.st_mtime_ns, st.st_size)
+  if memoized is not None:
+    return memoized
+
+  total = count_ndjson_lines(path)
+  if total == 0:
+    return [], 0, False
+
+  has_more = total > limit
+  take = min(limit, total)
+  if take == 0:
+    return [], total, has_more
 
   tail_window_size = 512 * 1024
   with open(path, "rb") as f:
-    # Fast-count total lines
-    total = _count_lines(f)
-    if total == 0:
-      return [], 0, False
-
-    has_more = total > limit
-    take = min(limit, total)
-    if take == 0:
-      return [], total, has_more
-
     f.seek(0, 2)
     file_size = f.tell()
     if file_size <= tail_window_size:
@@ -104,6 +178,12 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
     except json.JSONDecodeError as e:
       log.debug("ndjson_tail_parse_skip", error=str(e))
 
+  key = (path, limit)
+  with _tail_memo_lock:
+    _tail_memo[key] = (st.st_mtime_ns, st.st_size, events, total, has_more)
+    _tail_memo.move_to_end(key)
+    while len(_tail_memo) > _COUNT_MEMO_LIMIT:
+      _tail_memo.popitem(last=False)
   return events, total, has_more
 
 

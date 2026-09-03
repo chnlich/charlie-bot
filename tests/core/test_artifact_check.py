@@ -646,8 +646,28 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
   prompt = backends["beta"].calls[0]["prompt"]
   assert artifact.read_text(encoding="utf-8") in prompt
   assert '"where are we?"' in prompt
+  assert "(7) List every term" in prompt
   assert "<trigger message verbatim>" not in prompt
   assert backends["beta"].calls[0]["timeout"] == artifact_check.ARTIFACT_PROBE_TIMEOUT == 300.0
+
+
+@pytest.mark.parametrize("genre", ["plan", "understanding"])
+def test_cli_probe_runs_after_assertions_pass_on_plan_and_understanding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], genre: str) -> None:
+  artifact = _write(tmp_path, _genre_ok_doc(genre))
+  cfg, _options = _probe_cfg(tmp_path)
+  backends = {"alpha": _FakeBackend(error="boom"), "beta": _FakeBackend(answer="(1) The reader's problem.\n(2)-(7) fine.")}
+  _patch_backends(monkeypatch, backends)
+  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  assert _run_cli([str(artifact), "--genre", genre, "--trigger", "where are we?"]) == 0
+  lines = capsys.readouterr().out.splitlines()
+  assert lines[-5:] == [
+      "--- cold read ---",
+      "attempt alpha failed: boom",
+      "backend beta",
+      "(1) The reader's problem.",
+      "(2)-(7) fine.",
+  ]
 
 
 def test_cli_probe_exit_1_when_every_backend_fails(
@@ -673,14 +693,23 @@ def test_cli_assertions_only_skips_probe_on_probe_genre(
   assert "--- cold read ---" not in capsys.readouterr().out
 
 
+def test_cli_assertions_only_skips_probe_on_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  artifact = _write(tmp_path, plan_page_html())
+  monkeypatch.setattr(artifact_check, "build_backend", lambda option, cfg: pytest.fail("probe must not run"))
+  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
+  assert _run_cli([str(artifact), "--genre", "plan", "--assertions-only"]) == 0
+  assert "--- cold read ---" not in capsys.readouterr().out
+
+
 def test_cli_trigger_missing_on_probe_genre_is_usage_error(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   assert _run_cli(["page.html", "--genre", "sitrep"]) == 2
   assert "--trigger" in capsys.readouterr().err
 
 
-def test_cli_trigger_rejected_on_plan(capsys: pytest.CaptureFixture[str]) -> None:
-  assert _run_cli(["page.html", "--genre", "plan", "--trigger", "x"]) == 2
+def test_cli_plan_without_trigger_or_assertions_only_is_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+  assert _run_cli(["page.html", "--genre", "plan"]) == 2
   assert "--trigger" in capsys.readouterr().err
 
 
@@ -720,7 +749,18 @@ async def test_plan_present_and_artifact_check_reject_the_same_assertions_on_one
   message = str(exc_info.value)
   for name in cli_failures:
     assert name in message
-  assert message.endswith("Measure locally with: charliebot artifact check <artifact.html> --genre plan")
+  assert message.endswith("Measure locally with: charliebot artifact check <artifact.html> --genre plan --assertions-only")
+
+
+@pytest.mark.asyncio
+async def test_plan_present_never_calls_build_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Registration stays model-free: present runs the assertions and constructs no backend."""
+  monkeypatch.setattr(
+      artifact_check, "build_backend", lambda option, cfg: pytest.fail("registration must not build a backend"))
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await make_plan_setup(tmp_path)
+  file_rel = write_plan_artifact(cfg, meta.id, "plan_01.html")
+  result = await plan_mgr.present(meta.id, file=file_rel, title="P1")
+  assert result["state"] == "awaiting approval"
 
 
 # ---------------------------------------------------------------------------

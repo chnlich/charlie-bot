@@ -9,8 +9,9 @@ half of the genre's GRAMMAR; rules needing judgment stay with the reader and the
 line — never stopping at the first failure. Structure parsing uses the standard library's
 ``html.parser``; only ``page-height`` shells out to headless chrome, so every other
 assertion runs on a host without a renderer. ``run_probe`` sends the page text plus the
-cold-read six questions to CharlieBot's preferred light backends (config model_preference
-order) and returns the attempts, the answering backend, and its verbatim answer.
+cold-read seven questions to CharlieBot's preferred light backends (config model_preference
+order) and returns the attempts, the answering backend, and its verbatim answer; every
+genre's delivery gate routes through it after the assertions pass.
 
 The goal-length and page-height measurements (with their budgets and the headless-chrome
 probe page) live here as the goal-budget / page-height assertions; the plan registration
@@ -660,8 +661,8 @@ _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
 
 GENRES: tuple[str, ...] = tuple(_ASSERTION_SETS)
 
-# Genres whose delivery gate includes one cold-read model pass (assertions must pass first).
-PROBE_GENRES: tuple[str, ...] = ("sitrep", "debug", "explain")
+# Every genre's delivery gate includes one cold-read pass after its assertions pass.
+PROBE_GENRES: tuple[str, ...] = GENRES
 
 
 def run_assertions(genre: str, artifact: Path, cfg: "CharlieBotConfig | None" = None) -> list[AssertionOutcome]:
@@ -687,17 +688,18 @@ def run_assertions(genre: str, artifact: Path, cfg: "CharlieBotConfig | None" = 
 
 _PROBE_SYSTEM_PROMPT = "You are a careful cold reader. Answer every question from the page alone."
 
-# The single canonical copy of the cold-read six-question prompt. skills/file-server/SKILL.md's
+# The single canonical copy of the cold-read seven-question prompt. skills/file-server/SKILL.md's
 # Cold-Read Gate section points at this module instead of restating the text.
 _PROBE_QUESTIONS = """You are reading one HTML page cold: the page source is the piped input, and you have no
-context beyond the file itself. Answer six questions, each in one or two sentences and in
+context beyond the file itself. Answer seven questions, each in one or two sentences and in
 the page's own language: (1) Whose problem does this page describe, and what is the
 problem? (2) What is the page's conclusion, and what epistemic state does the page itself
 claim for it (confirmed, hypothesis, refuted, or a stated mix)? (3) What does the page ask
 of the reader, if anything? (4) In which numbered section did you first become clear on
 what the problem is? (5) Name up to five points you had to re-read to follow the page.
 (6) The chat message that triggered this page was: "<trigger message verbatim>".
-Does the page answer that message, every part of it?"""
+Does the page answer that message, every part of it?
+(7) List every term, abbreviation, or name the page uses without explaining it and that you could only guess at; write none when there is none."""
 
 
 @dataclasses.dataclass
@@ -711,7 +713,7 @@ class ProbeResult:
 
 
 def run_probe(cfg: CharlieBotConfig, artifact: Path, trigger: str) -> ProbeResult:
-  """Send the page's full text plus the six-question prompt to the preferred light backends.
+  """Send the page's full text plus the seven-question prompt to the preferred light backends.
 
   Backends are tried in config model_preference order (iter_light_backends); each failure is
   recorded and the next backend is tried. Returns the answering backend's id and answer, or

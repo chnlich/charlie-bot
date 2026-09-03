@@ -303,9 +303,9 @@ class PlanRegistryManager:
     """Validate *file* as a new plan version's binding and return its session-relative path.
 
     The file must live inside the session directory, pass the plan assertion set
-    (exactly what ``charliebot artifact check --genre plan`` enforces), and not already back
-    an existing plan version. Callers hold the session lock and pass the freshly loaded
-    registry *data*.
+    (exactly what ``charliebot artifact check --genre plan --assertions-only`` enforces), and
+    not already back an existing plan version. Callers hold the session lock and pass the
+    freshly loaded registry *data*.
     """
     file = posixpath.normpath(file)
     file_relative = self._validate_file_in_session_dir(session_id, file)
@@ -317,7 +317,7 @@ class PlanRegistryManager:
           f"plan artifact fails {len(failures)} check assertion(s): {reasons}. "
           "Recover headroom by folding, per the page-budget rules in the BLOCK KIT comment of "
           "prompts/plan_template.html. Measure locally with: "
-          "charliebot artifact check <artifact.html> --genre plan")
+          "charliebot artifact check <artifact.html> --genre plan --assertions-only")
     existing_file = self._find_binding_by_file(session_id, data, file_relative)
     if existing_file is not None:
       raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")

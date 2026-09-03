@@ -68,9 +68,12 @@ async def finalize_review_chain(
   if original_thread.keep_worktree:
     return None
   return await git_worktree_remove_reporting(
-      original_thread,
+      original_thread.repo_path,
+      original_thread.worktree_path,
+      original_thread.branch_name,
+      original_thread.id,
       worktree_parent,
-      session_id=session_id,
+      log_fields={"thread_id": original_thread.id, "session": session_id},
       label="Review worktree",
       fail_event="review_chain_cleanup_failed",
       remove_failed_event="review_chain_cleanup_remove_failed",

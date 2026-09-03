@@ -26,9 +26,7 @@ from src.core.git import (
     git_current_branch,
     git_push_branch,
     git_push_refspec,
-    git_worktree_dir_name,
-    git_worktree_prune,
-    git_worktree_remove,
+    git_worktree_remove_reporting,
 )
 from src.core.master_trigger import trigger_master
 from src.core.models import SpawnRequest, TaskType, ThreadStatus, utc_now
@@ -927,29 +925,17 @@ async def run_improve_loop(
     # sweep reclaims it later. A hard process crash skips this finally and likewise keeps it.
     final_state = await load_loop_state(session_id, loop_id, cfg)
     loop_failed = final_state is not None and final_state.status == 'failed'
-    if wt_path.exists() and not loop_failed:
-      try:
-        removed = await git_worktree_remove(
-            str(resolved_repo),
-            wt_path,
-            session_id,
-            allowed_parent=Path(cfg.worktree_dir),
-            expected_residue_name=git_worktree_dir_name(work_branch),
-        )
-      except Exception as e:
-        log.exception("improve_loop_cleanup_failed", session=session_id, worktree=str(wt_path), error=str(e))
-        await session_mgr.deliver_to_successor(
-            session_id, {
-                "type": ET.ERROR,
-                "content": f"Improve-loop worktree cleanup failed for {wt_path}: {e}"
-            })
-      else:
-        if removed:
-          await git_worktree_prune(str(resolved_repo), session_id)
-        else:
-          log.error("improve_loop_cleanup_remove_failed", session=session_id, worktree=str(wt_path))
-          await session_mgr.deliver_to_successor(
-              session_id, {
-                  "type": ET.ERROR,
-                  "content": f"Improve-loop worktree cleanup failed for {wt_path}: git worktree remove reported failure"
-              })
+    if not loop_failed:
+      cleanup_error = await git_worktree_remove_reporting(
+          str(resolved_repo),
+          str(wt_path),
+          work_branch,
+          session_id,
+          Path(cfg.worktree_dir),
+          log_fields={"session": session_id},
+          label="Improve-loop worktree",
+          fail_event="improve_loop_cleanup_failed",
+          remove_failed_event="improve_loop_cleanup_remove_failed",
+      )
+      if cleanup_error:
+        await session_mgr.deliver_to_successor(session_id, {"type": ET.ERROR, "content": cleanup_error})

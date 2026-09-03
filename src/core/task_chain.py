@@ -69,7 +69,7 @@ async def spawn_step(
   prompt = step.prompt
   if step_index > 0:
     previous_name = task_cfg.steps[step_index - 1].name
-    prompt = f"{prompt}\n\n## Result of the previous step ({previous_name})\n{previous_result}"
+    prompt = f"{prompt.rstrip()}\n\n## Result of the previous step ({previous_name})\n{previous_result}"
 
   handle = create_logged_task(
       spawn_worker(

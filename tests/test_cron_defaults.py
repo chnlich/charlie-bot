@@ -7,7 +7,8 @@ loader's acceptance of ``prompt_file``, its rejection of an inline ``prompt``
 plus hot-reload in ``src/core/config.py::get_scheduled_tasks`` /
 ``get_scheduled_task_errors``, broken-entry ``path``/``enabled`` carrying, the
 per-file failure isolation of ``config.d/cron.d/<name>.yaml``, and the shipped
-``configs/cron.default.yaml`` + ``prompts/cron/memory_curator/memory_curator.md``.
+``configs/cron.default.yaml`` + ``prompts/cron/memory_curator/memory_selector.md`` /
+``memory_reviewer.md``.
 """
 
 import asyncio
@@ -72,12 +73,21 @@ def test_seed_idempotence(temp_home: Path) -> None:
   bytes1 = seeded_path.read_bytes()
 
   body1 = load_yaml(seeded_path, default={})
-  # The seeded host file keeps the repo pointer: the pointed file owns the
-  # prompt body, and the host file carries only the path to it.
+  # The seeded host file keeps the repo pointers: the pointed files own the
+  # prompt bodies, and the host file carries only the paths to them.
   assert body1 == {
       "cron": "27 6 * * *",
       "timezone": "local",
-      "prompt_file": "prompts/cron/memory_curator/memory_curator.md",
+      "steps": [
+          {
+              "name": "selector",
+              "prompt_file": "prompts/cron/memory_curator/memory_selector.md",
+          },
+          {
+              "name": "reviewer",
+              "prompt_file": "prompts/cron/memory_curator/memory_reviewer.md",
+          },
+      ],
   }
   assert "prompt" not in body1
   assert "backend" not in body1
@@ -203,8 +213,12 @@ def test_shipped_default_loadable(temp_home: Path) -> None:
     assert "backend" not in entry
     resolved = copy.deepcopy(entry)
     resolved.pop("name", None)
-    path = _resolve_prompt_file(resolved, repo_root)
-    assert path is not None and path.exists(), f"prompt_file does not resolve: {entry}"
+    if resolved.get("prompt_file"):
+      path = _resolve_prompt_file(resolved, repo_root)
+      assert path is not None and path.exists(), f"prompt_file does not resolve: {entry}"
+    for step in resolved.get("steps") or []:
+      step_path = _resolve_prompt_file(step, repo_root)
+      assert step_path is not None and step_path.exists(), f"step prompt_file does not resolve: {entry}"
     _resolve_local_timezone(resolved)
     ScheduledTaskConfig(name=entry.get("name"), **resolved)
 
@@ -215,7 +229,10 @@ def test_shipped_default_loadable(temp_home: Path) -> None:
     seeded = load_yaml(cfg.config_d_dir / "cron.d" / f"{entry['name']}.yaml", default={})
     # seeded host files keep the pointer, never an inlined body
     assert "prompt" not in seeded
-    assert seeded["prompt_file"] == entry["prompt_file"]
+    if "prompt_file" in entry:
+      assert seeded["prompt_file"] == entry["prompt_file"]
+    if "steps" in entry:
+      assert seeded["steps"] == entry["steps"]
 
 
 def test_seed_fails_loud_on_legacy_cron(temp_home: Path) -> None:
@@ -250,10 +267,11 @@ def test_explicit_timezone_untouched(temp_home: Path) -> None:
 # --- 8. prompt file carries no host paths ------------------------------------
 
 
-def test_memory_curator_prompt_no_host_paths() -> None:
-  body = (REPO_ROOT / "prompts" / "cron" / "memory_curator" / "memory_curator.md").read_text(encoding="utf-8")
-  assert "/home/" not in body
-  assert "chaoli" not in body
+def test_memory_curator_prompts_no_host_paths() -> None:
+  for filename in ("memory_selector.md", "memory_reviewer.md"):
+    body = (REPO_ROOT / "prompts" / "cron" / "memory_curator" / filename).read_text(encoding="utf-8")
+    assert "/home/" not in body
+    assert "chaoli" not in body
 
 
 # --- 9. failure isolation: one broken file never aborts another ---------------
@@ -410,7 +428,7 @@ def test_broken_entry_enabled_null_on_unparseable_yaml(temp_home: Path) -> None:
 
 
 def test_broken_prompt_file_missing_path(temp_home: Path) -> None:
-  missing = temp_home / "prompts" / "cron" / "memory_curator" / "memory_curator.md"
+  missing = temp_home / "prompts" / "cron" / "memory_curator" / "memory_selector.md"
   injected = _write_task_text(temp_home, "memory-curator", _dump(
       {"cron": "27 6 * * *", "timezone": "local", "prompt_file": str(missing), "enabled": True}))
 

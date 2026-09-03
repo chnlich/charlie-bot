@@ -162,7 +162,7 @@ def _spy_opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   calls: list[str] = []
   real_open = open
 
-  def spy(file, mode="r", *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
+  def spy(file, mode="r", *args, **kwargs):
     calls.append(str(file))
     return real_open(file, mode, *args, **kwargs)
 

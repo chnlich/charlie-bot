@@ -13,9 +13,9 @@ from src.agents import master_cc
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  CreateSessionRequest,
-  SessionMetadata,
-  SlackOrigin,
+    CreateSessionRequest,
+    SessionMetadata,
+    SlackOrigin,
 )
 from src.core.sessions import SessionManager
 
@@ -28,11 +28,12 @@ def test_config_without_slack_keys_yields_defaults() -> None:
 
 
 def test_config_round_trips_slack_keys() -> None:
-  cfg = CharlieBotConfig.model_validate({
-      "slack_bot_token": "test-bot-token",
-      "slack_app_token": "test-app-token",
-      "slack_allowed_user_ids": ["U_TEST"],
-  })
+  cfg = CharlieBotConfig.model_validate(
+      {
+          "slack_bot_token": "test-bot-token",
+          "slack_app_token": "test-app-token",
+          "slack_allowed_user_ids": ["U_TEST"],
+      })
   assert cfg.slack_bot_token == "test-bot-token"
   assert cfg.slack_app_token == "test-app-token"
   assert cfg.slack_allowed_user_ids == ["U_TEST"]
@@ -42,8 +43,7 @@ def test_config_round_trips_slack_keys() -> None:
 async def test_create_session_accepts_caller_supplied_id_and_slack_origin(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   origin = SlackOrigin(team_id="T_TEST", channel_id="C_TEST", thread_ts="1700000000.000100")
-  meta = await SessionManager(cfg).create_session(
-      CreateSessionRequest(session_id="fixed-id-0001", slack_origin=origin))
+  meta = await SessionManager(cfg).create_session(CreateSessionRequest(session_id="fixed-id-0001", slack_origin=origin))
   assert meta.id == "fixed-id-0001"
   assert meta.slack_origin == origin
 
@@ -81,7 +81,8 @@ async def _run_one_round(user_event_id: str | None) -> dict:
   await run_session_consumer(session_id, [item], fake_run_cc)
 
   done_events = [
-      call.args[1] for call in callbacks.persist_and_broadcast.call_args_list
+      call.args[1]
+      for call in callbacks.persist_and_broadcast.call_args_list
       if call.args[1].get("type") == ET.MASTER_DONE
   ]
   assert len(done_events) == 1

@@ -1496,10 +1496,8 @@ class SessionManager:
     # same point. deliver_done decides for itself whether the round is one a
     # Slack thread is waiting for.
     if event.get("type") == ET.MASTER_DONE:
-      from src.core.slack_listener import (
-        # lazy: slack_listener imports SessionManager from this module at top level
-        deliver_done,
-      )
+      # lazy: slack_listener imports SessionManager from this module at top level
+      from src.core.slack_listener import deliver_done
 
       create_logged_task(deliver_done(session_id, event, self._cfg, self), name=f"slack-deliver-{session_id}")
 

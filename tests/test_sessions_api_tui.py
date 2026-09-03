@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-  OPUS_BACKEND_ID,
-  TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET,
-  TUI_KILL_TMUX_SESSION_PATCH_TARGET,
-  TUI_TMUX_SESSION_EXISTS_PATCH_TARGET,
-  build_tui_sessions_cfg,
+    OPUS_BACKEND_ID,
+    TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET,
+    TUI_KILL_TMUX_SESSION_PATCH_TARGET,
+    TUI_TMUX_SESSION_EXISTS_PATCH_TARGET,
+    build_tui_sessions_cfg,
 )
 from conftest import make_sessions_client as _build_client
 
@@ -108,8 +108,14 @@ async def test_tui_status_returns_running_busy_dict_for_tui_sessions_only(
 
   assert response.status_code == 200
   assert response.json() == {
-      running_tui_meta.id: {"running": True, "busy": True},
-      stopped_tui_meta.id: {"running": False, "busy": False},
+      running_tui_meta.id: {
+          "running": True,
+          "busy": True
+      },
+      stopped_tui_meta.id: {
+          "running": False,
+          "busy": False
+      },
   }
   assert set(checked) == {running_tui_meta.id, stopped_tui_meta.id}
   assert busy_checked == [running_tui_meta.id]

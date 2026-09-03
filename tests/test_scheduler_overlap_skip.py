@@ -22,10 +22,10 @@ from conftest import OPUS_BACKEND_ID, make_home_config
 from src.core import scheduler as scheduler_module
 from src.core.config import ScheduledTaskConfig
 from src.core.models import (
-  CreateSessionRequest,
-  SessionMetadata,
-  ThreadStatus,
-  parse_utc_datetime,
+    CreateSessionRequest,
+    SessionMetadata,
+    ThreadStatus,
+    parse_utc_datetime,
 )
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
@@ -134,8 +134,8 @@ def _skip_events_since(session_mgr, since: int) -> int:
 
 
 def _pending_rig(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> tuple[_Clock, Scheduler, SessionMetadata, AsyncMock, _PendingRound, ScheduledTaskConfig]:
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path) -> tuple[_Clock, Scheduler, SessionMetadata, AsyncMock, _PendingRound, ScheduledTaskConfig]:
   """Rig for the scheduled-path tests: clock parked at 2026-06-01 00:00 UTC, one
   pending in-flight round, session anchored at that instant, one-minute-cadence task."""
   clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
@@ -197,8 +197,7 @@ async def test_one_skip_per_due_tick_normal_cadence(
     cursor = len(session_mgr.persist_and_broadcast.await_args_list)
 
   # The final skip (00:04) left the anchor at its own occurrence, nothing behind.
-  assert parse_utc_datetime(session.last_scheduled_run) == datetime(
-      2026, 6, 1, 0, 4, 0, tzinfo=UTC)
+  assert parse_utc_datetime(session.last_scheduled_run) == datetime(2026, 6, 1, 0, 4, 0, tzinfo=UTC)
   pending.complete.set()
   await asyncio.sleep(0)
 
@@ -218,8 +217,7 @@ async def test_one_skip_consuming_delayed_occurrences(
 
   # Exactly one record consumed occurrences 00:02, 00:03 and 00:04.
   assert _skip_events_since(session_mgr, cursor) == 1
-  assert parse_utc_datetime(session.last_scheduled_run) == datetime(
-      2026, 6, 1, 0, 4, 0, tzinfo=UTC)
+  assert parse_utc_datetime(session.last_scheduled_run) == datetime(2026, 6, 1, 0, 4, 0, tzinfo=UTC)
   pending.complete.set()
   await asyncio.sleep(0)
 
@@ -259,8 +257,7 @@ async def test_no_fire_on_completion_moment(
   await _tick(scheduler, task_cfg, session_mgr, clock, minute=3)
   await asyncio.sleep(0)  # let the birthed round count its start
   assert pending.fires == fires_at_completion + 1
-  assert parse_utc_datetime(session.last_scheduled_run) == datetime(
-      2026, 6, 1, 0, 3, 0, tzinfo=UTC)
+  assert parse_utc_datetime(session.last_scheduled_run) == datetime(2026, 6, 1, 0, 3, 0, tzinfo=UTC)
 
 
 # ---------------------------------------------------------------------------

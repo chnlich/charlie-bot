@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-  TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET,
-  TUI_TMUX_SESSION_EXISTS_PATCH_TARGET,
-  build_tui_sessions_cfg,
+    TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET,
+    TUI_TMUX_SESSION_EXISTS_PATCH_TARGET,
+    build_tui_sessions_cfg,
 )
 from conftest import make_sessions_client as _build_client
 

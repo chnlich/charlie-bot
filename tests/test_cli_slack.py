@@ -8,9 +8,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 from conftest import (
-  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-  CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
-  make_json_response,
+    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+    make_json_response,
 )
 from conftest import setup_session_cwd as _setup_session_cwd
 

@@ -18,10 +18,10 @@ import os.path
 from collections.abc import Sequence
 
 from src.cli.common import (
-  add_session_arg,
-  get_api,
-  post_internal_api,
-  resolve_session_id,
+    add_session_arg,
+    get_api,
+    post_internal_api,
+    resolve_session_id,
 )
 
 _PLAN_REMINDER = (
@@ -67,8 +67,7 @@ def _readback_plan(session_id: str, verb: str, args: argparse.Namespace) -> dict
   if verb == "approve":
     candidates = [
         p for p in plans
-        if p.get("takeoff") is not None and p.get("closed") is None
-        and (args.plan is None or p.get("id") == args.plan)
+        if p.get("takeoff") is not None and p.get("closed") is None and (args.plan is None or p.get("id") == args.plan)
     ]
     if len(candidates) == 1:
       plan = candidates[0]

@@ -14,10 +14,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
-  BROADCAST_PATCH_TARGET,
-  OPUS_BACKEND_ID,
-  OPUS_BACKEND_OPTION,
-  patch_improve_git_ops,
+    BROADCAST_PATCH_TARGET,
+    OPUS_BACKEND_ID,
+    OPUS_BACKEND_OPTION,
+    patch_improve_git_ops,
 )
 from conftest import make_parent as _make_parent
 
@@ -158,7 +158,8 @@ async def test_improve_final_summary_lands_in_successor(tmp_path: Path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_improve_worktree_creation_failure_lands_in_successor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_improve_worktree_creation_failure_lands_in_successor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   mgr = SessionManager(_make_cfg(tmp_path))
   parent_id = await _make_parent(mgr)
   child_id = await _elone(mgr, parent_id)
@@ -229,6 +230,7 @@ async def test_improve_final_summary_no_successor_writes_into_itself_without_ori
 
 
 def _patch_review_reviewer_chain(monkeypatch: pytest.MonkeyPatch, *, cleanup_error: str) -> None:
+
   async def fake_finalize_review_chain(session_id, original_thread, worktree_parent) -> str:
     del session_id, original_thread, worktree_parent
     return cleanup_error

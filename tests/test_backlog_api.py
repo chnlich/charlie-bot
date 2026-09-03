@@ -11,9 +11,7 @@ from src.api import backlog as backlog_api
 from src.core.config import BacklogRepoConfig, CharlieBotConfig
 
 
-def _build_client(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cfg: CharlieBotConfig
-) -> TestClient:
+def _build_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cfg: CharlieBotConfig) -> TestClient:
   monkeypatch.setattr("src.core.config.get_config", lambda: cfg)
   app = FastAPI()
   app.include_router(backlog_api.router, prefix="/api/backlog")

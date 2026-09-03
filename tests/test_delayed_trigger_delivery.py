@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-  BROADCAST_PATCH_TARGET,
-  TRIGGER_MASTER_PATCH_TARGET,
-  TRIGGERS_GET_CONFIG_PATCH_TARGET,
-  make_home_config,
+    BROADCAST_PATCH_TARGET,
+    TRIGGER_MASTER_PATCH_TARGET,
+    TRIGGERS_GET_CONFIG_PATCH_TARGET,
+    make_home_config,
 )
 
 from src.api.message_utils import events_to_messages

@@ -28,8 +28,8 @@ from src.core import event_types as ET
 from src.core import runs
 from src.core.process import kill_process_group, make_pdeathsig_kill_preexec
 from src.core.timeouts import (
-  NO_OUTPUT_REPORT_THRESHOLD,
-  SUBPROCESS_DIAG_CAPTURE_TIMEOUT,
+    NO_OUTPUT_REPORT_THRESHOLD,
+    SUBPROCESS_DIAG_CAPTURE_TIMEOUT,
 )
 
 log = structlog.get_logger()
@@ -332,10 +332,8 @@ async def tail_follow_events(
         break
       if not is_alive():
         break  # producer gone and fully drained
-      if (
-          on_silence is not None and not silence_reported
-          and time.monotonic() - last_output_at > NO_OUTPUT_REPORT_THRESHOLD
-      ):
+      if (on_silence is not None and not silence_reported and
+          time.monotonic() - last_output_at > NO_OUTPUT_REPORT_THRESHOLD):
         silence_reported = True
         await on_silence()
       await asyncio.sleep(poll_interval)

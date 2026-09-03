@@ -64,6 +64,7 @@ def _thread_status(home: Path, session_id: str, thread_id: str) -> str:
 
 @pytest.fixture
 def _no_master_wake(monkeypatch: pytest.MonkeyPatch) -> None:
+
   async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
     pass
 
@@ -159,8 +160,7 @@ async def test_cancellation_with_live_probe_reports_and_skips_finalize(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_no_master_wake")
-async def test_cancellation_with_dead_probe_finalizes_failed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cancellation_with_dead_probe_finalizes_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """CancelledError + probe false -> current FAILED finalize (and the
   cancellation still propagates)."""
   home = tmp_path / "home"

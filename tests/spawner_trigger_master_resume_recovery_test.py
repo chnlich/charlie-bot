@@ -80,7 +80,8 @@ class FakeSessionManager:
 
 
 @pytest.mark.asyncio
-async def test_stale_resume_id_retries_once_without_resume_and_does_not_persist(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stale_resume_id_retries_once_without_resume_and_does_not_persist(
+    monkeypatch: pytest.MonkeyPatch) -> None:
   """Stale resume/session-not-found errors should retry once and recover.
 
   Persistence of the new cc_session_id is the consumer's job (inside

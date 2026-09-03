@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-  BROADCAST_PATCH_TARGET,
-  OPUS_BACKEND_ID,
-  TRIGGER_MASTER_PATCH_TARGET,
-  TRIGGERS_GET_CONFIG_PATCH_TARGET,
-  make_home_session,
+    BROADCAST_PATCH_TARGET,
+    OPUS_BACKEND_ID,
+    TRIGGER_MASTER_PATCH_TARGET,
+    TRIGGERS_GET_CONFIG_PATCH_TARGET,
+    make_home_session,
 )
 from conftest import make_parent as _make_parent
 

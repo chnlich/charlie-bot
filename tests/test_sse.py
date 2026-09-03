@@ -156,7 +156,14 @@ def test_production_frame_shape_with_raw_boundary_chars_survives_chunking() -> N
   ls = "\u2028"
   part_text = '...identifier\\");else{a:48<' + nel + ">NEL-CHAR" + ls + '>LS-CHAR"},"status":"running",...'
   payload = json.dumps(
-      {"type": "message.part.updated", "properties": {"part": {"text": part_text}}},
+      {
+          "type": "message.part.updated",
+          "properties": {
+              "part": {
+                  "text": part_text
+              }
+          }
+      },
       ensure_ascii=False,
   )
   assert nel in payload and ls in payload

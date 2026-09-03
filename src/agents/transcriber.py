@@ -11,11 +11,13 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 import numpy as np
 import structlog
 
 from src.core.config import CharlieBotConfig
+from src.core.json_utils import atomic_write_stream
 from src.core.timeouts import HTTP_MODEL_DOWNLOAD_TIMEOUT
 
 log = structlog.get_logger()
@@ -174,21 +176,22 @@ def _ensure_artifact(path: Path, url: str, expected_sha256: str) -> None:
       raise RuntimeError(f"cached speech model hash mismatch for {path}: {actual}")
     return
 
-  tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-  try:
+  def _write(stream: BinaryIO) -> None:
     with urllib.request.urlopen(url, timeout=HTTP_MODEL_DOWNLOAD_TIMEOUT) as response:
       status = getattr(response, "status", 200)
       if status != 200:
         raise RuntimeError(f"model download failed for {url}: HTTP {status}")
-      with tmp_path.open("wb") as out:
-        shutil.copyfileobj(response, out, length=1024 * 1024)
-    actual = _sha256_file(tmp_path)
+      digest = hashlib.sha256()
+      while chunk := response.read(1024 * 1024):
+        digest.update(chunk)
+        stream.write(chunk)
+    actual = digest.hexdigest()
     if actual != expected_sha256:
       raise RuntimeError(f"downloaded speech model hash mismatch for {url}: {actual}")
-    os.replace(tmp_path, path)
-  finally:
-    if tmp_path.exists():
-      tmp_path.unlink()
+
+  # The swap discipline lives in json_utils.atomic_write_stream, so the verify
+  # runs inside its write callback: a mismatch raises before the publish.
+  atomic_write_stream(path, _write)
 
 
 def _qwen3_model_files(paths: VoiceModelPaths) -> tuple[Path, ...]:

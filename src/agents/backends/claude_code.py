@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 import signal
 from collections.abc import Mapping
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import structlog
 
 from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, AgentBackend
+from src.core import event_types as ET
 from src.core.process import kill_process_group
 
 log = structlog.get_logger()
@@ -155,6 +157,76 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
       return window, None
 
   return window, window - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
+
+
+# The CLI's synthetic assistant events (errors, injected notices) carry this
+# sentinel as message.model; they name no real model and never count as one.
+_SYNTHETIC_MODEL = "<synthetic>"
+
+# One trailing 8-digit date segment, e.g. claude-haiku-4-5-20251001. Stripped
+# from both sides before the family comparison so a dated basename and its
+# bare spelling land in the same family.
+_TRAILING_DATE_SEGMENT = re.compile(r"-\d{8}$")
+
+
+def _family_membership(served: str, configured: str) -> bool:
+  """Whether *served* and *configured* name models of the same Claude family.
+
+  Both sides first lose one trailing 8-digit date segment
+  (claude-haiku-4-5-20251001 -> claude-haiku-4-5), then the shorter name must
+  be the longer name or its prefix at a complete dash-segment boundary:
+  claude-fable-5 is a segment prefix of claude-fable-5-1 (same family), while
+  claude-opus-4-8 and claude-opus-5 are segment prefixes of neither
+  (different families). Stripping any trailing numeric segment instead would
+  cut the main healthy spelling claude-fable-5 down to claude-fable and
+  misjudge it as out-of-family.
+  """
+  served_stripped = _TRAILING_DATE_SEGMENT.sub("", served)
+  configured_stripped = _TRAILING_DATE_SEGMENT.sub("", configured)
+  shorter, longer = sorted((served_stripped, configured_stripped), key=len)
+  return longer == shorter or longer.startswith(f"{shorter}-")
+
+
+def out_of_family_served_models(events: list[dict], configured_model: str | None) -> list[str]:
+  """Models outside *configured_model*'s family that authored a round's visible reply.
+
+  Pure detector over parsed (projected) event dicts. The author of the visible
+  reply is a main-chain assistant event — no ``parent_tool_use_id`` — carrying
+  at least one ``{"type": "text"}`` content block, the blocks the aggregator
+  merges into the rendered reply text; thinking and tool_use blocks never
+  qualify, and only ``message.model`` is read (never modelUsage, whose healthy
+  key set routinely includes haiku). Events with a missing/null model or the
+  CLI's ``<synthetic>`` sentinel are skipped. Returns the raw model names in
+  first-appearance order, deduplicated. Empty when every text-authoring model
+  is in-family, and when *configured_model* is empty — a family backend with
+  no model pin never produces a notice.
+  """
+  if not configured_model:
+    return []
+  served: list[str] = []
+  seen: set[str] = set()
+  for event in events:
+    if event.get("parent_tool_use_id"):
+      continue
+    if event.get("type") != ET.ASSISTANT:
+      continue
+    message = event.get("message")
+    if not isinstance(message, dict):
+      continue
+    model = message.get("model")
+    if not model or model == _SYNTHETIC_MODEL:
+      continue
+    blocks = message.get("content")
+    if not isinstance(blocks, list):
+      continue
+    if not any(isinstance(block, dict) and block.get("type") == "text" for block in blocks):
+      continue
+    if _family_membership(model, configured_model):
+      continue
+    if model not in seen:
+      seen.add(model)
+      served.append(model)
+  return served
 
 
 class ClaudeCodeBackend(AgentBackend):

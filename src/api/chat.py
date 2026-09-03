@@ -238,7 +238,6 @@ async def _auto_name(
     return
 
   # Collect existing group names so the LLM can reuse them
-  all_sessions = await session_mgr.list_sessions()
-  existing_groups = sorted({s.group for s in all_sessions if s.group})
+  existing_groups = await session_mgr.list_group_names()
 
   await maybe_auto_name(cfg, session_meta, user_message, assistant_text, session_mgr, existing_groups)

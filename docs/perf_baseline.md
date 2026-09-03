@@ -50,6 +50,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M37 archived-session chat tail page, steady state | M37 collector below | seconds per `parse_ndjson_tail(200)` call, worst on-disk archived live file | median < 0.005 s | — (introduced with its first history row) |
 | M38 session stream-broadcast fan-out, worst on-disk turn replay | M38 collector below | stream frames and json.dumps calls/seconds per turn replay, instant feed, one subscriber | dumps total < 0.02 s; final-frame parity true | — (introduced with its first history row) |
 | M39 tui/status busy check, steady state | M39 collector below | seconds of loop lag + wall per per-session busy check, live ~/.claude/projects corpus (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.01 s; wall median < 0.001 s | — (introduced with its first history row) |
+| M40 session-list filtered listing + group reduction, steady state | M40 collector below | seconds per `list_sessions(starred=True, …)` call and per group-name reduction, live session corpus | both medians < 0.005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2027,6 +2028,58 @@ async def main():
     print(f"{n_dirs} project dirs; busy={results[0][0]}; "
           f"loop-lag median {lags[4]*1000:.2f} ms, max {lags[-1]*1000:.2f} ms; "
           f"busy-check wall median {walls[4]*1000:.2f} ms, max {walls[-1]*1000:.2f} ms")
+
+asyncio.run(main())
+EOF
+```
+
+M40 — session-list filtered listing and group-name reduction, steady state. The
+sessions page's load fetches hit `GET /api/sessions/starred` and
+`GET /api/sessions/groups`; the pre-fix `list_sessions` copied and
+thinking-stamped every cached meta (~1012 rows at measurement) before the
+starred/scheduled filters ran (the starred list keeps ~10), and the groups
+handler plus the autonamer's group list paid the same full copy pass to reduce
+the corpus to ~25 names — several ms of on-loop pydantic work per request.
+The fixed `list_sessions` runs the starred/scheduled filters against the shared
+cached metas (read-only) so only surviving rows pay the model_copy and thinking
+stamp, and the group-name readers go through `list_group_names`, a read-only
+reduction of the cached metas with no copies at all. The per-request enrich and
+enrichment-free paths behind the standing status poll are unchanged. The cost
+is a page-load latency no standing row covers, so the collector times the two
+handler-level manager calls over the live session corpus (read-only), from the
+checkout under test: one cold pass, as at a server start with an empty metadata
+cache, then nine timed pairs. The pre-fix numbers used in the landing PR's
+evidence are the same verbatim command with the pre-fix groups handler body
+(`sorted({s.group for s in await mgr.list_sessions() if s.group})`) in place of
+the `list_group_names()` call, the same shape as the M21 protocol. Evidence
+while the live server runs older code points the same collector at the branch
+checkout (`CHECKOUT` at the worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+async def main():
+    cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+    mgr = SessionManager(cfg)
+    await mgr.list_group_names()  # cold pass, as at a server start; not timed
+    stimes, gtimes, n_star, n_groups = [], [], 0, 0
+    for _ in range(9):
+        t0 = time.perf_counter()
+        starred = await mgr.list_sessions(starred=True, include_running_status=True, include_pending_trigger_status=True)
+        stimes.append(time.perf_counter() - t0)
+        t0 = time.perf_counter()
+        groups = await mgr.list_group_names()
+        gtimes.append(time.perf_counter() - t0)
+        n_star, n_groups = len(starred), len(groups)
+    stimes.sort()
+    gtimes.sort()
+    print(f"starred list: {n_star} rows, median {stimes[4]*1000:.2f} ms, max {stimes[-1]*1000:.2f} ms; "
+          f"group-name reduction: {n_groups} groups, median {gtimes[4]*1000:.2f} ms, max {gtimes[-1]*1000:.2f} ms")
 
 asyncio.run(main())
 EOF

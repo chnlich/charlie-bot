@@ -73,6 +73,7 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
         model=_require_model(option),
         api_base=option.api_base,
         context_window=option.context_window,
+        api_key=option.api_key,
         **kwargs)
   if option.type == "gemini":
     return GeminiCliBackend(model=_require_model(option), **kwargs)

@@ -5,7 +5,7 @@ import pytest
 from conftest import FLAG_LIKE_PROMPT
 from pydantic import ValidationError
 
-from src.agents.backends.base import AgentBackend
+from src.agents.backends.base import USER_LOCAL_BIN, AgentBackend
 from src.agents.backends.charlie_code import CharlieCodeBackend
 from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
@@ -329,6 +329,34 @@ def test_backend_option_rejects_nonpositive_context_window(bad: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# BackendOption.api_key -> CHARLIE_CODE_API_KEY injection
+# ---------------------------------------------------------------------------
+
+
+def test_backend_option_defaults_api_key_to_none() -> None:
+  option = BackendOption(id="cc-test", label="t", type="charlie-code", model="test-model")
+  assert option.api_key is None
+
+
+def test_prepare_env_injects_api_key_when_configured(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, api_key="test-api-key-placeholder")
+
+  prepared = backend._prepare_env({"PATH": "/usr/bin"})
+
+  assert prepared["CHARLIE_CODE_API_KEY"] == "test-api-key-placeholder"
+
+
+def test_prepare_env_without_api_key_leaves_env_untouched(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+  input_env = {"PATH": f"{USER_LOCAL_BIN}:/usr/bin", "HOME": "/home/test"}
+
+  prepared = backend._prepare_env(dict(input_env))
+
+  assert "CHARLIE_CODE_API_KEY" not in prepared
+  assert prepared == input_env
+
+
+# ---------------------------------------------------------------------------
 # registry wiring
 # ---------------------------------------------------------------------------
 
@@ -351,6 +379,26 @@ def test_registry_propagates_context_window_into_charlie_code_backend(monkeypatc
 
   assert isinstance(backend, CharlieCodeBackend)
   assert backend._context_window == 262144
+
+
+def test_registry_propagates_api_key_into_charlie_code_backend(monkeypatch) -> None:
+  monkeypatch.setattr(
+      "src.agents.backends.charlie_code.resolve_binary",
+      lambda name, fallback: "/usr/bin/charlie-code",
+  )
+  option = BackendOption(
+      id="cc-gemini-test",
+      label="t",
+      type="charlie-code",
+      model="openai/test-model",
+      api_base="http://test.invalid/v1",
+      api_key="test-api-key-placeholder",
+  )
+
+  backend = build_backend(option, CharlieBotConfig())
+
+  assert isinstance(backend, CharlieCodeBackend)
+  assert backend._api_key == "test-api-key-placeholder"
 
 
 def test_api_base_required(monkeypatch) -> None:

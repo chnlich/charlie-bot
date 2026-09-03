@@ -37,6 +37,7 @@ class CharlieCodeBackend(AgentBackend):
       model: str,
       api_base: str | None = None,
       context_window: int | None = None,
+      api_key: str | None = None,
       **kwargs,
   ):
     super().__init__(model=model, **kwargs)
@@ -44,6 +45,7 @@ class CharlieCodeBackend(AgentBackend):
     if not self._api_base:
       raise ValueError("charlie-code backend requires api_base (set backend_options[].api_base in config.yaml)")
     self._context_window = context_window
+    self._api_key = api_key
     self._bin = resolve_binary("charlie-code", USER_LOCAL_BIN)
     self._transport_dir: Path | None = None
 
@@ -54,6 +56,8 @@ class CharlieCodeBackend(AgentBackend):
   def _prepare_env(self, env: dict) -> dict:
     charlie_code_env = {**env}
     prepend_path_dir(charlie_code_env, USER_LOCAL_BIN)
+    if self._api_key is not None:
+      charlie_code_env["CHARLIE_CODE_API_KEY"] = self._api_key
     return charlie_code_env
 
   def _build_command(self, prompt: str) -> list[str]:

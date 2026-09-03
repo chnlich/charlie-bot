@@ -25,9 +25,21 @@ the full path follow the per-file cache's own visibility contract: appends, dele
 and directory-permission changes all move the signature, while a file-level chmod that
 leaves (mtime_ns, size) untouched keeps serving the cached parse. The memo is order-safe
 under an unstable walk order: cross-file dedupe arbitrates verbatim replays, which carry
-identical token values, so first-wins cannot move a sum. The opencode db stays outside the
-memo: its WAL sidecar moves under plain serve traffic, so its entry always round-trips the
-persisted document.
+identical token values, so first-wins cannot move a sum. The opencode db stays outside that
+corpus memo: its WAL sidecar moves under plain serve traffic, so its entry always round-trips
+the persisted document, and the miss path is incremental per message row (see row memo below).
+Vocabulary (opencode row memo):
+  key         ``(message id, time_updated)`` of one row in the db's message table. opencode
+              (drizzle ORM, ``$onUpdate(() => Date.now())`` on the column) bumps time_updated
+              to epoch ms on every write, insert and upsert alike, so the pair identifies the
+              row's content: a collect re-reads only rows whose pair moved since the previous
+              collect and drops ids absent from a ``select id, time_updated`` pass (cascade
+              deletes). A terminal pair of writes to one row inside one millisecond can carry
+              the same time_updated; the second write then never reaches the memo. Only
+              finish metadata (error/completed) rides such writes on observed opencode write
+              paths — token fields change exactly once, at the step-finish write that starts
+              the pair — so the three projected token buckets the tally sums cannot go stale,
+              and any later write to the row re-reads it.
 Vocabulary:
   signature   ``[mtime_ns, size]`` for a log file; a file re-scans whole whenever either value
               moves. The opencode db signs as ``[mtime_ns, size, wal_sig]`` with ``wal_sig`` the
@@ -51,6 +63,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import sqlite3
 import time
 from collections import defaultdict
@@ -299,11 +312,16 @@ def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path
 # The aggregate memo pair (walk signature, partial); see the module docstring.
 _aggregate_memo: tuple[tuple, _SourceAggregate] | None = None
 
+# Per-row memo for the opencode message table: db path -> {message id: (time_updated, record
+# or None)}; see the module docstring for the key's contract.
+_opencode_row_memos: dict[str, dict[str, tuple[int, list | None]]] = {}
+
 
 def _reset_aggregate_memo() -> None:
-  """Drop the aggregate memo (test isolation)."""
+  """Drop the collection's process-wide memos (test isolation)."""
   global _aggregate_memo
   _aggregate_memo = None
+  _opencode_row_memos.clear()
 
 
 def _claude_file_contribution(path: Path) -> tuple[dict, int]:
@@ -454,23 +472,33 @@ def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -
         f"{len(check)} root sessions; /compact resets a session total, so the per-request sum leads)")
 
 
-# The scan projects each matching row's tally fields inside SQLite: one json_extract parse
-# per row there beats fetching every matching row's whole data blob and parsing in Python
-# (~0.5 s vs ~0.8 s over this host's 27.9k-row message table). json_valid keeps the old
-# json.loads failure mode: the LIKE prefilter can match a malformed row, and skipping it
-# must not error the query. Non-object tokens project NULLs, dropped by the filter below.
+# The cold-pass scan projects each matching row's tally fields inside SQLite: json_extract
+# in C there beats a Python round trip plus json.loads per row (measured ~4x slower over this
+# host's 36k-row message table). json_valid keeps the old json.loads failure mode: the LIKE
+# prefilter can match a malformed row, and skipping it must not error the query. Non-object
+# tokens project NULLs, dropped by the row filter below. The trailing id/time_updated columns
+# seed the row memo; rows the WHERE clause drops are known non-contributors and memoize as
+# None without a re-read. _opencode_row_data must project an identical record per row.
 _OPENCODE_SCAN_SQL = """
 select json_extract(data, '$.modelID'), json_extract(data, '$.providerID'),
        json_extract(data, '$.time.created'),
        json_extract(data, '$.tokens.input'), json_extract(data, '$.tokens.output'),
        json_extract(data, '$.tokens.total'),
        json_extract(data, '$.tokens.cache.write'), json_extract(data, '$.tokens.cache.read'),
-       length(data)
+       length(data), id, time_updated
 from message
 where data like '%"tokens"%'
   and json_valid(data)
   and json_extract(data, '$.role') = 'assistant'
 """
+
+# Row keys the incremental path diffs against the memo; a leaf-page scan that never touches
+# the data blobs' overflow pages (~0.03 s warm over this host's table).
+_OPENCODE_KEYS_SQL = "select id, time_updated from message"
+
+# ASCII-case-insensitive mirror of the scan SQL's LIKE '%"tokens"%' prefilter (SQLite folds
+# only A-Z, so str.lower would mismatch marks SQLite leaves distinct).
+_OPENCODE_TOKENS_LIKE = re.compile(r'"[tT][oO][kK][eE][nN][sS]"').search
 
 
 def _opencode_row(row: tuple) -> list | None:
@@ -485,6 +513,38 @@ def _opencode_row(row: tuple) -> list | None:
       created, (int, float)) else None
   return [model, provider or "unknown", ts,
           in_fresh or 0, cache_write or 0, cache_read or 0, output or 0]
+
+
+def _strict_json_constant(name: str) -> None:
+  """Reject the NaN/Infinity literals json.loads admits but SQLite's json_valid rejects."""
+  raise ValueError(f"invalid JSON constant: {name}")
+
+
+def _opencode_row_data(data: str) -> tuple[list | None, int]:
+  """One message row's (record, bytes counted) from its data blob, as the scan SQL projects.
+
+  Byte-counted exactly when the SQL filter chain (LIKE prefilter, json_valid, assistant role)
+  would return the row; the record is then _opencode_row over the same eight projections.
+  """
+  if _OPENCODE_TOKENS_LIKE(data) is None:
+    return None, 0
+  try:
+    obj = json.loads(data, parse_constant=_strict_json_constant)
+  except (ValueError, RecursionError):
+    return None, 0
+  if not isinstance(obj, dict) or obj.get("role") != "assistant":
+    return None, 0
+  tokens = obj.get("tokens")
+  tokens = tokens if isinstance(tokens, dict) else {}
+  cache = tokens.get("cache")
+  cache = cache if isinstance(cache, dict) else {}
+  created = obj.get("time")
+  created = created.get("created") if isinstance(created, dict) else None
+  rec = _opencode_row((
+      obj.get("modelID"), obj.get("providerID"), created,
+      tokens.get("input"), tokens.get("output"), tokens.get("total"),
+      cache.get("write"), cache.get("read")))
+  return rec, len(data)
 
 
 def _opencode_db_signature(db: Path) -> list | None:
@@ -518,20 +578,16 @@ def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> None:
     # never be served later as if complete.
     try:
       con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+      try:
+        memo = _opencode_row_memos.setdefault(str(db), {})
+        nbytes = _scan_opencode_rows(con, memo)
+      finally:
+        con.close()
     except sqlite3.Error as exc:
       t.notes.append(f"opencode: unreadable db: {exc}")
       return
-    records: list[list] = []
-    nbytes = 0
-    try:
-      for row in con.execute(_OPENCODE_SCAN_SQL):
-        nbytes += row[8]
-        rec = _opencode_row(row[:8])
-        if rec is not None:
-          records.append(rec)
-    finally:
-      con.close()
     t.scanned_bytes += nbytes
+    records = [rec for _, rec in memo.values() if rec is not None]
     if cache is not None and sig is not None:
       cache.store("opencode", db, {"sig": sig, "records": records})
   else:
@@ -541,6 +597,37 @@ def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> None:
         "opencode", model, account, ts,
         in_fresh=in_fresh, cache_write=cache_write, cache_read=cache_read, output=output)
   t.notes.append(f"opencode: {len(records):,} assistant messages with token counts")
+
+
+def _scan_opencode_rows(con: sqlite3.Connection, memo: dict[str, tuple[int, list | None]]) -> int:
+  """Advance *memo* to the message table's current rows; return the bytes this pass read.
+
+  With an empty memo the SQL scan projects every contributing row (the cold pass, as at a
+  process start) and rows it filters out memoize as None — both without a re-read per row.
+  Afterwards only rows whose ``(id, time_updated)`` key moved go through the per-id fetch:
+  steady state re-reads a handful of blobs per collect instead of the whole table, which the
+  WAL-invalidated file signature would otherwise re-scan on every page load.
+  """
+  live = {mid: tu for mid, tu in con.execute(_OPENCODE_KEYS_SQL)}
+  nbytes = 0
+  if not memo:
+    for row in con.execute(_OPENCODE_SCAN_SQL):
+      nbytes += row[8]
+      memo[row[9]] = (row[10], _opencode_row(row[:8]))
+    for mid, tu in live.items():
+      if mid not in memo:
+        memo[mid] = (tu, None)
+    return nbytes
+  changed = [mid for mid, tu in live.items() if memo.get(mid, (None,))[0] != tu]
+  for mid in list(memo):
+    if mid not in live:
+      del memo[mid]
+  for mid in changed:
+    row = con.execute("select data from message where id = ?", (mid,)).fetchone()
+    rec, n = (None, 0) if row is None else _opencode_row_data(row[0])
+    nbytes += n
+    memo[mid] = (live[mid], rec)
+  return nbytes
 
 
 def _build(t: _Tally) -> list[dict]:

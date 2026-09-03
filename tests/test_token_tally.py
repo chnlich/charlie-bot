@@ -85,12 +85,38 @@ def _codex_count(last: dict, total: dict, ts: str = "ts") -> dict:
   }
 
 
+def _create_message_table(con: sqlite3.Connection) -> None:
+  """The opencode message table's production shape (drizzle schema): the row memo reads the
+  id and time_updated audit columns, so fixtures must carry them."""
+  con.execute(
+      "create table message (id text primary key, session_id text not null, "
+      "time_created integer not null, time_updated integer not null, data text not null)")
+
+
+def _insert_opencode_raw(con: sqlite3.Connection, rows: list[tuple[dict | str, tuple]]) -> None:
+  """Insert rows as (data-dict-or-raw-string, account-model-provider payload pair) with
+  minted ids and forward-only audit times, mirroring opencode's upsert contract."""
+  for data, (payload, model_id, provider) in rows:
+    tu = con.execute(
+        "select coalesce(max(time_updated), 1699999999999) + 1 from message").fetchone()[0]
+    if isinstance(data, dict):
+      data.setdefault("role", "assistant")
+      data.setdefault("modelID", model_id)
+      data.setdefault("providerID", provider)
+      data.setdefault("tokens", payload)
+      blob = json.dumps(data)
+    else:
+      blob = data
+    con.execute(
+        "insert into message (id, session_id, time_created, time_updated, data) "
+        "values (?, 'sess', ?, ?, ?)",
+        (f"msg-{tu}", tu, tu, blob))
+
+
 def _write_opencode(path: Path, rows: list[tuple[dict, str, str]]) -> None:
   con = sqlite3.connect(path)
-  con.execute("create table message (data text)")
-  for payload, model_id, provider in rows:
-    data = {"role": "assistant", "modelID": model_id, "providerID": provider, "tokens": payload}
-    con.execute("insert into message (data) values (?)", (json.dumps(data),))
+  _create_message_table(con)
+  _insert_opencode_raw(con, [({}, row) for row in rows])
   con.commit()
   con.close()
 
@@ -527,9 +553,7 @@ def test_non_opencode_change_still_persists(tmp_path: Path) -> None:
 
 def _append_opencode(path: Path, rows: list[tuple[dict, str, str]]) -> None:
   con = sqlite3.connect(path)
-  for payload, model_id, provider in rows:
-    data = {"role": "assistant", "modelID": model_id, "providerID": provider, "tokens": payload}
-    con.execute("insert into message (data) values (?)", (json.dumps(data),))
+  _insert_opencode_raw(con, [({}, row) for row in rows])
   con.commit()
   con.close()
 
@@ -553,26 +577,25 @@ def test_opencode_scan_row_filters(tmp_path: Path) -> None:
   # path put it: counted, skipped as non-contributing, or skipped as malformed.
   db = tmp_path / "db.sqlite"
   con = sqlite3.connect(db)
-  con.execute("create table message (data text)")
+  _create_message_table(con)
   rows = [
-      {"role": "assistant", "modelID": "oc-full", "providerID": "prov",
-       "time": {"created": 1700000000000},
-       "tokens": {"input": 10, "output": 2, "cache": {"read": 4, "write": 1}}},
-      {"role": "assistant", "modelID": "/models/oc-local", "providerID": "lmstudio",
-       "tokens": {"input": 0, "output": 3, "total": 3}},
-      {"role": "assistant", "modelID": "oc-nocache", "providerID": "prov",
-       "tokens": {"input": 5, "output": 1, "total": 6}},
+      ({"role": "assistant", "modelID": "oc-full", "providerID": "prov",
+        "time": {"created": 1700000000000},
+        "tokens": {"input": 10, "output": 2, "cache": {"read": 4, "write": 1}}}, (None, "", "")),
+      ({"role": "assistant", "modelID": "/models/oc-local", "providerID": "lmstudio",
+        "tokens": {"input": 0, "output": 3, "total": 3}}, (None, "", "")),
+      ({"role": "assistant", "modelID": "oc-nocache", "providerID": "prov",
+        "tokens": {"input": 5, "output": 1, "total": 6}}, (None, "", "")),
       # skipped rows below: non-assistant role; all counters zero; tokens not an object;
       # malformed JSON that still matches the LIKE prefilter
-      {"role": "user", "modelID": "oc-user",
-       "tokens": {"input": 99, "output": 99, "total": 99}},
-      {"role": "assistant", "modelID": "oc-zero", "tokens": {"input": 0, "output": 0, "total": 0}},
-      {"role": "assistant", "modelID": "oc-lit", "tokens": "final"},
-      '{"role":"assistant","tokens":{"input": 5,',
+      ({"role": "user", "modelID": "oc-user",
+        "tokens": {"input": 99, "output": 99, "total": 99}}, (None, "", "")),
+      ({"role": "assistant", "modelID": "oc-zero",
+        "tokens": {"input": 0, "output": 0, "total": 0}}, (None, "", "")),
+      ({"role": "assistant", "modelID": "oc-lit", "tokens": "final"}, (None, "", "")),
+      ('{"role":"assistant","tokens":{"input": 5,', (None, "", "")),
   ]
-  for data in rows:
-    con.execute("insert into message (data) values (?)",
-                (json.dumps(data) if isinstance(data, dict) else data,))
+  _insert_opencode_raw(con, rows)
   con.commit()
   con.close()
 
@@ -584,6 +607,38 @@ def test_opencode_scan_row_filters(tmp_path: Path) -> None:
   assert (full.cache_read, full.cache_write) == (4, 1)
   assert full.last == "2023-11-14"
   assert by_model["oc-local (lmstudio)"].output == 3
+
+
+def test_opencode_row_data_matches_the_scan_projection() -> None:
+  # The incremental path projects fetched blobs through _opencode_row_data; that projection
+  # must agree with the scan SQL on every shape the prefilter admits, including the skips.
+  shapes = [
+      ({"role": "assistant", "modelID": "oc-full", "providerID": "prov",
+        "time": {"created": 1700000000000},
+        "tokens": {"input": 10, "output": 2, "cache": {"read": 4, "write": 1}}},
+       (["oc-full", "prov", "2023-11-14T22:13:20+00:00", 10, 1, 4, 2], True)),
+      ({"role": "assistant", "modelID": "/models/oc-local", "providerID": "lmstudio",
+        "tokens": {"input": 0, "output": 3, "total": 3}},
+       (["oc-local (lmstudio)", "lmstudio", None, 0, 0, 0, 3], True)),
+      ({"role": "assistant", "modelID": "oc-nocache", "providerID": "prov",
+        "tokens": {"input": 5, "output": 1, "total": 6}},
+       (["oc-nocache", "prov", None, 5, 0, 0, 1], True)),
+      # skipped rows below: non-assistant role counted 0 bytes; zero counters and
+      # string tokens pass the filters but project to None with bytes counted
+      ({"role": "user", "modelID": "oc-user", "tokens": {"input": 9, "output": 9}},
+       (None, False)),
+      ({"role": "assistant", "modelID": "oc-zero", "tokens": {"input": 0, "output": 0}},
+       (None, True)),
+      ({"role": "assistant", "modelID": "oc-lit", "tokens": "final"}, (None, True)),
+      ('{"role":"assistant","tokens":{"input": 5,', (None, False)),
+      ({"role": "assistant", "modelID": "oc-nano", "tokens": {"input": float("nan")}},
+       (None, False)),
+  ]
+  for data, (rec, counted) in shapes:
+    blob = json.dumps(data) if isinstance(data, dict) else data
+    got_rec, got_bytes = tt._opencode_row_data(blob)
+    assert got_rec == rec
+    assert got_bytes == (len(blob) if counted else 0)
 
 
 def test_opencode_cache_invalidates_on_insert(tmp_path: Path) -> None:
@@ -602,6 +657,54 @@ def test_opencode_cache_invalidates_on_insert(tmp_path: Path) -> None:
   assert after.calls == before.calls + 1
 
 
+def test_opencode_row_memo_rereads_only_moved_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # Steady state: an append invalidates the file signature, but the row memo re-reads only
+  # the new row's blob — the untouched rows' data must not re-enter the parser.
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  first = _collect(None, None, db, cache)
+  assert first.scanned_bytes > 0
+
+  _append_opencode(db, [
+      ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * 500}, "oc-m", "prov"),
+  ])
+  projected: list[str] = []
+  orig = tt._opencode_row_data
+
+  def spy(data: str) -> tuple[list | None, int]:
+    projected.append(data)
+    return orig(data)
+
+  monkeypatch.setattr(tt, "_opencode_row_data", spy)
+  second = _collect(None, None, db, cache)
+
+  assert len(projected) == 1 and '"input": 100' in projected[0]
+  after = _row(second, "opencode", "oc-m")
+  assert after.total == _row(first, "opencode", "oc-m").total + 102
+  assert after.calls == 2
+
+
+def test_opencode_row_memo_tracks_in_place_update(tmp_path: Path) -> None:
+  # The production write path: assistant rows land with zero tokens and step-finish upserts
+  # rewrite data in place with a bumped time_updated; the memo re-reads exactly those rows.
+  db = tmp_path / "db.sqlite"
+  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  before = _row(_collect(None, None, db), "opencode", "oc-m")
+
+  con = sqlite3.connect(db)
+  mid, = con.execute("select id from message").fetchone()
+  data = {"role": "assistant", "modelID": "oc-m", "providerID": "prov",
+          "tokens": {"input": 100, "output": 2, "cache": {"read": 0, "write": 0}}}
+  con.execute("update message set data = ?, time_updated = time_updated + 1 where id = ?",
+              (json.dumps(data), mid))
+  con.commit()
+  con.close()
+
+  after = _row(_collect(None, None, db), "opencode", "oc-m")
+  assert after.total == before.total - 6 + 102
+  assert after.calls == before.calls
+
+
 def test_opencode_cache_invalidates_on_wal_write(tmp_path: Path) -> None:
   # A WAL-mode commit grows the -wal sidecar and leaves the main file untouched; the main
   # file's stat alone can never see it. The writer stays open across the second collect so
@@ -609,17 +712,17 @@ def test_opencode_cache_invalidates_on_wal_write(tmp_path: Path) -> None:
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   con = sqlite3.connect(db)
   con.execute("pragma journal_mode=WAL")
-  con.execute("create table message (data text)")
+  _create_message_table(con)
   msg = {"role": "assistant", "modelID": "oc-m", "providerID": "prov",
          "tokens": {"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}}
-  con.execute("insert into message (data) values (?)", (json.dumps(msg),))
+  _insert_opencode_raw(con, [(msg, (None, "", ""))])
   con.commit()
   assert (db.parent / "db.sqlite-wal").exists()
   before = _row(_collect(None, None, db, cache), "opencode", "oc-m")
 
   msg["tokens"] = {"input": 100, "output": 2, "cache": {"read": 0, "write": 0}}
   main_sig = (db.stat().st_mtime_ns, db.stat().st_size)
-  con.execute("insert into message (data) values (?)", (json.dumps(msg),))
+  _insert_opencode_raw(con, [(msg, (None, "", ""))])
   con.commit()
   assert (db.stat().st_mtime_ns, db.stat().st_size) == main_sig
 

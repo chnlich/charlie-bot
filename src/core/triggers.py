@@ -16,7 +16,7 @@ import structlog
 
 from src.api.message_utils import build_scheduled_trigger_event
 from src.core.config import CharlieBotConfig, get_config
-from src.core.json_utils import atomic_write_text
+from src.core.json_utils import write_model_json_atomically
 from src.core.master_trigger import trigger_master
 from src.core.models import (
   LocalPid,
@@ -609,9 +609,8 @@ class TriggerManager:
           log.warning("trigger_recovery_load_failed", path=str(f), error=str(e))
           continue
         if migrated:
-          # Rewrite the legacy file once with the new schema, under the same
-          # atomic-write rule as _save_trigger.
-          await asyncio.to_thread(atomic_write_text, f, trigger.model_dump_json(indent=2))
+          # Rewrite the legacy file once with the new schema.
+          await write_model_json_atomically(f, trigger)
           log.info("trigger_schema_migrated", path=str(f), trigger_id=trigger.id)
         if trigger.status == TriggerStatus.PENDING:
           self._start_task(trigger)
@@ -944,14 +943,10 @@ class TriggerManager:
     return self._triggers_dir(session_id) / f"{trigger_id}.json"
 
   async def _save_trigger(self, trigger: PendingTrigger) -> None:
-    path = self._trigger_path(trigger.session_id, trigger.id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    serialized = trigger.model_dump_json(indent=2)
-    # Atomic per the write rule in src/core/json_utils.py: list_triggers and
-    # the sidebar probe read this file from executor threads with no
-    # coordination, and a plain truncate-write lets them observe a
-    # half-written file (a JSON parse failure drops the trigger from one poll).
-    await asyncio.to_thread(atomic_write_text, path, serialized)
+    # list_triggers and the sidebar probe read this file from executor threads
+    # with no coordination, so the write must stay atomic (a JSON parse
+    # failure drops the trigger from one poll).
+    await write_model_json_atomically(self._trigger_path(trigger.session_id, trigger.id), trigger)
     # Single funnel for every trigger-file write (schedule/cancel/undeliverable):
     # a pending-count change must reach the sidebar snapshot.
     mark_sidebar_dirty(trigger.session_id)

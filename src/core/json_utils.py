@@ -1,5 +1,6 @@
 """Shared JSON read/write helpers and the single home of the atomic file-write rule."""
 
+import asyncio
 import contextlib
 import json
 import os
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 import structlog
+from pydantic import BaseModel
 
 log = structlog.get_logger()
 
@@ -100,3 +102,15 @@ def write_json_atomically(
   if newline:
     text += "\n"
   atomic_write_text(path, text, private=private)
+
+
+async def write_model_json_atomically(path: Path, model: BaseModel) -> None:
+  """Serialize *model* as indented JSON and publish it at *path* under :func:`atomic_write_text`'s rule.
+
+  Creates the parent directory when missing. Callers' readers parse the file
+  from executor threads with no coordination, so the publish must stay an
+  async atomic swap: a plain truncate-write lets them observe a half-written
+  file.
+  """
+  path.parent.mkdir(parents=True, exist_ok=True)
+  await asyncio.to_thread(atomic_write_text, path, model.model_dump_json(indent=2))

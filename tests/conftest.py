@@ -247,7 +247,7 @@ def archive_cutoff_events() -> tuple[datetime, list[dict]]:
   return cutoff, events
 
 
-async def make_parent(mgr: "SessionManager", *, name: str = "Parent") -> str:
+async def make_parent(mgr: SessionManager, *, name: str = "Parent") -> str:
   """A session ready to elone: the two seed events give succession tests a cut point to reference."""
   parent = await mgr.create_session(models.CreateSessionRequest(name=name), backend=OPUS_BACKEND_ID)
   append_events(

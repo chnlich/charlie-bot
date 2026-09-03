@@ -46,27 +46,29 @@ NOTIFICATION_TYPES = (
     "agent_completed",
 )
 _NOTIFICATION_TYPES = frozenset(NOTIFICATION_TYPES)
-_SESSION_END_REASONS = frozenset({
-    "clear",
-    "resume",
-    "logout",
-    "prompt_input_exit",
-    "bypass_permissions_disabled",
-    "other",
-})
+_SESSION_END_REASONS = frozenset(
+    {
+        "clear",
+        "resume",
+        "logout",
+        "prompt_input_exit",
+        "bypass_permissions_disabled",
+        "other",
+    })
 _POST_COMPACT_TRIGGERS = frozenset({"manual", "auto"})
-_STOP_FAILURE_TYPES = frozenset({
-    "rate_limit",
-    "overloaded",
-    "authentication_failed",
-    "oauth_org_not_allowed",
-    "billing_error",
-    "invalid_request",
-    "model_not_found",
-    "server_error",
-    "max_output_tokens",
-    "unknown",
-})
+_STOP_FAILURE_TYPES = frozenset(
+    {
+        "rate_limit",
+        "overloaded",
+        "authentication_failed",
+        "oauth_org_not_allowed",
+        "billing_error",
+        "invalid_request",
+        "model_not_found",
+        "server_error",
+        "max_output_tokens",
+        "unknown",
+    })
 _CORRELATION_FIELDS = ("turn_id", "prompt_id", "turnId", "promptId")
 
 
@@ -129,16 +131,13 @@ class HookTurnState:
   def _validate_common(self, event_name: str, payload: dict[str, Any]) -> None:
     hook_event_name = _required_string(payload, "hook_event_name")
     if hook_event_name != event_name:
-      raise HookProtocolError(
-          f"hook event name mismatch: bridge received {event_name}, payload says {hook_event_name}")
+      raise HookProtocolError(f"hook event name mismatch: bridge received {event_name}, payload says {hook_event_name}")
     session_id = _required_string(payload, "session_id")
     if session_id != self.expected_session_id:
-      raise HookProtocolError(
-          f"hook session id mismatch: expected {self.expected_session_id}, got {session_id}")
+      raise HookProtocolError(f"hook session id mismatch: expected {self.expected_session_id}, got {session_id}")
     cwd = _required_string(payload, "cwd")
     if _canonical_cwd(cwd) != _canonical_cwd(self.expected_cwd):
-      raise HookProtocolError(
-          f"hook cwd mismatch: expected {self.expected_cwd}, got {cwd}")
+      raise HookProtocolError(f"hook cwd mismatch: expected {self.expected_cwd}, got {cwd}")
 
   def _correlation(self, payload: dict[str, Any], *, event_name: str) -> tuple[str, str]:
     if self.correlation_field is not None:
@@ -147,19 +146,16 @@ class HookTurnState:
             f"{event_name} payload is missing established correlation field '{self.correlation_field}'")
       value = payload[self.correlation_field]
       if not isinstance(value, str) or not value:
-        raise HookProtocolError(
-            f"{event_name} correlation field '{self.correlation_field}' must be a non-empty string")
+        raise HookProtocolError(f"{event_name} correlation field '{self.correlation_field}' must be a non-empty string")
       return self.correlation_field, value
     for field_name in _CORRELATION_FIELDS:
       if field_name in payload:
         value = payload[field_name]
         if not isinstance(value, str) or not value:
-          raise HookProtocolError(
-              f"{event_name} correlation field '{field_name}' must be a non-empty string")
+          raise HookProtocolError(f"{event_name} correlation field '{field_name}' must be a non-empty string")
         return field_name, value
     fields = ", ".join(_CORRELATION_FIELDS)
-    raise HookProtocolError(
-        f"{event_name} payload is missing the official turn correlation field; checked {fields}")
+    raise HookProtocolError(f"{event_name} payload is missing the official turn correlation field; checked {fields}")
 
   def handle(self, event_name: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Validate one hook payload and return zero or more CharlieBot events."""
@@ -196,26 +192,27 @@ class HookTurnState:
     if source not in _SESSION_START_SOURCES:
       raise HookProtocolError(f"unknown SessionStart source '{source}'")
     if source != self.expected_source:
-      raise HookProtocolError(
-          f"SessionStart source mismatch: expected {self.expected_source}, got {source}")
+      raise HookProtocolError(f"SessionStart source mismatch: expected {self.expected_source}, got {source}")
     if self.session_started:
       raise HookProtocolError("duplicate SessionStart hook for one Claude process")
     self.session_started = True
-    return [{
-        "type": ET.SYSTEM,
-        "subtype": "init",
-        "cwd": self.expected_cwd,
-        "session_id": self.expected_session_id,
-        "tools": [],
-        "mcp_servers": [],
-        "model": model,
-        "permissionMode": "bypassPermissions",
-        "output_style": "default",
-        "agents": [],
-        "skills": [],
-        "plugins": [],
-        "uuid": str(uuid.uuid4()),
-    }]
+    return [
+        {
+            "type": ET.SYSTEM,
+            "subtype": "init",
+            "cwd": self.expected_cwd,
+            "session_id": self.expected_session_id,
+            "tools": [],
+            "mcp_servers": [],
+            "model": model,
+            "permissionMode": "bypassPermissions",
+            "output_style": "default",
+            "agents": [],
+            "skills": [],
+            "plugins": [],
+            "uuid": str(uuid.uuid4()),
+        }
+    ]
 
   def _handle_user_prompt_submit(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
     self._validate_common("UserPromptSubmit", payload)
@@ -264,39 +261,47 @@ class HookTurnState:
     self._seen_message_batches.add(batch_key)
     if not delta:
       return []
-    return [{
-        "type": ET.ASSISTANT,
-        "message": {
-            "role": "assistant",
-            "content": [{"type": "text", "text": delta}],
-        },
-        "parent_tool_use_id": None,
-        "session_id": self.expected_session_id,
-        "message_id": message_id,
-        "turn_id": turn_id,
-        "uuid": str(uuid.uuid4()),
-    }]
+    return [
+        {
+            "type": ET.ASSISTANT,
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "text",
+                    "text": delta
+                }],
+            },
+            "parent_tool_use_id": None,
+            "session_id": self.expected_session_id,
+            "message_id": message_id,
+            "turn_id": turn_id,
+            "uuid": str(uuid.uuid4()),
+        }
+    ]
 
   def _handle_pre_tool_use(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
     self._validate_current_turn("PreToolUse", payload)
     tool_name = _required_string(payload, "tool_name")
     tool_input = _required(payload, "tool_input", dict)
     tool_use_id = _required_string(payload, "tool_use_id")
-    return [{
-        "type": ET.ASSISTANT,
-        "message": {
-            "role": "assistant",
-            "content": [{
-                "type": ET.TOOL_USE,
-                "id": tool_use_id,
-                "name": tool_name,
-                "input": tool_input,
-            }],
-        },
-        "parent_tool_use_id": None,
-        "session_id": self.expected_session_id,
-        "uuid": str(uuid.uuid4()),
-    }]
+    return [
+        {
+            "type": ET.ASSISTANT,
+            "message":
+                {
+                    "role": "assistant",
+                    "content": [{
+                        "type": ET.TOOL_USE,
+                        "id": tool_use_id,
+                        "name": tool_name,
+                        "input": tool_input,
+                    }],
+                },
+            "parent_tool_use_id": None,
+            "session_id": self.expected_session_id,
+            "uuid": str(uuid.uuid4()),
+        }
+    ]
 
   def _handle_post_tool_use(self, event_name: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
     self._validate_current_turn(event_name, payload)
@@ -315,17 +320,19 @@ class HookTurnState:
         "content": _tool_result_content(tool_response),
         "is_error": is_error,
     }
-    return [{
-        "type": ET.USER,
-        "message": {
-            "role": "user",
-            "content": [result_block],
-        },
-        "parent_tool_use_id": None,
-        "session_id": self.expected_session_id,
-        "uuid": str(uuid.uuid4()),
-        "tool_use_result": tool_response,
-    }]
+    return [
+        {
+            "type": ET.USER,
+            "message": {
+                "role": "user",
+                "content": [result_block],
+            },
+            "parent_tool_use_id": None,
+            "session_id": self.expected_session_id,
+            "uuid": str(uuid.uuid4()),
+            "tool_use_result": tool_response,
+        }
+    ]
 
   def _handle_post_compact(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
     self._validate_current_turn("PostCompact", payload)
@@ -385,15 +392,16 @@ class HookTurnState:
     }
     events: list[dict[str, Any]] = []
     if error == "rate_limit":
-      events.append({
-          "type": ET.RATE_LIMIT_EVENT,
-          "rate_limit_info": {
-              "status": "rejected",
-              "rateLimitType": "unknown",
-              "resetsAt": "unknown",
-          },
-          "uuid": str(uuid.uuid4()),
-      })
+      events.append(
+          {
+              "type": ET.RATE_LIMIT_EVENT,
+              "rate_limit_info": {
+                  "status": "rejected",
+                  "rateLimitType": "unknown",
+                  "resetsAt": "unknown",
+              },
+              "uuid": str(uuid.uuid4()),
+          })
     events.append(error_event)
     self.failure = HookBridgeError(f"StopFailure reported {error}: {message}")
     return events

@@ -264,7 +264,7 @@ class _Context:
   genre: str
   artifact: Path
   root: _Element
-  cfg: "CharlieBotConfig | None"
+  cfg: CharlieBotConfig | None
 
 
 _GENRE_TEMPLATES = {
@@ -465,7 +465,7 @@ _ORDINAL_SKIP_TAGS = frozenset({"style", "script", "pre"})
 _CJK_DIGITS = {c: i for i, c in enumerate("零一二三四五六七八九", 0)}
 
 
-def _toint(n: "str | None") -> "int | None":
+def _toint(n: str | None) -> int | None:
   """ASCII-digit or Chinese-numeral label number to int; unknown forms read as out of every range."""
   if n is None:
     return None
@@ -662,7 +662,7 @@ _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
 GENRES: tuple[str, ...] = tuple(_ASSERTION_SETS)
 
 
-def run_assertions(genre: str, artifact: Path, cfg: "CharlieBotConfig | None" = None) -> list[AssertionOutcome]:
+def run_assertions(genre: str, artifact: Path, cfg: CharlieBotConfig | None = None) -> list[AssertionOutcome]:
   """Run every assertion of *genre*'s set against *artifact*; return one outcome per printed line.
 
   Never stops at the first failure — a fix round clears every defect in one pass. A genre with

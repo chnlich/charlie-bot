@@ -95,8 +95,9 @@ async def spawn_worker(
     # still terminated.
     cancelled = True
     transport = runs.backend_type(cfg, thread.backend if thread else None)
-    let_go = (worker is not None and transport not in runs.UNCOVERED_BACKEND_TYPES
-              and not description.startswith(runs.IMPROVE_ITERATION_PREFIX))
+    let_go = (
+        worker is not None and transport not in runs.UNCOVERED_BACKEND_TYPES and
+        not description.startswith(runs.IMPROVE_ITERATION_PREFIX))
     log.warning(
         "spawn_worker_cancelled",
         session=session_id,
@@ -210,11 +211,10 @@ async def resume_worker(
         # Alive or unverifiable death: never record FAILED on our own error.
         log.warning("resume_finalize_skipped_alive", thread_id=thread_id, error=outcome.error)
         from src.core import (
-          init as init_module,  # lazy: init imports this module lazily too
+            init as init_module,  # lazy: init imports this module lazily too
         )
         await init_module._report_recovery_event(
-            session_mgr,
-            session_id,
+            session_mgr, session_id,
             f"Worker thread {thread_id[:8]} hit a resume error but its process cannot be proven "
             f"dead ({RESUME_EXCEPTION_ALIVE_REASON}). It is NOT being killed — left running "
             "and judged again on the next restart.")

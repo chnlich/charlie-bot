@@ -113,10 +113,12 @@ def _backend_overlay_inactive_msg(ev: dict) -> dict:
   """
   if ev.get("reason") == "unreadable":
     return {
-        "role": "system",
-        "content": (
-            f"Backend {ev.get('backend', '')}: prompt_overlay '{ev.get('overlay', '')}' "
-            f"could not be loaded ({ev.get('error', '')}) — running without a fence"),
+        "role":
+            "system",
+        "content":
+            (
+                f"Backend {ev.get('backend', '')}: prompt_overlay '{ev.get('overlay', '')}' "
+                f"could not be loaded ({ev.get('error', '')}) — running without a fence"),
     }
   return {
       "role": "system",
@@ -176,7 +178,9 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
             'content': ev.get('content', ''),
             'full_content': ev.get('full_content', ''),
             'thread_id': ev.get('thread_id'),
-            **({'origin_session_id': ev['origin_session_id']} if ev.get('origin_session_id') is not None else {}),
+            **({
+                'origin_session_id': ev['origin_session_id']
+            } if ev.get('origin_session_id') is not None else {}),
         },
     ET.HANDLER_RESULT:
         _handler_result_msg,

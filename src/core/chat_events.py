@@ -13,11 +13,11 @@ import structlog
 from src.core.json_utils import atomic_write_text
 from src.core.models import SessionMetadata, parse_utc_datetime, utc_now
 from src.core.ndjson import (
-  append_ndjson,
-  count_ndjson_lines,
-  parse_ndjson_file,
-  parse_ndjson_range,
-  parse_ndjson_tail,
+    append_ndjson,
+    count_ndjson_lines,
+    parse_ndjson_file,
+    parse_ndjson_range,
+    parse_ndjson_tail,
 )
 
 log = structlog.get_logger()

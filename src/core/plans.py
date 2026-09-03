@@ -262,8 +262,7 @@ class PlanRegistryManager:
     # Every save path first reads plans.json or a bound artifact out of the
     # session dir, so the dir exists; no mkdir here — a deleted dir must fail
     # this write, not resurrect.
-    await asyncio.to_thread(
-        write_json_atomically, self._plans_path(session_id), _project_registry(data), indent=2)
+    await asyncio.to_thread(write_json_atomically, self._plans_path(session_id), _project_registry(data), indent=2)
     # Single funnel for every registry verb (present/amend/approve/close):
     # an awaiting-approval change must reach the sidebar snapshot.
     mark_sidebar_dirty(session_id)

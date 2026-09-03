@@ -16,17 +16,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 
 from src.agents.backends.pty_common import (
-  _TMUX_SOCKET,
-  tmux_session_exists,
-  tmux_session_name,
+    _TMUX_SOCKET,
+    tmux_session_exists,
+    tmux_session_name,
 )
 from src.api.deps import get_thread_manager, get_trigger_manager
 from src.api.message_utils import extract_text_from_message, extract_tool_result_text
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import (
-  ThreadMetadata,
-  ThreadStatus,
-  WorkerEvent,
+    ThreadMetadata,
+    ThreadStatus,
+    WorkerEvent,
 )
 from src.core.process import kill_process_group
 from src.core.threads import ThreadManager
@@ -220,8 +220,7 @@ async def list_threads(
 ) -> Response:
   """Return mixed list of thread and trigger summaries, sorted by created_at descending."""
   session_dir = cfg.sessions_dir / session_id
-  sig = await asyncio.to_thread(
-      _list_body_signature, str(session_dir / "threads"), str(session_dir / "triggers"))
+  sig = await asyncio.to_thread(_list_body_signature, str(session_dir / "threads"), str(session_dir / "triggers"))
   hit = _list_body_memo.get(session_id)
   if hit is not None and hit[0] == sig:
     _list_body_memo.move_to_end(session_id)
@@ -335,8 +334,7 @@ def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
 
 
 def _append_worker_events(
-    raw_events: Iterable[dict], events: list[WorkerEvent], tool_id_to_name: dict[str, str]
-) -> None:
+    raw_events: Iterable[dict], events: list[WorkerEvent], tool_id_to_name: dict[str, str]) -> None:
   for data in raw_events:
     event_timestamp = data.get("timestamp") or datetime.now(UTC)
     event_type = data.get('type', '')
@@ -401,7 +399,11 @@ async def get_thread_events(
   # A returned Response skips response_model validation; model_dump(mode="json") is
   # ~6x faster than the jsonable_encoder pass FastAPI runs on mapped returns.
   return JSONResponse(
-      {"events": [e.model_dump(mode="json") for e in events[start:]], "total": len(events), "reset": reset})
+      {
+          "events": [e.model_dump(mode="json") for e in events[start:]],
+          "total": len(events),
+          "reset": reset
+      })
 
 
 @router.post("/{session_id}/threads/{thread_id}/cancel")

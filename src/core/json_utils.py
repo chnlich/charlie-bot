@@ -42,7 +42,8 @@ def atomic_write_text(path: Path, text: str, *, private: bool = False) -> None:
 
 
 def atomic_write_stream(path: Path, write: Callable[[BinaryIO], None], *, private: bool = False) -> None:
-  """Stream the payload ``write`` emits into *path* atomically: a uniquely named tmp sibling swapped in by ``os.replace``.
+  """Stream the payload ``write`` emits into *path* atomically: a uniquely named tmp sibling
+  swapped in by ``os.replace``.
 
   ``write`` receives the tmp sibling open for binary writing and runs to
   completion before the swap, so a large payload never materializes as one

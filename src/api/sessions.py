@@ -14,49 +14,49 @@ from starlette.responses import Response
 
 from src.api.cron import TaskUpdate, apply_task_yaml_update
 from src.api.deps import (
-  get_plan_manager,
-  get_session_manager,
-  get_thread_manager,
-  get_trigger_manager,
-  require_found,
-  require_session,
+    get_plan_manager,
+    get_session_manager,
+    get_thread_manager,
+    get_trigger_manager,
+    require_found,
+    require_session,
 )
 from src.api.message_utils import (
-  SessionBootstrapData,
-  build_session_bootstrap_data,
-  build_session_view_data,
-  events_to_messages,
+    SessionBootstrapData,
+    build_session_bootstrap_data,
+    build_session_view_data,
+    events_to_messages,
 )
 from src.core.chat_events import chat_events_path
 from src.core.config import (
-  CharlieBotConfig,
-  claude_config_dir,
-  get_config,
-  get_scheduled_tasks,
+    CharlieBotConfig,
+    claude_config_dir,
+    get_config,
+    get_scheduled_tasks,
 )
 from src.core.event_types import BACKEND_SWITCHED
 from src.core.models import (
-  BackendOption,
-  CreateSessionRequest,
-  DeleteGroupRequest,
-  EloneSessionRequest,
-  ForkSessionRequest,
-  RateRoundRequest,
-  RenameGroupRequest,
-  RenameSessionRequest,
-  SessionMetadata,
-  SessionStatus,
-  SetGroupRequest,
-  SwitchBackendRequest,
-  ThreadMetadata,
+    BackendOption,
+    CreateSessionRequest,
+    DeleteGroupRequest,
+    EloneSessionRequest,
+    ForkSessionRequest,
+    RateRoundRequest,
+    RenameGroupRequest,
+    RenameSessionRequest,
+    SessionMetadata,
+    SessionStatus,
+    SetGroupRequest,
+    SwitchBackendRequest,
+    ThreadMetadata,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import (
-  ELONE_BOOTSTRAP_OPENER,
-  FORK_BOOTSTRAP_OPENER,
-  ScheduledSessionBusyError,
-  SessionManager,
-  SuccessionRefused,
+    ELONE_BOOTSTRAP_OPENER,
+    FORK_BOOTSTRAP_OPENER,
+    ScheduledSessionBusyError,
+    SessionManager,
+    SuccessionRefused,
 )
 from src.core.threads import ThreadManager
 
@@ -141,8 +141,9 @@ def _switchable_backend_ids(
   active_domain = _backend_domain_for(active_backend, cfg)
   if active_domain is None:
     return []
-  return [opt.id for opt in cfg.backend_options if opt.type == "cc-claude"
-          and str(claude_config_dir(opt)) == active_domain]
+  return [
+      opt.id for opt in cfg.backend_options if opt.type == "cc-claude" and str(claude_config_dir(opt)) == active_domain
+  ]
 
 
 def _backend_domain_for(backend_id: str, cfg: CharlieBotConfig) -> str | None:
@@ -461,19 +462,20 @@ async def get_session_view(
   active_backend_opt = cfg.get_backend_option(active_backend)
   active_backend_type = active_backend_opt.type if active_backend_opt else ""
   # JSONResponse for the message-page cost reason in get_session_events_page.
-  return JSONResponse({
-      "session": meta.model_dump(mode="json"),
-      "messages": view.messages,
-      "pending_draft": view.pending_draft,
-      "threads": [t.model_dump(mode="json") for t in view.threads],
-      "triggers": [tr.model_dump(mode="json") for tr in triggers],
-      "event_count": view.total_event_count,
-      "oldest_message_ordinal": view.oldest_message_ordinal,
-      "usage": view.usage,
-      "active_backend": active_backend,
-      "active_backend_type": active_backend_type,
-      "has_more": view.has_more,
-  })
+  return JSONResponse(
+      {
+          "session": meta.model_dump(mode="json"),
+          "messages": view.messages,
+          "pending_draft": view.pending_draft,
+          "threads": [t.model_dump(mode="json") for t in view.threads],
+          "triggers": [tr.model_dump(mode="json") for tr in triggers],
+          "event_count": view.total_event_count,
+          "oldest_message_ordinal": view.oldest_message_ordinal,
+          "usage": view.usage,
+          "active_backend": active_backend,
+          "active_backend_type": active_backend_type,
+          "has_more": view.has_more,
+      })
 
 
 @router.get('/{session_id}/bootstrap')

@@ -1879,9 +1879,8 @@ worst stream turn on disk (events between bare user events whose stream deltas c
 most preview bytes; only files ≥ 2 MB contend), replays it instant-feed through the real
 ``MessageAggregator`` and ``StreamingManager`` into a stub socket mirroring starlette's
 send_json (json.dumps wrapped process-wide so both arms count), stopping before
-``master_done`` so both arms must deliver the final preview. Evidence points the same
-collector at the before and after checkouts (``CHECKOUT`` at each root), the same shape
-as the M7 protocol:
+``master_done`` so both arms must deliver the final preview. Evidence points the
+collector at the before and after checkouts (``CHECKOUT`` at each root):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'

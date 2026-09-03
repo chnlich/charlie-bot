@@ -25,15 +25,15 @@ from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
 
-# The client already throttles stream-draft paints to a 200 ms cadence
-# (usage.js showStreaming), so fan-out at the same cadence adds at most one
-# client paint tick of latency while cutting per-delta serialization of the
-# whole accumulated draft to one dump per window.
+# The client already paints stream drafts at a 200 ms cadence (usage.js
+# showStreaming), so a matching coalesce window adds at most one window of
+# wire latency while cutting per-delta serialization of the accumulated
+# draft to one dump per window.
 _STREAM_COALESCE_INTERVAL = 0.2  # seconds
 
-# websocket.js hideStreaming reach: _commitMessage on every ``message`` frame
-# (comments there pin the commit-supersedes-preview rule) plus the
-# ``assistant_error`` and ``error`` arms of the event switch.
+# websocket.js hideStreaming reach: _commitMessage on committed bubbles (its
+# comments pin the commit-supersedes-preview rule) plus the ``assistant_error``
+# and ``error`` arms of the event switch.
 _PREVIEW_HIDING_TYPES = frozenset({"message", "assistant_error", "error"})
 
 
@@ -74,7 +74,8 @@ class StreamingManager:
       await self._fan_out(thread_id, event)
       return
     if event.get("type") in _PREVIEW_HIDING_TYPES:
-      self._pending_stream.pop(thread_id, None)
+      # A hiding frame ends the preview burst, so it ends the window too: the next burst leads immediately.
+      self._drop_pending_stream(thread_id)
     await self._fan_out(thread_id, event)
 
   def _stream_window_ended(self, thread_id: str) -> None:

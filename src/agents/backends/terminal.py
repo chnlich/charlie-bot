@@ -11,17 +11,17 @@ import structlog
 from fastapi import WebSocket
 
 from src.agents.backends.pty_common import (
-  PTY_EXIT,
-  PtyAttachment,
-  _run_pty_relay,
-  _run_tmux,
-  _start_tmux_session,
-  tmux_session_name,
+    PTY_EXIT,
+    PtyAttachment,
+    _run_pty_relay,
+    _run_tmux,
+    _start_tmux_session,
+    tmux_session_name,
 )
 from src.core.config import (
-  CHARLIEBOT_HOME_ENV,
-  charliebot_home_dir,
-  default_charliebot_home,
+    CHARLIEBOT_HOME_ENV,
+    charliebot_home_dir,
+    default_charliebot_home,
 )
 
 log = structlog.get_logger()

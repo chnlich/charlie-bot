@@ -14,10 +14,10 @@ from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.latex import get_tex_path, snapshot_tex
 from src.core.models import (
-  BackendOption,
-  MasterRunRecord,
-  SessionCallbacks,
-  SessionMetadata,
+    BackendOption,
+    MasterRunRecord,
+    SessionCallbacks,
+    SessionMetadata,
 )
 from src.core.process import kill_group_escalating
 from src.core.streaming import streaming_manager
@@ -98,8 +98,8 @@ async def _session_consumer(session_id: str) -> None:
         # so --resume picks up the in-progress CC transcript.
         if last_cc_session_id and not item.session_meta.cc_session_id:
           item.session_meta.cc_session_id = last_cc_session_id
-        result = await (master_cc_run._resume_cc(item)
-                        if item.resume_record is not None else master_cc_run._run_cc(item))
+        result = await (
+            master_cc_run._resume_cc(item) if item.resume_record is not None else master_cc_run._run_cc(item))
         cc_session_id, exit_code, _error_msg, finish_extras = result
 
         # Zero-output guard: a run that settled with a result event of all-zero
@@ -139,13 +139,17 @@ async def _session_consumer(session_id: str) -> None:
                 written=cc_session_id,
                 read_back=read_back,
             )
-            await item.callbacks.persist_and_broadcast(session_id, {
-                "type": ET.ERROR,
-                "source": "resume_anchor",
-                "message": (
-                    f"Resume anchor persist mismatch: wrote {cc_session_id!r}, "
-                    f"read back {read_back!r} from disk"),
-            })
+            await item.callbacks.persist_and_broadcast(
+                session_id, {
+                    "type":
+                        ET.ERROR,
+                    "source":
+                        "resume_anchor",
+                    "message":
+                        (
+                            f"Resume anchor persist mismatch: wrote {cc_session_id!r}, "
+                            f"read back {read_back!r} from disk"),
+                })
 
         # Computed once, with no re-check: a queued item keeps this round's
         # busy interval alive, so the only question is whether one is queued.

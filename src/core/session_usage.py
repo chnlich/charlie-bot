@@ -44,9 +44,8 @@ from src.core.models import SessionMetadata
 def _prompt_token_sum(usage: dict) -> int:
   """input + cache_creation + cache_read from a Claude Code usage block."""
   return (
-      usage.get("input_tokens", 0)
-      + usage.get("cache_creation_input_tokens", 0)
-      + usage.get("cache_read_input_tokens", 0))
+      usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) +
+      usage.get("cache_read_input_tokens", 0))
 
 
 @dataclass(frozen=True)
@@ -164,10 +163,7 @@ def _resolve_claude_tier(facts: _UsageFacts) -> dict | None:
   """
   if facts.chosen_prompt_tokens <= 0:
     return None
-  context_tokens = (
-      facts.post_compact_tokens
-      if facts.post_compact_tokens is not None
-      else facts.chosen_prompt_tokens)
+  context_tokens = (facts.post_compact_tokens if facts.post_compact_tokens is not None else facts.chosen_prompt_tokens)
   declared_window, compact_point = headless_claude_declared_window()
   if facts.chosen_model and facts.chosen_model in facts.model_windows:
     context_full = min(facts.model_windows[facts.chosen_model], declared_window)
@@ -183,11 +179,8 @@ def _resolve_claude_tier(facts: _UsageFacts) -> dict | None:
 def _snapshot_tokens_sum(tokens: dict) -> int:
   """Sum the five token fields of a context_snapshot ``tokens`` block."""
   return (
-      tokens.get("input", 0)
-      + tokens.get("output", 0)
-      + tokens.get("reasoning", 0)
-      + tokens.get("cache_read", 0)
-      + tokens.get("cache_write", 0))
+      tokens.get("input", 0) + tokens.get("output", 0) + tokens.get("reasoning", 0) + tokens.get("cache_read", 0) +
+      tokens.get("cache_write", 0))
 
 
 def _snapshot_full_and_compact(limit: dict) -> tuple[int | None, int | None]:
@@ -242,12 +235,7 @@ def _resolve_no_source_tier(facts: _UsageFacts) -> dict:
   context_tokens / context_full / context_compact_at are ``None`` (rendered as
   ``unknown``); cost is the shared scan's sum over result events.
   """
-  return _usage_dict(
-      context_tokens=None,
-      context_full=None,
-      context_compact_at=None,
-      model="",
-      cost=facts.cost)
+  return _usage_dict(context_tokens=None, context_full=None, context_compact_at=None, model="", cost=facts.cost)
 
 
 _FACTS_MEMO_CAP = 8
@@ -299,8 +287,7 @@ class SessionUsageResolver:
       return usage
 
     if self._codex_resolver.is_codex_backend(session_meta.backend):
-      merged = await asyncio.to_thread(
-          self._codex_resolver.resolve, session_id, session_meta, events)
+      merged = await asyncio.to_thread(self._codex_resolver.resolve, session_id, session_meta, events)
       if merged is not None:
         return merged
 

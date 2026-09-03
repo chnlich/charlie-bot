@@ -26,17 +26,17 @@ from typing import Any
 from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, SKIP_PERMISSIONS_SETTINGS
 from src.agents.backends.claude_code import headless_claude_env
 from src.agents.backends.pty_common import (
-  _TMUX_SOCKET,
-  _tmux_binary,
-  _tmux_client_env,
-  tmux_session_exists,
-  tmux_session_name,
+    _TMUX_SOCKET,
+    _tmux_binary,
+    _tmux_client_env,
+    tmux_session_exists,
+    tmux_session_name,
 )
 from src.agents.backends.tui import mark_project_trusted
 from src.cli.claude_sub_bridge import (
-  HookBridge,
-  HookTurnState,
-  PromptDelivery,
+    HookBridge,
+    HookTurnState,
+    PromptDelivery,
 )
 from src.core.config import charliebot_home_dir
 from src.core.json_utils import write_json_atomically
@@ -553,7 +553,8 @@ async def _check_cli_capabilities() -> None:
   if version < _MIN_CLAUDE_VERSION:
     raise ClaudeSubError(
         f"Claude Code {'.'.join(str(part) for part in version)} is below the minimum compatible version "
-        f"{'.'.join(str(part) for part in _MIN_CLAUDE_VERSION)} (target {'.'.join(str(part) for part in _TARGET_CLAUDE_VERSION)})")
+        f"{'.'.join(str(part) for part in _MIN_CLAUDE_VERSION)} (target {'.'.join(str(part) for part in _TARGET_CLAUDE_VERSION)})"
+    )
 
   rc, stdout, stderr = await _run_cli_capture("claude", "--help", "--", "claude-sub-leading-dash-probe")
   if rc != 0:
@@ -606,8 +607,10 @@ def _write_hook_plugin(root: Path, bridge: HookBridge) -> Path:
     group: dict[str, Any] = {"hooks": [command]}
     hooks[event_name] = [group]
   (hooks_dir / "hooks.json").write_text(
-      json.dumps({"description": "CharlieBot session-only hook bridge", "hooks": hooks}, separators=(",", ":")) +
-      "\n",
+      json.dumps({
+          "description": "CharlieBot session-only hook bridge",
+          "hooks": hooks
+      }, separators=(",", ":")) + "\n",
       encoding="utf-8",
   )
   return plugin_dir
@@ -705,8 +708,7 @@ def _result_event(session_id: str, candidate: str, duration_ms: int) -> dict[str
 def _unknown_delivery_message(reason: str) -> str:
   return (
       f"{reason}; prompt delivery is UNKNOWN: the prompt MAY already have been received by Claude; "
-      "claude-sub terminated the foreground process and will never retry or replay this prompt automatically"
-  )
+      "claude-sub terminated the foreground process and will never retry or replay this prompt automatically")
 
 
 async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:

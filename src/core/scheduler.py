@@ -177,12 +177,12 @@ class Scheduler:
 
     session_mgr = self._session_mgr
 
-    # Cache all sessions once to avoid O(N) list_sessions() calls per tick.
-    all_sessions = await session_mgr.list_sessions(include_running_status=False)
+    # Cache the scheduled sessions once to avoid O(tasks) list_sessions() calls per tick.
+    scheduled_sessions = await session_mgr.list_sessions(scheduled=True, include_running_status=False)
     session_cache: dict[str, list[SessionMetadata]] = {}
-    for s in all_sessions:
-      if s.scheduled_task:
-        session_cache.setdefault(s.scheduled_task, []).append(s)
+    for s in scheduled_sessions:
+      assert s.scheduled_task is not None
+      session_cache.setdefault(s.scheduled_task, []).append(s)
 
     for task_cfg in tasks:
       if task_cfg.enabled:

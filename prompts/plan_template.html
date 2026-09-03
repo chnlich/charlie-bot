@@ -197,8 +197,8 @@
 
     <section class="plan-section">
       <h2><span class="n">2</span> Context</h2>
-      <p>A scheduled trigger resumes a CharlieBot session after a delay or when watched work finishes. Operators can create these triggers, but cannot inspect the triggers already scheduled for the session before adding another watch. <span class="src">Sources: src/cli/main.py:19-25; src/core/triggers.py:322-337</span></p>
-      <p>The unified command dispatcher exposes trigger creation as <code>charliebot schedule-trigger</code>. The component responsible for trigger lifecycle, <code>TriggerManager</code>, persists each record as a JSON file under the session's <code>triggers</code> directory; no read-only CLI path currently loads those records for inspection. <span class="src">Sources: src/cli/main.py:19-25; src/core/triggers.py:322-337, 677-687</span></p>
+      <p>A scheduled trigger resumes a CharlieBot session after a delay or when watched work finishes. Operators can create these triggers, but cannot inspect the triggers already scheduled for the session before adding another watch. <span class="src">Sources: src/cli/main.py; src/core/triggers.py</span></p>
+      <p>The unified command dispatcher exposes trigger creation as <code>charliebot schedule-trigger</code>. The component responsible for trigger lifecycle, <code>TriggerManager</code>, persists each record as a JSON file under the session's <code>triggers</code> directory; no read-only CLI path currently loads those records for inspection. <span class="src">Sources: src/cli/main.py; src/core/triggers.py</span></p>
     </section>
 
     <section class="plan-section">
@@ -253,7 +253,7 @@
             <li>Worked example: a directory holds two published triggers; a third session elsewhere holds one.
               Current-session scope shows those two only, cross-session shows all three.</li>
             <li>Each row's existence is anchored to its JSON file, so the rendered list is checkable against
-              what was persisted <span class="src">Sources: src/core/triggers.py:322-337, 677-687</span>.</li>
+              what was persisted <span class="src">Sources: src/core/triggers.py</span>.</li>
           </ul>
         </details>
       </div>

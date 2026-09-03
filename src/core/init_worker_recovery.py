@@ -319,13 +319,7 @@ async def _reconcile_one(
     if resolution.outcome is runs.RunOutcome.STALLED:
       # The boot report claims this thread's one-per-boot silence report.
       _silence_reported_thread_ids.add(thread_id)
-      await _report_recovery_event(
-          session_mgr,
-          session_id,
-          f"Worker thread {thread_id[:8]} is still alive but produced no output for over "
-          f"{NO_OUTPUT_REPORT_THRESHOLD // 3600}h ({resolution.reason}). Suspected hung; "
-          "it is NOT being killed — re-attached and left running.",
-      )
+      await _report_recovery_event(session_mgr, session_id, _silence_report_text(thread_id, resolution.reason))
     create_logged_task(
         spawner.resume_worker(
             session_id,
@@ -375,6 +369,14 @@ def _parse_started_at(meta: dict) -> datetime | None:
     return None
 
 
+def _silence_report_text(thread_id: str, reason: str) -> str:
+  """The one-per-boot "alive but silent" report, shared by its two emit paths."""
+  return (
+      f"Worker thread {thread_id[:8]} is still alive but produced no output for over "
+      f"{NO_OUTPUT_REPORT_THRESHOLD // 3600}h ({reason}). Suspected hung; "
+      "it is NOT being killed — re-attached and left running.")
+
+
 async def _report_recovery_event(session_mgr: SessionManager, session_id: str, content: str) -> None:
   """Persist a user-visible recovery report to the session chat stream."""
   try:
@@ -392,19 +394,15 @@ async def _report_recovery_event(session_mgr: SessionManager, session_id: str, c
 async def _follow_silence_recheck(session_mgr: SessionManager, session_id: str, thread_id: str) -> None:
   """Emit this thread's one-per-boot silence report from a mounted follow.
 
-  Same text shape as the boot STALLED report, and shares its once-key:
-  whichever side emits first claims the thread for this boot, so repeated
-  re-mounts within one boot can never re-emit.
+  The text is the boot STALLED report's (``_silence_report_text``), and the
+  once-key is shared: whichever side emits first claims the thread for this
+  boot, so repeated re-mounts within one boot can never re-emit.
   """
   if thread_id in _silence_reported_thread_ids:
     return
   _silence_reported_thread_ids.add(thread_id)
   await _report_recovery_event(
-      session_mgr,
-      session_id,
-      f"Worker thread {thread_id[:8]} is still alive but produced no output for over "
-      f"{NO_OUTPUT_REPORT_THRESHOLD // 3600}h (silence crossed after re-attach). Suspected hung; "
-      "it is NOT being killed — re-attached and left running.")
+      session_mgr, session_id, _silence_report_text(thread_id, "silence crossed after re-attach"))
 
 
 async def _maybe_respawn(

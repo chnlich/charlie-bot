@@ -661,9 +661,6 @@ _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
 
 GENRES: tuple[str, ...] = tuple(_ASSERTION_SETS)
 
-# Every genre's delivery gate includes one cold-read pass after its assertions pass.
-PROBE_GENRES: tuple[str, ...] = GENRES
-
 
 def run_assertions(genre: str, artifact: Path, cfg: "CharlieBotConfig | None" = None) -> list[AssertionOutcome]:
   """Run every assertion of *genre*'s set against *artifact*; return one outcome per printed line.

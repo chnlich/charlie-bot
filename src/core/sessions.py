@@ -506,9 +506,7 @@ class SessionManager:
   ) -> SessionMetadata | None:
     """Return the active scheduled session for task_name/backend, rotating history if needed.
 
-    Backend changes are generation changes: the old active session is archived and a new
-    scheduled session is created with only scheduler bookkeeping copied over. ``role`` and
-    ``group`` (mode: master PM tasks) carry onto the created session.
+    See ``src/core/scheduled_sessions.py`` for the rotation contract.
     """
     return await self._scheduled_sessions.ensure_scheduled_session_backend(
         task_name,

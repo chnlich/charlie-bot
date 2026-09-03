@@ -36,11 +36,32 @@ log = structlog.get_logger()
 _CLAUDE_TUI_SETTINGS = json.dumps(SKIP_PERMISSIONS_SETTINGS, separators=(",", ":"))
 _BUSY_THRESHOLD_SECONDS = 3.0
 
+# Transcript paths are stable per session id (claude treats a session's jsonl
+# as an append-only log it never relocates), so a hit memoizes for the process
+# life and the exists() recheck covers deletion. A miss re-globs only after
+# this TTL, since a fresh session's jsonl appears when claude starts.
+_JSONL_MISS_TTL_SECONDS = 30.0
+_jsonl_path_memo: dict[str, tuple[Path | None, float]] = {}
+
 
 def _find_existing_claude_jsonl(session_id: str) -> Path | None:
-  """Glob ~/.claude/projects/*/<session_id>.jsonl and return first match (or None)."""
+  """Glob ~/.claude/projects/*/<session_id>.jsonl and return first match (or None), memoized per session id."""
+  entry = _jsonl_path_memo.get(session_id)
+  if entry is not None:
+    path, miss_deadline = entry
+    if path is not None:
+      if path.exists():
+        return path
+    elif time.monotonic() < miss_deadline:
+      return None
   matches = list(Path.home().glob(f".claude/projects/*/{session_id}.jsonl"))
-  return matches[0] if matches else None
+  path = matches[0] if matches else None
+  _jsonl_path_memo[session_id] = (path, time.monotonic() + _JSONL_MISS_TTL_SECONDS)
+  return path
+
+
+def reset_jsonl_memo_for_tests() -> None:
+  _jsonl_path_memo.clear()
 
 
 def _claude_jsonl_busy(session_id: str, threshold_seconds: float = _BUSY_THRESHOLD_SECONDS) -> bool:

@@ -24,8 +24,8 @@ function loadChatRenderingModules(context) {
   vm.runInContext(RENDERING_JS, context, {filename: 'chat/rendering.js'});
 }
 
-// makeChatRenderContext builds the sandbox every chat/rendering.js vm harness
-// boots: a FakeElement-backed document over an element map, plus the page
+// makeChatRenderContext builds the sandbox shared by the chat/rendering.js vm
+// harnesses: a FakeElement-backed document over an element map, plus the page
 // globals the chat render paths read, so they run without a browser
 // (marked/fixNestedFences/renderChatMath stand in for markdown-renderer.js).
 function makeChatRenderContext(elements = new Map()) {

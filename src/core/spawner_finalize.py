@@ -115,9 +115,12 @@ async def _cleanup_worker_directory(thread: ThreadMetadata, skip_cleanup: bool, 
     return None
 
   return await git_worktree_remove_reporting(
-      thread,
+      thread.repo_path,
+      thread.worktree_path,
+      thread.branch_name,
+      thread.id,
       worktree_parent,
-      session_id=None,
+      log_fields={"thread_id": thread.id},
       label="Worktree",
       fail_event="worktree_cleanup_error",
       remove_failed_event="worktree_cleanup_remove_failed",

@@ -185,8 +185,8 @@ async def test_improve_loop_keeps_worktree_on_failure(tmp_path: Path, monkeypatc
 
   monkeypatch.setattr(improve_command, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
   monkeypatch.setattr(SPAWNER_SPAWN_WORKER_PATCH_TARGET, boom_spawn_worker)
-  monkeypatch.setattr(improve_command, "git_worktree_remove", fake_remove)
-  monkeypatch.setattr(improve_command, "git_worktree_prune", noop_async)
+  monkeypatch.setattr(git_module, "git_worktree_remove", fake_remove)
+  monkeypatch.setattr(git_module, "git_worktree_prune", noop_async)
   monkeypatch.setattr(improve_command, "trigger_master", noop_async)
 
   await improve_command.run_improve_loop(

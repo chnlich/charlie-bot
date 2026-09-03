@@ -1139,13 +1139,14 @@ def make_fake_git_create_worktree(
 
 
 def patch_improve_git_ops(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Install the pass-through git fakes on src.core.improve_command.
+  """Install the pass-through git fakes a run_improve_loop test needs without a real repo.
 
-  A run_improve_loop test without a real repo relies on the loop running to completion:
-  create_worktree reuses make_fake_git_create_worktree(mkdir=True), push_branch succeeds,
-  and the finally-cleanup remove removes the empty worktree dir and reports success so
-  prune runs. The fakes mirror the src.core.git signatures so the patched attributes stay
-  drop-in replacements.
+  create_worktree and push_branch are patched on src.core.improve_command (create_worktree
+  reuses make_fake_git_create_worktree(mkdir=True), push_branch succeeds). remove and prune
+  are patched on src.core.git: the finally-cleanup resolves them there through
+  git_worktree_remove_reporting, so the faked remove still clears the worktree dir and
+  prune runs. The fakes mirror the real signatures so each patch stays a drop-in
+  replacement.
   """
 
   async def fake_git_push_branch(repo_path: Path, branch_name: str) -> tuple[bool, str]:
@@ -1170,8 +1171,8 @@ def patch_improve_git_ops(monkeypatch: pytest.MonkeyPatch) -> None:
 
   monkeypatch.setattr(improve_command, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
   monkeypatch.setattr(improve_command, "git_push_branch", fake_git_push_branch)
-  monkeypatch.setattr(improve_command, "git_worktree_remove", fake_git_worktree_remove)
-  monkeypatch.setattr(improve_command, "git_worktree_prune", fake_git_worktree_prune)
+  monkeypatch.setattr("src.core.git.git_worktree_remove", fake_git_worktree_remove)
+  monkeypatch.setattr("src.core.git.git_worktree_prune", fake_git_worktree_prune)
 
 
 def build_worker_prompt(

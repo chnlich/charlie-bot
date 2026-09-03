@@ -10,7 +10,6 @@ from pathlib import Path
 
 import structlog
 
-from src.core.models import ThreadMetadata
 from src.core.timeouts import (
     SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
     SUBPROCESS_GIT_WRITE_TIMEOUT,
@@ -473,47 +472,50 @@ async def git_worktree_remove(
 
 
 async def git_worktree_remove_reporting(
-    thread: ThreadMetadata,
+    repo_path: str | None,
+    worktree_path: str | None,
+    branch_name: str | None,
+    owner_id: str,
     worktree_parent: Path,
     *,
-    session_id: str | None,
+    log_fields: dict,
     label: str,
     fail_event: str,
     remove_failed_event: str,
 ) -> str | None:
-  """Remove a thread's worktree after a finished run, reporting failure as a message.
+  """Remove a finished flow's worktree, reporting failure as a message.
 
   Returns an error message string when the remove fails so the caller can surface
-  it in its own flow, or None on success and when the thread has no worktree to
-  clean. ``label`` and the two structlog event names carry the caller's flow
-  identity (worker finalize vs review chain); ``session_id`` is logged only by the
-  review-chain flow. A stored worktree without a branch raises instead of
-  reporting: the residue name and the prune both derive from the branch, so a
-  missing one is corrupt thread state, not a cleanup miss.
+  it in its own flow, or None on success and when the flow has no worktree to
+  clean. ``label``, ``log_fields``, and the two structlog event names carry the
+  caller's flow identity (worker finalize, review chain, improve loop);
+  ``owner_id`` feeds the remove/prune primitives' thread_id log field. A
+  worktree without a branch raises instead of reporting: the residue name and
+  the prune both derive from the branch, so a missing one is corrupt state, not
+  a cleanup miss.
   """
-  if not thread.repo_path or not thread.worktree_path:
+  if not repo_path or not worktree_path:
     return None
-  wt = Path(thread.worktree_path)
+  wt = Path(worktree_path)
   if not wt.exists():
     return None
-  if not thread.branch_name:
-    raise RuntimeError(f"thread {thread.id} has worktree_path but no branch_name")
-  session_field = {"session": session_id} if session_id is not None else {}
+  if not branch_name:
+    raise RuntimeError(f"owner {owner_id} has worktree_path but no branch_name")
   try:
     removed = await git_worktree_remove(
-        thread.repo_path,
+        repo_path,
         wt,
-        thread.id,
+        owner_id,
         allowed_parent=worktree_parent,
-        expected_residue_name=git_worktree_dir_name(thread.branch_name),
+        expected_residue_name=git_worktree_dir_name(branch_name),
     )
   except Exception as e:
-    log.exception(fail_event, thread_id=thread.id, worktree=str(wt), error=str(e), **session_field)
+    log.exception(fail_event, worktree=str(wt), error=str(e), **log_fields)
     return f"{label} cleanup failed for {wt}: {e}"
   if not removed:
-    log.error(remove_failed_event, thread_id=thread.id, worktree=str(wt), **session_field)
+    log.error(remove_failed_event, worktree=str(wt), **log_fields)
     return f"{label} cleanup failed for {wt}: git worktree remove reported failure"
-  await git_worktree_prune(thread.repo_path, thread.id)
+  await git_worktree_prune(repo_path, owner_id)
   return None
 
 

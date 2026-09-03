@@ -101,10 +101,17 @@ def test_alert_fires_through_loader_refresh(
     sent: list[str],
 ) -> None:
   """The scheduler tick path: get_scheduled_tasks → snapshot refresh → alert."""
-  target = temp_home / "prompts" / "memory_curator.md"
-  target.parent.mkdir(parents=True, exist_ok=True)
-  _write_task_text(temp_home, "memory-curator", _dump(
-      {"cron": "27 6 * * *", "prompt_file": str(target)}))
+  selector = temp_home / "prompts" / "memory_selector.md"
+  reviewer = temp_home / "prompts" / "memory_reviewer.md"
+  selector.parent.mkdir(parents=True, exist_ok=True)
+  reviewer.write_text("review the diff", encoding="utf-8")
+  _write_task_text(temp_home, "memory-curator", _dump({
+      "cron": "27 6 * * *",
+      "steps": [
+          {"name": "selector", "prompt_file": str(selector)},
+          {"name": "reviewer", "prompt_file": str(reviewer)},
+      ],
+  }))
 
   async def refresh() -> None:
     assert not cm.get_scheduled_tasks()
@@ -117,7 +124,7 @@ def test_alert_fires_through_loader_refresh(
   # Restoring the pointed file (the host file only carries the path to it) flips
   # the job back to healthy on the next refresh, and the recovery notification
   # goes out once.
-  target.write_text("curate memory now", encoding="utf-8")
+  selector.write_text("curate memory now", encoding="utf-8")
 
   async def refresh_again() -> None:
     assert [t.name for t in cm.get_scheduled_tasks()] == ["memory-curator"]

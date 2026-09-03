@@ -13,33 +13,16 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
-
-const {createFakeWebSocketClass} = require('./fake_websocket');
-
-const WEBSOCKET_JS = readStatic('websocket.js');
+const { loadWebsocketContext } = require('./websocket_context_stub');
 
 function buildClient() {
   const bubbles = [];
   const preview = {visible: false, content: ''};
-  const FakeWebSocket = createFakeWebSocketClass();
 
-  const context = {
+  const {context, FakeWebSocket} = loadWebsocketContext({
     SESSION_ID: 's1',
-    eventCursor: 0,
-    reconnectDelay: 1000,
-    thinkingStart: null,
-    sessionUnread: {},
-    localStorage: {getItem: () => null},
-    // No stored key: mirrors page-load order config.js → websocket.js on the no-key path.
-    wsUrlWithToken: (path) => path,
-    location: {protocol: 'http:', host: 'localhost:8000'},
-    console: {log: () => {}, error: () => {}},
-    WebSocket: FakeWebSocket,
     setTimeout: () => 0,
-    clearTimeout: () => {},
     document: {getElementById: () => null, querySelector: () => null},
     hideStreaming: () => { preview.visible = false; preview.content = ''; },
     showStreaming: (draft) => {
@@ -47,24 +30,7 @@ function buildClient() {
       preview.content = (draft && draft.content) || '';
     },
     appendMessageObject: (msg) => bubbles.push({role: msg.role, content: msg.content || ''}),
-    appendMessage: () => {},
-    startThinking: () => {},
-    stopThinking: () => {},
-    pollActiveSessionView: () => {},
-    renderExtUsage: () => {},
-    refreshSessionStatusNow: () => {},
-    setSessionIndicator: () => {},
-    getSessionIndicatorState: () => ({}),
-    setSessionPendingTriggerIndicator: () => {},
-    updateSidebarSessionName: () => {},
-    handleSidebarSearch: () => {},
-    switchSidebarFilter: () => {},
-    currentFilter: 'all',
-    showDiffModal: () => {},
-  };
-  context.globalThis = context;
-  vm.createContext(context);
-  vm.runInContext(WEBSOCKET_JS, context);
+  });
   return {context, FakeWebSocket, bubbles, preview};
 }
 

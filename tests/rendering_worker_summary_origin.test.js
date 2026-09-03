@@ -7,31 +7,10 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { loadChatRenderingModules } = require('./chat_rendering_context_stub');
-
-const { FakeElement } = require('./fake_dom');
-
-function makeDocument() {
-  return {
-    getElementById() { return null; },
-    createElement(tag) { return new FakeElement(tag); },
-    querySelector() { return null; },
-    querySelectorAll() { return []; },
-  };
-}
+const { loadChatRenderingModules, makeChatRenderContext } = require('./chat_rendering_context_stub');
 
 function loadContext() {
-  const context = {
-    document: makeDocument(),
-    console: { error: () => {}, log: () => {} },
-    marked: { parse: (v) => '<p>' + String(v || '') + '</p>' },
-    fixNestedFences: (v) => String(v || ''),
-    renderChatMath: () => {},
-    CSS: { escape: (v) => String(v) },
-    SESSION_ID: 'sess-1',
-    confirm: () => true,
-    fetch: () => Promise.resolve({ ok: true }),
-  };
+  const context = makeChatRenderContext();
   vm.createContext(context);
   loadChatRenderingModules(context);
   return context;

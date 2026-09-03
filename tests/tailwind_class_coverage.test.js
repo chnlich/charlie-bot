@@ -25,6 +25,7 @@ const { FakeElement } = require('./fake_dom');
 const { escapeHtml } = require('./escape_html_stub');
 const { readStatic } = require('./read_static');
 const { loadArtifactsScript } = require('./artifacts_context_stub');
+const { makeChatRenderContext } = require('./chat_rendering_context_stub');
 
 function makeDocument(elements) {
   return {
@@ -40,17 +41,7 @@ function makeDocument(elements) {
 // tests/compact_button.test.js and tests/plan_cards.test.js.
 // ---------------------------------------------------------------------------
 function loadChatContext(elements) {
-  const context = {
-    document: makeDocument(elements),
-    console: { error: () => {}, log: () => {} },
-    marked: { parse: (v) => '<p>' + String(v || '') + '</p>' },
-    fixNestedFences: (v) => String(v || ''),
-    renderChatMath: () => {},
-    CSS: { escape: (v) => String(v) },
-    SESSION_ID: 'sess-1',
-    confirm: () => true,
-    fetch: () => Promise.resolve({ ok: true }),
-  };
+  const context = makeChatRenderContext(elements);
   vm.createContext(context);
   vm.runInContext(readStatic('chat/namespace.js'), context, { filename: 'chat/namespace.js' });
   vm.runInContext(readStatic('chat/shared.js'), context, { filename: 'chat/shared.js' });

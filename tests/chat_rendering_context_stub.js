@@ -24,6 +24,29 @@ function loadChatRenderingModules(context) {
   vm.runInContext(RENDERING_JS, context, {filename: 'chat/rendering.js'});
 }
 
+// makeChatRenderContext builds the sandbox shared by the chat/rendering.js vm
+// harnesses: a FakeElement-backed document over an element map, plus the page
+// globals the chat render paths read, so they run without a browser
+// (marked/fixNestedFences/renderChatMath stand in for markdown-renderer.js).
+function makeChatRenderContext(elements = new Map()) {
+  return {
+    document: {
+      getElementById(id) { return elements.get(id) || null; },
+      createElement(tag) { return new FakeElement(tag); },
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+    },
+    console: { error: () => {}, log: () => {} },
+    marked: { parse: (v) => '<p>' + String(v || '') + '</p>' },
+    fixNestedFences: (v) => String(v || ''),
+    renderChatMath: () => {},
+    CSS: { escape: (v) => String(v) },
+    SESSION_ID: 'sess-1',
+    confirm: () => true,
+    fetch: () => Promise.resolve({ ok: true }),
+  };
+}
+
 // loadToggleHarness covers the toggle suites (show_more_toggle,
 // thinking_toggle): a FakeElement-backed document and the marked/fence/math
 // stubs the toggle render paths touch, then the module-load sequence above,
@@ -58,4 +81,4 @@ function loadToggleHarness(extraModule, extraStubs = {}) {
   return context;
 }
 
-module.exports = {loadChatRenderingModules, loadToggleHarness};
+module.exports = {loadChatRenderingModules, loadToggleHarness, makeChatRenderContext};

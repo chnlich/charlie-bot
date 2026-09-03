@@ -1,39 +1,20 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
-
-const {createFakeWebSocketClass} = require('./fake_websocket');
-
-const WEBSOCKET_JS = readStatic('websocket.js');
+const { loadWebsocketContext } = require('./websocket_context_stub');
 
 function buildContext(sessionId) {
   const messages = [];
   const timers = [];
   const sidebarActions = [];
-  const FakeWebSocket = createFakeWebSocketClass();
 
-  const context = {
+  const {context, FakeWebSocket} = loadWebsocketContext({
     SESSION_ID: sessionId,
-    eventCursor: 0,
-    reconnectDelay: 1000,
-    thinkingStart: null,
-    sessionUnread: {},
-    localStorage: {getItem: () => null},
-    // No stored key: mirrors page-load order config.js → websocket.js on the no-key path.
-    wsUrlWithToken: (path) => path,
-    location: {protocol: 'http:', host: 'localhost:8000'},
-    console: {log: () => {}, error: () => {}},
     marked: {parse: (txt) => txt},
-    WebSocket: FakeWebSocket,
     setTimeout: (fn, ms) => {
       timers.push({fn, ms});
       return timers.length;
     },
-    clearTimeout: () => {},
-    hideStreaming: () => {},
-    showStreaming: () => {},
     appendMessage: (role, content, isVoice, timestamp, uploadedFiles) => {
       messages.push({role, content, isVoice: !!isVoice, timestamp, uploadedFiles: uploadedFiles || []});
     },
@@ -50,16 +31,12 @@ function buildContext(sessionId) {
     addWorkerCard: () => {},
     updateWorkerStatus: () => {},
     updateSpinner: () => {},
-    showDiffModal: () => {},
-    startThinking: () => {},
-    stopThinking: () => {},
     switchSidebarFilter: (filter) => {
       sidebarActions.push({type: 'filter', value: filter});
     },
     handleSidebarSearch: (query) => {
       sidebarActions.push({type: 'search', value: query});
     },
-    currentFilter: 'all',
     document: {
       getElementById: (id) => {
         if (id === 'sidebar-search') return null;
@@ -67,10 +44,7 @@ function buildContext(sessionId) {
       },
       createElement: () => ({className: '', innerHTML: '', dataset: {}}),
     },
-  };
-
-  vm.createContext(context);
-  vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
+  });
   return {context, FakeWebSocket, messages, timers, sidebarActions};
 }
 

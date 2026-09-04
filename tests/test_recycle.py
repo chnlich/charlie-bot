@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -243,6 +244,123 @@ async def test_live_range_reparses_after_append(tmp_path: Path) -> None:
   # An appended live file's changed (mtime, size) must invalidate the memo.
   _append_events(live_path, [{"type": "user", "content": "f3", "timestamp": (cutoff + timedelta(days=2)).isoformat()}])
 
+  after, _ = mgr.load_chat_events_range(session.id, 5, 9)
+  assert [e["content"] for e in after] == ["f0", "f1", "f2", "f3"]
+
+
+@pytest.mark.asyncio
+async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, events = _archive_cutoff_events()
+  live_path = mgr.get_chat_events_path(session.id)
+  _append_events(live_path, events)
+  await mgr.recycle_scheduled_session(session.id, cutoff)
+
+  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
+  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+
+  _append_events(live_path, [{"type": "user", "content": "f3", "timestamp": (cutoff + timedelta(days=2)).isoformat()}])
+  appended_line = json.dumps(
+      {
+          "type": "user",
+          "content": "f3",
+          "timestamp": (cutoff + timedelta(days=2)).isoformat()
+      }) + "\n"
+
+  read_bytes = []
+
+  class _CountingReader:
+
+    def __init__(self, inner):
+      self._inner = inner
+
+    def read(self, *args, **kwargs):
+      data = self._inner.read(*args, **kwargs)
+      read_bytes.append(len(data))
+      return data
+
+    def seek(self, *args, **kwargs):
+      return self._inner.seek(*args, **kwargs)
+
+    def __enter__(self):
+      self._inner.__enter__()
+      return self
+
+    def __exit__(self, *args, **kwargs):
+      return self._inner.__exit__(*args, **kwargs)
+
+  real_open = open
+
+  def counting_open(file, *args, **kwargs):
+    handle = real_open(file, *args, **kwargs)
+    if str(file) == str(live_path):
+      return _CountingReader(handle)
+    return handle
+
+  with patch("builtins.open", counting_open):
+    after, _ = mgr.load_chat_events_range(session.id, 5, 9)
+  # The extension read the appended tail only, not the whole file.
+  assert sum(read_bytes) == len(appended_line.encode("utf-8"))
+
+  assert [e["content"] for e in after] == ["f0", "f1", "f2", "f3"]
+  # The extended memo serves a further unchanged repeat with zero file bytes.
+  read_bytes.clear()
+  with patch("builtins.open", counting_open):
+    again, _ = mgr.load_chat_events_range(session.id, 5, 9)
+  assert read_bytes == []
+  assert [e["content"] for e in again] == ["f0", "f1", "f2", "f3"]
+
+
+@pytest.mark.asyncio
+async def test_live_range_rewrite_with_larger_size_reparses_fully(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, events = _archive_cutoff_events()
+  live_path = mgr.get_chat_events_path(session.id)
+  _append_events(live_path, events)
+  await mgr.recycle_scheduled_session(session.id, cutoff)
+
+  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
+  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+
+  # An archive-style rewrite publishes a new inode via os.replace; a larger
+  # size must never read as append growth, or the stale prefix would glue onto
+  # the new tail.
+  replacement = [
+      {
+          "type": "user",
+          "content": f"g{i}",
+          "timestamp": (cutoff + timedelta(hours=i)).isoformat()
+      } for i in range(6)
+  ]
+  tmp_sibling = live_path.with_name(live_path.name + ".rewrite-tmp")
+  tmp_sibling.write_text("".join(json.dumps(event) + "\n" for event in replacement), encoding="utf-8")
+  os.replace(tmp_sibling, live_path)
+
+  after, _ = mgr.load_chat_events_range(session.id, 5, 11)
+  assert [e["content"] for e in after] == ["g0", "g1", "g2", "g3", "g4", "g5"]
+
+
+@pytest.mark.asyncio
+async def test_live_range_completed_partial_line_reparses_fully(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, events = _archive_cutoff_events()
+  live_path = mgr.get_chat_events_path(session.id)
+  _append_events(live_path, events)
+  await mgr.recycle_scheduled_session(session.id, cutoff)
+
+  before, _ = mgr.load_chat_events_range(session.id, 5, 8)
+  assert [e["content"] for e in before] == ["f0", "f1", "f2"]
+
+  # A read that raced a mid-flight append covers a trailing partial line; the
+  # completed line must surface once a full re-parse lands on the newline.
+  partial = json.dumps({"type": "user", "content": "f3", "timestamp": (cutoff + timedelta(days=2)).isoformat()})
+  with open(live_path, "a", encoding="utf-8") as f:
+    f.write(partial[:len(partial) // 2])
+  torn, _ = mgr.load_chat_events_range(session.id, 5, 9)
+  assert [e["content"] for e in torn if e is not None] == ["f0", "f1", "f2"]
+
+  with open(live_path, "a", encoding="utf-8") as f:
+    f.write(partial[len(partial) // 2:] + "\n")
   after, _ = mgr.load_chat_events_range(session.id, 5, 9)
   assert [e["content"] for e in after] == ["f0", "f1", "f2", "f3"]
 

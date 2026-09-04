@@ -177,6 +177,7 @@ async function ensureWorkersLoadedForActiveSession(opts) {
   try {
     const res = await fetch('/api/threads/' + pollSessionId + '/list');
     if (!res.ok) throw new Error(res.status);
+    workersListEtag = res.headers.get('ETag');
     const items = await res.json();
     if (pollSessionId !== SESSION_ID) return;
     renderWorkersListItems(items || [], pollSessionId);
@@ -196,8 +197,19 @@ function pollWorkers() {
     ensureWorkersLoadedForActiveSession({force: true});
     return;
   }
-  fetch('/api/threads/' + pollSessionId + '/list')
-    .then(r => r.ok ? r.json() : null)
+  // The list body carries an ETag; repeating it via ?etag= asks the server
+  // for a bodyless 204 instead of the full rows when nothing behind the list
+  // moved. no-store keeps every poll a real request (the browser's HTTP cache
+  // would fulfil a revalidation itself and hide the answer).
+  const etagParam = workersListEtag ? '?etag=' + encodeURIComponent(workersListEtag) : '';
+  fetch('/api/threads/' + pollSessionId + '/list' + etagParam, {cache: 'no-store'})
+    .then(r => {
+      if (r.status === 204) return null;
+      if (!r.ok) return null;
+      const etag = r.headers.get('ETag');
+      if (etag) workersListEtag = etag;
+      return r.json();
+    })
     .then(items => {
       if (!items || pollSessionId !== SESSION_ID) return;
       for (const item of items) {

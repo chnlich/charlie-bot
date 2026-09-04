@@ -392,10 +392,17 @@ def _route_resume_session(backend_type: str, cc_session_id: str | None) -> tuple
   return [], None
 
 
-def _build_master_env(cfg: CharlieBotConfig) -> dict[str, str]:
-  """Build the environment for the master backend subprocess."""
+def _build_master_env(cfg: CharlieBotConfig, session_id: str) -> dict[str, str]:
+  """Build the environment for the master backend subprocess.
+
+  ``CHARLIEBOT_SESSION_ID`` carries this master's own session identity, so the
+  session-scoped CLIs the master runs resolve to it wherever the shell cd's to
+  (``src.cli.common.resolve_session_id``). ``claude_supervisor_env`` strips any
+  inherited value first, so a server started from inside another session's
+  environment hands down no stale id.
+  """
   env = claude_supervisor_env(os.environ)
-  env.pop("CHARLIEBOT_SESSION_ID", None)
+  env["CHARLIEBOT_SESSION_ID"] = session_id
   env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
 
   venv_bin = cfg.charlie_bot_repo / ".venv" / "bin"
@@ -590,7 +597,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   if item.extra_claude_flags:
     extra_flags.extend(item.extra_claude_flags)
 
-  env = _build_master_env(cfg)
+  env = _build_master_env(cfg, session_meta.id)
 
   prompt = _build_prompt(item.user_content, item.is_voice)
 

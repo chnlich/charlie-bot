@@ -191,7 +191,7 @@ For handling diff-comment batches, see the `charliebot` skill.
 
 ## Delegation
 
-Session identity is supplied by cwd (`~/.charliebot/sessions/{session_id}`); an explicit `--session` is rejected on mismatch. Omit `--session` in normal master use. The same applies to the `improve`, `schedule-trigger`, and `remote-launch` examples below.
+Session identity travels in `CHARLIEBOT_SESSION_ID`, which the server writes into each master process, so a session-scoped CLI lands in this session from any cwd; cwd supplies the identity only when that variable is absent, and an explicit `--session` is rejected on mismatch. Omit `--session` in normal master use. The same applies to the `improve`, `schedule-trigger`, and `remote-launch` examples below.
 
 ### Runtime delegation authorization
 Runtime authorization is derived from the chat event log — see skills/plan-approval/SKILL.md for the full contract.

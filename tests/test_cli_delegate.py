@@ -80,6 +80,51 @@ def _write_task_spec(tmp_path: Path, content: str | None = None) -> Path:
   return task_spec_file
 
 
+def test_main_routes_by_session_env_from_another_session_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+  """Replays the incident: a master whose shell sits in an archived session's dir delegates, and the
+  task lands in the session the server started it for. The warning names both ids, so the misplaced
+  cwd stays visible."""
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "archived-session")
+  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "live-session")
+  task_spec_file = _write_task_spec(tmp_path)
+
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
+    post_mock.return_value.json.return_value = {"thread_id": "t1", "description": "do work"}
+    main()
+
+  assert post_mock.call_args.kwargs["json"]["session_id"] == "live-session"
+  err = capsys.readouterr().err
+  assert "archived-session" in err
+  assert "CHARLIEBOT_SESSION_ID=live-session" in err
+
+
+def test_main_rejects_explicit_session_against_session_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+  """The other incident shape, a copied --session literal, stays a rejection that names both ids."""
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "live-session")
+  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "live-session")
+  task_spec_file = _write_task_spec(tmp_path)
+
+  with (
+      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, session="archived-session")) as post_mock,
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    main()
+
+  assert exc_info.value.code == 2
+  post_mock.assert_not_called()
+  error = json.loads(capsys.readouterr().err)["error"]
+  assert "--session=archived-session" in error
+  assert "CHARLIEBOT_SESSION_ID=live-session" in error
+
+
 def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _mock_config(tmp_path)
   monkeypatch.chdir(tmp_path)

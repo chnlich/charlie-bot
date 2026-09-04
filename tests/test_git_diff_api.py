@@ -63,7 +63,12 @@ def test_diff_files_manifest(tmp_path: Path) -> None:
 
   resp = client.get(
       "/api/git/diff/files",
-      params={"repo": str(repo), "base": "main", "head": "feature", "mode": "three-dot"},
+      params={
+          "repo": str(repo),
+          "base": "main",
+          "head": "feature",
+          "mode": "three-dot"
+      },
   )
   assert resp.status_code == 200
   data = resp.json()
@@ -95,7 +100,12 @@ def test_diff_file_returns_unified_diff(tmp_path: Path) -> None:
 
   resp = client.get(
       "/api/git/diff/file",
-      params={"repo": str(repo), "base": "main", "head": "feature", "path": "keep.txt"},
+      params={
+          "repo": str(repo),
+          "base": "main",
+          "head": "feature",
+          "path": "keep.txt"
+      },
   )
   assert resp.status_code == 200
   data = resp.json()
@@ -119,7 +129,12 @@ def test_diff_file_rename_renders_as_rename(tmp_path: Path) -> None:
   # Without old_path git drops the pairing and the same file looks like a wholesale add.
   readd = client.get(
       "/api/git/diff/file",
-      params={"repo": str(repo), "base": "main", "head": "feature", "path": "renamed.txt"},
+      params={
+          "repo": str(repo),
+          "base": "main",
+          "head": "feature",
+          "path": "renamed.txt"
+      },
   ).json()["diff"]
   assert "new file" in readd
 
@@ -148,7 +163,11 @@ def test_empty_diff_has_no_files(tmp_path: Path) -> None:
 
   resp = client.get(
       "/api/git/diff/files",
-      params={"repo": str(repo), "base": "main", "head": "main"},
+      params={
+          "repo": str(repo),
+          "base": "main",
+          "head": "main"
+      },
   )
   assert resp.status_code == 200
   data = resp.json()
@@ -164,7 +183,12 @@ def test_two_dot_mode(tmp_path: Path) -> None:
 
   resp = client.get(
       "/api/git/diff/files",
-      params={"repo": str(repo), "base": "main", "head": "feature", "mode": "two-dot"},
+      params={
+          "repo": str(repo),
+          "base": "main",
+          "head": "feature",
+          "mode": "two-dot"
+      },
   )
   assert resp.status_code == 200
   data = resp.json()
@@ -201,7 +225,12 @@ def test_diff_files_keeps_event_loop_responsive(tmp_path: Path, monkeypatch: pyt
       tick_task = asyncio.create_task(ticker())
       resp = await client.get(
           "/api/git/diff/files",
-          params={"repo": str(repo), "base": "main", "head": "feature", "mode": "three-dot"},
+          params={
+              "repo": str(repo),
+              "base": "main",
+              "head": "feature",
+              "mode": "three-dot"
+          },
       )
       stop = True
       await tick_task
@@ -316,6 +345,10 @@ def test_repo_outside_workspace_rejected(tmp_path: Path) -> None:
 
   resp = client.get(
       "/api/git/diff/files",
-      params={"repo": str(repo), "base": "main", "head": "feature"},
+      params={
+          "repo": str(repo),
+          "base": "main",
+          "head": "feature"
+      },
   )
   assert resp.status_code == 400

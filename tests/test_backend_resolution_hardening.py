@@ -8,14 +8,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-  BROADCAST_PATCH_TARGET,
-  BUILD_BACKEND_PATCH_TARGET,
-  TRIGGER_MASTER_PATCH_TARGET,
-  TRIGGERS_GET_CONFIG_PATCH_TARGET,
-  FakeBackend,
-  make_home_config,
-  make_work_item,
-  patch_instructions_content,
+    BROADCAST_PATCH_TARGET,
+    BUILD_BACKEND_PATCH_TARGET,
+    TRIGGER_MASTER_PATCH_TARGET,
+    TRIGGERS_GET_CONFIG_PATCH_TARGET,
+    FakeBackend,
+    make_home_config,
+    make_work_item,
+    patch_instructions_content,
 )
 
 from src.agents import master_cc
@@ -110,6 +110,7 @@ def test_registry_scopes_opencode_proxy_to_opencode_constructor(monkeypatch) -> 
 
 # --------------------------------------------------------------- config reload
 
+
 def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypatch) -> None:
   """A reload must update the existing instance so earlier holders see new values."""
   home = tmp_path / "home"
@@ -155,6 +156,7 @@ def test_get_config_keeps_previous_value_when_reload_fails(tmp_path: Path, monke
 
 # ------------------------------------------------------------- trigger wake-up
 
+
 @pytest.mark.asyncio
 async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_path: Path) -> None:
   """A backend added after the manager was constructed must reach trigger_master."""
@@ -188,14 +190,14 @@ async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_pa
 
 # --------------------------------------------------------- no silent fallback
 
+
 @pytest.mark.asyncio
 async def test_run_cc_refuses_to_substitute_an_unknown_pinned_backend(tmp_path: Path, monkeypatch) -> None:
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5")],
   )
-  session_meta = models.SessionMetadata(id="session-id", name="S", backend="deleted-id",
-                                        cc_session_id="conv-1")
+  session_meta = models.SessionMetadata(id="session-id", name="S", backend="deleted-id", cc_session_id="conv-1")
   spawned: list[object] = []
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
@@ -254,9 +256,9 @@ def test_spawner_defaults_when_session_pins_no_backend() -> None:
 
 # ------------------------------------------------------------ resume guarding
 
+
 def test_claude_config_dir_prefers_option_then_env_then_home(monkeypatch) -> None:
-  opt = models.BackendOption(id="a", label="A", type="cc-claude", model="m",
-                             claude_config_dir="~/.claude-ext-1")
+  opt = models.BackendOption(id="a", label="A", type="cc-claude", model="m", claude_config_dir="~/.claude-ext-1")
   assert core_config.claude_config_dir(opt) == Path.home() / ".claude-ext-1"
 
   bare = models.BackendOption(id="b", label="B", type="cc-claude", model="m")
@@ -280,8 +282,7 @@ def test_cc_transcript_exists_ignores_subagent_logs(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_cc_drops_resume_when_transcript_is_in_another_account_dir(
-    tmp_path: Path, monkeypatch) -> None:
+async def test_run_cc_drops_resume_when_transcript_is_in_another_account_dir(tmp_path: Path, monkeypatch) -> None:
   other = tmp_path / ".claude-ext-1"
   _write_transcript(other, "conv-1")
   target = tmp_path / ".claude"
@@ -289,8 +290,10 @@ async def test_run_cc_drops_resume_when_transcript_is_in_another_account_dir(
 
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude",
-                                            model="claude-fable-5", claude_config_dir=str(target))],
+      backend_options=[
+          models.BackendOption(
+              id="cc", label="CC", type="cc-claude", model="claude-fable-5", claude_config_dir=str(target))
+      ],
   )
   session_meta = models.SessionMetadata(id="session-id", name="S", backend="cc", cc_session_id="conv-1")
   captures: dict[str, object] = {}
@@ -315,8 +318,10 @@ async def test_run_cc_keeps_resume_when_transcript_is_present(tmp_path: Path, mo
 
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude",
-                                            model="claude-fable-5", claude_config_dir=str(target))],
+      backend_options=[
+          models.BackendOption(
+              id="cc", label="CC", type="cc-claude", model="claude-fable-5", claude_config_dir=str(target))
+      ],
   )
   session_meta = models.SessionMetadata(id="session-id", name="S", backend="cc", cc_session_id="conv-1")
   captures: dict[str, object] = {}
@@ -334,14 +339,16 @@ async def test_run_cc_keeps_resume_when_transcript_is_present(tmp_path: Path, mo
 
 def test_resume_context_dropped_renders_backend_neutral_by_reason() -> None:
   from src.core.message_aggregator import _SIMPLE_HANDLERS
-  anchor = _SIMPLE_HANDLERS[ET.RESUME_CONTEXT_DROPPED](
-      {"type": ET.RESUME_CONTEXT_DROPPED, "reason": "anchor_missing"})
+  anchor = _SIMPLE_HANDLERS[ET.RESUME_CONTEXT_DROPPED]({"type": ET.RESUME_CONTEXT_DROPPED, "reason": "anchor_missing"})
   assert anchor["role"] == "system"
   assert "anchor" in anchor["content"].lower()
   assert "claude" not in anchor["content"].lower()
 
   transcript = _SIMPLE_HANDLERS[ET.RESUME_CONTEXT_DROPPED](
-      {"type": ET.RESUME_CONTEXT_DROPPED, "reason": "transcript_missing"})
+      {
+          "type": ET.RESUME_CONTEXT_DROPPED,
+          "reason": "transcript_missing"
+      })
   assert transcript["role"] == "system"
   assert "transcript" in transcript["content"].lower()
   assert "claude" not in transcript["content"].lower()

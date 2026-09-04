@@ -10,29 +10,29 @@ from zoneinfo import ZoneInfo
 import pytest
 import yaml
 from conftest import (
-  OPUS_BACKEND_ID,
-  OPUS_BACKEND_OPTION,
-  SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
-  SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
-  SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
-  SCHEDULER_THREAD_MANAGER_PATCH_TARGET,
-  FakeThreadManager,
-  _noop,
-  build_scheduler_cfg,
-  close_create_logged_task,
-  make_cron_client,
+    OPUS_BACKEND_ID,
+    OPUS_BACKEND_OPTION,
+    SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
+    SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
+    SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
+    SCHEDULER_THREAD_MANAGER_PATCH_TARGET,
+    FakeThreadManager,
+    _noop,
+    build_scheduler_cfg,
+    close_create_logged_task,
+    make_cron_client,
 )
 
 from src.api import cron as cron_api
 from src.core.config import (
-  ScheduledTaskConfig,
-  _load_cron_file,
+    ScheduledTaskConfig,
+    _load_cron_file,
 )
 from src.core.models import (
-  CreateSessionRequest,
-  SessionMetadata,
-  SessionStatus,
-  SpawnRequest,
+    CreateSessionRequest,
+    SessionMetadata,
+    SessionStatus,
+    SpawnRequest,
 )
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
@@ -339,8 +339,11 @@ def test_cron_api_rejects_invalid_backend_on_update(
   prompt_path.parent.mkdir(parents=True, exist_ok=True)
   prompt_path.write_text("run nightly", encoding="utf-8")
   (cron_dir / "nightly.yaml").write_text(
-      yaml.safe_dump({"cron": "0 2 * * *", "prompt_file": str(prompt_path), "backend": "codex-o3"}),
-      encoding="utf-8")
+      yaml.safe_dump({
+          "cron": "0 2 * * *",
+          "prompt_file": str(prompt_path),
+          "backend": "codex-o3"
+      }), encoding="utf-8")
   _patch_cron_d(monkeypatch, cron_dir)
   cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
@@ -350,9 +353,7 @@ def test_cron_api_rejects_invalid_backend_on_update(
 
   assert response.status_code == 400
   assert response.json()["detail"] == "backend 'missing-backend' is not in backend_options"
-  assert (
-      yaml.safe_load((cron_dir / "nightly.yaml").read_text(encoding="utf-8")).get("backend")
-      == "codex-o3")
+  assert (yaml.safe_load((cron_dir / "nightly.yaml").read_text(encoding="utf-8")).get("backend") == "codex-o3")
 
 
 @pytest.mark.asyncio
@@ -366,7 +367,11 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
   prompt_path.parent.mkdir(parents=True, exist_ok=True)
   prompt_path.write_text("run nightly", encoding="utf-8")
   (cron_dir / "nightly.yaml").write_text(
-      yaml.safe_dump({"cron": "0 2 * * *", "prompt_file": str(prompt_path), "backend": OPUS_BACKEND_ID}),
+      yaml.safe_dump({
+          "cron": "0 2 * * *",
+          "prompt_file": str(prompt_path),
+          "backend": OPUS_BACKEND_ID
+      }),
       encoding="utf-8")
   _patch_cron_d(monkeypatch, cron_dir)
   cfg = build_scheduler_cfg(tmp_path)
@@ -383,9 +388,7 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
 
     assert response.status_code == 409
     assert "backend switch" in response.json()["detail"]
-    assert (
-        yaml.safe_load((cron_dir / "nightly.yaml").read_text(encoding="utf-8")).get("backend")
-        == OPUS_BACKEND_ID)
+    assert (yaml.safe_load((cron_dir / "nightly.yaml").read_text(encoding="utf-8")).get("backend") == OPUS_BACKEND_ID)
   finally:
     clear_busy(session.id)
 

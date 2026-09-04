@@ -124,32 +124,33 @@ def test_translate_thought_and_unknown(monkeypatch) -> None:
 def test_translate_compact_event_and_unknown_still_dropped(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  translated = backend.translate_event({
-      "type": "compact",
-      "step": 12,
-      "layer": "mask",
-      "trigger": "threshold",
-      "pre_tokens": 85196,
-      "post_tokens_est": 27400,
-  })
-
-  assert translated == [{
-      "type": ET.SYSTEM,
-      "subtype": ET.COMPACT_BOUNDARY,
-      ET.COMPACT_METADATA: {
+  translated = backend.translate_event(
+      {
+          "type": "compact",
+          "step": 12,
+          "layer": "mask",
           "trigger": "threshold",
           "pre_tokens": 85196,
-      },
-  }]
+          "post_tokens_est": 27400,
+      })
+
+  assert translated == [
+      {
+          "type": ET.SYSTEM,
+          "subtype": ET.COMPACT_BOUNDARY,
+          ET.COMPACT_METADATA: {
+              "trigger": "threshold",
+              "pre_tokens": 85196,
+          },
+      }
+  ]
   assert backend.translate_event({"type": "future-event"}) == []
 
 
 def test_translate_session_event(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  assert backend.translate_event({"type": "session", "session_id": "session-X"}) == [{
-      "session_id": "session-X"
-  }]
+  assert backend.translate_event({"type": "session", "session_id": "session-X"}) == [{"session_id": "session-X"}]
 
 
 def test_build_command_writes_task_file_and_flags(monkeypatch, tmp_path: Path) -> None:
@@ -185,8 +186,7 @@ def test_build_command_writes_task_file_and_flags(monkeypatch, tmp_path: Path) -
   assert not any(FLAG_LIKE_PROMPT in arg for arg in cmd)
 
 
-def test_no_instructions_skips_agents_md_and_writes_bare_task_file(
-    monkeypatch, tmp_path: Path) -> None:
+def test_no_instructions_skips_agents_md_and_writes_bare_task_file(monkeypatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch)
   session_cwd = tmp_path / "cwd"
   session_cwd.mkdir()
@@ -284,8 +284,7 @@ async def _drive_run_halted_at_spawn(backend: AgentBackend, monkeypatch: pytest.
   process.stdin = MagicMock()
   process.stdin.drain = AsyncMock()
   process.stdin.wait_closed = AsyncMock()
-  monkeypatch.setattr(
-      "src.agents.backends.base.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
+  monkeypatch.setattr("src.agents.backends.base.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
 
   async def on_spawn(pid: int) -> None:
     raise _HaltAtSpawn
@@ -337,16 +336,14 @@ def test_backend_option_defaults_context_window_to_none() -> None:
 
 
 def test_backend_option_accepts_positive_context_window() -> None:
-  option = BackendOption(
-      id="cc-k3-test", label="t", type="charlie-code", model="test-model", context_window=262144)
+  option = BackendOption(id="cc-k3-test", label="t", type="charlie-code", model="test-model", context_window=262144)
   assert option.context_window == 262144
 
 
 @pytest.mark.parametrize("bad", [0, -1])
 def test_backend_option_rejects_nonpositive_context_window(bad: int) -> None:
   with pytest.raises(ValidationError):
-    BackendOption(
-        id="cc-k3-test", label="t", type="charlie-code", model="test-model", context_window=bad)
+    BackendOption(id="cc-k3-test", label="t", type="charlie-code", model="test-model", context_window=bad)
 
 
 # ---------------------------------------------------------------------------

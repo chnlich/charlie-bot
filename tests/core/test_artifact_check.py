@@ -14,10 +14,10 @@ from unittest.mock import patch
 
 import pytest
 from conftest import (
-  make_plan_setup,
-  plan_page_html,
-  write_plan_artifact,
-  write_stub_chrome,
+    make_plan_setup,
+    plan_page_html,
+    write_plan_artifact,
+    write_stub_chrome,
 )
 
 from src.cli.artifact import main as artifact_main
@@ -62,15 +62,12 @@ def _sections(genre_titles: list[str]) -> str:
       f'<section><h2><span class="n">{i}</span> {title}</h2></section>' for i, title in enumerate(genre_titles, 1))
 
 
-_SITREP_TITLES = [
-    "What waits on you?", "What is this and why?", "What was verified?", "Risks", "What happens next?"
-]
+_SITREP_TITLES = ["What waits on you?", "What is this and why?", "What was verified?", "Risks", "What happens next?"]
 
 
 def _sitrep_ok_doc() -> str:
   return _genre_doc(
-      "sitrep",
-      '<section><h2><span class="n">1</span> What waits on you?</h2><p>Nothing.</p></section>'
+      "sitrep", '<section><h2><span class="n">1</span> What waits on you?</h2><p>Nothing.</p></section>'
       '<section><h2><span class="n">2</span> What is this and why?</h2><p>Why. <span class="req">r1</span></p></section>'
       '<section><h2><span class="n">3</span> What was verified?</h2><p>Done. <span class="src">s</span></p></section>'
       '<section><h2><span class="n">4</span> Risks</h2>'
@@ -172,10 +169,15 @@ def test_sections_numbered_ignores_unnumbered_h2_and_h2less_sections(tmp_path: P
 
 def test_understanding_needs_at_least_five_numbered_sections(tmp_path: Path) -> None:
   cfg = _chrome_cfg(tmp_path)
-  five = _write(tmp_path, _genre_doc("understanding", _sections([f"S{i}" for i in range(1, 6)]) + '<div class="foot"><p>x</p></div>'))
+  five = _write(
+      tmp_path,
+      _genre_doc("understanding",
+                 _sections([f"S{i}" for i in range(1, 6)]) + '<div class="foot"><p>x</p></div>'))
   assert [o.passed for o in _run("understanding", five, cfg)["sections-numbered"]] == [True]
   four = _write(
-      tmp_path, _genre_doc("understanding", _sections([f"S{i}" for i in range(1, 5)]) + '<div class="foot"><p>x</p></div>'))
+      tmp_path,
+      _genre_doc("understanding",
+                 _sections([f"S{i}" for i in range(1, 5)]) + '<div class="foot"><p>x</p></div>'))
   (outcome,) = _run("understanding", four, cfg)["sections-numbered"]
   assert not outcome.passed
   assert "understanding requires at least 5 numbered sections, found 4" in outcome.detail
@@ -196,7 +198,9 @@ def test_foot_present_pass_and_fail(tmp_path: Path) -> None:
 
 
 def test_explain_triad_pass_and_fail(tmp_path: Path) -> None:
-  with_triad = _genre_doc("explain", '<section><div class="triad"><div class="row"><span class="k">You know</span>X</div></div></section>' + _sections([f"S{i}" for i in range(1, 6)]))
+  with_triad = _genre_doc(
+      "explain", '<section><div class="triad"><div class="row"><span class="k">You know</span>X</div></div></section>' +
+      _sections([f"S{i}" for i in range(1, 6)]))
   assert [o.passed for o in _run("explain", _write(tmp_path, with_triad))["explain-triad"]] == [True]
   without = _genre_doc("explain", _sections([f"S{i}" for i in range(1, 6)]))
   (outcome,) = _run("explain", _write(tmp_path, without))["explain-triad"]
@@ -206,7 +210,8 @@ def test_explain_triad_pass_and_fail(tmp_path: Path) -> None:
 
 def test_req_chips_pass_and_fail(tmp_path: Path) -> None:
   assert [o.passed for o in _run("sitrep", _write(tmp_path, _sitrep_ok_doc()))["req-chips"]] == [True]
-  (outcome,) = _run("sitrep", _write(tmp_path, _sitrep_ok_doc().replace('<span class="req">r1</span>', "r1")))["req-chips"]
+  (outcome,) = _run("sitrep", _write(tmp_path,
+                                     _sitrep_ok_doc().replace('<span class="req">r1</span>', "r1")))["req-chips"]
   assert not outcome.passed
   assert "no span.req" in outcome.detail
 
@@ -215,21 +220,26 @@ def test_req_chips_pass_and_fail(tmp_path: Path) -> None:
 # fork-open-shape / fork-explainer
 # ---------------------------------------------------------------------------
 
-_OPEN_FORK = ('<div class="fork"><p class="q"><span class="fn">1</span>Scope?</p>'
-              '<p class="rec"><b>Recommendation:</b> R</p><p class="trade">Tradeoff: T</p></div>')
+_OPEN_FORK = (
+    '<div class="fork"><p class="q"><span class="fn">1</span>Scope?</p>'
+    '<p class="rec"><b>Recommendation:</b> R</p><p class="trade">Tradeoff: T</p></div>')
 
 
 def test_fork_open_shape_passes_full_and_skips_resolved(tmp_path: Path) -> None:
-  resolved = ('<div class="fork"><p class="q"><span class="fn">2</span>Done?</p>'
-              '<p class="resolved">Resolved: all.</p></div>')
+  resolved = (
+      '<div class="fork"><p class="q"><span class="fn">2</span>Done?</p>'
+      '<p class="resolved">Resolved: all.</p></div>')
   doc = _genre_doc("debug", _sections([f"S{i}" for i in range(1, 6)]) + f"<section>{_OPEN_FORK}{resolved}</section>")
   assert [o.passed for o in _run("debug", _write(tmp_path, doc))["fork-open-shape"]] == [True]
 
 
 def test_fork_open_shape_locates_the_offending_fork_and_section(tmp_path: Path) -> None:
-  fork = ('<div class="fork"><p class="q"><span class="fn">1</span>Scope?</p>'
-          '<p class="rec"><b>Recommendation:</b> R</p></div>')
-  doc = _genre_doc("debug", f'<section><h2><span class="n">5</span> Decisions</h2>{fork}</section>' + _sections([f"S{i}" for i in range(1, 5)]))
+  fork = (
+      '<div class="fork"><p class="q"><span class="fn">1</span>Scope?</p>'
+      '<p class="rec"><b>Recommendation:</b> R</p></div>')
+  doc = _genre_doc(
+      "debug", f'<section><h2><span class="n">5</span> Decisions</h2>{fork}</section>' +
+      _sections([f"S{i}" for i in range(1, 5)]))
   (outcome,) = _run("debug", _write(tmp_path, doc))["fork-open-shape"]
   assert not outcome.passed
   assert outcome.detail == "fork #1 (section '5 Decisions') is missing p.trade"
@@ -238,8 +248,7 @@ def test_fork_open_shape_locates_the_offending_fork_and_section(tmp_path: Path) 
 def test_fork_explainer_reports_every_open_fork_missing_a_details_layer(tmp_path: Path) -> None:
   fork = _OPEN_FORK
   doc = _genre_doc(
-      "sitrep",
-      f'<section><h2><span class="n">1</span> What waits on you?</h2>{fork}{fork}</section>'
+      "sitrep", f'<section><h2><span class="n">1</span> What waits on you?</h2>{fork}{fork}</section>'
       '<section><h2><span class="n">2</span> W</h2><p><span class="req">r1</span></p></section>'
       '<section><h2><span class="n">3</span> V</h2></section><section><h2><span class="n">4</span> R</h2></section>'
       '<section><h2><span class="n">5</span> N</h2></section>')
@@ -251,9 +260,13 @@ def test_fork_explainer_reports_every_open_fork_missing_a_details_layer(tmp_path
 
 
 def test_fork_explainer_passes_with_details_layer(tmp_path: Path) -> None:
-  fork = _OPEN_FORK.replace("</div>", '<details class="details-layer"><summary>Why</summary><ul><li>w</li></ul></details></div>')
-  doc = _genre_doc("sitrep", f'<section><h2><span class="n">1</span> S1</h2>{fork}</section>' + _sections([f"S{i}" for i in range(2, 6)]))
-  doc = doc.replace('<h2><span class="n">2</span> S2</h2>', '<h2><span class="n">2</span> S2</h2><p><span class="req">r1</span></p>')
+  fork = _OPEN_FORK.replace(
+      "</div>", '<details class="details-layer"><summary>Why</summary><ul><li>w</li></ul></details></div>')
+  doc = _genre_doc(
+      "sitrep",
+      f'<section><h2><span class="n">1</span> S1</h2>{fork}</section>' + _sections([f"S{i}" for i in range(2, 6)]))
+  doc = doc.replace(
+      '<h2><span class="n">2</span> S2</h2>', '<h2><span class="n">2</span> S2</h2><p><span class="req">r1</span></p>')
   assert [o.passed for o in _run("sitrep", _write(tmp_path, doc))["fork-explainer"]] == [True]
 
 
@@ -275,20 +288,23 @@ def test_fact_anchored_fails_without_src_and_reports_block_tag(tmp_path: Path) -
 
 
 def test_fact_anchored_fails_on_a_label_parked_in_a_bare_div(tmp_path: Path) -> None:
-  doc = _genre_doc("debug", _sections([f"S{i}" for i in range(1, 6)]) +
-                   '<section><div><span class="tag fact">Fact</span> Loose.</div></section>')
+  doc = _genre_doc(
+      "debug",
+      _sections([f"S{i}" for i in range(1, 6)]) +
+      '<section><div><span class="tag fact">Fact</span> Loose.</div></section>')
   (outcome,) = _run("debug", _write(tmp_path, doc))["fact-anchored"]
   assert not outcome.passed
   assert "has no p/li/td/blockquote/h3 ancestor" in outcome.detail
 
 
 def test_fact_anchored_counts_labels_in_document_order(tmp_path: Path) -> None:
-  labels = ('<p><span class="tag fact">Fact</span> kept <span class="src">s</span></p>'
-            '<li><span class="tag fact">Fact</span> dropped</li>')
+  labels = (
+      '<p><span class="tag fact">Fact</span> kept <span class="src">s</span></p>'
+      '<li><span class="tag fact">Fact</span> dropped</li>')
   doc = _genre_doc(
       "debug",
-      _sections(["S1", "S2", "S3"]) +
-      '<section><h2><span class="n">4</span> Evidence</h2><ul>' + labels + '</ul></section>'
+      _sections(["S1", "S2", "S3"]) + '<section><h2><span class="n">4</span> Evidence</h2><ul>' + labels +
+      '</ul></section>'
       '<section><h2><span class="n">5</span> S5</h2></section>')
   outcomes = _run("debug", _write(tmp_path, doc))["fact-anchored"]
   # The first label anchors in its own p; the second li carries no span.src nearby.
@@ -374,8 +390,8 @@ def _ordinal_doc(body: str, *, numbered_h2: int = 5, sn: tuple[str, ...] = ()) -
   span.sn subsection markers, and *body* as one trailing paragraph."""
   return _genre_doc(
       "debug",
-      _sections([f"S{i}" for i in range(1, numbered_h2 + 1)]) +
-      "".join(f'<span class="sn">{s}</span>' for s in sn) + f"<p>{body}</p>")
+      _sections([f"S{i}" for i in range(1, numbered_h2 + 1)]) + "".join(f'<span class="sn">{s}</span>' for s in sn) +
+      f"<p>{body}</p>")
 
 
 def _ordinal_outcome(tmp_path: Path, body: str, **kwargs) -> artifact_check.AssertionOutcome:
@@ -403,11 +419,9 @@ def test_ordinal_named_document_word_marks_external(tmp_path: Path) -> None:
 def test_ordinal_named_first_use_order(tmp_path: Path) -> None:
   """A naming sentence before a bare use passes; the bare use before the naming sentence fails on
   the earlier sentence alone."""
-  named_first = _genre_doc(
-      "debug", _sections([f"S{i}" for i in range(1, 6)]) + "<p>plan 3：这样收</p><p>plan 3 的收法</p>")
+  named_first = _genre_doc("debug", _sections([f"S{i}" for i in range(1, 6)]) + "<p>plan 3：这样收</p><p>plan 3 的收法</p>")
   assert _run("debug", _write(tmp_path, named_first))["ordinal-named"][0].passed
-  bare_first = _genre_doc(
-      "debug", _sections([f"S{i}" for i in range(1, 6)]) + "<p>plan 3 的收法</p><p>plan 3：这样收</p>")
+  bare_first = _genre_doc("debug", _sections([f"S{i}" for i in range(1, 6)]) + "<p>plan 3 的收法</p><p>plan 3：这样收</p>")
   (outcome,) = _run("debug", _write(tmp_path, bare_first))["ordinal-named"]
   assert not outcome.passed
   assert "plan 3 的收法" in outcome.detail
@@ -474,12 +488,15 @@ def test_ordinal_named_pre_and_code_literals(tmp_path: Path) -> None:
   """pre subtrees are not scanned, a label inside code is a mention, and code text in the same
   sentence still anchors a bare label outside the code."""
   sections = _sections([f"S{i}" for i in range(1, 6)])
-  assert _run("debug", _write(tmp_path, _genre_doc("debug", sections + "<pre>计划 section 1</pre>")))["ordinal-named"][
-      0].passed
-  assert _run("debug", _write(tmp_path, _genre_doc("debug", sections + "<p>见 <code>plan 3</code> 的输出</p>")))[
-      "ordinal-named"][0].passed
-  assert _run("debug", _write(tmp_path, _genre_doc("debug", sections + "<p>plan 3 见 <code>/a/b/c</code> 下的说明</p>")))[
-      "ordinal-named"][0].passed
+  assert _run("debug", _write(tmp_path, _genre_doc("debug",
+                                                   sections + "<pre>计划 section 1</pre>")))["ordinal-named"][0].passed
+  assert _run("debug", _write(tmp_path,
+                              _genre_doc("debug",
+                                         sections + "<p>见 <code>plan 3</code> 的输出</p>")))["ordinal-named"][0].passed
+  assert _run("debug",
+              _write(tmp_path,
+                     _genre_doc("debug",
+                                sections + "<p>plan 3 见 <code>/a/b/c</code> 下的说明</p>")))["ordinal-named"][0].passed
 
 
 def _genre_ok_doc(genre: str) -> str:
@@ -493,8 +510,7 @@ def _genre_ok_doc(genre: str) -> str:
   if genre == "debug":
     return _debug_ok_doc()
   return _genre_doc(
-      "explain",
-      '<section><div class="triad"><div class="row"><span class="k">You know</span>X</div></div></section>' +
+      "explain", '<section><div class="triad"><div class="row"><span class="k">You know</span>X</div></div></section>' +
       _sections([f"S{i}" for i in range(1, 6)]))
 
 
@@ -502,8 +518,10 @@ def _genre_ok_doc(genre: str) -> str:
 def test_ordinal_named_runs_in_every_genre(tmp_path: Path, genre: str) -> None:
   """The sentence fails ordinal-named on a minimal compliant page of every genre and passes without it."""
   cfg = _chrome_cfg(tmp_path)
-  assert [o.passed for o in _run(genre, _write(tmp_path, _genre_ok_doc(genre), name=f"{genre}-clean.html"),
-                                 cfg)["ordinal-named"]] == [True]
+  assert [
+      o.passed
+      for o in _run(genre, _write(tmp_path, _genre_ok_doc(genre), name=f"{genre}-clean.html"), cfg)["ordinal-named"]
+  ] == [True]
   offending = _genre_ok_doc(genre).replace("</body></html>", f"<p>{_ORDINAL_SENTENCE}</p></body></html>")
   outcomes = _run(genre, _write(tmp_path, offending, name=f"{genre}-offending.html"), cfg)["ordinal-named"]
   assert [o.passed for o in outcomes] == [False]
@@ -571,8 +589,7 @@ def test_cli_two_open_forks_without_explainer_report_two_locations_and_skip_the_
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """Section 1 with two open forks lacking details.details-layer: two FAIL lines, exit 1, no model call."""
   doc = _genre_doc(
-      "sitrep",
-      f'<section><h2><span class="n">1</span> What waits on you?</h2>{_OPEN_FORK}{_OPEN_FORK}</section>'
+      "sitrep", f'<section><h2><span class="n">1</span> What waits on you?</h2>{_OPEN_FORK}{_OPEN_FORK}</section>'
       '<section><h2><span class="n">2</span> What is this and why?</h2><p><span class="req">r1</span></p></section>'
       '<section><h2><span class="n">3</span> What was verified?</h2></section>'
       '<section><h2><span class="n">4</span> Risks</h2></section>'
@@ -630,7 +647,10 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = _write(tmp_path, _sitrep_ok_doc())
   cfg, _options = _probe_cfg(tmp_path)
-  backends = {"alpha": _FakeBackend(error="boom"), "beta": _FakeBackend(answer="(1) The reader's problem.\n(2)-(6) fine.")}
+  backends = {
+      "alpha": _FakeBackend(error="boom"),
+      "beta": _FakeBackend(answer="(1) The reader's problem.\n(2)-(6) fine.")
+  }
   _patch_backends(monkeypatch, backends)
   monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
@@ -656,7 +676,10 @@ def test_cli_probe_runs_after_assertions_pass_on_plan_and_understanding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], genre: str) -> None:
   artifact = _write(tmp_path, _genre_ok_doc(genre))
   cfg, _options = _probe_cfg(tmp_path)
-  backends = {"alpha": _FakeBackend(error="boom"), "beta": _FakeBackend(answer="(1) The reader's problem.\n(2)-(7) fine.")}
+  backends = {
+      "alpha": _FakeBackend(error="boom"),
+      "beta": _FakeBackend(answer="(1) The reader's problem.\n(2)-(7) fine.")
+  }
   _patch_backends(monkeypatch, backends)
   monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   assert _run_cli([str(artifact), "--genre", genre, "--trigger", "where are we?"]) == 0
@@ -702,8 +725,7 @@ def test_cli_assertions_only_skips_probe_on_plan(
   assert "--- cold read ---" not in capsys.readouterr().out
 
 
-def test_cli_trigger_missing_on_probe_genre_is_usage_error(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_trigger_missing_on_probe_genre_is_usage_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   assert _run_cli(["page.html", "--genre", "sitrep"]) == 2
   assert "--trigger" in capsys.readouterr().err
 
@@ -734,8 +756,7 @@ def test_cli_missing_file_errors(
 
 
 @pytest.mark.asyncio
-async def test_plan_present_and_artifact_check_reject_the_same_assertions_on_one_fixture(
-    tmp_path: Path) -> None:
+async def test_plan_present_and_artifact_check_reject_the_same_assertions_on_one_fixture(tmp_path: Path) -> None:
   broken = plan_page_html().replace('<span class="n">4</span>', '<span class="n">9</span>').replace(
       '<div class="foot"><p>How to respond.</p></div>', "")
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await make_plan_setup(tmp_path)
@@ -749,7 +770,8 @@ async def test_plan_present_and_artifact_check_reject_the_same_assertions_on_one
   message = str(exc_info.value)
   for name in cli_failures:
     assert name in message
-  assert message.endswith("Measure locally with: charliebot artifact check <artifact.html> --genre plan --assertions-only")
+  assert message.endswith(
+      "Measure locally with: charliebot artifact check <artifact.html> --genre plan --assertions-only")
 
 
 @pytest.mark.asyncio
@@ -768,7 +790,8 @@ async def test_plan_present_never_calls_build_backend(tmp_path: Path, monkeypatc
 # ---------------------------------------------------------------------------
 
 
-def test_run_probe_returns_attempts_and_first_answering_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_run_probe_returns_attempts_and_first_answering_backend(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   cfg, _options = _probe_cfg(tmp_path)
   backends = {"alpha": _FakeBackend(error="boom"), "beta": _FakeBackend(answer="six answers")}
   _patch_backends(monkeypatch, backends)

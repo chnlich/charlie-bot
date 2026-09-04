@@ -76,18 +76,21 @@ def test_seed_idempotence(temp_home: Path) -> None:
   # The seeded host file keeps the repo pointers: the pointed files own the
   # prompt bodies, and the host file carries only the paths to them.
   assert body1 == {
-      "cron": "27 6 * * *",
-      "timezone": "local",
-      "steps": [
-          {
-              "name": "selector",
-              "prompt_file": "prompts/cron/memory_curator/memory_selector.md",
-          },
-          {
-              "name": "reviewer",
-              "prompt_file": "prompts/cron/memory_curator/memory_reviewer.md",
-          },
-      ],
+      "cron":
+          "27 6 * * *",
+      "timezone":
+          "local",
+      "steps":
+          [
+              {
+                  "name": "selector",
+                  "prompt_file": "prompts/cron/memory_curator/memory_selector.md",
+              },
+              {
+                  "name": "reviewer",
+                  "prompt_file": "prompts/cron/memory_curator/memory_reviewer.md",
+              },
+          ],
   }
   assert "prompt" not in body1
   assert "backend" not in body1
@@ -104,8 +107,7 @@ def test_seed_idempotence(temp_home: Path) -> None:
 
 def test_existing_entry_untouched(temp_home: Path) -> None:
   cfg = get_config()
-  _write_task_text(temp_home, "memory-curator", _dump(
-      {"cron": "5 5 * * *", "prompt_file": "prompts/whatever.md"}))
+  _write_task_text(temp_home, "memory-curator", _dump({"cron": "5 5 * * *", "prompt_file": "prompts/whatever.md"}))
   path = _cron_d_dir(temp_home) / "memory-curator.yaml"
   before_bytes = path.read_bytes()
 
@@ -249,8 +251,7 @@ def test_seed_fails_loud_on_legacy_cron(temp_home: Path) -> None:
 
 def test_timezone_local_resolves(temp_home: Path) -> None:
   prompt_path = _write_healthy(temp_home, "t", "* * * * *", "p")
-  _write_task_text(temp_home, "t", _dump(
-      {"cron": "* * * * *", "timezone": "local", "prompt_file": str(prompt_path)}))
+  _write_task_text(temp_home, "t", _dump({"cron": "* * * * *", "timezone": "local", "prompt_file": str(prompt_path)}))
   tasks = get_scheduled_tasks()
   assert tasks[0].timezone != "local"
   ZoneInfo(tasks[0].timezone)
@@ -258,8 +259,12 @@ def test_timezone_local_resolves(temp_home: Path) -> None:
 
 def test_explicit_timezone_untouched(temp_home: Path) -> None:
   prompt_path = _write_healthy(temp_home, "t", "* * * * *", "p")
-  _write_task_text(temp_home, "t", _dump(
-      {"cron": "* * * * *", "timezone": "America/New_York", "prompt_file": str(prompt_path)}))
+  _write_task_text(
+      temp_home, "t", _dump({
+          "cron": "* * * * *",
+          "timezone": "America/New_York",
+          "prompt_file": str(prompt_path)
+      }))
   tasks = get_scheduled_tasks()
   assert tasks[0].timezone == "America/New_York"
 
@@ -292,7 +297,12 @@ def _inject_not_mapping(h: Path) -> Path:
 
 
 def _inject_name_key(h: Path) -> Path:
-  return _write_task_text(h, "broken-3", _dump({"name": "should-not-survive", "cron": "0 0 * * *", "prompt_file": "p.md"}))
+  return _write_task_text(
+      h, "broken-3", _dump({
+          "name": "should-not-survive",
+          "cron": "0 0 * * *",
+          "prompt_file": "p.md"
+      }))
 
 
 def _inject_unknown_key(h: Path) -> Path:
@@ -304,13 +314,16 @@ def _inject_missing_source(h: Path) -> Path:
 
 
 def _inject_missing_prompt_file(h: Path) -> Path:
-  return _write_task_text(h, "broken-6", _dump(
-      {"cron": "0 0 * * *", "prompt_file": "~/definitely-missing.md"}))
+  return _write_task_text(h, "broken-6", _dump({"cron": "0 0 * * *", "prompt_file": "~/definitely-missing.md"}))
 
 
 def _inject_inline_prompt(h: Path) -> Path:
-  return _write_task_text(h, "broken-7", _dump(
-      {"cron": "0 0 * * *", "prompt": "inline", "prompt_file": "~/also-missing.md"}))
+  return _write_task_text(
+      h, "broken-7", _dump({
+          "cron": "0 0 * * *",
+          "prompt": "inline",
+          "prompt_file": "~/also-missing.md"
+      }))
 
 
 def _inject_legacy(h: Path) -> Path:
@@ -330,8 +343,14 @@ def _inject_legacy(h: Path) -> Path:
         (_inject_legacy, "cron.yaml (legacy)", "cron.yaml"),
     ],
     ids=[
-        "whole-file-syntax", "not-mapping", "name-key", "unknown-key",
-        "missing-required-source", "missing-prompt-file", "inline-prompt", "legacy-cron",
+        "whole-file-syntax",
+        "not-mapping",
+        "name-key",
+        "unknown-key",
+        "missing-required-source",
+        "missing-prompt-file",
+        "inline-prompt",
+        "legacy-cron",
     ],
 )
 def test_single_broken_file_isolated(
@@ -375,8 +394,11 @@ def test_hot_reload_edit_existing_file(temp_home: Path) -> None:
   _write_healthy(temp_home, "task-a", "0 0 * * *", "a body")
   assert get_scheduled_tasks()[0].cron == "0 0 * * *"
 
-  _write_task_text(temp_home, "task-a", _dump(
-      {"cron": "0 9 * * *", "prompt_file": str(temp_home / "repo" / "task-a.md")}))
+  _write_task_text(
+      temp_home, "task-a", _dump({
+          "cron": "0 9 * * *",
+          "prompt_file": str(temp_home / "repo" / "task-a.md")
+      }))
   tasks = get_scheduled_tasks()
   assert tasks[0].cron == "0 9 * * *" and tasks[0].prompt == "a body"
 
@@ -405,8 +427,12 @@ def test_hot_reload_pointed_file_change_live_body(temp_home: Path) -> None:
 
 
 def test_broken_entry_carries_absolute_path_and_enabled(temp_home: Path) -> None:
-  injected = _write_task_text(temp_home, "broken", _dump(
-      {"cron": "0 0 * * *", "prompt_file": "~/typo-missing.md", "enabled": False}))
+  injected = _write_task_text(
+      temp_home, "broken", _dump({
+          "cron": "0 0 * * *",
+          "prompt_file": "~/typo-missing.md",
+          "enabled": False
+      }))
   errors = get_scheduled_task_errors()
   assert len(errors) == 1
   assert errors[0].path == str(injected)
@@ -429,8 +455,14 @@ def test_broken_entry_enabled_null_on_unparseable_yaml(temp_home: Path) -> None:
 
 def test_broken_prompt_file_missing_path(temp_home: Path) -> None:
   missing = temp_home / "prompts" / "cron" / "memory_curator" / "memory_selector.md"
-  injected = _write_task_text(temp_home, "memory-curator", _dump(
-      {"cron": "27 6 * * *", "timezone": "local", "prompt_file": str(missing), "enabled": True}))
+  injected = _write_task_text(
+      temp_home, "memory-curator",
+      _dump({
+          "cron": "27 6 * * *",
+          "timezone": "local",
+          "prompt_file": str(missing),
+          "enabled": True
+      }))
 
   assert not get_scheduled_tasks()
   errors = get_scheduled_task_errors()
@@ -473,8 +505,14 @@ def _client(cfg):
         (_inject_legacy, "cron.yaml (legacy)"),
     ],
     ids=[
-        "whole-file-syntax", "not-mapping", "name-key", "unknown-key",
-        "missing-required-source", "missing-prompt-file", "inline-prompt", "legacy-cron",
+        "whole-file-syntax",
+        "not-mapping",
+        "name-key",
+        "unknown-key",
+        "missing-required-source",
+        "missing-prompt-file",
+        "inline-prompt",
+        "legacy-cron",
     ],
 )
 def test_list_tasks_never_500_with_broken(temp_home: Path, inject, expected_name: str) -> None:
@@ -505,10 +543,14 @@ def test_list_tasks_omits_resolved_prompt(temp_home: Path) -> None:
   repo = temp_home / "repo"
   step_pf = repo / "step-one.md"
   step_pf.write_text("resolved step body", encoding="utf-8")
-  _write_task_text(temp_home, "task-chain", _dump({
-      "cron": "0 3 * * *",
-      "steps": [{"name": "one", "prompt_file": str(step_pf)}],
-  }))
+  _write_task_text(
+      temp_home, "task-chain", _dump({
+          "cron": "0 3 * * *",
+          "steps": [{
+              "name": "one",
+              "prompt_file": str(step_pf)
+          }],
+      }))
   cfg = get_config()
 
   with _client(cfg) as client:
@@ -551,8 +593,11 @@ def test_api_create_round_trips_prompt_file(temp_home: Path) -> None:
   cfg = get_config()
   with _client(cfg) as client:
     response = client.post(
-        "/api/cron/tasks",
-        json={"name": "nightly", "cron": "0 2 * * *", "prompt_file": str(prompt_path)})
+        "/api/cron/tasks", json={
+            "name": "nightly",
+            "cron": "0 2 * * *",
+            "prompt_file": str(prompt_path)
+        })
     assert response.status_code == 200
     assert response.json()["prompt_file"] == str(prompt_path)
     assert "prompt" not in response.json()
@@ -569,12 +614,13 @@ def test_api_put_round_trips_prompt_file(temp_home: Path) -> None:
   cfg = get_config()
   with _client(cfg) as client:
     created = client.post(
-        "/api/cron/tasks",
-        json={"name": "nightly", "cron": "0 2 * * *", "prompt_file": str(prompt_path)})
+        "/api/cron/tasks", json={
+            "name": "nightly",
+            "cron": "0 2 * * *",
+            "prompt_file": str(prompt_path)
+        })
     assert created.status_code == 200
-    response = client.put(
-        "/api/cron/tasks/nightly",
-        json={"cron": "0 4 * * *", "prompt_file": str(prompt_path)})
+    response = client.put("/api/cron/tasks/nightly", json={"cron": "0 4 * * *", "prompt_file": str(prompt_path)})
     assert response.status_code == 200
   _assert_pointer_round_trip(temp_home, prompt_path, "nightly", "0 4 * * *")
 
@@ -607,8 +653,12 @@ def test_api_create_writes_single_file(temp_home: Path) -> None:
   prompt_path.parent.mkdir(parents=True, exist_ok=True)
   prompt_path.write_text("run nightly", encoding="utf-8")
   with _client(cfg) as client:
-    response = client.post("/api/cron/tasks", json={
-        "name": "nightly", "cron": "0 2 * * *", "prompt_file": str(prompt_path)})
+    response = client.post(
+        "/api/cron/tasks", json={
+            "name": "nightly",
+            "cron": "0 2 * * *",
+            "prompt_file": str(prompt_path)
+        })
     assert response.status_code == 200
     path = _cron_d_dir(temp_home) / "nightly.yaml"
     assert path.exists()
@@ -618,8 +668,7 @@ def test_api_create_writes_single_file(temp_home: Path) -> None:
     assert "prompt" not in stored
 
     # 409 on an existing job
-    dup = client.post("/api/cron/tasks", json={
-        "name": "nightly", "cron": "0 3 * * *", "prompt_file": str(prompt_path)})
+    dup = client.post("/api/cron/tasks", json={"name": "nightly", "cron": "0 3 * * *", "prompt_file": str(prompt_path)})
     assert dup.status_code == 409
 
 
@@ -629,8 +678,7 @@ def test_api_put_round_trips_single_file(temp_home: Path) -> None:
   prompt_path.parent.mkdir(parents=True, exist_ok=True)
   prompt_path.write_text("run nightly", encoding="utf-8")
   with _client(cfg) as client:
-    client.post("/api/cron/tasks", json={
-        "name": "nightly", "cron": "0 2 * * *", "prompt_file": str(prompt_path)})
+    client.post("/api/cron/tasks", json={"name": "nightly", "cron": "0 2 * * *", "prompt_file": str(prompt_path)})
     response = client.put("/api/cron/tasks/nightly", json={"cron": "0 4 * * *"})
     assert response.status_code == 200
     path = _cron_d_dir(temp_home) / "nightly.yaml"

@@ -221,6 +221,15 @@ def test_serve_file_diff_annotates_and_keeps_injection_layer(sessions_root: Path
   assert 'window.__cbcServerSessionId="S";' in resp.text
 
 
+def test_serve_file_diff_without_credential_does_not_fall_back_to_clean_page(sessions_root: Path) -> None:
+  _, new = _write_pages(sessions_root)
+
+  resp = _build_client().get("/files" + str(new) + "?diff=artifacts/plan_01.html")
+  assert resp.status_code == 200
+  assert "cbd-ins" in resp.text
+  assert SCRIPT not in resp.text
+
+
 def test_serve_file_without_diff_is_byte_identical_to_pre_diff_response(sessions_root: Path) -> None:
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
   original = page.read_text(encoding="utf-8")
@@ -263,6 +272,7 @@ def test_serve_file_diff_base_non_html_is_400(sessions_root: Path) -> None:
 def test_serve_file_diff_non_artifact_target_is_400(sessions_root: Path) -> None:
   _, new = _write_pages(sessions_root)
   notes_page = _write(sessions_root / "S" / "notes" / "page.html")
+  (sessions_root / "S" / "artifacts" / "directory.html").mkdir()
   text_file = sessions_root / "S" / "artifacts" / "file.txt"
   text_file.write_text("plain", encoding="utf-8")
 
@@ -271,4 +281,8 @@ def test_serve_file_diff_non_artifact_target_is_400(sessions_root: Path) -> None
   assert resp.status_code == 400
   resp = _build_client().get(
       "/files" + str(text_file) + "?diff=artifacts/plan_02.html", cookies={"charliebot_access_key": "secret"})
+  assert resp.status_code == 400
+  resp = _build_client().get(
+      "/files" + str(sessions_root / "S" / "artifacts" / "directory.html") + "?diff=artifacts/plan_02.html",
+      cookies={"charliebot_access_key": "secret"})
   assert resp.status_code == 400

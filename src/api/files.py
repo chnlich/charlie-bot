@@ -154,7 +154,10 @@ async def serve_file(path: str, request: Request):
   if not await asyncio.to_thread(fs_path.exists):
     raise HTTPException(status_code=404, detail="Not found")
 
+  diff_param = request.query_params.get("diff")
   if await asyncio.to_thread(fs_path.is_dir):
+    if diff_param is not None:
+      raise HTTPException(status_code=400, detail=f"diff target is not a session artifact page: {fs_path}")
     url_prefix = f"/files/{path}" if path else "/files"
     listing = await asyncio.to_thread(_dir_listing_html, fs_path, url_prefix)
     return HTMLResponse(listing)
@@ -164,21 +167,22 @@ async def serve_file(path: str, request: Request):
   # only for readers who carry a valid access key: only they can post a comment, so only
   # they see the comment entry. An uncredentialed reader gets the file's original bytes.
   session_id = _artifact_session_id(fs_path) if fs_path.suffix.lower() == ".html" else None
-  diff_param = request.query_params.get("diff")
   if diff_param is not None:
     # A diff request addresses two artifact pages. Both must pass the artifact
     # predicate before anything is served, so a malformed address is rejected
     # rather than silently answered with the clean page. The marks themselves
-    # are spliced in inside the credentialed branch below: like the injected
-    # comment layer, they carry content (the base page's deleted text) that an
-    # uncredentialed reader must not see.
+    # are spliced into the response before the optional comment layer below.
     if session_id is None:
       raise HTTPException(status_code=400, detail=f"diff target is not a session artifact page: {fs_path}")
     base_text = await asyncio.to_thread(_read_diff_base, session_id, diff_param)
+    html_text = await asyncio.to_thread(lambda: fs_path.read_text(encoding="utf-8"))
+    html_text = plan_diff.annotate(base_text, html_text)
+    if request_has_access_key(request, get_config().charliebot_access_key):
+      html_text = _inject_artifact_ui(html_text, session_id)
+    return HTMLResponse(html_text, media_type="text/html")
+
   if session_id is not None and request_has_access_key(request, get_config().charliebot_access_key):
     html_text = await asyncio.to_thread(lambda: fs_path.read_text(encoding="utf-8"))
-    if diff_param is not None:
-      html_text = plan_diff.annotate(base_text, html_text)
     return HTMLResponse(_inject_artifact_ui(html_text, session_id), media_type="text/html")
 
   # Serve the file with auto-detected MIME type

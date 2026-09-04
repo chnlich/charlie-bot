@@ -525,6 +525,10 @@ const planPanel = (() => {
       if (lv && (_selectedVersion == null || _selectedVersion > lv.v)) {
         _selectedVersion = lv.v;
         _diffEnabled = hasPredecessor(found, lv.v);
+      } else if (_diffEnabled == null) {
+        // openPlan can assign a version before the registry fetch resolves.
+        // Finish that selection with the version's actual lineage default.
+        _diffEnabled = hasPredecessor(found, _selectedVersion);
       }
       return;
     }
@@ -643,7 +647,8 @@ const planPanel = (() => {
     if (typeof switchTab === 'function') switchTab('chat-plans');
     _selectedPlanId = planId != null ? Number(planId) : null;
     if (v != null) _selectedVersion = Number(v);
-    _diffEnabled = hasPredecessor(_findPlan(_selectedPlanId), _selectedVersion);
+    var plan = _findPlan(_selectedPlanId);
+    _diffEnabled = plan ? hasPredecessor(plan, _selectedVersion) : null;
     _renderSelector();
     _renderVersionSwitcher();
     _renderStaleNotice();

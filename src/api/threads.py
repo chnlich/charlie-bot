@@ -29,6 +29,7 @@ from src.core.models import (
     ThreadStatus,
     WorkerEvent,
 )
+from src.core.ndjson import iter_ndjson_events
 from src.core.process import kill_process_group
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
@@ -344,15 +345,8 @@ def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
         window = f.read(size - entry.offset)
       complete_end = window.rfind(b"\n") + 1
       if complete_end:
-        raw_events: list[dict] = []
-        for raw_line in window[:complete_end].split(b"\n"):
-          line = raw_line.strip()
-          if not line:
-            continue
-          try:
-            raw_events.append(json.loads(line))
-          except json.JSONDecodeError as e:
-            log.debug("ndjson_parse_skip", error=str(e))
+        raw_events = list(
+            iter_ndjson_events(window[:complete_end].split(b"\n"), log_event="ndjson_parse_skip", log_fields={}))
         _append_worker_events(raw_events, entry.events, entry.tool_id_to_name)
         entry.offset += complete_end
     _thread_events_cache[key] = entry

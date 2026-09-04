@@ -5,8 +5,10 @@ import json
 import os
 import threading
 from collections import OrderedDict
+from collections.abc import Iterable, Iterator
+from itertools import islice
 from pathlib import Path
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 import numpy as np
 import structlog
@@ -87,21 +89,30 @@ def _count_lines(f: BinaryIO) -> int:
   return total
 
 
+def iter_ndjson_events(lines: Iterable[str | bytes], *, log_event: str, log_fields: dict[str, Any]) -> Iterator[dict]:
+  """Yield the JSON objects parsed from *lines*, skipping blank and malformed lines.
+
+  The one definition of the NDJSON reader skip contract: a line that strips to
+  empty is invisible, and a line json.loads rejects logs *log_event* (plus
+  *log_fields* and the parse error) at debug level and yields nothing. Lazy, so
+  first-match and early-stop readers terminate without reading the rest.
+  """
+  for raw_line in lines:
+    line = raw_line.strip()
+    if not line:
+      continue
+    try:
+      yield json.loads(line)
+    except json.JSONDecodeError as e:
+      log.debug(log_event, error=str(e), **log_fields)
+
+
 def parse_ndjson_file(path: Path) -> list[dict]:
   """Sync read+parse an NDJSON file. Skips blank/malformed lines."""
   if not path.exists():
     return []
-  events: list[dict] = []
   with open(path, encoding="utf-8") as f:
-    for raw_line in f:
-      line = raw_line.strip()
-      if not line:
-        continue
-      try:
-        events.append(json.loads(line))
-      except json.JSONDecodeError as e:
-        log.debug("ndjson_parse_skip", error=str(e))
-  return events
+    return list(iter_ndjson_events(f, log_event="ndjson_parse_skip", log_fields={}))
 
 
 def count_ndjson_lines(path: Path) -> int:
@@ -172,12 +183,7 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
       else:
         tail_lines = window_lines[-take:]
 
-  events: list[dict] = []
-  for raw in tail_lines:
-    try:
-      events.append(json.loads(raw))
-    except json.JSONDecodeError as e:
-      log.debug("ndjson_tail_parse_skip", error=str(e))
+  events = list(iter_ndjson_events(tail_lines, log_event="ndjson_tail_parse_skip", log_fields={}))
 
   key = (path, limit)
   with _tail_memo_lock:
@@ -218,14 +224,8 @@ def parse_ndjson_tail_parseable(path: Path, limit: int) -> list[dict]:
         lines = lines[1:]
       if lines and lines[-1] == b"":
         lines = lines[:-1]
-      for raw in reversed(lines):
-        line = raw.strip()
-        if not line:
-          continue
-        try:
-          collected.append(json.loads(line))
-        except json.JSONDecodeError as e:
-          log.debug("ndjson_tail_parseable_skip", error=str(e))
+      for event in iter_ndjson_events(reversed(lines), log_event="ndjson_tail_parseable_skip", log_fields={}):
+        collected.append(event)
         if len(collected) >= limit:
           break
       pos = start
@@ -240,20 +240,8 @@ def parse_ndjson_range(path: Path, start: int, end: int) -> tuple[list[dict], bo
   """
   if not path.exists():
     return [], False
-  events: list[dict] = []
   with open(path, encoding="utf-8") as f:
-    for i, raw_line in enumerate(f):
-      if i >= end:
-        break
-      if i < start:
-        continue
-      line = raw_line.strip()
-      if not line:
-        continue
-      try:
-        events.append(json.loads(line))
-      except json.JSONDecodeError as e:
-        log.debug("ndjson_range_parse_skip", error=str(e))
+    events = list(iter_ndjson_events(islice(f, start, end), log_event="ndjson_range_parse_skip", log_fields={}))
   return events, start > 0
 
 

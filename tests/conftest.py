@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -603,6 +604,13 @@ CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.codex.resolve_binary"
 # helper (charlie_code.py, codex.py, gemini_cli.py, opencode.py) keep their own namespaces.
 ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.antigravity_cli.resolve_binary"
 
+# Patch target for the atomic-write swap hook. src/core/json_utils.py publishes each staged
+# payload with an ``os.replace`` attribute lookup on its module-scope ``import os`` binding, and
+# atomic_write_stream's docstring pins that lookup as the test hook, so mock setattrs the
+# stand-in on the shared os module through this route for the patch window and the write side's
+# call-time read picks it up.
+JSON_UTILS_OS_REPLACE_PATCH_TARGET = "src.core.json_utils.os.replace"
+
 # Import-path patch targets for the tmux seams the TUI session handlers read. The handlers
 # bind the names with call-time `from src.agents.backends.tui import ...`
 # (src/api/sessions.py's tui status/stop handlers, src/core/sessions.py's delete path). The
@@ -1114,6 +1122,41 @@ def make_fake_run_tmux(calls: list[tuple[str, ...]]) -> Callable[..., Awaitable[
     return 0, ""
 
   return fake_run_tmux
+
+
+# Captured before any patch window opens: the os.replace spies below delegate through it, so a
+# spy running inside its own patch window still performs the real swap.
+REAL_OS_REPLACE = os.replace
+
+
+def make_os_replace_spy(captured_targets: list[str]) -> Callable[[str, str], None]:
+  """os.replace side-effect recording each destination path, then performing the real swap.
+
+  The delegation back to the real os.replace is the contract: a stand-in that skips the swap
+  lets a write side pass while never publishing the staged payload, which is the defect the
+  atomic-write tests discriminate against.
+  """
+
+  def capture_replace(src: str, dst: str) -> None:
+    captured_targets.append(str(dst))
+    return REAL_OS_REPLACE(src, dst)
+
+  return capture_replace
+
+
+def make_read_at_os_replace(read_at_swap: list[str], target: Path) -> Callable[[str, str], None]:
+  """os.replace side-effect reading ``target`` at the swap instant, then performing the real swap.
+
+  The read must precede the real swap: it observes the previous document at the instant a
+  concurrent reader could, and a read after the swap would see the new one instead. Delegation
+  back to the real os.replace carries the same contract as make_os_replace_spy's.
+  """
+
+  def read_then_replace(src: str, dst: str) -> None:
+    read_at_swap.append(target.read_text(encoding="utf-8"))
+    return REAL_OS_REPLACE(src, dst)
+
+  return read_then_replace
 
 
 def make_fake_git_create_worktree(*,

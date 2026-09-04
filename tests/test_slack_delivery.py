@@ -873,7 +873,9 @@ async def test_summon_issued_under_the_marker_contract_is_outside_the_audit(tmp_
 
   with _listener_seam(client, trigger=trigger):
     assert await deliver_done(sid, done, cfg, session_mgr) is False
-    with _listener_seam(client, queued=set()):
+    # The backfill probe needs only the queued seam; patch it directly instead of
+    # re-entering the full seam with the same client.
+    with patch(_QUEUED_USER_EVENT_IDS_PATCH_TARGET, return_value=set()):
       assert await backfill_lost_summons(cfg, session_mgr) == 0
 
   assert not client.posts

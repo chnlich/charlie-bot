@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
+from urllib.parse import quote
 
 import pytest
 from conftest import (
@@ -631,6 +632,22 @@ async def test_reply_rewrites_a_file_server_url_to_the_published_one_and_keeps_q
   assert published.read_text(encoding="utf-8") == "<p>sitrep body</p>"
   reply = _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)[0]
   assert reply["content"] == f"details: {published_url} thanks"
+
+
+@pytest.mark.asyncio
+async def test_reply_rewrites_a_percent_encoded_file_server_path(tmp_path: Path) -> None:
+  cfg, session_mgr, client = _rig_with_publish_lane(tmp_path)
+  artifact = _write_artifact(tmp_path, "encoded.html", "<p>encoded body</p>")
+  sid = await _slack_session(session_mgr)
+  encoded_path = quote(str(artifact), safe="")
+
+  with _listener_seam(client):
+    result = await post_reply(sid, f"details: {_FILE_HOST}/files/{encoded_path}", cfg, session_mgr)
+
+  published_url = f"{_PUB_BASE}/encoded.html"
+  assert client.posts == [{"channel": _CHANNEL, "text": f"details: {published_url}", "thread_ts": _THREAD}]
+  assert result["text"] == f"details: {published_url}"
+  assert (cfg.publish_dir / artifact.name).read_text(encoding="utf-8") == "<p>encoded body</p>"
 
 
 @pytest.mark.asyncio

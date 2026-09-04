@@ -10,7 +10,6 @@ that refusal into a refused reply and the CLI into a non-zero exit.
 import filecmp
 import shutil
 from pathlib import Path
-from typing import NamedTuple
 
 from src.core.config import CharlieBotConfig
 
@@ -19,12 +18,22 @@ class PublishError(Exception):
   """A publish preflight failure; the message names the missing config key or the missing artifact."""
 
 
-class PublishResult(NamedTuple):
-  """What one publish produced: the published file, its URL, and whether it replaced a differing file."""
+class PublishResult(str):
+  """The published URL string plus the metadata the callers print or inspect."""
 
   path: Path
-  url: str
   overwrote: bool
+
+  def __new__(cls, url: str, path: Path, overwrote: bool) -> "PublishResult":
+    result = super().__new__(cls, url)
+    result.path = path
+    result.overwrote = overwrote
+    return result
+
+  @property
+  def url(self) -> str:
+    """Return the URL as an ordinary string for callers that use the named field."""
+    return str(self)
 
 
 def publish_artifact(artifact: str | Path, cfg: CharlieBotConfig) -> PublishResult:
@@ -53,4 +62,4 @@ def publish_artifact(artifact: str | Path, cfg: CharlieBotConfig) -> PublishResu
   overwrote = dest.is_file() and not filecmp.cmp(src, dest, shallow=False)
   shutil.copyfile(src, dest)
   dest.chmod(0o644)
-  return PublishResult(path=dest, url=f"{cfg.public_base_url.rstrip('/')}/{src.name}", overwrote=overwrote)
+  return PublishResult(f"{cfg.public_base_url.rstrip('/')}/{src.name}", dest, overwrote)

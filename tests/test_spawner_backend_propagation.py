@@ -3,30 +3,30 @@ from typing import Any
 
 import pytest
 from conftest import (
-  CLEAN_EXIT_OUTCOME,
-  CODEX_BACKEND_OPTION,
-  OPUS_BACKEND_ID,
-  CapturingThreadManager,
-  JudgmentShim,
-  ReviewSpawnSessionManager,
-  ReviewSpawnThreadManager,
-  SpawnFlowSessionManager,
-  build_worker_prompt,
-  capturing_worker,
-  make_fake_git_create_worktree,
-  patch_review_spawn_path,
-  recording_notify_completion,
+    CLEAN_EXIT_OUTCOME,
+    CODEX_BACKEND_OPTION,
+    OPUS_BACKEND_ID,
+    CapturingThreadManager,
+    JudgmentShim,
+    ReviewSpawnSessionManager,
+    ReviewSpawnThreadManager,
+    SpawnFlowSessionManager,
+    build_worker_prompt,
+    capturing_worker,
+    make_fake_git_create_worktree,
+    patch_review_spawn_path,
+    recording_notify_completion,
 )
 
 from src.core import review, spawner, spawner_events, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  BackendOption,
-  SessionMetadata,
-  SpawnRequest,
-  TaskType,
-  ThreadMetadata,
-  ThreadStatus,
+    BackendOption,
+    SessionMetadata,
+    SpawnRequest,
+    TaskType,
+    ThreadMetadata,
+    ThreadStatus,
 )
 
 
@@ -334,8 +334,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
   captures: dict[str, Any] = {}
 
   monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(
-      spawner_launch, "git_create_worktree", make_fake_git_create_worktree(captures=captures))
+  monkeypatch.setattr(spawner_launch, "git_create_worktree", make_fake_git_create_worktree(captures=captures))
   monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 
@@ -544,8 +543,7 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
     monkeypatch: pytest.MonkeyPatch,
     task_type: TaskType,
 ) -> None:
-  cfg = _build_tmp_cfg(
-      tmp_path, BackendOption(id="agy", label="Antigravity", type="antigravity"))
+  cfg = _build_tmp_cfg(tmp_path, BackendOption(id="agy", label="Antigravity", type="antigravity"))
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",

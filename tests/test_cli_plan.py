@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 from conftest import (
-  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-  CLI_COMMON_REQUESTS_GET_PATCH_TARGET,
-  CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
-  make_json_response,
+    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+    CLI_COMMON_REQUESTS_GET_PATCH_TARGET,
+    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+    make_json_response,
 )
 from conftest import setup_session_cwd as _setup_session_cwd
 
@@ -224,9 +224,12 @@ def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(
 
   with (
       patch("sys.argv", [
-          "plan", "present",
-          "--file", "artifacts/missing.html",
-          "--title", "P1",
+          "plan",
+          "present",
+          "--file",
+          "artifacts/missing.html",
+          "--title",
+          "P1",
       ]),
       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, side_effect=FakeRequestException()),
@@ -256,7 +259,10 @@ def test_plan_session_mismatch_rejected(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   with (
       patch("sys.argv", [
-          "plan", "list", "--session", "xyz",
+          "plan",
+          "list",
+          "--session",
+          "xyz",
       ]),
       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
       pytest.raises(SystemExit) as exc_info,
@@ -293,18 +299,12 @@ REJECTION_CASES = [
     pytest.param(["plan", "close", "--as", "superseded"], id="close-requires-plan"),
     pytest.param(["plan", "close", "--plan", "1"], id="close-requires-as"),
     pytest.param(["plan", "close", "--plan", "1", "--as", "weird"], id="close-rejects-invalid-as"),
-    pytest.param(
-        ["plan", "amend", "--file", "f.html", "--trigger", "initial"],
-        id="amend-rejects-invalid-trigger"),
-    pytest.param(
-        ["plan", "reverify", "--verify-thread", "t2", "--plan", "1"],
-        id="reverify-subcommand-removed"),
+    pytest.param(["plan", "amend", "--file", "f.html", "--trigger", "initial"], id="amend-rejects-invalid-trigger"),
+    pytest.param(["plan", "reverify", "--verify-thread", "t2", "--plan", "1"], id="reverify-subcommand-removed"),
     pytest.param(
         ["plan", "present", "--file", "f.html", "--verify-thread", "t1", "--title", "P1"],
         id="present-rejects-verify-thread"),
-    pytest.param(
-        ["plan", "amend", "--file", "f.html", "--verify-thread", "t1"],
-        id="amend-rejects-verify-thread"),
+    pytest.param(["plan", "amend", "--file", "f.html", "--verify-thread", "t1"], id="amend-rejects-verify-thread"),
     pytest.param(["plan"], id="requires-verb"),
 ]
 

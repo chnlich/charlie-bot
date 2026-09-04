@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 from conftest import (
-  OPUS_BACKEND_ID,
-  SPAWNER_RESUME_WORKER_PATCH_TARGET,
-  spy_on_load_json_meta,
+    OPUS_BACKEND_ID,
+    SPAWNER_RESUME_WORKER_PATCH_TARGET,
+    spy_on_load_json_meta,
 )
 from test_restart_recovery_e2e import _await_recovery_tasks
 
@@ -175,8 +175,7 @@ async def test_quarantine_rejects_unexpected_residue_name(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_remove_local_artifacts_skips_symlink_and_keeps_target(
-    tmp_path: Path) -> None:
+async def test_remove_local_artifacts_skips_symlink_and_keeps_target(tmp_path: Path) -> None:
   """A `.venv` symlink into an outside checkout survives cleanup without raising.
 
   The symlink (one cheap directory entry `git worktree remove --force` deletes on
@@ -341,10 +340,7 @@ async def test_sweep_survives_non_string_completed_at_and_continues(
               branch_name="charliebot/task-number-ts",
               completed_at=123),
           _thread(
-              thread_id="valid",
-              status="failed",
-              worktree_path=old,
-              branch_name="charliebot/task-valid",
+              thread_id="valid", status="failed", worktree_path=old, branch_name="charliebot/task-valid",
               age_days=20.0),
       ],
   )
@@ -677,8 +673,17 @@ async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
 
   resume_calls: list[bool] = []
 
-  async def fake_resume_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr, *, is_alive,
-                               interrupt_reason="", on_silence=None):
+  async def fake_resume_worker(
+      session_id,
+      description,
+      thread_id,
+      cfg,
+      session_mgr,
+      thread_mgr,
+      *,
+      is_alive,
+      interrupt_reason="",
+      on_silence=None):
     resume_calls.append(is_alive())
 
   monkeypatch.setattr(SPAWNER_RESUME_WORKER_PATCH_TARGET, fake_resume_worker)
@@ -716,8 +721,7 @@ async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
     chat_path = cfg.sessions_dir / "s1" / "data" / "chat_events.jsonl"
     chat_events = [json.loads(line) for line in chat_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     hang_reports = [
-        e for e in chat_events
-        if e.get("source") == "crash_recovery" and "Suspected hung" in e.get("content", "")
+        e for e in chat_events if e.get("source") == "crash_recovery" and "Suspected hung" in e.get("content", "")
     ]
     assert len(hang_reports) == 1
   finally:
@@ -808,8 +812,7 @@ async def test_recover_window_covers_quarantine_band_and_skips_older(
   for tid, wt, age in (("band", band_wt, 20.0), ("recent", recent_wt, 3.0), ("ancient", ancient_wt, 40.0)):
     meta_path = _write_thread_meta(
         cfg, "s1",
-        _thread(
-            thread_id=tid, status="failed", worktree_path=wt, branch_name=f"charliebot/task-{tid}", age_days=age))
+        _thread(thread_id=tid, status="failed", worktree_path=wt, branch_name=f"charliebot/task-{tid}", age_days=age))
     _age_metadata_mtime(meta_path, age)
 
   await init_module.run_crash_recovery(cfg, utc_now())

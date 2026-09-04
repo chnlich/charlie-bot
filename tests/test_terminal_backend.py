@@ -24,6 +24,7 @@ def _b64(data: bytes) -> str:
 
 
 class _ScriptedWebSocket:
+
   def __init__(self, messages: list[dict]) -> None:
     self._messages = [json.dumps(message) for message in messages]
     self.sent: list[dict] = []
@@ -38,6 +39,7 @@ class _ScriptedWebSocket:
 
 
 class _AcceptingWebSocket:
+
   def __init__(self) -> None:
     self.accepted = False
 
@@ -188,9 +190,7 @@ async def test_ensure_terminal_session_starts_global_login_shell(
 
 
 @pytest.mark.asyncio
-async def test_ensure_terminal_session_reuses_existing_tmux_session(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_ensure_terminal_session_reuses_existing_tmux_session(monkeypatch: pytest.MonkeyPatch,) -> None:
   calls = []
 
   async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
@@ -205,15 +205,21 @@ async def test_ensure_terminal_session_reuses_existing_tmux_session(
 
 
 @pytest.mark.asyncio
-async def test_run_terminal_attachment_attaches_and_handles_input(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_run_terminal_attachment_attaches_and_handles_input(monkeypatch: pytest.MonkeyPatch,) -> None:
   ensured = []
   _FakeAttachment.instances = []
-  ws = _ScriptedWebSocket([
-      {"type": PTY_INPUT, "data": _b64(b"pwd\n")},
-      {"type": PTY_RESIZE, "cols": 100, "rows": 30},
-  ])
+  ws = _ScriptedWebSocket(
+      [
+          {
+              "type": PTY_INPUT,
+              "data": _b64(b"pwd\n")
+          },
+          {
+              "type": PTY_RESIZE,
+              "cols": 100,
+              "rows": 30
+          },
+      ])
 
   async def fake_ensure_terminal_session() -> None:
     ensured.append(True)
@@ -243,10 +249,18 @@ async def test_tui_attachment_still_uses_shared_pty_path(
 ) -> None:
   ensured = []
   _FakeAttachment.instances = []
-  ws = _ScriptedWebSocket([
-      {"type": PTY_INPUT, "data": _b64(b"help\n")},
-      {"type": PTY_RESIZE, "cols": 120, "rows": 40},
-  ])
+  ws = _ScriptedWebSocket(
+      [
+          {
+              "type": PTY_INPUT,
+              "data": _b64(b"help\n")
+          },
+          {
+              "type": PTY_RESIZE,
+              "cols": 120,
+              "rows": 40
+          },
+      ])
 
   async def fake_ensure_tmux_session(session_id: str, working_dir: Path) -> None:
     ensured.append((session_id, working_dir))
@@ -255,6 +269,7 @@ async def test_tui_attachment_still_uses_shared_pty_path(
     await asyncio.sleep(60)
 
   class FakeSessionManager:
+
     async def get_session(self, _session_id: str):
       return None
 

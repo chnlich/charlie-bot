@@ -24,6 +24,7 @@ def _reset_token_usage_single_flight() -> None:
 
 
 class FakeSessionManager:
+
   async def list_sessions(
       self,
       status=None,
@@ -53,13 +54,28 @@ async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch) -
   tally = TokenTally(
       rows=[
           ModelRow(
-              model="claude-opus-5", source="Claude Code", calls=1, in_fresh=10,
-              cache_write=5, cache_read=20, output=30, total=65, first="2024-01-01",
+              model="claude-opus-5",
+              source="Claude Code",
+              calls=1,
+              in_fresh=10,
+              cache_write=5,
+              cache_read=20,
+              output=30,
+              total=65,
+              first="2024-01-01",
               last="2024-01-02",
               accounts=[AccountRow(name="work (default)", calls=1, output=30, total=65)]),
           ModelRow(
-              model="gpt-5.2", source="Codex", calls=2, in_fresh=40, cache_write=0,
-              cache_read=0, output=15, total=55, first="2024-01-01", last="2024-01-03",
+              model="gpt-5.2",
+              source="Codex",
+              calls=2,
+              in_fresh=40,
+              cache_write=0,
+              cache_read=0,
+              output=15,
+              total=55,
+              first="2024-01-01",
+              last="2024-01-03",
               accounts=[AccountRow(name="work (default)", calls=2, output=15, total=55)]),
       ],
       notes=["Claude Code: 1 unique API responses over 1 config dirs"],
@@ -99,8 +115,7 @@ async def test_token_usage_route_is_single_flight(monkeypatch: pytest.MonkeyPatc
 
   request_one = make_page_request("/")
   request_two = make_page_request("/")
-  first, second = await asyncio.gather(
-      pages.token_usage_viewer(request_one), pages.token_usage_viewer(request_two))
+  first, second = await asyncio.gather(pages.token_usage_viewer(request_one), pages.token_usage_viewer(request_two))
   assert first.status_code == 200
   assert second.status_code == 200
   # Two concurrent requests share one in-flight collection: exactly one scan ran.
@@ -108,8 +123,7 @@ async def test_token_usage_route_is_single_flight(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_token_usage_viewer_clears_inflight_task_after_render(
-    monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_token_usage_viewer_clears_inflight_task_after_render(monkeypatch: pytest.MonkeyPatch) -> None:
   """A finished collection is cleared, so the next request re-scans afresh."""
   calls = 0
 
@@ -138,8 +152,15 @@ async def test_token_usage_inline_script_parses(monkeypatch: pytest.MonkeyPatch,
   tally = TokenTally(
       rows=[
           ModelRow(
-              model="claude-opus-5", source="Claude Code", calls=1, in_fresh=10,
-              cache_write=5, cache_read=20, output=30, total=65, first="2026-06-24",
+              model="claude-opus-5",
+              source="Claude Code",
+              calls=1,
+              in_fresh=10,
+              cache_write=5,
+              cache_read=20,
+              output=30,
+              total=65,
+              first="2026-06-24",
               last="2026-08-07",
               accounts=[AccountRow(name="work (default)", calls=1, output=30, total=65)]),
       ],
@@ -216,6 +237,7 @@ async def test_index_versions_local_static_assets(monkeypatch: pytest.MonkeyPatc
 
 
 class PendingTriggerSessionManager(FakeSessionManager):
+
   def __init__(self, session: SessionMetadata):
     self._session = session
 

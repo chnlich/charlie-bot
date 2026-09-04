@@ -11,10 +11,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-  SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
-  SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
-  build_slack_cfg,
-  make_task_spawner,
+    SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
+    SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
+    build_slack_cfg,
+    make_task_spawner,
 )
 from conftest import cfg_with_repo as _cfg_with_repo
 
@@ -24,12 +24,12 @@ from src.core import event_types as ET
 from src.core.models import CreateSessionRequest, SlackOrigin
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
-  CITATION_BOUNDARY,
-  SlackClient,
-  _build_summon_prompt,
-  ensure_slack_group,
-  handle_app_mention,
-  summon_session_id,
+    CITATION_BOUNDARY,
+    SlackClient,
+    _build_summon_prompt,
+    ensure_slack_group,
+    handle_app_mention,
+    summon_session_id,
 )
 
 _TS = "1700000000.000100"
@@ -107,8 +107,7 @@ def _sid(event: dict) -> str:
 
 
 def _origin(event: dict) -> SlackOrigin:
-  return SlackOrigin(
-      team_id=event["team"], channel_id=event["channel"], thread_ts=_thread_ts(event))
+  return SlackOrigin(team_id=event["team"], channel_id=event["channel"], thread_ts=_thread_ts(event))
 
 
 @pytest.mark.asyncio
@@ -184,8 +183,7 @@ def test_reply_command_round_trip_between_prompt_and_cli(tmp_path: Path) -> None
   a contract edit names a verb the dispatcher lacks, or a CLI edit renames the
   verb or its flag while the prompt still states the old form.
   """
-  prompt = _build_summon_prompt(
-      "https://fake.slack.test/archives/C_TEST/p1700000000.000100", build_slack_cfg(tmp_path))
+  prompt = _build_summon_prompt("https://fake.slack.test/archives/C_TEST/p1700000000.000100", build_slack_cfg(tmp_path))
   command_match = re.search(r"`(charliebot slack reply [^`]+)`", prompt)
   assert command_match is not None
   reply_file = tmp_path / "reply.md"
@@ -320,6 +318,7 @@ async def test_reactions_add_failure_still_spawns_the_round(tmp_path: Path) -> N
   event = _make_event()
 
   class _FailingReactionClient(_FakeSlackClient):
+
     async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
       raise RuntimeError("missing_scope")
 
@@ -396,6 +395,7 @@ async def test_unresolvable_channel_name_groups_by_channel_id(tmp_path: Path) ->
   event = _make_event()
 
   class _UnresolvingClient(_FakeSlackClient):
+
     async def get_channel_name(self, channel_id: str) -> str | None:
       self.calls.append(("get_channel_name", {"channel": channel_id}))
       return None
@@ -476,8 +476,7 @@ async def test_set_group_failure_does_not_break_handle_app_mention(tmp_path: Pat
 
   with (
       patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()),
-      patch.object(
-          session_mgr, "set_group", new=AsyncMock(side_effect=RuntimeError("disk full"))),
+      patch.object(session_mgr, "set_group", new=AsyncMock(side_effect=RuntimeError("disk full"))),
   ):
     sid = await handle_app_mention(event, cfg, session_mgr, client)
 
@@ -512,6 +511,7 @@ class _StubHttp:
     self.gets.append({"url": url, "params": params})
 
     class _Resp:
+
       def __init__(self, body: dict) -> None:
         self._body = body
 
@@ -533,7 +533,9 @@ async def test_get_channel_name_resolves_and_caches(tmp_path: Path) -> None:
   assert await client.get_channel_name("C_TEST") == "general"
   assert http.gets == [{
       "url": "https://slack.com/api/conversations.info",
-      "params": {"channel": "C_TEST"},
+      "params": {
+          "channel": "C_TEST"
+      },
   }]
 
 

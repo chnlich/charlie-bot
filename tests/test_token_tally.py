@@ -584,7 +584,8 @@ def test_opencode_cache_serves_unchanged_db(tmp_path: Path) -> None:
   assert first.scanned_bytes > 0
 
   # Keep the second collect on the persisted-cache path this test names; the whole-tally
-  # memo would otherwise serve it first.
+  # and aggregate memos would otherwise serve it first.
+  tt._reset_aggregate_memo()
   tt._tally_memo = None
   second = _collect(None, None, db, cache)
   # The db contribution came from the cache: nothing re-read, same tally and note.
@@ -752,3 +753,97 @@ def test_opencode_cache_invalidates_on_wal_write(tmp_path: Path) -> None:
   con.close()
   assert after.total == before.total + 102
   assert after.calls == before.calls + 1
+
+
+def _wal_db_with_noise_table(tmp_path: Path) -> tuple[Path, Path, sqlite3.Connection]:
+  """A WAL-mode db holding one contributing message row plus a second table the noise
+  writes land in — the production shape behind WAL-sidecar signature moves."""
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  con = sqlite3.connect(db)
+  con.execute("pragma journal_mode=WAL")
+  _create_message_table(con)
+  con.execute("create table other (id text primary key, data text not null)")
+  msg = {"role": "assistant", "modelID": "oc-m", "providerID": "prov",
+         "tokens": {"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}}
+  _insert_opencode_raw(con, [(msg, (None, "", ""))])
+  con.commit()
+  return db, cache, con
+
+
+def test_tally_memo_survives_wal_noise_without_row_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # opencode writes other tables under plain serve traffic, so the WAL sidecar moves while
+  # the message table sits unchanged. The row memo's key diff proves that and re-serves the
+  # memo instead of replaying the db's rows or loading the persisted document.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+
+  con.execute("insert into other values ('noise', 'x')")
+  con.commit()
+
+  def no_parse(data: str) -> tuple[list | None, int]:
+    raise AssertionError("row blob re-read when the WAL noise touched no message row")
+
+  def no_cache_doc(*args, **kwargs) -> None:
+    raise AssertionError("cache document loaded on an epoch-proof hit")
+
+  monkeypatch.setattr(tt, "_opencode_row_data", no_parse)
+  monkeypatch.setattr(tt.TallyCache, "load", no_cache_doc)
+  second = _collect(None, None, db, cache)
+
+  assert second.rows == first.rows
+  assert second.notes == first.notes
+  assert second.scanned_bytes == 0
+  con.close()
+
+
+def test_wal_noise_hit_reproves_until_the_next_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The epoch-proof hit re-signs the memo at the scan's own signature, so the next collect
+  # with a quiet db takes the stat-only fast hit and never opens the db at all.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  con.execute("insert into other values ('noise', 'x')")
+  con.commit()
+  second = _collect(None, None, db, cache)
+  assert second.rows == first.rows
+
+  def boom(*args, **kwargs) -> None:
+    raise AssertionError("quiet db reopened on a signature fast hit")
+
+  monkeypatch.setattr(tt.sqlite3, "connect", boom)
+  third = _collect(None, None, db, cache)
+  assert third.rows == first.rows
+  assert third.notes == first.notes
+  con.close()
+
+
+def test_wal_move_with_new_row_still_counts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A real message row under a moved WAL bumps the epoch, so the proof misses and the
+  # collect replays — re-reading only the new row's blob.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  before = _row(first, "opencode", "oc-m")
+
+  _insert_opencode_raw(con, [
+      ({}, ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * 500},
+            "oc-m", "prov")),
+  ])
+  con.commit()
+
+  projected: list[str] = []
+  orig = tt._opencode_row_data
+
+  def spy(data: str) -> tuple[list | None, int]:
+    projected.append(data)
+    return orig(data)
+
+  monkeypatch.setattr(tt, "_opencode_row_data", spy)
+  second = _collect(None, None, db, cache)
+  after = _row(second, "opencode", "oc-m")
+
+  assert len(projected) == 1 and '"input": 100' in projected[0]
+  assert after.total == before.total + 102
+  assert after.calls == before.calls + 1
+  con.close()

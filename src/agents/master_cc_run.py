@@ -16,7 +16,10 @@ from src.agents.backends.base import (
     make_text_event,
     tail_follow_events,
 )
-from src.agents.backends.claude_code import claude_supervisor_env
+from src.agents.backends.claude_code import (
+    claude_supervisor_env,
+    out_of_family_served_models,
+)
 from src.core import event_types as ET
 from src.core import runs
 from src.core.config import CharlieBotConfig, claude_config_dir
@@ -26,6 +29,7 @@ from src.core.models import (
     PROJECT_ROLE,
     BackendOption,
     MasterRunRecord,
+    SessionCallbacks,
     SessionMetadata,
     backend_type_allows_missing_model,
 )
@@ -679,8 +683,6 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     # re-attach path uses (fresh translate) — no detection state accumulates
     # in the stream loop. In-family rounds and non-cc backends emit nothing.
     if option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
-      from src.agents.backends.claude_code import out_of_family_served_models
-
       raw_path = Path(raw_log)
       if not raw_path.is_file():
         # A live cc round always has one (run() creates the raw log before
@@ -691,15 +693,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       else:
         turn_events = runs.project_raw_events(
             runs.parse_raw_lines(raw_path.read_bytes()), _build_fresh_translate(cfg, option))
-        served_models = out_of_family_served_models(turn_events, option.model)
-        if served_models:
-          await item.callbacks.persist_and_broadcast(
-              session_meta.id, {
-                  "type": ET.MODEL_FALLBACK_NOTICE,
-                  "backend": option.id,
-                  "configured_model": option.model,
-                  "served_models": served_models,
-              })
+        await _emit_model_fallback_notice(item.callbacks, session_meta, option, turn_events)
 
   except asyncio.CancelledError:
     # Only live trigger: event-loop shutdown (graceful restart). Same let-go
@@ -796,6 +790,25 @@ def _build_fresh_translate(cfg: CharlieBotConfig, option: BackendOption | None) 
     return lambda event: [event]
 
 
+async def _emit_model_fallback_notice(
+    callbacks: SessionCallbacks,
+    session_meta: SessionMetadata,
+    option: BackendOption,
+    events: list[dict],
+) -> None:
+  """Persist and broadcast the turn-end served-model notice when the round's visible reply came
+  from models outside the configured model's family. Emits nothing for in-family rounds."""
+  served_models = out_of_family_served_models(events, option.model)
+  if served_models:
+    await callbacks.persist_and_broadcast(
+        session_meta.id, {
+            "type": ET.MODEL_FALLBACK_NOTICE,
+            "backend": option.id,
+            "configured_model": option.model,
+            "served_models": served_models,
+        })
+
+
 async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
   """Re-attach to a recorded live master turn: follow its raw log to the end.
 
@@ -866,17 +879,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
     # paths (a completed live turn clears its master_run record, so a
     # re-attach implies the live path never completed), so no double emit.
     if option is not None and option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
-      from src.agents.backends.claude_code import out_of_family_served_models
-
-      served_models = out_of_family_served_models(events, option.model)
-      if served_models:
-        await item.callbacks.persist_and_broadcast(
-            session_meta.id, {
-                "type": ET.MODEL_FALLBACK_NOTICE,
-                "backend": option.id,
-                "configured_model": option.model,
-                "served_models": served_models,
-            })
+      await _emit_model_fallback_notice(item.callbacks, session_meta, option, events)
 
     # The loop ended on the post-result timeout: same contract as the live
     # path's cleanup — SIGTERM the recorded process group, escalate to

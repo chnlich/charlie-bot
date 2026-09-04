@@ -6,6 +6,7 @@ import json
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import IO, Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -267,31 +268,31 @@ async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Pat
           "timestamp": (cutoff + timedelta(days=2)).isoformat()
       }) + "\n"
 
-  read_bytes = []
+  read_bytes: list[int] = []
 
   class _CountingReader:
 
-    def __init__(self, inner):
+    def __init__(self, inner: IO[bytes]) -> None:
       self._inner = inner
 
-    def read(self, *args, **kwargs):
-      data = self._inner.read(*args, **kwargs)
+    def read(self, *args: Any, **kwargs: Any) -> bytes:
+      data: bytes = self._inner.read(*args, **kwargs)
       read_bytes.append(len(data))
       return data
 
-    def seek(self, *args, **kwargs):
+    def seek(self, *args: Any, **kwargs: Any) -> int:
       return self._inner.seek(*args, **kwargs)
 
-    def __enter__(self):
+    def __enter__(self) -> "_CountingReader":
       self._inner.__enter__()
       return self
 
-    def __exit__(self, *args, **kwargs):
-      return self._inner.__exit__(*args, **kwargs)
+    def __exit__(self, *args: Any, **kwargs: Any) -> bool:
+      return bool(self._inner.__exit__(*args, **kwargs))
 
   real_open = open
 
-  def counting_open(file, *args, **kwargs):
+  def counting_open(file: Any, *args: Any, **kwargs: Any) -> IO[bytes] | _CountingReader:
     handle = real_open(file, *args, **kwargs)
     if str(file) == str(live_path):
       return _CountingReader(handle)

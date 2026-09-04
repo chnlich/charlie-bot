@@ -390,6 +390,17 @@ def test_goal_budget_drops_a_body_revbadge(tmp_path: Path) -> None:
   assert marked == plain
 
 
+def test_goal_budget_keeps_non_revision_class_content(tmp_path: Path) -> None:
+  """Only exact revision class tokens are outside the budget; lookalike attributes still count."""
+  cfg = _chrome_cfg(tmp_path)
+  content = "x" * (artifact_check.GOAL_WEIGHTED_BUDGET + 1)
+  lookalikes = (f'<div class="revnote-old">{content}</div>', f'<div data-class="revnote">{content}</div>')
+  for i, mark in enumerate(lookalikes):
+    (outcome,) = _run("plan", _write(tmp_path, _with_mark_after_goal_heading(mark), name=f"lookalike-{i}.html"), cfg)[
+        "goal-budget"]
+    assert not outcome.passed
+
+
 def test_goal_budget_still_rejects_an_over_budget_goal_alongside_marks(tmp_path: Path) -> None:
   """Stripping revision marks does not weaken the budget: an over-budget goal still fails."""
   cfg = _chrome_cfg(tmp_path)

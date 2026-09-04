@@ -49,8 +49,16 @@ _TAG_RE = re.compile(r"<[^>]+>")
 # Revision marks ride outside the goal budget: the plan template clears them at the next revision,
 # and the page-height probe hides these same two classes before measuring. Each is dropped whole,
 # inline tags and content included; the two elements do not nest in practice.
-_REVNOTE_RE = re.compile(r'<div\b[^>]*\bclass="[^"]*\brevnote\b[^"]*"[^>]*>.*?</div>', re.DOTALL)
-_REVBADGE_RE = re.compile(r'<span\b[^>]*\bclass="[^"]*\brevbadge\b[^"]*"[^>]*>.*?</span>', re.DOTALL)
+_REVNOTE_RE = re.compile(
+    r'<div\b(?=[^>]*(?<!\S)class\s*=\s*'
+    r'(?:(?:"(?:[^"]*\s)?revnote(?:\s[^"]*)?")|(?:\'(?:[^\']*\s)?revnote(?:\s[^\']*)?\')|revnote(?:\s|>))'
+    r')[^>]*>.*?</div>',
+    re.DOTALL)
+_REVBADGE_RE = re.compile(
+    r'<span\b(?=[^>]*(?<!\S)class\s*=\s*'
+    r'(?:(?:"(?:[^"]*\s)?revbadge(?:\s[^"]*)?")|(?:\'(?:[^\']*\s)?revbadge(?:\s[^\']*)?\')|revbadge(?:\s|>))'
+    r')[^>]*>.*?</span>',
+    re.DOTALL)
 # CJK ideographs, CJK punctuation, and fullwidth forms count double, so the same
 # information density spends the same budget in Chinese and English.
 _CJK_RANGES = ((0x3000, 0x303F), (0x4E00, 0x9FFF), (0xFF00, 0xFFEF))

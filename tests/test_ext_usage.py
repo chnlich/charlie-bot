@@ -22,6 +22,7 @@ from src.api.ext_usage import (
     _latest_token_count_event,
     _list_rollout_files,
     _poll_loop,
+    _read_credentials,
     _sum_codex_spend_events,
     _transform_codex_response,
     _transform_response,
@@ -36,6 +37,14 @@ def _fresh_unknown_limit_shape_registry():
   ext_usage_mod._reset_unknown_limit_shapes_for_tests()
   yield
   ext_usage_mod._reset_unknown_limit_shapes_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _fresh_credential_read_warning_registry():
+  """Keep the process-wide warn-once registry from leaking across tests."""
+  ext_usage_mod._reset_credential_read_warnings_for_tests()
+  yield
+  ext_usage_mod._reset_credential_read_warnings_for_tests()
 
 
 def _build_token_count_event(
@@ -1137,6 +1146,61 @@ def test_transform_response_unknown_shape_warns_once_per_process(monkeypatch) ->
       ("weekly_scoped", "missing percent"),
   ]
   assert repeat_events == []
+
+
+def test_read_credentials_tokenless_file_warns_once_per_streak(monkeypatch, tmp_path) -> None:
+  """A tokenless file re-read every poll round fires its alarm once, not every round."""
+  warns: list[dict] = []
+  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  credentials_path = tmp_path / ".credentials.json"
+  _write_credentials(credentials_path, access="")
+
+  assert _read_credentials(credentials_path) is None
+  first_events = [w["event"] for w in warns]
+  warns.clear()
+  for _ in range(60):
+    assert _read_credentials(credentials_path) is None
+
+  assert first_events == ["ext_usage_no_access_token"]
+  assert warns == []
+
+
+def test_read_credentials_recovery_rearms_the_warning(monkeypatch, tmp_path) -> None:
+  """A token read clears the streak: a later relapse is a new onset and earns one new line."""
+  warns: list[dict] = []
+  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  credentials_path = tmp_path / ".credentials.json"
+  _write_credentials(credentials_path, access="")
+  _read_credentials(credentials_path)
+
+  _write_credentials(credentials_path)
+  assert _read_credentials(credentials_path) is not None
+
+  _write_credentials(credentials_path, access="")
+  warns.clear()
+  for _ in range(60):
+    assert _read_credentials(credentials_path) is None
+
+  assert [w["event"] for w in warns] == ["ext_usage_no_access_token"]
+
+
+def test_read_credentials_missing_and_tokenless_are_separate_alarms(monkeypatch, tmp_path) -> None:
+  """A path whose failure state changes warns once per state, not once per path forever."""
+  warns: list[dict] = []
+  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  credentials_path = tmp_path / ".credentials.json"
+
+  for _ in range(60):
+    assert _read_credentials(credentials_path) is None
+
+  _write_credentials(credentials_path, access="")
+  for _ in range(60):
+    assert _read_credentials(credentials_path) is None
+
+  assert [w["event"] for w in warns] == [
+      "ext_usage_credentials_not_found",
+      "ext_usage_no_access_token",
+  ]
 
 
 def test_transform_response_absent_limits_produces_exactly_today_windows() -> None:

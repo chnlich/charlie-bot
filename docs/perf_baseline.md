@@ -60,6 +60,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M47 claude declared-window warning stream, steady state | M47 collector below | warnings per 60 steady-state declared-window resolutions | 0 warnings after the first sighting per process | — (introduced with its first history row) |
 | M48 search content-scan missing-file debug stream, steady state | M48 collector below | debug lines per 60 steady-state content scans of an active session whose live chat file is missing | 0 lines after the first sighting per (session, error) per process | — (introduced with its first history row) |
 | M49 opencode part-unhandled debug stream, steady state | M49 collector below | debug lines per 60 steady-state `_translate_part` calls of one unhandled part type | 0 lines after the first sighting per part type per process | — (introduced with its first history row) |
+| M50 ext-usage credentials read warning stream, steady state | M50 collector below | warnings per 60 steady-state `_read_credentials` calls of a tokenless file | 0 warnings after the first sighting per (event, path) per broken streak | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2616,6 +2617,49 @@ print(f"60 steady-state unhandled patch parts; opencode_part_unhandled debug lin
 EOF
 ```
 
+M50 — ext-usage credentials read warning stream, steady state. Every
+claude-account poll round re-reads the account's credentials file
+(`ClaudeUsageProvider.fetch` → `_read_credentials`), and while the file is
+missing or carries no access token each round re-fires the same warning —
+135 lines in the 13.89 h live server log sampled 2026-09-04 (~10/h), every
+one of them `ext_usage_no_access_token` naming the same path — while one
+sighting per (event, path) per broken streak carries the whole signal: the
+file is re-read every round, so a recovery (a read that returns a token)
+re-arms the path and a later relapse is a new onset, earning one new line.
+The cost is background log volume invisible to HTTP probes, so the collector
+drives `_read_credentials` over a synthetic tokenless credentials file: one
+first-sighting read, as at a process start, then 60 steady-state repeat
+reads, counting the event. A warning in the repeat window is a re-fired
+alarm; the count is the metric. Evidence while the live server runs older
+code points the same collector at the branch checkout (`sys.path.insert` at
+the worktree root), the same shape as the M22 protocol:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import json, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.api import ext_usage as ext_usage_mod
+
+work = Path(tempfile.mkdtemp(prefix="m50-cred-read-"))
+creds = work / ".credentials.json"
+creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "", "refreshToken": "r"}}))
+
+warns = []
+orig = ext_usage_mod.log.warning
+ext_usage_mod.log.warning = lambda event, **kw: warns.append(event)
+try:
+    ext_usage_mod._read_credentials(creds)  # first sighting, as at a process start; not counted
+    warns.clear()
+    for _ in range(60):  # steady-state repeat reads of the poller's fetch rounds
+        ext_usage_mod._read_credentials(creds)
+finally:
+    ext_usage_mod.log.warning = orig
+n = sum(1 for event in warns if event == "ext_usage_no_access_token")
+print(f"60 steady-state credential reads of a tokenless file; ext_usage_no_access_token warnings: {n}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2680,3 +2724,4 @@ EOF
 | 2026-09-04 | this PR | M47 60 → 0 claude_declared_window_degraded warnings per 60 steady-state resolutions (collector verbatim, main checkout before vs branch after; live-log corroboration 62 lines in the 7.89 h server log ≈ 8/h, host exports CLAUDE_CODE_MAX_CONTEXT_TOKENS=400000) | declared-window degradation warnings routed through an (event, variable, value) warn-once guard — one line per degradation per process, a swapped bad value earns one new line; M47 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M48 60 → 0 search_read_failed debug lines per 60 steady-state content scans of a no-live-file session (collector verbatim, main checkout before vs branch after back-to-back at load 0.75/0.78/0.64; live-log corroboration 30 lines in the 11.92 h server log, all naming the one active session with no live chat file; search results and M8 monitoring shape unchanged) | both search content-scan failed-read loggers (the stat failure and the scan-open failure) routed through a (session, error) warn-once guard — one line per reported failure per process, a swapped path or errno earns one new line; M48 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M49 60 → 0 opencode_part_unhandled debug lines per 60 steady-state parts of one unhandled type (collector verbatim, main checkout before vs branch after back-to-back at load 0.25/0.59/0.86; live-log corroboration 152 lines in the 12.88 h server log, every line type=patch; unhandled parts still translate to []) | the part type falling through `_translate_part` routed through a part-type warn-once registry — one line per unmapped type per process; M49 definition and healthy range introduced with this PR |
+| 2026-09-04 | this PR | M50 60 → 0 ext_usage_no_access_token warnings per 60 steady-state credential reads of a tokenless file (collector verbatim, main checkout before at load 0.97/0.75/0.66 vs branch after at load 0.29/0.59/0.62, back-to-back; live-log corroboration 135 lines in the 13.89 h server log ≈ 10/h, every line ext_usage_no_access_token naming the same path; every read still returns None and a token-bearing read re-arms the path) | both `_read_credentials` failure-site warnings (ext_usage_credentials_not_found, ext_usage_no_access_token) routed through a recovery-aware warn-once registry — one line per (event, path) per broken streak, a read returning a token re-arms the path; M50 definition and healthy range introduced with this PR |

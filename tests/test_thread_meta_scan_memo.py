@@ -65,6 +65,38 @@ def test_rereads_after_atomic_rewrite(tmp_path: Path) -> None:
   assert [m["status"] for m in _scan(threads_dir)] == ["completed"]
 
 
+def test_rereads_after_same_size_rewrite(tmp_path: Path) -> None:
+  """Same byte size, new mtime_ns: the key's mtime half must move the verdict.
+
+  A content change that keeps the size constant exercises mtime_ns alone —
+  without this, a suite whose rewrites all change size could pass on the size
+  half while the mtime half was broken.
+  """
+  cfg = make_home_config(tmp_path)
+  threads_dir = cfg.sessions_dir / "s1" / "threads"
+  path = write_thread_meta(cfg, "s1", {"id": "t1", "status": "completed", "note": "aaaa"})
+  assert [m["note"] for m in _scan(threads_dir)] == ["aaaa"]
+
+  _rewrite_atomically(path, {"id": "t1", "status": "completed", "note": "bbbb"})
+  st = path.stat()
+  os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+  assert [m["note"] for m in _scan(threads_dir)] == ["bbbb"]
+
+
+def test_same_signature_still_serves_memo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Same (mtime_ns, size) after a scan: the memo hit must not re-read."""
+  cfg = make_home_config(tmp_path)
+  threads_dir = cfg.sessions_dir / "s1" / "threads"
+  path = write_thread_meta(cfg, "s1", {"id": "t1", "status": "completed"})
+  assert len(_scan(threads_dir)) == 1
+  signature = (path.stat().st_mtime_ns, path.stat().st_size)
+
+  reads = count_path_read_text(monkeypatch, lambda p: True)
+  assert len(_scan(threads_dir)) == 1
+  assert reads == []
+  assert (path.stat().st_mtime_ns, path.stat().st_size) == signature
+
+
 def test_out_of_window_files_stay_unread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from datetime import timedelta
 

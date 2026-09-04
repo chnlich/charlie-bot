@@ -265,14 +265,20 @@ def _delete_file(path: Path, counter: _Counter, dry_run: bool, *, count: bool = 
     log.warning("storage_cool_file_stat_failed", path=str(path), error=str(e))
     return
   if dry_run:
-    counter.add(size) if count else counter.add_bytes(size)
+    if count:
+      counter.add(size)
+    else:
+      counter.add_bytes(size)
     return
   try:
     path.unlink()
   except OSError as e:
     log.warning("storage_cool_file_delete_failed", path=str(path), error=str(e))
     return
-  counter.add(size) if count else counter.add_bytes(size)
+  if count:
+    counter.add(size)
+  else:
+    counter.add_bytes(size)
 
 
 # ---------------------------------------------------------------------------

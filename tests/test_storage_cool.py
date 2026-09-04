@@ -293,8 +293,8 @@ def test_claude_deleted_worktree_dirs_deleted_and_live_worktrees_kept(
 def test_claude_user_cwd_dirs_never_touched(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   cfg = cool_env
   user_dirs = [
-      claude_dir(tmp_path, "-home-chaoli"),
-      claude_dir(tmp_path, "-home-chaoli-workspace-charlie-bot"),
+      claude_dir(tmp_path, "-home-dev"),
+      claude_dir(tmp_path, "-home-dev-workspace-charlie-bot"),
       claude_dir(tmp_path, "-tmp-cb-e2e-home-sessions"),
   ]
 
@@ -318,22 +318,22 @@ def test_claude_orphan_window_reads_newest_file_not_dir_mtime(
 
 
 def test_claude_transcript_name_encodes_cwd_with_dots_and_underscores() -> None:
-  assert claude_project_dir_name(Path("/home/chaoli/.charliebot/sessions/abc")) == \
-      "-home-chaoli--charliebot-sessions-abc"
+  assert claude_project_dir_name(Path("/home/dev/.charliebot/sessions/abc")) == \
+      "-home-dev--charliebot-sessions-abc"
 
 
 def test_encoded_session_id_reads_the_session_from_any_managed_shape() -> None:
   sid = SID_COLD
-  assert storage_cool._encoded_session_id(f"-home-chaoli--charliebot-sessions-{sid}") == sid
-  assert storage_cool._encoded_session_id(f"-home-chaoli--charliebot-sessions-{sid}-threads-{TID}") == sid
-  assert storage_cool._encoded_session_id(f"-home-chaoli--charliebot-sessions-{sid}-artifacts") == sid
+  assert storage_cool._encoded_session_id(f"-home-dev--charliebot-sessions-{sid}") == sid
+  assert storage_cool._encoded_session_id(f"-home-dev--charliebot-sessions-{sid}-threads-{TID}") == sid
+  assert storage_cool._encoded_session_id(f"-home-dev--charliebot-sessions-{sid}-artifacts") == sid
   assert storage_cool._encoded_session_id(f"-tmp-cb-e2e-home-sessions-{sid}") == sid
   # Not CharlieBot's shape: no sessions segment, a bare sessions dir, a truncated
   # id, or characters trailing the id.
-  assert storage_cool._encoded_session_id("-home-chaoli") is None
-  assert storage_cool._encoded_session_id("-home-chaoli--charliebot-sessions") is None
-  assert storage_cool._encoded_session_id(f"-home-chaoli--charliebot-sessions-{sid}extra") is None
-  assert storage_cool._encoded_session_id("-home-chaoli--charliebot-sessions-not-a-uuid") is None
+  assert storage_cool._encoded_session_id("-home-dev") is None
+  assert storage_cool._encoded_session_id("-home-dev--charliebot-sessions") is None
+  assert storage_cool._encoded_session_id(f"-home-dev--charliebot-sessions-{sid}extra") is None
+  assert storage_cool._encoded_session_id("-home-dev--charliebot-sessions-not-a-uuid") is None
 
 
 # ---------------------------------------------------------------------------

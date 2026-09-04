@@ -4,13 +4,13 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-  OPUS_BACKEND_ID,
-  append_events,
-  build_scheduler_cfg,
-  cron_d_dir,
-  dump_yaml,
-  read_chat_events,
-  write_cron_task,
+    OPUS_BACKEND_ID,
+    append_events,
+    build_scheduler_cfg,
+    cron_d_dir,
+    dump_yaml,
+    read_chat_events,
+    write_cron_task,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -42,20 +42,20 @@ def write_nightly_task(home: Path) -> Path:
   return write_cron_task(
       home,
       "nightly",
-      dump_yaml({
-          "cron": "0 3 * * *",
-          "prompt_file": str(prompt_path),
-          "timezone": "America/Los_Angeles",
-          "enabled": True,
-      }),
+      dump_yaml(
+          {
+              "cron": "0 3 * * *",
+              "prompt_file": str(prompt_path),
+              "timezone": "America/Los_Angeles",
+              "enabled": True,
+          }),
   )
 
 
 async def make_scheduled_session(session_mgr: SessionManager, task_name: str):
   """One active session dedicated to task_name, created through the real manager."""
   return await session_mgr.create_session(
-      CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend=OPUS_BACKEND_ID
-  )
+      CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend=OPUS_BACKEND_ID)
 
 
 @pytest.mark.asyncio
@@ -97,9 +97,7 @@ async def test_delete_task_without_sessions_returns_empty_archived_list(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_delete_keeps_session_dir_and_history_and_unarchive_restores(
-    tmp_path: Path, temp_home: Path
-) -> None:
+async def test_delete_keeps_session_dir_and_history_and_unarchive_restores(tmp_path: Path, temp_home: Path) -> None:
   cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   write_nightly_task(temp_home)

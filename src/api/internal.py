@@ -453,6 +453,7 @@ async def plan_amend(
         plan_id=req.plan_id,
         trigger=req.trigger,
         base=_build_base(req),
+        note=req.note,
     )
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e

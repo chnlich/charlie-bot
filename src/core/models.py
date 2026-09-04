@@ -489,6 +489,9 @@ class PlanAmendRequest(BaseModel):
   file: str
   plan_id: int | None = None
   trigger: Literal["auto_amend", "feedback"] = "feedback"
+  # Why this version differs from its predecessor; rides on the version record,
+  # never in the page body. Required: the author is an agent absent at read time.
+  note: str
   base_repo: str | None = None
   base_branch: str | None = None
   base_sha: str | None = None

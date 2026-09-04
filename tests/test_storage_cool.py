@@ -232,6 +232,23 @@ def test_transport_rule_leaves_unrecognized_names_inside_managed_dirs(cool_env: 
     assert (data_dir / name).read_bytes() == payload
 
 
+def test_transport_rule_does_not_follow_managed_directory_symlinks(
+    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+  cfg = cool_env
+  write_session_meta(cfg, SID_COLD, cold_meta())
+  external = tmp_path / "external"
+  external.mkdir()
+  external_file = external / "stdout.log"
+  external_file.write_bytes(b"external")
+  managed_link = cfg.sessions_dir / SID_COLD / "threads" / TID / "data"
+  managed_link.parent.mkdir(parents=True)
+  managed_link.symlink_to(external, target_is_directory=True)
+
+  run_cool_sweep(cfg=cfg, now=NOW)
+
+  assert external_file.read_bytes() == b"external"
+
+
 # ---------------------------------------------------------------------------
 # Claude Code transcript directories
 # ---------------------------------------------------------------------------
@@ -267,6 +284,20 @@ def test_claude_orphan_dirs_deleted_past_window_and_kept_within_it(
 
   assert not dead_old.exists()
   assert dead_recent.exists()
+
+
+def test_claude_dir_for_session_with_unreadable_metadata_is_not_an_orphan(
+    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+  cfg = cool_env
+  session_dir = cfg.sessions_dir / SID_DEAD
+  session_dir.mkdir(parents=True)
+  (session_dir / "metadata.json").write_text("not-json", encoding="utf-8")
+  transcript_dir = claude_dir(tmp_path, encoded_session_dir(cfg, SID_DEAD))
+  age_file(transcript_dir / "transcript.jsonl", timedelta(days=3))
+
+  run_cool_sweep(cfg=cfg, now=NOW)
+
+  assert transcript_dir.exists()
 
 
 def test_claude_deleted_worktree_dirs_deleted_and_live_worktrees_kept(
@@ -318,8 +349,8 @@ def test_claude_orphan_window_reads_newest_file_not_dir_mtime(
 
 
 def test_claude_transcript_name_encodes_cwd_with_dots_and_underscores() -> None:
-  assert claude_project_dir_name(Path("/home/dev/.charliebot/sessions/abc")) == \
-      "-home-dev--charliebot-sessions-abc"
+  assert claude_project_dir_name(Path("home/dev/.charliebot/sessions/abc")) == \
+      "home-dev--charliebot-sessions-abc"
 
 
 def test_encoded_session_id_reads_the_session_from_any_managed_shape() -> None:
@@ -496,6 +527,88 @@ def test_opencode_unreferenced_recent_aggregate_survives_window(
   run_cool_sweep(cfg=cfg, now=NOW)
 
   assert opencode_row_counts(db) == {"event_sequence": 1, "event": 1, "message": 0, "part": 0}
+
+
+def test_opencode_sequence_without_events_is_reclaimed_and_messages_remain(
+    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+  cfg = cool_env
+  db = tmp_path / "opencode.db"
+  make_opencode_db(db, {CC_OPENCOLD: {"events": [], "messages": 1}})
+  write_session_meta(cfg, SID_COLD, cold_meta(cc_session_id=CC_OPENCOLD))
+
+  result = run_cool_sweep(cfg=cfg, now=NOW)
+
+  assert opencode_row_counts(db) == {"event_sequence": 0, "event": 0, "message": 1, "part": 0}
+  assert result.category("opencode-events").count == 1
+  assert result.category("opencode-events").bytes == 0
+
+
+def test_opencode_vacuum_is_retried_after_a_failed_prior_attempt(
+    tmp_path: Path, cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = cool_env
+  db = tmp_path / "opencode.db"
+  make_opencode_db(db, {CC_OPENCOLD: {"events": [b"event-bytes"]}})
+  write_session_meta(cfg, SID_COLD, cold_meta(cc_session_id=CC_OPENCOLD))
+  calls: list[bool] = []
+
+  def pretend_vacuum(connection: sqlite3.Connection, db_path: Path, *, force: bool) -> None:
+    del connection, db_path
+    calls.append(force)
+
+  monkeypatch.setattr(storage_cool, "_vacuum_opencode_db", pretend_vacuum)
+
+  run_cool_sweep(cfg=cfg, now=NOW)
+  run_cool_sweep(cfg=cfg, now=NOW)
+
+  assert calls == [True, False]
+
+
+def test_scoped_backend_record_shared_with_live_session_survives(
+    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+  cfg = cool_env
+  db = tmp_path / "opencode.db"
+  make_opencode_db(db, {CC_OPENCOLD: {"events": [b"shared"]}})
+  write_session_meta(cfg, SID_COLD, cold_meta(cc_session_id=CC_OPENCOLD))
+  write_session_meta(cfg, SID_LIVE, live_meta(cc_session_id=CC_OPENCOLD))
+
+  run_cool_sweep(cfg=cfg, now=NOW, session_id=SID_COLD)
+
+  assert opencode_row_counts(db)["event_sequence"] == 1
+  assert opencode_row_counts(db)["event"] == 1
+
+
+def test_scoped_live_run_does_not_vacuum_unrelated_database_pages(
+    tmp_path: Path, cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = cool_env
+  db = tmp_path / "opencode.db"
+  make_opencode_db(db, {CC_OPENORPHAN: {"events": [b"unrelated"]}})
+  write_session_meta(cfg, SID_LIVE, live_meta())
+  calls: list[bool] = []
+  monkeypatch.setattr(
+      storage_cool,
+      "_vacuum_opencode_db",
+      lambda connection, db_path, *, force: calls.append(force),
+  )
+
+  run_cool_sweep(cfg=cfg, now=NOW, session_id=SID_LIVE)
+
+  assert calls == []
+
+
+def test_orphan_thread_metadata_keeps_backend_record_referenced(
+    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+  cfg = cool_env
+  db = tmp_path / "opencode.db"
+  make_opencode_db(db, {CC_OPENCOLD: {"events": [b"referenced"]}})
+  orphan_thread = cfg.sessions_dir / SID_DEAD / "threads" / TID
+  orphan_thread.mkdir(parents=True)
+  (orphan_thread / "metadata.json").write_text(json.dumps({"cc_session_id": CC_OPENCOLD}), encoding="utf-8")
+  set_opencode_updated(db, CC_OPENCOLD, int((NOW - timedelta(days=3)).timestamp() * 1000))
+
+  run_cool_sweep(cfg=cfg, now=NOW)
+
+  assert opencode_row_counts(db)["event_sequence"] == 1
+  assert opencode_row_counts(db)["event"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -683,7 +796,11 @@ def test_cli_storage_cool_prints_table_and_exits_zero(
   out = capsys.readouterr().out
   assert "raw-transport" in out
   assert "1 files" in out
-  assert out.strip().endswith("(dry run — nothing deleted)")
+  report_lines = out.strip().splitlines()[-5:]
+  assert len(report_lines) == 5
+  assert report_lines[0].startswith("raw-transport")
+  assert report_lines[-1].startswith("total")
+  assert "dry run" not in out
 
 
 def test_cli_storage_cool_unknown_session_exits_nonzero(

@@ -564,7 +564,7 @@ async def test_reply_binding_tracks_the_running_round_under_metadata_churn(tmp_p
   assert sum(r is not None for r in resolved) >= 5  # ...including replies made mid-round
   replies = _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
   assert len(replies) == len(resolved)
-  for reply_event, running_at_resolution in zip(replies, resolved):
+  for reply_event, running_at_resolution in zip(replies, resolved, strict=True):
     assert reply_event["slack_reply"]["answers"] == running_at_resolution
 
 

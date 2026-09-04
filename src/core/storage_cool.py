@@ -311,13 +311,17 @@ def claude_project_dir_name(cwd: Path) -> str:
 
 
 def claude_projects_roots(cfg: CharlieBotConfig) -> list[Path]:
-  """Every ``projects`` tree a configured cc-claude backend writes transcripts into.
+  """Every ``projects`` tree a cc-claude backend may have written transcripts into.
 
-  ``claude_config_dir`` is the single source of the resolution order; the
-  no-override option stands in for a claude process run outside any configured
-  backend, so ``$CLAUDE_CONFIG_DIR`` and the default home stay covered.
+  A transcript tree outlives the environment that created it, so the search set
+  must not depend on the current one: the default home is seeded beside the
+  ``claude_config_dir`` answers for the environment and the configured cc-claude
+  options, mirroring how ``codex_session_trees`` seeds its store.  Widening the
+  searched trees does not widen what is deletable: a name that encodes neither a
+  CharlieBot session id nor the worktree prefix stays untouched no matter which
+  tree it sits in.
   """
-  homes = {claude_config_dir(BackendOption(id="-", label="-", type="cc-claude"))}
+  homes = {Path.home() / ".claude", claude_config_dir(BackendOption(id="-", label="-", type="cc-claude"))}
   for option in cfg.backend_options:
     if option.type == "cc-claude":
       homes.add(claude_config_dir(option))

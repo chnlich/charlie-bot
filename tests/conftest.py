@@ -1548,6 +1548,36 @@ async def _noop() -> None:
   return None
 
 
+async def _ok_asgi_downstream(scope: Any, receive: Any, send: Any) -> None:
+  """Downstream ASGI app the auth-middleware tests wrap; records that it ran."""
+  _ok_asgi_downstream.called = True
+  await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/plain")]})
+  await send({"type": "http.response.body", "body": b"OK"})
+
+
+_ok_asgi_downstream.called = False
+
+
+async def run_through_asgi_middleware(middleware: Any, scope: dict) -> list[dict]:
+  """Drive one ASGI middleware over *scope* with the shared OK downstream; return the sent messages."""
+  _ok_asgi_downstream.called = False
+  sent: list[dict] = []
+
+  async def receive() -> dict:
+    return {"type": "http.request", "body": b"", "more_body": False}
+
+  async def send(message: dict) -> None:
+    sent.append(message)
+
+  await middleware(scope, receive, send)
+  return sent
+
+
+def asgi_downstream_called() -> bool:
+  """Whether the shared downstream ran during the last run_through_asgi_middleware call."""
+  return _ok_asgi_downstream.called
+
+
 def close_create_logged_task(coro: Any, *, name: str | None = None) -> None:
   """create_logged_task stand-in: closes the coroutine instead of scheduling it as a task."""
   coro.close()

@@ -17,29 +17,29 @@ from typing import Any
 import pytest
 import yaml
 from conftest import (
-  OPUS_BACKEND_ID,
-  SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
-  SCHEDULER_GET_CONFIG_PATCH_TARGET,
-  SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
-  SCHEDULER_TRIGGER_MASTER_PATCH_TARGET,
-  _noop,
-  build_scheduler_cfg,
-  close_create_logged_task,
-  make_cron_client,
-  make_sessions_client,
+    OPUS_BACKEND_ID,
+    SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
+    SCHEDULER_GET_CONFIG_PATCH_TARGET,
+    SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
+    SCHEDULER_TRIGGER_MASTER_PATCH_TARGET,
+    _noop,
+    build_scheduler_cfg,
+    close_create_logged_task,
+    make_cron_client,
+    make_sessions_client,
 )
 from pydantic import ValidationError
 
 from src.agents import master_cc
 from src.core.config import (
-  ImprovementLoopConfig,
-  ScheduledTaskConfig,
-  _validate_cron_body,
+    ImprovementLoopConfig,
+    ScheduledTaskConfig,
+    _validate_cron_body,
 )
 from src.core.models import (
-  PROJECT_ROLE,
-  CreateSessionRequest,
-  SessionStatus,
+    PROJECT_ROLE,
+    CreateSessionRequest,
+    SessionStatus,
 )
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
@@ -87,8 +87,7 @@ def test_task_config_worker_mode_allows_no_project() -> None:
 
 def test_task_config_master_mode_with_handler_is_rejected() -> None:
   with pytest.raises(ValidationError, match="mode 'master' requires a prompt source"):
-    ScheduledTaskConfig(
-        name="pm_x", cron="30 8 * * *", handler="backup", mode="master", project="bp-eval")
+    ScheduledTaskConfig(name="pm_x", cron="30 8 * * *", handler="backup", mode="master", project="bp-eval")
 
 
 def test_task_config_master_mode_with_loop_is_rejected() -> None:
@@ -112,9 +111,7 @@ def test_master_task_with_prompt_file_loads(tmp_path: Path) -> None:
           "prompt_file": str(md_path),
           "mode": "master",
           "project": "bp-eval",
-      },
-      cfg.charlie_bot_repo,
-      "pm_bp_eval")
+      }, cfg.charlie_bot_repo, "pm_bp_eval")
   assert task.mode == "master"
   assert task.project == "bp-eval"
   assert task.prompt == "# Project Manager\n\nThe contract.\n"
@@ -302,11 +299,9 @@ def test_cron_create_second_master_task_for_project_is_409(cron_dir: Path, tmp_p
   prompt_path = tmp_path / "pm_contract.md"
   prompt_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
   with make_cron_client(cfg, session_mgr) as client:
-    first = client.post(
-        "/api/cron/tasks", json=_master_task_payload("pm_bp_eval", prompt_file=str(prompt_path)))
+    first = client.post("/api/cron/tasks", json=_master_task_payload("pm_bp_eval", prompt_file=str(prompt_path)))
     assert first.status_code == 200
-    conflict = client.post(
-        "/api/cron/tasks", json=_master_task_payload("pm_bp_eval_2", prompt_file=str(prompt_path)))
+    conflict = client.post("/api/cron/tasks", json=_master_task_payload("pm_bp_eval_2", prompt_file=str(prompt_path)))
     # A worker-mode task may share the project; only master tasks are exclusive.
     worker = client.post(
         "/api/cron/tasks",
@@ -330,16 +325,22 @@ def test_cron_update_enabling_conflicting_master_task_is_409(cron_dir: Path, tmp
   prompt_path = tmp_path / "pm_contract.md"
   prompt_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
   (cron_dir / "pm_a.yaml").write_text(
-      yaml.safe_dump({"cron": "30 8 * * *", "prompt_file": str(prompt_path), "mode": "master", "project": "bp-eval"}),
-      encoding="utf-8")
-  (cron_dir / "pm_b.yaml").write_text(
       yaml.safe_dump({
-          "cron": "30 9 * * *",
+          "cron": "30 8 * * *",
           "prompt_file": str(prompt_path),
           "mode": "master",
-          "project": "bp-eval",
-          "enabled": False,
+          "project": "bp-eval"
       }),
+      encoding="utf-8")
+  (cron_dir / "pm_b.yaml").write_text(
+      yaml.safe_dump(
+          {
+              "cron": "30 9 * * *",
+              "prompt_file": str(prompt_path),
+              "mode": "master",
+              "project": "bp-eval",
+              "enabled": False,
+          }),
       encoding="utf-8")
   cfg = build_scheduler_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
@@ -369,13 +370,14 @@ async def test_role_bound_scheduled_session_backend_switch_writes_through_and_ro
   prompt_path = tmp_path / "pm_contract.md"
   prompt_path.write_text(PM_TASK_PROMPT + "\n", encoding="utf-8")
   yaml_path.write_text(
-      yaml.safe_dump({
-          "cron": "30 8 * * *",
-          "prompt_file": str(prompt_path),
-          "mode": "master",
-          "project": "bp-eval",
-          "enabled": True,
-      }),
+      yaml.safe_dump(
+          {
+              "cron": "30 8 * * *",
+              "prompt_file": str(prompt_path),
+              "mode": "master",
+              "project": "bp-eval",
+              "enabled": True,
+          }),
       encoding="utf-8")
   pm = await session_mgr.create_session(
       CreateSessionRequest(name="PM: bp-eval", scheduled_task="pm_bp_eval", role=PROJECT_ROLE),
@@ -440,10 +442,7 @@ def _instructions_cfg(tmp_path: Path) -> SimpleNamespace:
       "---\nscope: user\ntopic: profile\naudience: master, worker\ntitle: Note\n---\n"
       "MEMORY BODY\n",
       encoding="utf-8")
-  return SimpleNamespace(
-      charlie_bot_repo=repo,
-      claude_md_file=home / "MASTER_AGENT_PROMPT.md",
-      memory_dir=memory_dir)
+  return SimpleNamespace(charlie_bot_repo=repo, claude_md_file=home / "MASTER_AGENT_PROMPT.md", memory_dir=memory_dir)
 
 
 def test_pm_identity_part_appended_for_project_session_with_group(tmp_path: Path) -> None:

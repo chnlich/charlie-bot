@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import threading
+from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -56,6 +58,27 @@ FAILED_WORKTREE_QUARANTINE_DAYS = 7
 # write time), so no quarantine-eligible thread is ever skipped.
 RUNNING_SCAN_WINDOW = timedelta(days=30)
 
+# Parsed in-window thread metadata keyed by metadata path. The sidebar deep probe
+# re-enters this scan on every poll that follows any write to the session, and
+# re-parsing every unchanged metadata file dominated that probe (~25 ms measured on
+# the 339-thread worst corpus); a repeat scan pays one stat per file and re-reads
+# only files whose signature moved. Every thread-metadata writer publishes through
+# write_model_json_atomically's tmp-file rename, so any content change moves
+# mtime_ns and an unchanged (mtime_ns, size) proves the content current. The
+# signature is taken before the read, so an entry recorded while a write raced the
+# scan keys the older signature and can never be served for the newer bytes. Yielded
+# dicts are shared across calls and scans — consumers must treat them as read-only.
+_THREAD_META_MEMO_LIMIT = 1024
+_thread_meta_memo: OrderedDict[str, tuple[int, int, dict]] = OrderedDict()
+_thread_meta_memo_lock = threading.Lock()
+
+
+def _reset_thread_meta_memo_for_tests() -> None:
+  """Clear the thread-metadata scan memo, restoring the process-start state."""
+  with _thread_meta_memo_lock:
+    _thread_meta_memo.clear()
+
+
 # Boot-scoped once-key for "alive but silent" reports: at most one recovery
 # event per thread per boot, shared by the boot STALLED report and the
 # follow-time silence recheck (whichever emits first claims the key). Process
@@ -74,7 +97,9 @@ def iter_recent_thread_metas(
   Cheap-first: ``os.scandir`` the threads dir and ``stat`` each ``metadata.json``,
   only ``load_json_meta`` (read + parse) the ones whose mtime is at least
   ``now - window``. Threads whose metadata is older than the window are skipped
-  with zero content reads, as are dirs with missing/unreadable metadata. Shared by
+  with zero content reads, as are dirs with missing/unreadable metadata. In-window
+  parses are memoized on (mtime_ns, size) (see the memo above the scan's callers),
+  so a repeat scan over unchanged files costs one stat per file. Shared by
   ``_scan_interrupted_runs`` (init) and ``has_running_tasks_sync`` (sessions) so the
   stat-before-read scan stays identical at both sites.
   """
@@ -87,17 +112,33 @@ def iter_recent_thread_metas(
         continue
       meta_path = Path(entry.path) / "metadata.json"
       try:
-        mtime = meta_path.stat().st_mtime
+        st = meta_path.stat()
       except FileNotFoundError:
         continue  # thread dir without metadata.json (mid-creation) — nothing to read
       except OSError as e:
         log.debug(log_event, path=str(meta_path), error=str(e))
         continue
-      if mtime < cutoff:
+      if st.st_mtime < cutoff:
+        continue
+      key = str(meta_path)
+      with _thread_meta_memo_lock:
+        cached = _thread_meta_memo.get(key)
+        if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+          _thread_meta_memo.move_to_end(key)
+          cached_meta: dict | None = cached[2]
+        else:
+          cached_meta = None
+      if cached_meta is not None:
+        yield Path(entry.path), meta_path, cached_meta
         continue
       meta = load_json_meta(meta_path, log_event)
       if meta is None:
         continue
+      with _thread_meta_memo_lock:
+        _thread_meta_memo[key] = (st.st_mtime_ns, st.st_size, meta)
+        _thread_meta_memo.move_to_end(key)
+        while len(_thread_meta_memo) > _THREAD_META_MEMO_LIMIT:
+          _thread_meta_memo.popitem(last=False)
       yield Path(entry.path), meta_path, meta
 
 

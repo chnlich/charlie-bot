@@ -138,7 +138,9 @@ def has_running_tasks_sync(threads_dir: Path) -> bool:
 
   The 30-day-window scan (``iter_recent_thread_metas``): only threads whose
   metadata mtime is within the window are read+parsed; older thread dirs cost
-  a scandir+stat with zero content reads.
+  a scandir+stat with zero content reads, and unchanged in-window files cost
+  one stat too (parsed-JSON memo in the scan, re-parsed only when the file's
+  (mtime_ns, size) signature moves).
   """
   for _thread_dir, _meta_path, meta in iter_recent_thread_metas(threads_dir, utc_now(), "thread_meta_read_failed"):
     if meta.get("status") == "running":

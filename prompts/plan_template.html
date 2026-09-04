@@ -156,8 +156,7 @@
                     and stays on the page. The stylesheet is copied verbatim from the template
                     (USAGE), and the budget counts the page at the template's type and spacing, so
                     headroom comes from folding content.
-                    The budget counts standing content: revision badges and revnotes, cleared by the
-                    next revision, ride outside it. The always-visible minimum is the surface approval binds to:
+                    The always-visible minimum is the surface approval binds to:
                     the header, sections 1 and 3, 4.1's short definitions and folded-block summary lines,
                     and each Trade-off's question, recommendation, and trade lines. Shrink or split a plan
                     whose minimum alone overflows. Registration enforces the
@@ -179,13 +178,10 @@
                     Restate any conclusion imported from an earlier plan, run, comment, or review in the current
                     plan and anchor it directly to stable, checkable evidence. Session-local identifiers cannot
                     carry meaning for the reader, and source anchors support rather than replace the explanation.
-      Revision marks: when an already-presented plan is updated, its body remains the complete current design.
-                    Every changed section gets a span.revbadge in its h2, such as "changed · r3", and a
-                    div.revnote immediately after the h2 stating "rN · trigger — what changed". The note only
-                    summarizes the current delta, describes it in terms understandable without the triggering
-                    conversation, and never carries background missing from the body. Row-level changes reuse the
-                    existing .new and .edit marks. Keep only the latest revision's marks: a new revision clears
-                    all previous badges, revnotes, and row marks. A first presentation carries no revision marks.
+      Versions: each version's body is the complete current design and carries no revision marks;
+                    the reason a version differs from its predecessor rides on the version record's
+                    note, recorded at amend time, and the reader gets the differences from the diff
+                    view (charliebot plan diff).
       Shared blocks: p, ul/li, ol/li, blockquote, pre, table, and td are comment-friendly text blocks;
       div.callout highlights a note (.warn for amber); div.flow with span.b and span.ar sketches a data flow;
       div.meta > span.mtag gives small metadata chips near the top of a plan.

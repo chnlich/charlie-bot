@@ -365,6 +365,42 @@ def test_goal_budget_counts_cjk_double(tmp_path: Path) -> None:
   assert "242 weighted chars" in outcome.detail
 
 
+def _with_mark_after_goal_heading(mark: str) -> str:
+  return plan_page_html().replace("Problem / Goal</h2>", f"Problem / Goal</h2>{mark}", 1)
+
+
+def test_goal_budget_drops_a_revnote_whole(tmp_path: Path) -> None:
+  """A div.revnote right after section 1's h2 — where the plan template puts it — rides outside
+  the budget (cleared by the next revision): an overlong note changes nothing, inline <code>
+  included."""
+  cfg = _chrome_cfg(tmp_path)
+  note = (f'<div class="revnote">r2 · trigger — {"x" * (artifact_check.GOAL_WEIGHTED_BUDGET + 40)} '
+          "<code>a/b/c</code></div>")
+  marked = _run("plan", _write(tmp_path, _with_mark_after_goal_heading(note)), cfg)["goal-budget"]
+  plain = _run("plan", _write(tmp_path, plan_page_html(), name="plain.html"), cfg)["goal-budget"]
+  assert marked == plain
+
+
+def test_goal_budget_drops_a_body_revbadge(tmp_path: Path) -> None:
+  """A span.revbadge inside section 1's body (not in the heading) does not contribute either."""
+  cfg = _chrome_cfg(tmp_path)
+  badge = '<span class="revbadge">changed · r3</span>'
+  marked = _run("plan", _write(tmp_path, _with_mark_after_goal_heading(badge)), cfg)["goal-budget"]
+  plain = _run("plan", _write(tmp_path, plan_page_html(), name="plain.html"), cfg)["goal-budget"]
+  assert marked == plain
+
+
+def test_goal_budget_still_rejects_an_over_budget_goal_alongside_marks(tmp_path: Path) -> None:
+  """Stripping revision marks does not weaken the budget: an over-budget goal still fails."""
+  cfg = _chrome_cfg(tmp_path)
+  over = artifact_check.GOAL_WEIGHTED_BUDGET + 1
+  doc = plan_page_html(goal_body="x" * over).replace(
+      "Problem / Goal</h2>", 'Problem / Goal</h2><div class="revnote">r2 · note</div>', 1)
+  (outcome,) = _run("plan", _write(tmp_path, doc), cfg)["goal-budget"]
+  assert not outcome.passed
+  assert f"{over} weighted chars (budget {artifact_check.GOAL_WEIGHTED_BUDGET})" in outcome.detail
+
+
 # ---------------------------------------------------------------------------
 # page-height (moved measurement, unchanged budgets)
 # ---------------------------------------------------------------------------

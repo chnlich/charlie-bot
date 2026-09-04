@@ -135,12 +135,11 @@
                     acceptance to 4.2, and choices the user must judge to Trade-offs.
       5. Trade-offs — numbered choices the user must judge, rendered as div.fork blocks. An open item contains
                     the question (p.q with span.fn number), recommendation (p.rec), and one-line tradeoff
-                    (p.trade). An open item whose whole story runs deeper than its question, recommendation, and
-                    tradeoff lines also carries a folded explainer, a details.details-layer block collapsed by
-                    default, so the reader can verify the recommendation from the block alone while the decision
-                    surface stays short: it retells the decision from scratch, glosses each term at first use,
-                    walks the causal chain through one worked example small enough to check by hand, and anchors
-                    each fact to its source. A resolved item keeps only the question and resolution
+                    (p.trade). Every open item also carries a folded explainer, a details.details-layer block
+                    collapsed by default, so the reader can verify the recommendation from the block alone while
+                    the decision surface stays short: it retells the decision from scratch, glosses each term at
+                    first use, walks the causal chain through one worked example small enough to check by hand,
+                    and anchors each fact to its source. A resolved item keeps only the question and resolution
                     (p.resolved); never record rejected alternatives. When nothing needs judging, keep one line
                     stating there are no open trade-offs.
       6. Other Details — a collapsed details.details-layer. Use one li per autonomous implementation decision,

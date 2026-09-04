@@ -253,8 +253,14 @@ async def make_parent(mgr: SessionManager, *, name: str = "Parent") -> str:
   append_events(
       mgr.get_chat_events_path(parent.id),
       [
-          {"type": "user", "content": "e0"},
-          {"type": "assistant", "content": "e1"},
+          {
+              "type": "user",
+              "content": "e0"
+          },
+          {
+              "type": "assistant",
+              "content": "e1"
+          },
       ],
   )
   return parent.id
@@ -278,15 +284,15 @@ def _assert_stderr_fragments(capsys: pytest.CaptureFixture[str], *fragments: str
     assert fragment in err
 
 
-def assert_cli_reject(exc_info: pytest.ExceptionInfo[SystemExit], capsys: pytest.CaptureFixture[str],
-                      *err_fragments: str) -> None:
+def assert_cli_reject(
+    exc_info: pytest.ExceptionInfo[SystemExit], capsys: pytest.CaptureFixture[str], *err_fragments: str) -> None:
   """Shared tail of CLI reject tests: main() exited nonzero and every fragment landed on stderr."""
   assert exc_info.value.code != 0
   _assert_stderr_fragments(capsys, *err_fragments)
 
 
-def assert_cli_reject_exit2(exc_info: pytest.ExceptionInfo[SystemExit], capsys: pytest.CaptureFixture[str],
-                            *err_fragments: str) -> None:
+def assert_cli_reject_exit2(
+    exc_info: pytest.ExceptionInfo[SystemExit], capsys: pytest.CaptureFixture[str], *err_fragments: str) -> None:
   """Same as assert_cli_reject with the exit code pinned at 2 (CLI usage error, e.g. bad file input)."""
   assert exc_info.value.code == 2
   _assert_stderr_fragments(capsys, *err_fragments)
@@ -327,8 +333,10 @@ def make_session_mgr(tmp_path: Path) -> SessionManager:
 
 
 async def make_home_session(
-    tmp_path: Path, *, name: str, backend: str | None = None
-) -> tuple[CharlieBotConfig, SessionManager, models.SessionMetadata]:
+    tmp_path: Path,
+    *,
+    name: str,
+    backend: str | None = None) -> tuple[CharlieBotConfig, SessionManager, models.SessionMetadata]:
   """(cfg, SessionManager, one created session) over a CharlieBotConfig rooted at tmp_path/"home";
   backend=None takes create_session's default (the first registered backend). A test needing more
   sessions calls mgr.create_session directly; a test needing no session builds the cfg/mgr pair
@@ -397,12 +405,8 @@ def session_dir_names(cfg: CharlieBotConfig) -> set[str]:
 # payload builders keep the raw string because it is wire data there.
 OPUS_BACKEND_ID = "claude-opus-4.6"
 
-OPUS_BACKEND_OPTION = models.BackendOption(
-    id=OPUS_BACKEND_ID, label="Opus", type="cc-claude", model="claude-opus-4-6"
-)
-CODEX_BACKEND_OPTION = models.BackendOption(
-    id="codex-o3", label="Codex", type="codex", model="o3"
-)
+OPUS_BACKEND_OPTION = models.BackendOption(id=OPUS_BACKEND_ID, label="Opus", type="cc-claude", model="claude-opus-4-6")
+CODEX_BACKEND_OPTION = models.BackendOption(id="codex-o3", label="Codex", type="codex", model="o3")
 
 THREE_BACKEND_OPTIONS = [
     OPUS_BACKEND_OPTION,
@@ -510,9 +514,7 @@ SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.scheduler.create_logged_ta
 # attribute and _reload_config, _execute_master_task, and _spawn_scheduled_worker read it at
 # call time; sibling modules binding the same functions keep their own routes.
 SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.core.scheduler.get_config"
-SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = (
-    "src.core.scheduler.resolve_requested_subagent_backend_model"
-)
+SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.core.scheduler.resolve_requested_subagent_backend_model")
 SCHEDULER_SPAWN_WORKER_PATCH_TARGET = "src.core.scheduler.spawn_worker"
 SCHEDULER_THREAD_MANAGER_PATCH_TARGET = "src.core.scheduler.ThreadManager"
 SCHEDULER_TRIGGER_MASTER_PATCH_TARGET = "src.core.scheduler.trigger_master"
@@ -610,9 +612,7 @@ def plan_page_html(goal_body: str = "Ship the fix.") -> str:
   with *goal_body* as the Problem / Goal section's body."""
   template = (ROOT / "prompts" / "plan_template.html").read_text(encoding="utf-8")
   style = re.search(r"<style>.*?</style>", template, re.DOTALL).group(0)
-  titles = [
-      "Problem / Goal", "Context", "High Level Solution", "Detailed Design", "Trade-offs", "Other Details"
-  ]
+  titles = ["Problem / Goal", "Context", "High Level Solution", "Detailed Design", "Trade-offs", "Other Details"]
   sections = "".join(
       f'<section class="plan-section"><h2><span class="n">{i}</span> {title}</h2>'
       f"<p>{goal_body if i == 1 else title}</p></section>" for i, title in enumerate(titles, 1))
@@ -739,8 +739,7 @@ def build_recovery_cfg(home: Path) -> CharlieBotConfig:
 
 
 def write_plan_artifact(
-    cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html", content: str | None = None
-) -> str:
+    cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html", content: str | None = None) -> str:
   """Write one plan artifact under cfg's sessions dir and return its plan-relative path; the default content
   passes the plan assertion set so tests can present/approve directly."""
   if content is None:
@@ -813,8 +812,7 @@ def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
   """Point the CLI HTTP layer at a fake config so tests never touch a real server."""
   monkeypatch.setattr(
       CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-      lambda: SimpleNamespace(
-          server_base_url="https://server", charliebot_access_key="", sessions_dir=sessions_dir))
+      lambda: SimpleNamespace(server_base_url="https://server", charliebot_access_key="", sessions_dir=sessions_dir))
 
 
 def make_task_spawner(tasks: list[asyncio.Task]) -> Callable[..., asyncio.Task]:
@@ -1029,8 +1027,8 @@ class FakeBackend:
     yield backend_base.make_result_event()
 
 
-def _instructions_content_stub(session_meta: models.SessionMetadata, cfg: CharlieBotConfig,
-                               prompt_overlay: str | None) -> str:
+def _instructions_content_stub(
+    session_meta: models.SessionMetadata, cfg: CharlieBotConfig, prompt_overlay: str | None) -> str:
   return "instructions"
 
 
@@ -1041,8 +1039,8 @@ def patch_instructions_content(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @contextlib.contextmanager
 def patch_trigger_fire(
-    subprocess_mock: AsyncMock, sacct_available: bool | None, sleep_mock: Callable[[float], Awaitable[None]] | None
-) -> Iterator[AsyncMock]:
+    subprocess_mock: AsyncMock, sacct_available: bool | None,
+    sleep_mock: Callable[[float], Awaitable[None]] | None) -> Iterator[AsyncMock]:
   """Patch the externals a trigger-watch fire run reads; yields the trigger_master mock.
 
   broadcast and trigger_master are always patched. sacct_available=None leaves
@@ -1064,8 +1062,7 @@ def patch_trigger_fire(
 
 
 async def assert_trigger_fired_completed(
-    trigger_mgr: TriggerManager, session_id: str, trigger_id: str, mock_master: AsyncMock
-) -> str:
+    trigger_mgr: TriggerManager, session_id: str, trigger_id: str, mock_master: AsyncMock) -> str:
   """Asserts the trigger persisted FIRED with the "completed" reason and the standard fired prefix;
   returns the fired message so the caller can assert its site-specific suffix (pids, slurm states)."""
   stored = await trigger_mgr._load_trigger(session_id, trigger_id)
@@ -1077,8 +1074,7 @@ async def assert_trigger_fired_completed(
 
 
 async def assert_trigger_fired_timeout(
-    trigger_mgr: TriggerManager, session_id: str, trigger_id: str, mock_master: AsyncMock
-) -> str:
+    trigger_mgr: TriggerManager, session_id: str, trigger_id: str, mock_master: AsyncMock) -> str:
   """Asserts the trigger persisted FIRED with the "timeout" reason and the standard fired prefix;
   returns the fired message so the caller can assert its site-specific suffix (pids, slurm states).
 
@@ -1110,9 +1106,9 @@ def make_fake_run_tmux(calls: list[tuple[str, ...]]) -> Callable[..., Awaitable[
   return fake_run_tmux
 
 
-def make_fake_git_create_worktree(
-    *, mkdir: bool = False, captures: dict[str, Any] | None = None
-) -> Callable[..., Awaitable[BaseResolution]]:
+def make_fake_git_create_worktree(*,
+                                  mkdir: bool = False,
+                                  captures: dict[str, Any] | None = None) -> Callable[..., Awaitable[BaseResolution]]:
   """A `git_create_worktree` stand-in returning a `detail="fake"` BaseResolution.
 
   The signature mirrors src.core.git.git_create_worktree so the monkeypatched attribute
@@ -1122,8 +1118,7 @@ def make_fake_git_create_worktree(
   """
 
   async def fake_git_create_worktree(
-      repo_path: Path, base_branch: str, branch_name: str, wt_path: Path
-  ) -> BaseResolution:
+      repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
     if captures is not None:
       captures["git_create_worktree"] = {
           "repo": repo_path,
@@ -1488,8 +1483,7 @@ async def await_recovery_tasks(prefixes: tuple[str, ...]) -> None:
   current = asyncio.current_task()
   while True:
     pending = [
-        t for t in asyncio.all_tasks()
-        if t is not current and not t.done() and t.get_name().startswith(prefixes)
+        t for t in asyncio.all_tasks() if t is not current and not t.done() and t.get_name().startswith(prefixes)
     ]
     if not pending:
       return

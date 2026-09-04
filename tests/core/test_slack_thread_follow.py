@@ -11,17 +11,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import requests
 from conftest import (
-  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-  CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
-  SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
-  SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
-  SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
-  TRIGGER_MASTER_PATCH_TARGET,
-  TRIGGERS_GET_CONFIG_PATCH_TARGET,
-  build_slack_cfg,
-  make_json_response,
-  make_task_spawner,
-  setup_session_cwd,
+    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+    SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
+    SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
+    SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
+    TRIGGER_MASTER_PATCH_TARGET,
+    TRIGGERS_GET_CONFIG_PATCH_TARGET,
+    build_slack_cfg,
+    make_json_response,
+    make_task_spawner,
+    setup_session_cwd,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -32,23 +32,23 @@ from src.api.internal import router as internal_router
 from src.cli.slack import main as cli_main
 from src.core import event_types as ET
 from src.core.models import (
-  CreateSessionRequest,
-  PendingTrigger,
-  SessionMetadata,
-  SlackOrigin,
-  TriggerStatus,
-  utc_now,
+    CreateSessionRequest,
+    PendingTrigger,
+    SessionMetadata,
+    SlackOrigin,
+    TriggerStatus,
+    utc_now,
 )
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
-  SlackReplyError,
-  _backfill_followed_threads,
-  _build_follow_wake_message,
-  ack_messages,
-  assert_thread_fresh,
-  handle_app_mention,
-  handle_thread_message,
-  summon_session_id,
+    SlackReplyError,
+    _backfill_followed_threads,
+    _build_follow_wake_message,
+    ack_messages,
+    assert_thread_fresh,
+    handle_app_mention,
+    handle_thread_message,
+    summon_session_id,
 )
 from src.core.triggers import TriggerManager
 
@@ -203,8 +203,7 @@ async def test_watermark_persists_through_metadata_json(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "case",
-    [
+    "case", [
         "edit_subtype",
         "delete_subtype",
         "bot_authored",
@@ -373,7 +372,11 @@ async def test_message_event_first_then_mention_cancels_the_armed_trigger(tmp_pa
 def _seed_gate_thread(client: _FakeSlackClient) -> None:
   """One unread-eligible pair around noise that must not count."""
   client.thread = [
-      {"user": "U_ALLOWED", "ts": _MENTION_ERA_WATERMARK, "text": "the summon itself"},
+      {
+          "user": "U_ALLOWED",
+          "ts": _MENTION_ERA_WATERMARK,
+          "text": "the summon itself"
+      },
       _thread_message(110, "first follow up"),
       _thread_message(115, "bot noise", bot=True),
       _thread_message(120, "lurker", user="U_OTHER"),
@@ -398,8 +401,7 @@ async def test_reply_gate_refuses_the_stale_thread_and_persists_nothing(tmp_path
   assert payload["error"] == "stale_thread"
   assert payload["watermark_ts"] == _MENTION_ERA_WATERMARK
   assert [m["ts"] for m in payload["new_messages"]] == [_ts(110), _ts(130)]
-  assert payload["new_messages"][0] == {
-      "ts": _ts(110), "user": "U_ALLOWED", "text_preview": "first follow up"}
+  assert payload["new_messages"][0] == {"ts": _ts(110), "user": "U_ALLOWED", "text_preview": "first follow up"}
   assert client.posts == []
   assert not [ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == ET.SLACK_REPLY]
 
@@ -433,8 +435,7 @@ async def test_ack_completeness_advance_and_idempotence(tmp_path: Path) -> None:
 
   with patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     # Re-acking at or below the watermark is an idempotent no-op counted as acked.
-    assert await ack_messages(meta.id, [_ts(110)], cfg, session_mgr) == {
-        "acked": 1, "watermark_ts": _ts(130)}
+    assert await ack_messages(meta.id, [_ts(110)], cfg, session_mgr) == {"acked": 1, "watermark_ts": _ts(130)}
     reloaded = await session_mgr.get_session(meta.id)
     assert reloaded is not None and reloaded.slack_watermark_ts == _ts(130)
     # And once the thread is acked through, the gate passes.
@@ -463,8 +464,7 @@ async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: Path) -> None
     assert [m["ts"] for m in body["new_messages"]] == [_ts(110), _ts(130)]
     assert client.posts == []
 
-    ack = http.post("/api/internal/slack/ack",
-                    json={"session_id": meta.id, "message_ids": [_ts(110), _ts(130)]})
+    ack = http.post("/api/internal/slack/ack", json={"session_id": meta.id, "message_ids": [_ts(110), _ts(130)]})
     assert ack.status_code == 200
     assert ack.json() == {"acked": 2, "watermark_ts": _ts(130)}
 
@@ -473,8 +473,7 @@ async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: Path) -> None
     assert resp.json()["posted"] is True
 
   assert [p["text"] for p in client.posts] == ["the answer"]
-  assert len([ev for ev in session_mgr.load_chat_events_sync(meta.id)
-              if ev.get("type") == ET.SLACK_REPLY]) == 1
+  assert len([ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == ET.SLACK_REPLY]) == 1
 
 
 @pytest.mark.asyncio
@@ -587,7 +586,11 @@ def test_cli_reply_412_refusal_exits_nonzero_with_the_payload_on_stderr(
   reply_file.write_text("the answer", encoding="utf-8")
   refusal_payload = {
       "error": "stale_thread",
-      "new_messages": [{"ts": _ts(110), "user": "U_ALLOWED", "text_preview": "first follow up"}],
+      "new_messages": [{
+          "ts": _ts(110),
+          "user": "U_ALLOWED",
+          "text_preview": "first follow up"
+      }],
       "watermark_ts": _MENTION_ERA_WATERMARK,
   }
   refusal = MagicMock()

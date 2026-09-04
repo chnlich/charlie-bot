@@ -9,10 +9,10 @@ import pytest
 
 from src.cli import claude_sub, claude_sub_hook
 from src.cli.claude_sub_bridge import (
-  HookBridge,
-  HookProtocolError,
-  HookTurnState,
-  PromptDelivery,
+    HookBridge,
+    HookProtocolError,
+    HookTurnState,
+    PromptDelivery,
 )
 from src.core import event_types as ET
 
@@ -161,9 +161,20 @@ def test_prompt_delivery_starts_unknown_and_acknowledges_exact_submit() -> None:
 @pytest.mark.parametrize(
     "fields",
     [
-        {"prompt": "different prompt", "turn_id": "turn-1"},
-        {"prompt": PROMPT, "turn_id": "turn-1", "session_id": "other-session"},
-        {"prompt": PROMPT, "turn_id": "turn-1", "cwd": "/tmp/other-directory"},
+        {
+            "prompt": "different prompt",
+            "turn_id": "turn-1"
+        },
+        {
+            "prompt": PROMPT,
+            "turn_id": "turn-1",
+            "session_id": "other-session"
+        },
+        {
+            "prompt": PROMPT,
+            "turn_id": "turn-1",
+            "cwd": "/tmp/other-directory"
+        },
     ],
 )
 def test_prompt_delivery_mismatch_blocks_and_never_acknowledges(fields: dict) -> None:
@@ -400,8 +411,7 @@ def test_session_settings_are_session_scoped_and_lower_idle_threshold() -> None:
   assert settings["inputNeededNotifEnabled"] is True
 
   with pytest.raises(claude_sub.ClaudeSubError, match="inline JSON"):
-    claude_sub._session_settings(
-        claude_sub.ClaudeSubArgs(output_format="stream-json", settings=["user-settings.json"]))
+    claude_sub._session_settings(claude_sub.ClaudeSubArgs(output_format="stream-json", settings=["user-settings.json"]))
 
 
 def test_session_config_overlay_sets_idle_threshold_without_touching_sources(
@@ -472,11 +482,16 @@ def test_session_config_overlay_heals_existing_overlay_missing_trust_entry(
   config_dir.mkdir(parents=True)
   overlay_global = config_dir / ".claude.json"
   overlay_global.write_text(
-      json.dumps({
-          "preservedKey": "kept",
-          "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
-          "projects": {"/unrelated": {"hasTrustDialogAccepted": True}},
-      }),
+      json.dumps(
+          {
+              "preservedKey": "kept",
+              "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
+              "projects": {
+                  "/unrelated": {
+                      "hasTrustDialogAccepted": True
+                  }
+              },
+          }),
       encoding="utf-8",
   )
 
@@ -501,14 +516,15 @@ def test_session_config_overlay_preserves_existing_project_onboarding_seen_count
   config_dir.mkdir(parents=True)
   overlay_global = config_dir / ".claude.json"
   overlay_global.write_text(
-      json.dumps({
-          "projects": {
-              WORKING_DIRECTORY: {
-                  "hasTrustDialogAccepted": False,
-                  "projectOnboardingSeenCount": 7,
+      json.dumps(
+          {
+              "projects": {
+                  WORKING_DIRECTORY: {
+                      "hasTrustDialogAccepted": False,
+                      "projectOnboardingSeenCount": 7,
+                  },
               },
-          },
-      }),
+          }),
       encoding="utf-8",
   )
 
@@ -528,15 +544,16 @@ def test_session_config_overlay_idempotent_when_already_configured(
   config_dir.mkdir(parents=True)
   overlay_global = config_dir / ".claude.json"
   overlay_global.write_text(
-      json.dumps({
-          "projects": {
-              WORKING_DIRECTORY: {
-                  "hasTrustDialogAccepted": True,
-                  "projectOnboardingSeenCount": 3,
+      json.dumps(
+          {
+              "projects": {
+                  WORKING_DIRECTORY: {
+                      "hasTrustDialogAccepted": True,
+                      "projectOnboardingSeenCount": 3,
+                  },
               },
-          },
-          "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
-      }),
+              "messageIdleNotifThresholdMs": claude_sub._IDLE_NOTIFICATION_THRESHOLD_MS,
+          }),
       encoding="utf-8",
   )
   writes: list[Path] = []
@@ -765,6 +782,7 @@ async def test_started_marker_without_session_refuses_to_resume(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+
   async def fake_exists(session_id: str) -> bool:
     return False
 

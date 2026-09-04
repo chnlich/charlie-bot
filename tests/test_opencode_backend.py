@@ -13,6 +13,7 @@ from conftest import (
   FakeChunkedResponse,
 )
 
+import src.agents.backends.opencode as opencode_mod
 from src.agents.backends.opencode import (
     SSE_EVENT_MESSAGE_PART_UPDATED,
     SSE_EVENT_MESSAGE_UPDATED,
@@ -1266,3 +1267,26 @@ async def test_sse_watchdog_timeout_fails_run_end_to_end(monkeypatch, tmp_path: 
   abort_session.assert_awaited_once()
   process.wait.assert_awaited()
   assert "opencode_sse_silence_timeout" in capsys.readouterr().out
+
+
+@pytest.fixture(autouse=True)
+def _fresh_unhandled_part_type_registry():
+  """Keep the process-wide warn-once registry from leaking across tests."""
+  opencode_mod._reset_unhandled_part_types_for_tests()
+  yield
+  opencode_mod._reset_unhandled_part_types_for_tests()
+
+
+def test_unhandled_part_type_logs_once_per_process(monkeypatch) -> None:
+  """60 unhandled parts of one type log one line; a second type earns one more."""
+  backend = _build_backend(monkeypatch)
+  logged = []
+  monkeypatch.setattr(opencode_mod.log, "debug", lambda event, **kw: logged.append({"event": event, **kw}))
+
+  for _ in range(60):
+    assert backend._translate_part({"id": "p1", "messageID": "m1", "type": "patch"}) == []
+  for _ in range(60):
+    assert backend._translate_part({"id": "p2", "messageID": "m1", "type": "snapshot"}) == []
+
+  lines = [line for line in logged if line["event"] == "opencode_part_unhandled"]
+  assert [(line["type"]) for line in lines] == ["patch", "snapshot"]

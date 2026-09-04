@@ -56,6 +56,29 @@ _IGNORED_SSE_EVENT_TYPES = {
 OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 _LOCAL_NO_PROXY_ENTRIES = ("localhost", "127.0.0.1", "::1")
 
+# A part type the translator does not map re-fires once per unhandled part per
+# stream, while one sighting of a type carries the whole signal: the set of
+# mapped types is code, fixed for the process.
+_UNHANDLED_PART_TYPES_SEEN: set[str] = set()
+
+
+def _log_unhandled_part_once(part_type: str) -> None:
+  """Log one opencode_part_unhandled per part type per process.
+
+  A caller relies on at most one line per part type: a later unmapped part of
+  the same type re-fires a fired alarm, and a type the translator grows a
+  branch for stops reaching this helper at all.
+  """
+  if part_type in _UNHANDLED_PART_TYPES_SEEN:
+    return
+  _UNHANDLED_PART_TYPES_SEEN.add(part_type)
+  log.debug("opencode_part_unhandled", type=part_type)
+
+
+def _reset_unhandled_part_types_for_tests() -> None:
+  """Clear the warn-once registry, restoring the process-start state."""
+  _UNHANDLED_PART_TYPES_SEEN.clear()
+
 
 class OpenCodeSseSilenceError(RuntimeError):
   """The SSE stream carried no session-id-bearing event within OPENCODE_SSE_PROGRESS_TIMEOUT."""
@@ -546,7 +569,7 @@ class OpenCodeBackend(AgentBackend):
       return []
     if part_type == "step-start":
       return []
-    log.debug("opencode_part_unhandled", type=part_type)
+    _log_unhandled_part_once(part_type)
     return []
 
   def _part_delta(self, part_id: str, full_text: str) -> str:

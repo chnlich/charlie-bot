@@ -59,6 +59,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M46 cron tasks list payload and handler time, steady state | M46 collector below | seconds per request + response body bytes, live cron corpus | median < 0.02 s; body < 20 KB | — (introduced with its first history row) |
 | M47 claude declared-window warning stream, steady state | M47 collector below | warnings per 60 steady-state declared-window resolutions | 0 warnings after the first sighting per process | — (introduced with its first history row) |
 | M48 search content-scan missing-file debug stream, steady state | M48 collector below | debug lines per 60 steady-state content scans of an active session whose live chat file is missing | 0 lines after the first sighting per (session, error) per process | — (introduced with its first history row) |
+| M49 opencode part-unhandled debug stream, steady state | M49 collector below | debug lines per 60 steady-state `_translate_part` calls of one unhandled part type | 0 lines after the first sighting per part type per process | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2577,6 +2578,44 @@ print(f"60 steady-state content scans of a no-live-file session; search_read_fai
 EOF
 ```
 
+M49 — opencode part-unhandled debug stream, steady state. Every opencode SSE
+`message.part.updated` frame routes through `_translate_part`, and a part type
+the translator does not map logs `opencode_part_unhandled` per part — 152 lines
+in the 12.88 h live server log sampled 2026-09-04 (~12/h), every one of them
+`type=patch`, so a stream of unhandled parts re-fires the same line forever
+while one sighting per part type carries the whole signal: the set of mapped
+types is code, fixed for the process. The cost is background log volume
+invisible to HTTP probes, so the collector drives `_translate_part` on a
+synthetic unhandled part: one first-sighting call, as at a process start, then
+60 steady-state repeat calls, counting the event. A line in the repeat window
+is a re-fired alarm; the count is the metric. Evidence while the live server
+runs older code points the same collector at the branch checkout
+(`sys.path.insert` at the worktree root), the same shape as the M22 protocol:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import sys
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.agents.backends import opencode as opencode_mod
+
+backend = opencode_mod.OpenCodeBackend()
+part = {"id": "m49-p1", "messageID": "m49-m1", "type": "patch"}
+
+events = []
+orig = opencode_mod.log.debug
+opencode_mod.log.debug = lambda event, **kw: events.append(event)
+try:
+    backend._translate_part(part)  # first sighting, as at a process start; not counted
+    events.clear()
+    for _ in range(60):  # steady-state repeat parts of the same unhandled type
+        backend._translate_part(part)
+finally:
+    opencode_mod.log.debug = orig
+n = sum(1 for event in events if event == "opencode_part_unhandled")
+print(f"60 steady-state unhandled patch parts; opencode_part_unhandled debug lines: {n}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2640,3 +2679,4 @@ EOF
 | 2026-09-04 | this PR | M46 GET /api/cron/tasks body 96235 B → 3745 B (resolved-prompt bytes 90348 → 0 of 12 task rows), handler median 2.71 ms → 1.90 ms, max 3.12 ms → 2.31 ms (collector verbatim, live cron corpus read-only through TestClient, main checkout before at load 0.40/0.77/0.82 vs branch head after at load 1.02/1.22/0.93, back-to-back; row keys identical minus prompt; live-log corroboration 96 KB fetch bodies) | cron tasks list dump excludes prompt, the resolved body the in-process scheduler/master reads while every consumer of the route edits prompt_file (POST/PUT responses never carried it), mirroring M36's description prefix cut; M46 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M47 60 → 0 claude_declared_window_degraded warnings per 60 steady-state resolutions (collector verbatim, main checkout before vs branch after; live-log corroboration 62 lines in the 7.89 h server log ≈ 8/h, host exports CLAUDE_CODE_MAX_CONTEXT_TOKENS=400000) | declared-window degradation warnings routed through an (event, variable, value) warn-once guard — one line per degradation per process, a swapped bad value earns one new line; M47 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M48 60 → 0 search_read_failed debug lines per 60 steady-state content scans of a no-live-file session (collector verbatim, main checkout before vs branch after back-to-back at load 0.75/0.78/0.64; live-log corroboration 30 lines in the 11.92 h server log, all naming the one active session with no live chat file; search results and M8 monitoring shape unchanged) | both search content-scan failed-read loggers (the stat failure and the scan-open failure) routed through a (session, error) warn-once guard — one line per reported failure per process, a swapped path or errno earns one new line; M48 definition and healthy range introduced with this PR |
+| 2026-09-04 | this PR | M49 60 → 0 opencode_part_unhandled debug lines per 60 steady-state parts of one unhandled type (collector verbatim, main checkout before vs branch after back-to-back at load 0.25/0.59/0.86; live-log corroboration 152 lines in the 12.88 h server log, every line type=patch; unhandled parts still translate to []) | the part type falling through `_translate_part` routed through a part-type warn-once registry — one line per unmapped type per process; M49 definition and healthy range introduced with this PR |

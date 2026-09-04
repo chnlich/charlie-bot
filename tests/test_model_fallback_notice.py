@@ -21,11 +21,11 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
     drain_session_consumer,
+    fresh_master_state,
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
 )
-from conftest import reset_master_state as _reset_master_state
 
 from src.agents import master_cc, master_cc_queue, master_cc_run
 from src.agents.backends import claude_code
@@ -427,13 +427,10 @@ async def test_resume_round_emits_identical_notice_from_projection(
   cb = mock_session_callbacks()
 
   _resume_patch_setup(monkeypatch)
-  _reset_master_state(session_id)
-  try:
+  async with fresh_master_state(session_id):
     future = await master_cc.enqueue_master_resume(cfg, meta, record, cb, is_alive=lambda: False)
     await asyncio.wait_for(future, timeout=5)
     await drain_session_consumer(session_id, timeout=5)
-  finally:
-    _reset_master_state(session_id)
 
   persisted = [c.args[1] for c in cb.persist_and_broadcast.await_args_list]
   notices = [e for e in persisted if e.get("type") == ET.MODEL_FALLBACK_NOTICE]
@@ -478,13 +475,10 @@ async def test_resume_notice_persists_exactly_once_with_full_fields(
 
   monkeypatch.setattr(BROADCAST_PATCH_TARGET, AsyncMock())
   _resume_patch_setup(monkeypatch)
-  _reset_master_state(session_id)
-  try:
+  async with fresh_master_state(session_id):
     future = await master_cc.enqueue_master_resume(cfg, meta, record, mgr.callbacks(), is_alive=lambda: False)
     await asyncio.wait_for(future, timeout=5)
     await drain_session_consumer(session_id, timeout=5)
-  finally:
-    _reset_master_state(session_id)
 
   events = mgr.load_chat_events_sync(session.id)
   notices = [e for e in events if e.get("type") == ET.MODEL_FALLBACK_NOTICE]

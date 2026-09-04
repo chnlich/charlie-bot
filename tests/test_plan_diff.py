@@ -230,6 +230,22 @@ def test_word_deletion_and_short_gap_merge_restore_the_base_text() -> None:
   assert 'data-del="old "' in deletion
 
 
+def test_token_never_spans_a_text_node_boundary() -> None:
+  base = '<html><body><p>alpha beta<b>gamma</b></p></body></html>'
+  new = '<html><body><p>alpha beta</p></body></html>'
+  annotated = annotate(base, new)
+  assert 'data-del="gamma"' in annotated
+  assert '<span class="cbd-del" data-del="betagamma"></span>' not in annotated
+  assert '<ins class="cbd-ins">beta</ins>' not in annotated
+  assert [kind for kind, _ in _marks(annotated)] == ["del"]
+
+
+def test_pure_inline_markup_move_with_unchanged_text_produces_no_marks() -> None:
+  base = '<html><body><p>alpha beta<b>gamma</b></p></body></html>'
+  new = '<html><body><p>alpha <b>beta</b>gamma</p></body></html>'
+  assert not _marks(annotate(base, new))
+
+
 def test_same_document_has_no_marks_and_diff_text_names_real_changes() -> None:
   base = (_ROOT / "tests/data/plan_move2-direct-kill_v10.html").read_text(encoding="utf-8")
   new = (_ROOT / "tests/data/plan_move2-direct-kill_v11.html").read_text(encoding="utf-8")

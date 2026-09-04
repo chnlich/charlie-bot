@@ -278,18 +278,17 @@ def _tokenise(text: str) -> list[tuple[str, int, int]]:
 
 
 def _leaf_tokens(leaf: _Leaf) -> list[_Token]:
-  text = leaf.text
+  # The leaf's tokens stay one sequence for alignment, but a token never spans
+  # a text-node boundary: parts join without whitespace (``beta<b>gamma</b>``),
+  # and fusing them into one token would mark unchanged words as changed.
   raw_ranges, _ = _leaf_raw_map(leaf)
   result: list[_Token] = []
-  for value, logical_start, logical_end in _tokenise(text):
-    result.append(
-        _Token(
-            value,
-            logical_start,
-            logical_end,
-            raw_ranges[logical_start][0],
-            raw_ranges[logical_end - 1][1],
-        ))
+  offset = 0
+  for part in leaf.parts:
+    for value, start, end in _tokenise(part.text):
+      result.append(
+          _Token(value, offset + start, offset + end, raw_ranges[offset + start][0], raw_ranges[offset + end - 1][1]))
+    offset += len(part.text)
   return result
 
 

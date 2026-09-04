@@ -112,7 +112,11 @@ An understanding page precedes the plan when the master must first align the rea
 
 - Replies that touch the plan are feedback, not approval: Trade-off resolutions by
   number, added constraints, questions, changed terms. Fold each into the plan and
-  re-present what changed, then wait.
+  re-present what changed, then wait. A revision registers with `charliebot plan amend`,
+  which requires `--note`: the one line saying why this version differs from its
+  predecessor. The note rides on the version record; the body stays the complete
+  current design and carries no revision marks, and the reader gets the differences
+  from `charliebot plan diff`.
 - A style finding on one passage stands for its pattern: sweep the whole artifact for that
   pattern and fold every fix into the same revision.
 - Only the user changes the goal. Versions answer feedback within the standing goal; a changed
@@ -156,8 +160,10 @@ An understanding page precedes the plan when the master must first align the rea
 - Every spec declares its scope, and a spec that declares neither is verified as full.
   The first round of a lineage declares full; a revision round answering findings
   declares delta and re-checks the declared terms, their dependents, and whether prior
-  findings are closed. Adequacy's whole-plan refutation belongs to full rounds, so a
-  revision that changes the design's structure declares full again.
+  findings are closed. The declared terms are the output of `charliebot plan diff`
+  quoted into the spec, not restated by the author. Adequacy's whole-plan refutation
+  belongs to full rounds, so a revision that changes the design's structure declares
+  full again.
 - Every round of one plan measures with the same ruler: the spec's Goal quotes the registered
   version's section 1 by path, and cites fidelity and adequacy as defined here. A round that
   wants a wider question puts that question to the user.

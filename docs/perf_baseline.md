@@ -40,7 +40,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M27 plans registry tolerant read, steady state | M27 collector below | seconds per `read_plans_tolerant` call, worst on-disk plans corpus | median < 0.005 s | — (introduced with its first history row) |
 | M28 ndjson tail+count scan, steady state | M28 collector below | seconds per `parse_ndjson_tail` call, worst on-disk live chat file | median < 0.030 s | — (introduced with its first history row) |
 | M29 session-metadata listing preamble, steady state | M29 collector below | seconds per `_load_session_metas(ACTIVE)` call, live session-dir corpus | median < 0.005 s | — (introduced with its first history row) |
-| M30 live-half chat-event range rescan, steady state | M30 collector below | seconds per 8-page backwards scroll over the biggest archived session's live file | median < 0.005 s | — (introduced with its first history row) |
+| M30 live-half chat-event range rescan, steady state | M30 collector below | seconds per 8-page backwards scroll over the biggest archived session's live file; the append-round repeat (one appended line before each timed round, the page click during a streamed turn) | unchanged median < 0.005 s; append-round median < 0.005 s | — (introduced with its first history row) |
 | M31 worker-finalize events-summary read, steady state | M31 collector below | seconds per `read_events_summary` call, worst on-disk worker log | median < 0.02 s | — (introduced with its first history row) |
 | M32 memory-store assemble, steady state | M32 collector below | seconds per `assemble_master` call, live memory corpus | median < 0.005 s | — (introduced with its first history row) |
 | M33 assistant-stream draft render, full-turn replay | M33 collector below | seconds per replay of the largest on-disk assistant draft, 200 B deltas at 40 ms virtual cadence | median < 1.0 s | — (introduced with its first history row) |
@@ -1445,6 +1445,7 @@ mgr = SessionManager(cfg)
 asyncio.run(mgr.get_session(SID))  # warm the metadata cache, as the live server's polls do
 offset = mgr._chat_events.read_archive_offset_sync(SID)
 total = mgr.get_chat_event_count_sync(SID)
+live_path = home / "sessions" / SID / "data" / "chat_events.jsonl"
 
 def scroll():
     before = total
@@ -1461,8 +1462,20 @@ for _ in range(5):
     scroll()
     times.append(time.perf_counter() - t0)
 times.sort()
+scroll()
+atimes = []
+for i in range(8):
+    with open(live_path, "a", encoding="utf-8") as f:  # the scratch copy, never the live home
+        f.write(json.dumps({"id": f"m30-append-probe-{i}", "type": "assistant",
+                            "message": {"content": [{"type": "text", "text": "probe"}]},
+                            "timestamp": "2026-09-04T19:00:00Z"}) + "\n")
+    t0 = time.perf_counter()
+    scroll()
+    atimes.append(time.perf_counter() - t0)
+atimes.sort()
 print(f"archive_offset {offset}, total {total}; 8-page live-half scroll steady-state "
-      f"median {times[2]:.4f} s, max {times[-1]:.4f} s")
+      f"median {times[2]:.4f} s, max {times[-1]:.4f} s; append-round median {atimes[3]:.4f} s, "
+      f"max {atimes[-1]:.4f} s over 8")
 shutil.rmtree(home)
 EOF
 ```
@@ -2892,3 +2905,4 @@ EOF
 | 2026-09-04 | this PR | M51 post-write deep probe median 25.82/25.62 ms → 6.12/6.30 ms, max 26.22/25.98 ms → 6.33/8.04 ms (collector verbatim, 339-file worst threads corpus, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×2 at load 1.16-1.70/1.18-1.32/0.95-1.04; probe verdicts identical — unchanged-sig sweep re-measured 0.0021 s vs 0.0022 s standing M21, no regression) | the sidebar deep probe's thread-metadata scan (`iter_recent_thread_metas`, shared with the boot recovery scan) memoizes each in-window metadata file's parsed dict on (path, mtime_ns, size) — every writer publishes through the atomic tmp-file rename so a content change always moves mtime_ns, the signature is taken before the read so a mid-rewrite entry keys the older signature, only successful parses memoize, and yielded dicts are shared read-only; a post-write probe re-parses the moved file alone instead of all 339; M51 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M36 unchanged-poll body 168209 B → 0 B (conditional ?etag= repeat answers 204; collector with the conditional round, 2551 KB / 339-row worst worker-list corpus, live state read-only, main checkout before vs branch head after back-to-back ×2 at load 0.85/1.13/0.89 and 1.42/2.84/2.64; full-poll first-paint path unchanged — medians 4.27/4.66/6.09 ms → 4.25/5.06/4.57 ms with the byte-identical 168209 B body; live read-only check confirms the running instance still serves 200 full) | the list body carries a strong content-addressed ETag (sha1 of the body bytes) plus Cache-Control: no-store; the poll repeats the ETag it rendered via ?etag= and the whole-body memo's unchanged signature serves a bodyless 204 — the client keeps its rendered rows and skips the 339-row JSON.parse while nothing behind the list moved (a query param, not If-None-Match, because the browser's HTTP cache fulfils a revalidation itself and fetch never surfaces the 304); conditional sub-metric added to the M36 definition and collector in this PR |
 | 2026-09-04 | this PR | M52 save_chat_event append median 346/382 µs → 176/184 µs, maxima 2353/2477 µs → 1977/1963 µs (collector verbatim, 20534-event worst live corpus, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×2 at load 1.25/1.79/2.09; appended lines parse back in order both arms; isolated-component check: raw open+write+close inline 19 µs, one executor round-trip ~104 µs under the same load) | chat-event appends left aiofiles' open+write+close — three executor round-trips, ~355 µs — on the streamed-turn delta path (one append per stream delta, each gating its broadcast; a 500-delta turn paid ~180 ms of append overhead); one to_thread hop around a raw open(O_APPEND)+write+close keeps the off-loop write rule at one round-trip, O_APPEND re-resolves the path per call so an atomic archive rewrite or recreate never lands behind a stale handle, and the write loop keeps the io stack's write-all contract; the same funnel serves the worker events-log appends (src/agents/worker.py); M52 definition and healthy range introduced with this PR |
+| 2026-09-04 | this PR | M30 append-round 8-page scroll median 0.0406/0.0417 s → 0.0003/0.0003 s, max 0.0515 s → 0.0005 s (collector + append-round rounds, 9.4 MB live file of archived session 3b91d606, archive_offset 1136, scratch CHARLIEBOT_HOME A/B, main checkout before vs branch after interleaved back-to-back ×2 at load 0.65-1.93; live-half event count 3840 identical across all four arms; unchanged-file steady state re-measured 0.0002 s both arms, no regression) | the live-half memo extends on a same-inode size growth, re-parsing only the appended tail instead of the whole file — chat files mutate only by append between archive rewrites and the rewrite publishes through os.replace (new inode), so the inode rules out reading a rewrite as append growth; the covered byte offset tracks the bytes actually parsed (an entry whose read raced a landing append keys its pre-read stat and stays reachable only as an extension base), and a covered content ending mid-line blocks extension until a full re-parse lands on a line boundary, so a completed append is never glued onto a half-parsed last line; append-round sub-metric added to the M30 definition and collector in this PR |

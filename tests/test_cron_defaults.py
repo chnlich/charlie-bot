@@ -330,29 +330,32 @@ def _inject_legacy(h: Path) -> Path:
   return _write_legacy_cron(h)
 
 
-@pytest.mark.parametrize(
-    ("inject", "expected_name", "expected_path"),
-    [
-        (_inject_syntax, "broken-1", "broken-1.yaml"),
-        (_inject_not_mapping, "broken-2", "broken-2.yaml"),
-        (_inject_name_key, "broken-3", "broken-3.yaml"),
-        (_inject_unknown_key, "broken-4", "broken-4.yaml"),
-        (_inject_missing_source, "broken-5", "broken-5.yaml"),
-        (_inject_missing_prompt_file, "broken-6", "broken-6.yaml"),
-        (_inject_inline_prompt, "broken-7", "broken-7.yaml"),
-        (_inject_legacy, "cron.yaml (legacy)", "cron.yaml"),
-    ],
-    ids=[
-        "whole-file-syntax",
-        "not-mapping",
-        "name-key",
-        "unknown-key",
-        "missing-required-source",
-        "missing-prompt-file",
-        "inline-prompt",
-        "legacy-cron",
-    ],
-)
+# The broken-file taxonomy is defined once, here: both parametrized consumers
+# below (loader isolation and the API total test) read this list, so adding a
+# case happens in this one place.
+_BROKEN_CASES = [
+    (_inject_syntax, "broken-1", "broken-1.yaml"),
+    (_inject_not_mapping, "broken-2", "broken-2.yaml"),
+    (_inject_name_key, "broken-3", "broken-3.yaml"),
+    (_inject_unknown_key, "broken-4", "broken-4.yaml"),
+    (_inject_missing_source, "broken-5", "broken-5.yaml"),
+    (_inject_missing_prompt_file, "broken-6", "broken-6.yaml"),
+    (_inject_inline_prompt, "broken-7", "broken-7.yaml"),
+    (_inject_legacy, "cron.yaml (legacy)", "cron.yaml"),
+]
+_BROKEN_CASE_IDS = [
+    "whole-file-syntax",
+    "not-mapping",
+    "name-key",
+    "unknown-key",
+    "missing-required-source",
+    "missing-prompt-file",
+    "inline-prompt",
+    "legacy-cron",
+]
+
+
+@pytest.mark.parametrize(("inject", "expected_name", "expected_path"), _BROKEN_CASES, ids=_BROKEN_CASE_IDS)
 def test_single_broken_file_isolated(
     temp_home: Path,
     inject,
@@ -494,26 +497,8 @@ def _client(cfg):
 
 @pytest.mark.parametrize(
     ("inject", "expected_name"),
-    [
-        (_inject_syntax, "broken-1"),
-        (_inject_not_mapping, "broken-2"),
-        (_inject_name_key, "broken-3"),
-        (_inject_unknown_key, "broken-4"),
-        (_inject_missing_source, "broken-5"),
-        (_inject_missing_prompt_file, "broken-6"),
-        (_inject_inline_prompt, "broken-7"),
-        (_inject_legacy, "cron.yaml (legacy)"),
-    ],
-    ids=[
-        "whole-file-syntax",
-        "not-mapping",
-        "name-key",
-        "unknown-key",
-        "missing-required-source",
-        "missing-prompt-file",
-        "inline-prompt",
-        "legacy-cron",
-    ],
+    [(inject, name) for inject, name, _ in _BROKEN_CASES],
+    ids=_BROKEN_CASE_IDS,
 )
 def test_list_tasks_never_500_with_broken(temp_home: Path, inject, expected_name: str) -> None:
   _write_healthy(temp_home, "task-a", "0 0 * * *", "a body")

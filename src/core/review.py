@@ -1,7 +1,6 @@
 """Review pipeline — builds prompts, selects backends, and spawns review workers."""
 
 import asyncio
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,7 +22,7 @@ from src.core.models import (
     ThreadMetadata,
     backend_type_allows_missing_model,
 )
-from src.core.ndjson import parse_ndjson_file
+from src.core.ndjson import iter_ndjson_events, parse_ndjson_file
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager, thread_events_log_path
@@ -157,21 +156,13 @@ def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:
 
   Streams the log and stops at the first matching event whether its description
   carries text or not — the first-match contract of the full-parse loop this
-  replaced. Blank and malformed lines are skipped exactly like
-  ``parse_ndjson_file``; a missing file means no match, never an error.
+  replaced; blank and malformed lines are skipped by the shared
+  ``iter_ndjson_events`` contract. A missing file means no match, never an error.
   """
   if not chat_log.exists():
     return None
   with open(chat_log, encoding="utf-8") as stream:
-    for raw_line in stream:
-      line = raw_line.strip()
-      if not line:
-        continue
-      try:
-        event = json.loads(line)
-      except json.JSONDecodeError as e:
-        log.debug("ndjson_parse_skip", error=str(e))
-        continue
+    for event in iter_ndjson_events(stream, log_event="ndjson_parse_skip", log_fields={}):
       if event.get("type") == ET.TASK_DELEGATED and event.get("thread_id") == thread_id:
         value = event.get("description")
         if isinstance(value, str):

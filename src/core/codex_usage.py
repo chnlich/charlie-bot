@@ -1,6 +1,5 @@
 """Codex-specific context-window usage resolution from native rollout logs."""
 
-import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -9,6 +8,7 @@ import structlog
 
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import CharlieBotConfig
+from src.core.ndjson import iter_ndjson_events
 
 log = structlog.get_logger()
 
@@ -82,15 +82,8 @@ def _extract_latest_codex_rollout_usage(path: Path) -> dict[str, Any] | None:
       carry = parts[0] if pos > 0 else b""
       lines = parts[1:] if pos > 0 else parts
 
-      for raw_line in reversed(lines):
-        line = raw_line.strip()
-        if not line:
-          continue
-        try:
-          event = json.loads(line)
-        except json.JSONDecodeError as e:
-          log.debug("codex_rollout_parse_skip", path=str(path), error=str(e))
-          continue
+      for event in iter_ndjson_events(reversed(lines), log_event="codex_rollout_parse_skip",
+                                      log_fields={"path": str(path)}):
         if usage is None:
           usage = _extract_codex_rollout_usage_event(event)
         if model is None:
@@ -99,16 +92,11 @@ def _extract_latest_codex_rollout_usage(path: Path) -> dict[str, Any] | None:
           usage["model"] = model
           return usage
 
-    if carry.strip():
-      try:
-        event = json.loads(carry)
-      except json.JSONDecodeError as e:
-        log.debug("codex_rollout_parse_skip", path=str(path), error=str(e))
-      else:
-        if usage is None:
-          usage = _extract_codex_rollout_usage_event(event)
-        if model is None:
-          model = _extract_codex_rollout_model_event(event)
+    for event in iter_ndjson_events([carry], log_event="codex_rollout_parse_skip", log_fields={"path": str(path)}):
+      if usage is None:
+        usage = _extract_codex_rollout_usage_event(event)
+      if model is None:
+        model = _extract_codex_rollout_model_event(event)
 
   if usage is None:
     return None
@@ -212,15 +200,7 @@ class CodexUsageResolver:
       return None
 
     with open(path, encoding="utf-8") as f:
-      for raw_line in f:
-        line = raw_line.strip()
-        if not line:
-          continue
-        try:
-          event = json.loads(line)
-        except json.JSONDecodeError as e:
-          log.debug("translated_session_id_parse_skip", path=str(path), error=str(e))
-          continue
+      for event in iter_ndjson_events(f, log_event="translated_session_id_parse_skip", log_fields={"path": str(path)}):
         session_id_value = event.get("session_id")
         if isinstance(session_id_value, str) and session_id_value:
           return session_id_value

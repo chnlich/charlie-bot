@@ -1729,7 +1729,8 @@ class SessionManager:
     """Load session metadata, batching disk reads and parses for cache misses.
 
     Performs the listing preamble for the entry points routed through here
-    (``list_sessions``, ``search_sessions``, and ``list_archived_page``):
+    (``list_sessions``, ``list_group_names``, ``search_sessions``, and
+    ``list_archived_page``):
     (1) return [] if sessions_dir does not exist, (2) list session directories
     under asyncio.to_thread to avoid blocking the event loop, (3) use fresh
     cache entries directly and read+parse all missing metadata files serially

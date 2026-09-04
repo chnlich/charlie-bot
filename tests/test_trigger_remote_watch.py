@@ -12,15 +12,15 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import requests
 from conftest import (
-  CLI_COMMON_REQUESTS_GET_PATCH_TARGET,
-  CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
-  TRIGGER_MASTER_PATCH_TARGET,
-  TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
-  FakeAsyncProcess,
-  assert_trigger_fired_completed,
-  assert_trigger_fired_timeout,
-  fake_cli_cfg,
-  patch_trigger_fire,
+    CLI_COMMON_REQUESTS_GET_PATCH_TARGET,
+    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+    TRIGGER_MASTER_PATCH_TARGET,
+    TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    FakeAsyncProcess,
+    assert_trigger_fired_completed,
+    assert_trigger_fired_timeout,
+    fake_cli_cfg,
+    patch_trigger_fire,
 )
 from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
@@ -28,14 +28,14 @@ from pydantic import ValidationError
 
 from src.cli import schedule_trigger as cli_module
 from src.core.models import (
-  LocalPid,
-  RemotePid,
-  ScheduleTriggerRequest,
+    LocalPid,
+    RemotePid,
+    ScheduleTriggerRequest,
 )
 from src.core.triggers import (
-  RemoteVerifyError,
-  TriggerManager,
-  _migrate_legacy_watch_pids,
+    RemoteVerifyError,
+    TriggerManager,
+    _migrate_legacy_watch_pids,
 )
 
 # ---------------------------------------------------------------------------
@@ -240,12 +240,9 @@ async def test_backoff_intervals_and_plateau(tmp_path: Path) -> None:
 
   expected_bases = [10, 20, 40, 80, 160, 320, 600, 600]
   assert len(recorded_sleeps) >= len(expected_bases), (
-      f"only recorded {len(recorded_sleeps)} sleeps: {recorded_sleeps}"
-  )
+      f"only recorded {len(recorded_sleeps)} sleeps: {recorded_sleeps}")
   for i, base in enumerate(expected_bases):
-    assert base <= recorded_sleeps[i] <= base + 10, (
-        f"sleep[{i}]={recorded_sleeps[i]} not in [{base}, {base + 10}]"
-    )
+    assert base <= recorded_sleeps[i] <= base + 10, (f"sleep[{i}]={recorded_sleeps[i]} not in [{base}, {base + 10}]")
 
 
 # ---------------------------------------------------------------------------
@@ -264,8 +261,7 @@ def test_migrate_legacy_watch_pids_helper() -> None:
           "status": "pending",
           "fired_at": None,
           "watch_pids": [123, 456],
-      }
-  )
+      })
   trigger, migrated = _migrate_legacy_watch_pids(legacy)
   assert migrated is True
   assert trigger.watch_targets == [LocalPid(pid=123), LocalPid(pid=456)]
@@ -282,8 +278,7 @@ def test_migrate_legacy_watch_pids_none_value() -> None:
           "status": "pending",
           "fired_at": None,
           "watch_pids": None,
-      }
-  )
+      })
   trigger, migrated = _migrate_legacy_watch_pids(legacy)
   assert migrated is True
   assert not trigger.watch_targets
@@ -299,9 +294,12 @@ def test_migrate_legacy_no_op_when_already_new_schema() -> None:
           "created_at": "2030-01-01T00:00:00+00:00",
           "status": "pending",
           "fired_at": None,
-          "watch_targets": [{"kind": "remote_pid", "host": "neptune", "pid": 7}],
-      }
-  )
+          "watch_targets": [{
+              "kind": "remote_pid",
+              "host": "neptune",
+              "pid": 7
+          }],
+      })
   trigger, migrated = _migrate_legacy_watch_pids(modern)
   assert migrated is False
   assert trigger.watch_targets == [RemotePid(host="neptune", pid=7)]
@@ -318,9 +316,14 @@ def test_migrate_backfills_kind_on_kindless_targets() -> None:
           "created_at": "2030-01-01T00:00:00+00:00",
           "status": "pending",
           "fired_at": None,
-          "watch_targets": [{"host": None, "pid": 1}, {"host": "neptune", "pid": 2}],
-      }
-  )
+          "watch_targets": [{
+              "host": None,
+              "pid": 1
+          }, {
+              "host": "neptune",
+              "pid": 2
+          }],
+      })
   trigger, migrated = _migrate_legacy_watch_pids(legacy)
   assert migrated is True
   assert trigger.watch_targets == [LocalPid(pid=1), RemotePid(host="neptune", pid=2)]
@@ -345,8 +348,7 @@ async def test_recover_pending_rewrites_legacy_file(tmp_path: Path) -> None:
               "status": "pending",
               "fired_at": None,
               "watch_pids": [777],
-          }
-      ),
+          }),
       encoding="utf-8",
   )
 
@@ -408,10 +410,16 @@ def _fake_200_post(captured: dict):
 def test_cli_accepts_mixed_kinds(monkeypatch) -> None:
   argv = [
       "schedule_trigger",
-      "--session", "s1",
-      "--max-wait", "60",
-      "--message", "m",
-      "--watch", "1234", "neptune:5678", "slurm:99",
+      "--session",
+      "s1",
+      "--max-wait",
+      "60",
+      "--message",
+      "m",
+      "--watch",
+      "1234",
+      "neptune:5678",
+      "slurm:99",
   ]
   captured: dict = {}
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
@@ -421,19 +429,33 @@ def test_cli_accepts_mixed_kinds(monkeypatch) -> None:
     cli_module.main()
 
   assert captured["payload"]["watch_targets"] == [
-      {"kind": "local_pid", "pid": 1234},
-      {"kind": "remote_pid", "host": "neptune", "pid": 5678},
-      {"kind": "slurm_job", "job_id": 99},
+      {
+          "kind": "local_pid",
+          "pid": 1234
+      },
+      {
+          "kind": "remote_pid",
+          "host": "neptune",
+          "pid": 5678
+      },
+      {
+          "kind": "slurm_job",
+          "job_id": 99
+      },
   ]
 
 
 def test_cli_watch_pid_flag_removed() -> None:
   argv = [
       "schedule_trigger",
-      "--session", "s1",
-      "--max-wait", "60",
-      "--message", "m",
-      "--watch-pid", "1234",
+      "--session",
+      "s1",
+      "--max-wait",
+      "60",
+      "--message",
+      "m",
+      "--watch-pid",
+      "1234",
   ]
   with patch.object(sys, "argv", argv), pytest.raises(SystemExit):
     cli_module.main()
@@ -442,9 +464,12 @@ def test_cli_watch_pid_flag_removed() -> None:
 def test_cli_renamed_flag_delay_no_longer_accepted() -> None:
   argv = [
       "schedule_trigger",
-      "--session", "s1",
-      "--delay", "60",
-      "--message", "m",
+      "--session",
+      "s1",
+      "--delay",
+      "60",
+      "--message",
+      "m",
   ]
   with patch.object(sys, "argv", argv), pytest.raises(SystemExit):
     cli_module.main()
@@ -453,9 +478,12 @@ def test_cli_renamed_flag_delay_no_longer_accepted() -> None:
 def test_cli_max_wait_accepted(monkeypatch) -> None:
   argv = [
       "schedule_trigger",
-      "--session", "s1",
-      "--max-wait", "60",
-      "--message", "hello",
+      "--session",
+      "s1",
+      "--max-wait",
+      "60",
+      "--message",
+      "hello",
   ]
   captured: dict = {}
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
@@ -474,10 +502,14 @@ def test_cli_max_wait_accepted(monkeypatch) -> None:
 def test_cli_remote_dead_exits_with_code_2(monkeypatch) -> None:
   argv = [
       "schedule_trigger",
-      "--session", "s1",
-      "--max-wait", "60",
-      "--message", "hello",
-      "--watch", "neptune:5678",
+      "--session",
+      "s1",
+      "--max-wait",
+      "60",
+      "--message",
+      "hello",
+      "--watch",
+      "neptune:5678",
   ]
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
 

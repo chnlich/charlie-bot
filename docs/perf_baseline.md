@@ -57,6 +57,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M44 scheduled-list next-run resolution, steady state | M44 collector below | seconds per `GET /api/sessions/scheduled` request, live session + cron corpus | median < 0.004 s | — (introduced with its first history row) |
 | M45 session-WS catchup replay event-loop lag, stale-cursor reconnect | M45 collector below | seconds of loop lag + wall per `_replay_aggregated_catchup` run, worst on-disk live chat corpus, cursor 50 events behind (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.05 s | — (introduced with its first history row) |
 | M46 cron tasks list payload and handler time, steady state | M46 collector below | seconds per request + response body bytes, live cron corpus | median < 0.02 s; body < 20 KB | — (introduced with its first history row) |
+| M47 claude declared-window warning stream, steady state | M47 collector below | warnings per 60 steady-state declared-window resolutions | 0 warnings after the first sighting per process | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2488,6 +2489,44 @@ print(f"{len(rows)} task rows, body {len(r.content)} B, prompt bytes {prompt_byt
 EOF
 ```
 
+M47 — claude declared-window warning stream, steady state. Every claude-session
+usage resolution re-derives the headless declared window from the environment
+(`_resolve_claude_tier` → `headless_claude_declared_window`), and while a
+forwarded-but-unmodelled override is exported (this host sets
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS=400000`) each resolution re-fires the same
+degradation warning — 62 lines in the 7.89 h live server log sampled 2026-09-04
+(~8/h) — while one sighting per process carries the whole signal: the
+environment the warning reports cannot change between resolutions. The cost is
+background log volume invisible to HTTP probes, so the collector drives the
+resolution directly with the override exported: one first-sighting call, as at
+a process start, then 60 steady-state repeat calls, counting the event. A
+warning in the repeat window is a re-fired alarm; the count is the metric.
+Evidence while the live server runs older code points the same collector at the
+branch checkout (`sys.path.insert` at the worktree root), the same shape as the
+M22 protocol:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+os.environ["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = "400000"
+from src.agents.backends import claude_code as claude_code_mod
+
+warns = []
+orig = claude_code_mod.log.warning
+claude_code_mod.log.warning = lambda event, **kw: warns.append({"event": event, **kw})
+try:
+    claude_code_mod.headless_claude_declared_window()  # first sighting, as at a process start; not counted
+    warns.clear()
+    for _ in range(60):  # steady-state repeat resolutions of the usage path
+        claude_code_mod.headless_claude_declared_window()
+finally:
+    claude_code_mod.log.warning = orig
+n = sum(1 for w in warns if w["event"] == "claude_declared_window_degraded")
+print(f"60 steady-state declared-window resolutions; claude_declared_window_degraded warnings: {n}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2549,3 +2588,4 @@ EOF
 | 2026-09-03 | this PR | M7 collector-level warm collect median 0.3767 s → 0.0729 s, max 0.4274 s → 0.3471 s (verbatim warm-collect command, 16 rows / 3 notes, main checkout before at load 1.43/1.50/1.40 vs branch after at load 1.48/1.51/1.40 back-to-back; rows+notes digest agreement across interleaved arms whenever the live corpus held still between them — opencode db WAL moves every few seconds under live traffic; the after max is one such WAL-moved memo miss still paying the old fresh path; suite pins hit serves the first collect's rows/notes with zero scanned bytes) + HTTP-level live-before warm median 0.336 s → scratch-after warm median 0.056 s (verbatim M7 curls, live-before at load ~1.75, scratch server on the branch with a scratch CHARLIEBOT_HOME, cold 9.25 s) | whole-tally memo keyed on the walk signature plus the opencode db signature serves repeat collects without the cache-document JSON parse (~0.09 s), the apply(t) record replay (~43.5k add calls, ~0.075 s) or the db open per load, and the signature walk itself switches to str joins + raw os.stat (Path construction measured over twice the stat syscall on this corpus), with one shared os.walk error-hook home for both walkers |
 | 2026-09-04 | this PR | M45 stale-cursor replay loop-lag median 0.0259 s → 0.0102 s, max 0.0281 s → 0.0102 s (collector verbatim, 20534-event worst live corpus at cursor 20484, 47 frames replayed, scratch CHARLIEBOT_HOME A/B, frame-list digest identical 314dfbe9fd89 across arms; main checkout before vs branch after back-to-back at load 1.77/1.32/0.91 and 1.79/1.33/0.91; replay wall 0.0259 s → 0.0242 s — the walk's CPU still runs, now off the loop; suite pins ws.sent == _catchup_frames output and the stop-at-first-failure send count) | session-WS catchup replay's full-history aggregator walk moved off the event loop: `_catchup_frames` builds the ordered frame list via asyncio.to_thread and `_replay_aggregated_catchup` only sends it in order; M45 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M46 GET /api/cron/tasks body 96235 B → 3745 B (resolved-prompt bytes 90348 → 0 of 12 task rows), handler median 2.71 ms → 1.90 ms, max 3.12 ms → 2.31 ms (collector verbatim, live cron corpus read-only through TestClient, main checkout before at load 0.40/0.77/0.82 vs branch head after at load 1.02/1.22/0.93, back-to-back; row keys identical minus prompt; live-log corroboration 96 KB fetch bodies) | cron tasks list dump excludes prompt, the resolved body the in-process scheduler/master reads while every consumer of the route edits prompt_file (POST/PUT responses never carried it), mirroring M36's description prefix cut; M46 definition and healthy range introduced with this PR |
+| 2026-09-04 | this PR | M47 60 → 0 claude_declared_window_degraded warnings per 60 steady-state resolutions (collector verbatim, main checkout before vs branch after; live-log corroboration 62 lines in the 7.89 h server log ≈ 8/h, host exports CLAUDE_CODE_MAX_CONTEXT_TOKENS=400000) | declared-window degradation warnings routed through an (event, variable, value) warn-once guard — one line per degradation per process, a swapped bad value earns one new line; M47 definition and healthy range introduced with this PR |

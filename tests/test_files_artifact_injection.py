@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import files as files_api
+from src.core import plan_diff
 
 SCRIPT = "<script src=/static/js/artifact-comments.js></script>"
 
@@ -187,3 +188,87 @@ def test_serve_file_artifact_shape_outside_sessions_root_not_injected(
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   assert "last-modified" in resp.headers
+
+
+# --- diff requests: ?diff=<base artifact path> serves the annotated page ---
+
+
+def _write_pages(sessions_root: Path) -> tuple[Path, Path]:
+  """A two-version artifact pair whose word-level difference plan_diff can mark."""
+  base = sessions_root / "S" / "artifacts" / "plan_01.html"
+  new = sessions_root / "S" / "artifacts" / "plan_02.html"
+  base.parent.mkdir(parents=True, exist_ok=True)
+  base.write_text("<html><body><p>hello world</p></body></html>", encoding="utf-8")
+  new.write_text("<html><body><p>hello brave world</p></body></html>", encoding="utf-8")
+  return base, new
+
+
+def test_serve_file_diff_annotates_and_keeps_injection_layer(sessions_root: Path) -> None:
+  base, new = _write_pages(sessions_root)
+
+  resp = _build_client().get(
+      "/files" + str(new) + "?diff=artifacts/plan_01.html", cookies={"charliebot_access_key": "secret"})
+  assert resp.status_code == 200
+  assert resp.headers["content-type"].startswith("text/html")
+  # Byte-exact against composing the two layers the way the handler must:
+  # plan_diff marks spliced into the new page, then the comment layer wrapped
+  # around the annotated result exactly as it wraps a clean page.
+  expected = files_api._inject_artifact_ui(
+      plan_diff.annotate(base.read_text(encoding="utf-8"), new.read_text(encoding="utf-8")), "S")
+  assert resp.text == expected
+  assert "cbd-ins" in resp.text  # the word-level marks are actually present
+  assert resp.text.count(SCRIPT) == 1
+  assert 'window.__cbcServerSessionId="S";' in resp.text
+
+
+def test_serve_file_without_diff_is_byte_identical_to_pre_diff_response(sessions_root: Path) -> None:
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
+  original = page.read_text(encoding="utf-8")
+
+  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
+  assert resp.status_code == 200
+  # Exactly the bytes the handler produced before the diff feature existed:
+  # the page wrapped in the artifact UI, with no diff machinery involved.
+  assert resp.text == files_api._inject_artifact_ui(original, "S")
+
+
+def test_serve_file_diff_missing_base_is_404_naming_the_path(sessions_root: Path) -> None:
+  new = sessions_root / "S" / "artifacts" / "plan_02.html"
+  _write(new)
+
+  resp = _build_client().get(
+      "/files" + str(new) + "?diff=artifacts/plan_01.html", cookies={"charliebot_access_key": "secret"})
+  assert resp.status_code == 404
+  assert "plan_01.html" in resp.text
+
+
+def test_serve_file_diff_base_outside_session_artifacts_is_400(sessions_root: Path) -> None:
+  _, new = _write_pages(sessions_root)
+  _write(sessions_root / "S" / "notes" / "plan_01.html")
+
+  resp = _build_client().get(
+      "/files" + str(new) + "?diff=notes/plan_01.html", cookies={"charliebot_access_key": "secret"})
+  assert resp.status_code == 400
+
+
+def test_serve_file_diff_base_non_html_is_400(sessions_root: Path) -> None:
+  _, new = _write_pages(sessions_root)
+  (sessions_root / "S" / "artifacts" / "plan_01.txt").write_text("not html", encoding="utf-8")
+
+  resp = _build_client().get(
+      "/files" + str(new) + "?diff=artifacts/plan_01.txt", cookies={"charliebot_access_key": "secret"})
+  assert resp.status_code == 400
+
+
+def test_serve_file_diff_non_artifact_target_is_400(sessions_root: Path) -> None:
+  _, new = _write_pages(sessions_root)
+  notes_page = _write(sessions_root / "S" / "notes" / "page.html")
+  text_file = sessions_root / "S" / "artifacts" / "file.txt"
+  text_file.write_text("plain", encoding="utf-8")
+
+  resp = _build_client().get(
+      "/files" + str(notes_page) + "?diff=artifacts/plan_02.html", cookies={"charliebot_access_key": "secret"})
+  assert resp.status_code == 400
+  resp = _build_client().get(
+      "/files" + str(text_file) + "?diff=artifacts/plan_02.html", cookies={"charliebot_access_key": "secret"})
+  assert resp.status_code == 400

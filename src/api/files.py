@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 from src.api.auth import request_has_access_key
+from src.core import plan_diff
 from src.core.config import get_config
 
 router = APIRouter()
@@ -50,6 +51,25 @@ def _inject_artifact_ui(html_text: str, session_id: str) -> str:
   if idx == -1:
     return html_text + "\n" + tags + "\n"
   return html_text[:idx] + tags + "\n" + html_text[idx:]
+
+
+def _read_diff_base(session_id: str, diff_param: str) -> str:
+  """Read the base page named by the ``?diff=`` query parameter of a diff request.
+
+  The parameter is a session-relative artifact path — the plan registry's ``versions[].file``
+  form, e.g. ``artifacts/plan_01_v1.html``. It must resolve to a ``.html`` page whose
+  immediate parent is a session's ``artifacts`` directory (the same predicate the target
+  passes); anything else is a malformed request → 400. A base that is missing or unreadable
+  is 404 naming it — a reader who sees no marks has to be able to trust there are none, so
+  a broken diff never falls back to the clean page.
+  """
+  candidate = (get_config().sessions_dir / session_id / diff_param).resolve()
+  if candidate.suffix.lower() != ".html" or _artifact_session_id(candidate) is None:
+    raise HTTPException(status_code=400, detail=f"diff base is not a session artifact page: {diff_param}")
+  try:
+    return candidate.read_text(encoding="utf-8")
+  except OSError as e:
+    raise HTTPException(status_code=404, detail=f"diff base not found: {candidate}") from e
 
 
 def _human_size(size: int) -> str:
@@ -144,8 +164,21 @@ async def serve_file(path: str, request: Request):
   # only for readers who carry a valid access key: only they can post a comment, so only
   # they see the comment entry. An uncredentialed reader gets the file's original bytes.
   session_id = _artifact_session_id(fs_path) if fs_path.suffix.lower() == ".html" else None
+  diff_param = request.query_params.get("diff")
+  if diff_param is not None:
+    # A diff request addresses two artifact pages. Both must pass the artifact
+    # predicate before anything is served, so a malformed address is rejected
+    # rather than silently answered with the clean page. The marks themselves
+    # are spliced in inside the credentialed branch below: like the injected
+    # comment layer, they carry content (the base page's deleted text) that an
+    # uncredentialed reader must not see.
+    if session_id is None:
+      raise HTTPException(status_code=400, detail=f"diff target is not a session artifact page: {fs_path}")
+    base_text = await asyncio.to_thread(_read_diff_base, session_id, diff_param)
   if session_id is not None and request_has_access_key(request, get_config().charliebot_access_key):
     html_text = await asyncio.to_thread(lambda: fs_path.read_text(encoding="utf-8"))
+    if diff_param is not None:
+      html_text = plan_diff.annotate(base_text, html_text)
     return HTMLResponse(_inject_artifact_ui(html_text, session_id), media_type="text/html")
 
   # Serve the file with auto-detected MIME type

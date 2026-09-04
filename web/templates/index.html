@@ -365,6 +365,10 @@
                   class="flex-1 min-w-0 text-sm font-medium bg-gray-800 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none"></select>
           <select id="plan-version-selector" onchange="planPanel.selectVersion(this.value)"
                   class="text-xs bg-gray-700 text-gray-300 rounded px-2 py-1 border border-gray-600 focus:outline-none"></select>
+          <label id="plan-diff-toggle-wrap" class="hidden text-xs text-gray-400 cursor-pointer select-none whitespace-nowrap">
+            <input id="plan-diff-toggle" type="checkbox" onchange="planPanel.setDiffEnabled(this.checked)" class="accent-blue-500">
+            对比上一版
+          </label>
           <button onclick="planPanel.refresh()" class="text-xs text-gray-400 hover:text-white transition-colors whitespace-nowrap">Refresh</button>
           <button onclick="planPanel.openCurrentInTab()" class="text-xs text-gray-400 hover:text-white transition-colors whitespace-nowrap">Open in tab</button>
         </div>

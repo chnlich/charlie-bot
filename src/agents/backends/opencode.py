@@ -94,23 +94,7 @@ class OpenCodeBackend(AgentBackend):
     super().__init__(**kwargs)
     self._opencode_bin = resolve_binary("opencode", str(Path.home() / ".opencode" / "bin"))
     self._opencode_proxy_url = opencode_proxy_url
-    self._server_url: str | None = None
-    self._session_id: str | None = None
-    self._stdout_task: asyncio.Task | None = None
-    self._message_roles: dict[str, str] = {}
-    self._pending_parts: dict[str, list[dict]] = {}
-    self._last_part_text: dict[str, str] = {}
-    self._tool_use_emitted: set[str] = set()
-    self._tool_result_emitted: set[str] = set()
-    self._compaction_message_ids: set[str] = set()
-    self._usage_input = 0
-    self._usage_output = 0
-    self._usage_cache_read = 0
-    self._usage_cache_write = 0
-    self._usage_cost = 0.0
-    self._model_limit: dict | None = None
-    self._last_step_tokens: dict | None = None
-    self._failed = False
+    self._reset_run_state()
 
   def _prepare_cwd(self, cwd: str) -> None:
     """Write AGENTS.md into the cwd so opencode auto-detects it."""
@@ -262,22 +246,24 @@ class OpenCodeBackend(AgentBackend):
         "but CharlieBot runs headless with no approval path; aborting run.")
 
   def _reset_run_state(self) -> None:
-    self._server_url = None
-    self._session_id = None
-    self._stdout_task = None
-    self._message_roles.clear()
-    self._pending_parts.clear()
-    self._last_part_text.clear()
-    self._tool_use_emitted.clear()
-    self._tool_result_emitted.clear()
-    self._compaction_message_ids.clear()
+    # __init__ delegates here, so every per-run field is assigned fresh;
+    # in-place .clear() would hit missing attributes on a fresh instance.
+    self._server_url: str | None = None
+    self._session_id: str | None = None
+    self._stdout_task: asyncio.Task | None = None
+    self._message_roles: dict[str, str] = {}
+    self._pending_parts: dict[str, list[dict]] = {}
+    self._last_part_text: dict[str, str] = {}
+    self._tool_use_emitted: set[str] = set()
+    self._tool_result_emitted: set[str] = set()
+    self._compaction_message_ids: set[str] = set()
     self._usage_input = 0
     self._usage_output = 0
     self._usage_cache_read = 0
     self._usage_cache_write = 0
     self._usage_cost = 0.0
-    self._model_limit = None
-    self._last_step_tokens = None
+    self._model_limit: dict | None = None
+    self._last_step_tokens: dict | None = None
     self._failed = False
 
   def _log_paths(self) -> tuple[Path | None, Path | None]:

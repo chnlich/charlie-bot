@@ -35,7 +35,6 @@ from src.core.models import (
     ScheduleTriggerRequest,
     SessionMessageRequest,
     SessionMetadata,
-    SessionStatus,
     SlackAckRequest,
     SlackReplyRequest,
     SpawnRequest,
@@ -58,7 +57,7 @@ from src.core.spawner import (
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
-from src.core.triggers import RemoteVerifyError, TriggerManager
+from src.core.triggers import ArchivedSessionError, RemoteVerifyError, TriggerManager
 
 log = structlog.get_logger()
 
@@ -279,8 +278,9 @@ async def schedule_trigger(
         watch_targets=req.watch_targets,
         probe_out=watch_probe,
     )
-  except RemoteVerifyError as e:
-    # Verify-on-create rejection: surface as 422 so the CLI exits with code 2.
+  except (RemoteVerifyError, ArchivedSessionError) as e:
+    # Verify-on-create rejection, or a target archived without a successor:
+    # surface as 422 so the CLI exits with code 2.
     raise HTTPException(status_code=422, detail=str(e)) from e
   except RuntimeError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
@@ -322,14 +322,14 @@ async def session_message(
   Persists an ``agent_message`` event (never a ``user`` event, so no takeoff
   window is minted or revoked), then wakes the target master with the relay
   prefix. The injected content bypasses slash-command dispatch; when the target
-  session is mid-run the wake enqueues on the master work-item queue.
+  session is mid-run the wake enqueues on the master work-item queue. An
+  archived target still receives the event: the wake that follows pulls it
+  back to active.
   """
   caller = require_found(await session_mgr.get_session(req.session_id))
   target = await session_mgr.get_session(req.target_session_id)
   if target is None:
     raise HTTPException(status_code=404, detail="Target session not found")
-  if target.status == SessionStatus.ARCHIVED:
-    raise HTTPException(status_code=409, detail="Target session is archived")
 
   await session_mgr.persist_and_broadcast(
       req.target_session_id,

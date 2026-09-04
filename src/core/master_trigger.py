@@ -89,8 +89,17 @@ async def trigger_master(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
     user_event_id: str | None = None,
+    # Default True = pull back, so any wake path added later carries content and
+    # unarchives its target without being listed here. Only the two timed wakes
+    # (the trigger fire in src/core/triggers.py and the cron scheduler in
+    # src/core/scheduler.py) pass pull_back=False and keep the skip.
+    pull_back: bool = True,
 ) -> None:
-  """Best-effort trigger of the master agent to process a worker result."""
+  """Best-effort trigger of the master agent to process a worker result.
+
+  A target archived without a successor is pulled back to active first when
+  ``pull_back`` is set (the default); timed wakes opt out and skip instead.
+  """
   target_session_id = session_id
   try:
     # Resolve through the succession chain: an elone may have landed since this
@@ -112,15 +121,24 @@ async def trigger_master(
       )
 
     # An archived session with no successor is the user's explicit "no more
-    # wakes" signal: skip entirely (no run, no event). An archived session WITH
-    # a successor has already been eloned and redirects above instead.
+    # wakes" signal. Timed wakes (pull_back=False) skip entirely: no run, no
+    # event. Content wakes pull the session back to active first and continue.
+    # An archived session WITH a successor has already been eloned and
+    # redirects above instead.
     if resolved.status == SessionStatus.ARCHIVED and resolved.successor_session_id is None:
+      if not pull_back:
+        log.info(
+            "wake_skipped_archived",
+            session=session_id,
+            resolved_session=resolved.id,
+        )
+        return
+      await session_mgr.unarchive_session(resolved.id)
       log.info(
-          "wake_skipped_archived",
+          "wake_pulled_back_archived_session",
           session=session_id,
           resolved_session=resolved.id,
       )
-      return
 
     session_meta = await session_mgr.get_session(resolved.id)
     if not session_meta:

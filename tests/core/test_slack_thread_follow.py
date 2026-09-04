@@ -42,6 +42,7 @@ from src.core.models import (
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
     SlackReplyError,
+    _arm_follow_trigger,
     _backfill_followed_threads,
     _build_follow_wake_message,
     ack_messages,
@@ -250,6 +251,21 @@ async def test_eligible_thread_message_arms_the_follow_trigger(tmp_path: Path, w
   armed = await _armed(trigger_mgr, meta.id)
   assert len(armed) == 1
   assert f"floor={_ts(150)}" in armed[0].message
+  _shut_down(trigger_mgr)
+
+
+@pytest.mark.asyncio
+async def test_arm_follow_trigger_on_archived_session_returns_without_a_record(tmp_path: Path) -> None:
+  """The create-time rejection stops the thread-follow when its session is archived:
+  the re-arm logs the refusal and returns without a new trigger record."""
+  cfg, session_mgr, trigger_mgr, _client = _rig(tmp_path)
+  meta = await _make_session(session_mgr, watermark=None)
+  await session_mgr.archive_session(meta.id)
+
+  trigger = await _arm_follow_trigger(trigger_mgr, meta.id, _CHANNEL, _ROOT, _PERMALINK, _ts(150))
+
+  assert trigger is None
+  assert await trigger_mgr.list_triggers(meta.id) == []
   _shut_down(trigger_mgr)
 
 

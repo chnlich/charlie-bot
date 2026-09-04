@@ -127,7 +127,11 @@ class ScheduledSessionStore:
         session for session in candidates
         if session.scheduled_task == task_name and session.status == SessionStatus.ACTIVE
     ]
-    sessions.sort(key=lambda session: session.updated_at, reverse=True)
+    # Sort by creation time, not updated_at: unarchiving refreshes updated_at
+    # (sessions.py _update_field), so a pulled-back old generation would
+    # otherwise rank newest and capture the task's next cron fire. created_at
+    # names the newest generation, and no wake path rewrites it.
+    sessions.sort(key=lambda session: session.created_at, reverse=True)
     return sessions
 
   async def _scheduled_session_busy(self, session: SessionMetadata) -> bool:

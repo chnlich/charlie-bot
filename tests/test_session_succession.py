@@ -593,6 +593,35 @@ async def test_succession_keeps_scheduler_chain_intact_for_tick_and_triggers(
 
 
 @pytest.mark.asyncio
+async def test_unarchived_old_generation_does_not_capture_the_next_cron_fire(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """Scheduled-session selection sorts by creation time, not updated_at: a
+  pulled-back (unarchived) old generation refreshes its updated_at, so only the
+  creation order keeps the task's next fire on the newest generation."""
+  cfg = build_two_backend_cfg(tmp_path)
+  mgr = SessionManager(cfg)
+  _seed_scheduled_task(tmp_path, monkeypatch)
+  gen1 = await _make_scheduled_parent(mgr)
+
+  gen2 = await mgr.elone_session(gen1.id, event_index=0)
+
+  # A later wake pulls the old generation back to active; the unarchive
+  # refreshes its updated_at past gen2's, which is exactly the trap the
+  # creation-time sort key exists to defuse.
+  await mgr.unarchive_session(gen1.id)
+  gen1_fresh = await mgr.read_metadata_fresh(gen1.id)
+  gen2_fresh = await mgr.read_metadata_fresh(gen2.id)
+  assert gen1_fresh is not None and gen2_fresh is not None
+  assert gen1_fresh.updated_at > gen2_fresh.updated_at
+
+  resolved = await mgr.ensure_scheduled_session_backend("nightly", gen2.backend)
+  assert resolved is not None
+  assert resolved.id == gen2.id
+
+
+@pytest.mark.asyncio
 async def test_handoff_reference_holds_exact_parent_prefix_and_parent_pointer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

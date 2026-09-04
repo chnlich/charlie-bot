@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from src.agents.master_cc import cancel_master, run_message
-from src.api.deps import get_session_manager, require_session
+from src.api.deps import get_session_manager, require_found, require_session
 from src.api.message_utils import (
     build_agent_input_content,
     build_user_event,
@@ -19,7 +19,7 @@ from src.api.message_utils import (
 from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
-from src.core.models import SendMessageRequest, SessionMetadata
+from src.core.models import SendMessageRequest, SessionMetadata, SessionStatus
 from src.core.sessions import SessionManager
 from src.core.slash_commands import SlashDispatchResult, dispatch_slash_command
 from src.core.tasks import create_logged_task
@@ -70,6 +70,12 @@ async def send_message(
   backend_option = cfg.get_backend_option(meta.backend) if meta.backend else None
   if backend_option is not None and backend_option.type == "tui-cli":
     raise HTTPException(status_code=400, detail="Chat input is not supported for tui-cli sessions; use the terminal.")
+
+  # The only content path that does not go through trigger_master: unarchive an
+  # archived target here, before dispatching, so the slash-command branch and
+  # the ordinary branch below share the pull-back step.
+  if meta.status == SessionStatus.ARCHIVED:
+    meta = require_found(await session_mgr.unarchive_session(session_id))
 
   uploaded_files = serialize_uploaded_files(req.uploaded_files)
   content = build_agent_input_content(req.content, uploaded_files)

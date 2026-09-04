@@ -83,9 +83,18 @@ _SLURM_TERMINAL_STATES = frozenset(
 # records for the process lifetime.
 _TRIGGER_LIST_MEMO_SESSION_LIMIT = 32
 
+# How often a waiting trigger's watchdog re-checks the dormancy predicate: an archive must
+# stop the trigger's probes within about a minute, and the poll reads only session
+# metadata, so a faster cadence buys nothing. Tests shrink this constant to drive the clock.
+_DORMANCY_CHECK_SECONDS = 60
+
 
 class RemoteVerifyError(Exception):
   """Raised when verify-on-create fails for a remote watch target."""
+
+
+class ArchivedSessionError(Exception):
+  """Raised when create_trigger targets a session archived without a successor."""
 
 
 def _detect_pidfd():
@@ -425,6 +434,10 @@ class TriggerManager:
   ) -> PendingTrigger:
     """Create a pending trigger, persist to disk, and start the sleep task.
 
+    Raises ``ArchivedSessionError`` when the target session's succession chain
+    ends archived with no successor (the single rejection funnel for both
+    callers: the internal API and the Slack thread-follow re-arm).
+
     ``probe_out``, when given, is filled with ``label -> observed state`` for every
     remote SLURM target probed at create time, so the caller can report what was
     actually seen without probing twice. ``created_at``, when given, stamps the
@@ -434,6 +447,12 @@ class TriggerManager:
     """
     targets = list(watch_targets or [])
     kinds = {t.kind for t in targets}
+
+    # Single rejection funnel for both callers (the internal API and the Slack
+    # thread-follow re-arm): a target archived without a successor is the user's
+    # explicit "no more wakes" signal and must not gain a new wake.
+    if await self._is_dormant_target(session_id):
+      raise ArchivedSessionError(f"session {session_id} is archived with no successor; trigger rejected")
 
     if WatchKind.LOCAL_PID in kinds and not _PIDFD_SUPPORTED:
       raise RuntimeError("pidfd_open unavailable: need Linux 5.3+ with kernel pidfd_open support")
@@ -622,6 +641,31 @@ class TriggerManager:
     task = create_logged_task(self._wait_and_fire(trigger), name=f"trigger-{trigger.id[:8]}")
     self._tasks[trigger.id] = task
 
+  async def _is_dormant_target(self, session_id: str) -> bool:
+    """The one dormancy judgment for all three readers in this module — create-time
+    rejection, the wait watchdog, and the fire-time backstop: resolve *session_id*'s
+    succession chain and answer whether the chain end is ARCHIVED with no successor,
+    the user's explicit "no more wakes" signal. A chain end that has a successor
+    (elone) is never dormant; a missing chain end is not a dormancy answer and
+    reads False (the fire-time path reports it as metadata_unavailable instead).
+    """
+    resolved_tail = await self._session_mgr.resolve_successor_chain(session_id)
+    if resolved_tail is None:
+      return False
+    return resolved_tail.status == SessionStatus.ARCHIVED and resolved_tail.successor_session_id is None
+
+  async def _watch_dormancy(self, trigger: PendingTrigger) -> None:
+    """Watchdog racer: poll the dormancy predicate every ``_DORMANCY_CHECK_SECONDS``.
+
+    Returns — and so wins the race against the delivery wait — once the target
+    has gone dormant; it never fires anything itself. The winner's handling
+    lives in ``_wait_and_fire``.
+    """
+    while True:
+      await asyncio.sleep(_DORMANCY_CHECK_SECONDS)
+      if await self._is_dormant_target(trigger.session_id):
+        return
+
   async def _cancel_undeliverable(self, fresh: PendingTrigger, reason: str) -> None:
     """Every _wait_and_fire exit where the event cannot be delivered ends the same
     way: stamp CANCELLED, persist, drop the in-memory task handle, log the path's reason."""
@@ -641,36 +685,77 @@ class TriggerManager:
     Targets are grouped by kind and each group's sub-waiter runs concurrently
     against the shared ``fire_at`` deadline. The reason is 'completed' when all
     groups finish, 'timeout' if the deadline arrives with anything still alive.
+    The wait races a dormancy watchdog, so a session archived without a
+    successor mid-wait cancels the trigger instead of firing.
     """
     groups: dict[WatchKind, list[WatchTarget]] = {}
     for t in trigger.watch_targets:
       groups.setdefault(t.kind, []).append(t)
 
-    if groups:
-      sub_waiters = []
-      for kind, group in groups.items():
-        if kind == WatchKind.LOCAL_PID:
-          sub_waiters.append(self._wait_with_pidfd(trigger, group))
-        elif kind == WatchKind.REMOTE_PID:
-          sub_waiters.append(self._wait_with_remote_probe(trigger, group))
-        elif kind == WatchKind.SLURM_JOB:
-          sub_waiters.append(self._wait_with_sacct(trigger, group))
-        elif kind == WatchKind.UNKNOWN:
-          raise RuntimeError("WatchKind.UNKNOWN is a fail-loud sentinel and must never be watched")
-        else:
-          raise RuntimeError(f"unhandled WatchKind in dispatch: {kind!r}")
-      results = await asyncio.gather(*sub_waiters)
-      finished = [label for group_finished, _ in results for label in group_finished]
-      still_alive = [label for _, group_alive in results for label in group_alive]
-      reason = "timeout" if still_alive else "completed"
-    else:
-      now = datetime.now(UTC)
-      remaining = (trigger.fire_at - now).total_seconds()
-      if remaining > 0:
-        await asyncio.sleep(remaining)
-      reason = "timeout"
-      finished = []
-      still_alive = []
+    async def _existing_wait() -> tuple[str, list[str], list[str]]:
+      if groups:
+        sub_waiters = []
+        for kind, group in groups.items():
+          if kind == WatchKind.LOCAL_PID:
+            sub_waiters.append(self._wait_with_pidfd(trigger, group))
+          elif kind == WatchKind.REMOTE_PID:
+            sub_waiters.append(self._wait_with_remote_probe(trigger, group))
+          elif kind == WatchKind.SLURM_JOB:
+            sub_waiters.append(self._wait_with_sacct(trigger, group))
+          elif kind == WatchKind.UNKNOWN:
+            raise RuntimeError("WatchKind.UNKNOWN is a fail-loud sentinel and must never be watched")
+          else:
+            raise RuntimeError(f"unhandled WatchKind in dispatch: {kind!r}")
+        results = await asyncio.gather(*sub_waiters)
+        finished = [label for group_finished, _ in results for label in group_finished]
+        still_alive = [label for _, group_alive in results for label in group_alive]
+        reason = "timeout" if still_alive else "completed"
+      else:
+        now = datetime.now(UTC)
+        remaining = (trigger.fire_at - now).total_seconds()
+        if remaining > 0:
+          await asyncio.sleep(remaining)
+        reason = "timeout"
+        finished = []
+        still_alive = []
+      return reason, finished, still_alive
+
+    wait_task = asyncio.create_task(_existing_wait())
+    watchdog_task = asyncio.create_task(self._watch_dormancy(trigger))
+    try:
+      done, _ = await asyncio.wait({wait_task, watchdog_task}, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+      # An outer cancellation (the trigger was cancelled mid-wait) must not
+      # orphan the two racers.
+      for task in (wait_task, watchdog_task):
+        task.cancel()
+      raise
+    for task in (wait_task, watchdog_task):
+      if task not in done:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    # A racer that failed surfaces its exception instead of counting as a win.
+    for task in (watchdog_task, wait_task):
+      if task.done() and not task.cancelled():
+        exc = task.exception()
+        if exc is not None:
+          raise exc
+
+    if watchdog_task in done:
+      # Watchdog win: the chain end went dormant mid-wait. Same re-read as the
+      # fire-time backstop below, so a trigger cancelled while we waited is not
+      # re-stamped.
+      try:
+        fresh = await self._load_trigger(trigger.session_id, trigger.id)
+      except FileNotFoundError:
+        log.warning("trigger_file_missing_after_sleep", trigger_id=trigger.id)
+        return
+      if fresh.status != TriggerStatus.PENDING:
+        return
+      await self._cancel_undeliverable(fresh, reason="archived")
+      return
+
+    reason, finished, still_alive = wait_task.result()
 
     # Re-load to check for cancellation during sleep
     try:
@@ -700,7 +785,9 @@ class TriggerManager:
       await self._cancel_undeliverable(fresh, reason="metadata_unavailable")
       return
 
-    if resolved_tail.status == SessionStatus.ARCHIVED and resolved_tail.successor_session_id is None:
+    # Race backstop: the watchdog covers the wait, so this fire-time re-check of
+    # the same predicate catches an archive landing in the final stretch.
+    if await self._is_dormant_target(fresh.session_id):
       await self._cancel_undeliverable(fresh, reason="archived")
       return
 
@@ -723,6 +810,10 @@ class TriggerManager:
         trigger_message,
         get_config(),
         self._session_mgr,
+        # Timed wake: never pull an archived session back. The dormancy checks
+        # above cancel that case; this opt-out also covers the window between
+        # the last watchdog poll and this call.
+        pull_back=False,
     )
 
     fresh.status = TriggerStatus.FIRED

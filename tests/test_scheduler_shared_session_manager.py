@@ -5,10 +5,13 @@ round would land on disk while /bootstrap, /view and WS catchup — which all re
 process-wide instance's cache — keep serving the pre-cron history.
 """
 
+from __future__ import annotations
+
+import asyncio
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
@@ -26,7 +29,7 @@ from conftest import (
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig
-from src.core.models import CreateSessionRequest
+from src.core.models import CreateSessionRequest, SessionStatus
 from src.core.scheduler import TASK_HANDLERS, Scheduler
 from src.core.sessions import SessionManager
 
@@ -112,3 +115,47 @@ async def test_scheduled_round_events_reach_shared_read_cache(
   projection = session_mgr.get_message_projection(meta.id)
   assert projection is not None
   assert len(projection.history) == 1
+
+
+@pytest.mark.asyncio
+async def test_cron_master_wake_leaves_an_archived_session_archived(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """The cron wake is a timed wake (pull_back=False): a resolved session that is
+  archived stays archived, with no run and no event."""
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = await session_mgr.create_session(
+      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
+      backend=OPUS_BACKEND_ID,
+  )
+  await session_mgr.archive_session(meta.id)
+  # get_session returns copies: re-read so the handed-over meta carries ARCHIVED.
+  archived = await session_mgr.get_session(meta.id)
+  assert archived is not None
+  scheduler = Scheduler(cfg, session_mgr)
+  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt")
+
+  spawned: list[asyncio.Task] = []
+
+  def spawning_create_logged_task(coro: Coroutine[Any, Any, Any], name: str | None = None) -> asyncio.Task:
+    task = asyncio.get_running_loop().create_task(coro, name=name)
+    spawned.append(task)
+    return task
+
+  # Hand the wake an archived session directly: selection itself only ever
+  # returns active sessions, so this isolates the opted-out wake's behavior.
+  monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=archived))
+  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, spawning_create_logged_task)
+
+  with patch("src.core.master_trigger.run_message_with_resume_recovery", new=AsyncMock()) as mock_run:
+    await scheduler._execute_master_task(task_cfg)
+    await asyncio.wait_for(spawned[0], timeout=5)
+
+  mock_run.assert_not_awaited()
+  assert session_mgr.load_chat_events_sync(meta.id) == []
+  fresh = await session_mgr.get_session(meta.id)
+  assert fresh is not None
+  assert fresh.status == SessionStatus.ARCHIVED

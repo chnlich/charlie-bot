@@ -31,6 +31,7 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 from src.core.spawner import resolve_requested_subagent_backend_model, spawn_worker
+from src.core.storage_cool import format_sweep_line, run_cool_sweep
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager
 
@@ -48,8 +49,18 @@ async def _backup_handler() -> str:
   return str(archive)
 
 
+async def _cool_storage_handler() -> str:
+  """Built-in handler: reclaim cold sessions' readerless bytes (real run, no dry run)."""
+  loop = asyncio.get_running_loop()
+  result = await loop.run_in_executor(None, run_cool_sweep)
+  summary = format_sweep_line(result)
+  log.info('cool_storage_handler_done', total_bytes=result.total_bytes)
+  return summary
+
+
 TASK_HANDLERS: dict[str, callable] = {
     'backup': _backup_handler,
+    'cool_storage': _cool_storage_handler,
 }
 
 

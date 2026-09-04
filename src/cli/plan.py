@@ -7,23 +7,27 @@ the result is a single JSON object on stdout, and server 4xx/5xx ``detail`` is
 written to stderr as a JSON error with a non-zero exit code.
 
   charliebot plan present --file artifacts/plan_01.html --title "…"
-  charliebot plan amend --file artifacts/plan_02.html [--plan N]
+  charliebot plan amend --file artifacts/plan_02.html --note "…" [--plan N]
   charliebot plan approve [--plan N]
   charliebot plan close --plan N --as superseded|abandoned|completed
+  charliebot plan diff [--plan N] [--v N]
   charliebot plan list
 """
 
 import argparse
 import json
 import os.path
+import sys
 from collections.abc import Sequence
 
+from src.cli import common as cli_common
 from src.cli.common import (
     add_session_arg,
     get_api,
     post_internal_api,
     resolve_session_id,
 )
+from src.core import plan_diff
 
 _PLAN_REMINDER = (
     "A read-only verify delegation runs, and its adequacy findings are reported alongside "
@@ -98,6 +102,10 @@ def _add_present(parser: argparse.ArgumentParser) -> None:
 
 def _add_amend(parser: argparse.ArgumentParser) -> None:
   parser.add_argument("--file", required=True, help="Artifact path relative to the session dir")
+  parser.add_argument(
+      "--note",
+      required=True,
+      help="One line saying why this version differs from its predecessor; rides on the version record")
   parser.add_argument("--plan", type=int, default=None, help="Target plan id (required when ambiguous)")
   parser.add_argument(
       "--trigger", choices=["auto_amend", "feedback"], default="feedback", help="Revision trigger (default feedback)")
@@ -113,6 +121,11 @@ def _add_close(parser: argparse.ArgumentParser) -> None:
   parser.add_argument("--as", dest="close_as", required=True, choices=["superseded", "abandoned", "completed"])
 
 
+def _add_diff(parser: argparse.ArgumentParser) -> None:
+  parser.add_argument("--plan", type=int, default=None, help="Target plan id (required when the session holds several)")
+  parser.add_argument("--v", type=int, default=None, help="Version to diff against its predecessor (default: latest)")
+
+
 def _build_parser() -> argparse.ArgumentParser:
   parent = argparse.ArgumentParser(add_help=False)
   add_session_arg(parent)
@@ -122,6 +135,8 @@ def _build_parser() -> argparse.ArgumentParser:
   _add_amend(sub.add_parser("amend", parents=[parent], help="Append the next version to a plan lineage"))
   _add_approve(sub.add_parser("approve", parents=[parent], help="Record a takeoff"))
   _add_close(sub.add_parser("close", parents=[parent], help="Terminate a plan lineage"))
+  _add_diff(
+      sub.add_parser("diff", parents=[parent], help="Print the local diff of one version against its predecessor"))
   sub.add_parser("list", parents=[parent], help="Print the session's plan registry")
   return parser
 
@@ -142,6 +157,7 @@ def _build_payload(verb: str, session_id: str, args: argparse.Namespace) -> dict
         "file": args.file,
         "plan_id": args.plan,
         "trigger": args.trigger,
+        "note": args.note,
         "base_repo": args.base_repo,
         "base_branch": args.base_branch,
         "base_sha": args.base_sha,
@@ -153,6 +169,59 @@ def _build_payload(verb: str, session_id: str, args: argparse.Namespace) -> dict
   raise ValueError(f"unsupported verb: {verb!r}")
 
 
+def _resolve_diff_plan(plans: list[dict], args: argparse.Namespace) -> tuple[dict, dict, dict]:
+  """Return (plan, from_version, to_version) for a diff request; ValueError names the problem.
+
+  ``--plan`` is required when the session holds several plans. ``--v`` names the version to
+  diff against its predecessor and defaults to the latest; version 1 has no predecessor.
+  """
+  if args.plan is not None:
+    plan = next((p for p in plans if p.get("id") == args.plan), None)
+    if plan is None:
+      raise ValueError(f"plan {args.plan} not found in session")
+  else:
+    if not plans:
+      raise ValueError("session has no plans; nothing to diff")
+    if len(plans) > 1:
+      ids = ", ".join(str(p["id"]) for p in plans)
+      raise ValueError(f"diff requires --plan (multiple plans: {ids})")
+    plan = plans[0]
+  versions = plan["versions"]
+  target = args.v if args.v is not None else max(v["v"] for v in versions)
+  to_version = next((v for v in versions if v["v"] == target), None)
+  if to_version is None:
+    raise ValueError(f"plan {plan['id']} has no version {target}")
+  if target < 2:
+    raise ValueError(f"version {target} has no predecessor; diff needs v >= 2")
+  from_version = next((v for v in versions if v["v"] == target - 1), None)
+  if from_version is None:
+    raise ValueError(f"predecessor version {target - 1} not found in plan {plan['id']}")
+  return plan, from_version, to_version
+
+
+def _read_version_file(session_id: str, version: dict) -> str:
+  """Read one version's artifact; registry file paths are relative to the session dir."""
+  path = cli_common.get_config().sessions_dir / session_id / version["file"]
+  if not path.is_file():
+    raise ValueError(f"version file not found: {path}")
+  return path.read_text(encoding="utf-8")
+
+
+def _build_diff(session_id: str, args: argparse.Namespace) -> dict:
+  """One diff object computed locally: registry through the list endpoint, files off disk."""
+  listing = get_api(f"/api/sessions/{session_id}/plans")
+  plan, from_version, to_version = _resolve_diff_plan(listing.get("plans", []), args)
+  old_html = _read_version_file(session_id, from_version)
+  new_html = _read_version_file(session_id, to_version)
+  return {
+      "plan": plan["id"],
+      "from": from_version["v"],
+      "to": to_version["v"],
+      "note": to_version.get("note"),
+      "text": plan_diff.diff_text(old_html, new_html),
+  }
+
+
 def main(argv: Sequence[str] | None = None) -> None:
   parser = _build_parser()
   args = parser.parse_args(argv if argv is not None else None)
@@ -160,6 +229,12 @@ def main(argv: Sequence[str] | None = None) -> None:
 
   if args.verb == "list":
     result = get_api(f"/api/sessions/{session_id}/plans")
+  elif args.verb == "diff":
+    try:
+      result = _build_diff(session_id, args)
+    except ValueError as e:
+      print(json.dumps({"error": str(e)}), file=sys.stderr)
+      sys.exit(1)
   else:
     payload = _build_payload(args.verb, session_id, args)
     result = post_internal_api(

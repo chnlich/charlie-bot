@@ -74,10 +74,35 @@ async def test_plan_amend_endpoint_happy_path(tmp_path: Path) -> None:
             "session_id": meta.id,
             "file": f2,
             "plan_id": 1,
+            "note": "split the executor into its own deployment",
         })
-  assert resp.status_code == 200
-  body = resp.json()
-  assert body == {"plan": 1, "v": 2, "state": "awaiting approval"}
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"plan": 1, "v": 2, "state": "awaiting approval"}
+
+    listing = client.get(f"/api/sessions/{meta.id}/plans")
+  assert listing.status_code == 200
+  versions = listing.json()["plans"][0]["versions"]
+  assert versions[0]["note"] is None
+  assert versions[1]["note"] == "split the executor into its own deployment"
+
+
+@pytest.mark.asyncio
+async def test_plan_amend_requires_note_422(tmp_path: Path) -> None:
+  """note is a required field on the amend request; a request without one is a 422."""
+  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
+  await plan_mgr.present(meta.id, file=f1, title="P1")
+  f2 = _write_artifact(cfg, meta.id, "plan_02.html")
+  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  with TestClient(app) as client:
+    resp = client.post(
+        "/api/internal/plan/amend", json={
+            "session_id": meta.id,
+            "file": f2,
+            "plan_id": 1,
+        })
+  assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -203,6 +228,7 @@ async def test_plan_amend_rejects_closed_400(tmp_path: Path) -> None:
             "session_id": meta.id,
             "file": f2,
             "plan_id": 1,
+            "note": "why changed",
         })
   assert resp.status_code == 400
   assert "is closed" in resp.json()["detail"]
@@ -399,6 +425,7 @@ async def test_plan_amend_rejects_initial_trigger_422(tmp_path: Path) -> None:
             "session_id": meta.id,
             "file": f2,
             "plan_id": 1,
+            "note": "why changed",
             "trigger": "initial",
         })
   assert resp.status_code == 422

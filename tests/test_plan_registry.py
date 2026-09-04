@@ -99,7 +99,7 @@ async def test_amend_absolute_in_session_path_stores_relative_path(tmp_path: Pat
   file_2 = _write_artifact(cfg, meta.id, "plan_02.html")
   file_2_abs = str((cfg.sessions_dir / meta.id / file_2).resolve())
 
-  await plan_mgr.amend(meta.id, file=file_2_abs, plan_id=1)
+  await plan_mgr.amend(meta.id, file=file_2_abs, plan_id=1, note="reworded goal")
 
   data = json.loads((cfg.sessions_dir / meta.id / "plans.json").read_text(encoding="utf-8"))
   assert [ver["file"] for ver in data["plans"][0]["versions"]] == [file_1, file_2]
@@ -130,7 +130,7 @@ async def test_amend_rejects_cross_format_duplicate(tmp_path: Path, first_absolu
 
   await plan_mgr.present(meta.id, file=first_file, title="P1")
   with pytest.raises(ValueError, match=r"already bound to plan 1 v1"):
-    await plan_mgr.amend(meta.id, file=second_file, plan_id=1)
+    await plan_mgr.amend(meta.id, file=second_file, plan_id=1, note="why changed")
 
 
 @pytest.mark.asyncio
@@ -170,12 +170,55 @@ async def test_amend_on_approved_clears_takeoff(tmp_path: Path) -> None:
   await plan_mgr.approve(meta.id)
 
   file_2 = _write_artifact(cfg, meta.id, "plan_02.html")
-  result = await plan_mgr.amend(meta.id, file=file_2, plan_id=1)
+  result = await plan_mgr.amend(meta.id, file=file_2, plan_id=1, note="answered verify findings")
   assert result == {"plan": 1, "v": 2, "state": "awaiting approval"}
 
   listing = await plan_mgr.list_plans(meta.id)
   assert listing["plans"][0]["takeoff"] is None
   assert len(listing["plans"][0]["versions"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Version note: present records null, amend requires a non-empty one
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_present_records_null_note(tmp_path: Path) -> None:
+  """present has no predecessor, so the first version's note is null."""
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
+  await plan_mgr.present(meta.id, file=file_rel, title="P1")
+
+  data = json.loads((cfg.sessions_dir / meta.id / "plans.json").read_text(encoding="utf-8"))
+  assert data["plans"][0]["versions"][0]["note"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("note", [None, "", "   "])
+async def test_amend_requires_non_empty_note(tmp_path: Path, note: str | None) -> None:
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
+  await plan_mgr.present(meta.id, file=f1, title="P1")
+  f2 = _write_artifact(cfg, meta.id, "plan_02.html")
+
+  with pytest.raises(ValueError, match="amend requires a non-empty --note"):
+    await plan_mgr.amend(meta.id, file=f2, plan_id=1, note=note)
+
+
+@pytest.mark.asyncio
+async def test_amend_note_reaches_registry_and_survives_list_readback(tmp_path: Path) -> None:
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
+  await plan_mgr.present(meta.id, file=f1, title="P1")
+  f2 = _write_artifact(cfg, meta.id, "plan_02.html")
+
+  await plan_mgr.amend(meta.id, file=f2, plan_id=1, note="folded the split executor back into one")
+
+  data = json.loads((cfg.sessions_dir / meta.id / "plans.json").read_text(encoding="utf-8"))
+  assert data["plans"][0]["versions"][1]["note"] == "folded the split executor back into one"
+  listing = await plan_mgr.list_plans(meta.id)
+  assert listing["plans"][0]["versions"][1]["note"] == "folded the split executor back into one"
 
 
 @pytest.mark.asyncio
@@ -252,7 +295,7 @@ async def test_amend_rejects_closed(tmp_path: Path) -> None:
   await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
   with pytest.raises(ValueError, match="is closed"):
-    await plan_mgr.amend(meta.id, file=f2, plan_id=1)
+    await plan_mgr.amend(meta.id, file=f2, plan_id=1, note="why changed")
 
 
 @pytest.mark.asyncio
@@ -265,7 +308,7 @@ async def test_amend_ambiguity_requires_plan(tmp_path: Path) -> None:
 
   f3 = _write_artifact(cfg, meta.id, "plan_03.html")
   with pytest.raises(ValueError, match="amend requires --plan"):
-    await plan_mgr.amend(meta.id, file=f3)
+    await plan_mgr.amend(meta.id, file=f3, note="why changed")
 
 
 @pytest.mark.asyncio
@@ -277,7 +320,7 @@ async def test_amend_no_open_lineage_requires_plan(tmp_path: Path) -> None:
 
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
   with pytest.raises(ValueError, match="no open lineage to amend"):
-    await plan_mgr.amend(meta.id, file=f2)
+    await plan_mgr.amend(meta.id, file=f2, note="why changed")
 
 
 @pytest.mark.asyncio
@@ -306,11 +349,12 @@ async def test_plans_json_shape_matches_schema(tmp_path: Path) -> None:
   plan = data["plans"][0]
   assert set(plan.keys()) == {"id", "title", "versions", "takeoff", "closed"}
   ver = plan["versions"][0]
-  assert set(ver.keys()) == {"v", "file", "created_at", "trigger", "base"}
+  assert set(ver.keys()) == {"v", "file", "created_at", "trigger", "base", "note"}
   assert ver["v"] == 1
   assert ver["file"] == "artifacts/plan_01.html"
   assert ver["trigger"] == "initial"
   assert ver["base"] == {"repo": "r", "branch": "b", "sha": "s"}
+  assert ver["note"] is None
   assert plan["takeoff"] is None
   assert plan["closed"] is None
 
@@ -364,7 +408,7 @@ async def test_old_plans_json_with_verify_keys_loads_and_list_omits_them(tmp_pat
   plan = listing["plans"][0]
   assert set(plan.keys()) == {"id", "title", "versions", "takeoff", "closed", "state"}
   ver = plan["versions"][0]
-  assert set(ver.keys()) == {"v", "file", "created_at", "trigger", "base"}
+  assert set(ver.keys()) == {"v", "file", "created_at", "trigger", "base", "note"}
   assert "verify_thread" not in ver
   assert "verify_state" not in ver
   # The legacy verify_state=clean collapses to awaiting approval (no takeoff, no closed).
@@ -384,7 +428,7 @@ async def test_save_drops_legacy_verify_keys(tmp_path: Path) -> None:
   raw = plans_path.read_text(encoding="utf-8")
   data = json.loads(raw)
   ver = data["plans"][0]["versions"][0]
-  assert set(ver.keys()) == {"v", "file", "created_at", "trigger", "base"}
+  assert set(ver.keys()) == {"v", "file", "created_at", "trigger", "base", "note"}
   assert "verify_thread" not in ver
   assert "verify_state" not in ver
   assert data["plans"][0]["takeoff"] is not None
@@ -593,7 +637,7 @@ async def test_amend_rejects_canonical_duplicate_after_dot_slash_present(tmp_pat
   await plan_mgr.present(meta.id, file=dot_slash, title="P1")
 
   with pytest.raises(ValueError, match=r"already bound to plan 1 v1"):
-    await plan_mgr.amend(meta.id, file=file_rel, plan_id=1)
+    await plan_mgr.amend(meta.id, file=file_rel, plan_id=1, note="why changed")
 
 
 # ---------------------------------------------------------------------------
@@ -608,7 +652,7 @@ async def test_amend_rejects_initial_trigger(tmp_path: Path) -> None:
   await plan_mgr.present(meta.id, file=f1, title="P1")
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
   with pytest.raises(ValueError, match=r"trigger must be one of auto_amend\|feedback"):
-    await plan_mgr.amend(meta.id, file=f2, plan_id=1, trigger="initial")
+    await plan_mgr.amend(meta.id, file=f2, plan_id=1, trigger="initial", note="why changed")
 
 
 @pytest.mark.asyncio
@@ -654,7 +698,7 @@ async def test_goal_budget_counts_cjk_double_and_gates_amend(tmp_path: Path) -> 
   await plan_mgr.present(meta.id, file=at_budget, title="P1")
   over = _write_artifact(cfg, meta.id, "plan_02.html", content=_goal_doc("\u4e00" * 121))
   with pytest.raises(ValueError, match=r"242 weighted chars"):
-    await plan_mgr.amend(meta.id, file=over)
+    await plan_mgr.amend(meta.id, file=over, note="goal grew past budget")
 
 
 @pytest.mark.asyncio
@@ -678,7 +722,7 @@ async def test_page_budget_rejects_over_budget_naming_measured_height_and_gates_
   cfg.headless_chrome_bin = _write_stub_chrome(tmp_path, 1601)
   over = _write_artifact(cfg, meta.id, "plan_02.html")
   with pytest.raises(ValueError, match=r"measures 1601 px as it opens: 1 px over the 1600 px budget"):
-    await plan_mgr.amend(meta.id, file=over)
+    await plan_mgr.amend(meta.id, file=over, note="page grew past budget")
 
 
 @pytest.mark.asyncio

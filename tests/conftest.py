@@ -823,13 +823,15 @@ def write_plans(cfg: CharlieBotConfig, session_id: str, data: dict) -> Path:
 
 
 def plan_version_v1(file: str = "artifacts/plan_01.html") -> dict:
-  """One plan-registry version in the current schema: v1, initial trigger, no base, fixed timestamp."""
+  """One plan-registry version in the current schema: v1, initial trigger, no base, no note
+  (present has no predecessor), fixed timestamp."""
   return {
       "v": 1,
       "file": file,
       "created_at": "2026-07-20T00:00:00+00:00",
       "trigger": "initial",
       "base": None,
+      "note": None,
   }
 
 

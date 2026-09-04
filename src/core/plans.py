@@ -93,7 +93,7 @@ def _utc_now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 _PLAN_FIELDS = ("id", "title", "versions", "takeoff", "closed")
-_VERSION_FIELDS = ("v", "file", "created_at", "trigger", "base")
+_VERSION_FIELDS = ("v", "file", "created_at", "trigger", "base", "note")
 
 
 def _project_version(ver: dict) -> dict:
@@ -360,6 +360,7 @@ class PlanRegistryManager:
                   "created_at": _utc_now_iso(),
                   "trigger": "initial",
                   "base": base,
+                  "note": None,
               }],
           "takeoff": None,
           "closed": None,
@@ -376,9 +377,12 @@ class PlanRegistryManager:
       plan_id: int | None = None,
       trigger: str = "feedback",
       base: dict | None = None,
+      note: str | None = None,
   ) -> dict:
     if trigger not in ("auto_amend", "feedback"):
       raise ValueError(f"trigger must be one of auto_amend|feedback, got {trigger!r}")
+    if not isinstance(note, str) or not note.strip():
+      raise ValueError("amend requires a non-empty --note stating why this version differs from its predecessor")
     async with self._lock_for(session_id):
       data = await self._load(session_id)
       file_relative = self._validate_new_version_file(session_id, file, data)
@@ -391,6 +395,7 @@ class PlanRegistryManager:
               "created_at": _utc_now_iso(),
               "trigger": trigger,
               "base": base,
+              "note": note,
           })
       plan["takeoff"] = None
       await self._save(session_id, data)

@@ -83,14 +83,14 @@ def _turned_messages_events(turn_lengths: list[int]) -> list[dict]:
         "content": f"q{turn_i}",
         "timestamp": f"t{turn_i}-u",
     })
-    events.extend(
-        _assistant_event(f"a{turn_i}-{j}", f"a{turn_i}-{j}") for j in range(length - 1))
-    events.append({
-        "id": f"done{turn_i}",
-        "type": ET.MASTER_DONE,
-        "thinking_seconds": 1,
-        "timestamp": f"t{turn_i}-done",
-    })
+    events.extend(_assistant_event(f"a{turn_i}-{j}", f"a{turn_i}-{j}") for j in range(length - 1))
+    events.append(
+        {
+            "id": f"done{turn_i}",
+            "type": ET.MASTER_DONE,
+            "thinking_seconds": 1,
+            "timestamp": f"t{turn_i}-done",
+        })
   return events
 
 
@@ -138,7 +138,6 @@ def _real_session_events() -> list[tuple[str, list[dict]]]:
 
 # Loaded once so every real-session parametrization shares a single read.
 _REAL_SESSION_EVENTS = _real_session_events()
-
 
 # ---------------------------------------------------------------------------
 # 1. Definitional equivalence
@@ -210,8 +209,8 @@ def _assert_turn_aligned_walk(projection: MessageProjection, limit: int, label: 
   while True:
     steps += 1
     assert steps <= max(1, total), f"{label}: walk did not terminate after {total} pages"
-    assert start == 0 or committed[start - 1]["role"] == "separator", (
-        f"{label}: page start {start} is not a turn start")
+    assert start == 0 or committed[start -
+                                   1]["role"] == "separator", (f"{label}: page start {start} is not a turn start")
     assert len(page) >= limit or start == 0, (
         f"{label}: under-filled page ({len(page)} < {limit}) before history exhaustion")
     # Upper bound: the page may over-run the raw boundary only up to the end
@@ -238,8 +237,8 @@ def _assert_turn_aligned_walk(projection: MessageProjection, limit: int, label: 
     assert lo < hi, f"{label}: empty page interval ({lo}, {hi})"
     cursor = hi
   assert cursor == total, f"{label}: walk stopped at {cursor}, history has {total} messages"
-  assert [_identity_tuple(m) for m in collected] == [_identity_tuple(m) for m in committed], (
-      f"{label}: union of pages != full message list")
+  assert [_identity_tuple(m) for m in collected] == [_identity_tuple(m) for m in committed
+                                                    ], (f"{label}: union of pages != full message list")
 
 
 @pytest.mark.parametrize("limit", [1, 7, 40, 100])
@@ -253,8 +252,7 @@ def test_lossless_backwards_walk_returns_full_id_set(limit: int) -> None:
   before = len(committed)
   while before > 0:
     page, next_before, has_more = projection.slice_before(before, limit)
-    assert next_before == 0 or committed[next_before - 1]["role"] == "separator", (
-        "page start must be a turn start")
+    assert next_before == 0 or committed[next_before - 1]["role"] == "separator", ("page start must be a turn start")
     assert len(page) >= limit or next_before == 0, (
         "page must hold at least `limit` messages unless history is exhausted")
     assert next_before < before, "next_before must be strictly < before for a non-empty page"
@@ -341,20 +339,40 @@ def test_tail_snaps_mid_turn_boundary_to_the_turn_start() -> None:
   turn's user message, not at the interior."""
   events = _turned_messages_events([2, 2, 2])  # 3 earlier turns, 3 messages each
   defect_turn = [
-      {"id": "ask", "type": ET.USER, "content": "take off using kimi", "timestamp": "t-u"},
+      {
+          "id": "ask",
+          "type": ET.USER,
+          "content": "take off using kimi",
+          "timestamp": "t-u"
+      },
       _assistant_event("plan approved, step 1 starts", "a-plan"),
       _assistant_event("kimi resolves to opencode-kimi-k3", "a-kimi"),
-      {"id": "td", "type": ET.TASK_DELEGATED, "thread_id": "th1", "description": "d", "timestamp": "t-td"},
-      {"id": "ws", "type": ET.WORKER_SUMMARY, "content": "merged", "timestamp": "t-ws"},
+      {
+          "id": "td",
+          "type": ET.TASK_DELEGATED,
+          "thread_id": "th1",
+          "description": "d",
+          "timestamp": "t-td"
+      },
+      {
+          "id": "ws",
+          "type": ET.WORKER_SUMMARY,
+          "content": "merged",
+          "timestamp": "t-ws"
+      },
       _assistant_event("Take off recorded, plan approved", "a-done"),
-      {"id": "sep", "type": ET.MASTER_DONE, "thinking_seconds": 96, "timestamp": "t-sep"},
+      {
+          "id": "sep",
+          "type": ET.MASTER_DONE,
+          "thinking_seconds": 96,
+          "timestamp": "t-sep"
+      },
   ]
   events += defect_turn
   projection = MessageProjection(events)
   committed = projection.committed
-  assert [m["role"] for m in committed[-7:]] == [
-      "user", "assistant", "assistant", "task_delegated", "worker_summary", "assistant", "separator"
-  ]
+  assert [m["role"] for m in committed[-7:]
+         ] == ["user", "assistant", "assistant", "task_delegated", "worker_summary", "assistant", "separator"]
 
   defect_turn_start = len(committed) - 7
   interior = committed.index(next(m for m in committed if m["id"] == "td"))
@@ -378,21 +396,74 @@ def test_tail_snaps_mid_turn_boundary_to_the_turn_start() -> None:
 # broadly. A new event type cannot regress the invariant, because validity is
 # derived from the consumed event count rather than from a per-type hook.
 _COMMITTING_EVENT_SEQUENCE: list[dict] = [
-    {"type": ET.USER, "content": "q1", "timestamp": "t1"},
+    {
+        "type": ET.USER,
+        "content": "q1",
+        "timestamp": "t1"
+    },
     _assistant_event("first block", "a1"),
     _assistant_event("second block", "a2"),
-    {"type": ET.TOOL_USE, "name": "Read", "input": {}, "timestamp": "t2"},
-    {"type": ET.TOOL_RESULT, "content": "out", "timestamp": "t3"},
-    {"type": ET.TASK_DELEGATED, "thread_id": "th1", "description": "d", "timestamp": "t4"},
-    {"type": ET.WORKER_SUMMARY, "content": "merged", "timestamp": "t5"},
-    {"type": ET.HANDLER_RESULT, "task": "x", "message": "y", "status": "ok", "timestamp": "t6"},
-    {"type": ET.CONTEXT_COMPACTED, "trigger": "auto", "pre_tokens": 1000, "timestamp": "t7"},
-    {"type": ET.USER, "content": "q2 queued", "timestamp": "t8"},
-    {"type": ET.MASTER_DONE, "still_thinking": True, "timestamp": "t9"},
+    {
+        "type": ET.TOOL_USE,
+        "name": "Read",
+        "input": {},
+        "timestamp": "t2"
+    },
+    {
+        "type": ET.TOOL_RESULT,
+        "content": "out",
+        "timestamp": "t3"
+    },
+    {
+        "type": ET.TASK_DELEGATED,
+        "thread_id": "th1",
+        "description": "d",
+        "timestamp": "t4"
+    },
+    {
+        "type": ET.WORKER_SUMMARY,
+        "content": "merged",
+        "timestamp": "t5"
+    },
+    {
+        "type": ET.HANDLER_RESULT,
+        "task": "x",
+        "message": "y",
+        "status": "ok",
+        "timestamp": "t6"
+    },
+    {
+        "type": ET.CONTEXT_COMPACTED,
+        "trigger": "auto",
+        "pre_tokens": 1000,
+        "timestamp": "t7"
+    },
+    {
+        "type": ET.USER,
+        "content": "q2 queued",
+        "timestamp": "t8"
+    },
+    {
+        "type": ET.MASTER_DONE,
+        "still_thinking": True,
+        "timestamp": "t9"
+    },
     _assistant_event("second run", "a3"),
-    {"type": ET.ERROR, "content": "boom", "timestamp": "t10"},
-    {"type": ET.MASTER_DONE, "thinking_seconds": 3, "timestamp": "t11"},
-    {"type": ET.USER, "content": "q3 after the run", "timestamp": "t12"},
+    {
+        "type": ET.ERROR,
+        "content": "boom",
+        "timestamp": "t10"
+    },
+    {
+        "type": ET.MASTER_DONE,
+        "thinking_seconds": 3,
+        "timestamp": "t11"
+    },
+    {
+        "type": ET.USER,
+        "content": "q3 after the run",
+        "timestamp": "t12"
+    },
 ]
 
 
@@ -413,8 +484,9 @@ async def test_projection_equals_reference_after_every_append(tmp_path: Path) ->
     assert projection is not None
     all_events = mgr.load_chat_events_sync(session.id)
     reference = events_to_messages(all_events)
-    assert [_identity_tuple(m) for m in projection.history] == [_identity_tuple(m) for m in reference], (
-        f"projection diverged from the reference after event {i} ({event['type']})")
+    assert [_identity_tuple(m) for m in projection.history
+           ] == [_identity_tuple(m) for m in reference
+                ], (f"projection diverged from the reference after event {i} ({event['type']})")
     assert projection.event_count == len(all_events)
 
 
@@ -438,8 +510,9 @@ async def test_projection_equals_reference_after_every_append_with_open_run(tmp_
     assert projection is not None
     all_events = mgr.load_chat_events_sync(session.id)
     reference = events_to_messages(all_events)
-    assert [_identity_tuple(m) for m in projection.history] == [_identity_tuple(m) for m in reference], (
-        f"projection diverged from the reference after event {i} ({event.get('type', 'run-marker')})")
+    assert [_identity_tuple(m) for m in projection.history
+           ] == [_identity_tuple(m) for m in reference
+                ], (f"projection diverged from the reference after event {i} ({event.get('type', 'run-marker')})")
     assert projection.event_count == len(all_events)
 
 
@@ -762,8 +835,7 @@ async def test_worker_summary_delivered_to_successor_projects_origin_and_thread(
   child = await mgr.elone_session(parent.id, event_index=0)
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
-    delivered = await mgr.deliver_to_successor(
-        parent.id, _worker_summary_event(thread_id="th-e2e"))
+    delivered = await mgr.deliver_to_successor(parent.id, _worker_summary_event(thread_id="th-e2e"))
 
   assert delivered == child.id
 

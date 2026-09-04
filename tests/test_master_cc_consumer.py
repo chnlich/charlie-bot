@@ -13,6 +13,7 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    drain_session_consumer,
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
@@ -247,9 +248,7 @@ async def test_busy_cleared_when_run_cc_raises(tmp_path: Path, monkeypatch: pyte
         master_cc.run_message(cfg, SessionMetadata(id=session_id, name="t"), "hi", callbacks, skip_user_event=True))
     with pytest.raises(RuntimeError, match="boom"):
       await asyncio.wait_for(run_task, timeout=5)
-    consumer = master_cc_state._session_consumers.get(session_id)
-    if consumer is not None:
-      await asyncio.wait_for(consumer, timeout=5)
+    await drain_session_consumer(session_id, timeout=5)
     assert thinking_state.busy_since(session_id) is None
   finally:
     _reset_master_state(session_id)
@@ -461,9 +460,7 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
   try:
     result = await master_cc.run_message(cfg, session, "hi", session_mgr.callbacks(), skip_user_event=True)
     assert result == backend_returned_id
-    consumer = master_cc_state._session_consumers.get(session.id)
-    if consumer and not consumer.done():
-      await asyncio.wait_for(consumer, timeout=5)
+    await drain_session_consumer(session.id, timeout=5)
   finally:
     _reset_master_state(session.id)
 
@@ -579,9 +576,7 @@ async def test_resume_reattach_uses_persisted_interval_start(tmp_path: Path, mon
         "the sidebar-indicator start must equal the persisted record start")
 
     release.set()
-    consumer = master_cc_state._session_consumers.get(session_id)
-    if consumer is not None:
-      await asyncio.wait_for(consumer, timeout=5)
+    await drain_session_consumer(session_id, timeout=5)
     await asyncio.wait_for(future, timeout=5)
   finally:
     _reset_master_state(session_id)
@@ -640,9 +635,7 @@ async def _run_stream_consumer(
   _reset_master_state(session_id)
   try:
     await master_cc.run_message(cfg, meta, "hi", cb, skip_user_event=True)
-    consumer = master_cc_state._session_consumers.get(session_id)
-    if consumer is not None:
-      await asyncio.wait_for(consumer, timeout=5)
+    await drain_session_consumer(session_id, timeout=5)
   finally:
     _reset_master_state(session_id)
   return cb
@@ -718,9 +711,7 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
   try:
     future = await master_cc.enqueue_master_resume(cfg, meta, record, cb, is_alive=lambda: True)
     await asyncio.wait_for(future, timeout=5)
-    consumer = master_cc_state._session_consumers.get(session_id)
-    if consumer is not None:
-      await asyncio.wait_for(consumer, timeout=5)
+    await drain_session_consumer(session_id, timeout=5)
   finally:
     _reset_master_state(session_id)
 
@@ -842,9 +833,7 @@ async def test_zero_output_guard_resume_exempts_manual_compact(tmp_path: Path, m
   try:
     future = await master_cc.enqueue_master_resume(cfg, meta, record, cb, is_alive=lambda: False)
     await asyncio.wait_for(future, timeout=5)
-    consumer = master_cc_state._session_consumers.get(session_id)
-    if consumer is not None:
-      await asyncio.wait_for(consumer, timeout=5)
+    await drain_session_consumer(session_id, timeout=5)
   finally:
     _reset_master_state(session_id)
 

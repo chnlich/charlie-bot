@@ -22,6 +22,7 @@ from conftest import (
   SCHEDULER_GET_CONFIG_PATCH_TARGET,
   SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
   SCHEDULER_TRIGGER_MASTER_PATCH_TARGET,
+  _noop,
   build_scheduler_cfg,
   close_create_logged_task,
   make_cron_client,
@@ -61,10 +62,6 @@ def _master_task(**overrides: Any) -> ScheduledTaskConfig:
   }
   kwargs.update(overrides)
   return ScheduledTaskConfig(**kwargs)
-
-
-async def _noop() -> None:
-  return None
 
 
 # ---------------------------------------------------------------------------

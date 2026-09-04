@@ -652,7 +652,10 @@ def _advance_opencode_rows(db: Path) -> _OpencodeScan:
 
 
 def _merge_opencode(
-    t: _Tally, db: Path, cache: TallyCache | None, scan: _OpencodeScan | None,
+    t: _Tally,
+    db: Path,
+    cache: TallyCache | None,
+    scan: _OpencodeScan | None,
 ) -> tuple[list | None, int, bool]:
   """Tally the opencode db into the accumulator. Scans unless ``scan`` already advanced the
   row memo this collect, or the cache document's entry still matches the file. Returns

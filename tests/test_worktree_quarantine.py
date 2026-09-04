@@ -9,6 +9,7 @@ import pytest
 from conftest import (
     OPUS_BACKEND_ID,
     SPAWNER_RESUME_WORKER_PATCH_TARGET,
+    build_worktree_cfg,
     spy_on_load_json_meta,
 )
 from test_restart_recovery_e2e import _await_recovery_tasks
@@ -19,13 +20,6 @@ from src.core import init_worker_recovery as worker_recovery_module
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, utc_now
 from src.core.sessions import SessionManager
-
-
-def _cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "home",
-      worktree_dir=str(tmp_path / "worktrees"),
-  )
 
 
 async def _make_session(cfg: CharlieBotConfig, session_id: str) -> None:
@@ -232,7 +226,7 @@ def _install_recording_quarantine(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 @pytest.mark.asyncio
 async def test_sweep_quarantines_old_failed_worktree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   parent = Path(cfg.worktree_dir)
   wt = _make_worktree(parent, "charliebot-task-old")
   quarantined = _install_recording_quarantine(monkeypatch)
@@ -247,7 +241,7 @@ async def test_sweep_quarantines_old_failed_worktree(tmp_path: Path, monkeypatch
 
 @pytest.mark.asyncio
 async def test_sweep_age_threshold_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   parent = Path(cfg.worktree_dir)
   recent = _make_worktree(parent, "charliebot-task-recent")
   old = _make_worktree(parent, "charliebot-task-aged")
@@ -278,7 +272,7 @@ async def test_sweep_age_threshold_boundary(tmp_path: Path, monkeypatch: pytest.
 
 @pytest.mark.asyncio
 async def test_sweep_skips_keep_worktree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   wt = _make_worktree(Path(cfg.worktree_dir), "charliebot-task-pinned")
   quarantined = _install_recording_quarantine(monkeypatch)
 
@@ -292,7 +286,7 @@ async def test_sweep_skips_keep_worktree(tmp_path: Path, monkeypatch: pytest.Mon
 @pytest.mark.asyncio
 async def test_sweep_skips_missing_and_unparseable_completed_at(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   parent = Path(cfg.worktree_dir)
   no_ts = _make_worktree(parent, "charliebot-task-nots")
   bad_ts = _make_worktree(parent, "charliebot-task-badts")
@@ -324,7 +318,7 @@ async def test_sweep_skips_missing_and_unparseable_completed_at(
 @pytest.mark.asyncio
 async def test_sweep_survives_non_string_completed_at_and_continues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   parent = Path(cfg.worktree_dir)
   malformed = _make_worktree(parent, "charliebot-task-number-ts")
   old = _make_worktree(parent, "charliebot-task-valid")
@@ -353,7 +347,7 @@ async def test_sweep_survives_non_string_completed_at_and_continues(
 @pytest.mark.asyncio
 async def test_sweep_skips_when_running_thread_references_worktree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   wt = _make_worktree(Path(cfg.worktree_dir), "charliebot-task-shared")
   quarantined = _install_recording_quarantine(monkeypatch)
 
@@ -371,7 +365,7 @@ async def test_sweep_skips_when_running_thread_references_worktree(
 
 @pytest.mark.asyncio
 async def test_sweep_dedups_shared_worktree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   wt = _make_worktree(Path(cfg.worktree_dir), "charliebot-task-chain")
   quarantined = _install_recording_quarantine(monkeypatch)
 
@@ -389,7 +383,7 @@ async def test_sweep_dedups_shared_worktree(tmp_path: Path, monkeypatch: pytest.
 
 @pytest.mark.asyncio
 async def test_sweep_is_idempotent_on_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   wt = _make_worktree(Path(cfg.worktree_dir), "charliebot-task-once")
   quarantined = _install_recording_quarantine(monkeypatch)
   threads = [_thread(thread_id="t1", status="failed", worktree_path=wt, age_days=20.0)]
@@ -403,7 +397,7 @@ async def test_sweep_is_idempotent_on_rerun(tmp_path: Path, monkeypatch: pytest.
 
 @pytest.mark.asyncio
 async def test_sweep_never_raises_when_helper_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   wt = _make_worktree(Path(cfg.worktree_dir), "charliebot-task-boom")
 
   async def boom(*args: Any, **kwargs: Any) -> Path:
@@ -494,7 +488,7 @@ async def test_run_crash_recovery_recovers_and_sweeps(tmp_path: Path, monkeypatc
   """A never-started pre-boot thread drain-finalizes to failed; the aged failed worktree is swept."""
   import json
 
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   parent = Path(cfg.worktree_dir)
   old_wt = _make_worktree(parent, "charliebot-task-aged")
   running_wt = _make_worktree(parent, "charliebot-task-live")
@@ -536,7 +530,7 @@ def test_scan_skips_post_boot_running_thread(tmp_path: Path) -> None:
   """A worker spawned during the recovery window (started_at > boot_time) is not interrupted."""
   import json
 
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   boot_time = utc_now()
   meta_path = _write_thread_meta(
       cfg, "s1", {
@@ -557,7 +551,7 @@ def test_scan_skips_post_boot_running_thread(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_scan_skips_archived_session_threads(tmp_path: Path) -> None:
   """An archived session's pre-boot thread is not reconciled, yet still feeds the quarantine list."""
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   await _make_session(cfg, "live")
   await _make_session(cfg, "done")
   started_at = utc_now().isoformat()
@@ -583,7 +577,7 @@ async def test_reconcile_pre_boot_run_without_raw_log_kept_alive_when_death_unve
 
   from src.core import runs
 
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   killed: list[int] = []
   monkeypatch.setattr(worker_recovery_module, "kill_process_group", lambda pid, sig: killed.append(pid))
   boot_time = utc_now()
@@ -623,7 +617,7 @@ async def test_reconcile_pre_boot_run_without_raw_log_and_verifiable_death_drain
   """
   import json
 
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   killed: list[int] = []
   monkeypatch.setattr(worker_recovery_module, "kill_process_group", lambda pid, sig: killed.append(pid))
   boot_time = utc_now()
@@ -660,7 +654,7 @@ async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
 
   from src.core import runs
 
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   boot_time = utc_now() + timedelta(hours=1)  # forces the fresh thread to be treated pre-boot
 
   await _make_session(cfg, "s1")
@@ -731,7 +725,7 @@ async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
 
 def test_scan_missing_started_at_falls_back_to_ctime(tmp_path: Path) -> None:
   """Without started_at, the thread dir ctime decides; an old dir (pre-boot) is interrupted."""
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   # Thread dir created now; boot_time in the future => dir ctime < boot_time => interrupted.
   _write_thread_meta(cfg, "s1", {"id": "no-start", "status": "running", "pid": None})
 
@@ -761,7 +755,7 @@ def test_scan_skips_out_of_window_thread(tmp_path: Path, monkeypatch: pytest.Mon
   longer than RUNNING_SCAN_WINDOW is neither read nor reconciled, while a
   recent pre-boot thread beside it still is.
   """
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   read_paths = spy_on_load_json_meta(monkeypatch)
 
   boot_time = utc_now()
@@ -802,7 +796,7 @@ async def test_recover_window_covers_quarantine_band_and_skips_older(
     - 40 days: outside window -> never read -> worktree kept (accepted negligible
       edge, only reachable if the server stayed up longer than the window).
   """
-  cfg = _cfg(tmp_path)
+  cfg = build_worktree_cfg(tmp_path)
   parent = Path(cfg.worktree_dir)
   band_wt = _make_worktree(parent, "charliebot-task-band")
   recent_wt = _make_worktree(parent, "charliebot-task-recent")

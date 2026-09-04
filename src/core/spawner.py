@@ -22,15 +22,12 @@ from src.core.spawner_finalize import (  # noqa: F401  # re-export: facade impor
     _cleanup_worker_directory,
     _finalize_worker,
     _maybe_override_exit_code_from_result,
-    _notify_completion,
-    _run_finalize_effects,
     _should_skip_worktree_cleanup,
     _stream_worker_events,
     _WorkerRunOutcome,
     recomplete_finalize_effects,
 )
 from src.core.spawner_launch import (  # noqa: F401  # re-export: facade import list (see module docstring)
-    _construct_worker,
     _create_repoless_process,
     _create_worktree_and_process,
 )

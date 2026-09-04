@@ -498,6 +498,31 @@ def test_list_tasks_never_500_with_broken(temp_home: Path, inject, expected_name
   assert Path(broken["path"]).is_absolute()
 
 
+def test_list_tasks_omits_resolved_prompt(temp_home: Path) -> None:
+  """GET /tasks rows omit prompt: the list payload served whole resolved bodies
+  (~90 KB on the seed host) that no consumer reads; the UI edits prompt_file."""
+  _write_healthy(temp_home, "task-a", "0 0 * * *", "a resolved body")
+  repo = temp_home / "repo"
+  step_pf = repo / "step-one.md"
+  step_pf.write_text("resolved step body", encoding="utf-8")
+  _write_task_text(temp_home, "task-chain", _dump({
+      "cron": "0 3 * * *",
+      "steps": [{"name": "one", "prompt_file": str(step_pf)}],
+  }))
+  cfg = get_config()
+
+  with _client(cfg) as client:
+    response = client.get("/api/cron/tasks")
+    assert response.status_code == 200
+    data = response.json()
+  row = next(d for d in data if d["name"] == "task-a")
+  assert "prompt" not in row
+  assert "prompt_file" in row
+  chain = next(d for d in data if d["name"] == "task-chain")
+  assert "prompt" not in chain["steps"][0]
+  assert "prompt_file" in chain["steps"][0]
+
+
 # --- API: create persists the pointer, and the file reloads (round-trip) -----
 
 

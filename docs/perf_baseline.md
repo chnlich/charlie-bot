@@ -62,6 +62,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M49 opencode part-unhandled debug stream, steady state | M49 collector below | debug lines per 60 steady-state `_translate_part` calls of one unhandled part type | 0 lines after the first sighting per part type per process | — (introduced with its first history row) |
 | M50 ext-usage credentials read warning stream, steady state | M50 collector below | warnings per 60 steady-state `_read_credentials` calls of a tokenless file | 0 warnings after the first sighting per (event, path) per broken streak | — (introduced with its first history row) |
 | M51 sidebar dirty-session deep probe, post-write | M51 collector below | seconds per post-write deep probe of the worst on-disk threads corpus (scratch copy, one atomic metadata rewrite per round) | median < 0.010 s | — (introduced with its first history row) |
+| M52 chat-event append, per event | M52 collector below | seconds per `save_chat_event` append of one probe event, worst on-disk live-events corpus, scratch home | median < 0.0003 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2753,6 +2754,76 @@ shutil.rmtree(home)
 EOF
 ```
 
+M52 — chat-event append, per event. Every streamed turn appends one chat event per
+delta through `save_chat_event` (`persist_and_broadcast` awaits it before each
+broadcast), and every worker event lands through the same `append_ndjson` funnel;
+the append is O(1) disk work but its per-call overhead rides the delta path. The
+cost is write-side thread-pool time invisible to the read-side standing rows, so
+the collector copies the session whose live chat file carries the most events into
+a scratch `CHARLIEBOT_HOME` under /tmp (metadata.json and data/ only; live home
+read once for the copy, never written), warms the events cache as a live streamed
+turn does, and times 50 `save_chat_event` appends of one probe event, asserting
+the appended lines parse back from disk in order. Evidence while the live server
+runs older code points the same collector at the branch checkout (`CHECKOUT` at
+the worktree root), the same shape as the M26 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, json, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+# Worst append corpus: the session whose LIVE chat file carries the most
+# events; a streamed turn appends one event per delta to exactly this file.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        with open(p, errors="replace") as f:
+            n = sum(1 for _ in f)
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
+# session's metadata.json and data/; live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m52-append-home-", dir="/tmp"))
+dst = home / "sessions" / SID
+dst.mkdir(parents=True)
+shutil.copy2(best / "metadata.json", dst / "metadata.json")
+shutil.copytree(best / "data", dst / "data")
+
+cfg = CharlieBotConfig(charliebot_home=home)
+mgr = SessionManager(cfg)
+mgr.load_chat_events_sync(SID)  # warm the events cache, as a live streamed turn does
+
+probe_base = {"type": "assistant", "message": {"content": [{"type": "text", "text": "m52 probe chunk " + "y" * 400}]}}
+
+async def main():
+    times = []
+    for i in range(50):
+        ev = {**probe_base, "id": f"m52-probe-{i}", "timestamp": f"2026-09-04T19:01:{i:02d}Z"}
+        t0 = time.perf_counter()
+        await mgr.save_chat_event(SID, ev)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    cached = mgr.load_chat_events_sync(SID)
+    with open(home / "sessions" / SID / "data" / "chat_events.jsonl", "rb") as f:
+        lines = f.read().split(b"\n")[:-1]
+    on_disk = [json.loads(line) for line in lines[best_n:]]
+    ids = [e["id"] for e in on_disk]
+    parity = ids == [f"m52-probe-{i}" for i in range(50)] and len(cached) == best_n + 50
+    print(f"{best_n}-event corpus; save_chat_event append median {times[24] * 1e6:.0f} us, "
+          f"max {times[-1] * 1e6:.0f} us over 50; parity {parity}")
+    shutil.rmtree(home)
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2820,3 +2891,4 @@ EOF
 | 2026-09-04 | this PR | M50 60 → 0 ext_usage_no_access_token warnings per 60 steady-state credential reads of a tokenless file (collector verbatim, main checkout before at load 0.97/0.75/0.66 vs branch after at load 0.29/0.59/0.62, back-to-back; live-log corroboration 135 lines in the 13.89 h server log ≈ 10/h, every line ext_usage_no_access_token naming the same path; every read still returns None and a token-bearing read re-arms the path) | both `_read_credentials` failure-site warnings (ext_usage_credentials_not_found, ext_usage_no_access_token) routed through a recovery-aware warn-once registry — one line per (event, path) per broken streak, a read returning a token re-arms the path; M50 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M51 post-write deep probe median 25.82/25.62 ms → 6.12/6.30 ms, max 26.22/25.98 ms → 6.33/8.04 ms (collector verbatim, 339-file worst threads corpus, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×2 at load 1.16-1.70/1.18-1.32/0.95-1.04; probe verdicts identical — unchanged-sig sweep re-measured 0.0021 s vs 0.0022 s standing M21, no regression) | the sidebar deep probe's thread-metadata scan (`iter_recent_thread_metas`, shared with the boot recovery scan) memoizes each in-window metadata file's parsed dict on (path, mtime_ns, size) — every writer publishes through the atomic tmp-file rename so a content change always moves mtime_ns, the signature is taken before the read so a mid-rewrite entry keys the older signature, only successful parses memoize, and yielded dicts are shared read-only; a post-write probe re-parses the moved file alone instead of all 339; M51 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M36 unchanged-poll body 168209 B → 0 B (conditional ?etag= repeat answers 204; collector with the conditional round, 2551 KB / 339-row worst worker-list corpus, live state read-only, main checkout before vs branch head after back-to-back ×2 at load 0.85/1.13/0.89 and 1.42/2.84/2.64; full-poll first-paint path unchanged — medians 4.27/4.66/6.09 ms → 4.25/5.06/4.57 ms with the byte-identical 168209 B body; live read-only check confirms the running instance still serves 200 full) | the list body carries a strong content-addressed ETag (sha1 of the body bytes) plus Cache-Control: no-store; the poll repeats the ETag it rendered via ?etag= and the whole-body memo's unchanged signature serves a bodyless 204 — the client keeps its rendered rows and skips the 339-row JSON.parse while nothing behind the list moved (a query param, not If-None-Match, because the browser's HTTP cache fulfils a revalidation itself and fetch never surfaces the 304); conditional sub-metric added to the M36 definition and collector in this PR |
+| 2026-09-04 | this PR | M52 save_chat_event append median 346/382 µs → 176/184 µs, maxima 2353/2477 µs → 1977/1963 µs (collector verbatim, 20534-event worst live corpus, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×2 at load 1.25/1.79/2.09; appended lines parse back in order both arms; isolated-component check: raw open+write+close inline 19 µs, one executor round-trip ~104 µs under the same load) | chat-event appends left aiofiles' open+write+close — three executor round-trips, ~355 µs — on the streamed-turn delta path (one append per stream delta, each gating its broadcast; a 500-delta turn paid ~180 ms of append overhead); one to_thread hop around a raw open(O_APPEND)+write+close keeps the off-loop write rule at one round-trip, O_APPEND re-resolves the path per call so an atomic archive rewrite or recreate never lands behind a stale handle, and the write loop keeps the io stack's write-all contract; the same funnel serves the worker events-log appends (src/agents/worker.py); M52 definition and healthy range introduced with this PR |

@@ -31,6 +31,7 @@ from src.api.deps import get_session_manager  # noqa: E402
 from src.api.sessions import router as sessions_router  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
 from src.core import improve_command  # noqa: E402
+from src.core import thinking_state  # noqa: E402
 from src.core import init_worker_recovery as worker_recovery_module  # noqa: E402
 from src.core import models  # noqa: E402
 from src.core import review  # noqa: E402
@@ -109,6 +110,15 @@ async def run_session_consumer(
   finally:
     master_cc_state._session_queues.pop(session_id, None)
     master_cc_state._session_consumers.pop(session_id, None)
+
+
+def reset_master_state(session_id: str) -> None:
+  """Reset a session's master-cc state: drop the queue and consumer registry entries and clear
+  the thinking-busy mark. Suites that run _session_consumer by hand call this between runs so
+  leftover state from one run cannot leak into the next."""
+  master_cc_state._session_queues.pop(session_id, None)
+  master_cc_state._session_consumers.pop(session_id, None)
+  thinking_state.clear_busy(session_id)
 
 
 def append_events(path: Path, events: list[dict]) -> None:

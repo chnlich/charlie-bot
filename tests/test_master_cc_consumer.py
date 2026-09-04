@@ -18,6 +18,7 @@ from conftest import (
   patch_instructions_content,
   run_session_consumer,
 )
+from conftest import reset_master_state as _reset_master_state
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -83,12 +84,6 @@ def _make_consumer_cfg(tmp_path: Path) -> CharlieBotConfig:
       charliebot_home=tmp_path / "charliebot-home",
       backend_options=[BackendOption(id="fake", label="Fake", type="codex")],
   )
-
-
-def _reset_master_state(session_id: str) -> None:
-  master_cc_state._session_queues.pop(session_id, None)
-  master_cc_state._session_consumers.pop(session_id, None)
-  thinking_state.clear_busy(session_id)
 
 
 @pytest.mark.asyncio

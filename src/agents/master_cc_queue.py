@@ -244,9 +244,18 @@ async def run_message(
       has_completed_round).
     skip_user_event: If True, skip persisting/broadcasting the user event
       (used when the master is triggered by a worker completion, not a real user message).
+    auto_trigger: If True, the turn is a machine wake, not user input;
+      carried on the sidebar RUNNING_CHANGED broadcast payload.
+    backend_option: Backend this turn spawns; None defers to the consumer,
+      which re-resolves from ``session_meta.backend``.
+    extra_claude_flags: Extra CLI flags appended to the spawned claude
+      process (prompt-scope slash dispatches).
     display_content: User-visible content persisted to the chat log. Defaults
       to ``user_content`` when omitted.
     uploaded_files: Structured uploaded-file metadata persisted on the user event.
+    is_voice: If True, the message came from voice input: persisted on the
+      user event as ``is_voice``, and the spawned prompt opens with the
+      voice-recognition disclaimer.
     expect_fresh_session: True only on the scheduled-session weekly-recycle
       path that deliberately clears the anchor; suppresses the
       resume-anchor-missing pre-flight alarm.

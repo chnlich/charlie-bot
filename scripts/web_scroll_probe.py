@@ -125,8 +125,7 @@ GESTURE_SPEED = 3000
 READY_EXPR = (
     "(() => { const l = document.getElementById('session-list');"
     " return JSON.stringify({list: !!l, rows: l ? l.querySelectorAll('a[id^=session-]').length : 0,"
-    " readyState: document.readyState}); })()"
-)
+    " readyState: document.readyState}); })()")
 
 
 def fail(message: str) -> NoReturn:
@@ -190,7 +189,8 @@ async def evaluate_json(cdp: CDP, sid: str, expression: str) -> object:
 
 async def rect(cdp: CDP, sid: str, selector: str) -> dict | None:
   """Bounding box plus scroll metrics for the first element matching selector."""
-  value = await evaluate_json(cdp, sid, f"""(() => {{
+  value = await evaluate_json(
+      cdp, sid, f"""(() => {{
       const el = document.querySelector({json.dumps(selector)}); if (!el) return null;
       const b = el.getBoundingClientRect();
       return {{x: b.x, y: b.y, w: b.width, h: b.height, sh: el.scrollHeight, ch: el.clientHeight, st: el.scrollTop}};
@@ -200,8 +200,7 @@ async def rect(cdp: CDP, sid: str, selector: str) -> dict | None:
 
 async def mark(cdp: CDP, sid: str, leg: str, edge: str) -> None:
   """Drop a performance.mark leg marker; blink.user_timing carries it into the trace."""
-  await cdp.send("Runtime.evaluate", sid, expression=f"performance.mark('leg:{leg}:{edge}')",
-                 returnByValue=True)
+  await cdp.send("Runtime.evaluate", sid, expression=f"performance.mark('leg:{leg}:{edge}')", returnByValue=True)
 
 
 async def scroll_leg(cdp: CDP, sid: str, name: str, selector: str, x: float, y: float) -> dict:
@@ -211,8 +210,16 @@ async def scroll_leg(cdp: CDP, sid: str, name: str, selector: str, x: float, y: 
   await asyncio.sleep(HOVER_SETTLE_S)
   path = [(await rect(cdp, sid, selector))["st"]]
   for dist in GESTURE_BURSTS:
-    await cdp.send("Input.synthesizeScrollGesture", sid, x=x, y=y, xDistance=0, yDistance=dist,
-                   repeatCount=0, speed=GESTURE_SPEED, gestureSourceType="mouse")
+    await cdp.send(
+        "Input.synthesizeScrollGesture",
+        sid,
+        x=x,
+        y=y,
+        xDistance=0,
+        yDistance=dist,
+        repeatCount=0,
+        speed=GESTURE_SPEED,
+        gestureSourceType="mouse")
     await asyncio.sleep(BURST_SETTLE_S)
     path.append((await rect(cdp, sid, selector))["st"])
   # A small second hover shift so a different row sits under the pointer.
@@ -275,8 +282,9 @@ def trace_leg_metrics(trace: list[dict]) -> dict[str, dict]:
     fail("trace contains no 'leg:<name>:<start|end>' user_timing marks; not a web_scroll_probe trace")
   main_pid, main_tid = _renderer_main_thread(trace)
   main_events = [e for e in trace if e.get("pid") == main_pid and e.get("tid") == main_tid]
-  reporters = [e for e in trace if e.get("name") == "PipelineReporter" and e.get("ph") == "b"
-               and e.get("pid") == main_pid]
+  reporters = [
+      e for e in trace if e.get("name") == "PipelineReporter" and e.get("ph") == "b" and e.get("pid") == main_pid
+  ]
   metrics: dict[str, dict] = {}
   for leg, m in marks.items():
     if "start" not in m or "end" not in m:
@@ -290,22 +298,30 @@ def trace_leg_metrics(trace: list[dict]) -> dict[str, dict]:
     states = Counter(e["args"]["frame_reporter"]["state"] for e in pr)
     scroll_states = Counter(e["args"]["frame_reporter"]["scroll_state"] for e in pr)
     metrics[leg] = {
-        "span_ms": round((b - a) / 1000, 1),
-        "frames": frames,
-        "scroll_state": dict(scroll_states),
-        "dropped_frames": states.get("STATE_DROPPED", 0),
-        "dropped_affecting_smoothness": sum(
-            1 for e in pr
-            if e["args"]["frame_reporter"]["state"] == "STATE_DROPPED"
-            and e["args"]["frame_reporter"]["affects_smoothness"]),
-        "main_busy_ms": round(busy_ms, 1),
-        "main_ms_per_frame": round(busy_ms / max(frames, 1), 2),
-        "paint_count": sum(1 for e in in_window if e.get("name") == "Paint" and e.get("dur")),
-        "style_recalc_count": sum(1 for e in in_window if e.get("name") == "UpdateLayoutTree" and e.get("dur")),
-        "animation_recalc_count": sum(
-            1 for e in in_window
-            if e.get("name") == "StyleRecalcInvalidationTracking"
-            and e.get("args", {}).get("data", {}).get("reason") == "Animation"),
+        "span_ms":
+            round((b - a) / 1000, 1),
+        "frames":
+            frames,
+        "scroll_state":
+            dict(scroll_states),
+        "dropped_frames":
+            states.get("STATE_DROPPED", 0),
+        "dropped_affecting_smoothness":
+            sum(
+                1 for e in pr if e["args"]["frame_reporter"]["state"] == "STATE_DROPPED" and
+                e["args"]["frame_reporter"]["affects_smoothness"]),
+        "main_busy_ms":
+            round(busy_ms, 1),
+        "main_ms_per_frame":
+            round(busy_ms / max(frames, 1), 2),
+        "paint_count":
+            sum(1 for e in in_window if e.get("name") == "Paint" and e.get("dur")),
+        "style_recalc_count":
+            sum(1 for e in in_window if e.get("name") == "UpdateLayoutTree" and e.get("dur")),
+        "animation_recalc_count":
+            sum(
+                1 for e in in_window if e.get("name") == "StyleRecalcInvalidationTracking" and
+                e.get("args", {}).get("data", {}).get("reason") == "Animation"),
     }
   return metrics
 
@@ -338,24 +354,26 @@ def make_row(leg: str, scrollable: bool, computed: dict | None, scroll_top_path:
 
 def print_table(rows: list[dict]) -> None:
   """Print the per-leg metrics table (dash cells for non-scrollable legs)."""
-  print(f"{'leg':28s} {'scr':>3s} {'span_ms':>8s} {'frames':>6s} {'drop':>5s} {'dropSm':>6s} "
-        f"{'ms/fr':>6s} {'Paint':>5s} {'ULT':>5s} {'Anim':>6s}  scroll_state / scroll_top_path")
+  print(
+      f"{'leg':28s} {'scr':>3s} {'span_ms':>8s} {'frames':>6s} {'drop':>5s} {'dropSm':>6s} "
+      f"{'ms/fr':>6s} {'Paint':>5s} {'ULT':>5s} {'Anim':>6s}  scroll_state / scroll_top_path")
   for r in rows:
     if not r["scrollable"]:
-      print(f"{r['leg']:28s}   no {'-':>8s} {'-':>6s} {'-':>5s} {'-':>6s} {'-':>6s} {'-':>5s} "
-            f"{'-':>5s} {'-':>6s}  (no overflowing scroller under test)")
+      print(
+          f"{r['leg']:28s}   no {'-':>8s} {'-':>6s} {'-':>5s} {'-':>6s} {'-':>6s} {'-':>5s} "
+          f"{'-':>5s} {'-':>6s}  (no overflowing scroller under test)")
       continue
-    print(f"{r['leg']:28s}  yes {r['span_ms']:8.1f} {r['frames']:6d} {r['dropped_frames']:5d} "
-          f"{r['dropped_affecting_smoothness']:6d} {r['main_ms_per_frame']:6.2f} {r['paint_count']:5d} "
-          f"{r['style_recalc_count']:5d} {r['animation_recalc_count']:6d}  "
-          f"{r['scroll_state']}  {r['scroll_top_path']}")
+    print(
+        f"{r['leg']:28s}  yes {r['span_ms']:8.1f} {r['frames']:6d} {r['dropped_frames']:5d} "
+        f"{r['dropped_affecting_smoothness']:6d} {r['main_ms_per_frame']:6.2f} {r['paint_count']:5d} "
+        f"{r['style_recalc_count']:5d} {r['animation_recalc_count']:6d}  "
+        f"{r['scroll_state']}  {r['scroll_top_path']}")
 
 
 def gate(rows: list[dict]) -> int:
   """0 = every scrollable scroll leg is compositor-scrolls; 1 = any SCROLL_MAIN_THREAD frame."""
   bad = [
-      f"{r['leg']}={r['scroll_state']['SCROLL_MAIN_THREAD']}"
-      for r in rows
+      f"{r['leg']}={r['scroll_state']['SCROLL_MAIN_THREAD']}" for r in rows
       if r["scrollable"] and r["scroll_state"] and r["scroll_state"].get("SCROLL_MAIN_THREAD", 0) > 0
   ]
   if bad:
@@ -375,9 +393,10 @@ def report_mode(args: argparse.Namespace) -> int:
   except (OSError, json.JSONDecodeError) as e:
     fail(f"cannot read trace {path}: {e}")
   computed = trace_leg_metrics(trace)
-  rows = [make_row(leg, scrollable=not leg.startswith(IDLE_LEG), computed=computed.get(leg),
-                   scroll_top_path=None)
-          for leg, _ in computed.items()]
+  rows = [
+      make_row(leg, scrollable=not leg.startswith(IDLE_LEG), computed=computed.get(leg), scroll_top_path=None)
+      for leg, _ in computed.items()
+  ]
   print_table(rows)
   return gate(rows)
 
@@ -414,10 +433,13 @@ async def drive_mode(args: argparse.Namespace) -> int:
   records: list[dict] = []
   with tempfile.TemporaryDirectory(prefix="charliebot-scroll-probe-") as profile:
     proc = subprocess.Popen(
-        [chrome_bin, "--headless=new", "--no-sandbox", f"--remote-debugging-port={debug_port}",
-         f"--user-data-dir={profile}", "--window-size=1600,900", "--force-device-scale-factor=1",
-         "--no-first-run", "--disable-extensions", "about:blank"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        [
+            chrome_bin, "--headless=new", "--no-sandbox", f"--remote-debugging-port={debug_port}",
+            f"--user-data-dir={profile}", "--window-size=1600,900", "--force-device-scale-factor=1", "--no-first-run",
+            "--disable-extensions", "about:blank"
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL)
     try:
       devtools = f"http://127.0.0.1:{debug_port}"
       ver = None
@@ -444,9 +466,12 @@ async def drive_mode(args: argparse.Namespace) -> int:
             await cdp.send(f"{dom}.enable", sid)
           if key:
             # Pre-load bootstrap so the first navigation lands authenticated, like a signed-in browser.
-            await cdp.send("Page.addScriptToEvaluateOnNewDocument", sid, source=(
-                f"try{{localStorage.setItem('charliebot_access_key','{key}');}}catch(e){{}};"
-                f"document.cookie='charliebot_access_key={key}; path=/; SameSite=Strict';"))
+            await cdp.send(
+                "Page.addScriptToEvaluateOnNewDocument",
+                sid,
+                source=(
+                    f"try{{localStorage.setItem('charliebot_access_key','{key}');}}catch(e){{}};"
+                    f"document.cookie='charliebot_access_key={key}; path=/; SameSite=Strict';"))
           cdp.handlers["Tracing.dataCollected"] = lambda m: chunks.extend(m["params"].get("value", []))
           done = asyncio.get_running_loop().create_future()
           cdp.handlers["Tracing.tracingComplete"] = lambda m: (not done.done()) and done.set_result(True)
@@ -457,15 +482,21 @@ async def drive_mode(args: argparse.Namespace) -> int:
           await asyncio.sleep(PAGE_SETTLE_S)  # let chat history render and polls settle
           if args.inject_css:
             css = Path(args.inject_css).read_text(encoding="utf-8")
-            await cdp.send("Runtime.evaluate", sid, returnByValue=True, expression=(
-                "(() => { const st = document.createElement('style'); st.textContent = "
-                + json.dumps(css) + "; document.head.appendChild(st); return 'css injected'; })()"))
+            await cdp.send(
+                "Runtime.evaluate",
+                sid,
+                returnByValue=True,
+                expression=(
+                    "(() => { const st = document.createElement('style'); st.textContent = " + json.dumps(css) +
+                    "; document.head.appendChild(st); return 'css injected'; })()"))
             await asyncio.sleep(1.0)
-          page = json.loads(await evaluate_json(cdp, sid, (
-              "JSON.stringify({url: location.href, view: innerWidth + 'x' + innerHeight,"
-              " dpr: devicePixelRatio,"
-              " rows: document.querySelectorAll('#session-list a[id^=session-]').length,"
-              " page_nodes: document.getElementsByTagName('*').length})")))
+          page = json.loads(
+              await evaluate_json(
+                  cdp, sid, (
+                      "JSON.stringify({url: location.href, view: innerWidth + 'x' + innerHeight,"
+                      " dpr: devicePixelRatio,"
+                      " rows: document.querySelectorAll('#session-list a[id^=session-]').length,"
+                      " page_nodes: document.getElementsByTagName('*').length})")))
           page["chrome"] = ver.get("Browser")
           page["injected_css"] = Path(args.inject_css).name if args.inject_css else None
           print("PAGE", json.dumps(page))
@@ -491,8 +522,7 @@ async def drive_mode(args: argparse.Namespace) -> int:
             for name, gx, gy in list_legs:
               records.append(await scroll_leg(cdp, sid, name, LIST_SELECTOR, gx, gy))
           else:
-            records.extend({"leg": name, "scrollable": False, "scroll_top_path": None}
-                           for name, _, _ in list_legs)
+            records.extend({"leg": name, "scrollable": False, "scroll_top_path": None} for name, _, _ in list_legs)
           if chat_sel:
             cr = await rect(cdp, sid, chat_sel)
             cx, cy = cr["x"] + cr["w"] / 2, cr["y"] + cr["h"] / 2
@@ -523,8 +553,7 @@ async def drive_mode(args: argparse.Namespace) -> int:
   with trace_path.open("w") as f:
     json.dump(chunks, f)
   computed = trace_leg_metrics(chunks)
-  rows = [make_row(r["leg"], r["scrollable"], computed.get(r["leg"]), r["scroll_top_path"])
-          for r in records]
+  rows = [make_row(r["leg"], r["scrollable"], computed.get(r["leg"]), r["scroll_top_path"]) for r in records]
   with metrics_path.open("w") as f:
     json.dump({"page": page, "legs": rows}, f, indent=1)
   print(f"trace: {trace_path} ({len(chunks)} events)")
@@ -539,11 +568,13 @@ def parse_args() -> argparse.Namespace:
   mode.add_argument("--session", help="session id to drive the probe against (drive mode)")
   mode.add_argument("--report", help="re-read an existing trace JSON and re-apply the gate (report mode)")
   p.add_argument("--url", help="server base URL (default http://127.0.0.1:<server_port> from config)")
-  p.add_argument("--out", default="/tmp/charliebot-scroll-probe/",
-                 help="output directory for trace and metrics (default %(default)s)")
+  p.add_argument(
+      "--out",
+      default="/tmp/charliebot-scroll-probe/",
+      help="output directory for trace and metrics (default %(default)s)")
   p.add_argument("--inject-css", help="CSS file appended as a <style> element after the page settles")
-  p.add_argument("--cpu-throttle", type=int, default=4,
-                 help="CPU throttling rate for the final list leg (default %(default)s)")
+  p.add_argument(
+      "--cpu-throttle", type=int, default=4, help="CPU throttling rate for the final list leg (default %(default)s)")
   return p.parse_args()
 
 

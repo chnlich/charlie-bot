@@ -56,6 +56,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M43 git diff/file repeat expand, steady state | M43 collector below | seconds per repeat `diff_file` call over the heaviest file of the charlie-bot root..HEAD manifest | median < 0.02 s | — (introduced with its first history row) |
 | M44 scheduled-list next-run resolution, steady state | M44 collector below | seconds per `GET /api/sessions/scheduled` request, live session + cron corpus | median < 0.004 s | — (introduced with its first history row) |
 | M45 session-WS catchup replay event-loop lag, stale-cursor reconnect | M45 collector below | seconds of loop lag + wall per `_replay_aggregated_catchup` run, worst on-disk live chat corpus, cursor 50 events behind (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.05 s | — (introduced with its first history row) |
+| M46 cron tasks list payload and handler time, steady state | M46 collector below | seconds per request + response body bytes, live cron corpus | median < 0.02 s; body < 20 KB | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2436,6 +2437,57 @@ shutil.rmtree(home)
 EOF
 ```
 
+M46 — cron tasks list payload and handler time, steady state. Every grouped
+sidebar render pairs ``GET /api/cron/tasks`` with ``GET /api/sessions/scheduled``
+(the project-manager refresh fires on every list render), and the pre-fix route
+shipped every task's resolved prompt body — ~90 KB of the 96 KB live response,
+content only the in-process scheduler/master reads (the UI edits
+``prompt_file``) — plus the client pays a same-size JSON.parse per render. The
+fixed dump excludes ``prompt``, mirroring the POST/PUT responses which never
+carried it. The cost rides the sidebar render path, so the collector drives the
+endpoint through TestClient over the live cron corpus (read-only:
+``get_scheduled_tasks`` serves the fingerprint-cached snapshot; nothing is
+written), one cold pass, as at first sidebar render after a server start, then
+nine timed requests, re-running rather than comparing noise when the live
+config drifts mid-measurement. Evidence while the live server runs older code
+points the same collector at the branch checkout (``CHECKOUT`` at the worktree
+root), the same shape as the M36 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from src.api.cron import router as cron_router
+
+# Live cron corpus read-only: get_scheduled_tasks resolves the process config's
+# fingerprint-cached snapshot; nothing here writes.
+app = FastAPI()
+app.include_router(cron_router, prefix="/api/cron")
+client = TestClient(app)
+url = "/api/cron/tasks"
+
+r = client.get(url)  # cold pass, as at first sidebar render after a server start; not timed
+assert r.status_code == 200, (r.status_code, r.text[:200])
+times = []
+bodies = set()
+for _ in range(9):
+    t0 = time.perf_counter()
+    r = client.get(url)
+    times.append(time.perf_counter() - t0)
+    bodies.add(r.content)
+times.sort()
+if len(bodies) != 1:
+    raise SystemExit("live churn during measurement; re-run")
+rows = r.json()
+prompt_bytes = sum(len(row.get("prompt") or "") for row in rows)
+step_prompt_bytes = sum(len(s.get("prompt") or "") for row in rows for s in (row.get("steps") or []))
+print(f"{len(rows)} task rows, body {len(r.content)} B, prompt bytes {prompt_bytes}, step prompt bytes {step_prompt_bytes}; "
+      f"steady-state GET /api/cron/tasks median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2496,3 +2548,4 @@ EOF
 | 2026-09-03 | this PR | M44 steady-state median 5.11 ms → 2.90 ms, max 8.63 ms → 6.29 ms (collector verbatim, 12 scheduled rows / 13194 B body, live session + cron corpus read-only, main checkout before vs branch after back-to-back at load 0.36/1.28/2.58 and 0.49/1.29/2.57; body digest identical ec0f7b654411 both arms; component corroboration: croniter get_next measured 2.97 ms over the 12-task corpus, one expand each) | per-(cron, timezone) memo for the /scheduled rows' next-fire resolution, entries valid until the fire time they name passes — get_next is a pure function of (cron, timezone, now) and no occurrence can land before that first next fire, so repeat requests inside the window recompute an identical string; M44 definition and healthy range introduced with this PR |
 | 2026-09-03 | this PR | M7 collector-level warm collect median 0.3767 s → 0.0729 s, max 0.4274 s → 0.3471 s (verbatim warm-collect command, 16 rows / 3 notes, main checkout before at load 1.43/1.50/1.40 vs branch after at load 1.48/1.51/1.40 back-to-back; rows+notes digest agreement across interleaved arms whenever the live corpus held still between them — opencode db WAL moves every few seconds under live traffic; the after max is one such WAL-moved memo miss still paying the old fresh path; suite pins hit serves the first collect's rows/notes with zero scanned bytes) + HTTP-level live-before warm median 0.336 s → scratch-after warm median 0.056 s (verbatim M7 curls, live-before at load ~1.75, scratch server on the branch with a scratch CHARLIEBOT_HOME, cold 9.25 s) | whole-tally memo keyed on the walk signature plus the opencode db signature serves repeat collects without the cache-document JSON parse (~0.09 s), the apply(t) record replay (~43.5k add calls, ~0.075 s) or the db open per load, and the signature walk itself switches to str joins + raw os.stat (Path construction measured over twice the stat syscall on this corpus), with one shared os.walk error-hook home for both walkers |
 | 2026-09-04 | this PR | M45 stale-cursor replay loop-lag median 0.0259 s → 0.0102 s, max 0.0281 s → 0.0102 s (collector verbatim, 20534-event worst live corpus at cursor 20484, 47 frames replayed, scratch CHARLIEBOT_HOME A/B, frame-list digest identical 314dfbe9fd89 across arms; main checkout before vs branch after back-to-back at load 1.77/1.32/0.91 and 1.79/1.33/0.91; replay wall 0.0259 s → 0.0242 s — the walk's CPU still runs, now off the loop; suite pins ws.sent == _catchup_frames output and the stop-at-first-failure send count) | session-WS catchup replay's full-history aggregator walk moved off the event loop: `_catchup_frames` builds the ordered frame list via asyncio.to_thread and `_replay_aggregated_catchup` only sends it in order; M45 definition and healthy range introduced with this PR |
+| 2026-09-04 | this PR | M46 GET /api/cron/tasks body 96235 B → 3745 B (resolved-prompt bytes 90348 → 0 of 12 task rows), handler median 2.71 ms → 1.90 ms, max 3.12 ms → 2.31 ms (collector verbatim, live cron corpus read-only through TestClient, main checkout before at load 0.40/0.77/0.82 vs branch head after at load 1.02/1.22/0.93, back-to-back; row keys identical minus prompt; live-log corroboration 96 KB fetch bodies) | cron tasks list dump excludes prompt, the resolved body the in-process scheduler/master reads while every consumer of the route edits prompt_file (POST/PUT responses never carried it), mirroring M36's description prefix cut; M46 definition and healthy range introduced with this PR |

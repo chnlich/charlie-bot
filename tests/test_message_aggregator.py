@@ -14,12 +14,11 @@ VOICE_KEY = "is_" + "voice"
 
 def test_user_event_emits_a_user_message_delta() -> None:
   agg = MessageAggregator()
-  deltas = list(
-      agg.feed({
-          "type": "user",
-          "content": "hello",
-          "timestamp": "2026-04-29T00:00:00Z",
-      }))
+  deltas = list(agg.feed({
+      "type": "user",
+      "content": "hello",
+      "timestamp": "2026-04-29T00:00:00Z",
+  }))
   expected_message = {
       "role": "user",
       "content": "hello",
@@ -29,12 +28,10 @@ def test_user_event_emits_a_user_message_delta() -> None:
       "timestamp": "2026-04-29T00:00:00Z",
   }
   expected_message[VOICE_KEY] = False
-  assert deltas == [
-      {
-          "type": "message",
-          "message": expected_message,
-      }
-  ]
+  assert deltas == [{
+      "type": "message",
+      "message": expected_message,
+  }]
 
 
 def test_assistant_text_event_emits_a_stream_delta() -> None:
@@ -368,12 +365,13 @@ def test_handler_result_flushes_draft_and_emits_system_message() -> None:
 def test_tui_menu_dismissed_system_event_emits_system_message() -> None:
   agg = MessageAggregator()
   deltas = list(
-      agg.feed({
-          "type": "system",
-          "subtype": "tui_menu_dismissed",
-          "content": "Warning: dismissed a Claude TUI startup menu with Escape before sending the prompt.",
-          "timestamp": "t",
-      }))
+      agg.feed(
+          {
+              "type": "system",
+              "subtype": "tui_menu_dismissed",
+              "content": "Warning: dismissed a Claude TUI startup menu with Escape before sending the prompt.",
+              "timestamp": "t",
+          }))
 
   assert deltas == [
       {
@@ -392,13 +390,12 @@ def test_tui_menu_dismissed_system_event_emits_system_message() -> None:
 
 def test_context_compacted_projection_carries_kind() -> None:
   agg = MessageAggregator()
-  deltas = list(
-      agg.feed({
-          "type": "context_compacted",
-          "trigger": "manual",
-          "pre_tokens": 21988,
-          "timestamp": "t",
-      }))
+  deltas = list(agg.feed({
+      "type": "context_compacted",
+      "trigger": "manual",
+      "pre_tokens": 21988,
+      "timestamp": "t",
+  }))
 
   assert deltas == [
       {
@@ -418,12 +415,11 @@ def test_context_compacted_projection_carries_kind() -> None:
 
 def test_context_compact_failed_projection_with_error() -> None:
   agg = MessageAggregator()
-  deltas = list(
-      agg.feed({
-          "type": "context_compact_failed",
-          "error": "context too large",
-          "timestamp": "t",
-      }))
+  deltas = list(agg.feed({
+      "type": "context_compact_failed",
+      "error": "context too large",
+      "timestamp": "t",
+  }))
 
   assert deltas == [
       {
@@ -443,12 +439,11 @@ def test_context_compact_failed_projection_with_error() -> None:
 
 def test_context_compact_failed_projection_without_error() -> None:
   agg = MessageAggregator()
-  deltas = list(
-      agg.feed({
-          "type": "context_compact_failed",
-          "error": None,
-          "timestamp": "t",
-      }))
+  deltas = list(agg.feed({
+      "type": "context_compact_failed",
+      "error": None,
+      "timestamp": "t",
+  }))
 
   assert deltas == [
       {
@@ -558,35 +553,39 @@ def test_thinking_delta_appends_to_assistant_draft() -> None:
 def test_cc_assistant_thinking_block_attaches_to_draft() -> None:
   agg = MessageAggregator()
   deltas = list(
-      agg.feed({
-          "type": "assistant",
-          "message": {
-              "content": [
+      agg.feed(
+          {
+              "type": "assistant",
+              "message":
                   {
-                      "type": "thinking",
-                      "thinking": "Step one",
-                      "signature": "sig1"
+                      "content":
+                          [
+                              {
+                                  "type": "thinking",
+                                  "thinking": "Step one",
+                                  "signature": "sig1"
+                              },
+                              {
+                                  "type": "text",
+                                  "text": "Hello"
+                              },
+                          ]
                   },
-                  {
-                      "type": "text",
-                      "text": "Hello"
-                  },
-              ]
-          },
-          "timestamp": "t1",
-      }))
+              "timestamp": "t1",
+          }))
 
   assert deltas == [
       {
           "type": "stream",
-          "message": {
-              "role": "assistant",
-              "content": "Hello",
-              "thinking": "Step one",
-              "event_index": 0,
-              "id": "legacy:0",
-              "timestamp": "t1",
-          },
+          "message":
+              {
+                  "role": "assistant",
+                  "content": "Hello",
+                  "thinking": "Step one",
+                  "event_index": 0,
+                  "id": "legacy:0",
+                  "timestamp": "t1",
+              },
       }
   ]
   assert "signature" not in deltas[0]["message"]
@@ -594,9 +593,30 @@ def test_cc_assistant_thinking_block_attaches_to_draft() -> None:
 
 def test_cc_thinking_snapshot_is_cumulative() -> None:
   agg = MessageAggregator()
-  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "Step"}]}, "timestamp": "t1"}))
+  list(
+      agg.feed(
+          {
+              "type": "assistant",
+              "message": {
+                  "content": [{
+                      "type": "thinking",
+                      "thinking": "Step"
+                  }]
+              },
+              "timestamp": "t1"
+          }))
   deltas = list(
-      agg.feed({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "Step two"}]}, "timestamp": "t2"}))
+      agg.feed(
+          {
+              "type": "assistant",
+              "message": {
+                  "content": [{
+                      "type": "thinking",
+                      "thinking": "Step two"
+                  }]
+              },
+              "timestamp": "t2"
+          }))
 
   assert deltas[0]["type"] == "stream"
   assert deltas[0]["message"]["thinking"] == "Step two"
@@ -633,9 +653,7 @@ def test_stable_history_orders_queued_user_between_completed_runs() -> None:
   assert view_messages == messages
   assert pending is None
   assert [message["role"] for message in messages] == ["assistant", "separator", "user", "assistant", "separator"]
-  assert [message["id"] for message in messages] == [
-      "assistant-1", "done-1", "queued-user", "assistant-2", "done-2"
-  ]
+  assert [message["id"] for message in messages] == ["assistant-1", "done-1", "queued-user", "assistant-2", "done-2"]
   assert messages[0]["thinking"] == "final thought"
   assert messages[0]["tools"][0]["output"] == "report contents"
 
@@ -646,10 +664,18 @@ def test_stable_history_preserves_still_thinking_separator_semantics() -> None:
       (True, ["assistant", "user"]),
   ]:
     events = [
-        {"session_id": "opencode-session"},
+        {
+            "session_id": "opencode-session"
+        },
         _assistant_event("conclusion"),
-        {"type": ET.USER, "content": "queued"},
-        {"type": ET.MASTER_DONE, "still_thinking": still_thinking},
+        {
+            "type": ET.USER,
+            "content": "queued"
+        },
+        {
+            "type": ET.MASTER_DONE,
+            "still_thinking": still_thinking
+        },
     ]
 
     assert [message["role"] for message in events_to_messages(events)] == expected_roles
@@ -657,11 +683,23 @@ def test_stable_history_preserves_still_thinking_separator_semantics() -> None:
 
 def test_stable_history_preserves_multiple_deferred_user_source_order() -> None:
   events = [
-      {"session_id": "opencode-session"},
+      {
+          "session_id": "opencode-session"
+      },
       _assistant_event("conclusion"),
-      {"id": "user-1", "type": ET.USER, "content": "first queued user"},
-      {"id": "user-2", "type": ET.USER, "content": "second queued user"},
-      {"type": ET.MASTER_DONE},
+      {
+          "id": "user-1",
+          "type": ET.USER,
+          "content": "first queued user"
+      },
+      {
+          "id": "user-2",
+          "type": ET.USER,
+          "content": "second queued user"
+      },
+      {
+          "type": ET.MASTER_DONE
+      },
   ]
 
   messages = events_to_messages(events)
@@ -672,13 +710,37 @@ def test_stable_history_preserves_multiple_deferred_user_source_order() -> None:
 
 def test_stable_history_leaves_tool_result_and_slash_users_on_immediate_path() -> None:
   events = [
-      {"session_id": "opencode-session"},
+      {
+          "session_id": "opencode-session"
+      },
       _assistant_event("before slash", "assistant-before-slash"),
-      {"id": "tool", "type": ET.TOOL_USE, "name": "Read", "input": {"file_path": "a.txt"}},
-      {"type": ET.USER, "message": {"content": [{"type": "tool_result", "content": "tool output"}]}},
-      {"id": "slash-user", "type": ET.USER, "content": "/status"},
+      {
+          "id": "tool",
+          "type": ET.TOOL_USE,
+          "name": "Read",
+          "input": {
+              "file_path": "a.txt"
+          }
+      },
+      {
+          "type": ET.USER,
+          "message": {
+              "content": [{
+                  "type": "tool_result",
+                  "content": "tool output"
+              }]
+          }
+      },
+      {
+          "id": "slash-user",
+          "type": ET.USER,
+          "content": "/status"
+      },
       _assistant_event("after slash", "assistant-after-slash"),
-      {"id": "done", "type": ET.MASTER_DONE},
+      {
+          "id": "done",
+          "type": ET.MASTER_DONE
+      },
   ]
   live = MessageAggregator()
   live_messages = [delta["message"] for delta in live.feed_all(events) if delta["type"] == "message"]
@@ -696,16 +758,29 @@ def test_stable_history_does_not_repair_incomplete_windows() -> None:
       (
           [
               _assistant_event("answer"),
-              {"id": "user", "type": ET.USER, "content": "next"},
-              {"id": "done", "type": ET.MASTER_DONE},
+              {
+                  "id": "user",
+                  "type": ET.USER,
+                  "content": "next"
+              },
+              {
+                  "id": "done",
+                  "type": ET.MASTER_DONE
+              },
           ],
           ["assistant", "user", "separator"],
       ),
       (
           [
-              {"session_id": "opencode-session"},
+              {
+                  "session_id": "opencode-session"
+              },
               _assistant_event("answer"),
-              {"id": "user", "type": ET.USER, "content": "next"},
+              {
+                  "id": "user",
+                  "type": ET.USER,
+                  "content": "next"
+              },
           ],
           ["assistant", "user"],
       ),
@@ -722,8 +797,13 @@ def test_stable_history_does_not_repair_incomplete_windows() -> None:
 
 def test_stable_history_preserves_deferred_user_metadata_without_mutating_events() -> None:
   events = [
-      {"session_id": "opencode-session", "timestamp": "start"},
-      _assistant_event("conclusion") | {"timestamp": "assistant-ts"},
+      {
+          "session_id": "opencode-session",
+          "timestamp": "start"
+      },
+      _assistant_event("conclusion") | {
+          "timestamp": "assistant-ts"
+      },
       {
           "id": "queued-user",
           "type": ET.USER,
@@ -736,7 +816,11 @@ def test_stable_history_preserves_deferred_user_metadata_without_mutating_events
               "size": 42,
           }],
       },
-      {"id": "done", "type": ET.MASTER_DONE, "timestamp": "done-ts"},
+      {
+          "id": "done",
+          "type": ET.MASTER_DONE,
+          "timestamp": "done-ts"
+      },
   ]
   original = deepcopy(events)
 

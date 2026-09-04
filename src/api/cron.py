@@ -163,7 +163,10 @@ async def list_cron_tasks():
   (None when the body could not be parsed). A broken or legacy file must never
   cause this route to fail.
   """
-  valid = [t.model_dump() for t in get_scheduled_tasks()]
+  # prompt is resolved from prompt_file for the in-process scheduler/master
+  # reads; no consumer of this route reads it (the UI edits prompt_file), and
+  # shipping the resolved bodies was ~90 KB of the 96 KB response.
+  valid = [t.model_dump(exclude={'prompt'}) for t in get_scheduled_tasks()]
   broken = [
       {
           'name': e.name,

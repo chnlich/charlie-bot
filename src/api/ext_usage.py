@@ -352,11 +352,36 @@ def _create_provider(provider: str, label: str, dir_path: str) -> ClaudeUsagePro
 # Credentials helpers
 # ---------------------------------------------------------------------------
 
+# The poller re-reads the credentials file every round, so one sighting of a
+# missing or tokenless file is the whole alarm; every later round in the same
+# broken streak repeats a fired alarm. A read that returns a token re-arms the
+# path: a relapse after it is a new onset, not a repeat.
+_CREDENTIAL_READ_WARNED: dict[str, str] = {}
+
+
+def _warn_credential_read_once(event: str, credentials_path: Path) -> None:
+  """Log one *event* per credentials path until a read of it returns a token.
+
+  A caller relies on at most one line per (event, path) per broken streak: the
+  poller's next round re-reading an unchanged broken file is not a new state,
+  while a relapse after a successful read is.
+  """
+  key = str(credentials_path)
+  if _CREDENTIAL_READ_WARNED.get(key) == event:
+    return
+  _CREDENTIAL_READ_WARNED[key] = event
+  log.warning(event, path=key)
+
+
+def _reset_credential_read_warnings_for_tests() -> None:
+  """Clear the warn-once registry, restoring the process-start state."""
+  _CREDENTIAL_READ_WARNED.clear()
+
 
 def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
   """Read OAuth credentials from a Claude account's .credentials.json."""
   if not credentials_path.exists():
-    log.warning("ext_usage_credentials_not_found", path=str(credentials_path))
+    _warn_credential_read_once("ext_usage_credentials_not_found", credentials_path)
     return None
 
   data = json.loads(credentials_path.read_text(encoding="utf-8"))
@@ -365,9 +390,10 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
   refresh_token = oauth.get("refreshToken")
 
   if not access_token:
-    log.warning("ext_usage_no_access_token", path=str(credentials_path))
+    _warn_credential_read_once("ext_usage_no_access_token", credentials_path)
     return None
 
+  _CREDENTIAL_READ_WARNED.pop(str(credentials_path), None)
   # expiresAt is deliberately not read: token renewal keys off the server's 401
   # in ClaudeUsageProvider.fetch, never a local expiry check.
   return {

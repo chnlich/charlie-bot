@@ -17,25 +17,19 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
+    build_worktree_cfg,
     patch_improve_git_ops,
 )
 from conftest import make_parent as _make_parent
 
 from src.core import event_types as ET
 from src.core import improve_command, review
-from src.core.config import CharlieBotConfig
 from src.core.improve_command import run_improve_loop
 from src.core.init import _report_recovery_event
 from src.core.models import ThreadMetadata
 from src.core.sessions import SessionManager
 from src.core.spawner_events import _thread_worker_event
 from src.core.spawner_finalize import _persist_worker_summary_once
-
-
-def _make_cfg(tmp_path: Path) -> CharlieBotConfig:
-  # worktree_dir must stay under tmp_path: the improve-loop fakes create and remove
-  # wt_path, and the default (~/worktrees) would touch real worktrees on the host.
-  return CharlieBotConfig(charliebot_home=tmp_path / "home", worktree_dir=str(tmp_path / "worktrees"))
 
 
 def _broadcast_patch():
@@ -53,7 +47,7 @@ async def _elone(mgr: SessionManager, parent_id: str) -> str:
 
 @pytest.mark.asyncio
 async def test_spawner_worker_summary_lands_in_successor_and_preserves_thread_id(tmp_path: Path) -> None:
-  mgr = SessionManager(_make_cfg(tmp_path))
+  mgr = SessionManager(build_worktree_cfg(tmp_path))
   parent_id = await _make_parent(mgr)
   child_id = await _elone(mgr, parent_id)
 
@@ -72,7 +66,7 @@ async def test_spawner_worker_summary_lands_in_successor_and_preserves_thread_id
 
 @pytest.mark.asyncio
 async def test_spawner_worker_summary_no_successor_writes_into_itself_without_origin(tmp_path: Path) -> None:
-  mgr = SessionManager(_make_cfg(tmp_path))
+  mgr = SessionManager(build_worktree_cfg(tmp_path))
   session_id = await _make_parent(mgr)
 
   thread = ThreadMetadata(session_id=session_id, id="thread-1", description="hello", backend=OPUS_BACKEND_ID)
@@ -94,7 +88,7 @@ async def test_spawner_worker_summary_no_successor_writes_into_itself_without_or
 
 @pytest.mark.asyncio
 async def test_crash_recovery_report_lands_in_successor(tmp_path: Path) -> None:
-  mgr = SessionManager(_make_cfg(tmp_path))
+  mgr = SessionManager(build_worktree_cfg(tmp_path))
   parent_id = await _make_parent(mgr)
   child_id = await _elone(mgr, parent_id)
 
@@ -109,7 +103,7 @@ async def test_crash_recovery_report_lands_in_successor(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_crash_recovery_report_no_successor_writes_into_itself_without_origin(tmp_path: Path) -> None:
-  mgr = SessionManager(_make_cfg(tmp_path))
+  mgr = SessionManager(build_worktree_cfg(tmp_path))
   session_id = await _make_parent(mgr)
 
   with _broadcast_patch():
@@ -128,7 +122,7 @@ async def test_crash_recovery_report_no_successor_writes_into_itself_without_ori
 
 @pytest.mark.asyncio
 async def test_improve_final_summary_lands_in_successor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  mgr = SessionManager(_make_cfg(tmp_path))
+  mgr = SessionManager(build_worktree_cfg(tmp_path))
   parent_id = await _make_parent(mgr)
   child_id = await _elone(mgr, parent_id)
 
@@ -141,7 +135,7 @@ async def test_improve_final_summary_lands_in_successor(tmp_path: Path, monkeypa
         repo_path=str(tmp_path / "repo"),
         iterations=0,
         goal="tune",
-        cfg=_make_cfg(tmp_path),
+        cfg=build_worktree_cfg(tmp_path),
         session_mgr=mgr,
         thread_mgr=MagicMock(),
         base_branch="main",
@@ -160,7 +154,7 @@ async def test_improve_final_summary_lands_in_successor(tmp_path: Path, monkeypa
 @pytest.mark.asyncio
 async def test_improve_worktree_creation_failure_lands_in_successor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  mgr = SessionManager(_make_cfg(tmp_path))
+  mgr = SessionManager(build_worktree_cfg(tmp_path))
   parent_id = await _make_parent(mgr)
   child_id = await _elone(mgr, parent_id)
 
@@ -177,7 +171,7 @@ async def test_improve_worktree_creation_failure_lands_in_successor(
         repo_path=str(tmp_path / "missing"),
         iterations=3,
         goal="tune",
-        cfg=_make_cfg(tmp_path),
+        cfg=build_worktree_cfg(tmp_path),
         session_mgr=mgr,
         thread_mgr=MagicMock(),
         base_branch="main",
@@ -196,7 +190,7 @@ async def test_improve_worktree_creation_failure_lands_in_successor(
 @pytest.mark.asyncio
 async def test_improve_final_summary_no_successor_writes_into_itself_without_origin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  mgr = SessionManager(_make_cfg(tmp_path))
+  mgr = SessionManager(build_worktree_cfg(tmp_path))
   session_id = await _make_parent(mgr)
 
   patch_improve_git_ops(monkeypatch)
@@ -208,7 +202,7 @@ async def test_improve_final_summary_no_successor_writes_into_itself_without_ori
         repo_path=str(tmp_path / "repo"),
         iterations=0,
         goal="tune",
-        cfg=_make_cfg(tmp_path),
+        cfg=build_worktree_cfg(tmp_path),
         session_mgr=mgr,
         thread_mgr=MagicMock(),
         base_branch="main",
@@ -256,7 +250,7 @@ async def test_review_cleanup_error_is_routed_to_successor(tmp_path: Path, monke
   spawn machinery, so the migration is asserted by patching the primitive and
   checking it is invoked with the owning session id and the error event.
   """
-  mgr = SessionManager(_make_cfg(tmp_path))
+  mgr = SessionManager(build_worktree_cfg(tmp_path))
   parent_id = await _make_parent(mgr)
   child_id = await _elone(mgr, parent_id)
 
@@ -281,7 +275,7 @@ async def test_review_cleanup_error_is_routed_to_successor(tmp_path: Path, monke
         full_summary="summary",
         thread_mgr=thread_mgr,
         session_mgr=mgr,
-        cfg=_make_cfg(tmp_path),
+        cfg=build_worktree_cfg(tmp_path),
     )
 
   mock_deliver.assert_awaited_once()
@@ -297,7 +291,7 @@ async def test_review_cleanup_error_is_routed_to_successor(tmp_path: Path, monke
 async def test_review_cleanup_error_no_successor_writes_into_itself_without_origin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """For a session with no successor, the routed cleanup error lands in that session itself."""
-  mgr = SessionManager(_make_cfg(tmp_path))
+  mgr = SessionManager(build_worktree_cfg(tmp_path))
   session_id = await _make_parent(mgr)
 
   real_deliver = mgr.deliver_to_successor
@@ -321,7 +315,7 @@ async def test_review_cleanup_error_no_successor_writes_into_itself_without_orig
         full_summary="summary",
         thread_mgr=thread_mgr,
         session_mgr=mgr,
-        cfg=_make_cfg(tmp_path),
+        cfg=build_worktree_cfg(tmp_path),
     )
 
   mock_deliver.assert_awaited_once()

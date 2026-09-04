@@ -32,11 +32,17 @@ async def test_persist_assistant_text_broadcasts_stream_then_message_on_master_d
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
-    await mgr.persist_and_broadcast(session.id, {
-        "type": "assistant",
-        "message": {"content": [{"type": "text", "text": "Working"}]},
-        "timestamp": "t1",
-    })
+    await mgr.persist_and_broadcast(
+        session.id, {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "text",
+                    "text": "Working"
+                }]
+            },
+            "timestamp": "t1",
+        })
     await mgr.persist_and_broadcast(session.id, {
         "type": "master_done",
         "thinking_seconds": 2,
@@ -59,13 +65,14 @@ async def test_persist_handler_result_broadcasts_message_delta_and_raw_event(tmp
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
-    await mgr.persist_and_broadcast(session.id, {
-        "type": "handler_result",
-        "task": "Lint",
-        "status": "ok",
-        "message": "Done",
-        "timestamp": "ts",
-    })
+    await mgr.persist_and_broadcast(
+        session.id, {
+            "type": "handler_result",
+            "task": "Lint",
+            "status": "ok",
+            "message": "Done",
+            "timestamp": "ts",
+        })
 
   payloads = _broadcast_calls(mock)
   assert [p["type"] for p in payloads] == ["message", "handler_result"]
@@ -79,18 +86,39 @@ async def test_aggregator_state_persists_across_calls(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
-    await mgr.persist_and_broadcast(session.id, {
-        "type": "assistant",
-        "message": {"content": [
-            {"type": "text", "text": "Running"},
-            {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
-        ]},
-        "timestamp": "t1",
-    })
-    await mgr.persist_and_broadcast(session.id, {
-        "type": "user",
-        "message": {"content": [{"type": "tool_result", "content": "out", "is_error": False}]},
-    })
+    await mgr.persist_and_broadcast(
+        session.id, {
+            "type": "assistant",
+            "message":
+                {
+                    "content":
+                        [
+                            {
+                                "type": "text",
+                                "text": "Running"
+                            },
+                            {
+                                "type": "tool_use",
+                                "name": "Bash",
+                                "input": {
+                                    "command": "ls"
+                                }
+                            },
+                        ]
+                },
+            "timestamp": "t1",
+        })
+    await mgr.persist_and_broadcast(
+        session.id, {
+            "type": "user",
+            "message": {
+                "content": [{
+                    "type": "tool_result",
+                    "content": "out",
+                    "is_error": False
+                }]
+            },
+        })
     await mgr.persist_and_broadcast(session.id, {
         "type": "master_done",
         "thinking_seconds": 1,
@@ -103,7 +131,9 @@ async def test_aggregator_state_persists_across_calls(tmp_path: Path) -> None:
   assert commit_msgs[0]["content"] == "Running"
   assert commit_msgs[0]["tools"] == [{
       "name": "Bash",
-      "input": {"command": "ls"},
+      "input": {
+          "command": "ls"
+      },
       "output": "out",
       "is_error": False,
   }]
@@ -116,11 +146,17 @@ async def test_lazy_init_aggregator_after_restart_does_not_replay_history(tmp_pa
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "hi", "timestamp": "t1"})
-    await mgr.persist_and_broadcast(session.id, {
-        "type": "assistant",
-        "message": {"content": [{"type": "text", "text": "ok"}]},
-        "timestamp": "t2",
-    })
+    await mgr.persist_and_broadcast(
+        session.id, {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "text",
+                    "text": "ok"
+                }]
+            },
+            "timestamp": "t2",
+        })
     await mgr.persist_and_broadcast(session.id, {
         "type": "master_done",
         "thinking_seconds": 1,

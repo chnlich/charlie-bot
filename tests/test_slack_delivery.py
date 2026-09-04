@@ -10,11 +10,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-  SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
-  SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
-  SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
-  build_slack_cfg,
-  make_task_spawner,
+    SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
+    SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
+    SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
+    build_slack_cfg,
+    make_task_spawner,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -29,23 +29,23 @@ from src.core import tasks as tasks_module
 from src.core.config import CharlieBotConfig
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import (
-  CreateSessionRequest,
-  MasterRunRecord,
-  SessionMetadata,
-  SlackOrigin,
-  utc_now,
+    CreateSessionRequest,
+    MasterRunRecord,
+    SessionMetadata,
+    SlackOrigin,
+    utc_now,
 )
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
-  _MAX_POST_CHARS,
-  _NO_REPLY_NOTICE,
-  _REPLY_BUDGET_CHARS,
-  SlackClient,
-  SlackReplyError,
-  _chunk_text,
-  backfill_lost_summons,
-  deliver_done,
-  post_reply,
+    _MAX_POST_CHARS,
+    _NO_REPLY_NOTICE,
+    _REPLY_BUDGET_CHARS,
+    SlackClient,
+    SlackReplyError,
+    _chunk_text,
+    backfill_lost_summons,
+    deliver_done,
+    post_reply,
 )
 
 _CHANNEL = "C_TEST"
@@ -104,9 +104,10 @@ class _FakeSlackClient:
     return {"ok": True}
 
 
-def _rig(
-    tmp_path: Path, *, fail_posts: bool = False, fail_remove: bool = False
-) -> tuple[CharlieBotConfig, SessionManager, _FakeSlackClient]:
+def _rig(tmp_path: Path,
+         *,
+         fail_posts: bool = False,
+         fail_remove: bool = False) -> tuple[CharlieBotConfig, SessionManager, _FakeSlackClient]:
   """Slack rig: cfg and manager rooted at tmp_path, plus a recording fake client."""
   cfg = build_slack_cfg(tmp_path)
   return cfg, SessionManager(cfg), _FakeSlackClient(fail_posts=fail_posts, fail_remove=fail_remove)
@@ -116,8 +117,7 @@ async def _slack_session(session_mgr: SessionManager, *, thread_ts: str = _THREA
   """Create a Slack-born session and return its id."""
   meta = await session_mgr.create_session(
       CreateSessionRequest(
-          name="slack session",
-          slack_origin=SlackOrigin(team_id=_TEAM, channel_id=_CHANNEL, thread_ts=thread_ts)))
+          name="slack session", slack_origin=SlackOrigin(team_id=_TEAM, channel_id=_CHANNEL, thread_ts=thread_ts)))
   return meta.id
 
 
@@ -133,8 +133,9 @@ async def _run_record(session_mgr: SessionManager, sid: str, user_event_id: str 
       sid, MasterRunRecord(started_at=utc_now(), raw_log=str(tmp_path / "raw.jsonl"), user_event_id=user_event_id))
 
 
-def _running_item(cfg: CharlieBotConfig, session_mgr: SessionManager, sid: str,
-                  user_event_id: str | None) -> master_cc_state._WorkItem:
+def _running_item(
+    cfg: CharlieBotConfig, session_mgr: SessionManager, sid: str,
+    user_event_id: str | None) -> master_cc_state._WorkItem:
   """A work item as the consumer parks it in ``master_cc_state._current_items`` while a round runs."""
   return master_cc_state._WorkItem(
       cfg=cfg,
@@ -156,7 +157,11 @@ def _summon(thread_ts: str = _THREAD, content: str = _SUMMON_CONTENT) -> dict:
       "content": content,
       "from_session": "src",
       "from_session_name": "Slack",
-      "slack": {"channel_id": _CHANNEL, "thread_ts": thread_ts, "mention_ts": thread_ts},
+      "slack": {
+          "channel_id": _CHANNEL,
+          "thread_ts": thread_ts,
+          "mention_ts": thread_ts
+      },
   }
 
 
@@ -167,7 +172,9 @@ def _nudge(summon: dict) -> dict:
       "content": "decide whether to post",
       "from_session": "src",
       "from_session_name": "Slack",
-      "slack": {**summon["slack"], "nudge_of": summon["id"]},
+      "slack": {
+          **summon["slack"], "nudge_of": summon["id"]
+      },
   }
 
 
@@ -175,7 +182,11 @@ def _reply(answers: str | None, text: str = "the answer") -> dict:
   return {
       "type": ET.SLACK_REPLY,
       "content": text,
-      "slack_reply": {"answers": answers, "chars": len(text), "chunks": 1},
+      "slack_reply": {
+          "answers": answers,
+          "chars": len(text),
+          "chunks": 1
+      },
   }
 
 
@@ -190,9 +201,7 @@ def _done(input_event_id: str | None, exit_code: int = 0) -> dict:
   return event
 
 
-async def _unanswered_nudge_round(
-    session_mgr: SessionManager, client: _FakeSlackClient
-) -> tuple[str, dict, dict]:
+async def _unanswered_nudge_round(session_mgr: SessionManager, client: _FakeSlackClient) -> tuple[str, dict, dict]:
   """A Slack thread re-asked once with no reply yet; returns (sid, summon, nudge).
 
   The summon round completed and the eyes reaction marks the thread
@@ -653,12 +662,18 @@ def test_route_rejects_extra_fields() -> None:
 def test_slack_reply_event_projects_as_a_system_message() -> None:
   """The persisted reply shows in the chat as what was posted, through the existing system role."""
   agg = MessageAggregator()
-  deltas = list(agg.feed({
-      "type": ET.SLACK_REPLY,
-      "content": "hi there",
-      "slack_reply": {"answers": None, "chars": 8, "chunks": 1},
-      "timestamp": "2026-08-26T08:00:00Z",
-  }))
+  deltas = list(
+      agg.feed(
+          {
+              "type": ET.SLACK_REPLY,
+              "content": "hi there",
+              "slack_reply": {
+                  "answers": None,
+                  "chars": 8,
+                  "chunks": 1
+              },
+              "timestamp": "2026-08-26T08:00:00Z",
+          }))
   assert len(deltas) == 1
   assert deltas[0]["message"]["role"] == "system"
   assert deltas[0]["message"]["content"] == "Posted to Slack: hi there"
@@ -1204,16 +1219,14 @@ async def test_reply_to_a_summon_without_mention_ts_posts_normally_and_clears_no
 @pytest.mark.asyncio
 async def test_remove_reaction_treats_no_reaction_as_the_end_state() -> None:
   """ok=false with error=no_reaction returns normally (idempotent); other errors raise."""
-  client = SlackClient(
-      _StubSlackHttp({"ok": False, "error": "no_reaction"}), bot_token="b", app_token="a")
+  client = SlackClient(_StubSlackHttp({"ok": False, "error": "no_reaction"}), bot_token="b", app_token="a")
 
   assert await client.remove_reaction("C_TEST", "eyes", _THREAD) == {
       "ok": False,
       "error": "no_reaction",
   }
 
-  raising = SlackClient(
-      _StubSlackHttp({"ok": False, "error": "missing_scope"}), bot_token="b", app_token="a")
+  raising = SlackClient(_StubSlackHttp({"ok": False, "error": "missing_scope"}), bot_token="b", app_token="a")
   with pytest.raises(RuntimeError, match=r"reactions\.remove failed"):
     await raising.remove_reaction("C_TEST", "eyes", _THREAD)
 
@@ -1252,9 +1265,7 @@ async def test_remove_failure_leaves_a_stale_eye_and_stays_in_the_ack_task(tmp_p
       capture_logs() as logs,
   ):
     result = await post_reply(sid, "the answer", cfg, session_mgr)
-    ack = next(
-        t for t in tasks_module._background_tasks
-        if t.get_name() == f"slack-ack-clear-{sid}")
+    ack = next(t for t in tasks_module._background_tasks if t.get_name() == f"slack-ack-clear-{sid}")
     await asyncio.gather(ack, return_exceptions=True)
     await asyncio.sleep(0)  # the task's logging done callback runs one tick later
 

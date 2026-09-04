@@ -28,12 +28,17 @@ under an unstable walk order: cross-file dedupe arbitrates verbatim replays, whi
 identical token values, so first-wins cannot move a sum. The opencode db stays outside that
 corpus memo: its WAL sidecar moves under plain serve traffic, so its entry always round-trips
 the persisted document, and the miss path is incremental per message row (see row memo below).
-One more memo sits above both: the whole-tally memo, keyed on the walk signature plus the
-opencode db signature, holds the built rows and notes of the last collect. A hit serves the
-tally without loading the persisted document, replaying a record, or opening the db, because
-every input to those steps signs into the key. The walk signature itself walks with string
-paths and raw os.stat: Path construction per file measures over twice the stat syscall's cost
-on this corpus, and the signature pays it on every collect, hit or miss.
+One more memo sits above both: the whole-tally memo, keyed on the walk signature, the opencode
+db signature its rows were read at, and the row memo's change epoch, holds the built rows and
+notes of the last collect. Two hits serve the tally without loading the persisted document,
+replaying a record, or re-reading a row: the db signature still matching means no write landed
+since the read (a stat-only check); a moved signature whose row memo the scan just proved
+unchanged means the WAL wrote rows the tally never reads — the epoch counts row-memo changes,
+so an unchanged epoch re-serves the rows and re-signs them at the scan's own signature. Only
+memos built from a scan carry that epoch proof; rows served from the persisted document sign
+into the key by signature alone. The walk signature itself walks with string paths and raw
+os.stat: Path construction per file measures over twice the stat syscall's cost on this
+corpus, and the signature pays it on every collect, hit or miss.
 Vocabulary (opencode row memo):
   key         ``(message id, time_updated)`` of one row in the db's message table. opencode
               (drizzle ORM, ``$onUpdate(() => Date.now())`` on the column) bumps time_updated
@@ -338,15 +343,34 @@ def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path
 # The aggregate memo pair (walk signature, partial); see the module docstring.
 _aggregate_memo: tuple[tuple, _SourceAggregate] | None = None
 
-# The whole-tally memo: ((walk signature, opencode db signature), rows, notes) of the last
-# collect; see the module docstring for the key's contract. The db half of the key is the
-# signature the rows were read at (collect_opencode's return), not a pre-walk lookup value.
-# Served tallies copy out of the stored containers via ``_materialize_rows``.
+# The whole-tally memo: ((walk signature, opencode db signature, row epoch, scan-sourced),
+# rows, notes) of the last collect; see the module docstring for the key's contract. The db
+# half of the key is the signature the rows were read at, not a pre-walk lookup value; the
+# epoch is the row memo's change count as of the build, and only a scan-built memo carries a
+# proof an epoch comparison can honor. Served tallies copy out of the stored containers via
+# ``_materialize_rows``.
 _tally_memo: tuple[tuple, list[dict], list[str]] | None = None
 
 # Per-row memo for the opencode message table: db path -> {message id: (time_updated, record
 # or None)}; see the module docstring for the key's contract.
 _opencode_row_memos: dict[str, dict[str, tuple[int, list | None]]] = {}
+
+# Per-db change count of the row memo: the epoch a scan-built whole-tally memo keys its rows
+# on. It advances exactly when a scan moves the memo (a row landed, moved, or vanished), so
+# an equal epoch proves the memo's records — and the rows built from them — still current.
+_opencode_row_epochs: dict[str, int] = {}
+
+
+class _OpencodeScan(NamedTuple):
+  """One row-memo advance. ``ok`` is False when the db is absent or sqlite-unreadable
+  (``error`` carries the message the collect note needs); the remaining fields are then
+  informational only."""
+
+  sig: list | None
+  epoch: int
+  nbytes: int
+  ok: bool
+  error: str | None
 
 
 def _reset_aggregate_memo() -> None:
@@ -355,6 +379,7 @@ def _reset_aggregate_memo() -> None:
   _aggregate_memo = None
   _tally_memo = None
   _opencode_row_memos.clear()
+  _opencode_row_epochs.clear()
 
 
 def _claude_file_contribution(path: Path) -> tuple[dict, int]:
@@ -604,35 +629,63 @@ def _opencode_db_signature(db: Path) -> list | None:
   return [st.st_mtime_ns, st.st_size, wal_sig]
 
 
-def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> list | None:
-  """Tally the opencode db. Returns the signature the rows were read at — None when no
-  signature applies (absent, unstatable, or unreadable db), so the whole-tally memo never
-  signs rows it cannot key."""
+def _advance_opencode_rows(db: Path) -> _OpencodeScan:
+  """Advance the db's row memo to its message table's current rows, bumping the epoch when any
+  row moved. Read-only: the scan never writes. Absent or unreadable dbs advance nothing and
+  return ``ok=False``."""
+  key = str(db)
+  sig = _opencode_db_signature(db)
+  try:
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+      memo = _opencode_row_memos.setdefault(key, {})
+      nbytes, changed = _scan_opencode_rows(con, memo)
+    finally:
+      con.close()
+  except sqlite3.Error as exc:
+    return _OpencodeScan(sig, 0, 0, False, str(exc))
+  epoch = _opencode_row_epochs.get(key, 0)
+  if changed:
+    epoch += 1
+    _opencode_row_epochs[key] = epoch
+  return _OpencodeScan(sig, epoch, nbytes, True, None)
+
+
+def _merge_opencode(
+    t: _Tally,
+    db: Path,
+    cache: TallyCache | None,
+    scan: _OpencodeScan | None,
+) -> tuple[list | None, int, bool]:
+  """Tally the opencode db into the accumulator. Scans unless ``scan`` already advanced the
+  row memo this collect, or the cache document's entry still matches the file. Returns
+  (the signature the rows were read at, the row epoch, scan-sourced); the signature is None
+  when no signature applies (absent, unstatable, or unreadable db), so the whole-tally memo
+  never signs rows it cannot key."""
   if not db.exists():
     t.notes.append("opencode: db absent")
-    return None
+    return None, 0, False
   sig = _opencode_db_signature(db)
   entry = cache.lookup_sig("opencode", str(db), sig) if cache is not None and sig is not None else None
-  if entry is None:
-    # The signature is taken before the read: a concurrent write mid-scan then necessarily
-    # outdates the stored sig and the next lookup re-scans, so a partial or extended read can
-    # never be served later as if complete.
-    try:
-      con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-      try:
-        memo = _opencode_row_memos.setdefault(str(db), {})
-        nbytes = _scan_opencode_rows(con, memo)
-      finally:
-        con.close()
-    except sqlite3.Error as exc:
-      t.notes.append(f"opencode: unreadable db: {exc}")
-      return None
-    t.scanned_bytes += nbytes
-    records = [rec for _, rec in memo.values() if rec is not None]
+  epoch = 0
+  from_scan = False
+  if entry is not None:
+    # The signature is taken before the read and stored with the rows, so an entry can only
+    # be served while the file still matches it.
+    records = entry["records"]
+    epoch = _opencode_row_epochs.get(str(db), 0)
+  else:
+    if scan is None:
+      scan = _advance_opencode_rows(db)
+    if not scan.ok:
+      t.notes.append(f"opencode: unreadable db: {scan.error}")
+      return None, scan.epoch, False
+    records = [rec for _, rec in _opencode_row_memos[str(db)].values() if rec is not None]
     if cache is not None and sig is not None:
       cache.store("opencode", db, {"sig": sig, "records": records})
-  else:
-    records = entry["records"]
+    t.scanned_bytes += scan.nbytes
+    epoch = scan.epoch
+    from_scan = True
   for model, account, ts, in_fresh, cache_write, cache_read, output in records:
     t.add(
         "opencode",
@@ -644,11 +697,12 @@ def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> list | No
         cache_read=cache_read,
         output=output)
   t.notes.append(f"opencode: {len(records):,} assistant messages with token counts")
-  return sig
+  return sig, epoch, from_scan
 
 
-def _scan_opencode_rows(con: sqlite3.Connection, memo: dict[str, tuple[int, list | None]]) -> int:
-  """Advance *memo* to the message table's current rows; return the bytes this pass read.
+def _scan_opencode_rows(con: sqlite3.Connection, memo: dict[str, tuple[int, list | None]]) -> tuple[int, bool]:
+  """Advance *memo* to the message table's current rows; return the bytes this pass read and
+  whether any row changed (landed, moved, or vanished) — the whole-tally memo's epoch bump.
 
   With an empty memo the SQL scan projects every contributing row (the cold pass, as at a
   process start) and rows it filters out memoize as None — both without a re-read per row.
@@ -665,17 +719,17 @@ def _scan_opencode_rows(con: sqlite3.Connection, memo: dict[str, tuple[int, list
     for mid, tu in live.items():
       if mid not in memo:
         memo[mid] = (tu, None)
-    return nbytes
+    return nbytes, bool(live)
+  removed = [mid for mid in memo if mid not in live]
+  for mid in removed:
+    del memo[mid]
   changed = [mid for mid, tu in live.items() if memo.get(mid, (None,))[0] != tu]
-  for mid in list(memo):
-    if mid not in live:
-      del memo[mid]
   for mid in changed:
     row = con.execute("select data from message where id = ?", (mid,)).fetchone()
     rec, n = (None, 0) if row is None else _opencode_row_data(row[0])
     nbytes += n
     memo[mid] = (live[mid], rec)
-  return nbytes
+  return nbytes, bool(removed or changed)
 
 
 def _build(t: _Tally) -> list[dict]:
@@ -741,7 +795,7 @@ def collect_token_usage(
   signature = _corpus_signature(claude_homes, codex_homes)
   lookup_sig = _opencode_db_signature(opencode_db)
   tally_memo = _tally_memo
-  if lookup_sig is not None and tally_memo is not None and tally_memo[0] == (signature, lookup_sig):
+  if lookup_sig is not None and tally_memo is not None and tally_memo[0][:2] == (signature, lookup_sig):
     _, rows, notes = tally_memo
     return TokenTally(
         rows=_materialize_rows(rows),
@@ -749,28 +803,43 @@ def collect_token_usage(
         elapsed_s=time.perf_counter() - start,
         scanned_bytes=0,
     )
+  fresh_sources = _aggregate_memo is None or _aggregate_memo[0] != signature
+  scan: _OpencodeScan | None = None
+  if not fresh_sources and lookup_sig is not None and tally_memo is not None \
+          and tally_memo[0][0] == signature and tally_memo[0][3]:
+    # The db signature moved, so the fast hit missed; the row memo's key diff is the cheap
+    # proof of whether the WAL wrote rows the tally reads. An unchanged epoch re-serves the
+    # memo and re-signs it at the scan's own signature.
+    scan = _advance_opencode_rows(opencode_db)
+    if scan.ok and scan.epoch == tally_memo[0][2]:
+      _, rows, notes = tally_memo
+      _tally_memo = ((signature, scan.sig, scan.epoch, True), rows, list(notes))
+      return TokenTally(
+          rows=_materialize_rows(rows),
+          notes=list(notes),
+          elapsed_s=time.perf_counter() - start,
+          scanned_bytes=0,
+      )
   t = _Tally()
-  cache = TallyCache.load(cache_path, t.notes) if cache_path is not None else None
-  memo = _aggregate_memo
-  fresh_sources = memo is None or memo[0] != signature
+  cache = TallyCache.load(cache_path, t.notes) if fresh_sources and cache_path is not None else None
   if fresh_sources:
     notes_from = len(t.notes)
     collect_claude(t, claude_homes, cache)
     collect_codex(t, codex_homes, cache)
     _aggregate_memo = (signature, _SourceAggregate.snapshot(t, notes_from))
   else:
-    memo[1].apply(t)
-  read_sig = collect_opencode(t, opencode_db, cache)
+    _aggregate_memo[1].apply(t)
+  read_sig, epoch, from_scan = _merge_opencode(t, opencode_db, cache, scan)
   # Save only on the source-walk path: its lookups refreshed the next document. A memo hit's
   # only fresh entry is the opencode db's, whose WAL sig the next load recomputes anyway.
-  if cache is not None and fresh_sources:
+  if cache is not None:
     try:
       cache.save(cache_path)
     except OSError as exc:
       t.notes.append(f"Tally cache: save failed: {exc}")
   rows = _build(t)
   if read_sig is not None:
-    _tally_memo = ((signature, read_sig), rows, list(t.notes))
+    _tally_memo = ((signature, read_sig, epoch, from_scan), rows, list(t.notes))
   elapsed = time.perf_counter() - start
   return TokenTally(
       rows=_materialize_rows(rows),

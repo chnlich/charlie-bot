@@ -45,6 +45,7 @@ Known-alive symbols:
   `_clear_store_memo` (`tests/test_memory_store_memo.py`),
   `_clear_aggregate_memo` (`tests/test_token_tally.py`),
   `_clear_jsonl_memo` (`tests/test_tui_backend.py`),
+  `_clean_memo` (`tests/test_thread_meta_scan_memo.py`),
   `clear_next_run_memo` (`tests/test_cron_next_run_memo.py`) — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
   definitions, so vulture flags them as unused functions. Vulture also flags

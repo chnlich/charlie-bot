@@ -29,6 +29,7 @@ from conftest import (
     _noop,
     build_scheduler_cfg,
     close_create_logged_task,
+    make_scheduler_setup,
     read_chat_events,
 )
 
@@ -46,7 +47,6 @@ from src.core.models import (
     TaskType,
     ThreadMetadata,
 )
-from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
@@ -294,9 +294,7 @@ def _write_result_events(cfg: Any, session_id: str, thread_id: str, result_text:
 
 @pytest.mark.asyncio
 async def test_fire_spawns_first_step_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  scheduler = Scheduler(cfg, session_mgr)
+  cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
   spawns: list[dict[str, Any]] = []
   _patch_chain_pipes(monkeypatch, spawns)
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
@@ -333,8 +331,7 @@ async def test_step_success_spawns_next_step_with_previous_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
   thread_mgr = ThreadManager(cfg)
   session = await _make_chain_session(cfg, session_mgr)
   step0 = await _make_chain_thread(thread_mgr, session, "selector", None, 0)
@@ -373,8 +370,7 @@ async def test_step_failure_spawns_nothing_and_wakes_master(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
   thread_mgr = ThreadManager(cfg)
   session = await _make_chain_session(cfg, session_mgr)
   step0 = await _make_chain_thread(thread_mgr, session, "selector", None, 0)
@@ -399,8 +395,7 @@ async def test_last_step_completion_wakes_master_once_with_block_per_step(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
   thread_mgr = ThreadManager(cfg)
   session = await _make_chain_session(cfg, session_mgr)
   step0 = await _make_chain_thread(thread_mgr, session, "selector", None, 0)
@@ -453,8 +448,7 @@ async def test_empty_previous_result_stops_chain_and_notes_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
   thread_mgr = ThreadManager(cfg)
   session = await _make_chain_session(cfg, session_mgr)
   step0 = await _make_chain_thread(thread_mgr, session, "selector", None, 0)

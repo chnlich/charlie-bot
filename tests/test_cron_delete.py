@@ -6,9 +6,9 @@ import pytest
 from conftest import (
     OPUS_BACKEND_ID,
     append_events,
-    build_scheduler_cfg,
     cron_d_dir,
     dump_yaml,
+    make_scheduler_setup,
     read_chat_events,
     write_cron_task,
 )
@@ -60,8 +60,7 @@ async def make_scheduled_session(session_mgr: SessionManager, task_name: str):
 
 @pytest.mark.asyncio
 async def test_delete_archives_task_session_and_drops_it_from_scheduled(tmp_path: Path, temp_home: Path) -> None:
-  cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
   write_nightly_task(temp_home)
   session = await make_scheduled_session(session_mgr, "nightly")
 
@@ -84,8 +83,7 @@ async def test_delete_archives_task_session_and_drops_it_from_scheduled(tmp_path
 
 @pytest.mark.asyncio
 async def test_delete_task_without_sessions_returns_empty_archived_list(tmp_path: Path, temp_home: Path) -> None:
-  cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
   write_nightly_task(temp_home)
 
   with make_cron_sessions_client(cfg, session_mgr) as client:
@@ -98,8 +96,7 @@ async def test_delete_task_without_sessions_returns_empty_archived_list(tmp_path
 
 @pytest.mark.asyncio
 async def test_delete_keeps_session_dir_and_history_and_unarchive_restores(tmp_path: Path, temp_home: Path) -> None:
-  cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
   write_nightly_task(temp_home)
   session = await make_scheduled_session(session_mgr, "nightly")
   events_path = session_mgr.get_chat_events_path(session.id)
@@ -116,8 +113,7 @@ async def test_delete_keeps_session_dir_and_history_and_unarchive_restores(tmp_p
 
 
 def test_delete_shapes_missing_task_404_invalid_name_400(tmp_path: Path, temp_home: Path) -> None:
-  cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
 
   with make_cron_sessions_client(cfg, session_mgr) as client:
     missing = client.delete("/api/cron/tasks/nightly")

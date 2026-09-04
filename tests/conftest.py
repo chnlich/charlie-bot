@@ -39,6 +39,7 @@ from src.core import review  # noqa: E402
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402
 from src.core.git import BaseResolution  # noqa: E402
 from src.core.plans import PlanRegistryManager  # noqa: E402
+from src.core.scheduler import Scheduler  # noqa: E402
 from src.core.sessions import SessionManager  # noqa: E402
 from src.core import spawner  # noqa: E402
 from src.core.threads import ThreadManager  # noqa: E402
@@ -789,6 +790,15 @@ def write_trigger(path: Path, trigger: models.PendingTrigger) -> None:
   """Write trigger as a pending-trigger JSON file at path, creating parent dirs."""
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(trigger.model_dump_json(indent=2), encoding="utf-8")
+
+
+def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, Scheduler]:
+  """Real cfg/session_mgr/scheduler trio for scheduler and cron-task tests; the scheduler holds the
+  process-wide SessionManager because a private instance keeps its own chat-event cache and its
+  rounds would never reach the HTTP/WS read paths."""
+  cfg = build_scheduler_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  return cfg, session_mgr, Scheduler(cfg, session_mgr)
 
 
 async def make_plan_setup(

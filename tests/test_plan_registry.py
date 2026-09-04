@@ -163,19 +163,6 @@ async def test_approve_returns_approved(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_present_without_verify_thread_then_approve_succeeds(tmp_path: Path) -> None:
-  """verify_thread is gone from present; approve is unconditional (no verify_state to read)."""
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
-
-  present_result = await plan_mgr.present(meta.id, file=file_rel, title="P1")
-  assert present_result == {"plan": 1, "v": 1, "state": "awaiting approval"}
-
-  approve_result = await plan_mgr.approve(meta.id)
-  assert approve_result == {"plan": 1, "v": 1, "state": "approved"}
-
-
-@pytest.mark.asyncio
 async def test_approve_unconditional_no_verify_state_field(tmp_path: Path) -> None:
   """A version dict that would previously have been verify_state=mismatch approves unconditionally."""
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)

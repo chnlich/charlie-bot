@@ -26,6 +26,7 @@ from conftest import (
   SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
   SCHEDULER_GET_CONFIG_PATCH_TARGET,
   SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
+  _noop,
   build_scheduler_cfg,
   close_create_logged_task,
   read_chat_events,
@@ -53,10 +54,6 @@ SELECTOR_BODY = "Select memory candidates.\n"
 REVIEWER_BODY = "Review the memory diff.\n"
 SELECTOR_RESULT = "revise entries/workflow/focus.md plus three proof lines"
 REVIEWER_RESULT = "report written to the session artifacts"
-
-
-async def _noop() -> None:
-  return None
 
 
 # --- (a) loader --------------------------------------------------------------

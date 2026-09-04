@@ -1435,6 +1435,11 @@ async def fake_spawn_worker(
   return
 
 
+async def _noop() -> None:
+  """Awaitable stand-in returned by fakes patched over coroutine-returning helpers."""
+  return None
+
+
 def close_create_logged_task(coro: Any, *, name: str | None = None) -> None:
   """create_logged_task stand-in: closes the coroutine instead of scheduling it as a task."""
   coro.close()

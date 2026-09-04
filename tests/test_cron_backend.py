@@ -17,6 +17,7 @@ from conftest import (
   SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
   SCHEDULER_THREAD_MANAGER_PATCH_TARGET,
   FakeThreadManager,
+  _noop,
   build_scheduler_cfg,
   close_create_logged_task,
   make_cron_client,
@@ -37,10 +38,6 @@ from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
 from src.core.thinking_state import clear_busy, mark_busy
 from src.core.threads import ThreadManager
-
-
-async def _noop() -> None:
-  return None
 
 
 def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: Path) -> None:

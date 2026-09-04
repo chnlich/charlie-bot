@@ -61,6 +61,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M48 search content-scan missing-file debug stream, steady state | M48 collector below | debug lines per 60 steady-state content scans of an active session whose live chat file is missing | 0 lines after the first sighting per (session, error) per process | — (introduced with its first history row) |
 | M49 opencode part-unhandled debug stream, steady state | M49 collector below | debug lines per 60 steady-state `_translate_part` calls of one unhandled part type | 0 lines after the first sighting per part type per process | — (introduced with its first history row) |
 | M50 ext-usage credentials read warning stream, steady state | M50 collector below | warnings per 60 steady-state `_read_credentials` calls of a tokenless file | 0 warnings after the first sighting per (event, path) per broken streak | — (introduced with its first history row) |
+| M51 sidebar dirty-session deep probe, post-write | M51 collector below | seconds per post-write deep probe of the worst on-disk threads corpus (scratch copy, one atomic metadata rewrite per round) | median < 0.010 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2660,6 +2661,86 @@ print(f"60 steady-state credential reads of a tokenless file; ext_usage_no_acces
 EOF
 ```
 
+M51 — sidebar dirty-session deep probe, post-write. The 3 s status poll deep-probes a
+session whenever its stat-only probe-input signature moved — which is every poll that
+follows any write to the session (session/thread metadata writes mark it dirty), i.e.
+continuously during an active turn. The deep probe's read path re-enters
+`iter_recent_thread_metas`, which read and re-parsed every in-window (30-day) thread
+metadata file per probe. The collector copies the session whose threads dir carries the
+most metadata files (the M5 resolution rule) into a scratch `CHARLIEBOT_HOME` under /tmp
+(live home read once for the copy, never written), warms the probe as a server start
+does, then drives the post-write poll's shape: one atomic metadata rewrite (the
+tmp-file rename every thread-metadata writer performs) dirties the signature, and the
+sweep that follows is the deep probe — one cold pass, then five timed post-write sweeps,
+victim rotation resolved once so the pick itself stays out of the timing. Evidence while
+the live server runs older code points the same collector at the branch checkout
+(`CHECKOUT` at the worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core import sidebar_state
+from src.core.sessions import probe_sidebar_state_sync, selective_probe_sidebar_state
+
+# Worst deep-probe corpus: the session whose threads dir carries the most
+# metadata files (the M5 resolution rule).
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    t = d / "threads"
+    if t.is_dir():
+        n = sum(1 for p in t.iterdir() if (p / "metadata.json").is_file())
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+print(f"worst deep-probe corpus: session {SID}, {best_n} thread metadata files")
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
+# session's threads/; live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m51-deep-probe-", dir="/tmp"))
+dst = home / "sessions" / SID / "threads"
+dst.parent.mkdir(parents=True)
+shutil.copytree(best / "threads", dst)
+spec = (SID, dst, home / "sessions" / SID / "triggers", home / "sessions" / SID / "plans.json")
+
+sidebar_state.reset_for_tests()
+probe_sidebar_state_sync([spec])  # cold pass, as at a server start; not timed
+
+# Victim rotation, resolved once: each post-write sweep renames the next
+# metadata file. (Picking the newest victim per round with a Path.glob would
+# measure the pick, not the probe.)
+victims = sorted(dst.glob("*/metadata.json"), key=lambda p: p.stat().st_mtime_ns)
+
+def post_write_sweep() -> None:
+    # One thread-metadata write dirties the session: the tmp inode's fresh
+    # mtime_ns rides the atomic rename, the stat-only signature moves, and the
+    # next poll's sweep deep-probes.
+    victim = victims[post_write_sweep.i % len(victims)]
+    post_write_sweep.i += 1
+    tmp = victim.with_name("metadata.json.m51")
+    tmp.write_text(victim.read_text(encoding="utf-8"), encoding="utf-8")
+    os.replace(tmp, victim)
+    entries, sigs = selective_probe_sidebar_state([spec], deep=False)
+    assert entries, "deep probe returned no entry"
+    for sid, sig in sigs.items():
+        sidebar_state.store_probe_signature(sid, sig)  # the poll's on-loop storage half
+
+post_write_sweep.i = 0
+post_write_sweep()  # first post-write poll, as after any write; not timed
+times = []
+for _ in range(5):
+    t0 = time.perf_counter()
+    post_write_sweep()
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"{best_n} thread metadata files; post-write deep probe median "
+      f"{times[2] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms")
+shutil.rmtree(home)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2725,3 +2806,4 @@ EOF
 | 2026-09-04 | this PR | M48 60 → 0 search_read_failed debug lines per 60 steady-state content scans of a no-live-file session (collector verbatim, main checkout before vs branch after back-to-back at load 0.75/0.78/0.64; live-log corroboration 30 lines in the 11.92 h server log, all naming the one active session with no live chat file; search results and M8 monitoring shape unchanged) | both search content-scan failed-read loggers (the stat failure and the scan-open failure) routed through a (session, error) warn-once guard — one line per reported failure per process, a swapped path or errno earns one new line; M48 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M49 60 → 0 opencode_part_unhandled debug lines per 60 steady-state parts of one unhandled type (collector verbatim, main checkout before vs branch after back-to-back at load 0.25/0.59/0.86; live-log corroboration 152 lines in the 12.88 h server log, every line type=patch; unhandled parts still translate to []) | the part type falling through `_translate_part` routed through a part-type warn-once registry — one line per unmapped type per process; M49 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M50 60 → 0 ext_usage_no_access_token warnings per 60 steady-state credential reads of a tokenless file (collector verbatim, main checkout before at load 0.97/0.75/0.66 vs branch after at load 0.29/0.59/0.62, back-to-back; live-log corroboration 135 lines in the 13.89 h server log ≈ 10/h, every line ext_usage_no_access_token naming the same path; every read still returns None and a token-bearing read re-arms the path) | both `_read_credentials` failure-site warnings (ext_usage_credentials_not_found, ext_usage_no_access_token) routed through a recovery-aware warn-once registry — one line per (event, path) per broken streak, a read returning a token re-arms the path; M50 definition and healthy range introduced with this PR |
+| 2026-09-04 | this PR | M51 post-write deep probe median 25.82/25.62 ms → 6.12/6.30 ms, max 26.22/25.98 ms → 6.33/8.04 ms (collector verbatim, 339-file worst threads corpus, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×2 at load 1.16-1.70/1.18-1.32/0.95-1.04; probe verdicts identical — unchanged-sig sweep re-measured 0.0021 s vs 0.0022 s standing M21, no regression) | the sidebar deep probe's thread-metadata scan (`iter_recent_thread_metas`, shared with the boot recovery scan) memoizes each in-window metadata file's parsed dict on (path, mtime_ns, size) — every writer publishes through the atomic tmp-file rename so a content change always moves mtime_ns, the signature is taken before the read so a mid-rewrite entry keys the older signature, only successful parses memoize, and yielded dicts are shared read-only; a post-write probe re-parses the moved file alone instead of all 339; M51 definition and healthy range introduced with this PR |

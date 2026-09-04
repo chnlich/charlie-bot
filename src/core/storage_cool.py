@@ -38,10 +38,10 @@ from pathlib import Path
 import structlog
 
 from src.core.config import (
-  BackendOption,
-  CharlieBotConfig,
-  claude_config_dir,
-  get_config,
+    BackendOption,
+    CharlieBotConfig,
+    claude_config_dir,
+    get_config,
 )
 from src.core.json_utils import load_json_meta
 from src.core.models import SessionStatus, parse_utc_datetime
@@ -57,13 +57,14 @@ ORPHAN_IDLE_DAYS = 2
 # The five transport names a run's managed directories reserve, plus the numbered
 # variants a re-spawn rotates them to (src/agents/backends/base.py
 # _rotate_stale_transport). Matching stays scoped to the managed directories.
-RAW_TRANSPORT_NAMES = frozenset({
-    "agent.raw.ndjson",
-    "agent.stderr.log",
-    "agent.raw.cursor",
-    "stdout.log",
-    "stderr.log",
-})
+RAW_TRANSPORT_NAMES = frozenset(
+    {
+        "agent.raw.ndjson",
+        "agent.stderr.log",
+        "agent.raw.cursor",
+        "stdout.log",
+        "stderr.log",
+    })
 
 # Canonical UUID form of a CharlieBot session id, as it appears verbatim inside a
 # Claude Code transcript directory name (hyphens pass the cwd encoding through).
@@ -178,9 +179,7 @@ def _scan_sessions(cfg: CharlieBotConfig, now: datetime, min_idle_days: int) -> 
   return facts
 
 
-def _scan_references(
-    cfg: CharlieBotConfig, facts: dict[str, _SessionFacts]
-) -> dict[str, list[_SessionFacts]]:
+def _scan_references(cfg: CharlieBotConfig, facts: dict[str, _SessionFacts]) -> dict[str, list[_SessionFacts]]:
   """Backend session ids CharlieBot metadata references, mapped to their referencing sessions.
 
   A session's ``cc_session_id`` is the reference its backend record hangs from;
@@ -532,9 +531,8 @@ def _scoped_backend_sessions(
   owner = facts.get(session_id)
   backend_sessions = {owner.cc_session_id} if owner and owner.cc_session_id is not None else set()
   backend_sessions.update(
-      backend_session for backend_session, owners in references.items()
-      if any(reference.id == session_id for reference in owners)
-  )
+      backend_session for backend_session, owners in references.items() if any(
+          reference.id == session_id for reference in owners))
   return backend_sessions
 
 
@@ -544,8 +542,7 @@ def _scoped_backend_sessions(
 
 _AGGREGATE_IDS_SQL = "select aggregate_id from event_sequence"
 _AGGREGATE_SIZES_SQL = (
-    "select aggregate_id, count(*), sum(length(data)) from event where aggregate_id in ({}) group by aggregate_id"
-)
+    "select aggregate_id, count(*), sum(length(data)) from event where aggregate_id in ({}) group by aggregate_id")
 _SESSION_UPDATED_SQL = "select id, time_updated from session"
 
 
@@ -648,8 +645,7 @@ def _opencode_targets(
     return None
   window_ids = [
       aggregate_id for aggregate_id in unreferenced
-      if aggregate_id in updated
-      and now.timestamp() - updated[aggregate_id] / 1000 >= ORPHAN_IDLE_DAYS * 86400
+      if aggregate_id in updated and now.timestamp() - updated[aggregate_id] / 1000 >= ORPHAN_IDLE_DAYS * 86400
   ]
   return _opencode_aggregate_sizes(db, referenced_cold + window_ids)
 
@@ -782,15 +778,16 @@ def run_cool_sweep(
       _sweep_raw_transport(cfg.sessions_dir / cold_id, transport, dry_run)
   _sweep_claude_transcripts(cfg, facts, now, claude, dry_run=dry_run, session_id=session_id)
   _sweep_codex_rollouts(cfg, facts, references, now, codex, dry_run=dry_run, session_id=session_id)
-  _sweep_opencode(
-      DEFAULT_OPENCODE_DB, facts, references, now, opencode, dry_run=dry_run, session_id=session_id)
+  _sweep_opencode(DEFAULT_OPENCODE_DB, facts, references, now, opencode, dry_run=dry_run, session_id=session_id)
 
-  result = SweepResult(categories=tuple([
-      CategoryResult(transport.name, transport.unit, transport.count, transport.bytes),
-      CategoryResult(claude.name, claude.unit, claude.count, claude.bytes),
-      CategoryResult(codex.name, codex.unit, codex.count, codex.bytes),
-      CategoryResult(opencode.name, opencode.unit, opencode.count, opencode.bytes),
-  ]))
+  result = SweepResult(
+      categories=tuple(
+          [
+              CategoryResult(transport.name, transport.unit, transport.count, transport.bytes),
+              CategoryResult(claude.name, claude.unit, claude.count, claude.bytes),
+              CategoryResult(codex.name, codex.unit, codex.count, codex.bytes),
+              CategoryResult(opencode.name, opencode.unit, opencode.count, opencode.bytes),
+          ]))
   log.info(
       "storage_cool_sweep_done",
       dry_run=dry_run,
@@ -821,4 +818,4 @@ def format_sweep_table(result: SweepResult, *, dry_run: bool) -> str:
 
 
 def _gib(num_bytes: int) -> float:
-  return num_bytes / (1024 ** 3)
+  return num_bytes / (1024**3)

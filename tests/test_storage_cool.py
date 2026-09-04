@@ -51,8 +51,7 @@ def build_cfg(tmp_path: Path, *, with_codex: bool = True) -> CharlieBotConfig:
   options = [BackendOption(id="opus", label="Opus", type="cc-claude", model="m")]
   if with_codex:
     options.append(
-        BackendOption(id="codex-test", label="Codex", type="codex", model="m",
-                      codex_home=str(tmp_path / CODEX_HOME)))
+        BackendOption(id="codex-test", label="Codex", type="codex", model="m", codex_home=str(tmp_path / CODEX_HOME)))
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       worktree_dir=str(tmp_path / "worktrees"),
@@ -124,11 +123,7 @@ def tree_bytes_snapshot(root: Path) -> dict[str, bytes]:
   """Every file's bytes under *root*, keyed by relative path; missing root means empty."""
   if not root.exists():
     return {}
-  return {
-      str(path.relative_to(root)): path.read_bytes()
-      for path in sorted(root.rglob("*"))
-      if path.is_file()
-  }
+  return {str(path.relative_to(root)): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
 
 
 # ---------------------------------------------------------------------------
@@ -232,8 +227,7 @@ def test_transport_rule_leaves_unrecognized_names_inside_managed_dirs(cool_env: 
     assert (data_dir / name).read_bytes() == payload
 
 
-def test_transport_rule_does_not_follow_managed_directory_symlinks(
-    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+def test_transport_rule_does_not_follow_managed_directory_symlinks(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   cfg = cool_env
   write_session_meta(cfg, SID_COLD, cold_meta())
   external = tmp_path / "external"
@@ -272,8 +266,7 @@ def test_claude_dirs_delete_for_cold_sessions_and_keep_live_ones(tmp_path: Path,
   assert claude_result.bytes == 2 * len(b"claude-transcript")
 
 
-def test_claude_orphan_dirs_deleted_past_window_and_kept_within_it(
-    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+def test_claude_orphan_dirs_deleted_past_window_and_kept_within_it(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   cfg = cool_env
   dead_old = claude_dir(tmp_path, f"-tmp-somehome--charliebot-sessions-{SID_DEAD}")
   dead_recent = claude_dir(tmp_path, f"-tmp-otherhome--charliebot-sessions-{SID_DEAD}")
@@ -308,8 +301,7 @@ def test_claude_deleted_worktree_dirs_deleted_and_live_worktrees_kept(
   live_worktree = worktrees / "charliebot-task-100-alive"
   live_worktree.mkdir()
   gone = claude_dir(tmp_path, claude_project_dir_name(worktrees / "charliebot-task-200-gone"))
-  trash = claude_dir(
-      tmp_path, claude_project_dir_name(worktrees / WORKTREE_TRASH_NAME / "charliebot-task-300"))
+  trash = claude_dir(tmp_path, claude_project_dir_name(worktrees / WORKTREE_TRASH_NAME / "charliebot-task-300"))
   alive = claude_dir(tmp_path, claude_project_dir_name(live_worktree))
   age_file(gone / "transcript.jsonl", timedelta(days=5))
   age_file(trash / "transcript.jsonl", timedelta(days=5))
@@ -335,8 +327,7 @@ def test_claude_user_cwd_dirs_never_touched(tmp_path: Path, cool_env: CharlieBot
     assert path.exists()
 
 
-def test_claude_orphan_window_reads_newest_file_not_dir_mtime(
-    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+def test_claude_orphan_window_reads_newest_file_not_dir_mtime(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   """A project dir whose only file is recent survives even when the dir itself is old."""
   cfg = cool_env
   recent_dir = claude_dir(tmp_path, f"-tmp-home--charliebot-sessions-{SID_DEAD}")
@@ -394,8 +385,7 @@ def write_rollout(tree: Path, name: str, payload: bytes = b"rollout", *, mtime: 
   return path
 
 
-def test_codex_rollouts_follow_session_cold_and_orphan_window_rules(
-    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+def test_codex_rollouts_follow_session_cold_and_orphan_window_rules(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   cfg = cool_env
   write_session_meta(cfg, SID_COLD, cold_meta(cc_session_id=CODEX_COLD))
   write_session_meta(cfg, SID_LIVE, live_meta(cc_session_id=CODEX_LIVE))
@@ -483,16 +473,25 @@ def set_opencode_updated(db: Path, aggregate_id: str, updated_ms: int) -> None:
     connection.close()
 
 
-def test_opencode_delete_cascades_to_exactly_one_aggregates_events(
-    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+def test_opencode_delete_cascades_to_exactly_one_aggregates_events(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   cfg = cool_env
   db = tmp_path / "opencode.db"
   payload_a, payload_b = b"a" * 100, b"b" * 100
-  make_opencode_db(db, {
-      CC_OPENCOLD: {"events": [payload_a, payload_a], "messages": 2},
-      CC_OPENLIVE: {"events": [payload_b], "messages": 3},
-      CC_OPENORPHAN: {"events": [payload_a], "messages": 1},
-  })
+  make_opencode_db(
+      db, {
+          CC_OPENCOLD: {
+              "events": [payload_a, payload_a],
+              "messages": 2
+          },
+          CC_OPENLIVE: {
+              "events": [payload_b],
+              "messages": 3
+          },
+          CC_OPENORPHAN: {
+              "events": [payload_a],
+              "messages": 1
+          },
+      })
   write_session_meta(cfg, SID_COLD, cold_meta(cc_session_id=CC_OPENCOLD))
   write_session_meta(cfg, SID_LIVE, live_meta(cc_session_id=CC_OPENLIVE))
   set_opencode_updated(db, CC_OPENORPHAN, int((NOW - timedelta(days=3)).timestamp() * 1000))
@@ -517,8 +516,7 @@ def test_opencode_delete_cascades_to_exactly_one_aggregates_events(
   assert opencode_result.bytes == 3 * len(payload_a)
 
 
-def test_opencode_unreferenced_recent_aggregate_survives_window(
-    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+def test_opencode_unreferenced_recent_aggregate_survives_window(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   cfg = cool_env
   db = tmp_path / "opencode.db"
   make_opencode_db(db, {CC_OPENORPHAN: {"events": [b"fresh"]}})
@@ -563,8 +561,7 @@ def test_opencode_vacuum_is_retried_after_a_failed_prior_attempt(
   assert calls == [True, False]
 
 
-def test_scoped_backend_record_shared_with_live_session_survives(
-    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+def test_scoped_backend_record_shared_with_live_session_survives(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   cfg = cool_env
   db = tmp_path / "opencode.db"
   make_opencode_db(db, {CC_OPENCOLD: {"events": [b"shared"]}})
@@ -595,8 +592,7 @@ def test_scoped_live_run_does_not_vacuum_unrelated_database_pages(
   assert calls == []
 
 
-def test_orphan_thread_metadata_keeps_backend_record_referenced(
-    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+def test_orphan_thread_metadata_keeps_backend_record_referenced(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   cfg = cool_env
   db = tmp_path / "opencode.db"
   make_opencode_db(db, {CC_OPENCOLD: {"events": [b"referenced"]}})
@@ -637,8 +633,7 @@ def test_second_run_frees_nothing(tmp_path: Path, cool_env: CharlieBotConfig) ->
   assert all(category.count == 0 for category in second.categories)
 
 
-def test_dry_run_leaves_every_byte_untouched_and_matches_real_run(
-    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+def test_dry_run_leaves_every_byte_untouched_and_matches_real_run(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   cfg = cool_env
   _seed_every_category(tmp_path, cfg)
   db = tmp_path / "opencode.db"
@@ -699,14 +694,20 @@ def test_unreadable_transport_file_does_not_stop_the_run(
   assert result.category("raw-transport").count == 2
 
 
-def test_failing_sql_statement_does_not_stop_the_run(
-    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+def test_failing_sql_statement_does_not_stop_the_run(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   cfg = cool_env
   db = tmp_path / "opencode.db"
-  make_opencode_db(db, {
-      CC_OPENCOLD: {"events": [b"a" * 10], "messages": 1},
-      CC_OPENLIVE: {"events": [b"b" * 10], "messages": 1},
-  })
+  make_opencode_db(
+      db, {
+          CC_OPENCOLD: {
+              "events": [b"a" * 10],
+              "messages": 1
+          },
+          CC_OPENLIVE: {
+              "events": [b"b" * 10],
+              "messages": 1
+          },
+      })
   write_session_meta(cfg, SID_COLD, cold_meta(cc_session_id=CC_OPENCOLD))
   connection = sqlite3.connect(db)
   try:
@@ -731,8 +732,7 @@ def test_failing_sql_statement_does_not_stop_the_run(
 # ---------------------------------------------------------------------------
 
 
-def test_session_scope_limits_the_sweep_and_keeps_the_cold_rule(
-    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+def test_session_scope_limits_the_sweep_and_keeps_the_cold_rule(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   cfg = cool_env
   write_session_meta(cfg, SID_COLD, cold_meta(cc_session_id=CC_OPENCOLD))
   write_session_meta(cfg, SID_LIVE, live_meta(cc_session_id=CC_OPENLIVE))
@@ -743,10 +743,17 @@ def test_session_scope_limits_the_sweep_and_keeps_the_cold_rule(
   orphan_claude = claude_dir(tmp_path, f"-tmp-somehome--charliebot-sessions-{SID_DEAD}")
   age_file(orphan_claude / "transcript.jsonl", timedelta(days=3))
   db = tmp_path / "opencode.db"
-  make_opencode_db(db, {
-      CC_OPENCOLD: {"events": [b"a"], "messages": 1},
-      CC_OPENLIVE: {"events": [b"b"], "messages": 1},
-  })
+  make_opencode_db(
+      db, {
+          CC_OPENCOLD: {
+              "events": [b"a"],
+              "messages": 1
+          },
+          CC_OPENLIVE: {
+              "events": [b"b"],
+              "messages": 1
+          },
+      })
 
   result = run_cool_sweep(cfg=cfg, now=NOW, session_id=SID_COLD)
 

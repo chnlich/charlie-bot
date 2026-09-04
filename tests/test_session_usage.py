@@ -10,6 +10,7 @@ from src.agents.backends.claude_code import (
   CLAUDE_COMPACT_CONTEXT_RESERVE,
   CLAUDE_COMPACT_OUTPUT_RESERVE,
   HEADLESS_CLAUDE_DEFAULT_ENV,
+  _reset_declared_window_warnings_for_tests,
   headless_claude_declared_window,
 )
 from src.core import session_usage
@@ -446,6 +447,7 @@ def _clean_ceiling_env(monkeypatch: pytest.MonkeyPatch) -> None:
   for name in ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
                "CLAUDE_CODE_MAX_CONTEXT_TOKENS"):
     monkeypatch.delenv(name, raising=False)
+  _reset_declared_window_warnings_for_tests()
 
 
 @pytest.mark.usefixtures("_clean_ceiling_env")
@@ -490,6 +492,27 @@ def test_declared_window_returns_default_when_window_unparseable_and_warns(
   out = capsys.readouterr().out
   assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW" in out
   assert "declared_window" in out.lower()
+
+
+@pytest.mark.usefixtures("_clean_ceiling_env")
+def test_declared_window_degraded_warning_fires_once_per_process(monkeypatch, capsys) -> None:
+  monkeypatch.setenv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "400000")
+  assert headless_claude_declared_window()[1] is None
+  assert "claude_declared_window_degraded" in capsys.readouterr().out
+  assert headless_claude_declared_window()[1] is None
+  assert capsys.readouterr().out == ""
+
+
+@pytest.mark.usefixtures("_clean_ceiling_env")
+def test_declared_window_unparseable_warning_refires_for_a_new_bad_value(monkeypatch, capsys) -> None:
+  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "not-a-number")
+  headless_claude_declared_window()
+  assert "claude_declared_window_unparseable_window" in capsys.readouterr().out
+  headless_claude_declared_window()
+  assert capsys.readouterr().out == ""
+  monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "also-not-a-number")
+  headless_claude_declared_window()
+  assert "claude_declared_window_unparseable_window" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

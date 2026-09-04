@@ -61,6 +61,31 @@ HEADLESS_CLAUDE_FORWARDED_ENV_NAMES: tuple[str, ...] = (
 CLAUDE_COMPACT_OUTPUT_RESERVE = 20_000
 CLAUDE_COMPACT_CONTEXT_RESERVE = 13_000
 
+# Usage resolution re-derives the declared window per call while the environment a
+# degradation warning reports is fixed for the process's life, so the first sighting
+# of each (event, variable, value) is the whole alarm and every repeat re-fires it.
+_DECLARED_WINDOW_WARNINGS_SEEN: set[tuple[str, str, str]] = set()
+
+
+def _warn_declared_window_once(event: str, *, variable: str, value: str, **fields: str) -> None:
+  """Log one declared-window degradation per (event, variable, value) per process.
+
+  A caller relies on at most one line per key: the first sighting carries the full
+  signal and a later call on unchanged environment repeats a fired alarm. ``value``
+  is the offending raw setting, so an edit that swaps one bad value for another
+  earns one new line.
+  """
+  key = (event, variable, value)
+  if key in _DECLARED_WINDOW_WARNINGS_SEEN:
+    return
+  _DECLARED_WINDOW_WARNINGS_SEEN.add(key)
+  log.warning(event, variable=variable, **fields)
+
+
+def _reset_declared_window_warnings_for_tests() -> None:
+  """Clear the warn-once registry, restoring the process-start state."""
+  _DECLARED_WINDOW_WARNINGS_SEEN.clear()
+
 
 def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
   """Environment for a supervisor process whose children run Claude Code.
@@ -121,12 +146,12 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
   constants. Degrades loudly, never silently:
 
   - unparseable / non-positive window: ``declared_window`` falls back to the 433000
-    default and ``compact_point`` is derived normally; one ``log.warning`` names the
-    responsible variable.
+    default and ``compact_point`` is derived normally; one ``log.warning`` per
+    process names the responsible variable.
   - a forwarded-but-unmodelled override (``CLAUDE_AUTOCOMPACT_PCT_OVERRIDE``,
     ``CLAUDE_CODE_MAX_CONTEXT_TOKENS``) is present: ``declared_window`` is the parsed
     window and ``compact_point`` is ``None`` (the caller then reports no compaction
-    line); one ``log.warning`` names the responsible variable.
+    line); one ``log.warning`` per process names the responsible variable.
   """
   env = headless_claude_env()
   raw_window = env.get(
@@ -140,18 +165,20 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
     if window <= 0:
       raise ValueError(f"non-positive window: {raw_window!r}")
   except (ValueError, TypeError):
-    log.warning(
+    _warn_declared_window_once(
         "claude_declared_window_unparseable_window",
         variable="CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        value=str(raw_window),
         window=raw_window,
     )
     window = default_window
 
   for override_name in ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_MAX_CONTEXT_TOKENS"):
     if override_name in env:
-      log.warning(
+      _warn_declared_window_once(
           "claude_declared_window_degraded",
           variable=override_name,
+          value=env[override_name],
           reason="forwarded but semantics not modelled; returning declared window without compaction point",
       )
       return window, None

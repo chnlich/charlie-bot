@@ -100,6 +100,19 @@ class ScheduledSessionStore:
     )
     return meta
 
+  async def archive_sessions_for_task(self, task_name: str) -> list[str]:
+    """Archive every active session dedicated to task_name and return the archived ids.
+
+    Deletion-time counterpart of rotation: the sessions flip to the same archived
+    status with history kept on disk, so unarchive can restore them.
+    """
+    active_sessions = await self._active_scheduled_sessions(task_name)
+    archived_ids: list[str] = []
+    for session in active_sessions:
+      await self._session_manager.archive_session(session.id)
+      archived_ids.append(session.id)
+    return archived_ids
+
   async def _active_scheduled_sessions(
       self,
       task_name: str,

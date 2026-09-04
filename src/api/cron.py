@@ -255,13 +255,17 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
 
 
 @router.delete('/tasks/{name}')
-async def delete_cron_task(name: str):
-  """Remove a job by unlinking its config.d/cron.d/<name>.yaml file."""
+async def delete_cron_task(name: str, session_mgr: SessionManager = Depends(get_session_manager)):
+  """Remove a job by archiving its dedicated sessions, then unlinking its config.d/cron.d/<name>.yaml."""
   if not _CRON_NAME_RE.fullmatch(name):
     raise HTTPException(status_code=400, detail=f'invalid cron name: {name!r}')
   path = cron_path(name)
   if not path.exists():
     raise HTTPException(status_code=404, detail=f'Task "{name}" not found')
+  # Archive before unlink, mirroring the PUT route's rotate-then-write order: a
+  # failed unlink leaves the task alive and the next tick's get-or-create
+  # self-heals a fresh generation.
+  archived_sessions = await session_mgr.archive_scheduled_sessions(name)
   path.unlink()
-  log.debug('cron_task_deleted', name=name)
-  return {'ok': True}
+  log.debug('cron_task_deleted', name=name, archived_sessions=archived_sessions)
+  return {'ok': True, 'archived_sessions': archived_sessions}

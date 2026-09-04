@@ -327,6 +327,40 @@ def test_claude_user_cwd_dirs_never_touched(tmp_path: Path, cool_env: CharlieBot
     assert path.exists()
 
 
+def test_claude_projects_roots_include_default_home_beside_env_home(
+    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+  """CLAUDE_CONFIG_DIR points at a non-default home with no configured override,
+  yet the default home's projects tree stays in the search set."""
+  roots = storage_cool.claude_projects_roots(cool_env)
+
+  assert tmp_path / CLAUDE_HOME / "projects" in roots
+  assert tmp_path / ".claude" / "projects" in roots
+
+
+def test_default_home_transcript_deleted_and_human_dir_untouched_by_foreign_env_sweep(
+    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+  """A sweep under a CLAUDE_CONFIG_DIR pointing elsewhere still deletes a cold
+  session's transcript directory in the default home, while a directory there
+  whose name encodes neither a session id nor the worktree prefix survives
+  byte-unchanged: widening the search set is not widening the deletion set."""
+  cfg = cool_env
+  write_session_meta(cfg, SID_COLD, cold_meta())
+  default_root = tmp_path / ".claude" / "projects"
+  cold_dir = default_root / encoded_session_dir(cfg, SID_COLD)
+  cold_dir.mkdir(parents=True)
+  (cold_dir / "transcript.jsonl").write_bytes(b"claude-transcript")
+  human_dir = default_root / "-home-dev-workspace-my-own-project"
+  human_dir.mkdir(parents=True)
+  (human_dir / "transcript.jsonl").write_bytes(b"human-bytes")
+
+  result = run_cool_sweep(cfg=cfg, now=NOW)
+
+  assert not cold_dir.exists()
+  assert (human_dir / "transcript.jsonl").read_bytes() == b"human-bytes"
+  assert result.category("claude-transcripts").count == 1
+  assert result.category("claude-transcripts").bytes == len(b"claude-transcript")
+
+
 def test_claude_orphan_window_reads_newest_file_not_dir_mtime(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   """A project dir whose only file is recent survives even when the dir itself is old."""
   cfg = cool_env

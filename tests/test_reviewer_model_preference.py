@@ -6,19 +6,17 @@ from typing import Any
 
 import pytest
 from conftest import (
-  OPUS_BACKEND_ID,
-  OPUS_BACKEND_OPTION,
-  JudgmentShim,
-  ReviewSpawnSessionManager,
-  ReviewSpawnThreadManager,
-  capture_create_logged_task,
-  fake_git_current_branch,
-  fake_spawn_worker,
-  patch_review_spawn_path,
+    OPUS_BACKEND_ID,
+    OPUS_BACKEND_OPTION,
+    JudgmentShim,
+    ReviewSpawnSessionManager,
+    ReviewSpawnThreadManager,
+    capture_create_logged_task,
+    fake_git_current_branch,
+    fake_spawn_worker,
+    patch_review_spawn_path,
 )
-from conftest import (
-  THREE_BACKEND_OPTIONS as BACKEND_OPTIONS,
-)
+from conftest import THREE_BACKEND_OPTIONS as BACKEND_OPTIONS
 
 from src.core import review, spawner
 from src.core.config import CharlieBotConfig
@@ -146,7 +144,11 @@ async def test_spawn_review_worker_replaces_failed_reviewer_via_exclusion(monkey
   patch_review_spawn_path(monkeypatch, captured)
 
   spawned = await review.spawn_review_worker(
-      "session-id", original, cfg, ReviewSpawnSessionManager("Test"), ThreadMgrWithFailedReviewer(),
+      "session-id",
+      original,
+      cfg,
+      ReviewSpawnSessionManager("Test"),
+      ThreadMgrWithFailedReviewer(),
       exclude_thread_id="failed-review")
 
   assert spawned is True
@@ -158,22 +160,23 @@ _AGY_OPTION = BackendOption(id="agy", label="Antigravity", type="antigravity")
 # One model_preference selection rule per case. Row shape: (extra backend option,
 # model_preference, worker backend/model, expected reviewer backend/model).
 _PREFERENCE_CASES = [
-    pytest.param(None, [], ("codex-o3", "o3"), ("codex-o3", "o3"),
-                 id="empty-preference-uses-worker-backend"),
-    pytest.param(None, ["kimi-k2.5", OPUS_BACKEND_ID], ("codex-o3", "o3"), ("kimi-k2.5", "kimi-k2.5"),
-                 id="selects-first-non-matching-entry"),
-    pytest.param(_AGY_OPTION, ["agy"], ("codex-o3", "o3"), ("agy", None),
-                 id="selects-antigravity-entry-without-model"),
-    pytest.param(None, ["codex-o3", OPUS_BACKEND_ID], ("codex-o3", "o3"), (OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model),
-                 id="skips-entry-matching-worker-backend"),
-    pytest.param(None, ["nonexistent-1", "nonexistent-2"], ("codex-o3", "o3"), ("codex-o3", "o3"),
-                 id="invalid-entries-fall-back-to-worker-backend"),
-    pytest.param(None, ["codex-o3"], ("codex-o3", "o3"), ("codex-o3", "o3"),
-                 id="all-entries-matching-worker-fall-back"),
-    pytest.param(_AGY_OPTION, [], ("agy", None), ("agy", None),
-                 id="antigravity-worker-missing-model-keeps-backend"),
-    pytest.param(None, ["nonexistent", "kimi-k2.5"], ("codex-o3", "o3"), ("kimi-k2.5", "kimi-k2.5"),
-                 id="skips-invalid-entry-selects-next-valid"),
+    pytest.param(None, [], ("codex-o3", "o3"), ("codex-o3", "o3"), id="empty-preference-uses-worker-backend"),
+    pytest.param(
+        None, ["kimi-k2.5", OPUS_BACKEND_ID], ("codex-o3", "o3"), ("kimi-k2.5", "kimi-k2.5"),
+        id="selects-first-non-matching-entry"),
+    pytest.param(_AGY_OPTION, ["agy"], ("codex-o3", "o3"), ("agy", None), id="selects-antigravity-entry-without-model"),
+    pytest.param(
+        None, ["codex-o3", OPUS_BACKEND_ID], ("codex-o3", "o3"), (OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model),
+        id="skips-entry-matching-worker-backend"),
+    pytest.param(
+        None, ["nonexistent-1", "nonexistent-2"], ("codex-o3", "o3"), ("codex-o3", "o3"),
+        id="invalid-entries-fall-back-to-worker-backend"),
+    pytest.param(
+        None, ["codex-o3"], ("codex-o3", "o3"), ("codex-o3", "o3"), id="all-entries-matching-worker-fall-back"),
+    pytest.param(_AGY_OPTION, [], ("agy", None), ("agy", None), id="antigravity-worker-missing-model-keeps-backend"),
+    pytest.param(
+        None, ["nonexistent", "kimi-k2.5"], ("codex-o3", "o3"), ("kimi-k2.5", "kimi-k2.5"),
+        id="skips-invalid-entry-selects-next-valid"),
 ]
 
 
@@ -196,10 +199,7 @@ async def test_spawn_review_worker_resolves_preference(
   patch_review_spawn_path(monkeypatch, captured)
 
   await review.spawn_review_worker(
-      "session-id",
-      _make_original_thread(backend=worker[0], model=worker[1]),
-      cfg,
-      ReviewSpawnSessionManager("Test"),
+      "session-id", _make_original_thread(backend=worker[0], model=worker[1]), cfg, ReviewSpawnSessionManager("Test"),
       ReviewSpawnThreadManager())
 
   assert captured["request"].resolved_backend == expected[0]

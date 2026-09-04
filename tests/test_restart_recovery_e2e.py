@@ -37,13 +37,13 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-  OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-  RECOVERY_TASK_PREFIXES,
-  REVIEW_TRIGGER_MASTER_PATCH_TARGET,
-  SPAWNER_RESUME_WORKER_PATCH_TARGET,
-  await_recovery_tasks,
-  build_recovery_cfg,
-  read_chat_events,
+    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+    RECOVERY_TASK_PREFIXES,
+    REVIEW_TRIGGER_MASTER_PATCH_TARGET,
+    SPAWNER_RESUME_WORKER_PATCH_TARGET,
+    await_recovery_tasks,
+    build_recovery_cfg,
+    read_chat_events,
 )
 
 from src.agents.worker import QuotaExhaustedException, Worker
@@ -232,9 +232,9 @@ def _kill_driver_mid_run(proc: subprocess.Popen, home: Path, ids: dict) -> None:
   proc.wait(timeout=10)
 
 
-async def _recover(
-    monkeypatch: pytest.MonkeyPatch, home: Path, cfg: CharlieBotConfig | None = None
-) -> tuple[int, list[bool], list[str], list[runs.RunOutcome]]:
+async def _recover(monkeypatch: pytest.MonkeyPatch,
+                   home: Path,
+                   cfg: CharlieBotConfig | None = None) -> tuple[int, list[bool], list[str], list[runs.RunOutcome]]:
   """Run startup crash recovery as process B; record reattach mode, master
   wakes, and the resolve outcome each interrupted run received."""
   alive_at_reattach: list[bool] = []
@@ -283,7 +283,11 @@ def _assert_run_converged(home: Path, ids: dict) -> dict:
   # whole STREAM carries at most one duplicated event in total (the one
   # straddling the persisted cursor when the kill landed between the raw
   # write and the cursor advance) — a budget for the stream, not per event.
-  persisted = [{k: v for k, v in e.items() if k != "timestamp"} for e in _read_events(home, ids["session"], ids["thread"])]
+  persisted = [
+      {
+          k: v for k, v in e.items() if k != "timestamp"
+      } for e in _read_events(home, ids["session"], ids["thread"])
+  ]
   projected = runs.project_raw_events(runs.parse_raw_lines(raw.read_bytes()), lambda e: [e])
   persisted_counts = Counter(json.dumps(e, sort_keys=True) for e in persisted)
   projected_counts = Counter(json.dumps(e, sort_keys=True) for e in projected)
@@ -405,7 +409,11 @@ async def test_projection_exact_equality_at_deterministic_line_boundary(
   meta = _read_meta(home, ids["session"], ids["thread"])
   assert meta["status"] == "failed"  # DIED without a result event; no growth to drain
 
-  persisted = [{k: v for k, v in e.items() if k != "timestamp"} for e in _read_events(home, ids["session"], ids["thread"])]
+  persisted = [
+      {
+          k: v for k, v in e.items() if k != "timestamp"
+      } for e in _read_events(home, ids["session"], ids["thread"])
+  ]
   projected = runs.project_raw_events(runs.parse_raw_lines(raw.read_bytes()), lambda e: [e])
   assert persisted == projected
 
@@ -515,8 +523,16 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
   async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
     master_wakes.append(summary)
     await session_mgr.persist_and_broadcast(
-        session_id,
-        {"type": ET.ASSISTANT, "message": {"role": "assistant", "content": [{"type": "text", "text": "ack"}]}})
+        session_id, {
+            "type": ET.ASSISTANT,
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "text",
+                    "text": "ack"
+                }]
+            }
+        })
 
   monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
 
@@ -731,9 +747,10 @@ asyncio.run(main())
 """
 
 
-def _launch_graceful_driver(
-    tmp_path: Path, home: Path, result_delay: float, description: str = "e2e task"
-) -> tuple[subprocess.Popen, dict]:
+def _launch_graceful_driver(tmp_path: Path,
+                            home: Path,
+                            result_delay: float,
+                            description: str = "e2e task") -> tuple[subprocess.Popen, dict]:
   """Run the graceful driver to completion: spawn, wait for the run, cancel, exit."""
   shim_dir = _install_shim(tmp_path)
   driver = tmp_path / "graceful_driver.py"
@@ -827,7 +844,12 @@ async def test_graceful_shutdown_in_setup_phase_reaches_never_started_row(
   monkeypatch.setattr("src.core.spawner_launch._create_repoless_process", hang_in_setup)
   task = asyncio.create_task(
       spawner_module.spawn_worker(
-          session_meta.id, "e2e setup-phase task", thread.id, cfg, session_mgr, thread_mgr,
+          session_meta.id,
+          "e2e setup-phase task",
+          thread.id,
+          cfg,
+          session_mgr,
+          thread_mgr,
           request=SpawnRequest(resolved_backend="fake", resolved_model="fake-model", prompt_override="x")))
   await asyncio.wait_for(setup_entered.wait(), timeout=10.0)
   task.cancel()
@@ -902,8 +924,7 @@ async def test_restart_recovery_summary_invariant_to_backend_binary_presence(
       monkeypatch.setattr(OPENCODE_RESOLVE_BINARY_PATCH_TARGET, _missing_binary)
       home = tmp_path / "home-absent"
     else:
-      monkeypatch.setattr(
-          OPENCODE_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: binary)
+      monkeypatch.setattr(OPENCODE_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: binary)
       home = tmp_path / "home-present"
 
     cfg = build_recovery_cfg(home)
@@ -975,8 +996,7 @@ async def test_graceful_shutdown_winds_down_improve_iteration_with_reason(
 
 
 @pytest.mark.asyncio
-async def test_ui_cancel_endpoint_still_finalizes_cancelled(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_ui_cancel_endpoint_still_finalizes_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Regression: the cancel endpoint (SIGTERM + CANCELLED status, no task
   cancellation) is untouched by the shutdown change — the spawn task finishes
   normally and finalize keeps the cancelled status."""
@@ -1002,7 +1022,12 @@ async def test_ui_cancel_endpoint_still_finalizes_cancelled(
   ids = {"session": session_meta.id, "thread": thread.id}
   task = asyncio.create_task(
       spawner_module.spawn_worker(
-          session_meta.id, "e2e cancel task", thread.id, cfg, session_mgr, thread_mgr,
+          session_meta.id,
+          "e2e cancel task",
+          thread.id,
+          cfg,
+          session_mgr,
+          thread_mgr,
           request=SpawnRequest(resolved_backend="fake", resolved_model="fake-model", prompt_override="do the thing")))
 
   def started() -> bool:

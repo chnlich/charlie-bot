@@ -43,8 +43,11 @@ async def test_home_page_reads_config(tmp_path: Path) -> None:
   assert not _external_hrefs(empty.body.decode("utf-8"))
 
   services = [
-      {"name": f"svc-{i}", "description": f"Service {i}", "url": f"https://127.0.0.1:1/svc{i}"}
-      for i in range(3)
+      {
+          "name": f"svc-{i}",
+          "description": f"Service {i}",
+          "url": f"https://127.0.0.1:1/svc{i}"
+      } for i in range(3)
   ]
   full = await pages.home_page(make_page_request("/home"), _cfg(tmp_path / "h1", services))
   assert full.status_code == 200
@@ -59,8 +62,16 @@ async def test_home_probe_reflects_a_real_port(tmp_path: Path) -> None:
   listener.listen(1)
   port = listener.getsockname()[1]
   services = [
-      {"name": "listener-svc", "description": "TCP listener for the test", "url": f"http://127.0.0.1:{port}/api"},
-      {"name": "stub-svc", "description": "Refuses every connect", "url": "http://127.0.0.1:1/"},
+      {
+          "name": "listener-svc",
+          "description": "TCP listener for the test",
+          "url": f"http://127.0.0.1:{port}/api"
+      },
+      {
+          "name": "stub-svc",
+          "description": "Refuses every connect",
+          "url": "http://127.0.0.1:1/"
+      },
   ]
   cfg = _cfg(tmp_path / "h", services)
 
@@ -78,8 +89,7 @@ async def test_home_probe_reflects_a_real_port(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_home_badge_never_labels_a_link_that_cannot_open(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_home_badge_never_labels_a_link_that_cannot_open(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """For each external card, the host:port in its href equals the host:port the probe used."""
   probed: list[str] = []
   real_probe = pages._probe_home_service
@@ -91,8 +101,16 @@ async def test_home_badge_never_labels_a_link_that_cannot_open(
   monkeypatch.setattr(pages, "_probe_home_service", recording_probe)
 
   services = [
-      {"name": "a", "description": "Service a", "url": "https://example.internal:8443/x"},
-      {"name": "b", "description": "Service b", "url": "http://127.0.0.1:1/y"},
+      {
+          "name": "a",
+          "description": "Service a",
+          "url": "https://example.internal:8443/x"
+      },
+      {
+          "name": "b",
+          "description": "Service b",
+          "url": "http://127.0.0.1:1/y"
+      },
   ]
   body = (await pages.home_page(make_page_request("/home"), _cfg(tmp_path / "h", services))).body.decode("utf-8")
 
@@ -108,8 +126,16 @@ async def test_home_badge_never_labels_a_link_that_cannot_open(
 async def test_home_bad_url_entry_does_not_break_the_page(tmp_path: Path) -> None:
   """A service whose url has no parseable host renders down; the page and other cards survive."""
   services = [
-      {"name": "broken", "description": "No host", "url": "not-a-url"},
-      {"name": "fine", "description": "Has a host", "url": "https://127.0.0.1:1/"},
+      {
+          "name": "broken",
+          "description": "No host",
+          "url": "not-a-url"
+      },
+      {
+          "name": "fine",
+          "description": "Has a host",
+          "url": "https://127.0.0.1:1/"
+      },
   ]
   response = await pages.home_page(make_page_request("/home"), _cfg(tmp_path / "h", services))
   assert response.status_code == 200

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,6 +9,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    drain_session_consumer,
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
@@ -121,9 +121,7 @@ async def _run_message_with_capturing_backend(
       session_mgr_inst._has_running_tasks = AsyncMock(return_value=False)
       session_mgr_cls.return_value = session_mgr_inst
       await master_cc.run_message(cfg, meta, user_content, callbacks, is_voice=is_voice_arg)
-      consumer = master_cc_state._session_consumers.get(meta.id)
-      if consumer and not consumer.done():
-        await asyncio.wait_for(consumer, timeout=5)
+      await drain_session_consumer(meta.id, timeout=5)
   finally:
     master_cc_state._session_queues.pop(meta.id, None)
     master_cc_state._session_consumers.pop(meta.id, None)

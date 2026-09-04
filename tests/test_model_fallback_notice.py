@@ -20,13 +20,14 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    drain_session_consumer,
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
 )
 from conftest import reset_master_state as _reset_master_state
 
-from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
+from src.agents import master_cc, master_cc_queue, master_cc_run
 from src.agents.backends import claude_code
 from src.agents.backends.claude_code import (
     _family_membership,
@@ -394,12 +395,6 @@ async def test_live_non_cc_backend_emits_nothing(
 # ---------------------------------------------------------------------------
 
 
-async def _drain_consumer(session_id: str) -> None:
-  consumer = master_cc_state._session_consumers.get(session_id)
-  if consumer is not None:
-    await asyncio.wait_for(consumer, timeout=5)
-
-
 def _resume_patch_setup(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(master_cc_run, "_build_fresh_translate", lambda *a, **k: (lambda event: [event]))
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
@@ -436,7 +431,7 @@ async def test_resume_round_emits_identical_notice_from_projection(
   try:
     future = await master_cc.enqueue_master_resume(cfg, meta, record, cb, is_alive=lambda: False)
     await asyncio.wait_for(future, timeout=5)
-    await _drain_consumer(session_id)
+    await drain_session_consumer(session_id, timeout=5)
   finally:
     _reset_master_state(session_id)
 
@@ -487,7 +482,7 @@ async def test_resume_notice_persists_exactly_once_with_full_fields(
   try:
     future = await master_cc.enqueue_master_resume(cfg, meta, record, mgr.callbacks(), is_alive=lambda: False)
     await asyncio.wait_for(future, timeout=5)
-    await _drain_consumer(session_id)
+    await drain_session_consumer(session_id, timeout=5)
   finally:
     _reset_master_state(session_id)
 

@@ -10,13 +10,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
-  BROADCAST_PATCH_TARGET,
-  BUILD_BACKEND_PATCH_TARGET,
-  SESSIONS_SESSION_MANAGER_PATCH_TARGET,
-  make_work_item,
-  mock_session_callbacks,
-  patch_instructions_content,
-  run_session_consumer,
+    BROADCAST_PATCH_TARGET,
+    BUILD_BACKEND_PATCH_TARGET,
+    SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    make_work_item,
+    mock_session_callbacks,
+    patch_instructions_content,
+    run_session_consumer,
 )
 from conftest import reset_master_state as _reset_master_state
 from fastapi import FastAPI
@@ -31,11 +31,11 @@ from src.core import runs, thinking_state
 from src.core import sessions as sessions_module
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  BackendOption,
-  CreateSessionRequest,
-  MasterRunRecord,
-  SessionCallbacks,
-  SessionMetadata,
+    BackendOption,
+    CreateSessionRequest,
+    MasterRunRecord,
+    SessionCallbacks,
+    SessionMetadata,
 )
 from src.core.sessions import SessionManager
 
@@ -67,8 +67,8 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
 
   await run_session_consumer(session_id, [item_bootstrap, item_user], fake_run_cc)
 
-  assert observed_cc_session_ids == [None, "cc-id-from-bootstrap"], (
-      "second _run_cc must observe cc_session_id relayed from bootstrap meta")
+  assert observed_cc_session_ids == [None, "cc-id-from-bootstrap"
+                                    ], ("second _run_cc must observe cc_session_id relayed from bootstrap meta")
   assert meta_user_message.cc_session_id == "cc-id-from-bootstrap"
   assert item_bootstrap.future.done() and item_bootstrap.future.result() == "cc-id-from-bootstrap"
   assert item_user.future.done() and item_user.future.result() == "cc-id-from-bootstrap"
@@ -459,8 +459,7 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
 
   _reset_master_state(session.id)
   try:
-    result = await master_cc.run_message(
-        cfg, session, "hi", session_mgr.callbacks(), skip_user_event=True)
+    result = await master_cc.run_message(cfg, session, "hi", session_mgr.callbacks(), skip_user_event=True)
     assert result == backend_returned_id
     consumer = master_cc_state._session_consumers.get(session.id)
     if consumer and not consumer.done():
@@ -497,8 +496,7 @@ async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
   patch_instructions_content(monkeypatch)
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
-  item = make_work_item(
-      cfg, meta, cfg.backend_options[0], user_content="next round", callbacks=session_mgr.callbacks())
+  item = make_work_item(cfg, meta, cfg.backend_options[0], user_content="next round", callbacks=session_mgr.callbacks())
   await master_cc._run_cc(item)
 
   events = session_mgr.load_chat_events_sync(session.id)
@@ -534,9 +532,7 @@ async def test_persist_cc_session_id_same_id_does_not_advance_started_at(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_resume_reattach_uses_persisted_interval_start(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_resume_reattach_uses_persisted_interval_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A re-attached turn keeps its persisted interval start on the live surface.
 
   enqueue_master_resume queues an item carrying resume_record; both the busy
@@ -572,16 +568,12 @@ async def test_resume_reattach_uses_persisted_interval_start(
 
   _reset_master_state(session_id)
   try:
-    future = await master_cc.enqueue_master_resume(
-        cfg, meta, record, callbacks, is_alive=lambda: True)
+    future = await master_cc.enqueue_master_resume(cfg, meta, record, callbacks, is_alive=lambda: True)
 
     assert thinking_state.busy_since(session_id) == started_at, (
         "the live busy map must use the persisted interval start")
 
-    payloads = [
-        c.args[1] for c in broadcast.call_args_list
-        if c.args[1].get("type") == ET.RUNNING_CHANGED
-    ]
+    payloads = [c.args[1] for c in broadcast.call_args_list if c.args[1].get("type") == ET.RUNNING_CHANGED]
     assert payloads, "expected a RUNNING_CHANGED payload on re-attach"
     assert payloads[0]["thinking_since"] == record.started_at.isoformat(), (
         "the sidebar-indicator start must equal the persisted record start")
@@ -620,14 +612,8 @@ class _EventsBackend:
 
 def _guard_events(cb: SessionCallbacks) -> tuple[list[dict], list[dict]]:
   """Split persisted/broadcast events into zero-output ERRORs and MASTER_DONEs."""
-  errors = [
-      c.args[1] for c in cb.persist_and_broadcast.await_args_list
-      if c.args[1].get("type") == ET.ERROR
-  ]
-  dones = [
-      c.args[1] for c in cb.persist_and_broadcast.await_args_list
-      if c.args[1].get("type") == ET.MASTER_DONE
-  ]
+  errors = [c.args[1] for c in cb.persist_and_broadcast.await_args_list if c.args[1].get("type") == ET.ERROR]
+  dones = [c.args[1] for c in cb.persist_and_broadcast.await_args_list if c.args[1].get("type") == ET.MASTER_DONE]
   return errors, dones
 
 
@@ -665,8 +651,7 @@ async def _run_stream_consumer(
 @pytest.mark.asyncio
 async def test_zero_output_guard_fires_on_all_zero_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Positive: a result with all-zero usage and nothing else fails loudly."""
-  cb = await _run_stream_consumer(
-      tmp_path, monkeypatch, "zero-pos", [make_result_event()])
+  cb = await _run_stream_consumer(tmp_path, monkeypatch, "zero-pos", [make_result_event()])
 
   errors, dones = _guard_events(cb)
   assert len(errors) == 1
@@ -681,8 +666,7 @@ async def test_zero_output_guard_fires_on_all_zero_result(tmp_path: Path, monkey
 @pytest.mark.asyncio
 async def test_zero_output_guard_skips_nonzero_usage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Negative: a result with real output tokens must not fire the guard."""
-  cb = await _run_stream_consumer(
-      tmp_path, monkeypatch, "zero-neg-usage", [make_result_event(output_tokens=5)])
+  cb = await _run_stream_consumer(tmp_path, monkeypatch, "zero-neg-usage", [make_result_event(output_tokens=5)])
 
   errors, dones = _guard_events(cb)
   assert not errors
@@ -693,8 +677,7 @@ async def test_zero_output_guard_skips_nonzero_usage(tmp_path: Path, monkeypatch
 async def test_zero_output_guard_skips_assistant_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Negative: assistant text alongside an all-zero usage result must not fire."""
   cb = await _run_stream_consumer(
-      tmp_path, monkeypatch, "zero-neg-text",
-      [make_text_event("hello"), make_result_event()])
+      tmp_path, monkeypatch, "zero-neg-text", [make_text_event("hello"), make_result_event()])
 
   errors, dones = _guard_events(cb)
   assert not errors
@@ -704,8 +687,7 @@ async def test_zero_output_guard_skips_assistant_text(tmp_path: Path, monkeypatc
 @pytest.mark.asyncio
 async def test_zero_output_guard_skips_missing_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Negative: a stream that never settles with a result must not fire."""
-  cb = await _run_stream_consumer(
-      tmp_path, monkeypatch, "zero-neg-noresult", [make_text_event("hello")])
+  cb = await _run_stream_consumer(tmp_path, monkeypatch, "zero-neg-noresult", [make_text_event("hello")])
 
   errors, dones = _guard_events(cb)
   assert not errors
@@ -728,13 +710,13 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
 
   monkeypatch.setattr(master_cc_run, "_resume_cc", fake_resume_cc)
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: MagicMock(
-      _has_running_tasks=AsyncMock(return_value=False)))
+  monkeypatch.setattr(
+      SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+      lambda *a, **k: MagicMock(_has_running_tasks=AsyncMock(return_value=False)))
 
   _reset_master_state(session_id)
   try:
-    future = await master_cc.enqueue_master_resume(
-        cfg, meta, record, cb, is_alive=lambda: True)
+    future = await master_cc.enqueue_master_resume(cfg, meta, record, cb, is_alive=lambda: True)
     await asyncio.wait_for(future, timeout=5)
     consumer = master_cc_state._session_consumers.get(session_id)
     if consumer is not None:
@@ -757,10 +739,16 @@ async def test_zero_output_guard_exempts_manual_compact(tmp_path: Path, monkeypa
   finish extras carry no zero_output flag.
   """
   cb = await _run_stream_consumer(
-      tmp_path, monkeypatch, "zero-neg-compact-manual",
-      [
-          {"type": "system", "subtype": "compact_boundary",
-           "compact_metadata": {"trigger": "manual", "pre_tokens": 10, "post_tokens": 2}},
+      tmp_path, monkeypatch, "zero-neg-compact-manual", [
+          {
+              "type": "system",
+              "subtype": "compact_boundary",
+              "compact_metadata": {
+                  "trigger": "manual",
+                  "pre_tokens": 10,
+                  "post_tokens": 2
+              }
+          },
           make_result_event(),
       ])
 
@@ -776,10 +764,16 @@ async def test_zero_output_guard_fires_on_auto_compact(tmp_path: Path, monkeypat
   """Positive: an auto-compact boundary must be followed by model output — a
   silent turn after it is exactly the failure the guard exists for."""
   cb = await _run_stream_consumer(
-      tmp_path, monkeypatch, "zero-pos-compact-auto",
-      [
-          {"type": "system", "subtype": "compact_boundary",
-           "compact_metadata": {"trigger": "auto", "pre_tokens": 10, "post_tokens": 2}},
+      tmp_path, monkeypatch, "zero-pos-compact-auto", [
+          {
+              "type": "system",
+              "subtype": "compact_boundary",
+              "compact_metadata": {
+                  "trigger": "auto",
+                  "pre_tokens": 10,
+                  "post_tokens": 2
+              }
+          },
           make_result_event(),
       ])
 
@@ -795,9 +789,7 @@ async def test_zero_output_guard_fires_on_auto_compact(tmp_path: Path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_zero_output_guard_resume_exempts_manual_compact(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_zero_output_guard_resume_exempts_manual_compact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Re-attach: a manual boundary seen only in the raw log's pre-cursor region
   still exempts the turn (the restart scenario: the pre-restart process
   consumed the boundary line and crashed before consuming the result).
@@ -812,9 +804,15 @@ async def test_zero_output_guard_resume_exempts_manual_compact(
   log_dir.mkdir(parents=True)
   raw_path = log_dir / runs.RAW_LOG_NAME
   boundary_line = json.dumps(
-      {"type": "system", "subtype": "compact_boundary",
-       "compact_metadata": {"trigger": "manual", "pre_tokens": 10, "post_tokens": 2}}
-  ) + "\n"
+      {
+          "type": "system",
+          "subtype": "compact_boundary",
+          "compact_metadata": {
+              "trigger": "manual",
+              "pre_tokens": 10,
+              "post_tokens": 2
+          }
+      }) + "\n"
   result_line = json.dumps(make_result_event()) + "\n"
   raw_path.write_text(boundary_line + result_line, encoding="utf-8")
   cursor_path = log_dir / runs.CURSOR_NAME
@@ -836,13 +834,13 @@ async def test_zero_output_guard_resume_exempts_manual_compact(
 
   monkeypatch.setattr(master_cc_run, "_build_fresh_translate", lambda *a, **k: (lambda event: [event]))
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: MagicMock(
-      _has_running_tasks=AsyncMock(return_value=False)))
+  monkeypatch.setattr(
+      SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+      lambda *a, **k: MagicMock(_has_running_tasks=AsyncMock(return_value=False)))
 
   _reset_master_state(session_id)
   try:
-    future = await master_cc.enqueue_master_resume(
-        cfg, meta, record, cb, is_alive=lambda: False)
+    future = await master_cc.enqueue_master_resume(cfg, meta, record, cb, is_alive=lambda: False)
     await asyncio.wait_for(future, timeout=5)
     consumer = master_cc_state._session_consumers.get(session_id)
     if consumer is not None:
@@ -859,16 +857,24 @@ async def test_zero_output_guard_resume_exempts_manual_compact(
 
 @pytest.mark.asyncio
 async def test_zero_output_guard_passes_through_independent_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Exemption is purely subtractive: a manual-boundary turn whose backend
   independently failed keeps exactly its own error and nonzero exit code — the
   guard adds nothing and rewrites nothing."""
   cb = await _run_stream_consumer(
-      tmp_path, monkeypatch, "zero-passthrough",
+      tmp_path,
+      monkeypatch,
+      "zero-passthrough",
       [
-          {"type": "system", "subtype": "compact_boundary",
-           "compact_metadata": {"trigger": "manual", "pre_tokens": 10, "post_tokens": 2}},
+          {
+              "type": "system",
+              "subtype": "compact_boundary",
+              "compact_metadata": {
+                  "trigger": "manual",
+                  "pre_tokens": 10,
+                  "post_tokens": 2
+              }
+          },
           make_result_event(),
       ],
       exit_code=2,
@@ -878,9 +884,8 @@ async def test_zero_output_guard_passes_through_independent_error(
   errors, dones = _guard_events(cb)
   assert not errors, "no zero-output ERROR may be synthesized on top of the backend's own"
   assist_errors = [
-      c.args[1] for c in cb.persist_and_broadcast.await_args_list
-      if c.args[1].get("type") == ET.ASSISTANT_ERROR
+      c.args[1] for c in cb.persist_and_broadcast.await_args_list if c.args[1].get("type") == ET.ASSISTANT_ERROR
   ]
-  assert [e.get("content") for e in assist_errors] == ["Agent error: boom"], (
-      "exactly the backend's own error event passes through")
+  assert [e.get("content") for e in assist_errors] == ["Agent error: boom"
+                                                      ], ("exactly the backend's own error event passes through")
   assert dones and dones[0]["exit_code"] == 2, "the backend's nonzero exit code passes through"

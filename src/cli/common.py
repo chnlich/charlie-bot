@@ -15,6 +15,7 @@ Every failure output stays a JSON object on stderr with exit code 1, now with
 import argparse
 import contextlib
 import json
+import os
 import re
 import sys
 import time
@@ -32,6 +33,10 @@ from src.core.timeouts import (
     HTTP_VERSION_SKEW_TIMEOUT,
     SUBPROCESS_GIT_SHA_TIMEOUT,
 )
+
+# The server writes this variable into every master process environment; the
+# CLIs read their session identity from it (see ``resolve_session_id``).
+SESSION_ID_ENV_VAR = "CHARLIEBOT_SESSION_ID"
 
 TASK_SPEC_REQUIRED_HEADINGS = (
     "Goal",
@@ -339,25 +344,55 @@ def find_local_thread(
 
 def add_session_arg(parser: argparse.ArgumentParser) -> None:
   """Add the optional ``--session`` flag; ``resolve_session_id`` resolves its value."""
-  parser.add_argument("--session", default=None, help="Session ID (optional; auto-derived from cwd)")
+  parser.add_argument(
+      "--session",
+      default=None,
+      help=f"Session ID (optional; taken from the {SESSION_ID_ENV_VAR} the server writes into the master environment)",
+  )
+
+
+def _exit_ambiguous_session(source_text: str) -> None:
+  """Reject an invocation whose identity sources disagree, naming each source and its value."""
+  exit_usage_error(f"session id mismatch: {source_text}; refusing to use an ambiguous session")
 
 
 def resolve_session_id(arg_session: str | None) -> str:
   """Resolve the session id to use for a CLI invocation.
 
-  Master CC always cd's into ~/.charliebot/sessions/{session_id} before
-  running these CLIs. We use that fact to (a) auto-derive the session id
-  when --session is omitted, and (b) reject mismatches across explicit and
-  cwd-derived sources — which catches stale copied session ids before they
-  can mutate the wrong session.
+  The server writes ``CHARLIEBOT_SESSION_ID`` into every master process
+  environment, so each shell command a master runs carries its own session
+  identity wherever it cd's to; that variable is the authoritative source. An
+  explicit ``--session`` must agree with it and a mismatch exits 2 naming both,
+  because either value can carry a caller's intent. cwd serves as the fallback
+  for an invocation the server did not start (a hand-run shell, a tmux backend):
+  with the variable absent, ~/.charliebot/sessions/{session_id} supplies the id
+  exactly as it does today. With the variable present, a cwd sitting in another
+  session's directory routes by the variable and prints a non-fatal warning
+  naming both ids, so a stale copied path stays visible while a legitimate cd
+  (reading a sibling session's artifacts, entering a worktree) keeps working.
   """
   cwd = Path.cwd().resolve()
   sessions_dir = get_config().sessions_dir.resolve()
+  cwd_session = cwd.name if cwd.parent == sessions_dir else None
+
+  # An empty value carries no identity, so it reads as absent and the cwd
+  # fallback answers, which is what an unstarted-by-server invocation gets.
+  env_session = os.environ.get(SESSION_ID_ENV_VAR) or None
+  if env_session is not None:
+    if arg_session is not None and arg_session != env_session:
+      _exit_ambiguous_session(f"--session={arg_session} {SESSION_ID_ENV_VAR}={env_session}")
+    if cwd_session is not None and cwd_session != env_session:
+      print(
+          json.dumps({"note": f"cwd is session dir of {cwd_session}; using {SESSION_ID_ENV_VAR}={env_session}"}),
+          file=sys.stderr,
+      )
+    return env_session
+
   sources: dict[str, str] = {}
   if arg_session is not None:
     sources["--session"] = arg_session
-  if cwd.parent == sessions_dir:
-    sources["cwd"] = cwd.name
+  if cwd_session is not None:
+    sources["cwd"] = cwd_session
 
   if not sources:
     print(
@@ -368,11 +403,6 @@ def resolve_session_id(arg_session: str | None) -> str:
 
   unique_session_ids = set(sources.values())
   if len(unique_session_ids) > 1:
-    source_text = " ".join(f"{name}={value}" for name, value in sources.items())
-    print(
-        json.dumps({"error": f"session id mismatch: {source_text}; refusing to use an ambiguous session"}),
-        file=sys.stderr,
-    )
-    sys.exit(2)
+    _exit_ambiguous_session(" ".join(f"{name}={value}" for name, value in sources.items()))
 
   return next(iter(unique_session_ids))

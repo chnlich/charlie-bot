@@ -303,16 +303,19 @@ def test_success_path_derives_session_from_cwd(
   assert meta["remote_pid"] == 24680
 
 
-def test_session_env_is_not_a_remote_launch_session_source(
+def test_session_env_is_the_remote_launch_session_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+  """From a cwd outside any session dir, the server-written variable supplies the launch's session."""
   session = "sess-env"
   home = _make_session_dir(tmp_path, session)
   cfg = _mock_config(home)
   monkeypatch.chdir(tmp_path)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session)
+
+  fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="24680\n", stderr="")
 
   with patch("sys.argv", [
       "remote_launch",
@@ -321,11 +324,10 @@ def test_session_env_is_not_a_remote_launch_session_source(
       "--cmd", "echo hi",
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_SUBPROCESS_RUN_PATCH_TARGET) as mock_run, \
-       pytest.raises(SystemExit) as exc_info:
+       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
+       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc):
     main()
 
-  assert exc_info.value.code == 2
-  mock_run.assert_not_called()
-  error = json.loads(capsys.readouterr().err)["error"]
-  assert "--session required" in error
+  meta = json.loads(capsys.readouterr().out.strip())
+  assert meta["session_id"] == session
+  assert meta["remote_pid"] == 24680

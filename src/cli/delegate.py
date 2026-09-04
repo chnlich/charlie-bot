@@ -2,7 +2,8 @@
 
 Called by the master Claude Code instance via its run_command tool:
 
-  # --session is optional; auto-derived from cwd in normal master use.
+  # --session is optional; the server-written CHARLIEBOT_SESSION_ID supplies it
+  # in normal master use (see ``resolve_session_id``).
   charliebot delegate \
     --repo /path/to/repo \
     --base-branch main \

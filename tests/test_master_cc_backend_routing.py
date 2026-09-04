@@ -18,10 +18,11 @@ from src.core import config as core_config
 from src.core import models
 
 
-def test_build_master_env_removes_session_env_and_prepends_repo_venv(
+def test_build_master_env_writes_own_session_and_prepends_repo_venv(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+  """The master's own session id lands in the child environment, over any inherited value."""
   repo = tmp_path / "repo"
   venv_bin = repo / ".venv" / "bin"
   venv_bin.mkdir(parents=True)
@@ -31,9 +32,9 @@ def test_build_master_env_removes_session_env_and_prepends_repo_venv(
   monkeypatch.setenv("CLAUDECODE", "1")
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "stale-session")
 
-  env = master_cc._build_master_env(cfg)
+  env = master_cc._build_master_env(cfg, "own-session")
 
-  assert "CHARLIEBOT_SESSION_ID" not in env
+  assert env["CHARLIEBOT_SESSION_ID"] == "own-session"
   assert env["GIT_CEILING_DIRECTORIES"] == str(tmp_path / "home")
   assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
   assert env["PATH"].split(os.pathsep)[:2] == [str(venv_bin), "/usr/bin"]

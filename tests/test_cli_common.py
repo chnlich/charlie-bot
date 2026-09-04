@@ -46,17 +46,18 @@ def _set_cwd(
         ("same-session", "same-session", "same-session"),
     ],
 )
-def test_resolve_session_id_sources(
+def test_resolve_session_id_sources_without_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     arg_session: str | None,
     cwd_session: str | None,
     expected: str,
 ) -> None:
+  """Without the server-written variable, --session and cwd resolve as they always have."""
   sessions_dir = tmp_path / "sessions"
   sessions_dir.mkdir()
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "ignored-env-session")
+  monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
 
   with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
     assert common.resolve_session_id(arg_session) == expected
@@ -68,17 +69,18 @@ def test_resolve_session_id_sources(
         ("arg-session", "cwd-session"),
     ],
 )
-def test_resolve_session_id_rejects_mismatches(
+def test_resolve_session_id_rejects_mismatches_without_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     arg_session: str | None,
     cwd_session: str | None,
 ) -> None:
+  """Two disagreeing fallback sources stay a rejection when the variable is absent."""
   sessions_dir = tmp_path / "sessions"
   sessions_dir.mkdir()
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "ignored-env-session")
+  monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
 
   with (
       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)),
@@ -93,7 +95,6 @@ def test_resolve_session_id_rejects_mismatches(
     assert arg_session in error
   if cwd_session is not None:
     assert cwd_session in error
-  assert "ignored-env-session" not in error
 
 
 def test_resolve_session_id_requires_source_outside_session_dir(
@@ -104,7 +105,7 @@ def test_resolve_session_id_requires_source_outside_session_dir(
   sessions_dir = tmp_path / "sessions"
   sessions_dir.mkdir()
   _set_cwd(tmp_path, monkeypatch, sessions_dir, None)
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "ignored-env-session")
+  monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
 
   with (
       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)),
@@ -115,6 +116,79 @@ def test_resolve_session_id_requires_source_outside_session_dir(
   assert exc_info.value.code == 2
   error = json.loads(capsys.readouterr().err)["error"]
   assert "--session required" in error
+
+
+@pytest.mark.parametrize(
+    ("arg_session", "cwd_session", "expect_note"),
+    [
+        (None, None, False),
+        (None, "env-session", False),
+        (None, "other-session", True),
+        ("env-session", "other-session", True),
+    ],
+)
+def test_resolve_session_id_env_outranks_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    arg_session: str | None,
+    cwd_session: str | None,
+    expect_note: bool,
+) -> None:
+  """The server-written variable answers from any cwd; a cwd in another session's dir only warns."""
+  sessions_dir = tmp_path / "sessions"
+  sessions_dir.mkdir()
+  _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
+  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "env-session")
+
+  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
+    assert common.resolve_session_id(arg_session) == "env-session"
+
+  err = capsys.readouterr().err
+  if not expect_note:
+    assert err == ""
+    return
+  note = json.loads(err)["note"]
+  assert "other-session" in note
+  assert "CHARLIEBOT_SESSION_ID=env-session" in note
+
+
+def test_resolve_session_id_rejects_explicit_session_against_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+  """An explicit --session that disagrees with the variable is ambiguous, so the call exits 2."""
+  sessions_dir = tmp_path / "sessions"
+  sessions_dir.mkdir()
+  _set_cwd(tmp_path, monkeypatch, sessions_dir, "env-session")
+  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "env-session")
+
+  with (
+      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)),
+      pytest.raises(SystemExit) as exc_info,
+  ):
+    common.resolve_session_id("arg-session")
+
+  assert exc_info.value.code == 2
+  error = json.loads(capsys.readouterr().err)["error"]
+  assert "mismatch" in error
+  assert "--session=arg-session" in error
+  assert "CHARLIEBOT_SESSION_ID=env-session" in error
+
+
+def test_resolve_session_id_reads_empty_env_as_absent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  """An empty value carries no identity, so the cwd fallback answers."""
+  sessions_dir = tmp_path / "sessions"
+  sessions_dir.mkdir()
+  _set_cwd(tmp_path, monkeypatch, sessions_dir, "cwd-session")
+  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "")
+
+  with patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)):
+    assert common.resolve_session_id(None) == "cwd-session"
 
 
 def test_validate_repo_path_accepts_existing_absolute_dir(tmp_path: Path) -> None:
@@ -168,7 +242,7 @@ def test_resolve_session_id_only_derives_direct_session_child(
   nested_dir = sessions_dir / "session-id" / "nested"
   nested_dir.mkdir(parents=True)
   monkeypatch.chdir(nested_dir)
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "ignored-env-session")
+  monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
 
   with (
       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)),

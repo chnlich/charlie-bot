@@ -91,14 +91,19 @@ def _reset_declared_window_warnings_for_tests() -> None:
 def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
   """Environment for a supervisor process whose children run Claude Code.
 
-  Two pins travel together for every supervisor (master, worker): the inherited
-  ``CLAUDECODE`` marker is stripped — a child ``claude`` refuses to launch when
-  it detects a parent session — and ``CLAUDE_CODE_DISABLE_AUTO_MEMORY`` stays
-  pinned, so a child's auto-memory writes stay off and CharlieBot's own memory
-  store remains the only one. Returns a copy; the argument is not mutated.
+  Three pins travel together for every supervisor (master, worker): the
+  inherited ``CLAUDECODE`` marker is stripped — a child ``claude`` refuses to
+  launch when it detects a parent session — ``CLAUDE_CODE_DISABLE_AUTO_MEMORY``
+  stays pinned, so a child's auto-memory writes stay off and CharlieBot's own
+  memory store remains the only one, and an inherited ``CHARLIEBOT_SESSION_ID``
+  is stripped, so only the id a caller writes afterwards travels on: a master
+  gets its own session's id (see ``master_cc_run._build_master_env``) and a
+  worker gets none, whatever session's environment started the server.
+  Returns a copy; the argument is not mutated.
   """
   out = dict(env)
   out.pop("CLAUDECODE", None)
+  out.pop("CHARLIEBOT_SESSION_ID", None)
   out["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
   return out
 

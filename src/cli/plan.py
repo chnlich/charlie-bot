@@ -1,7 +1,8 @@
 """CLI script for the ``charliebot plan`` subcommand.
 
 Subcommands (verbs) follow the same caller contract as ``charliebot delegate``:
-session id is resolved from cwd (explicit ``--session`` mismatches are rejected),
+session id comes from the server-written CHARLIEBOT_SESSION_ID (explicit
+``--session`` mismatches are rejected; see ``resolve_session_id``),
 the result is a single JSON object on stdout, and server 4xx/5xx ``detail`` is
 written to stderr as a JSON error with a non-zero exit code.
 

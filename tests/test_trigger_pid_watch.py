@@ -11,17 +11,17 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-  BROADCAST_PATCH_TARGET,
-  TRIGGER_MASTER_PATCH_TARGET,
-  assert_trigger_fired_completed,
-  assert_trigger_fired_timeout,
+    BROADCAST_PATCH_TARGET,
+    TRIGGER_MASTER_PATCH_TARGET,
+    assert_trigger_fired_completed,
+    assert_trigger_fired_timeout,
 )
 from conftest import make_trigger_setup as _make_mgr
 
 from src.core.models import (
-  LocalPid,
-  PendingTrigger,
-  TriggerStatus,
+    LocalPid,
+    PendingTrigger,
+    TriggerStatus,
 )
 from src.core.triggers import _format_suffix
 
@@ -184,7 +184,10 @@ async def test_pidfd_fallback_works_on_host(tmp_path: Path, pidfd_open_available
     _cfg, _session_mgr, trigger_mgr, session_id = await _make_mgr(tmp_path)
     with patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
       trigger = await trigger_mgr.create_trigger(
-          session_id, delay_seconds=10, message="live", watch_targets=_local(proc.pid),
+          session_id,
+          delay_seconds=10,
+          message="live",
+          watch_targets=_local(proc.pid),
       )
       fresh = None
       for _ in range(50):
@@ -199,8 +202,7 @@ async def test_pidfd_fallback_works_on_host(tmp_path: Path, pidfd_open_available
 
 
 def test_format_suffix_completed_gone_at_start() -> None:
-  assert _format_suffix("completed", ["111 (gone at start)", "222"], []) == (
-      " (finished: 111 (gone at start), 222)")
+  assert _format_suffix("completed", ["111 (gone at start)", "222"], []) == (" (finished: 111 (gone at start), 222)")
 
 
 def test_format_suffix_completed_pids() -> None:
@@ -238,8 +240,7 @@ def test_load_legacy_trigger_without_watch_pids() -> None:
       '{"id": "legacy-1", "session_id": "sess", '
       '"fire_at": "2030-01-01T00:00:00+00:00", "message": "hi", '
       '"created_at": "2030-01-01T00:00:00+00:00", "status": "pending", '
-      '"fired_at": null}'
-  )
+      '"fired_at": null}')
   trigger = PendingTrigger.model_validate_json(legacy)
   assert trigger.watch_targets == []
   assert trigger.fire_reason is None

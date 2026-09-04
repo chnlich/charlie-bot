@@ -41,6 +41,7 @@ def _state_file(home: Path) -> Path:
 
 def _fire(error_names: list[str]) -> None:
   """Run one alert evaluation on a fresh loop, draining the fired send task."""
+
   async def go() -> None:
     cm._fire_cron_error_alert(error_names)
     await asyncio.sleep(0)
@@ -87,6 +88,7 @@ def test_no_event_loop_skips_send_without_persisting(
 
 
 def test_telegram_failure_is_log_only(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+
   async def raising_send_telegram(message: str, cfg) -> None:
     raise RuntimeError("telegram_bot_token is not configured")
 
@@ -105,13 +107,24 @@ def test_alert_fires_through_loader_refresh(
   reviewer = temp_home / "prompts" / "memory_reviewer.md"
   selector.parent.mkdir(parents=True, exist_ok=True)
   reviewer.write_text("review the diff", encoding="utf-8")
-  _write_task_text(temp_home, "memory-curator", _dump({
-      "cron": "27 6 * * *",
-      "steps": [
-          {"name": "selector", "prompt_file": str(selector)},
-          {"name": "reviewer", "prompt_file": str(reviewer)},
-      ],
-  }))
+  _write_task_text(
+      temp_home, "memory-curator",
+      _dump(
+          {
+              "cron":
+                  "27 6 * * *",
+              "steps":
+                  [
+                      {
+                          "name": "selector",
+                          "prompt_file": str(selector)
+                      },
+                      {
+                          "name": "reviewer",
+                          "prompt_file": str(reviewer)
+                      },
+                  ],
+          }))
 
   async def refresh() -> None:
     assert not cm.get_scheduled_tasks()

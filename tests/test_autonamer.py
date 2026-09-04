@@ -6,19 +6,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
-  ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
-  CODEX_RESOLVE_BINARY_PATCH_TARGET,
-  OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-  SYNTHETIC_MODEL,
-  FakeStdout,
-  make_one_shot_backend,
+    ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    CODEX_RESOLVE_BINARY_PATCH_TARGET,
+    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+    SYNTHETIC_MODEL,
+    FakeStdout,
+    make_one_shot_backend,
 )
 
 from src.core import autonamer
 from src.core.autonamer import (
-  iter_light_backends,
-  maybe_auto_name,
-  maybe_auto_name_from_claude_ai_title,
+    iter_light_backends,
+    maybe_auto_name,
+    maybe_auto_name_from_claude_ai_title,
 )
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
@@ -183,8 +183,7 @@ async def test_maybe_auto_name_keeps_snake_case_identifier_verbatim() -> None:
       patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
       patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
-    await maybe_auto_name(
-        cfg, session_meta, "Set CHARLIEBOT_HOME for the run.", "Done.", session_mgr, [])
+    await maybe_auto_name(cfg, session_meta, "Set CHARLIEBOT_HOME for the run.", "Done.", session_mgr, [])
 
   expected_name = json.loads(raw)["name"]
   session_mgr.rename_session.assert_awaited_once_with("session-snake", f"7: {expected_name}")
@@ -203,8 +202,7 @@ async def test_maybe_auto_name_keeps_chinese_title_verbatim() -> None:
       patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
       patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
-    await maybe_auto_name(
-        cfg, session_meta, "重构「TRELLIS.2」的分支。", "好的，开始重构。", session_mgr, [])
+    await maybe_auto_name(cfg, session_meta, "重构「TRELLIS.2」的分支。", "好的，开始重构。", session_mgr, [])
 
   expected_name = json.loads(raw)["name"]
   session_mgr.rename_session.assert_awaited_once_with("session-cjk", f"8: {expected_name}")

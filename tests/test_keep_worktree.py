@@ -10,23 +10,23 @@ from typing import Any
 
 import pytest
 from conftest import (
-  CLEAN_EXIT_OUTCOME,
-  CapturingThreadManager,
-  SpawnFlowSessionManager,
-  build_codex_worktree_cfg,
-  build_worker_prompt,
-  capturing_worker,
-  make_fake_git_create_worktree,
-  recording_notify_completion,
+    CLEAN_EXIT_OUTCOME,
+    CapturingThreadManager,
+    SpawnFlowSessionManager,
+    build_codex_worktree_cfg,
+    build_worker_prompt,
+    capturing_worker,
+    make_fake_git_create_worktree,
+    recording_notify_completion,
 )
 
 from src.core import git as git_module
 from src.core import review, spawner, spawner_finalize, spawner_launch
 from src.core.models import (
-  SpawnRequest,
-  TaskType,
-  ThreadMetadata,
-  ThreadStatus,
+    SpawnRequest,
+    TaskType,
+    ThreadMetadata,
+    ThreadStatus,
 )
 
 
@@ -116,8 +116,7 @@ async def test_finalize_review_chain_skips_when_keep_worktree(
 
   monkeypatch.setattr(git_module, "git_worktree_remove", fail_git_worktree_remove)
 
-  await review.finalize_review_chain(
-      "session-id", original, worktree_parent=tmp_path / "worktrees")
+  await review.finalize_review_chain("session-id", original, worktree_parent=tmp_path / "worktrees")
 
   assert wt_dir.exists()
   assert (wt_dir / "slurm.sh").exists()
@@ -162,8 +161,7 @@ async def test_finalize_review_chain_removes_worktree_by_default(
   monkeypatch.setattr(git_module, "git_worktree_remove", fake_git_worktree_remove)
   monkeypatch.setattr(git_module, "git_worktree_prune", fake_git_worktree_prune)
 
-  await review.finalize_review_chain(
-      "session-id", original, worktree_parent=tmp_path / "worktrees")
+  await review.finalize_review_chain("session-id", original, worktree_parent=tmp_path / "worktrees")
 
   assert len(remove_calls) == 1
   assert remove_calls[0][1] == wt_dir

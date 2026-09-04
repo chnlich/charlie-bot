@@ -28,6 +28,12 @@ under an unstable walk order: cross-file dedupe arbitrates verbatim replays, whi
 identical token values, so first-wins cannot move a sum. The opencode db stays outside that
 corpus memo: its WAL sidecar moves under plain serve traffic, so its entry always round-trips
 the persisted document, and the miss path is incremental per message row (see row memo below).
+One more memo sits above both: the whole-tally memo, keyed on the walk signature plus the
+opencode db signature, holds the built rows and notes of the last collect. A hit serves the
+tally without loading the persisted document, replaying a record, or opening the db, because
+every input to those steps signs into the key. The walk signature itself walks with string
+paths and raw os.stat: Path construction per file measures over twice the stat syscall's cost
+on this corpus, and the signature pays it on every collect, hit or miss.
 Vocabulary (opencode row memo):
   key         ``(message id, time_updated)`` of one row in the db's message table. opencode
               (drizzle ORM, ``$onUpdate(() => Date.now())`` on the column) bumps time_updated
@@ -273,6 +279,16 @@ class TallyCache:
     self._next[source][str(path)] = entry
 
 
+def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str):
+  """The os.walk onerror hook turning an unreadable directory into a per-account note."""
+
+  def _onerror(exc: OSError) -> None:
+    if not isinstance(exc, FileNotFoundError):
+      t.notes.append(f"{source}: unreadable {label}/{root_name}: {exc}")
+
+  return _onerror
+
+
 def _iter_jsonl(root: Path, t: _Tally, source: str, label: str):
   """Yield ``*.jsonl`` under *root*, recording a note when a directory is unreadable.
 
@@ -281,15 +297,20 @@ def _iter_jsonl(root: Path, t: _Tally, source: str, label: str):
   gets the error instead, which becomes a per-account note; a missing directory is not an error
   here (``discover_homes`` already filters those out for the real on-disk layout).
   """
-
-  def _onerror(exc: OSError) -> None:
-    if not isinstance(exc, FileNotFoundError):
-      t.notes.append(f"{source}: unreadable {label}/{root.name}: {exc}")
-
-  for dirpath, _, filenames in os.walk(root, onerror=_onerror):
+  for dirpath, _, filenames in os.walk(root, onerror=_walk_error_hook(t, source, label, root.name)):
     for name in filenames:
       if name.endswith(".jsonl"):
         yield Path(dirpath) / name
+
+
+def _iter_jsonl_paths(root: Path, t: _Tally, source: str, label: str):
+  """String-path sibling of ``_iter_jsonl`` (same walk, same notes) for callers that never
+  open the file, like the signature walk below: Path construction per file measures over
+  twice the stat syscall's cost on this corpus."""
+  for dirpath, _, filenames in os.walk(root, onerror=_walk_error_hook(t, source, label, root.name)):
+    for name in filenames:
+      if name.endswith(".jsonl"):
+        yield os.path.join(dirpath, name)
 
 
 def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path]) -> tuple:
@@ -301,12 +322,12 @@ def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path
     entries = []
     for label, home in homes.items():
       per_home = []
-      for path in _iter_jsonl(home / sub, probe, source, label):
+      for path in _iter_jsonl_paths(home / sub, probe, source, label):
         try:
-          st = path.stat()
-          per_home.append((str(path), st.st_mtime_ns, st.st_size))
+          st = os.stat(path)
+          per_home.append((path, st.st_mtime_ns, st.st_size))
         except OSError as exc:
-          per_home.append((str(path), None, repr(exc)))
+          per_home.append((path, None, repr(exc)))
       entries.append((label, tuple(sorted(per_home))))
     home_pairs = tuple(sorted((label, str(path)) for label, path in homes.items()))
     sig.append((source, home_pairs, tuple(entries), tuple(probe.notes)))
@@ -316,6 +337,11 @@ def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path
 # The aggregate memo pair (walk signature, partial); see the module docstring.
 _aggregate_memo: tuple[tuple, _SourceAggregate] | None = None
 
+# The whole-tally memo: ((walk signature, opencode db signature), rows, notes) of the last
+# collect; see the module docstring for the key's contract. Rows are the ``_build`` output;
+# callers read but never mutate them.
+_tally_memo: tuple[tuple, list[dict], list[str]] | None = None
+
 # Per-row memo for the opencode message table: db path -> {message id: (time_updated, record
 # or None)}; see the module docstring for the key's contract.
 _opencode_row_memos: dict[str, dict[str, tuple[int, list | None]]] = {}
@@ -323,8 +349,9 @@ _opencode_row_memos: dict[str, dict[str, tuple[int, list | None]]] = {}
 
 def _reset_aggregate_memo() -> None:
   """Drop the collection's process-wide memos (test isolation)."""
-  global _aggregate_memo
+  global _aggregate_memo, _tally_memo
   _aggregate_memo = None
+  _tally_memo = None
   _opencode_row_memos.clear()
 
 
@@ -691,7 +718,6 @@ def collect_token_usage(
   described at module level. None collects cacheless.
   """
   start = time.perf_counter()
-  t = _Tally()
   if claude_homes is None or codex_homes is None:
     discovered_claude, discovered_codex = discover_homes(DEFAULT_CLAUDE_DIR, DEFAULT_CODEX_HOME)
     claude_homes = claude_homes if claude_homes is not None else discovered_claude
@@ -699,8 +725,19 @@ def collect_token_usage(
   if opencode_db is None:
     opencode_db = DEFAULT_OPENCODE_DB
 
-  global _aggregate_memo
+  global _aggregate_memo, _tally_memo
   signature = _corpus_signature(claude_homes, codex_homes)
+  opencode_sig = _opencode_db_signature(opencode_db)
+  tally_memo = _tally_memo
+  if opencode_sig is not None and tally_memo is not None and tally_memo[0] == (signature, opencode_sig):
+    _, rows, notes = tally_memo
+    return TokenTally(
+        rows=[ModelRow(**row) for row in rows],
+        notes=list(notes),
+        elapsed_s=time.perf_counter() - start,
+        scanned_bytes=0,
+    )
+  t = _Tally()
   cache = TallyCache.load(cache_path, t.notes) if cache_path is not None else None
   memo = _aggregate_memo
   fresh_sources = memo is None or memo[0] != signature
@@ -720,6 +757,8 @@ def collect_token_usage(
     except OSError as exc:
       t.notes.append(f"Tally cache: save failed: {exc}")
   rows = _build(t)
+  if opencode_sig is not None:
+    _tally_memo = ((signature, opencode_sig), rows, list(t.notes))
   elapsed = time.perf_counter() - start
   return TokenTally(
       rows=[ModelRow(**row) for row in rows],

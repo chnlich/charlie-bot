@@ -202,7 +202,10 @@ def _scan_references(
     owner = facts.get(thread_dir.parent.parent.name)
     if owner is None:
       log.warning("storage_cool_thread_reference_orphaned", thread=str(thread_dir), cc_session_id=referenced_id)
-      continue
+      # The thread metadata is still a CharlieBot reference even when its
+      # parent session metadata has gone away.  Keep it conservative: an
+      # unknown owner is not cold.
+      owner = _SessionFacts(id=thread_dir.parent.parent.name, cold=False, cc_session_id=None)
     references.setdefault(referenced_id, []).append(owner)
   return references
 
@@ -227,14 +230,27 @@ def _is_transport_name(name: str) -> bool:
 def _managed_transport_dirs(session_dir: Path) -> list[Path]:
   """The two directory shapes whose direct children the transport rule governs."""
   managed: list[Path] = []
-  master_runs = session_dir / "data" / "master_runs"
-  if master_runs.is_dir():
-    managed.extend(child for child in sorted(master_runs.iterdir()) if child.is_dir())
+  data_root = session_dir / "data"
+  master_runs = data_root / "master_runs"
+  if data_root.is_dir() and not data_root.is_symlink() and master_runs.is_dir() and not master_runs.is_symlink():
+    try:
+      run_dirs = sorted(master_runs.iterdir())
+    except OSError as e:
+      log.warning("storage_cool_dir_scan_failed", dir=str(master_runs), error=str(e))
+    else:
+      managed.extend(child for child in run_dirs if child.is_dir() and not child.is_symlink())
   threads_dir = session_dir / "threads"
-  if threads_dir.is_dir():
-    for thread_dir in sorted(threads_dir.iterdir()):
+  if threads_dir.is_dir() and not threads_dir.is_symlink():
+    try:
+      thread_dirs = sorted(threads_dir.iterdir())
+    except OSError as e:
+      log.warning("storage_cool_dir_scan_failed", dir=str(threads_dir), error=str(e))
+      thread_dirs = []
+    for thread_dir in thread_dirs:
+      if not thread_dir.is_dir() or thread_dir.is_symlink():
+        continue
       data_dir = thread_dir / "data"
-      if data_dir.is_dir():
+      if data_dir.is_dir() and not data_dir.is_symlink():
         managed.append(data_dir)
   return managed
 
@@ -422,6 +438,10 @@ def _sweep_claude_transcripts(
           # The session still exists: only the cold rule decides.
           if owner.cold:
             _delete_claude_project_dir(entry, counter, dry_run)
+        elif (cfg.sessions_dir / encoded_session).is_dir():
+          # An unreadable session metadata file is not proof that the session
+          # was deleted; only a missing session directory makes this an orphan.
+          continue
         elif session_id is None and _idle_past_window(entry, now, ORPHAN_IDLE_DAYS):
           # No metadata references it any more: orphan past the window.
           _delete_claude_project_dir(entry, counter, dry_run)
@@ -469,6 +489,7 @@ def _sweep_codex_rollouts(
     session_id: str | None,
 ) -> None:
   """Delete rollout files under the session-cold / unreferenced-plus-window rule."""
+  scoped_backends = _scoped_backend_sessions(facts, references, session_id) if session_id is not None else set()
   for tree in codex_session_trees(cfg):
     if not tree.is_dir():
       continue
@@ -482,8 +503,10 @@ def _sweep_codex_rollouts(
       if backend_session is None:
         continue
       if session_id is not None:
-        # Scoped run: only the named session's own record, already cold-verified.
-        if backend_session == _scoped_backend_session(facts, session_id):
+        # Scoped run: only the named session's own record, already cold-verified,
+        # and never a record also referenced by a live session.
+        referencing = references.get(backend_session)
+        if backend_session in scoped_backends and referencing and all(owner.cold for owner in referencing):
           _delete_file(path, counter, dry_run)
         continue
       referencing = references.get(backend_session)
@@ -500,9 +523,19 @@ def _sweep_codex_rollouts(
         _delete_file(path, counter, dry_run)
 
 
-def _scoped_backend_session(facts: dict[str, _SessionFacts], session_id: str) -> str | None:
+def _scoped_backend_sessions(
+    facts: dict[str, _SessionFacts],
+    references: dict[str, list[_SessionFacts]],
+    session_id: str,
+) -> set[str]:
+  """Return every backend id referenced by the one scoped session."""
   owner = facts.get(session_id)
-  return owner.cc_session_id if owner is not None else None
+  backend_sessions = {owner.cc_session_id} if owner and owner.cc_session_id is not None else set()
+  backend_sessions.update(
+      backend_session for backend_session, owners in references.items()
+      if any(reference.id == session_id for reference in owners)
+  )
+  return backend_sessions
 
 
 # ---------------------------------------------------------------------------
@@ -529,37 +562,40 @@ def _opencode_query(db: Path, sql: str, parameters: tuple = ()) -> list[tuple] |
     return None
 
 
-def _opencode_candidate_ids(db: Path, backend_session: str | None) -> list[str]:
+def _opencode_candidate_ids(db: Path, backend_session: str | None) -> list[str] | None:
   """The aggregate ids a sweep may delete: all of them, or the scoped one."""
   if backend_session is None:
     rows = _opencode_query(db, _AGGREGATE_IDS_SQL)
   else:
     rows = _opencode_query(db, f"{_AGGREGATE_IDS_SQL} where aggregate_id = ?", (backend_session,))
-  return [str(row[0]) for row in rows] if rows is not None else []
+  return [str(row[0]) for row in rows] if rows is not None else None
 
 
-def _opencode_aggregate_sizes(db: Path, aggregate_ids: list[str]) -> dict[str, tuple[int, int]]:
+def _opencode_aggregate_sizes(db: Path, aggregate_ids: list[str]) -> dict[str, tuple[int, int]] | None:
   """Event counts and byte totals for *aggregate_ids*, from index-driven lookups.
 
   One failed query drops the whole map, so a partially-read scan never reports or
   deletes bytes it did not see; the next run re-reads and finishes.
   """
-  sizes: dict[str, tuple[int, int]] = {}
+  # Keep aggregates with no event rows in the map too.  Their sequence row is
+  # still a backend record covered by the deletion rule, even though it frees
+  # zero event bytes.
+  sizes: dict[str, tuple[int, int]] = {aggregate_id: (0, 0) for aggregate_id in aggregate_ids}
   for start in range(0, len(aggregate_ids), _SQL_PARAM_CHUNK):
     chunk = aggregate_ids[start:start + _SQL_PARAM_CHUNK]
     rows = _opencode_query(db, _AGGREGATE_SIZES_SQL.format(",".join("?" * len(chunk))), tuple(chunk))
     if rows is None:
-      return {}
+      return None
     for aggregate_id, count, size in rows:
       sizes[str(aggregate_id)] = (int(count), int(size or 0))
   return sizes
 
 
-def _opencode_session_updated(db: Path) -> dict[str, int]:
+def _opencode_session_updated(db: Path) -> dict[str, int] | None:
   """The backend's own last-update timestamp (ms epoch) per aggregate id."""
   rows = _opencode_query(db, _SESSION_UPDATED_SQL)
   if rows is None:
-    return {}
+    return None
   return {str(row[0]): int(row[1]) for row in rows if row[1] is not None}
 
 
@@ -569,7 +605,7 @@ def _opencode_targets(
     references: dict[str, list[_SessionFacts]],
     now: datetime,
     session_id: str | None,
-) -> dict[str, tuple[int, int]]:
+) -> dict[str, tuple[int, int]] | None:
   """Aggregate ids the rule deletes, with their event counts and byte totals.
 
   In a scoped run the named session's own aggregate is the only candidate (the
@@ -577,14 +613,28 @@ def _opencode_targets(
   when every referencing session is cold, and an unreferenced one once the
   backend's own timestamp has been idle past the safety window.
   """
-  scoped_backend = _scoped_backend_session(facts, session_id) if session_id is not None else None
-  if session_id is not None and scoped_backend is None:
+  scoped_backends = _scoped_backend_sessions(facts, references, session_id) if session_id is not None else set()
+  if session_id is not None and not scoped_backends:
     return {}
-  candidates = _opencode_candidate_ids(db, scoped_backend)
+  if session_id is None:
+    candidates = _opencode_candidate_ids(db, None)
+  else:
+    candidates = []
+    for backend_session in sorted(scoped_backends):
+      backend_candidates = _opencode_candidate_ids(db, backend_session)
+      if backend_candidates is None:
+        return None
+      candidates.extend(backend_candidates)
+  if candidates is None:
+    return None
   if not candidates:
     return {}
   if session_id is not None:
-    return _opencode_aggregate_sizes(db, candidates)
+    safe_candidates = [
+        aggregate_id for aggregate_id in candidates
+        if (referencing := references.get(aggregate_id)) and all(owner.cold for owner in referencing)
+    ]
+    return _opencode_aggregate_sizes(db, safe_candidates)
   referenced_cold: list[str] = []
   unreferenced: list[str] = []
   for aggregate_id in candidates:
@@ -594,6 +644,8 @@ def _opencode_targets(
     elif all(owner.cold for owner in referencing):
       referenced_cold.append(aggregate_id)
   updated = _opencode_session_updated(db) if unreferenced else {}
+  if updated is None:
+    return None
   window_ids = [
       aggregate_id for aggregate_id in unreferenced
       if aggregate_id in updated
@@ -622,12 +674,19 @@ def _sweep_opencode(
   if not db.exists():
     return
   targets = _opencode_targets(db, facts, references, now, session_id)
-  if not targets:
+  if targets is None:
     return
   if dry_run:
+    if not targets:
+      return
     for count, size in targets.values():
       counter.count += 1
       counter.bytes += size
+    return
+  # A scoped run must not compact unrelated database pages when its session is
+  # active or has no safely deletable backend record.  The unscoped scheduler
+  # pass is responsible for retrying a prior VACUUM lock failure.
+  if session_id is not None and not targets:
     return
   try:
     connection = sqlite3.connect(db, timeout=5.0)
@@ -636,8 +695,13 @@ def _sweep_opencode(
     return
   try:
     # Cascade only fires with foreign keys on, and the pragma is per-connection.
-    connection.execute("PRAGMA foreign_keys=ON")
+    try:
+      connection.execute("PRAGMA foreign_keys=ON")
+    except sqlite3.Error as e:
+      log.warning("storage_cool_opencode_setup_failed", db=str(db), error=str(e))
+      return
     connection.isolation_level = None  # per-statement transactions: one failure keeps the rest
+    deleted = False
     for aggregate_id, (count, size) in sorted(targets.items()):
       try:
         cursor = connection.execute("DELETE FROM event_sequence WHERE aggregate_id = ?", (aggregate_id,))
@@ -645,18 +709,24 @@ def _sweep_opencode(
         log.warning("storage_cool_opencode_delete_failed", aggregate_id=aggregate_id, error=str(e))
         continue
       if cursor.rowcount:
+        deleted = True
         counter.count += 1
         counter.bytes += size
-    if counter.bytes:
-      _vacuum_opencode_db(connection, db)
+    # A failed VACUUM leaves freelist pages behind.  Keep opening the database
+    # on later no-target runs so the short-lock attempt can be retried.
+    _vacuum_opencode_db(connection, db, force=deleted)
   finally:
     connection.close()
 
 
-def _vacuum_opencode_db(connection: sqlite3.Connection, db: Path) -> None:
+def _vacuum_opencode_db(connection: sqlite3.Connection, db: Path, *, force: bool) -> None:
   """Hand the freed pages back to the filesystem; leave them for the next run on a lock loss."""
   try:
     connection.execute("PRAGMA busy_timeout=2000")
+    if not force:
+      row = connection.execute("PRAGMA freelist_count").fetchone()
+      if not row or not row[0]:
+        return
     connection.execute("VACUUM")
   except sqlite3.Error as e:
     log.warning("storage_cool_opencode_vacuum_failed", db=str(db), error=str(e))
@@ -747,8 +817,6 @@ def format_sweep_table(result: SweepResult, *, dry_run: bool) -> str:
       for category in result.categories
   ]
   lines.append(f"{'total':<18}{'':>17}{_gib(result.total_bytes):>9.2f} GiB")
-  if dry_run:
-    lines.append("(dry run — nothing deleted)")
   return "\n".join(lines)
 
 

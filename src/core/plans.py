@@ -354,14 +354,16 @@ class PlanRegistryManager:
           "id": next_id,
           "title": title,
           "versions":
-              [{
-                  "v": 1,
-                  "file": file_relative,
-                  "created_at": _utc_now_iso(),
-                  "trigger": "initial",
-                  "base": base,
-                  "note": None,
-              }],
+              [
+                  {
+                      "v": 1,
+                      "file": file_relative,
+                      "created_at": _utc_now_iso(),
+                      "trigger": "initial",
+                      "base": base,
+                      "note": None,
+                  }
+              ],
           "takeoff": None,
           "closed": None,
       }

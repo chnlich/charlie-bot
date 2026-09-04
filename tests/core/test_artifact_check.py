@@ -374,8 +374,9 @@ def test_goal_budget_drops_a_revnote_whole(tmp_path: Path) -> None:
   the budget (cleared by the next revision): an overlong note changes nothing, inline <code>
   included."""
   cfg = _chrome_cfg(tmp_path)
-  note = (f'<div class="revnote">r2 · trigger — {"x" * (artifact_check.GOAL_WEIGHTED_BUDGET + 40)} '
-          "<code>a/b/c</code></div>")
+  note = (
+      f'<div class="revnote">r2 · trigger — {"x" * (artifact_check.GOAL_WEIGHTED_BUDGET + 40)} '
+      "<code>a/b/c</code></div>")
   marked = _run("plan", _write(tmp_path, _with_mark_after_goal_heading(note)), cfg)["goal-budget"]
   plain = _run("plan", _write(tmp_path, plan_page_html(), name="plain.html"), cfg)["goal-budget"]
   assert marked == plain
@@ -396,8 +397,8 @@ def test_goal_budget_keeps_non_revision_class_content(tmp_path: Path) -> None:
   content = "x" * (artifact_check.GOAL_WEIGHTED_BUDGET + 1)
   lookalikes = (f'<div class="revnote-old">{content}</div>', f'<div data-class="revnote">{content}</div>')
   for i, mark in enumerate(lookalikes):
-    (outcome,) = _run("plan", _write(tmp_path, _with_mark_after_goal_heading(mark), name=f"lookalike-{i}.html"), cfg)[
-        "goal-budget"]
+    (outcome,) = _run("plan", _write(tmp_path, _with_mark_after_goal_heading(mark), name=f"lookalike-{i}.html"),
+                      cfg)["goal-budget"]
     assert not outcome.passed
 
 

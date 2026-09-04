@@ -70,7 +70,8 @@ async def test_plan_amend_endpoint_happy_path(tmp_path: Path) -> None:
   app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
-        "/api/internal/plan/amend", json={
+        "/api/internal/plan/amend",
+        json={
             "session_id": meta.id,
             "file": f2,
             "plan_id": 1,
@@ -421,7 +422,8 @@ async def test_plan_amend_rejects_initial_trigger_422(tmp_path: Path) -> None:
   app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
-        "/api/internal/plan/amend", json={
+        "/api/internal/plan/amend",
+        json={
             "session_id": meta.id,
             "file": f2,
             "plan_id": 1,

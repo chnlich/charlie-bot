@@ -3,9 +3,12 @@
 import asyncio
 import copy
 import re
+from datetime import datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 import structlog
+from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -32,6 +35,23 @@ log = structlog.get_logger()
 router = APIRouter()
 
 _CRON_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+# get_next is a pure function of (cron, timezone, now), and its answer stays
+# valid until the fire time it names: no occurrence can land between the
+# compute instant and that first next fire. Task count bounds the map.
+_NEXT_RUN_MEMO: dict[tuple[str, str], tuple[datetime, str]] = {}
+
+
+def next_run_iso(cron_expr: str, timezone: str, now_utc: datetime) -> str:
+  """ISO next fire time of *cron_expr* in *timezone*, memoized until it passes."""
+  hit = _NEXT_RUN_MEMO.get((cron_expr, timezone))
+  if hit is not None and now_utc < hit[0]:
+    return hit[1]
+  tz = ZoneInfo(timezone)
+  next_run = croniter(cron_expr, datetime.now(tz)).get_next(datetime)
+  iso = next_run.isoformat()
+  _NEXT_RUN_MEMO[(cron_expr, timezone)] = (next_run, iso)
+  return iso
 
 
 def _read_cron_yaml(name: str) -> dict:

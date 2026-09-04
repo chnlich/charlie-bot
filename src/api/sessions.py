@@ -3,16 +3,14 @@
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import structlog
-from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.responses import Response
 
-from src.api.cron import TaskUpdate, apply_task_yaml_update
+from src.api.cron import TaskUpdate, apply_task_yaml_update, next_run_iso
 from src.api.deps import (
     get_plan_manager,
     get_session_manager,
@@ -303,6 +301,7 @@ async def list_scheduled_sessions(session_mgr: SessionManager = Depends(get_sess
       include_pending_trigger_status=True,
   )
   task_map = {t.name: t for t in get_scheduled_tasks()}
+  now_utc = datetime.now(UTC)
   for s in sessions:
     task = task_map.get(s.scheduled_task)
     if task:
@@ -311,9 +310,7 @@ async def list_scheduled_sessions(session_mgr: SessionManager = Depends(get_sess
       s.schedule_timezone = task.timezone
       s.schedule_project = task.project
       s.schedule_allow_failure = task.allow_failure
-      tz = ZoneInfo(task.timezone)
-      now = datetime.now(tz)
-      s.schedule_next_run = croniter(task.cron, now).get_next(datetime).isoformat()
+      s.schedule_next_run = next_run_iso(task.cron, task.timezone, now_utc)
     else:
       s.schedule_enabled = False
   return sessions

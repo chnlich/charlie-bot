@@ -20,6 +20,7 @@ from conftest import (
     SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
     SCHEDULER_THREAD_MANAGER_PATCH_TARGET,
     FakeThreadManager,
+    _noop,
     close_create_logged_task,
 )
 
@@ -66,9 +67,6 @@ async def test_scheduled_prompt_task_hands_injected_session_manager_to_worker(
   def fake_spawn_worker(**kwargs: Any) -> Coroutine[Any, Any, None]:
     captured.update(kwargs)
     return _noop()
-
-  async def _noop() -> None:
-    return None
 
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(SCHEDULER_THREAD_MANAGER_PATCH_TARGET, lambda _cfg: FakeThreadManager())

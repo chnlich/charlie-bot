@@ -17,6 +17,7 @@ from conftest import (
   CLI_COMMON_GET_CONFIG_PATCH_TARGET,
   CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
   FakeSessionManager,
+  _noop,
   make_json_response,
 )
 from fastapi import FastAPI
@@ -158,9 +159,6 @@ def test_session_message_relay_persists_event_and_wakes_master(
       "target": SessionMetadata(id="target", name="Target Task"),
   })
   triggered: list[tuple[str, str]] = []
-
-  async def _noop() -> None:
-    return None
 
   def fake_trigger_master(session_id: str, summary: str, *args: Any, **kwargs: Any) -> Coroutine[Any, Any, None]:
     triggered.append((session_id, summary))

@@ -56,8 +56,7 @@ def _revision_mark_re(tag: str, cls: str) -> re.Pattern[str]:
   return re.compile(
       rf'<{tag}\b(?=[^>]*(?<!\S)class\s*=\s*'
       rf'(?:(?:"(?:[^"]*\s)?{cls}(?:\s[^"]*)?")|(?:\'(?:[^\']*\s)?{cls}(?:\s[^\']*)?\')|{cls}(?:\s|>))'
-      rf')[^>]*>.*?</{tag}>',
-      re.DOTALL)
+      rf')[^>]*>.*?</{tag}>', re.DOTALL)
 
 
 _REVNOTE_RE = _revision_mark_re("div", "revnote")

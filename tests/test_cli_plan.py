@@ -343,8 +343,8 @@ def _write_diff_pair(cfg: MagicMock) -> tuple[Path, Path]:
   """Two differing plan pages on disk under the session dir; returns their paths."""
   write_plan_artifact(cfg, "abc", "plan_01.html", plan_page_html("Ship the executor fix."))
   write_plan_artifact(cfg, "abc", "plan_02.html", plan_page_html("Ship the executor fix behind a flag."))
-  return (cfg.sessions_dir / "abc" / "artifacts" / "plan_01.html", cfg.sessions_dir / "abc" / "artifacts" /
-          "plan_02.html")
+  return (
+      cfg.sessions_dir / "abc" / "artifacts" / "plan_01.html", cfg.sessions_dir / "abc" / "artifacts" / "plan_02.html")
 
 
 def test_plan_diff_prints_five_keys_computed_locally(

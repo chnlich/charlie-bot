@@ -12,14 +12,14 @@ import httpx
 import structlog
 
 from src.agents.backends.base import (
-  SKIP_PERMISSIONS_FLAG,
-  AgentBackend,
-  iter_ndjson_events,
-  make_error_event,
-  make_result_event,
-  make_text_event,
-  prepend_path_dir,
-  resolve_binary,
+    SKIP_PERMISSIONS_FLAG,
+    AgentBackend,
+    iter_ndjson_events,
+    make_error_event,
+    make_result_event,
+    make_text_event,
+    prepend_path_dir,
+    resolve_binary,
 )
 from src.core import event_types as ET
 from src.core.process import make_pdeathsig_kill_preexec, wait_or_kill_group
@@ -138,10 +138,15 @@ class OpenCodeBackend(AgentBackend):
     overrides; headless runs have no UI to answer interactive questions.
     """
     return {
-        "permission": {"*": "allow", "question": "deny"},
+        "permission": {
+            "*": "allow",
+            "question": "deny"
+        },
         "default_agent": "charliebot",
         "agent": {
-            "charliebot": {"mode": "primary"},
+            "charliebot": {
+                "mode": "primary"
+            },
         },
     }
 
@@ -321,15 +326,11 @@ class OpenCodeBackend(AgentBackend):
       response.raise_for_status()
       providers = response.json()
     except Exception as e:
-      log.warning(
-          "opencode_context_catalog_unavailable",
-          provider_id=provider_id, model_id=model_id, error=str(e))
+      log.warning("opencode_context_catalog_unavailable", provider_id=provider_id, model_id=model_id, error=str(e))
       return None
     limit = self._extract_model_limit(providers, provider_id, model_id)
     if limit is None:
-      log.warning(
-          "opencode_context_catalog_unavailable",
-          provider_id=provider_id, model_id=model_id)
+      log.warning("opencode_context_catalog_unavailable", provider_id=provider_id, model_id=model_id)
     return limit
 
   @staticmethod
@@ -480,11 +481,16 @@ class OpenCodeBackend(AgentBackend):
         if already_registered:
           return []
         pre_tokens = self._last_step_tokens["input"] if self._last_step_tokens is not None else None
-        return [{
-            "type": ET.SYSTEM,
-            "subtype": ET.COMPACT_BOUNDARY,
-            ET.COMPACT_METADATA: {"trigger": "auto", "pre_tokens": pre_tokens},
-        }]
+        return [
+            {
+                "type": ET.SYSTEM,
+                "subtype": ET.COMPACT_BOUNDARY,
+                ET.COMPACT_METADATA: {
+                    "trigger": "auto",
+                    "pre_tokens": pre_tokens
+                },
+            }
+        ]
       if info["role"] != "assistant":
         return []
       translated: list[dict] = []
@@ -557,17 +563,19 @@ class OpenCodeBackend(AgentBackend):
     events: list[dict] = []
 
     if call_id not in self._tool_use_emitted and state.get("status") != "pending":
-      events.append({
-          "type": ET.ASSISTANT,
-          "message": {
-              "content": [{
-                  "type": ET.TOOL_USE,
-                  "name": tool_name,
-                  "id": call_id,
-                  "input": state["input"],
-              }]
-          },
-      })
+      events.append(
+          {
+              "type": ET.ASSISTANT,
+              "message":
+                  {
+                      "content": [{
+                          "type": ET.TOOL_USE,
+                          "name": tool_name,
+                          "id": call_id,
+                          "input": state["input"],
+                      }]
+                  },
+          })
       self._tool_use_emitted.add(call_id)
 
     if call_id not in self._tool_result_emitted:

@@ -15,21 +15,21 @@ from starlette.types import Receive, Scope, Send
 
 from src.agents import transcriber
 from src.api import (
-  anthropic_proxy,
-  backlog,
-  chat,
-  code_server,
-  cron,
-  ext_usage,
-  files,
-  git,
-  internal,
-  latex,
-  pages,
-  sessions,
-  slash,
-  threads,
-  voice,
+    anthropic_proxy,
+    backlog,
+    chat,
+    code_server,
+    cron,
+    ext_usage,
+    files,
+    git,
+    internal,
+    latex,
+    pages,
+    sessions,
+    slash,
+    threads,
+    voice,
 )
 from src.api.auth import AuthMiddleware
 from src.api.deps import get_session_manager, get_thread_manager, set_trigger_manager
@@ -38,9 +38,9 @@ from src.core.buildinfo import init_build_info
 from src.core.config import CharlieBotConfig, get_config
 from src.core.http import close_http_client
 from src.core.init import (
-  init_charliebot_home,
-  reconcile_master_identity,
-  run_crash_recovery,
+    init_charliebot_home,
+    reconcile_master_identity,
+    run_crash_recovery,
 )
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import SessionMetadata, utc_now
@@ -96,9 +96,7 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context) -> 
     log.info(f"{log_label}_closed", reason=str(e), **log_context)
 
 
-async def _run_crash_recovery(
-    cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task | None = None
-) -> None:
+async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task | None = None) -> None:
   """Background startup recovery; logs completion and never swallows failures.
 
   Wraps init.run_crash_recovery so an exception surfaces loudly instead of
@@ -116,8 +114,7 @@ async def _run_crash_recovery(
     log.exception("crash_recovery_failed")
 
 
-async def _run_slack_backfill(cfg: CharlieBotConfig, session_mgr: SessionManager,
-                              recovery_task: asyncio.Task) -> None:
+async def _run_slack_backfill(cfg: CharlieBotConfig, session_mgr: SessionManager, recovery_task: asyncio.Task) -> None:
   """Report Slack summons lost across the restart, once recovery has had its chance.
 
   Waits on the crash-recovery task first so re-attach and the user-message
@@ -125,7 +122,7 @@ async def _run_slack_backfill(cfg: CharlieBotConfig, session_mgr: SessionManager
   unanswered after that is genuinely lost and gets a notice in its thread.
   """
   from src.core.slack_listener import (
-    backfill_lost_summons,  # lazy: avoids import cycle at module scope
+      backfill_lost_summons,  # lazy: avoids import cycle at module scope
   )
 
   await recovery_task
@@ -184,7 +181,7 @@ async def lifespan(app: FastAPI):
   slack_listener_task = None
   if cfg.slack_bot_token and cfg.slack_app_token and cfg.slack_allowed_user_ids:
     from src.core.slack_listener import (
-      run_listener,  # lazy: avoids import cycle at module scope
+        run_listener,  # lazy: avoids import cycle at module scope
     )
 
     slack_listener_task = create_logged_task(run_listener(cfg, session_mgr), name="slack-listener")
@@ -218,10 +215,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-  title="CharlieBot",
-  description="Multi-agent Claude Code orchestration system",
-  version="0.1.0",
-  lifespan=lifespan,
+    title="CharlieBot",
+    description="Multi-agent Claude Code orchestration system",
+    version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=6)
@@ -250,7 +247,6 @@ app.include_router(anthropic_proxy.router, prefix="/api/anthropic-proxy", tags=[
 # wrong where it is written. "/files" stays as the form the UI builds and older links carry.
 app.include_router(files.router, prefix="/files", tags=["files"])
 app.include_router(files.router, prefix="/absolute_filepath", tags=["files"])
-
 
 # ---------------------------------------------------------------------------
 # WebSocket endpoint for session-level events (master CC + worker summaries)
@@ -352,12 +348,12 @@ async def _send_session_catchup(
 
 
 async def _replay_aggregated_catchup(
-  websocket: WebSocket,
-  events: list[dict],
-  cursor: int,
-  session_id: str,
-  *,
-  event_index_offset: int = 0,
+    websocket: WebSocket,
+    events: list[dict],
+    cursor: int,
+    session_id: str,
+    *,
+    event_index_offset: int = 0,
 ) -> int:
   """Replay events past *cursor* as aggregator deltas + raw side-effect events.
 
@@ -438,7 +434,6 @@ _static_dir = Path(__file__).parent / "web" / "static"
 if _static_dir.exists():
   app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
-
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -448,10 +443,10 @@ if __name__ == "__main__":
 
   cfg = get_config()
   uvicorn.run(
-    "server:app",
-    host=cfg.server_host,
-    port=cfg.server_port,
-    reload=False,
-    log_level="info",
-    timeout_graceful_shutdown=5,
+      "server:app",
+      host=cfg.server_host,
+      port=cfg.server_port,
+      reload=False,
+      log_level="info",
+      timeout_graceful_shutdown=5,
   )

@@ -19,14 +19,14 @@ from src.core.config import CharlieBotConfig, get_config
 from src.core.json_utils import write_model_json_atomically
 from src.core.master_trigger import trigger_master
 from src.core.models import (
-  LocalPid,
-  PendingTrigger,
-  RemotePid,
-  SessionStatus,
-  SlurmJob,
-  TriggerStatus,
-  WatchKind,
-  WatchTarget,
+    LocalPid,
+    PendingTrigger,
+    RemotePid,
+    SessionStatus,
+    SlurmJob,
+    TriggerStatus,
+    WatchKind,
+    WatchTarget,
 )
 from src.core.sessions import SessionManager
 from src.core.sidebar_state import mark_sidebar_dirty
@@ -51,30 +51,32 @@ _SACCT_POLL_INTERVAL = 30  # seconds between sacct probes
 # group stops waiting and reports itself so the master wakes up instead of going blind.
 _REMOTE_SACCT_UNREACHABLE_GRACE = 900  # seconds
 # Non-terminal job states: the job is still in flight, keep polling.
-_SLURM_ACTIVE_STATES = frozenset({
-    "PENDING",
-    "RUNNING",
-    "CONFIGURING",
-    "COMPLETING",
-    "REQUEUED",
-    "RESIZING",
-    "SUSPENDED",
-})
+_SLURM_ACTIVE_STATES = frozenset(
+    {
+        "PENDING",
+        "RUNNING",
+        "CONFIGURING",
+        "COMPLETING",
+        "REQUEUED",
+        "RESIZING",
+        "SUSPENDED",
+    })
 # Terminal job states: the job has stopped, capture State + ExitCode. Any state
 # string in neither set is unknown (logged, treated as not-finished).
-_SLURM_TERMINAL_STATES = frozenset({
-    "COMPLETED",
-    "FAILED",
-    "CANCELLED",
-    "TIMEOUT",
-    "OUT_OF_MEMORY",
-    "NODE_FAIL",
-    "BOOT_FAIL",
-    "DEADLINE",
-    "PREEMPTED",
-    "REVOKED",
-    "SPECIAL_EXIT",
-})
+_SLURM_TERMINAL_STATES = frozenset(
+    {
+        "COMPLETED",
+        "FAILED",
+        "CANCELLED",
+        "TIMEOUT",
+        "OUT_OF_MEMORY",
+        "NODE_FAIL",
+        "BOOT_FAIL",
+        "DEADLINE",
+        "PREEMPTED",
+        "REVOKED",
+        "SPECIAL_EXIT",
+    })
 
 # LRU cap on list_triggers memos, in sessions: the workers-panel poll exercises at most a
 # handful of sessions at a time, and a fired-then-pruned session must not pin its files' parsed
@@ -493,9 +495,7 @@ class TriggerManager:
       by_host.setdefault(t.host, []).append(t.job_id)
 
     hosts = sorted(by_host)
-    results = await asyncio.gather(*[
-        _probe_sacct(sorted(by_host[h]), "verify-on-create", host=h) for h in hosts
-    ])
+    results = await asyncio.gather(*[_probe_sacct(sorted(by_host[h]), "verify-on-create", host=h) for h in hosts])
 
     observed: dict[str, str] = {}
     bad: list[str] = []
@@ -556,6 +556,7 @@ class TriggerManager:
         stale.append(name)
 
     if stale:
+
       def _read_stale() -> list[tuple[str, PendingTrigger]]:
         parsed = []
         for name in stale:
@@ -850,9 +851,7 @@ class TriggerManager:
     for t in targets:
       groups.setdefault(t.host, set()).add(t.job_id)
 
-    results = await asyncio.gather(*[
-        self._wait_sacct_group(trigger, host, ids) for host, ids in groups.items()
-    ])
+    results = await asyncio.gather(*[self._wait_sacct_group(trigger, host, ids) for host, ids in groups.items()])
     finished = [label for group_finished, _ in results for label in group_finished]
     still_alive = [label for _, group_alive in results for label in group_alive]
     return finished, still_alive
@@ -902,8 +901,7 @@ class TriggerManager:
           )
           note = error.splitlines()[0][:120]
           still_alive = [
-              f"{_slurm_label(host, j)} (unreachable {int(dark_for // 60)}m: {note})"
-              for j in sorted(remaining)
+              f"{_slurm_label(host, j)} (unreachable {int(dark_for // 60)}m: {note})" for j in sorted(remaining)
           ]
           return finished, still_alive
       for job_id in sorted(remaining):

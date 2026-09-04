@@ -2482,7 +2482,8 @@ if len(bodies) != 1:
     raise SystemExit("live churn during measurement; re-run")
 rows = r.json()
 prompt_bytes = sum(len(row.get("prompt") or "") for row in rows)
-print(f"{len(rows)} task rows, body {len(r.content)} B, prompt bytes {prompt_bytes}; "
+step_prompt_bytes = sum(len(s.get("prompt") or "") for row in rows for s in (row.get("steps") or []))
+print(f"{len(rows)} task rows, body {len(r.content)} B, prompt bytes {prompt_bytes}, step prompt bytes {step_prompt_bytes}; "
       f"steady-state GET /api/cron/tasks median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms")
 EOF
 ```

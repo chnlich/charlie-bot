@@ -165,8 +165,18 @@ async def list_cron_tasks():
   """
   # prompt is resolved from prompt_file for the in-process scheduler/master
   # reads; no consumer of this route reads it (the UI edits prompt_file), and
-  # shipping the resolved bodies was ~90 KB of the 96 KB response.
-  valid = [t.model_dump(exclude={'prompt'}) for t in get_scheduled_tasks()]
+  # shipping the resolved bodies was ~90 KB of the 96 KB response. The steps
+  # exclusion is the same field one level down on a chain task.
+  valid = [
+      t.model_dump(exclude={
+          'prompt': True,
+          'steps': {
+              '__all__': {
+                  'prompt': True
+              }
+          }
+      }) for t in get_scheduled_tasks()
+  ]
   broken = [
       {
           'name': e.name,

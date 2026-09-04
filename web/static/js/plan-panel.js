@@ -16,6 +16,10 @@ const planPanel = (() => {
   let _errors = [];
   let _selectedPlanId = null;
   let _selectedVersion = null;
+  // 对比上一版 toggle. Reset to the selected version's default (on when a
+  // predecessor exists) at every selection change; a user click overrides it
+  // until the next change of plan or version.
+  let _diffEnabled = false;
   let _loadedViewerKey = null;
   let _stale = true;
   let _fetchGeneration = 0;
@@ -59,6 +63,22 @@ const planPanel = (() => {
     var latest = _latestVersion(plan);
     if (!latest) return false;
     return version < latest.v;
+  }
+
+  // The lineage version immediately before `version` (greatest v below it), or
+  // null — this is what the 对比上一版 toggle and its ?diff= query key off.
+  function predecessorVersion(plan, version) {
+    if (!plan || !plan.versions) return null;
+    var pred = null;
+    for (var i = 0; i < plan.versions.length; i++) {
+      var v = plan.versions[i];
+      if (v.v < version && (pred === null || v.v > pred.v)) pred = v;
+    }
+    return pred;
+  }
+
+  function hasPredecessor(plan, version) {
+    return predecessorVersion(plan, version) !== null;
   }
 
   function detectNewPlanOrVersion(prev, next) {
@@ -131,31 +151,43 @@ const planPanel = (() => {
     return '/files' + root + '/' + sessionId + '/' + file;
   }
 
-  function buildIframeUrl(file, sessionId, sessionsRoot) {
-    return _filesUrl(file, sessionId, sessionsRoot, 'plan panel iframe URL') +
+  // diffFile, when set, rides as the ?diff= query *before* the #cbsession=…
+  // fragment, so the fragment stays last in every address this panel builds.
+  // The file is a session-relative POSIX path, so its slashes stay literal.
+  function encodeDiffFile(diffFile) {
+    return encodeURIComponent(diffFile).replace(/%2F/g, '/');
+  }
+
+  function buildIframeUrl(file, sessionId, sessionsRoot, diffFile) {
+    var url = _filesUrl(file, sessionId, sessionsRoot, 'plan panel iframe URL');
+    if (diffFile) url += '?diff=' + encodeDiffFile(diffFile);
+    return url +
       '#cbsession=' + encodeURIComponent(sessionId) +
       '&' + PLAN_PANEL_MARKER + '=1';
   }
 
-  function buildIframeUrlFromVersion(plan, version, sessionId, sessionsRoot) {
+  function buildIframeUrlFromVersion(plan, version, sessionId, sessionsRoot, diffOn) {
     var ver = _findVersion(plan, version);
     if (!ver) return null;
-    return buildIframeUrl(ver.file, sessionId, sessionsRoot);
+    var pred = diffOn ? predecessorVersion(plan, version) : null;
+    return buildIframeUrl(ver.file, sessionId, sessionsRoot, pred ? pred.file : null);
   }
 
   // Standalone URL for the "Open in tab" action: real /files URL with the
   // cbsession fragment but WITHOUT the cbpanel marker. The comment tray
   // activates via the top-level-page branch of artifact-comments.js (the
   // framed guard is skipped because the page is not in an iframe).
-  function buildStandaloneUrl(file, sessionId, sessionsRoot) {
-    return _filesUrl(file, sessionId, sessionsRoot, 'plan standalone URL') +
-      '#cbsession=' + encodeURIComponent(sessionId);
+  function buildStandaloneUrl(file, sessionId, sessionsRoot, diffFile) {
+    var url = _filesUrl(file, sessionId, sessionsRoot, 'plan standalone URL');
+    if (diffFile) url += '?diff=' + encodeDiffFile(diffFile);
+    return url + '#cbsession=' + encodeURIComponent(sessionId);
   }
 
-  function buildStandaloneUrlFromVersion(plan, version, sessionId, sessionsRoot) {
+  function buildStandaloneUrlFromVersion(plan, version, sessionId, sessionsRoot, diffOn) {
     var ver = _findVersion(plan, version);
     if (!ver) return null;
-    return buildStandaloneUrl(ver.file, sessionId, sessionsRoot);
+    var pred = diffOn ? predecessorVersion(plan, version) : null;
+    return buildStandaloneUrl(ver.file, sessionId, sessionsRoot, pred ? pred.file : null);
   }
 
   function _buildFilesFetchUrl(file, sessionId, sessionsRoot) {
@@ -247,9 +279,21 @@ const planPanel = (() => {
     notice.classList.toggle('hidden', !isStaleVersion(plan, _selectedVersion));
   }
 
-  function _viewerKey(planId, version, sessionId) {
+  // Shown only when the selected version has a predecessor in the lineage, so
+  // version 1 never offers the comparison.
+  function _renderDiffToggle() {
+    var wrap = _getEl('plan-diff-toggle-wrap');
+    if (!wrap) return;
+    var plan = _findPlan(_selectedPlanId);
+    var show = plan != null && _selectedVersion != null && hasPredecessor(plan, _selectedVersion);
+    wrap.classList.toggle('hidden', !show);
+    var box = _getEl('plan-diff-toggle');
+    if (box) box.checked = _diffEnabled;
+  }
+
+  function _viewerKey(planId, version, sessionId, diffOn) {
     if (planId == null || version == null) return null;
-    return String(sessionId) + ':' + String(planId) + ':' + String(version);
+    return String(sessionId) + ':' + String(planId) + ':' + String(version) + ':' + (diffOn ? 'diff' : 'clean');
   }
 
   function _renderViewer() {
@@ -263,11 +307,13 @@ const planPanel = (() => {
     }
     // The session component is always read live so a session switch reloads
     // the iframe even when (planId, version) is unchanged across sessions.
+    // The diff toggle state is part of the key for the same reason: flipping
+    // it must reload the iframe between the annotated and the clean page.
     var sid = _currentSessionId();
-    var key = _viewerKey(_selectedPlanId, _selectedVersion, sid);
+    var key = _viewerKey(_selectedPlanId, _selectedVersion, sid, _diffEnabled);
     if (key === _loadedViewerKey) return;
     try {
-      iframe.src = buildIframeUrlFromVersion(plan, _selectedVersion, sid);
+      iframe.src = buildIframeUrlFromVersion(plan, _selectedVersion, sid, undefined, _diffEnabled);
       _loadedViewerKey = key;
     } catch (e) {
       console.error('plan-panel: failed to build iframe URL', e);
@@ -363,6 +409,8 @@ const planPanel = (() => {
       if (vsel) vsel.innerHTML = '';
       var notice = _getEl('plan-stale-notice');
       if (notice) notice.classList.add('hidden');
+      var diffWrap = _getEl('plan-diff-toggle-wrap');
+      if (diffWrap) diffWrap.classList.add('hidden');
       var bar = _getEl('plan-action-bar');
       if (bar) bar.innerHTML = '';
       return;
@@ -372,6 +420,7 @@ const planPanel = (() => {
     _renderSelector();
     _renderVersionSwitcher();
     _renderStaleNotice();
+    _renderDiffToggle();
     _renderViewer();
   }
 
@@ -403,6 +452,7 @@ const planPanel = (() => {
     _loaded = false;
     _selectedPlanId = null;
     _selectedVersion = null;
+    _diffEnabled = false;
     _loadedViewerKey = null;
     ++_actionBarGeneration;      // discard in-flight action-bar renders for the old session
     _highlightTabBadge(false);   // fallback for any path that skips the hook
@@ -474,6 +524,7 @@ const planPanel = (() => {
       var lv = _latestVersion(found);
       if (lv && (_selectedVersion == null || _selectedVersion > lv.v)) {
         _selectedVersion = lv.v;
+        _diffEnabled = hasPredecessor(found, lv.v);
       }
       return;
     }
@@ -481,9 +532,11 @@ const planPanel = (() => {
     if (sel) {
       _selectedPlanId = sel.planId;
       _selectedVersion = sel.version;
+      _diffEnabled = hasPredecessor(_findPlan(sel.planId), sel.version);
     } else {
       _selectedPlanId = null;
       _selectedVersion = null;
+      _diffEnabled = false;
     }
   }
 
@@ -508,6 +561,7 @@ const planPanel = (() => {
       var plan = _findPlan(isNew.planId);
       var lv = _latestVersion(plan);
       _selectedVersion = lv ? lv.v : isNew.version;
+      _diffEnabled = hasPredecessor(plan, _selectedVersion);
       _highlightTabBadge(true);
       // No forced tab switch — keep the badge highlight + selection jump only.
     } else {
@@ -566,15 +620,19 @@ const planPanel = (() => {
     var plan = _findPlan(_selectedPlanId);
     var lv = _latestVersion(plan);
     _selectedVersion = lv ? lv.v : null;
+    _diffEnabled = hasPredecessor(plan, _selectedVersion);
     _renderVersionSwitcher();
     _renderStaleNotice();
+    _renderDiffToggle();
     _renderViewer();
     _renderActionBar();
   }
 
   function selectVersion(version) {
     _selectedVersion = version != null ? Number(version) : null;
+    _diffEnabled = hasPredecessor(_findPlan(_selectedPlanId), _selectedVersion);
     _renderStaleNotice();
+    _renderDiffToggle();
     _renderViewer();
     _renderActionBar();
   }
@@ -585,11 +643,21 @@ const planPanel = (() => {
     if (typeof switchTab === 'function') switchTab('chat-plans');
     _selectedPlanId = planId != null ? Number(planId) : null;
     if (v != null) _selectedVersion = Number(v);
+    _diffEnabled = hasPredecessor(_findPlan(_selectedPlanId), _selectedVersion);
     _renderSelector();
     _renderVersionSwitcher();
     _renderStaleNotice();
+    _renderDiffToggle();
     _renderViewer();
     _renderActionBar();
+  }
+
+  // Toggle click handler (the checkbox's onchange). Flipping changes the
+  // viewer key, so the iframe reloads between the annotated and the clean page.
+  function setDiffEnabled(on) {
+    _diffEnabled = !!on;
+    _renderDiffToggle();
+    _renderViewer();
   }
 
   // -- Iframe load hook ----------------------------------------------------
@@ -608,7 +676,7 @@ const planPanel = (() => {
     var plan = _findPlan(_selectedPlanId);
     if (!plan || _selectedVersion == null) return;
     try {
-      var url = buildStandaloneUrlFromVersion(plan, _selectedVersion, SESSION_ID);
+      var url = buildStandaloneUrlFromVersion(plan, _selectedVersion, SESSION_ID, undefined, _diffEnabled);
       if (!url) return;
       if (typeof window !== 'undefined' && typeof window.open === 'function') {
         window.open(url, '_blank', 'noopener,noreferrer');
@@ -644,6 +712,7 @@ const planPanel = (() => {
     selectPlan,
     selectVersion,
     openPlan,
+    setDiffEnabled,
     openCurrentInTab,
     ensureLoaded,
     ready,
@@ -651,6 +720,8 @@ const planPanel = (() => {
     init,
     selectDefaultLineage,
     isStaleVersion,
+    hasPredecessor,
+    predecessorVersion,
     detectNewPlanOrVersion,
     parseOpenForks,
     formatPlanStateLabel,

@@ -553,6 +553,165 @@ test('buildStandaloneUrlFromVersion returns null for unknown version', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 对比上一版 diff toggle: version predecessor, ?diff= query, viewer reload key
+// ---------------------------------------------------------------------------
+
+test('hasPredecessor: false for a single-version lineage, true from version 2 on', () => {
+  const {planPanel} = loadPlanPanelScript();
+  const single = makePlan(1, [makeVersion(1)]);
+  assert.equal(planPanel.hasPredecessor(single, 1), false);
+  const two = makePlan(1, [makeVersion(1), makeVersion(2)]);
+  assert.equal(planPanel.hasPredecessor(two, 1), false);
+  assert.equal(planPanel.hasPredecessor(two, 2), true);
+});
+
+test('predecessorVersion resolves the lineage version immediately before the selected one', () => {
+  const {planPanel} = loadPlanPanelScript();
+  const plan = makePlan(1, [makeVersion(1, 'a1.html'), makeVersion(2, 'a2.html'), makeVersion(3, 'a3.html')]);
+  assert.equal(planPanel.predecessorVersion(plan, 3).file, 'a2.html');
+  assert.equal(planPanel.predecessorVersion(plan, 2).file, 'a1.html');
+  assert.equal(planPanel.predecessorVersion(plan, 1), null);
+});
+
+test('buildIframeUrlFromVersion with diff on adds ?diff= before the fragment; off and v1 omit it', () => {
+  const {planPanel} = loadPlanPanelScript({sessionId: 's1', sessionsRoot: '/home/u/.charliebot/sessions'});
+  const plan = makePlan(1, [
+    makeVersion(1, 'artifacts/plan_01_v1.html'),
+    makeVersion(2, 'artifacts/plan_02_v2.html'),
+  ]);
+  const on = planPanel.buildIframeUrlFromVersion(plan, 2, 's1', '/home/u/.charliebot/sessions', true);
+  assert.ok(on.indexOf('?diff=artifacts/plan_01_v1.html') !== -1, 'on carries ?diff=<predecessor file>');
+  assert.ok(on.indexOf('#cbsession=s1') > on.indexOf('?diff='), 'the cbsession fragment stays last');
+  const off = planPanel.buildIframeUrlFromVersion(plan, 2, 's1', '/home/u/.charliebot/sessions', false);
+  assert.equal(off.indexOf('?diff='), -1, 'off drops the query');
+  const v1 = planPanel.buildIframeUrlFromVersion(plan, 1, 's1', '/home/u/.charliebot/sessions', true);
+  assert.equal(v1.indexOf('?diff='), -1, 'version 1 has no predecessor to diff against');
+});
+
+test('buildStandaloneUrlFromVersion carries the same query when diff is on', () => {
+  const {planPanel} = loadPlanPanelScript({sessionId: 's1', sessionsRoot: '/home/u/.charliebot/sessions'});
+  const plan = makePlan(1, [
+    makeVersion(1, 'artifacts/plan_01_v1.html'),
+    makeVersion(2, 'artifacts/plan_02_v2.html'),
+  ]);
+  const on = planPanel.buildStandaloneUrlFromVersion(plan, 2, 's1', '/home/u/.charliebot/sessions', true);
+  assert.ok(on.indexOf('?diff=artifacts/plan_01_v1.html') !== -1, 'on carries ?diff=<predecessor file>');
+  assert.ok(on.indexOf('#cbsession=s1') > on.indexOf('?diff='), 'the cbsession fragment stays last');
+  assert.equal(on.indexOf('cbpanel'), -1, 'standalone URL still carries no cbpanel marker');
+  const off = planPanel.buildStandaloneUrlFromVersion(plan, 2, 's1', '/home/u/.charliebot/sessions', false);
+  assert.equal(off.indexOf('?diff='), -1, 'off drops the query');
+});
+
+function makeToggleElements() {
+  const classes = new Set(['hidden']);
+  return {
+    wrap: {
+      classList: {
+        add: (name) => classes.add(name),
+        toggle: (name, force) => { if (force) classes.add(name); else classes.delete(name); },
+        contains: (name) => classes.has(name),
+      },
+    },
+    box: {checked: false},
+  };
+}
+
+function makeTwoVersionRegistry() {
+  return {plans: [makePlan(1, [
+    makeVersion(1, 'artifacts/plan_01_v1.html'),
+    makeVersion(2, 'artifacts/plan_02_v2.html'),
+  ])]};
+}
+
+function makeTogglePanelHarness(elements, toggle) {
+  elements['plan-diff-toggle-wrap'] = toggle.wrap;
+  elements['plan-diff-toggle'] = toggle.box;
+  const {viewer, writes} = makeRecordingViewer();
+  elements['plan-viewer'] = viewer;
+  return {viewer, writes};
+}
+
+test('diff toggle renders: absent for a single-version lineage, visible and on from version 2', async () => {
+  const elements = makePanelElements();
+  const toggle = makeToggleElements();
+  const {viewer} = makeTogglePanelHarness(elements, toggle);
+  const fetch = async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1)
+      return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01_v1.html')])]})};
+    return {ok: true, text: async () => ''};
+  };
+  const {planPanel} = loadPlanPanelScript({document: makePlanDocument(elements), fetch});
+  await planPanel.refresh();
+  assert.equal(toggle.wrap.classList.contains('hidden'), true, 'v1 lineage: the toggle is absent');
+
+  const elements2 = makePanelElements();
+  const toggle2 = makeToggleElements();
+  const {viewer: viewer2} = makeTogglePanelHarness(elements2, toggle2);
+  const fetch2 = async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1)
+      return {ok: true, json: async () => makeTwoVersionRegistry()};
+    return {ok: true, text: async () => ''};
+  };
+  const {planPanel: pp2} = loadPlanPanelScript({document: makePlanDocument(elements2), fetch: fetch2});
+  await pp2.refresh();
+  assert.equal(toggle2.wrap.classList.contains('hidden'), false, 'version 2: the toggle is present');
+  assert.equal(toggle2.box.checked, true, 'version 2: the toggle starts on');
+  assert.ok(viewer2.src.indexOf('?diff=artifacts/plan_01_v1.html') !== -1,
+    'the iframe URL carries ?diff=<predecessor file>');
+  assert.ok(viewer2.src.indexOf('#cbsession=') > viewer2.src.indexOf('?diff='), 'the cbsession fragment stays last');
+});
+
+test('turning the toggle off drops the query and reloads the iframe; on restores it', async () => {
+  const elements = makePanelElements();
+  const toggle = makeToggleElements();
+  const {viewer, writes} = makeTogglePanelHarness(elements, toggle);
+  const fetch = async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1)
+      return {ok: true, json: async () => makeTwoVersionRegistry()};
+    return {ok: true, text: async () => ''};
+  };
+  const {planPanel} = loadPlanPanelScript({document: makePlanDocument(elements), fetch});
+  await planPanel.refresh();
+  assert.ok(viewer.src.indexOf('?diff=artifacts/plan_01_v1.html') !== -1, 'loaded with the diff query');
+  const writesAfterOn = writes.length;
+
+  planPanel.setDiffEnabled(false);
+  assert.equal(writes.length, writesAfterOn + 1, 'flipping the toggle changes the reload key: the iframe reloads');
+  assert.equal(viewer.src.indexOf('?diff='), -1, 'off state drops the ?diff= query');
+  assert.ok(viewer.src.indexOf('#cbsession=') !== -1, 'the clean URL keeps the cbsession fragment');
+  assert.equal(toggle.box.checked, false, 'the checkbox reflects the off state');
+
+  planPanel.setDiffEnabled(true);
+  assert.equal(writes.length, writesAfterOn + 2, 'flipping back on reloads again');
+  assert.ok(viewer.src.indexOf('?diff=artifacts/plan_01_v1.html') !== -1, 'on state restores the query');
+  assert.equal(toggle.box.checked, true, 'the checkbox reflects the on state');
+});
+
+test('selecting another version resets the toggle to the new version default', async () => {
+  const elements = makePanelElements();
+  const toggle = makeToggleElements();
+  const {viewer} = makeTogglePanelHarness(elements, toggle);
+  const fetch = async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1)
+      return {ok: true, json: async () => makeTwoVersionRegistry()};
+    return {ok: true, text: async () => ''};
+  };
+  const {planPanel} = loadPlanPanelScript({document: makePlanDocument(elements), fetch});
+  await planPanel.refresh();
+  assert.equal(toggle.box.checked, true, 'v2 selected by default, toggle on');
+
+  planPanel.setDiffEnabled(false);
+  assert.equal(toggle.box.checked, false, 'user turned the toggle off');
+
+  planPanel.selectVersion('1');
+  assert.equal(toggle.wrap.classList.contains('hidden'), true, 'v1: the toggle is absent');
+  planPanel.selectVersion('2');
+  assert.equal(toggle.wrap.classList.contains('hidden'), false, 'back on v2: the toggle is present');
+  assert.equal(toggle.box.checked, true, 'a version change restarts the toggle from the on default');
+  assert.ok(viewer.src.indexOf('?diff=artifacts/plan_01_v1.html') !== -1, 'the diff query is back');
+});
+
+// ---------------------------------------------------------------------------
 // stateBadgeClass
 // ---------------------------------------------------------------------------
 

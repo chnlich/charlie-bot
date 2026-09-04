@@ -63,7 +63,7 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
-from src.core.triggers import TriggerManager
+from src.core.triggers import ArchivedSessionError, TriggerManager
 
 logger = structlog.get_logger()
 
@@ -464,14 +464,15 @@ async def _arm_follow_trigger(
     thread_ts: str,
     permalink: str,
     floor_ts: str,
-) -> PendingTrigger:
+) -> PendingTrigger | None:
   """Cancel-then-create the session's one persisted follow trigger; return the fresh record.
 
   The replaced record's ``created_at`` and floor ts are read BEFORE the cancel:
   the new record is stamped with that same ``created_at`` — the chain's start —
   so a steady trickle still flushes at ``chain_start + _FOLLOW_CHAIN_CAP_SECONDS``
   no matter how many re-arms land, and the label keeps the chain's oldest
-  unacked ts as the floor.
+  unacked ts as the floor. Returns None without arming when the session was
+  archived mid-flight: the thread-follow stops with its session.
   """
   chain_start: datetime | None = None
   for old in await _armed_follow_triggers(trigger_mgr, session_id):
@@ -485,8 +486,19 @@ async def _arm_follow_trigger(
   start = chain_start or now
   fire_at = min(now + timedelta(seconds=_FOLLOW_QUIET_SECONDS), start + timedelta(seconds=_FOLLOW_CHAIN_CAP_SECONDS))
   delay = max(0, int((fire_at - now).total_seconds()))
-  trigger = await trigger_mgr.create_trigger(
-      session_id, delay, _build_follow_wake_message(floor_ts, permalink), created_at=start)
+  try:
+    trigger = await trigger_mgr.create_trigger(
+        session_id, delay, _build_follow_wake_message(floor_ts, permalink), created_at=start)
+  except ArchivedSessionError as e:
+    # The archive raced the re-arm between the caller's ACTIVE check and the
+    # create: log and leave without a new trigger record.
+    logger.info(
+        "slack_follow_trigger_not_armed_archived",
+        session=session_id,
+        channel=channel_id,
+        thread_ts=thread_ts,
+        error=str(e))
+    return None
   logger.info(
       "slack_follow_trigger_armed",
       session=session_id,
@@ -557,8 +569,8 @@ async def handle_thread_message(
   if meta.slack_watermark_ts is not None and not (ts > meta.slack_watermark_ts):
     return None
   permalink = await client.get_permalink(channel_id, thread_ts)
-  await _arm_follow_trigger(trigger_mgr, sid, channel_id, thread_ts, permalink, ts)
-  return sid
+  trigger = await _arm_follow_trigger(trigger_mgr, sid, channel_id, thread_ts, permalink, ts)
+  return sid if trigger is not None else None
 
 
 async def _backfill_followed_threads(
@@ -585,8 +597,10 @@ async def _backfill_followed_threads(
       if not unread:
         continue
       permalink = await client.get_permalink(origin.channel_id, origin.thread_ts)
-      await _arm_follow_trigger(trigger_mgr, meta.id, origin.channel_id, origin.thread_ts, permalink, unread[0]["ts"])
-      armed += 1
+      trigger = await _arm_follow_trigger(
+          trigger_mgr, meta.id, origin.channel_id, origin.thread_ts, permalink, unread[0]["ts"])
+      if trigger is not None:
+        armed += 1
     except Exception as e:
       logger.warning(
           "slack_follow_backfill_thread_failed",

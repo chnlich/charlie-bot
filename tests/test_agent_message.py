@@ -7,17 +7,20 @@ spawner gate code itself stays untouched (the exclusion is by type, like
 ``scheduled_trigger``).
 """
 
+import asyncio
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
+    BROADCAST_PATCH_TARGET,
     CLI_COMMON_GET_CONFIG_PATCH_TARGET,
     CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
     FakeSessionManager,
     _noop,
+    make_home_config,
     make_json_response,
 )
 from fastapi import FastAPI
@@ -30,7 +33,13 @@ from src.api.message_utils import build_agent_message_event
 from src.cli.session import main as session_cli_main
 from src.core import event_types as ET
 from src.core.message_aggregator import MessageAggregator
-from src.core.models import SessionMetadata, SessionStatus
+from src.core.models import (
+    CreateSessionRequest,
+    SessionMessageRequest,
+    SessionMetadata,
+    SessionStatus,
+)
+from src.core.sessions import SessionManager
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -140,17 +149,43 @@ def test_session_message_404_when_target_missing() -> None:
   assert not session_mgr.persisted
 
 
-def test_session_message_409_when_target_archived() -> None:
-  session_mgr = RouteSessionManager(
-      {
-          "caller": SessionMetadata(id="caller", name="Caller"),
-          "target": SessionMetadata(id="target", name="Target", status=SessionStatus.ARCHIVED),
-      })
-  with _build_route_client(session_mgr) as client:
-    resp = client.post("/api/internal/session-message", json=_payload())
-  assert resp.status_code == 409
-  assert "archived" in resp.json()["detail"]
-  assert not session_mgr.persisted
+@pytest.mark.asyncio
+async def test_session_message_to_archived_target_relays_and_pulls_back(tmp_path: Path) -> None:
+  """No 409: the relay returns success, persists the event, and the wake that
+  follows (default pull_back) leaves the archived target ACTIVE."""
+  cfg = make_home_config(tmp_path)
+  session_mgr = SessionManager(cfg)
+  caller = await session_mgr.create_session(CreateSessionRequest(name="Caller"))
+  target = await session_mgr.create_session(CreateSessionRequest(name="Target"))
+  await session_mgr.archive_session(target.id)
+
+  spawned: list[asyncio.Task] = []
+
+  def fake_create_logged_task(coro: Coroutine[Any, Any, Any], name: str | None = None) -> asyncio.Task:
+    task = asyncio.get_running_loop().create_task(coro, name=name)
+    spawned.append(task)
+    return task
+
+  with (
+      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
+      patch("src.core.master_trigger.run_message_with_resume_recovery", new=AsyncMock()) as mock_run,
+      patch.object(internal, "create_logged_task", fake_create_logged_task),
+  ):
+    resp = await internal.session_message(
+        SessionMessageRequest(session_id=caller.id, target_session_id=target.id, content="status please"),
+        session_mgr=session_mgr,
+        cfg=cfg,
+    )
+    assert resp == {"status": "accepted"}
+    await asyncio.wait_for(spawned[0], timeout=5)
+
+  events = session_mgr.load_chat_events_sync(target.id)
+  assert any(ev.get("type") == ET.AGENT_MESSAGE and ev.get("content") == "status please" for ev in events)
+  mock_run.assert_awaited_once()
+  assert mock_run.await_args.args[1].id == target.id
+  fresh = await session_mgr.get_session(target.id)
+  assert fresh is not None
+  assert fresh.status == SessionStatus.ACTIVE
 
 
 def test_session_message_relay_persists_event_and_wakes_master(monkeypatch: pytest.MonkeyPatch,) -> None:

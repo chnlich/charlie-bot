@@ -312,8 +312,11 @@ class Scheduler:
     """
     cfg, session_mgr, session = await self._prepare_task_execution(task_cfg)
     wake_prompt = f"{task_cfg.prompt}\n\nGroup: {task_cfg.project}"
+    # pull_back=False: a cron wake is a timed wake and must never unarchive the
+    # session it lands on — the same opt-out the trigger fire passes. Selection
+    # above only hands over active sessions, so this is the declared intent.
     handle = create_logged_task(
-        trigger_master(session.id, wake_prompt, cfg, session_mgr),
+        trigger_master(session.id, wake_prompt, cfg, session_mgr, pull_back=False),
         name=f"scheduled_master_{task_cfg.name}",
     )
     if record_handle:

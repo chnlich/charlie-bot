@@ -33,6 +33,7 @@ from src.core.models import (
     ScheduleTriggerRequest,
 )
 from src.core.triggers import (
+    _DORMANCY_CHECK_SECONDS,
     RemoteVerifyError,
     TriggerManager,
     _migrate_legacy_watch_pids,
@@ -217,6 +218,8 @@ async def test_backoff_intervals_and_plateau(tmp_path: Path) -> None:
     if seconds <= 0:
       await real_sleep(seconds)
       return
+    if seconds == _DORMANCY_CHECK_SECONDS:
+      return  # the dormancy watchdog's cadence, not the probe backoff ladder
     recorded_sleeps.append(seconds)
     # Don't actually sleep — return immediately so iterations advance fast.
 

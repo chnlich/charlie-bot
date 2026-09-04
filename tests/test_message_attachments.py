@@ -8,15 +8,22 @@ import pytest
 from conftest import (
     CHAT_CREATE_LOGGED_TASK_PATCH_TARGET,
     CHAT_RUN_AND_FINALIZE_PATCH_TARGET,
+    OPUS_BACKEND_ID,
     close_create_logged_task,
     make_home_config,
+    make_home_session,
 )
 from fastapi import UploadFile
 
 from src.api.chat import send_message, upload_file
 from src.api.message_utils import events_to_messages
 from src.api.slash import SlashExecuteRequest, execute_command
-from src.core.models import SendMessageRequest, SessionMetadata, UploadedFileRef
+from src.core.models import (
+    SendMessageRequest,
+    SessionMetadata,
+    SessionStatus,
+    UploadedFileRef,
+)
 from src.core.slash_commands import SlashDispatchResult
 
 VOICE_KEY = "is_" + "voice"
@@ -145,6 +152,33 @@ async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path
           "size": 12
       },
   ]
+
+
+@pytest.mark.asyncio
+async def test_send_message_unarchives_archived_session_before_dispatch(tmp_path) -> None:
+  """A manual chat message to an archived session pulls it back to active and runs
+  the master — the one content path that does not go through trigger_master."""
+  cfg, session_mgr, meta = await make_home_session(tmp_path, name="Archived chat", backend=OPUS_BACKEND_ID)
+  await session_mgr.archive_session(meta.id)
+  archived_meta = await session_mgr.get_session(meta.id)
+  assert archived_meta is not None
+  req = SendMessageRequest(content="hello again")
+
+  with (
+      patch(CHAT_RUN_AND_FINALIZE_PATCH_TARGET, new=AsyncMock()) as mock_run,
+      patch(CHAT_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=close_create_logged_task),
+  ):
+    response = await send_message(archived_meta.id, req, meta=archived_meta, session_mgr=session_mgr, cfg=cfg)
+
+  assert response.status_code == 202
+  # close_create_logged_task closes the coroutine after construction: the dispatch
+  # happened (the call), the run itself is out of scope here.
+  assert mock_run.call_count == 1
+  # The dispatch carried the ACTIVE meta, and the session stays active on disk.
+  assert mock_run.call_args.args[1].status == SessionStatus.ACTIVE
+  fresh = await session_mgr.get_session(meta.id)
+  assert fresh is not None
+  assert fresh.status == SessionStatus.ACTIVE
 
 
 @pytest.mark.asyncio

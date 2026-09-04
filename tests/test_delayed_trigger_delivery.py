@@ -72,6 +72,8 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
       "[Scheduled trigger fired] Check PID 12345",
       cfg,
       session_mgr,
+      # Timed wake: the fire passes the opted-out pull_back.
+      pull_back=False,
   )
 
   stored_trigger = await trigger_mgr._load_trigger(session.id, trigger.id)

@@ -24,6 +24,7 @@ from conftest import (
     mock_session_callbacks,
     patch_instructions_content,
 )
+from conftest import reset_master_state as _reset_master_state
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
 from src.agents.backends import claude_code
@@ -32,7 +33,7 @@ from src.agents.backends.claude_code import (
     out_of_family_served_models,
 )
 from src.core import event_types as ET
-from src.core import runs, thinking_state
+from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.message_aggregator import (
     MessageAggregator,
@@ -391,12 +392,6 @@ async def test_live_non_cc_backend_emits_nothing(
 # ---------------------------------------------------------------------------
 # Wiring — re-attach path (reuses the whole-round projection, zero new I/O)
 # ---------------------------------------------------------------------------
-
-
-def _reset_master_state(session_id: str) -> None:
-  master_cc_state._session_queues.pop(session_id, None)
-  master_cc_state._session_consumers.pop(session_id, None)
-  thinking_state.clear_busy(session_id)
 
 
 async def _drain_consumer(session_id: str) -> None:

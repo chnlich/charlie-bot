@@ -821,12 +821,6 @@ async def set_session_group(
   return require_found(await session_mgr.set_group(session_id, req.group))
 
 
-@router.post("/{session_id}/read")
-async def mark_session_read(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
-  require_found(await session_mgr.mark_read(session_id))
-  return {"ok": True}
-
-
 @router.get("/{session_id}/events.jsonl")
 async def get_events_jsonl(session_id: str):
   """Serve the raw chat_events.jsonl file for a session."""

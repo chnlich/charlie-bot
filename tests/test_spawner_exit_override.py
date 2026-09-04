@@ -14,6 +14,7 @@ from src.core.models import ThreadMetadata
 
 
 class _FakeThreadManager:
+
   def __init__(self, events_path: Path) -> None:
     self._events_path = events_path
 
@@ -29,10 +30,21 @@ def _thread() -> ThreadMetadata:
 @pytest.mark.asyncio
 async def test_success_result_with_nonzero_exit_overrides_to_zero(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
-  append_events(events_path, [
-      {"type": "assistant", "message": {"content": "working"}},
-      {"type": "result", "subtype": "success", "is_error": False, "result": "done"},
-  ])
+  append_events(
+      events_path, [
+          {
+              "type": "assistant",
+              "message": {
+                  "content": "working"
+              }
+          },
+          {
+              "type": "result",
+              "subtype": "success",
+              "is_error": False,
+              "result": "done"
+          },
+      ])
 
   result = await spawner._maybe_override_exit_code_from_result(
       143, "session-id", _thread(), _FakeThreadManager(events_path))
@@ -44,7 +56,11 @@ async def test_success_result_with_nonzero_exit_overrides_to_zero(tmp_path: Path
 async def test_success_result_with_is_error_none_overrides_to_zero(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
   append_events(events_path, [
-      {"type": "result", "subtype": "success", "result": "done"},
+      {
+          "type": "result",
+          "subtype": "success",
+          "result": "done"
+      },
   ])
 
   result = await spawner._maybe_override_exit_code_from_result(
@@ -57,7 +73,11 @@ async def test_success_result_with_is_error_none_overrides_to_zero(tmp_path: Pat
 async def test_error_max_turns_subtype_does_not_override(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
   append_events(events_path, [
-      {"type": "result", "subtype": "error_max_turns", "is_error": False},
+      {
+          "type": "result",
+          "subtype": "error_max_turns",
+          "is_error": False
+      },
   ])
 
   result = await spawner._maybe_override_exit_code_from_result(
@@ -70,7 +90,11 @@ async def test_error_max_turns_subtype_does_not_override(tmp_path: Path) -> None
 async def test_is_error_true_does_not_override(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
   append_events(events_path, [
-      {"type": "result", "subtype": "success", "is_error": True},
+      {
+          "type": "result",
+          "subtype": "success",
+          "is_error": True
+      },
   ])
 
   result = await spawner._maybe_override_exit_code_from_result(
@@ -82,10 +106,19 @@ async def test_is_error_true_does_not_override(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_no_result_event_returns_original(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
-  append_events(events_path, [
-      {"type": "assistant", "message": {"content": "thinking"}},
-      {"type": "tool_use", "name": "Bash"},
-  ])
+  append_events(
+      events_path, [
+          {
+              "type": "assistant",
+              "message": {
+                  "content": "thinking"
+              }
+          },
+          {
+              "type": "tool_use",
+              "name": "Bash"
+          },
+      ])
 
   result = await spawner._maybe_override_exit_code_from_result(
       143, "session-id", _thread(), _FakeThreadManager(events_path))
@@ -97,10 +130,19 @@ async def test_no_result_event_returns_original(tmp_path: Path) -> None:
 async def test_only_last_result_event_is_considered(tmp_path: Path) -> None:
   events_path = tmp_path / "events.jsonl"
   # Earlier success result followed by a later failure result: should NOT override.
-  append_events(events_path, [
-      {"type": "result", "subtype": "success", "is_error": False},
-      {"type": "result", "subtype": "error_max_turns", "is_error": True},
-  ])
+  append_events(
+      events_path, [
+          {
+              "type": "result",
+              "subtype": "success",
+              "is_error": False
+          },
+          {
+              "type": "result",
+              "subtype": "error_max_turns",
+              "is_error": True
+          },
+      ])
 
   result = await spawner._maybe_override_exit_code_from_result(
       143, "session-id", _thread(), _FakeThreadManager(events_path))
@@ -114,13 +156,13 @@ async def test_exit_code_zero_returns_zero_without_reading_events(tmp_path: Path
   read_calls: dict[str, int] = {"count": 0}
 
   class _CountingThreadManager:
+
     async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
       del session_id, thread_id
       read_calls["count"] += 1
       return tmp_path / "missing.jsonl"
 
-  result = await spawner._maybe_override_exit_code_from_result(
-      0, "session-id", _thread(), _CountingThreadManager())
+  result = await spawner._maybe_override_exit_code_from_result(0, "session-id", _thread(), _CountingThreadManager())
 
   assert result == 0
   assert read_calls["count"] == 0
@@ -138,12 +180,13 @@ async def test_missing_events_file_returns_original(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_get_events_log_path_raising_does_not_propagate(tmp_path: Path) -> None:
+
   class _BrokenThreadManager:
+
     async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
       raise OSError("disk gone")
 
-  result = await spawner._maybe_override_exit_code_from_result(
-      143, "session-id", _thread(), _BrokenThreadManager())
+  result = await spawner._maybe_override_exit_code_from_result(143, "session-id", _thread(), _BrokenThreadManager())
 
   assert result == 143
 

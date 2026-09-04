@@ -29,11 +29,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
-  BUILD_BACKEND_PATCH_TARGET,
-  SESSIONS_SESSION_MANAGER_PATCH_TARGET,
-  make_work_item,
-  patch_instructions_content,
-  run_session_consumer,
+    BUILD_BACKEND_PATCH_TARGET,
+    SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    make_work_item,
+    patch_instructions_content,
+    run_session_consumer,
 )
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
@@ -42,12 +42,12 @@ from src.core import process as core_process
 from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  BackendOption,
-  CreateSessionRequest,
-  MasterRunRecord,
-  SessionCallbacks,
-  SessionMetadata,
-  utc_now,
+    BackendOption,
+    CreateSessionRequest,
+    MasterRunRecord,
+    SessionCallbacks,
+    SessionMetadata,
+    utc_now,
 )
 from src.core.sessions import SessionManager
 
@@ -69,8 +69,14 @@ def _user(content: str, event_id: str) -> dict:
 def test_unanswered_scan_picks_only_events_after_last_master_done() -> None:
   events = [
       _user("answered already", "e1"),
-      {"type": "assistant", "id": "a1"},
-      {"type": "master_done", "id": "d1"},
+      {
+          "type": "assistant",
+          "id": "a1"
+      },
+      {
+          "type": "master_done",
+          "id": "d1"
+      },
       _user("still open", "e2"),
       _user("queued behind it", "e3"),
   ]
@@ -91,8 +97,17 @@ def test_unanswered_scan_excludes_the_recorded_turns_event_only() -> None:
 
 def test_unanswered_scan_ignores_non_message_user_typed_events() -> None:
   events = [
-      {"type": "master_done", "id": "d1"},
-      {"type": "user", "content": {"tool_result": True}, "id": "e4"},  # tool bridge, not a message
+      {
+          "type": "master_done",
+          "id": "d1"
+      },
+      {
+          "type": "user",
+          "content": {
+              "tool_result": True
+          },
+          "id": "e4"
+      },  # tool bridge, not a message
       _user("real message", "e5"),
   ]
   pending = init_module.unanswered_user_events(events, set())
@@ -150,6 +165,7 @@ async def test_master_run_persist_does_not_clobber_unrelated_fields(tmp_path: Pa
 
 
 def _make_callbacks(persist_order: list[str]) -> SessionCallbacks:
+
   async def persist_and_broadcast(session_id: str, event: dict) -> None:
     if event.get("type") == "master_done":
       persist_order.append("master_done")
@@ -177,8 +193,7 @@ async def test_consumer_clears_master_run_after_master_done(monkeypatch: pytest.
   async def fake_run_cc(item: master_cc._WorkItem):
     return "cc-1", 0, None, {}
 
-  item = make_work_item(
-      _cfg(Path("/tmp/charliebot-unit")), session_meta, None, user_content="hi", callbacks=callbacks)
+  item = make_work_item(_cfg(Path("/tmp/charliebot-unit")), session_meta, None, user_content="hi", callbacks=callbacks)
   await run_session_consumer(session_meta.id, [item], fake_run_cc)
 
   assert persist_order == ["master_done", "master_run_cleared"], (
@@ -220,6 +235,7 @@ class _HungBackend:
 
 
 def _install_backend(monkeypatch: pytest.MonkeyPatch, backend: _HungBackend) -> None:
+
   def _build(*args, **kwargs):
     backend.on_spawn = kwargs["on_spawn"]
     return backend
@@ -240,10 +256,21 @@ def _persisting_callbacks(session_mgr: SessionManager, *, mark_unread=None) -> S
   )
 
 
-def _cancel_item(cfg: CharlieBotConfig, session_meta: SessionMetadata, callbacks: SessionCallbacks,
-                 option: BackendOption, *, should_check_tex: bool = False) -> master_cc._WorkItem:
-  return make_work_item(cfg, session_meta, option, user_content="hi", callbacks=callbacks,
-                        should_check_tex=should_check_tex, user_event_id="evt-1")
+def _cancel_item(
+    cfg: CharlieBotConfig,
+    session_meta: SessionMetadata,
+    callbacks: SessionCallbacks,
+    option: BackendOption,
+    *,
+    should_check_tex: bool = False) -> master_cc._WorkItem:
+  return make_work_item(
+      cfg,
+      session_meta,
+      option,
+      user_content="hi",
+      callbacks=callbacks,
+      should_check_tex=should_check_tex,
+      user_event_id="evt-1")
 
 
 async def _cancel_run(item: master_cc._WorkItem, ready: asyncio.Event) -> None:
@@ -256,8 +283,8 @@ async def _cancel_run(item: master_cc._WorkItem, ready: asyncio.Event) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancel_covered_turn_detaches_and_keeps_the_record(tmp_path: Path,
-                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cancel_covered_turn_detaches_and_keeps_the_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Covered transport + persisted record: the turn is handed to the next boot."""
   cfg = _cfg(tmp_path)
   session_mgr = SessionManager(cfg)
@@ -266,8 +293,7 @@ async def test_cancel_covered_turn_detaches_and_keeps_the_record(tmp_path: Path,
   _install_backend(monkeypatch, backend)
 
   await _cancel_run(
-      _cancel_item(cfg, meta, _persisting_callbacks(session_mgr), cfg.backend_options[0]),
-      backend.spawned)
+      _cancel_item(cfg, meta, _persisting_callbacks(session_mgr), cfg.backend_options[0]), backend.spawned)
 
   backend.detach.assert_called_once_with()
   backend.terminate.assert_not_awaited()
@@ -296,8 +322,7 @@ async def test_cancel_uncovered_transport_terminates(tmp_path: Path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_cancel_before_record_persisted_terminates(tmp_path: Path,
-                                                         monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cancel_before_record_persisted_terminates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A turn whose record never hit disk can never be found by a boot: terminate."""
   cfg = _cfg(tmp_path)
   session_mgr = SessionManager(cfg)
@@ -306,8 +331,7 @@ async def test_cancel_before_record_persisted_terminates(tmp_path: Path,
   _install_backend(monkeypatch, backend)
 
   await _cancel_run(
-      _cancel_item(cfg, meta, _persisting_callbacks(session_mgr), cfg.backend_options[0]),
-      backend.run_entered)
+      _cancel_item(cfg, meta, _persisting_callbacks(session_mgr), cfg.backend_options[0]), backend.run_entered)
 
   backend.terminate.assert_awaited_once_with()
   backend.detach.assert_not_called()
@@ -334,9 +358,11 @@ async def test_let_go_writes_no_terminal_state(tmp_path: Path, monkeypatch: pyte
   # should_check_tex=True so a non-let-go cancel WOULD run the tex row.
   await _cancel_run(
       _cancel_item(
-          cfg, meta, _persisting_callbacks(session_mgr, mark_unread=mark_unread),
-          cfg.backend_options[0], should_check_tex=True),
-      backend.spawned)
+          cfg,
+          meta,
+          _persisting_callbacks(session_mgr, mark_unread=mark_unread),
+          cfg.backend_options[0],
+          should_check_tex=True), backend.spawned)
 
   backend.detach.assert_called_once_with()
   mark_unread.assert_not_awaited()
@@ -444,31 +470,29 @@ async def test_identity_unresolved_option_keeps_live_record_clears_dead_one(
       ))
   # Liveness is judged on the record triple; pin it on the live one only.
   monkeypatch.setattr(
-      runs, "is_run_alive",
-      lambda pid, pid_start, started_at, host_boot: (pid, pid_start) == (1111, "9.0"))
+      runs, "is_run_alive", lambda pid, pid_start, started_at, host_boot: (pid, pid_start) == (1111, "9.0"))
 
   excluded = await init_module.reconcile_master_identity(cfg, session_mgr, datetime.now(UTC))
 
-  assert excluded == {live_meta.id: {live_user["id"]}}, (
-      "the live turn's message is its owner's alone; the dead turn's message stays replayable")
+  assert excluded == {
+      live_meta.id: {live_user["id"]}
+  }, ("the live turn's message is its owner's alone; the dead turn's message stays replayable")
   live_raw = json.loads((cfg.sessions_dir / live_meta.id / "metadata.json").read_text(encoding="utf-8"))
   dead_raw = json.loads((cfg.sessions_dir / dead_meta.id / "metadata.json").read_text(encoding="utf-8"))
   assert live_raw["master_run"]["pid"] == 1111  # kept: still judged next restart
-  assert dead_raw["master_run"] is None         # cleared: replay answers its message
-  live_events = [json.loads(line) for line in
-                 (cfg.sessions_dir / live_meta.id / "data" / "chat_events.jsonl")
-                 .read_text(encoding="utf-8").splitlines()]
-  assert any(
-      "treated as still alive (backend option 'gone' unresolved)" in json.dumps(e)
-      for e in live_events)
+  assert dead_raw["master_run"] is None  # cleared: replay answers its message
+  live_events = [
+      json.loads(line) for line in (cfg.sessions_dir / live_meta.id / "data" /
+                                    "chat_events.jsonl").read_text(encoding="utf-8").splitlines()
+  ]
+  assert any("treated as still alive (backend option 'gone' unresolved)" in json.dumps(e) for e in live_events)
 
 
 # --- boot ordering: identity judgment before any new-turn door ----------------
 
 
 @pytest.mark.asyncio
-async def test_identity_judgment_runs_before_any_new_turn_door(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_identity_judgment_runs_before_any_new_turn_door(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """master_run is a single slot per session that a spawning turn overwrites
   blindly, so the identity judgment must complete before the crash-recovery
   task, scheduler.start(), and trigger recovery. Asserted on recorded call
@@ -537,8 +561,7 @@ async def test_queued_user_event_ids_covers_running_and_queued_items() -> None:
   session_meta = SessionMetadata(id="session-queued", name="t")
 
   def item(event_id: str) -> master_cc._WorkItem:
-    return make_work_item(cfg, session_meta, None, user_content="x", callbacks=callbacks,
-                          user_event_id=event_id)
+    return make_work_item(cfg, session_meta, None, user_content="x", callbacks=callbacks, user_event_id=event_id)
 
   running = item("evt-running")
   queued = item("evt-queued")

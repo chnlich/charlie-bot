@@ -128,8 +128,9 @@ async def drain_session_consumer(session_id: str, timeout: float) -> None:
 
   A round's persist/broadcast work finishes inside the consumer after
   run_message/enqueue_master_resume return, so draining is what makes those side
-  effects observable before a test asserts. The registry keeps a finished task, so a
-  consumer that exited with a failure re-raises its exception here.
+  effects observable before a test asserts. The consumer deregisters itself on
+  every exit path, so the registry only ever holds an in-flight task: one that
+  already ended makes this a no-op, and one that misses the timeout raises.
   """
   consumer = master_cc_state._session_consumers.get(session_id)
   if consumer is not None:

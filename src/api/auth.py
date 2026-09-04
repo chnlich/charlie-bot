@@ -2,12 +2,17 @@
 
 import hmac
 import json
+from http.cookies import CookieError, SimpleCookie
 
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from src.core.config import get_config
+
+
+def _credential_matches(candidate: str, key: str) -> bool:
+  """Constant-time comparison — the one place that owns the credential comparison."""
+  return hmac.compare_digest(candidate, key)
 
 
 def request_has_access_key(request: Request, key: str) -> bool:
@@ -16,15 +21,16 @@ def request_has_access_key(request: Request, key: str) -> bool:
   An empty configured key means the middleware passes every request through,
   so every reader counts as authenticated. Otherwise the key is accepted from
   either an ``Authorization: Bearer`` header or a ``charliebot_access_key``
-  cookie, compared with ``hmac.compare_digest`` — the one place that owns the
-  credential comparison.
+  cookie, compared with ``hmac.compare_digest``.
   """
   if not key:
     return True
   auth_header = request.headers.get("authorization", "")
   bearer = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+  if bearer and _credential_matches(bearer, key):
+    return True
   cookie = request.cookies.get("charliebot_access_key", "")
-  return bool(bearer and hmac.compare_digest(bearer, key)) or bool(cookie and hmac.compare_digest(cookie, key))
+  return bool(cookie) and _credential_matches(cookie, key)
 
 
 # Paths that are always public (no auth required). The viewer routes only render
@@ -87,7 +93,53 @@ _LOGIN_PAGE = """<!doctype html>
 </html>"""
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
+def _header_value(scope: Scope, name: bytes) -> str:
+  """First value of header *name* from the raw ASGI scope, or "" (starlette Headers.get parity)."""
+  for header_name, value in scope["headers"]:
+    if header_name == name:
+      return value.decode("latin-1")
+  return ""
+
+
+def _bearer_from_scope(scope: Scope) -> str:
+  auth_header = _header_value(scope, b"authorization")
+  return auth_header[7:] if auth_header.startswith("Bearer ") else ""
+
+
+def _cookie_key_from_scope(scope: Scope) -> str:
+  raw = b";".join(value for name, value in scope["headers"] if name == b"cookie")
+  if not raw:
+    return ""
+  jar = SimpleCookie()
+  try:
+    jar.load(raw.decode("latin-1"))
+  except CookieError:
+    return ""
+  morsel = jar.get("charliebot_access_key")
+  return morsel.value if morsel else ""
+
+
+def _scope_has_access_key(scope: Scope, key: str) -> bool:
+  bearer = _bearer_from_scope(scope)
+  if bearer and _credential_matches(bearer, key):
+    return True
+  cookie = _cookie_key_from_scope(scope)
+  return bool(cookie) and _credential_matches(cookie, key)
+
+
+async def _send_unauthorized(send: Send, html: bool) -> None:
+  if html:
+    body = _LOGIN_PAGE.encode("utf-8")
+    content_type = b"text/html; charset=utf-8"
+  else:
+    body = json.dumps({"detail": "Unauthorized"}).encode("utf-8")
+    content_type = b"application/json"
+  headers = [(b"content-type", content_type), (b"content-length", str(len(body)).encode("latin-1"))]
+  await send({"type": "http.response.start", "status": 401, "headers": headers})
+  await send({"type": "http.response.body", "body": body})
+
+
+class AuthMiddleware:
   """Reject HTTP requests that lack a valid access key.
 
   The key is accepted from either an ``Authorization: Bearer`` header or a
@@ -95,33 +147,37 @@ class AuthMiddleware(BaseHTTPMiddleware):
   HTML login page; other unauthenticated requests get a JSON 401. When
   ``charliebot_access_key`` is empty the middleware is a no-op (all requests
   pass through).
+
+  Pure ASGI, not BaseHTTPMiddleware: the middleware rides every request, and
+  the BaseHTTPMiddleware wrapper's per-request task plus anyio memory streams
+  are the M3 middleware-floor overhead this form removes.
   """
 
-  async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-    cfg = get_config()
-    key = cfg.charliebot_access_key
-    if not key:
-      return await call_next(request)
+  def __init__(self, app: ASGIApp) -> None:
+    self.app = app
 
-    path = request.url.path
+  async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    if scope["type"] != "http":
+      await self.app(scope, receive, send)
+      return
+    key = get_config().charliebot_access_key
+    path = scope["path"]
 
     # Let public paths through without auth.
-    if path in _PUBLIC_PATHS or any(path.startswith(p) for p in _PUBLIC_PREFIXES):
-      return await call_next(request)
+    if not key or path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
+      await self.app(scope, receive, send)
+      return
 
     # Accept the access key from either the Authorization: Bearer header (used by
     # the SPA fetch wrapper) or the charliebot_access_key cookie (the only
     # credential a browser auto-sends on a top-level navigation).
-    if request_has_access_key(request, key):
-      return await call_next(request)
+    if _scope_has_access_key(scope, key):
+      await self.app(scope, receive, send)
+      return
 
     # Unauthenticated. Serve the HTML login page to browser navigations so the
     # user can authenticate; keep the bare JSON 401 for API/fetch calls.
-    accept = request.headers.get("accept", "")
-    if request.method == "GET" and "text/html" in accept:
-      return HTMLResponse(content=_LOGIN_PAGE, status_code=401)
-    return Response(
-        content=json.dumps({"detail": "Unauthorized"}),
-        status_code=401,
-        media_type="application/json",
-    )
+    if scope["method"] == "GET" and "text/html" in _header_value(scope, b"accept"):
+      await _send_unauthorized(send, html=True)
+      return
+    await _send_unauthorized(send, html=False)

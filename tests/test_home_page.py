@@ -9,9 +9,7 @@ from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
-from conftest import make_page_request
-from starlette.requests import Request
-from starlette.responses import Response
+from conftest import _ok_asgi_downstream, make_page_request, run_through_asgi_middleware
 
 from src.api import auth, pages
 from src.api.auth import AuthMiddleware
@@ -154,15 +152,19 @@ async def test_home_html_navigation_requires_auth(monkeypatch: pytest.MonkeyPatc
 
   monkeypatch.setattr(auth, "get_config", lambda: SimpleNamespace(charliebot_access_key="secret"))
 
-  async def _call_next(request: Request) -> Response:
-    return Response("OK", status_code=200)
-
-  raw_headers = [(b"accept", b"text/html")]
-  scope = {"type": "http", "method": "GET", "path": "/home", "headers": raw_headers, "query_string": b""}
-  resp = await AuthMiddleware(app=None).dispatch(Request(scope), _call_next)
-  assert resp.status_code == 401
-  assert resp.media_type == "text/html"
-  assert "<form" in resp.body.decode()
+  scope = {
+      "type": "http",
+      "method": "GET",
+      "path": "/home",
+      "headers": [(b"accept", b"text/html")],
+      "query_string": b""
+  }
+  sent = await run_through_asgi_middleware(AuthMiddleware(app=_ok_asgi_downstream), scope)
+  start = next(m for m in sent if m["type"] == "http.response.start")
+  body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+  assert start["status"] == 401
+  assert b"text/html" in dict(start["headers"])[b"content-type"]
+  assert "<form" in body.decode()
 
 
 @pytest.mark.asyncio

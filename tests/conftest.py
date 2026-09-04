@@ -123,6 +123,19 @@ def reset_master_state(session_id: str) -> None:
   thinking_state.clear_busy(session_id)
 
 
+async def drain_session_consumer(session_id: str, timeout: float) -> None:
+  """Await the session's registered _session_consumer task; no-op when none is registered.
+
+  A round's persist/broadcast work finishes inside the consumer after
+  run_message/enqueue_master_resume return, so draining is what makes those side
+  effects observable before a test asserts. The registry keeps a finished task, so a
+  consumer that exited with a failure re-raises its exception here.
+  """
+  consumer = master_cc_state._session_consumers.get(session_id)
+  if consumer is not None:
+    await asyncio.wait_for(consumer, timeout=timeout)
+
+
 def append_events(path: Path, events: list[dict]) -> None:
   """Append seed chat events as JSONL; append (not truncate) is what lets a test stage history first."""
   path.parent.mkdir(parents=True, exist_ok=True)

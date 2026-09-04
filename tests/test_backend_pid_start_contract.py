@@ -30,8 +30,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
-  ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
-  OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+    ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
+    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
 )
 
 import src.agents.backends as backends_package
@@ -54,15 +54,26 @@ _SENTINEL_STAT: tuple[str, str] = ("314159contract-start", "R")
 # string; resolve_binary itself is patched where the constructor calls it.
 _BASE_CTOR_KWARGS: dict[type[AgentBackend], dict] = {
     ClaudeCodeBackend: {},
-    KimiBackend: {"api_key": "contract-key", "model": "contract-model"},
-    CharlieCodeBackend: {"model": "contract-model", "api_base": "https://contract.invalid"},
-    CodexBackend: {"model": "contract-model"},
-    GeminiCliBackend: {"model": "contract-model"},
-    OpenAICompatibleClaudeBackend: {
-        "proxy_base_url": "https://contract.invalid",
-        "auth_token": "contract-token",
-        "model": "contract-model",
+    KimiBackend: {
+        "api_key": "contract-key",
+        "model": "contract-model"
     },
+    CharlieCodeBackend: {
+        "model": "contract-model",
+        "api_base": "https://contract.invalid"
+    },
+    CodexBackend: {
+        "model": "contract-model"
+    },
+    GeminiCliBackend: {
+        "model": "contract-model"
+    },
+    OpenAICompatibleClaudeBackend:
+        {
+            "proxy_base_url": "https://contract.invalid",
+            "auth_token": "contract-token",
+            "model": "contract-model",
+        },
 }
 
 _BASE_PATH_CLASSES: tuple[type[AgentBackend], ...] = tuple(_BASE_CTOR_KWARGS)
@@ -114,8 +125,7 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
   process.stdin = MagicMock()
   process.stdin.drain = AsyncMock()
   process.stdin.wait_closed = AsyncMock()
-  monkeypatch.setattr(
-      "src.agents.backends.base.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
+  monkeypatch.setattr("src.agents.backends.base.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
 
   with pytest.raises(_SpawnObserved):
     async for _event in backend.run("contract prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}):
@@ -129,8 +139,7 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
 async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """opencode custom run() harness (test_opencode_backend.py's MagicMock spawn shape)."""
-  monkeypatch.setattr(
-      OPENCODE_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/opencode")
+  monkeypatch.setattr(OPENCODE_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/opencode")
   _install_sentinel_read_pid_stat(monkeypatch)
   observed: list[tuple[int, str | None]] = []
   backend: AgentBackend
@@ -162,8 +171,7 @@ async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
       "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"SUCCESS\",\"conversation_id\":\"conv-abc\",\"response\":\"contract answer\",\"usage\":{}}'\n",
       encoding="utf-8")
   fake_agy.chmod(0o755)
-  monkeypatch.setattr(
-      ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: str(fake_agy))
+  monkeypatch.setattr(ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: str(fake_agy))
   _install_sentinel_read_pid_stat(monkeypatch)
   observed: list[tuple[int, str | None]] = []
   backend: AgentBackend
@@ -206,7 +214,6 @@ def test_every_backend_subclass_has_a_harness() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cls", sorted(HARNESSES, key=lambda c: c.__name__), ids=lambda c: c.__name__)
-async def test_pid_start_pinned_at_spawn_notification(cls, monkeypatch: pytest.MonkeyPatch,
-                                                      tmp_path: Path) -> None:
+async def test_pid_start_pinned_at_spawn_notification(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """One run() per backend: pid_start == sentinel[0] when _on_spawn fires."""
   await HARNESSES[cls](cls, monkeypatch, tmp_path)

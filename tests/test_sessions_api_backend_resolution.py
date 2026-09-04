@@ -6,10 +6,10 @@ from typing import Any
 
 import pytest
 from conftest import (
-  CHAT_RUN_AND_FINALIZE_PATCH_TARGET,
-  OPUS_BACKEND_ID,
-  build_two_backend_cfg,
-  close_create_logged_task,
+    CHAT_RUN_AND_FINALIZE_PATCH_TARGET,
+    OPUS_BACKEND_ID,
+    build_two_backend_cfg,
+    close_create_logged_task,
 )
 from conftest import make_sessions_client as _build_client
 from conftest import session_dir_names as _session_dir_names
@@ -123,8 +123,7 @@ async def test_elone_route_accepts_valid_backend_override(two_backend_env: _Rout
 
 @pytest.mark.asyncio
 async def test_elone_route_rejects_unresolvable_explicit_backend_and_persists_nothing(
-    two_backend_env: _RouteEnv,
-) -> None:
+    two_backend_env: _RouteEnv,) -> None:
   cfg, session_mgr, _ = two_backend_env
   parent_id = await _seed_parent(session_mgr, backend="codex-o3")
   before = _session_dir_names(cfg)
@@ -186,9 +185,7 @@ async def test_elone_route_bootstrap_points_at_reference_file(two_backend_env: _
 
 
 @pytest.mark.asyncio
-async def test_create_route_rejects_unresolvable_backend_and_persists_nothing(
-    two_backend_env: _RouteEnv,
-) -> None:
+async def test_create_route_rejects_unresolvable_backend_and_persists_nothing(two_backend_env: _RouteEnv,) -> None:
   cfg, session_mgr, _ = two_backend_env
   before = _session_dir_names(cfg)
 
@@ -201,8 +198,7 @@ async def test_create_route_rejects_unresolvable_backend_and_persists_nothing(
 
 @pytest.mark.asyncio
 async def test_fork_route_rejects_unresolvable_explicit_backend_and_persists_nothing(
-    two_backend_env: _RouteEnv,
-) -> None:
+    two_backend_env: _RouteEnv,) -> None:
   cfg, session_mgr, _ = two_backend_env
   parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
   before = _session_dir_names(cfg)
@@ -225,8 +221,7 @@ async def test_fork_route_rejects_unresolvable_explicit_backend_and_persists_not
 
 @pytest.mark.asyncio
 async def test_fork_route_rejects_unresolvable_inherited_backend_and_persists_nothing(
-    two_backend_env: _RouteEnv,
-) -> None:
+    two_backend_env: _RouteEnv,) -> None:
   cfg, session_mgr, _ = two_backend_env
   parent_id = await _seed_parent(session_mgr, backend="missing-backend")
   before = _session_dir_names(cfg)
@@ -240,8 +235,7 @@ async def test_fork_route_rejects_unresolvable_inherited_backend_and_persists_no
 
 @pytest.mark.asyncio
 async def test_elone_route_rejects_unresolvable_inherited_backend_and_leaves_parent_untouched(
-    two_backend_env: _RouteEnv,
-) -> None:
+    two_backend_env: _RouteEnv,) -> None:
   """Failure must precede the parent archive/thumbs-down side effect."""
   cfg, session_mgr, _ = two_backend_env
   parent_id = await _seed_parent(session_mgr, backend="missing-backend")
@@ -262,9 +256,7 @@ async def test_elone_route_rejects_unresolvable_inherited_backend_and_leaves_par
 
 
 @pytest.mark.asyncio
-async def test_persisted_backend_stays_within_backend_options_across_mixed_calls(
-    two_backend_env: _RouteEnv,
-) -> None:
+async def test_persisted_backend_stays_within_backend_options_across_mixed_calls(two_backend_env: _RouteEnv,) -> None:
   cfg, session_mgr, _ = two_backend_env
   valid_ids = {opt.id for opt in cfg.backend_options}
   fork_parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
@@ -301,7 +293,9 @@ async def test_persisted_backend_stays_within_backend_options_across_mixed_calls
     ).status_code == 200
     assert client.post(
         f"/api/sessions/{elone_bad_parent_id}/elone",
-        json={"event_index": 1},
+        json={
+            "event_index": 1
+        },
     ).status_code == 400
 
   new_session_ids = _session_dir_names(cfg) - before_dirs
@@ -316,9 +310,7 @@ async def test_persisted_backend_stays_within_backend_options_across_mixed_calls
 
 
 @pytest.mark.asyncio
-async def test_create_route_defaults_to_first_backend_option_when_omitted(
-    two_backend_env: _RouteEnv,
-) -> None:
+async def test_create_route_defaults_to_first_backend_option_when_omitted(two_backend_env: _RouteEnv,) -> None:
   cfg, session_mgr, _ = two_backend_env
 
   with _build_client(cfg, session_mgr) as client:

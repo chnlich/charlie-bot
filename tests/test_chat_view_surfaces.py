@@ -36,70 +36,154 @@ def _assistant(text: str, event_id: str, extra_blocks: tuple = ()) -> dict:
 
 def _plain_turn() -> list[dict]:
   return [
-      {"id": "u1", "type": ET.USER, "content": "q1"},
+      {
+          "id": "u1",
+          "type": ET.USER,
+          "content": "q1"
+      },
       _assistant("reply1", "a1"),
-      {"id": "d1", "type": ET.MASTER_DONE},
+      {
+          "id": "d1",
+          "type": ET.MASTER_DONE
+      },
   ]
 
 
 def _second_turn_in_flight() -> list[dict]:
   return [
       *_plain_turn(),
-      {"id": "u2", "type": ET.USER, "content": "q2"},
+      {
+          "id": "u2",
+          "type": ET.USER,
+          "content": "q2"
+      },
       _assistant("IN PROGRESS", "a2"),
   ]
 
 
 def _multi_block_turn() -> list[dict]:
   return [
-      {"id": "u1", "type": ET.USER, "content": "q1"},
+      {
+          "id": "u1",
+          "type": ET.USER,
+          "content": "q1"
+      },
       _assistant("part one", "a1"),
       _assistant("part two", "a2"),
       _assistant("part three", "a3"),
-      {"id": "d1", "type": ET.MASTER_DONE},
+      {
+          "id": "d1",
+          "type": ET.MASTER_DONE
+      },
   ]
 
 
 def _queued_user_inside_completed_run() -> list[dict]:
   return [
-      {"session_id": "oc-1"},
-      {"id": "u1", "type": ET.USER, "content": "q1"},
+      {
+          "session_id": "oc-1"
+      },
+      {
+          "id": "u1",
+          "type": ET.USER,
+          "content": "q1"
+      },
       _assistant("working", "a1"),
-      {"id": "u2", "type": ET.USER, "content": "q2 queued"},
+      {
+          "id": "u2",
+          "type": ET.USER,
+          "content": "q2 queued"
+      },
       _assistant("more", "a2"),
-      {"id": "d1", "type": ET.MASTER_DONE},
+      {
+          "id": "d1",
+          "type": ET.MASTER_DONE
+      },
   ]
 
 
 def _delegation_and_worker_summary() -> list[dict]:
   return [
-      {"id": "u1", "type": ET.USER, "content": "q1"},
+      {
+          "id": "u1",
+          "type": ET.USER,
+          "content": "q1"
+      },
       _assistant("analysis", "a1"),
-      {"id": "t1", "type": ET.TASK_DELEGATED, "thread_id": "th1", "description": "d"},
+      {
+          "id": "t1",
+          "type": ET.TASK_DELEGATED,
+          "thread_id": "th1",
+          "description": "d"
+      },
       _assistant("more analysis", "a2"),
-      {"id": "w1", "type": ET.WORKER_SUMMARY, "content": "merged"},
-      {"id": "d1", "type": ET.MASTER_DONE, "still_thinking": True},
+      {
+          "id": "w1",
+          "type": ET.WORKER_SUMMARY,
+          "content": "merged"
+      },
+      {
+          "id": "d1",
+          "type": ET.MASTER_DONE,
+          "still_thinking": True
+      },
       _assistant("second run", "a3"),
-      {"id": "d2", "type": ET.MASTER_DONE},
+      {
+          "id": "d2",
+          "type": ET.MASTER_DONE
+      },
   ]
 
 
 def _exit_plan_mode() -> list[dict]:
   return [
-      {"id": "u1", "type": ET.USER, "content": "q1"},
+      {
+          "id": "u1",
+          "type": ET.USER,
+          "content": "q1"
+      },
       _assistant("preamble", "a1"),
-      _assistant("", "a2", ({"type": "tool_use", "name": "ExitPlanMode", "input": {"plan": "the plan"}},)),
-      {"id": "d1", "type": ET.MASTER_DONE},
+      _assistant("", "a2", ({
+          "type": "tool_use",
+          "name": "ExitPlanMode",
+          "input": {
+              "plan": "the plan"
+          }
+      },)),
+      {
+          "id": "d1",
+          "type": ET.MASTER_DONE
+      },
   ]
 
 
 def _tool_result_only_user_event() -> list[dict]:
   return [
-      {"id": "u1", "type": ET.USER, "content": "q1"},
-      _assistant("", "a1", ({"type": "tool_use", "name": "Read", "input": {}},)),
-      {"id": "x1", "type": ET.USER, "message": {"content": [{"type": "tool_result", "content": "out"}]}},
+      {
+          "id": "u1",
+          "type": ET.USER,
+          "content": "q1"
+      },
+      _assistant("", "a1", ({
+          "type": "tool_use",
+          "name": "Read",
+          "input": {}
+      },)),
+      {
+          "id": "x1",
+          "type": ET.USER,
+          "message": {
+              "content": [{
+                  "type": "tool_result",
+                  "content": "out"
+              }]
+          }
+      },
       _assistant("done", "a2"),
-      {"id": "d1", "type": ET.MASTER_DONE},
+      {
+          "id": "d1",
+          "type": ET.MASTER_DONE
+      },
   ]
 
 

@@ -1,6 +1,7 @@
 """Chat event persistence for CharlieBot sessions."""
 
 import json
+import os
 import threading
 import uuid
 from collections import OrderedDict
@@ -39,6 +40,37 @@ def chat_events_path(session_dir: Path) -> Path:
   return session_dir / "data" / "chat_events.jsonl"
 
 
+def _universal_newline_segments(buf: bytes) -> tuple[list[str], bool]:
+  """Split *buf* into physical lines the way text-mode iteration would, and say whether the
+  content ends on a line boundary.
+
+  The PEP 278 translation (``\\r\\n`` and lone ``\\r`` to ``\\n``) applied manually keeps the
+  byte-offset extension and the text-mode line semantics from ever drifting apart: a byte
+  offset measured on raw bytes must land on the same physical-line boundary a text-mode
+  reader would have stopped at.
+  """
+  if not buf:
+    return [], True
+  text = buf.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+  ends_with_newline = text.endswith("\n")
+  segments = text.split("\n")
+  if ends_with_newline:
+    segments.pop()
+  return segments, ends_with_newline
+
+
+def _live_range_event(segment: str, session_id: str) -> dict | None:
+  """Parse one physical line; a blank or malformed line parses to None and consumes its index."""
+  stripped = segment.strip()
+  if not stripped:
+    return None
+  try:
+    return json.loads(stripped)
+  except json.JSONDecodeError as e:
+    log.debug("live_range_parse_skip", session_id=session_id, error=str(e))
+    return None
+
+
 class ChatEventStore:
   """Persistence and cache operations for per-session chat_events.jsonl."""
 
@@ -62,13 +94,14 @@ class ChatEventStore:
     # must not pop the key mid-hit.
     self._archive_events_memo: OrderedDict[Path, tuple[int, int, list[dict]]] = OrderedDict()
     self._archive_memo_lock = threading.Lock()
-    # Live-file range memo: path -> (mtime_ns, size, per-physical-line events
-    # with None holes for blank/malformed lines). Gated to archive_offset > 0
-    # sessions: unarchived sessions paginate through the message projection,
-    # so their range callers (recap extract, bulk reads) would pay a whole-file
-    # parse to retain a list a moving divider never reuses. Same lock rule as
-    # the archive memo.
-    self._live_range_memo: OrderedDict[Path, tuple[int, int, list[dict | None]]] = OrderedDict()
+    # Live-file range memo: path -> (mtime_ns, size, inode, per-physical-line
+    # events with None holes for blank/malformed lines, covered byte size,
+    # ends on a line boundary). Gated to archive_offset > 0 sessions:
+    # unarchived sessions paginate through the message projection, so their
+    # range callers (recap extract, bulk reads) would pay a whole-file parse to
+    # retain a list a moving divider never reuses. Same lock rule as the
+    # archive memo.
+    self._live_range_memo: OrderedDict[Path, tuple[int, int, int, list[dict | None], int, bool]] = OrderedDict()
     self._live_range_memo_lock = threading.Lock()
 
   @property
@@ -229,8 +262,16 @@ class ChatEventStore:
 
     A scroll through an archived session's live half re-enters here on every
     page turn; the memo keeps an unchanged file at one stat per turn. An
-    unreadable file logs and contributes nothing, the pre-memo reader's
-    behavior on open failure.
+    appended line re-parses only the appended tail: chat files mutate only by
+    append between archive rewrites, and a rewrite publishes through
+    ``os.replace`` and so swaps the inode, so a same-inode size growth extends
+    the previous parse from the byte offset its content actually covers. An
+    entry whose read raced a landing append keys its pre-read stat, so it is
+    reachable only through that covered offset, never as a hit for newer bytes.
+    A covered content ending mid-line blocks extension until a full re-parse
+    lands on a line boundary, so a completed append is never glued onto a
+    half-parsed last line. An unreadable file logs and contributes nothing, the
+    pre-memo reader's behavior on open failure.
     """
     try:
       st = path.stat()
@@ -241,28 +282,47 @@ class ChatEventStore:
       memo = self._live_range_memo.get(path)
       if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
         self._live_range_memo.move_to_end(path)
-        return memo[2]
-    lines: list[dict | None] = []
+        return memo[3]
+      extend_from = (memo[3], memo[4]) if (
+          memo is not None and memo[2] == st.st_ino and st.st_size >= memo[4] and memo[5]) else None
+    if extend_from is not None:
+      base_lines, covered = extend_from
+      buf = None
+      try:
+        with open(path, "rb") as f:
+          f.seek(covered)
+          buf = f.read()
+      except OSError as e:
+        log.debug("live_range_read_failed", path=str(path), error=str(e))
+      if buf is not None:
+        segments, ends = _universal_newline_segments(buf)
+        lines = base_lines + [_live_range_event(segment, session_id) for segment in segments]
+        self._store_live_range_lines(path, st, lines, covered + len(buf), ends)
+        return lines
     try:
-      with open(path, encoding="utf-8") as f:
-        for raw_line in f:
-          stripped = raw_line.strip()
-          if not stripped:
-            lines.append(None)
-            continue
-          try:
-            lines.append(json.loads(stripped))
-          except json.JSONDecodeError as e:
-            log.debug("live_range_parse_skip", session_id=session_id, error=str(e))
-            lines.append(None)
+      with open(path, "rb") as f:
+        buf = f.read()
     except OSError as e:
       log.debug("live_range_read_failed", path=str(path), error=str(e))
       return []
+    segments, ends = _universal_newline_segments(buf)
+    lines = [_live_range_event(segment, session_id) for segment in segments]
+    self._store_live_range_lines(path, st, lines, len(buf), ends)
+    return lines
+
+  def _store_live_range_lines(
+      self,
+      path: Path,
+      st: os.stat_result,
+      lines: list[dict | None],
+      covered: int,
+      ends_with_newline: bool,
+  ) -> None:
+    """Publish one parsed-live-file entry under the memo lock, capping the LRU."""
     with self._live_range_memo_lock:
-      self._live_range_memo[path] = (st.st_mtime_ns, st.st_size, lines)
+      self._live_range_memo[path] = (st.st_mtime_ns, st.st_size, st.st_ino, lines, covered, ends_with_newline)
       while len(self._live_range_memo) > _LIVE_RANGE_MEMO_LIMIT:
         self._live_range_memo.popitem(last=False)
-    return lines
 
   def _chat_events_path(self, session_id: str) -> Path:
     return chat_events_path(self._session_dir(session_id))

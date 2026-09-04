@@ -687,6 +687,30 @@ test('turning the toggle off drops the query and reloads the iframe; on restores
   assert.equal(toggle.box.checked, true, 'the checkbox reflects the on state');
 });
 
+test('openPlan defaults a pre-registry version to diff after the registry resolves', async () => {
+  const elements = makePanelElements();
+  const toggle = makeToggleElements();
+  const {viewer} = makeTogglePanelHarness(elements, toggle);
+  let resolveRegistry;
+  const fetch = async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1) {
+      return new Promise((resolve) => { resolveRegistry = resolve; });
+    }
+    return {ok: true, text: async () => ''};
+  };
+  const {context, planPanel} = loadPlanPanelScript({document: makePlanDocument(elements), fetch});
+  let tabPromise;
+  context.switchTab = () => { tabPromise = planPanel.onTabShown(); };
+
+  planPanel.openPlan(1, 2);
+  resolveRegistry({ok: true, json: async () => makeTwoVersionRegistry()});
+  await tabPromise;
+
+  assert.equal(toggle.box.checked, true, 'the selected v2 defaults to diff after the registry resolves');
+  assert.ok(viewer.src.indexOf('?diff=artifacts/plan_01_v1.html') !== -1,
+    'the resolved v2 viewer URL carries the predecessor diff');
+});
+
 test('selecting another version resets the toggle to the new version default', async () => {
   const elements = makePanelElements();
   const toggle = makeToggleElements();

@@ -15,21 +15,21 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-  append_events,
-  make_home_session,
-  write_plans,
-  write_thread_meta,
-  write_trigger,
+    append_events,
+    make_home_session,
+    write_plans,
+    write_thread_meta,
+    write_trigger,
 )
 
 from src.api import sessions as sessions_api
 from src.core import sessions as sessions_core
 from src.core import sidebar_state
 from src.core.models import (
-  CreateSessionRequest,
-  PendingTrigger,
-  SessionStatus,
-  ThreadStatus,
+    CreateSessionRequest,
+    PendingTrigger,
+    SessionStatus,
+    ThreadStatus,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.thinking_state import clear_busy, mark_busy
@@ -55,6 +55,7 @@ def _counting_probes(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
   }
 
   def _wrap(name: str):
+
     def wrapper(*args, **kwargs):
       calls[name] += 1
       return reals[name](*args, **kwargs)
@@ -124,8 +125,7 @@ async def test_trigger_save_marks_session_dirty(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="Trigger")
   trigger_mgr = TriggerManager(_cfg, mgr)
   trigger = PendingTrigger(
-      id="pending-dirty", session_id=session.id, fire_at=datetime.now(UTC) + timedelta(minutes=5), message="wake"
-  )
+      id="pending-dirty", session_id=session.id, fire_at=datetime.now(UTC) + timedelta(minutes=5), message="wake")
   sidebar_state.reset_for_tests()
 
   await trigger_mgr._save_trigger(trigger)
@@ -192,9 +192,11 @@ async def _expected_status(mgr, session_id: str, *, archived: bool) -> dict:
     }
   running = await mgr._has_running_tasks(session_id)
   pending_count, next_trigger_at = await asyncio.to_thread(
-      sessions_core.pending_trigger_state_sync, mgr._session_dir(session_id) / "triggers")
+      sessions_core.pending_trigger_state_sync,
+      mgr._session_dir(session_id) / "triggers")
   has_plan = await asyncio.to_thread(
-      sessions_core.has_pending_plan_approval_sync, mgr._session_dir(session_id) / "plans.json", session_id)
+      sessions_core.has_pending_plan_approval_sync,
+      mgr._session_dir(session_id) / "plans.json", session_id)
   return {
       "has_unread": bool(meta.has_unread),
       "has_running_tasks": bool(meta.thinking_since) or running,
@@ -219,19 +221,28 @@ async def test_first_and_forced_poll_match_direct_probing(tmp_path: Path) -> Non
       cfg.sessions_dir / busy.id / "triggers" / "pending.json",
       PendingTrigger(id="pending", session_id=busy.id, fire_at=now + timedelta(minutes=3), message="wake"),
   )
-  write_plans(cfg, busy.id, {"plans": [{
-      "id": 1,
-      "title": "Plan",
-      "versions": [{
-          "v": 1,
-          "file": "artifacts/plan_01.html",
-          "created_at": "2026-07-20T00:00:00+00:00",
-          "trigger": "initial",
-          "base": None,
-      }],
-      "takeoff": None,
-      "closed": None,
-  }]})
+  write_plans(
+      cfg, busy.id, {
+          "plans":
+              [
+                  {
+                      "id": 1,
+                      "title": "Plan",
+                      "versions":
+                          [
+                              {
+                                  "v": 1,
+                                  "file": "artifacts/plan_01.html",
+                                  "created_at": "2026-07-20T00:00:00+00:00",
+                                  "trigger": "initial",
+                                  "base": None,
+                              }
+                          ],
+                      "takeoff": None,
+                      "closed": None,
+                  }
+              ]
+      })
   (cfg.sessions_dir / busy.id / "artifacts").mkdir(parents=True, exist_ok=True)
   (cfg.sessions_dir / busy.id / "artifacts" / "plan_01.html").write_text("<html></html>", encoding="utf-8")
   busy_meta = await mgr.get_session(busy.id)
@@ -244,8 +255,7 @@ async def test_first_and_forced_poll_match_direct_probing(tmp_path: Path) -> Non
   write_trigger(
       cfg.sessions_dir / archived.id / "triggers" / "pending-archived.json",
       PendingTrigger(
-          id="pending-archived", session_id=archived.id, fire_at=now + timedelta(minutes=4), message="archived"
-      ),
+          id="pending-archived", session_id=archived.id, fire_at=now + timedelta(minutes=4), message="archived"),
   )
   archived_meta = await mgr.get_session(archived.id)
   assert archived_meta is not None

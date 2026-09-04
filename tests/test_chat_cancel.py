@@ -4,11 +4,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-  BUILD_BACKEND_PATCH_TARGET,
-  CHAT_CANCEL_MASTER_PATCH_TARGET,
-  make_work_item,
-  mock_session_callbacks,
-  patch_instructions_content,
+    BUILD_BACKEND_PATCH_TARGET,
+    CHAT_CANCEL_MASTER_PATCH_TARGET,
+    make_work_item,
+    mock_session_callbacks,
+    patch_instructions_content,
 )
 from fastapi import HTTPException
 
@@ -203,12 +203,25 @@ def _synthesized_notice_events(callbacks) -> list[str]:
 async def test_silent_turn_salvaged(tmp_path, monkeypatch) -> None:
   deltas = ["first thinking ", "second thinking ", "third thinking"]
   callbacks = await _run_cc_with_scripted_events(
-      tmp_path, monkeypatch,
+      tmp_path,
+      monkeypatch,
       events=[
-          {"type": ET.THINKING, "content": deltas[0]},
-          {"type": ET.THINKING, "content": deltas[1]},
-          {"type": ET.THINKING, "content": deltas[2]},
-          {"type": ET.RESULT, "usage": {}},
+          {
+              "type": ET.THINKING,
+              "content": deltas[0]
+          },
+          {
+              "type": ET.THINKING,
+              "content": deltas[1]
+          },
+          {
+              "type": ET.THINKING,
+              "content": deltas[2]
+          },
+          {
+              "type": ET.RESULT,
+              "usage": {}
+          },
       ],
   )
   texts = _synthesized_notice_events(callbacks)
@@ -221,11 +234,18 @@ async def test_silent_turn_salvaged(tmp_path, monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_normal_turn_untouched(tmp_path, monkeypatch) -> None:
   callbacks = await _run_cc_with_scripted_events(
-      tmp_path, monkeypatch,
+      tmp_path,
+      monkeypatch,
       events=[
           make_text_event("hello"),
-          {"type": ET.THINKING, "content": "thinking that was followed by speech"},
-          {"type": ET.RESULT, "result": {}},
+          {
+              "type": ET.THINKING,
+              "content": "thinking that was followed by speech"
+          },
+          {
+              "type": ET.RESULT,
+              "result": {}
+          },
       ],
   )
   assert not _synthesized_notice_events(callbacks)
@@ -234,9 +254,13 @@ async def test_normal_turn_untouched(tmp_path, monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_stream_cut_before_settlement_not_salvaged(tmp_path, monkeypatch) -> None:
   callbacks = await _run_cc_with_scripted_events(
-      tmp_path, monkeypatch,
+      tmp_path,
+      monkeypatch,
       events=[
-          {"type": ET.THINKING, "content": "thinking but no result"},
+          {
+              "type": ET.THINKING,
+              "content": "thinking but no result"
+          },
       ],
   )
   assert not _synthesized_notice_events(callbacks)
@@ -246,13 +270,22 @@ async def test_stream_cut_before_settlement_not_salvaged(tmp_path, monkeypatch) 
 async def test_claude_family_thinking_block_salvaged(tmp_path, monkeypatch) -> None:
   thinking = "claude-family buried reasoning"
   callbacks = await _run_cc_with_scripted_events(
-      tmp_path, monkeypatch,
+      tmp_path,
+      monkeypatch,
       events=[
           {
               "type": ET.ASSISTANT,
-              "message": {"content": [{"type": "thinking", "thinking": thinking}]},
+              "message": {
+                  "content": [{
+                      "type": "thinking",
+                      "thinking": thinking
+                  }]
+              },
           },
-          {"type": ET.RESULT, "result": {}},
+          {
+              "type": ET.RESULT,
+              "result": {}
+          },
       ],
   )
   texts = _synthesized_notice_events(callbacks)

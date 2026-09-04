@@ -524,6 +524,13 @@ class SessionManager:
         group,
     )
 
+  async def archive_scheduled_sessions(self, task_name: str) -> list[str]:
+    """Archive every active scheduled session dedicated to task_name, returning the archived ids.
+
+    See ``src/core/scheduled_sessions.py`` for the lifecycle contract.
+    """
+    return await self._scheduled_sessions.archive_sessions_for_task(task_name)
+
   def _tui_cli_option(self, backend_id: str) -> BackendOption | None:
     # Only tui-cli backends carry tmux lifecycle state, and the create and
     # destroy hooks must agree on which sessions that covers.

@@ -34,7 +34,6 @@ def _write_raw(thread_dir: Path, lines: list[str], age_seconds: float = 0.0) -> 
 RESULT_SUCCESS_LINE = '{"type": "result", "subtype": "success", "is_error": false, "result": "done", "usage": {}}'
 ASSISTANT_LINE = '{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}}'
 
-
 # ---------------------------------------------------------------------------
 # Process liveness
 # ---------------------------------------------------------------------------
@@ -112,9 +111,25 @@ def test_project_raw_events_applies_translate_in_order() -> None:
 
 
 def test_summarize_result_takes_last_result() -> None:
-  assert runs.summarize_result([{"type": "assistant"}, {"type": ET.RESULT, "result": "a"}]) == {"type": ET.RESULT, "result": "a"}
-  assert runs.summarize_result([{"type": ET.RESULT, "result": "first"}, {"type": ET.RESULT, "result": "last"}]) == {
-      "type": ET.RESULT, "result": "last"}
+  assert runs.summarize_result([{
+      "type": "assistant"
+  }, {
+      "type": ET.RESULT,
+      "result": "a"
+  }]) == {
+      "type": ET.RESULT,
+      "result": "a"
+  }
+  assert runs.summarize_result([{
+      "type": ET.RESULT,
+      "result": "first"
+  }, {
+      "type": ET.RESULT,
+      "result": "last"
+  }]) == {
+      "type": ET.RESULT,
+      "result": "last"
+  }
   assert runs.summarize_result([{"type": "assistant"}]) is None
 
 
@@ -317,7 +332,7 @@ def test_resolve_attaches_leftover_holders_only_when_not_alive(sleep_holding_std
   # Point the leftover scan at the SAME inode the run's raw log has: hardlink.
   os.link(target, raw)
   _write_raw(tmp_path, [ASSISTANT_LINE])
-  holders_scan = { (target.stat().st_dev, target.stat().st_ino): [runs.HolderProcess(pid=proc.pid, cmdline="sleep 30")] }
+  holders_scan = {(target.stat().st_dev, target.stat().st_ino): [runs.HolderProcess(pid=proc.pid, cmdline="sleep 30")]}
 
   # Provably dead run (full liveness identity recorded): the leftover holder
   # is attached for reporting + row-5 cleanup.

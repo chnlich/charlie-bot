@@ -262,8 +262,19 @@ async def test_extract_recap_memoizes_repeats_at_one_divider(tmp_path: Path) -> 
   _append_events(
       mgr.get_chat_events_path(session.id),
       [
-          {"type": "user", "content": "first ask"},
-          {"type": "assistant", "message": {"content": [{"type": "text", "text": "first answer"}]}},
+          {
+              "type": "user",
+              "content": "first ask"
+          },
+          {
+              "type": "assistant",
+              "message": {
+                  "content": [{
+                      "type": "text",
+                      "text": "first answer"
+                  }]
+              }
+          },
       ],
   )
 
@@ -273,8 +284,19 @@ async def test_extract_recap_memoizes_repeats_at_one_divider(tmp_path: Path) -> 
     _append_events(
         mgr.get_chat_events_path(session.id),
         [
-            {"type": "user", "content": "second ask"},
-            {"type": "assistant", "message": {"content": [{"type": "text", "text": "second answer"}]}},
+            {
+                "type": "user",
+                "content": "second ask"
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{
+                        "type": "text",
+                        "text": "second answer"
+                    }]
+                }
+            },
         ],
     )
     repeat = recap.extract_recap(mgr, session.id, upto=1)

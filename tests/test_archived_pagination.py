@@ -14,10 +14,10 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-  OPUS_BACKEND_ID,
-  build_sessions_cfg,
-  count_path_read_text,
-  make_session_mgr,
+    OPUS_BACKEND_ID,
+    build_sessions_cfg,
+    count_path_read_text,
+    make_session_mgr,
 )
 from conftest import make_sessions_client as _build_client
 
@@ -98,9 +98,18 @@ async def test_group_filter_and_whole_set_aggregates(tmp_path: Path) -> None:
   everything = await mgr.list_archived_page()
   assert len(everything["sessions"]) == 5
   assert everything["groups"] == [
-      {"group": "alpha", "total": 2},
-      {"group": "beta", "total": 1},
-      {"group": None, "total": 2},
+      {
+          "group": "alpha",
+          "total": 2
+      },
+      {
+          "group": "beta",
+          "total": 1
+      },
+      {
+          "group": None,
+          "total": 2
+      },
   ]
 
   alpha = await mgr.list_archived_page(group="alpha")
@@ -180,9 +189,7 @@ async def test_archive_unarchive_delete_visible_immediately(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_warm_list_paths_read_zero_metadata_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_warm_list_paths_read_zero_metadata_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   mgr = make_session_mgr(tmp_path)
   for i in range(3):
     await _add_session(mgr, f"arch{i}", minutes=i)
@@ -199,8 +206,7 @@ async def test_warm_list_paths_read_zero_metadata_files(
 
 @pytest.mark.asyncio
 async def test_archived_entries_survive_ttl_active_entries_expire(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   mgr = make_session_mgr(tmp_path)
   archived = await _add_session(mgr, "old", minutes=0)
   active = await _add_session(mgr, "live", status=SessionStatus.ACTIVE, minutes=1)

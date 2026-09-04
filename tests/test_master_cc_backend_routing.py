@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import (
-  BUILD_BACKEND_PATCH_TARGET,
-  FakeBackend,
-  make_work_item,
-  patch_instructions_content,
+    BUILD_BACKEND_PATCH_TARGET,
+    FakeBackend,
+    make_work_item,
+    patch_instructions_content,
 )
 from conftest import make_transcript as _make_transcript
 from structlog.testing import capture_logs
@@ -112,6 +112,7 @@ class _SessionIdBackend(FakeBackend):
 
 
 class _AnchorMismatchBackend(FakeBackend):
+
   async def run(self, prompt: str, cwd: str, env: dict):
     yield backend_base.make_error_event("agy resume envelope id fresh-id does not match anchor anchor-id")
     raise ValueError("antigravity envelope guard: resume envelope id fresh-id does not match anchor anchor-id")
@@ -152,8 +153,7 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
   assert error_msg is None
 
   # Run 2: the anchored session passes the anchor through as the resume id.
-  anchored_meta = models.SessionMetadata(
-      id="session-id", name="Antigravity", backend="agy", cc_session_id="conv-abc")
+  anchored_meta = models.SessionMetadata(id="session-id", name="Antigravity", backend="agy", cc_session_id="conv-abc")
   item2 = make_work_item(cfg, anchored_meta, cfg.backend_options[0])
   await master_cc._run_cc(item2)
 
@@ -171,8 +171,7 @@ async def test_run_cc_guard_round_fails_with_guard_reason(
           models.BackendOption(id="agy", label="Antigravity", type="antigravity"),
       ],
   )
-  session_meta = models.SessionMetadata(
-      id="session-id", name="Antigravity", backend="agy", cc_session_id="anchor-id")
+  session_meta = models.SessionMetadata(id="session-id", name="Antigravity", backend="agy", cc_session_id="anchor-id")
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **kw: _AnchorMismatchBackend())
   patch_instructions_content(monkeypatch)
@@ -253,12 +252,10 @@ async def test_claude_family_with_reachable_anchor_logs_resume_session_true(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
           models.BackendOption(
-              id="cc", label="CC", type="cc-claude", model="claude-fable-5",
-              claude_config_dir=str(config_dir)),
+              id="cc", label="CC", type="cc-claude", model="claude-fable-5", claude_config_dir=str(config_dir)),
       ],
   )
-  session_meta = models.SessionMetadata(
-      id="session-id", name="CC", backend="cc", cc_session_id="existing-session-id")
+  session_meta = models.SessionMetadata(id="session-id", name="CC", backend="cc", cc_session_id="existing-session-id")
 
   entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backend_options[0], monkeypatch)
 

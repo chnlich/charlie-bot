@@ -123,6 +123,21 @@ def reset_master_state(session_id: str) -> None:
   thinking_state.clear_busy(session_id)
 
 
+@contextlib.asynccontextmanager
+async def fresh_master_state(session_id: str) -> AsyncIterator[None]:
+  """Run the wrapped body against a reset master-cc state for one session.
+
+  The entry reset drops leftover queue/consumer/busy state from an earlier run;
+  the exit reset runs on every path out of the body, so a failing test cannot
+  leak that state into the next one.
+  """
+  reset_master_state(session_id)
+  try:
+    yield
+  finally:
+    reset_master_state(session_id)
+
+
 async def drain_session_consumer(session_id: str, timeout: float) -> None:
   """Await the session's registered _session_consumer task; no-op when none is registered.
 

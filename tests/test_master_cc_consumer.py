@@ -14,12 +14,12 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
     drain_session_consumer,
+    fresh_master_state,
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
     run_session_consumer,
 )
-from conftest import reset_master_state as _reset_master_state
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -165,8 +165,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", broadcast_hook)
   monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: workers_mock)
 
-  _reset_master_state(session_id)
-  try:
+  async with fresh_master_state(session_id):
     task1 = asyncio.create_task(
         master_cc.run_message(cfg, SessionMetadata(id=session_id, name="t"), "first", callbacks, skip_user_event=True))
     assert await asyncio.wait_for(task1, timeout=5) == "cc-1"
@@ -188,8 +187,6 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
     assert len(entries) == 2
     assert all(start is not None for start in entries), "every _run_cc entry must observe busy_since set"
     assert thinking_state.busy_since(session_id) is None
-  finally:
-    _reset_master_state(session_id)
 
 
 def test_thinking_since_listed_as_transient() -> None:
@@ -242,16 +239,13 @@ async def test_busy_cleared_when_run_cc_raises(tmp_path: Path, monkeypatch: pyte
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
   monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: workers_mock)
 
-  _reset_master_state(session_id)
-  try:
+  async with fresh_master_state(session_id):
     run_task = asyncio.create_task(
         master_cc.run_message(cfg, SessionMetadata(id=session_id, name="t"), "hi", callbacks, skip_user_event=True))
     with pytest.raises(RuntimeError, match="boom"):
       await asyncio.wait_for(run_task, timeout=5)
     await drain_session_consumer(session_id, timeout=5)
     assert thinking_state.busy_since(session_id) is None
-  finally:
-    _reset_master_state(session_id)
 
 
 @pytest.mark.asyncio
@@ -262,19 +256,16 @@ async def test_consumer_cancelled_before_first_item_finally_does_not_raise() -> 
   NameError trying to read cfg/auto_trigger off it.
   """
   session_id = "t3-cancel"
-  _reset_master_state(session_id)
-  master_cc_state._session_queues[session_id] = asyncio.Queue()
-  task = asyncio.create_task(master_cc._session_consumer(session_id))
-  master_cc_state._session_consumers[session_id] = task
-  try:
+  async with fresh_master_state(session_id):
+    master_cc_state._session_queues[session_id] = asyncio.Queue()
+    task = asyncio.create_task(master_cc._session_consumer(session_id))
+    master_cc_state._session_consumers[session_id] = task
     await asyncio.sleep(0)  # consumer is now suspended at queue.get()
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
     # A NameError raised in the finally would replace the cancellation with a
     # regular exception; a clean cancellation means teardown skipped gracefully.
     assert task.cancelled()
-  finally:
-    _reset_master_state(session_id)
 
 
 @pytest.mark.asyncio
@@ -456,13 +447,10 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
   monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
-  _reset_master_state(session.id)
-  try:
+  async with fresh_master_state(session.id):
     result = await master_cc.run_message(cfg, session, "hi", session_mgr.callbacks(), skip_user_event=True)
     assert result == backend_returned_id
     await drain_session_consumer(session.id, timeout=5)
-  finally:
-    _reset_master_state(session.id)
 
   # Cold-cache reader: a fresh SessionManager parses metadata.json from disk.
   cold_reader = SessionManager(cfg)
@@ -563,8 +551,7 @@ async def test_resume_reattach_uses_persisted_interval_start(tmp_path: Path, mon
   meta = _make_meta(session_id)
   callbacks = mock_session_callbacks()
 
-  _reset_master_state(session_id)
-  try:
+  async with fresh_master_state(session_id):
     future = await master_cc.enqueue_master_resume(cfg, meta, record, callbacks, is_alive=lambda: True)
 
     assert thinking_state.busy_since(session_id) == started_at, (
@@ -578,8 +565,6 @@ async def test_resume_reattach_uses_persisted_interval_start(tmp_path: Path, mon
     release.set()
     await drain_session_consumer(session_id, timeout=5)
     await asyncio.wait_for(future, timeout=5)
-  finally:
-    _reset_master_state(session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -632,12 +617,9 @@ async def _run_stream_consumer(
   monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
-  _reset_master_state(session_id)
-  try:
+  async with fresh_master_state(session_id):
     await master_cc.run_message(cfg, meta, "hi", cb, skip_user_event=True)
     await drain_session_consumer(session_id, timeout=5)
-  finally:
-    _reset_master_state(session_id)
   return cb
 
 
@@ -707,13 +689,10 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
       SESSIONS_SESSION_MANAGER_PATCH_TARGET,
       lambda *a, **k: MagicMock(_has_running_tasks=AsyncMock(return_value=False)))
 
-  _reset_master_state(session_id)
-  try:
+  async with fresh_master_state(session_id):
     future = await master_cc.enqueue_master_resume(cfg, meta, record, cb, is_alive=lambda: True)
     await asyncio.wait_for(future, timeout=5)
     await drain_session_consumer(session_id, timeout=5)
-  finally:
-    _reset_master_state(session_id)
 
   errors, dones = _guard_events(cb)
   assert len(errors) == 1
@@ -829,13 +808,10 @@ async def test_zero_output_guard_resume_exempts_manual_compact(tmp_path: Path, m
       SESSIONS_SESSION_MANAGER_PATCH_TARGET,
       lambda *a, **k: MagicMock(_has_running_tasks=AsyncMock(return_value=False)))
 
-  _reset_master_state(session_id)
-  try:
+  async with fresh_master_state(session_id):
     future = await master_cc.enqueue_master_resume(cfg, meta, record, cb, is_alive=lambda: False)
     await asyncio.wait_for(future, timeout=5)
     await drain_session_consumer(session_id, timeout=5)
-  finally:
-    _reset_master_state(session_id)
 
   errors, dones = _guard_events(cb)
   assert not errors

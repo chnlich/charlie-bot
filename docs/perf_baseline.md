@@ -55,6 +55,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M42 scheduler tick, steady state | M42 collector below | seconds of loop lag per 60 s tick with no task due, live config + session corpus (loop lag reads the 5 ms ticker floor like M14) | median < 0.01 s | — (introduced with its first history row) |
 | M43 git diff/file repeat expand, steady state | M43 collector below | seconds per repeat `diff_file` call over the heaviest file of the charlie-bot root..HEAD manifest | median < 0.02 s | — (introduced with its first history row) |
 | M44 scheduled-list next-run resolution, steady state | M44 collector below | seconds per `GET /api/sessions/scheduled` request, live session + cron corpus | median < 0.004 s | — (introduced with its first history row) |
+| M45 session-WS catchup replay event-loop lag, stale-cursor reconnect | M45 collector below | seconds of loop lag + wall per `_replay_aggregated_catchup` run, worst on-disk live chat corpus, cursor 50 events behind (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.05 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2336,6 +2337,105 @@ asyncio.run(main())
 EOF
 ```
 
+M45 — session-WS catchup replay event-loop lag, stale-cursor reconnect. When a session
+WebSocket (re)connects behind the live event count (a mid-turn reconnect after a network
+flap), `_send_session_catchup` replays the events past the cursor through
+`_replay_aggregated_catchup`, which must feed the FULL event list to rebuild aggregator
+state (a run interval that opened before the cursor drives the deltas after it). The
+pre-fix form ran that feed loop inline on the event loop — 22 ms measured 2026-09-04
+on the 20534-event worst live corpus — freezing every concurrent request and WebSocket
+for the walk's wall time; the fixed form builds the frame list in a thread through
+`_catchup_frames` and sends it in order, so the loop sees only the sends (identical
+wire bytes, identical stop-at-first-failure count).
+The cursor==total fast-skip never enters the replay, which the past day's 85 live
+`session_ws_catchup_sent` log lines confirm (all sent=0), so this is a cold-path
+insurance metric, invisible to the standing probes; the collector resolves the session
+whose live chat file carries the most events, copies only that session into a scratch
+`CHARLIEBOT_HOME` under /tmp (metadata.json and data/ only; live home read once for
+the copy, never written), warms the events cache as the server's to_thread load does,
+and replays at cursor = total − 50 (a reconnect 50 events behind) through a stub
+socket with a concurrent 5 ms ticker, reporting the replay's worst ticker gap plus
+wall — one cold pass, as at the first stale-cursor reconnect after a server start,
+then five timed replays, with a frame-list digest pinning cross-checkout parity.
+Evidence while the live server runs older code points the same collector at the
+branch checkout (`CHECKOUT` at the worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, hashlib, json, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from server import _replay_aggregated_catchup
+
+# Worst replay corpus: the session whose LIVE chat file carries the most
+# events; a stale-cursor replay feeds every event before the cursor.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        with open(p, errors="replace") as f:
+            n = sum(1 for _ in f)
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
+# session's metadata.json and data/; live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m45-catchup-home-", dir="/tmp"))
+dst = home / "sessions" / SID
+dst.mkdir(parents=True)
+shutil.copy2(best / "metadata.json", dst / "metadata.json")
+shutil.copytree(best / "data", dst / "data")
+cfg = CharlieBotConfig(charliebot_home=home)
+mgr = SessionManager(cfg)
+
+class Stub:
+    def __init__(self):
+        self.frames = []
+    async def send_json(self, data):
+        self.frames.append(data)
+
+async def main():
+    events = await asyncio.to_thread(mgr.load_chat_events_sync, SID)
+    total = len(events)
+    cursor = total - 50  # stale-cursor reconnect shape: the client is 50 events behind
+    stub = Stub()
+    async def run_once():
+        gaps = []
+        stop = False
+        async def ticker():
+            prev = time.perf_counter()
+            while not stop:
+                await asyncio.sleep(0.005)
+                now = time.perf_counter()
+                gaps.append(now - prev)
+                prev = now
+        t = asyncio.create_task(ticker())
+        t0 = time.perf_counter()
+        sent = await _replay_aggregated_catchup(stub, events, cursor, SID, event_index_offset=0)
+        wall = time.perf_counter() - t0
+        stop = True
+        await t
+        return sent, (max(gaps) if gaps else wall), wall
+    await run_once()  # cold pass, as at the first stale-cursor reconnect after a server start; not timed
+    results = []
+    for _ in range(5):
+        results.append(await run_once())
+    walls = sorted(r[2] for r in results)
+    gaps = sorted(r[1] for r in results)
+    digest = hashlib.sha256(json.dumps(stub.frames, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    print(f"{total} events, cursor {cursor}, {results[0][0]} frames replayed, digest {digest}; "
+          f"replay wall median {walls[2]:.4f} s, max {walls[-1]:.4f} s; "
+          f"loop-lag median {gaps[2]:.4f} s, max {gaps[-1]:.4f} s")
+
+asyncio.run(main())
+shutil.rmtree(home)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2395,3 +2495,4 @@ EOF
 | 2026-09-03 | this PR | M29 steady-state median 1.67-1.96 ms → 0.84-0.90 ms across five interleaved verbatim-collector rounds (1019 session dirs, 44 active, live corpus read-only, main checkout before vs branch after back-to-back at load 1.2-2.0; listings identical in both arms; earlier same-day round under the sibling CUDA build's load 7-12 read main 6.08 ms vs the <5 ms healthy range, recovering to 1.69-1.96 ms once the build drained at identical code — load noise, no regression) | session-dir name list memoized on the sessions root's own (mtime_ns, size), signature taken before the scandir: session create/delete is what moves the root's mtime (metadata writes land one level below), so an unchanged signature proves the name set current and steady-state listings pay one stat instead of the ~1 ms per-1000-entry scandir |
 | 2026-09-03 | this PR | M44 steady-state median 5.11 ms → 2.90 ms, max 8.63 ms → 6.29 ms (collector verbatim, 12 scheduled rows / 13194 B body, live session + cron corpus read-only, main checkout before vs branch after back-to-back at load 0.36/1.28/2.58 and 0.49/1.29/2.57; body digest identical ec0f7b654411 both arms; component corroboration: croniter get_next measured 2.97 ms over the 12-task corpus, one expand each) | per-(cron, timezone) memo for the /scheduled rows' next-fire resolution, entries valid until the fire time they name passes — get_next is a pure function of (cron, timezone, now) and no occurrence can land before that first next fire, so repeat requests inside the window recompute an identical string; M44 definition and healthy range introduced with this PR |
 | 2026-09-03 | this PR | M7 collector-level warm collect median 0.3767 s → 0.0729 s, max 0.4274 s → 0.3471 s (verbatim warm-collect command, 16 rows / 3 notes, main checkout before at load 1.43/1.50/1.40 vs branch after at load 1.48/1.51/1.40 back-to-back; rows+notes digest agreement across interleaved arms whenever the live corpus held still between them — opencode db WAL moves every few seconds under live traffic; the after max is one such WAL-moved memo miss still paying the old fresh path; suite pins hit serves the first collect's rows/notes with zero scanned bytes) + HTTP-level live-before warm median 0.336 s → scratch-after warm median 0.056 s (verbatim M7 curls, live-before at load ~1.75, scratch server on the branch with a scratch CHARLIEBOT_HOME, cold 9.25 s) | whole-tally memo keyed on the walk signature plus the opencode db signature serves repeat collects without the cache-document JSON parse (~0.09 s), the apply(t) record replay (~43.5k add calls, ~0.075 s) or the db open per load, and the signature walk itself switches to str joins + raw os.stat (Path construction measured over twice the stat syscall on this corpus), with one shared os.walk error-hook home for both walkers |
+| 2026-09-04 | this PR | M45 stale-cursor replay loop-lag median 0.0259 s → 0.0102 s, max 0.0281 s → 0.0102 s (collector verbatim, 20534-event worst live corpus at cursor 20484, 47 frames replayed, scratch CHARLIEBOT_HOME A/B, frame-list digest identical 314dfbe9fd89 across arms; main checkout before vs branch after back-to-back at load 1.77/1.32/0.91 and 1.79/1.33/0.91; replay wall 0.0259 s → 0.0242 s — the walk's CPU still runs, now off the loop; suite pins ws.sent == _catchup_frames output and the stop-at-first-failure send count) | session-WS catchup replay's full-history aggregator walk moved off the event loop: `_catchup_frames` builds the ordered frame list via asyncio.to_thread and `_replay_aggregated_catchup` only sends it in order; M45 definition and healthy range introduced with this PR |

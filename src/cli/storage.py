@@ -37,19 +37,14 @@ def main() -> None:
       "cool",
       help="Delete transport logs and backend records of cold sessions",
       description="Delete the bytes no reader can reach again: cold sessions' raw "
-          "transport files and the backend conversation stores the cold rule names.")
-  cool.add_argument(
-      "--dry-run",
-      action="store_true",
-      help="Report what would be freed; write nothing, delete nothing.")
+      "transport files and the backend conversation stores the cold rule names.")
+  cool.add_argument("--dry-run", action="store_true", help="Report what would be freed; write nothing, delete nothing.")
   cool.add_argument(
       "--min-idle-days",
       type=int,
       default=MIN_IDLE_DAYS,
       help=f"Idle age (days) at which an archived session counts as cold (default: {MIN_IDLE_DAYS}).")
-  cool.add_argument(
-      "--session",
-      help="Limit the whole sweep to one session; the cold rule still applies.")
+  cool.add_argument("--session", help="Limit the whole sweep to one session; the cold rule still applies.")
 
   args = parser.parse_args()
   {"cool": _cmd_cool}[args.command](args)

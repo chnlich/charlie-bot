@@ -484,17 +484,29 @@ def _token_text(leaf: _Leaf, tokens: list[_Token], start: int, end: int, include
   return leaf.text[logical_start:logical_end]
 
 
-def _change_is_whole_block(change: _LeafChange, opcodes: list[tuple[str, int, int, int, int]]) -> bool:
-  if change.old is None or change.new is None or not change.new.whole:
+def _wrap_erases_own_text(
+    leaf: _Leaf, new_tokens: list[_Token], changed_opcodes: list[tuple[str, int, int, int, int]]) -> bool:
+  # Commentability needs a direct text-node child with non-space text; an
+  # <ins> wrapper demotes the text it wraps to a grandchild.  Whenever the
+  # planned wrappers would cover every direct character, mark the block with
+  # its class instead of wrapping it (the all-new-block presentation).
+  wrapped = [(new_tokens[start].logical_start, new_tokens[end - 1].logical_end)
+             for _, _, _, start, end in changed_opcodes if start < end]
+  if not wrapped:
     return False
-  old_tokens = _leaf_tokens(change.old)
-  new_tokens = _leaf_tokens(change.new)
-  meaningful = [opcode for opcode in opcodes if opcode[0] != "equal"]
-  if not meaningful:
-    return False
-  return any(
-      old_start == 0 and old_end == len(old_tokens) and new_start == 0 and new_end == len(new_tokens)
-      for _, old_start, old_end, new_start, new_end in meaningful)
+  has_own_text = False
+  offset = 0
+  for part in leaf.parts:
+    if part.node is leaf.element:
+      for index, char in enumerate(part.text):
+        if char.isspace():
+          continue
+        logical = offset + index
+        if not any(start <= logical < end for start, end in wrapped):
+          return False
+        has_own_text = True
+    offset += len(part.text)
+  return has_own_text
 
 
 def _descendant_nodes(node: _Node) -> Iterable[_Node]:
@@ -638,7 +650,7 @@ def _render_leaf_changes(
     changed_opcodes = [opcode for opcode in opcodes if opcode[0] != "equal"]
     if not changed_opcodes:
       continue
-    if _change_is_whole_block(change, opcodes):
+    if _wrap_erases_own_text(change.new, new_tokens, changed_opcodes):
       classes.setdefault(change.new.element, set()).add("cbd-new")
       _insert_ghost(source, root, change.old, new_leaves, new_position, insertions, details)
       continue

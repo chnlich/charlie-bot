@@ -246,6 +246,51 @@ def test_pure_inline_markup_move_with_unchanged_text_produces_no_marks() -> None
   assert not _marks(annotate(base, new))
 
 
+def test_replaced_block_keeps_a_direct_text_node_and_stays_commentable() -> None:
+  base = '<html><body><h2><span class="n">2</span> Context<span class="revbadge">changed · r4</span></h2></body></html>'
+  new = '<html><body><h2><span class="n">2</span> Context</h2></body></html>'
+  annotated = _assert_invariants(base, new)
+  assert '<h2><span class="n">2</span> Context' in annotated
+  headings = [node for node in _commentable_blocks(annotated) if node.tag == "h2"]
+  assert len(headings) == 1
+  assert 'data-del="changed · r4"' in annotated
+  assert '<ins class="cbd-ins">Context</ins>' not in annotated
+
+  replaced = _assert_invariants(
+      '<html><body><h2><span class="n">2</span> Alpha Beta</h2></body></html>',
+      '<html><body><h2><span class="n">2</span> Gamma Delta</h2></body></html>')
+  assert '<h2 class="cbd-new"><span class="n">2</span> Gamma Delta</h2>' in replaced
+  assert 'class="cbd-del" data-del="2 Alpha Beta"' in replaced
+
+
+_BOUNDARY_BASE = """\
+<html><body>
+<h2><span class="n">2</span> Context<span class="revbadge">changed · r4</span></h2>
+<p>alpha beta<b>gamma</b></p>
+<p>old words here</p>
+<p>unchanged</p>
+</body></html>
+"""
+_BOUNDARY_NEW = """\
+<html><body>
+<h2><span class="n">2</span> Context</h2>
+<p>alpha beta</p>
+<p>fresh text now</p>
+<p>unchanged</p>
+</body></html>
+"""
+
+
+def test_four_invariants_hold_for_boundary_pair() -> None:
+  annotated = _assert_invariants(_BOUNDARY_BASE, _BOUNDARY_NEW)
+  assert 'data-del="changed · r4"' in annotated
+  assert 'data-del="gamma"' in annotated
+  assert '<p class="cbd-new">fresh text now</p>' in annotated
+  assert '<ins class="cbd-ins">beta</ins>' not in annotated
+  assert '<ins class="cbd-ins">Context</ins>' not in annotated
+  assert len(_commentable_blocks(annotated)) == len(_commentable_blocks(_BOUNDARY_NEW))
+
+
 def test_same_document_has_no_marks_and_diff_text_names_real_changes() -> None:
   base = (_ROOT / "tests/data/plan_move2-direct-kill_v10.html").read_text(encoding="utf-8")
   new = (_ROOT / "tests/data/plan_move2-direct-kill_v11.html").read_text(encoding="utf-8")

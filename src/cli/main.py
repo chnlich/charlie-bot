@@ -30,6 +30,7 @@ _COMMANDS = {
     "memory": "src.cli.memory",
     "session": "src.cli.session",
     "slack": "src.cli.slack",
+    "storage": "src.cli.storage",
 }
 
 

@@ -14,7 +14,6 @@ from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from fastapi.responses import JSONResponse
 
 from src.agents.backends.pty_common import (
     _TMUX_SOCKET,
@@ -23,6 +22,7 @@ from src.agents.backends.pty_common import (
 )
 from src.api.deps import get_thread_manager, get_trigger_manager
 from src.api.message_utils import extract_text_from_message, extract_tool_result_text
+from src.api.responses import FastJsonResponse
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import (
     ThreadMetadata,
@@ -420,7 +420,7 @@ async def get_thread_events(
   start = 0 if reset else after
   # A returned Response skips response_model validation; model_dump(mode="json") is
   # ~6x faster than the jsonable_encoder pass FastAPI runs on mapped returns.
-  return JSONResponse(
+  return FastJsonResponse(
       {
           "events": [e.model_dump(mode="json") for e in events[start:]],
           "total": len(events),

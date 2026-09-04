@@ -54,6 +54,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M41 git diff/files repeat view, steady state | M41 collector below | seconds per repeat `diff_files` call over the charlie-bot root..HEAD range | median < 0.02 s | — (introduced with its first history row) |
 | M42 scheduler tick, steady state | M42 collector below | seconds of loop lag per 60 s tick with no task due, live config + session corpus (loop lag reads the 5 ms ticker floor like M14) | median < 0.01 s | — (introduced with its first history row) |
 | M43 git diff/file repeat expand, steady state | M43 collector below | seconds per repeat `diff_file` call over the heaviest file of the charlie-bot root..HEAD manifest | median < 0.02 s | — (introduced with its first history row) |
+| M44 scheduled-list next-run resolution, steady state | M44 collector below | seconds per `GET /api/sessions/scheduled` request, live session + cron corpus | median < 0.004 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2252,6 +2253,89 @@ asyncio.run(main())
 EOF
 ```
 
+M44 — scheduled-list next-run resolution, steady state. Every grouped sidebar
+render pairs ``GET /api/sessions/scheduled`` with ``GET /api/cron/tasks`` (the
+project-manager refresh fires on every list render), and the handler resolved
+each scheduled row's next fire with one ``croniter(...).get_next`` expand per
+row per request (~248 µs each measured, ~3 ms at the 12-task live corpus) — a
+pure function of (cron, timezone, now) whose answer stays valid until the fire
+time it names, so every repeat request inside that window recomputed an
+identical string. The fixed handler serves rows from a memo keyed on (cron,
+timezone), entries valid until their named fire time passes; a fire that went
+by recomputes on the next request. The cost is a sidebar-render latency
+invisible to the standing HTTP probes, so the collector drives the endpoint
+through TestClient over the live session + cron corpora (read-only), with
+managers built once as the server's dependency singletons are (per-request
+instances would rebuild the M5/M24 memos on every call, drowning the measured
+path in memo-cold scans the live server never pays): one cold pass, as at
+first scheduled-tab open after a server start, then nine timed requests,
+asserting the body is repeat-identical. Evidence while the live server runs
+older code points the same collector at the branch checkout (``CHECKOUT`` at
+the worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio
+import hashlib
+import os
+import sys
+import time
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from src.api.deps import get_config, get_session_manager, get_thread_manager, get_trigger_manager
+from src.api.sessions import router as sessions_router
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
+from src.core.triggers import TriggerManager
+
+
+async def main():
+  # Scratch wiring against the live home: managers built once, as the server's
+  # dependency singletons are; read-only over the live session + cron corpus.
+  import src.api.deps as deps
+  cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+  mgr = SessionManager(cfg)
+  deps._trigger_manager = TriggerManager(cfg, mgr)
+  app = FastAPI()
+  app.include_router(sessions_router, prefix="/api/sessions")
+  app.dependency_overrides[get_session_manager] = lambda: mgr
+  app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
+  app.dependency_overrides[get_trigger_manager] = lambda: deps._trigger_manager
+  app.dependency_overrides[get_config] = lambda: cfg
+  client = TestClient(app)
+
+  url = "/api/sessions/scheduled"
+  r = client.get(url)  # cold pass, as at first scheduled-tab open after a server start; not timed
+  assert r.status_code == 200, (r.status_code, r.text[:200])
+  times = []
+  bodies = set()
+  for _ in range(9):
+    t0 = time.perf_counter()
+    r = client.get(url)
+    times.append(time.perf_counter() - t0)
+    bodies.add(r.content)
+  times.sort()
+  # A body changing between repeats is live churn, not determinism: re-measure
+  # rather than compare noise across arms.
+  if len(bodies) != 1:
+    print("live churn during measurement; re-run")
+    raise SystemExit(1)
+  digest = hashlib.sha256(r.content).hexdigest()[:12]
+  rows = len(r.json())
+  print(f"{rows} scheduled rows, body {len(r.content)} B, digest {digest}; "
+        f"steady-state /scheduled median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms")
+
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2309,3 +2393,4 @@ EOF
 | 2026-09-03 | this PR | M42 steady-state tick loop-lag median 0.0135 s → 0.0060 s (the 5 ms ticker floor), max 0.0146 s → 0.0071 s (collector verbatim, 12 enabled tasks over the 1012-session live corpus, fire stub awaited 0x in both arms, main checkout before vs final branch head after back-to-back at load 1.06/1.16/1.16; first standalone round 0.0102 s before) | scheduler tick's per-task session cache built via the M40 scheduled=True pre-copy filter: only the 52 scheduled rows pay model_copy+thinking stamp instead of all ~1012 cached metas; M42 definition and healthy range introduced with this PR |
 | 2026-09-03 | this PR | M43 repeat-expand median 0.0441 s → 0.0061 s, max 0.0541 s → 0.0063 s; first expand 0.0549 s → 0.0503 s (collector verbatim, heaviest charlie-bot root..HEAD manifest file web/static/css/tailwind.css +2515/-0, 45756 B, main checkout before vs branch head after back-to-back at load 1.20/1.13/1.02; bodies repeat-identical in both arms; live log corroboration 8 diff/file requests in the 24.4 h server log, one a re-expand) | per-file diff body memoized on the M41 manifest key plus the pathspec, miss-path range spec built from the resolved SHAs; M43 definition and healthy range introduced with this PR |
 | 2026-09-03 | this PR | M29 steady-state median 1.67-1.96 ms → 0.84-0.90 ms across five interleaved verbatim-collector rounds (1019 session dirs, 44 active, live corpus read-only, main checkout before vs branch after back-to-back at load 1.2-2.0; listings identical in both arms; earlier same-day round under the sibling CUDA build's load 7-12 read main 6.08 ms vs the <5 ms healthy range, recovering to 1.69-1.96 ms once the build drained at identical code — load noise, no regression) | session-dir name list memoized on the sessions root's own (mtime_ns, size), signature taken before the scandir: session create/delete is what moves the root's mtime (metadata writes land one level below), so an unchanged signature proves the name set current and steady-state listings pay one stat instead of the ~1 ms per-1000-entry scandir |
+| 2026-09-03 | this PR | M44 steady-state median 5.11 ms → 2.90 ms, max 8.63 ms → 6.29 ms (collector verbatim, 12 scheduled rows / 13194 B body, live session + cron corpus read-only, main checkout before vs branch after back-to-back at load 0.36/1.28/2.58 and 0.49/1.29/2.57; body digest identical ec0f7b654411 both arms; component corroboration: croniter get_next measured 2.97 ms over the 12-task corpus, one expand each) | per-(cron, timezone) memo for the /scheduled rows' next-fire resolution, entries valid until the fire time they name passes — get_next is a pure function of (cron, timezone, now) and no occurrence can land before that first next fire, so repeat requests inside the window recompute an identical string; M44 definition and healthy range introduced with this PR |

@@ -81,3 +81,28 @@ def test_list_body_memo_invalidates_on_metadata_rewrite(tmp_path: Path) -> None:
   third = client.get(url)
   assert third.json()[next(i for i, row in enumerate(third.json()) if row["id"] == any_id)]["status"] == "running"
   assert third.content != first.content
+
+
+def test_list_poll_repeating_the_rendered_etag_gets_a_bodyless_204(tmp_path: Path) -> None:
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._list_body_memo.clear()
+  url = f"/api/threads/{session_id}/list"
+
+  first = client.get(url)
+  etag = first.headers["ETag"]
+  assert first.headers["Cache-Control"] == "no-store"
+  conditional = client.get(url, params={"etag": etag})
+  assert conditional.status_code == 204
+  assert conditional.content == b""
+  assert conditional.headers["ETag"] == etag
+
+  # A signature move publishes a new body and tag; the stale tag re-serves 200.
+  rows = {row["id"]: row for row in first.json()}
+  any_id = next(iter(rows))
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
+  stale = client.get(url, params={"etag": etag})
+  assert stale.status_code == 200
+  assert stale.content != first.content
+  assert stale.headers["ETag"] != etag
+  assert client.get(url, params={"etag": stale.headers["ETag"]}).status_code == 204

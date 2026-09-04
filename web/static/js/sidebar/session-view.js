@@ -145,6 +145,7 @@ function resetLazySessionData() {
   stopPageTimer('workers-list');
   workersLoadedForSession = null;
   workersLoadInflightForSession = null;
+  workersListEtag = null;
   if (typeof stopAllThreadPolls === 'function') stopAllThreadPolls();
   if (typeof loadedThreads !== 'undefined') loadedThreads.clear();
 }

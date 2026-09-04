@@ -26,6 +26,7 @@
   exposeState('statusPollMs', 3000);
   exposeState('workersLoadedForSession', null);
   exposeState('workersLoadInflightForSession', null);
+  exposeState('workersListEtag', null);
   exposeState('thinkingStart', null);
 
   Sidebar.expose = expose;

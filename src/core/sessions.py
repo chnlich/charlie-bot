@@ -196,6 +196,35 @@ def has_pending_plan_approval_sync(plans_path: Path, session_id: str) -> bool:
   return any(plan.get("state") == "awaiting approval" for plan in result["plans"])
 
 
+# Search scans take the failed-read path for every active session whose live
+# chat file cannot be read (a fresh session's data/ stays empty until its
+# first event), and each scan reports the same failure again — one line per
+# search request per stuck file — while only the first sighting of a reported
+# (session, error) pair carries information.
+_SEARCH_READ_FAILURES_SEEN: set[tuple[str, str]] = set()
+
+
+def _log_search_read_failed_once(session_id: str, error: OSError) -> None:
+  """Log one search_read_failed per (session, error) per process.
+
+  A caller relies on at most one line per (session_id, error): a search round
+  that sees the same session's same failure re-fires a fired alarm, and the
+  key is exactly the fields the line logs, so a swapped failure (path or
+  errno changed) earns one new line and nothing outside the log statement
+  drifts the key away from what was reported.
+  """
+  key = (session_id, str(error))
+  if key in _SEARCH_READ_FAILURES_SEEN:
+    return
+  _SEARCH_READ_FAILURES_SEEN.add(key)
+  log.debug("search_read_failed", session_id=session_id, error=str(error))
+
+
+def _reset_search_read_failures_for_tests() -> None:
+  """Clear the warn-once registry, restoring the process-start state."""
+  _SEARCH_READ_FAILURES_SEEN.clear()
+
+
 def _scan_content_for_hit(path: Path, session_id: str, query_lower: str, start: int) -> bool | None:
   """Character-window scan of a chat-events file for *query_lower* (thread-pool work).
 
@@ -226,7 +255,7 @@ def _scan_content_for_hit(path: Path, session_id: str, query_lower: str, start: 
           # boundary lies whole inside exactly one window.
           tail = window[-overlap:] if overlap else ""
   except OSError as e:
-    log.debug("search_read_failed", session_id=session_id, error=str(e))
+    _log_search_read_failed_once(session_id, e)
     return None
 
 
@@ -837,7 +866,7 @@ class SessionManager:
         try:
           stat = path.stat()
         except OSError as e:
-          log.debug("search_read_failed", session_id=meta.id, error=str(e))
+          _log_search_read_failed_once(meta.id, e)
           return False, None
         sig = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
         start = 0

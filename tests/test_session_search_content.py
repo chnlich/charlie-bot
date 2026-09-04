@@ -12,6 +12,14 @@ from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 
 
+@pytest.fixture(autouse=True)
+def _fresh_search_read_failure_registry():
+  """Keep the process-wide warn-once registry from leaking across tests."""
+  sessions_mod._reset_search_read_failures_for_tests()
+  yield
+  sessions_mod._reset_search_read_failures_for_tests()
+
+
 async def _session_with_chat_content(session_mgr: SessionManager, body: str, name: str) -> SessionMetadata:
   session = await session_mgr.create_session(CreateSessionRequest(name=name))
   events_path = session_mgr.get_chat_events_path(session.id)
@@ -184,6 +192,28 @@ async def test_content_search_tail_rescan_finds_hit_straddling_the_append_bounda
   [found] = await mgr.search_sessions("absent")
   assert found.id == session.id
   assert starts[-1] == size_before - (4 * len("absent") + 8)
+
+
+@pytest.mark.asyncio
+async def test_content_search_missing_chat_file_logs_once_per_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = make_home_config(tmp_path)
+  mgr = SessionManager(cfg)
+  # A fresh session's data/ holds no live chat file, so every content scan's
+  # stat fails; the once-guard keeps the round's first sighting only.
+  await mgr.create_session(CreateSessionRequest(name="no-events-yet"))
+  events: list[str] = []
+  monkeypatch.setattr(sessions_mod.log, "debug", lambda event, **kw: events.append(event))
+
+  assert await mgr.search_sessions("absent") == []
+  assert events == ["search_read_failed"]
+  for _ in range(3):
+    assert await mgr.search_sessions("absent") == []
+  assert events == ["search_read_failed"]
+
+  sessions_mod._reset_search_read_failures_for_tests()
+  assert await mgr.search_sessions("absent") == []
+  assert events == ["search_read_failed", "search_read_failed"]
 
 
 @pytest.mark.asyncio

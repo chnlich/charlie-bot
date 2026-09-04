@@ -1255,9 +1255,9 @@ def build_worker_prompt(
 
 
 def recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Awaitable[None]]:
-  """A spawner._notify_completion stand-in recording the finalized outcome and thread.
+  """A spawner_finalize._notify_completion stand-in recording the finalized outcome and thread.
 
-  The signature mirrors the production call in spawner._run_finalize_effects; each
+  The signature mirrors the production call in spawner_finalize._run_finalize_effects; each
   monkeypatching test reads back only the captured fields it asserts on.
   """
 
@@ -1281,7 +1281,7 @@ def recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Await
 def capturing_worker(captures: dict[str, Any]) -> type:
   """A spawner_launch.Worker stand-in recording its constructor args into ``captures``.
 
-  The signature mirrors the production call in spawner._construct_worker, and the
+  The signature mirrors the production call in spawner_launch._construct_worker, and the
   fixed worker_dir/worker_backend/task_description key set is the shared contract
   the spawn-driving tests assert on; thread_metadata, events_log_path, worker_cfg,
   and on_spawned go unrecorded because no test reads them back off the worker.

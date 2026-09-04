@@ -112,8 +112,9 @@ def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
   thinking_since is a derived runtime fact owned by
   :mod:`src.core.thinking_state`; it is never persisted (see
   ``_TRANSIENT_METADATA_FIELDS``). Every API- and listing-bound return path
-  (``get_session``, ``_iter_session_metas``, ``list_active_session_metas``,
-  the spawn returns) applies this stamp on the way out; the succession-internal
+  (``get_session``, the listing entry points routed through
+  ``_load_session_metas``, ``list_active_session_metas``, the spawn returns)
+  applies this stamp on the way out; the succession-internal
   readers (``read_metadata_fresh``, ``resolve_successor_chain``) deliberately
   return the disk value unstamped, and a reader that needs live busy state stamps
   the meta itself (see ``_elone_scheduled_successor``). The field stays
@@ -641,8 +642,8 @@ class SessionManager:
     Single read tail for the one-session-at-a-time metadata readers (cached
     ``get_session`` and bypassing ``read_metadata_fresh``): a blank file must
     warn exactly once per read through the same ``session_metadata_empty``
-    event. The listing path (``_iter_session_metas``) cannot route through
-    here — it batches all missing metadata reads synchronously in one
+    event. The batched listing path (``_load_session_metas``) cannot route
+    through here — it batches all missing metadata reads synchronously in one
     ``asyncio.to_thread`` call — and keeps its own absent/blank handling with
     the same warning event.
     """
@@ -1728,14 +1729,15 @@ class SessionManager:
     """Load session metadata, batching disk reads and parses for cache misses.
 
     Performs the listing preamble for the entry points routed through here
-    (``list_sessions``, ``search_sessions``, and ``list_archived_page``):
+    (``list_sessions``, ``list_group_names``, ``search_sessions``, and
+    ``list_archived_page``):
     (1) return [] if sessions_dir does not exist, (2) list session directories
     under asyncio.to_thread to avoid blocking the event loop, (3) use fresh
     cache entries directly and read+parse all missing metadata files serially
     in one asyncio.to_thread call — the parse stays off the event loop —
     logging and dropping any session that fails to load. Returns the cached
     objects themselves, filtered to *status* when given: callers that hand
-    metadata out of the manager copy through ``_iter_session_metas``. The sync
+    metadata out of the manager copy and stamp on the way out. The sync
     active-only scan ``list_active_session_metas`` keeps its own per-file sync
     reads and does not route through here.
     """
@@ -1825,11 +1827,6 @@ class SessionManager:
       if status is None or meta.status == status:
         result.append(meta)
     return result
-
-  async def _iter_session_metas(self, status: SessionStatus | None = None) -> list[SessionMetadata]:
-    """Copying wrapper over ``_load_session_metas``: the status filter runs first,
-    so only metadata that leaves the manager pays the model_copy and thinking stamp."""
-    return [_stamp_thinking_since(meta.model_copy()) for meta in await self._load_session_metas(status)]
 
   def _lock_for(self, session_id: str) -> asyncio.Lock:
     """Return (creating on first use) the per-session metadata RMW lock."""

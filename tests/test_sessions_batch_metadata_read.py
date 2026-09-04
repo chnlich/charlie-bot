@@ -45,7 +45,7 @@ async def test_batch_fills_missing_active_and_archived_metadata(tmp_path: Path) 
     _write_metadata(mgr, active)
     _write_metadata(mgr, archived)
 
-    result = await mgr._iter_session_metas()
+    result = await mgr._load_session_metas()
 
     assert {meta.id for meta in result} == {active.id, archived.id}
     assert mgr._metadata_cache[active.id][0].name == "active"
@@ -62,7 +62,7 @@ async def test_batch_skips_metadata_reads_when_cache_is_fresh(
     await mgr.save_metadata(meta)
     metadata_reads = count_path_read_text(monkeypatch, lambda path: path.name == "metadata.json")
 
-    result = await mgr._iter_session_metas()
+    result = await mgr._load_session_metas()
 
     assert [item.id for item in result] == [meta.id]
     assert not metadata_reads
@@ -88,7 +88,7 @@ async def test_batch_isolates_file_read_failures_per_session(
     monkeypatch.setattr(Path, "read_text", fail_bad_read)
 
     with capture_logs() as logs:
-        result = await mgr._iter_session_metas()
+        result = await mgr._load_session_metas()
 
     assert {meta.id for meta in result} == {good.id}
     failures = _failed_events(logs, bad.id)
@@ -107,7 +107,7 @@ async def test_batch_isolates_model_validate_json_failures_per_session(
     _write_metadata(mgr, bad, "{not valid json")
 
     with capture_logs() as logs:
-        result = await mgr._iter_session_metas()
+        result = await mgr._load_session_metas()
 
     assert {meta.id for meta in result} == {good.id}
     failures = _failed_events(logs, bad.id)
@@ -135,7 +135,7 @@ async def test_batch_isolates_migration_save_failures_per_session(
     monkeypatch.setattr(mgr, "save_metadata", fail_bad_save)
 
     with capture_logs() as logs:
-        result = await mgr._iter_session_metas()
+        result = await mgr._load_session_metas()
 
     assert {meta.id for meta in result} == {good.id}
     failures = _failed_events(logs, bad.id)
@@ -172,7 +172,7 @@ async def test_batch_install_uses_setdefault_for_cache_entry_added_during_read(
         sessions_module.asyncio, "to_thread", install_between_diff_and_install
     )
 
-    result = await mgr._iter_session_metas()
+    result = await mgr._load_session_metas()
 
     assert to_thread_calls == 2
     assert mgr._metadata_cache[disk_meta.id][0] is installed_during_read
@@ -197,7 +197,7 @@ async def test_batch_migrates_legacy_round_ratings_on_cache_hit(
 
     monkeypatch.setattr(mgr, "save_metadata", counting_save)
 
-    result = await mgr._iter_session_metas()
+    result = await mgr._load_session_metas()
 
     assert save_calls == 1
     assert result[0].round_ratings == {"legacy:7": "thumbs_up"}
@@ -223,7 +223,7 @@ async def test_batch_migrates_legacy_round_ratings_on_missing_path(
 
     monkeypatch.setattr(mgr, "save_metadata", counting_save)
 
-    result = await mgr._iter_session_metas()
+    result = await mgr._load_session_metas()
 
     assert save_calls == 1
     assert result[0].round_ratings == {"legacy:8": "thumbs_down"}
@@ -245,7 +245,7 @@ async def test_batch_output_matches_sequential_get_session_for_mixed_fixture(
     _write_metadata(mgr, legacy)
     _write_metadata(mgr, corrupt, "{corrupt")
 
-    batch_result = await mgr._iter_session_metas()
+    batch_result = await mgr._load_session_metas()
     sequential_mgr = SessionManager(mgr._cfg)
     sequential_result: list[SessionMetadata] = []
     for session_dir in mgr._cfg.sessions_dir.iterdir():
@@ -272,7 +272,7 @@ async def test_dir_names_memo_rescans_only_when_root_changes(
     mgr = _make_session_mgr(tmp_path)
     first = SessionMetadata(name="first")
     _write_metadata(mgr, first)
-    await mgr._iter_session_metas()
+    await mgr._load_session_metas()
 
     real_scandir = os.scandir
     root_scans: list[str] = []
@@ -285,20 +285,20 @@ async def test_dir_names_memo_rescans_only_when_root_changes(
 
     monkeypatch.setattr(os, "scandir", counting_scandir)
 
-    steady = await mgr._iter_session_metas()
+    steady = await mgr._load_session_metas()
     assert [meta.id for meta in steady] == [first.id]
     assert not root_scans
 
     second = SessionMetadata(name="second")
     _write_metadata(mgr, second)
-    grown = await mgr._iter_session_metas()
+    grown = await mgr._load_session_metas()
     assert {meta.id for meta in grown} == {first.id, second.id}
     assert len(root_scans) == 1
 
-    assert await mgr._iter_session_metas()
+    assert await mgr._load_session_metas()
     assert len(root_scans) == 1
 
     shutil.rmtree(mgr._session_dir(second.id))
-    shrunk = await mgr._iter_session_metas()
+    shrunk = await mgr._load_session_metas()
     assert [meta.id for meta in shrunk] == [first.id]
     assert len(root_scans) == 2

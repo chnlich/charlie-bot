@@ -63,19 +63,20 @@ CLAUDE_COMPACT_CONTEXT_RESERVE = 13_000
 
 # Usage resolution re-derives the declared window per call while the environment a
 # degradation warning reports is fixed for the process's life, so the first sighting
-# of each (event, variable, value) is the whole alarm and every repeat re-fires it.
-_DECLARED_WINDOW_WARNINGS_SEEN: set[tuple[str, str, str]] = set()
+# of each reported shape is the whole alarm and every repeat re-fires it.
+_DECLARED_WINDOW_WARNINGS_SEEN: set[tuple[str, str, tuple[tuple[str, str], ...]]] = set()
 
 
-def _warn_declared_window_once(event: str, *, variable: str, value: str, **fields: str) -> None:
-  """Log one declared-window degradation per (event, variable, value) per process.
+def _warn_declared_window_once(event: str, *, variable: str, **fields: str) -> None:
+  """Log one declared-window degradation per reportable shape per process.
 
-  A caller relies on at most one line per key: the first sighting carries the full
-  signal and a later call on unchanged environment repeats a fired alarm. ``value``
-  is the offending raw setting, so an edit that swaps one bad value for another
-  earns one new line.
+  A caller relies on at most one line per (event, variable, logged fields): the
+  first sighting carries the full signal and a later call on unchanged environment
+  repeats a fired alarm. The key is exactly the fields the line logs, so an edit
+  that swaps one bad setting for another earns one new line, and nothing outside
+  the log statement can drift the key away from what was reported.
   """
-  key = (event, variable, value)
+  key = (event, variable, tuple(sorted(fields.items())))
   if key in _DECLARED_WINDOW_WARNINGS_SEEN:
     return
   _DECLARED_WINDOW_WARNINGS_SEEN.add(key)
@@ -168,7 +169,6 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
     _warn_declared_window_once(
         "claude_declared_window_unparseable_window",
         variable="CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-        value=str(raw_window),
         window=raw_window,
     )
     window = default_window

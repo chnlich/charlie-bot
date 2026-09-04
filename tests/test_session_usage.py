@@ -441,13 +441,18 @@ async def test_public_entry_point_has_no_events_parameter(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _reset_declared_window_warnings() -> None:
+  """Restore the warn-once registry's process-start state around every test."""
+  _reset_declared_window_warnings_for_tests()
+
+
 @pytest.fixture
 def _clean_ceiling_env(monkeypatch: pytest.MonkeyPatch) -> None:
   """Remove env vars that would change the declared window so each test starts clean."""
   for name in ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
                "CLAUDE_CODE_MAX_CONTEXT_TOKENS"):
     monkeypatch.delenv(name, raising=False)
-  _reset_declared_window_warnings_for_tests()
 
 
 @pytest.mark.usefixtures("_clean_ceiling_env")

@@ -12,13 +12,13 @@ from zoneinfo import ZoneInfo
 import pytest
 import yaml
 from conftest import (
-  BROADCAST_PATCH_TARGET,
-  OPUS_BACKEND_ID,
-  TRIGGER_MASTER_PATCH_TARGET,
-  TRIGGERS_GET_CONFIG_PATCH_TARGET,
-  build_sessions_cfg,
-  build_two_backend_cfg,
-  make_home_session,
+    BROADCAST_PATCH_TARGET,
+    OPUS_BACKEND_ID,
+    TRIGGER_MASTER_PATCH_TARGET,
+    TRIGGERS_GET_CONFIG_PATCH_TARGET,
+    build_sessions_cfg,
+    build_two_backend_cfg,
+    make_home_session,
 )
 from conftest import append_events as _append_events
 from conftest import make_parent as _make_parent
@@ -26,23 +26,23 @@ from conftest import make_sessions_client as _build_client
 from conftest import session_dir_names as _session_dir_names
 
 from src.core.config import (
-  CharlieBotConfig,
-  ScheduledTaskConfig,
-  _load_cron_file,
+    CharlieBotConfig,
+    ScheduledTaskConfig,
+    _load_cron_file,
 )
 from src.core.models import (
-  PROJECT_ROLE,
-  CreateSessionRequest,
-  SessionMetadata,
-  SessionStatus,
-  TriggerStatus,
+    PROJECT_ROLE,
+    CreateSessionRequest,
+    SessionMetadata,
+    SessionStatus,
+    TriggerStatus,
 )
 from src.core.scheduled_sessions import ScheduledSessionStore
 from src.core.scheduler import Scheduler
 from src.core.sessions import (
-  ScheduledSessionBusyError,
-  SessionManager,
-  SuccessionRefused,
+    ScheduledSessionBusyError,
+    SessionManager,
+    SuccessionRefused,
 )
 from src.core.thinking_state import clear_busy, mark_busy
 from src.core.triggers import TriggerManager
@@ -75,16 +75,15 @@ def _seed_scheduled_task(
   cron_d.mkdir(parents=True, exist_ok=True)
   path = cron_d / f"{task_name}.yaml"
   path.write_text(
-      yaml.safe_dump({
-          "cron": cron,
-          "prompt_file": str(prompt),
-          "timezone": "America/Los_Angeles",
-          "backend": backend,
-      }),
+      yaml.safe_dump(
+          {
+              "cron": cron,
+              "prompt_file": str(prompt),
+              "timezone": "America/Los_Angeles",
+              "backend": backend,
+          }),
       encoding="utf-8")
-  monkeypatch.setattr(
-      "src.core.scheduled_sessions.cron_path",
-      lambda name: cron_d / f"{name}.yaml")
+  monkeypatch.setattr("src.core.scheduled_sessions.cron_path", lambda name: cron_d / f"{name}.yaml")
   return path
 
 
@@ -99,14 +98,16 @@ async def _make_scheduled_parent(
     events: int = 3,
 ) -> SessionMetadata:
   """Create the active scheduled session for *task*, with *events* chat events."""
-  parent = await mgr.create_session(
-      CreateSessionRequest(name=name, scheduled_task=task, role=role), backend=backend)
+  parent = await mgr.create_session(CreateSessionRequest(name=name, scheduled_task=task, role=role), backend=backend)
   if group is not None:
     parent.group = group
     await mgr.save_metadata(parent)
   _append_events(
       mgr.get_chat_events_path(parent.id),
-      [{"type": "user", "content": f"e{i}"} for i in range(events)],
+      [{
+          "type": "user",
+          "content": f"e{i}"
+      } for i in range(events)],
   )
   return parent
 
@@ -128,8 +129,7 @@ async def test_elone_writes_successor_pointer_and_archives_thumbs_down_parent(tm
 
 @pytest.mark.asyncio
 async def test_second_elone_of_ordinary_parent_overwrites_successor_and_leaves_first_child_untouched(
-    tmp_path: Path,
-) -> None:
+    tmp_path: Path,) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
   parent_id = await _make_parent(mgr)
@@ -400,11 +400,9 @@ async def test_api_succession_refused_maps_to_409_and_bad_event_index_to_400(
   _seed_scheduled_task(tmp_path, monkeypatch)
   scheduled_parent = await _make_scheduled_parent(scheduled_mgr)
   with scheduled_client:
-    resp = scheduled_client.post(
-        f"/api/sessions/{scheduled_parent.id}/elone", json={"event_index": 0})
+    resp = scheduled_client.post(f"/api/sessions/{scheduled_parent.id}/elone", json={"event_index": 0})
     assert resp.status_code == 200
-    resp = scheduled_client.post(
-        f"/api/sessions/{scheduled_parent.id}/elone", json={"event_index": 0})
+    resp = scheduled_client.post(f"/api/sessions/{scheduled_parent.id}/elone", json={"event_index": 0})
     assert resp.status_code == 409
     assert "already has a successor" in resp.json()["detail"]
 
@@ -448,9 +446,7 @@ async def test_deliver_to_successor_leaves_origin_absent_for_no_successor(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_deliver_to_successor_returns_none_and_writes_nothing_when_chain_end_dir_removed(
-    tmp_path: Path,
-) -> None:
+async def test_deliver_to_successor_returns_none_and_writes_nothing_when_chain_end_dir_removed(tmp_path: Path,) -> None:
   cfg, mgr, session = await make_home_session(tmp_path, name="Gone", backend=OPUS_BACKEND_ID)
 
   # Remove the whole session directory, including metadata.json, exactly as a
@@ -467,9 +463,7 @@ async def test_deliver_to_successor_returns_none_and_writes_nothing_when_chain_e
 
 
 @pytest.mark.asyncio
-async def test_deliver_to_successor_reresolves_when_successor_appears_between_resolve_and_lock(
-    tmp_path: Path,
-) -> None:
+async def test_deliver_to_successor_reresolves_when_successor_appears_between_resolve_and_lock(tmp_path: Path,) -> None:
   mgr = SessionManager(CharlieBotConfig(charliebot_home=tmp_path / "home"))
   gen0 = await _make_parent(mgr)
   gen1 = await mgr.create_session(CreateSessionRequest(name="Late successor"), backend=OPUS_BACKEND_ID)
@@ -696,9 +690,7 @@ async def test_failed_write_back_rolls_back_the_succession(
   # No new scheduled session remains registered; the brief successor is archived.
   active = await mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=True)
   assert [s.id for s in active] == [parent.id]
-  assert all(
-      s.id == parent.id or s.status == SessionStatus.ARCHIVED
-      for s in await mgr.list_sessions(scheduled=True))
+  assert all(s.id == parent.id or s.status == SessionStatus.ARCHIVED for s in await mgr.list_sessions(scheduled=True))
   # ...and the task yaml was never rewritten.
   assert yaml_path.read_text(encoding="utf-8") == original_yaml
 
@@ -749,9 +741,7 @@ async def test_cadence_canary_without_bookkeeping_migration_the_tick_refires(
   _seed_scheduled_task(tmp_path, monkeypatch, cron=_CADENCE_CRON)
   parent = await _make_recently_run_cadence_parent(mgr)
   monkeypatch.setattr(
-      ScheduledSessionStore,
-      "migrate_scheduler_bookkeeping",
-      lambda self, old_session, new_session: None)
+      ScheduledSessionStore, "migrate_scheduler_bookkeeping", lambda self, old_session, new_session: None)
 
   child = await mgr.elone_session(parent.id, event_index=1, backend="codex-o3")
   fresh_child = await mgr.read_metadata_fresh(child.id)

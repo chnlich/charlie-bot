@@ -558,12 +558,34 @@ def _append_opencode(path: Path, rows: list[tuple[dict, str, str]]) -> None:
   con.close()
 
 
+def test_tally_memo_serves_unchanged_collect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  first = _collect(claude, None, db, cache)
+
+  def boom(*args, **kwargs) -> None:
+    raise AssertionError("whole-tally memo hit re-touched the cache document or the db")
+
+  monkeypatch.setattr(tt.TallyCache, "load", boom)
+  monkeypatch.setattr(tt.sqlite3, "connect", boom)
+  second = _collect(claude, None, db, cache)
+
+  assert second.rows == first.rows
+  assert second.notes == first.notes
+  assert second.scanned_bytes == 0
+
+
 def test_opencode_cache_serves_unchanged_db(tmp_path: Path) -> None:
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 4, "write": 2}}, "oc-m", "prov")])
   first = _collect(None, None, db, cache)
   assert first.scanned_bytes > 0
 
+  # Keep the second collect on the persisted-cache path this test names; the whole-tally
+  # memo would otherwise serve it first.
+  tt._tally_memo = None
   second = _collect(None, None, db, cache)
   # The db contribution came from the cache: nothing re-read, same tally and note.
   assert second.scanned_bytes == 0

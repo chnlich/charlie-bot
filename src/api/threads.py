@@ -238,7 +238,10 @@ async def list_threads(
     return Response(
         content=hit[1],
         media_type="application/json",
-        headers={"ETag": hit[2], "Cache-Control": "no-store"},
+        headers={
+            "ETag": hit[2],
+            "Cache-Control": "no-store"
+        },
     )
 
   threads = await thread_mgr.list_threads(session_id)
@@ -272,7 +275,10 @@ async def list_threads(
   return Response(
       content=body,
       media_type="application/json",
-      headers={"ETag": etag_value, "Cache-Control": "no-store"},
+      headers={
+          "ETag": etag_value,
+          "Cache-Control": "no-store"
+      },
   )
 
 

@@ -1,6 +1,7 @@
 """Thread management API routes."""
 
 import asyncio
+import hashlib
 import json
 import os
 import shlex
@@ -12,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 
 from src.agents.backends.pty_common import (
@@ -173,7 +174,7 @@ def _thread_list_item(t: ThreadMetadata) -> dict:
 # cap: one slot holds the ~140 KB worst body, and deeper caps buy nothing
 # because a session's poll reuses its one slot.
 _LIST_BODY_MEMO_LIMIT = 8
-_list_body_memo: OrderedDict[str, tuple[tuple[tuple[str, int, int], ...], bytes]] = OrderedDict()
+_list_body_memo: OrderedDict[str, tuple[tuple[tuple[str, int, int], ...], bytes, str]] = OrderedDict()
 
 
 def _list_body_signature(threads_dir: str, triggers_dir: str) -> tuple[tuple[str, int, int], ...]:
@@ -214,17 +215,30 @@ def _list_body_signature(threads_dir: str, triggers_dir: str) -> tuple[tuple[str
 @router.get("/{session_id}/list")
 async def list_threads(
     session_id: str,
+    if_none_match: str | None = Header(default=None),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     trigger_mgr: TriggerManager = Depends(get_trigger_manager),
     cfg: CharlieBotConfig = Depends(get_config),
 ) -> Response:
-  """Return mixed list of thread and trigger summaries, sorted by created_at descending."""
+  """Return mixed list of thread and trigger summaries, sorted by created_at descending.
+
+  The body carries a strong ETag (sha1 of the body bytes); a poll repeating the
+  ETag it rendered is answered 304 with no body. The memo already proves an
+  unchanged signature serves the current body, so the tag is content-addressed
+  and needs no validity window of its own.
+  """
   session_dir = cfg.sessions_dir / session_id
   sig = await asyncio.to_thread(_list_body_signature, str(session_dir / "threads"), str(session_dir / "triggers"))
   hit = _list_body_memo.get(session_id)
   if hit is not None and hit[0] == sig:
     _list_body_memo.move_to_end(session_id)
-    return Response(content=hit[1], media_type="application/json")
+    if if_none_match == hit[2]:
+      return Response(status_code=304, headers={"ETag": hit[2]})
+    return Response(
+        content=hit[1],
+        media_type="application/json",
+        headers={"ETag": hit[2], "Cache-Control": "no-cache"},
+    )
 
   threads = await thread_mgr.list_threads(session_id)
   thread_items = [_thread_list_item(t) for t in threads]
@@ -247,11 +261,18 @@ async def list_threads(
   # byte-identical bodies (verified on the 277-row worst-session corpus), so a
   # memo hit and a fresh build are indistinguishable on the wire.
   body = json.dumps(combined, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
-  _list_body_memo[session_id] = (sig, body)
+  etag = '"' + hashlib.sha1(body).hexdigest() + '"'
+  _list_body_memo[session_id] = (sig, body, etag)
   _list_body_memo.move_to_end(session_id)
   while len(_list_body_memo) > _LIST_BODY_MEMO_LIMIT:
     _list_body_memo.popitem(last=False)
-  return Response(content=body, media_type="application/json")
+  if if_none_match == etag:
+    return Response(status_code=304, headers={"ETag": etag})
+  return Response(
+      content=body,
+      media_type="application/json",
+      headers={"ETag": etag, "Cache-Control": "no-cache"},
+  )
 
 
 @router.get("/{session_id}/threads/{thread_id}", response_model=ThreadMetadataResponse)

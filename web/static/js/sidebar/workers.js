@@ -177,6 +177,7 @@ async function ensureWorkersLoadedForActiveSession(opts) {
   try {
     const res = await fetch('/api/threads/' + pollSessionId + '/list');
     if (!res.ok) throw new Error(res.status);
+    workersListEtag = res.headers.get('ETag');
     const items = await res.json();
     if (pollSessionId !== SESSION_ID) return;
     renderWorkersListItems(items || [], pollSessionId);
@@ -196,8 +197,17 @@ function pollWorkers() {
     ensureWorkersLoadedForActiveSession({force: true});
     return;
   }
-  fetch('/api/threads/' + pollSessionId + '/list')
-    .then(r => r.ok ? r.json() : null)
+  // The list body carries an ETag; repeating it asks the server for a 304
+  // instead of the full rows when nothing behind the list moved.
+  const headers = workersListEtag ? {'If-None-Match': workersListEtag} : undefined;
+  fetch('/api/threads/' + pollSessionId + '/list', {headers: headers})
+    .then(r => {
+      if (r.status === 304) return null;
+      if (!r.ok) return null;
+      const etag = r.headers.get('ETag');
+      if (etag) workersListEtag = etag;
+      return r.json();
+    })
     .then(items => {
       if (!items || pollSessionId !== SESSION_ID) return;
       for (const item of items) {

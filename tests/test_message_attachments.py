@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-  CHAT_CREATE_LOGGED_TASK_PATCH_TARGET,
-  CHAT_RUN_AND_FINALIZE_PATCH_TARGET,
-  close_create_logged_task,
-  make_home_config,
+    CHAT_CREATE_LOGGED_TASK_PATCH_TARGET,
+    CHAT_RUN_AND_FINALIZE_PATCH_TARGET,
+    close_create_logged_task,
+    make_home_config,
 )
 from fastapi import UploadFile
 
@@ -45,31 +45,28 @@ async def test_upload_file_strips_directory_components(tmp_path) -> None:
 
 
 def test_events_to_messages_uses_structured_uploaded_files_without_leaking_paths() -> None:
-  messages = events_to_messages([
-      {
-          "type": "user",
-          "content": "Please review these notes",
-          "uploaded_files": [
-              {
+  messages = events_to_messages(
+      [
+          {
+              "type": "user",
+              "content": "Please review these notes",
+              "uploaded_files": [{
                   "filename": "notes.txt",
                   "path": "/tmp/notes.txt",
                   "size": 12,
-              },
-          ],
-          "timestamp": "2026-04-02T10:00:00Z",
-      },
-  ])
+              },],
+              "timestamp": "2026-04-02T10:00:00Z",
+          },
+      ])
 
   expected = {
       "role": "user",
       "content": "Please review these notes",
-      "uploaded_files": [
-          {
-              "filename": "notes.txt",
-              "path": "/tmp/notes.txt",
-              "size": 12,
-          },
-      ],
+      "uploaded_files": [{
+          "filename": "notes.txt",
+          "path": "/tmp/notes.txt",
+          "size": 12,
+      },],
       "event_index": 0,
       "id": "legacy:0",
       "timestamp": "2026-04-02T10:00:00Z",
@@ -79,27 +76,37 @@ def test_events_to_messages_uses_structured_uploaded_files_without_leaking_paths
 
 
 def test_events_to_messages_extracts_legacy_attachment_block() -> None:
-  messages = events_to_messages([
-      {
-          "type": "user",
-          "content": "Please review\n\n[Attached files]\n- /tmp/alpha.txt\n- /tmp/beta.md",
-          "timestamp": "2026-04-02T10:00:00Z",
-      },
-      {
-          "type": "user",
-          "content": "\n\n[Attached files]\n- /tmp/file-only.pdf",
-          "timestamp": "2026-04-02T10:01:00Z",
-      },
-  ])
+  messages = events_to_messages(
+      [
+          {
+              "type": "user",
+              "content": "Please review\n\n[Attached files]\n- /tmp/alpha.txt\n- /tmp/beta.md",
+              "timestamp": "2026-04-02T10:00:00Z",
+          },
+          {
+              "type": "user",
+              "content": "\n\n[Attached files]\n- /tmp/file-only.pdf",
+              "timestamp": "2026-04-02T10:01:00Z",
+          },
+      ])
 
   assert messages[0]["content"] == "Please review"
   assert messages[0]["uploaded_files"] == [
-      {"filename": "alpha.txt", "path": "/tmp/alpha.txt"},
-      {"filename": "beta.md", "path": "/tmp/beta.md"},
+      {
+          "filename": "alpha.txt",
+          "path": "/tmp/alpha.txt"
+      },
+      {
+          "filename": "beta.md",
+          "path": "/tmp/beta.md"
+      },
   ]
   assert messages[1]["content"] == ""
   assert messages[1]["uploaded_files"] == [
-      {"filename": "file-only.pdf", "path": "/tmp/file-only.pdf"},
+      {
+          "filename": "file-only.pdf",
+          "path": "/tmp/file-only.pdf"
+      },
   ]
 
 
@@ -132,7 +139,11 @@ async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path
   assert mock_run.call_args.args[2] == "Summarize this\n\n[Attached files]\n- /tmp/notes.txt"
   assert mock_run.call_args.kwargs["display_content"] == "Summarize this"
   assert mock_run.call_args.kwargs["uploaded_files"] == [
-      {"filename": "notes.txt", "path": "/tmp/notes.txt", "size": 12},
+      {
+          "filename": "notes.txt",
+          "path": "/tmp/notes.txt",
+          "size": 12
+      },
   ]
 
 
@@ -170,7 +181,11 @@ async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_p
   persisted_event = session_mgr.persist_and_broadcast.await_args.args[1]
   assert persisted_event["content"] == "/review please"
   assert persisted_event["uploaded_files"] == [
-      {"filename": "report.pdf", "path": "/tmp/report.pdf", "size": 99},
+      {
+          "filename": "report.pdf",
+          "path": "/tmp/report.pdf",
+          "size": 99
+      },
   ]
 
   assert mock_run.call_count == 1
@@ -178,5 +193,9 @@ async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_p
   assert mock_run.call_args.kwargs["skip_user_event"] is True
   assert mock_run.call_args.kwargs["display_content"] == "/review please"
   assert mock_run.call_args.kwargs["uploaded_files"] == [
-      {"filename": "report.pdf", "path": "/tmp/report.pdf", "size": 99},
+      {
+          "filename": "report.pdf",
+          "path": "/tmp/report.pdf",
+          "size": 99
+      },
   ]

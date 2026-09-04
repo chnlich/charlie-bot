@@ -347,25 +347,20 @@ async def _send_session_catchup(
   return sent, event_index_offset + len(events)
 
 
-async def _replay_aggregated_catchup(
-    websocket: WebSocket,
-    events: list[dict],
-    cursor: int,
-    session_id: str,
-    *,
-    event_index_offset: int = 0,
-) -> int:
-  """Replay events past *cursor* as aggregator deltas + raw side-effect events.
+def _catchup_frames(events: list[dict], cursor: int, *, event_index_offset: int = 0) -> list[dict]:
+  """Build the ordered catchup frame list for events past *cursor* (thread-pool work).
 
   Walks the full event list to keep the aggregator state aligned with how the
   client's SSR/SPA aggregator processed events[0..cursor-1]; deltas from events
-  before the cursor are dropped because the client has already rendered them.
-  Raw events in `_RAW_EVENTS_REPLACED_BY_DELTAS` are suppressed because their
-  content is represented by `message`/`stream` deltas on the wire. Returns the
-  number of frames sent.
+  before the cursor are dropped from the result because the client has already
+  rendered them. Raw events in `_RAW_EVENTS_REPLACED_BY_DELTAS` are suppressed
+  because their content is represented by `message`/`stream` deltas on the wire.
+  Runs in a thread: a reconnecting client that is a few events behind a large
+  session still feeds the whole corpus, and that walk must not stall the event
+  loop the reconnect lives on.
   """
   aggregator = MessageAggregator(event_index_offset=event_index_offset)
-  sent = 0
+  frames: list[dict] = []
   latest_stream: dict | None = None
   for idx, ev in enumerate(events):
     global_idx = event_index_offset + idx
@@ -381,28 +376,41 @@ async def _replay_aggregated_catchup(
       # carries the same (or more complete) content and the client clears the
       # streaming preview when it appends a committed bubble.
       latest_stream = None
-      try:
-        await websocket.send_json(delta)
-        sent += 1
-      except Exception as e:
-        log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))
-        return sent
+      frames.append(delta)
     if ev.get("type") in _RAW_EVENTS_REPLACED_BY_DELTAS:
       continue
     payload = dict(ev)
     payload.setdefault("event_index", global_idx)
+    frames.append(payload)
+  if latest_stream is not None:
+    frames.append(latest_stream)
+  return frames
+
+
+async def _replay_aggregated_catchup(
+    websocket: WebSocket,
+    events: list[dict],
+    cursor: int,
+    session_id: str,
+    *,
+    event_index_offset: int = 0,
+) -> int:
+  """Replay events past *cursor* as aggregator deltas + raw side-effect events.
+
+  The frame list is built whole by `_catchup_frames` in a thread, then sent in
+  order; websocket.send_json keeps its original coalescing and failure shape,
+  so the wire bytes and the stop-at-first-send-failure count are unchanged.
+  Returns the number of frames sent.
+  """
+  frames = await asyncio.to_thread(_catchup_frames, events, cursor, event_index_offset=event_index_offset)
+  sent = 0
+  for frame in frames:
     try:
-      await websocket.send_json(payload)
+      await websocket.send_json(frame)
       sent += 1
     except Exception as e:
       log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))
       return sent
-  if latest_stream is not None:
-    try:
-      await websocket.send_json(latest_stream)
-      sent += 1
-    except Exception as e:
-      log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))
   return sent
 
 

@@ -43,6 +43,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -151,12 +152,14 @@ _FILE_URL_PREFIXES = ("/files/", "/absolute_filepath/")
 # server's port, one of the file-service prefixes, then the absolute filesystem
 # path, with the query string and fragment carried onto the published URL unchanged.
 _FILE_SERVER_URL_RE = re.compile(
-    r"https?://(?P<host>[^/\s:]+):(?P<port>\d+)/(?P<prefix>files|absolute_filepath)"
+    r"https?://(?P<host>\[[^\]\s]+\]|[^/\s:]+):(?P<port>\d+)/(?P<prefix>files|absolute_filepath)"
     r"(?P<fs_path>/[^\s?#]*)(?P<query>\?[^\s#]*)?(?P<fragment>#[^\s]*)?")
 
 # Any URL naming a port, for the application-route naming: the matches whose port is
 # this server's and whose path is not a file-service prefix reach the operator alone.
-_SERVER_PORT_URL_RE = re.compile(r"https?://[^/\s:]+:(?P<port>\d+)(?P<path>/[^\s?#]*)?(?:\?[^\s#]*)?(?:#[^\s]*)?")
+_SERVER_PORT_URL_RE = re.compile(
+    r"https?://(?:\[[^\]\s]+\]|[^/\s:]+):(?P<port>\d+)(?P<path>/[^\s?#]*)?"
+    r"(?:\?[^\s#]*)?(?:#[^\s]*)?")
 
 
 def summon_session_id(team_id: str, channel_id: str, thread_ts: str) -> str:
@@ -899,7 +902,7 @@ def _rewrite_file_links(text: str, cfg: CharlieBotConfig) -> tuple[str, list[str
   for m in _FILE_SERVER_URL_RE.finditer(text):
     if int(m.group("port")) != cfg.server_port:
       continue
-    fs_path = Path(m.group("fs_path"))
+    fs_path = Path(unquote(m.group("fs_path")))
     if not fs_path.is_file():
       raise SlackReplyError(422, f"reply links a file-server URL whose file is gone: {m.group(0)}")
     try:

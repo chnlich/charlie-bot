@@ -42,6 +42,8 @@ def test_publish_copies_and_joins_the_url_with_a_single_slash(tmp_path: Path, ba
 
   result = publish_artifact(artifact, cfg)
 
+  assert isinstance(result, str)
+  assert result == expected_url
   assert result.url == expected_url
   published = tmp_path / "publish" / "page.html"
   assert result.path == published

@@ -740,3 +740,37 @@ async def test_present_rejection_lists_every_failed_assertion(tmp_path: Path) ->
     await plan_mgr.present(meta.id, file=file_rel, title="P1")
   assert "sections-numbered" in str(exc_info.value)
   assert "foot-present" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Fork-explainer gate: present/amend enforce the open Trade-off explainer
+# ---------------------------------------------------------------------------
+
+
+_PLAN_OPEN_FORK = (
+    '<div class="fork"><p class="q"><span class="fn">1</span>Scope?</p>'
+    '<p class="rec"><b>Recommendation:</b> R</p><p class="trade">Tradeoff: T</p></div>')
+
+
+def _plan_doc_with_open_fork(fork: str) -> str:
+  """A plan page passing every plan assertion except fork-explainer, carrying *fork* under Trade-offs."""
+  return plan_page_html().replace(
+      '<h2><span class="n">5</span> Trade-offs</h2>', f'<h2><span class="n">5</span> Trade-offs</h2>{fork}')
+
+
+@pytest.mark.asyncio
+async def test_present_rejects_open_trade_off_without_explainer_block(tmp_path: Path) -> None:
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_plan_doc_with_open_fork(_PLAN_OPEN_FORK))
+  with pytest.raises(ValueError, match=r"fork #1 \(section '5 Trade-offs'\) has no details\.details-layer"):
+    await plan_mgr.present(meta.id, file=file_rel, title="P1")
+
+
+@pytest.mark.asyncio
+async def test_present_rejects_open_trade_off_with_bodyless_explainer(tmp_path: Path) -> None:
+  bodyless = _PLAN_OPEN_FORK.replace("</div>",
+                                     '<details class="details-layer"><summary>Why</summary></details></div>')
+  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_plan_doc_with_open_fork(bodyless))
+  with pytest.raises(ValueError, match="fork-explainer.*explainer has no body"):
+    await plan_mgr.present(meta.id, file=file_rel, title="P1")

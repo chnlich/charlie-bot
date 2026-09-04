@@ -286,6 +286,8 @@ _SECTION_COUNT_RULES = {
 
 _FACT_ANCESTOR_TAGS = ("p", "li", "td", "blockquote", "h3")
 
+_EXPLAINER_BODY_TAGS = frozenset({"li", "p", "table", "pre"})
+
 
 def _check_style_verbatim(ctx: _Context) -> list[AssertionOutcome]:
   name = "style-verbatim"
@@ -365,8 +367,11 @@ def _check_fork_explainer(ctx: _Context) -> list[AssertionOutcome]:
   name = "fork-explainer"
   failures: list[AssertionOutcome] = []
   for i, fork in _open_forks(ctx.root):
-    if not _find(fork, "details", ("details-layer",)):
+    layers = _find(fork, "details", ("details-layer",))
+    if not layers:
       failures.append(_fail(name, f"fork #{i} (section {_section_heading(fork)!r}) has no details.details-layer"))
+    elif not any(_text(el).strip() for el in _descendants(layers[0]) if el.tag in _EXPLAINER_BODY_TAGS):
+      failures.append(_fail(name, f"fork #{i} (section {_section_heading(fork)!r}) explainer has no body"))
   return failures or [_ok(name)]
 
 
@@ -651,8 +656,8 @@ _ASSERTION_RUNNERS = {
 _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
     "plan":
         (
-            "style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "goal-budget", "page-height",
-            "ordinal-named"),
+            "style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "fork-explainer", "goal-budget",
+            "page-height", "ordinal-named"),
     "understanding":
         (
             "style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "fork-explainer", "page-height",

@@ -98,6 +98,12 @@ def test_unknown_genre_is_refused(tmp_path: Path) -> None:
     run_assertions("weird", artifact)
 
 
+def test_plan_assertion_set_carries_fork_explainer_after_fork_open_shape() -> None:
+  names = artifact_check._ASSERTION_SETS["plan"]
+  assert names.index("fork-explainer") == names.index("fork-open-shape") + 1
+  assert len(names) == 8
+
+
 # ---------------------------------------------------------------------------
 # style-verbatim
 # ---------------------------------------------------------------------------
@@ -268,6 +274,19 @@ def test_fork_explainer_passes_with_details_layer(tmp_path: Path) -> None:
   doc = doc.replace(
       '<h2><span class="n">2</span> S2</h2>', '<h2><span class="n">2</span> S2</h2><p><span class="req">r1</span></p>')
   assert [o.passed for o in _run("sitrep", _write(tmp_path, doc))["fork-explainer"]] == [True]
+
+
+def test_fork_explainer_fails_when_details_layer_carries_no_body(tmp_path: Path) -> None:
+  """A details-layer holding only its summary — the summary's own text does not count as the body."""
+  fork = _OPEN_FORK.replace("</div>", '<details class="details-layer"><summary>Why</summary></details></div>')
+  doc = _genre_doc(
+      "sitrep",
+      f'<section><h2><span class="n">1</span> S1</h2>{fork}</section>' + _sections([f"S{i}" for i in range(2, 6)]))
+  doc = doc.replace(
+      '<h2><span class="n">2</span> S2</h2>', '<h2><span class="n">2</span> S2</h2><p><span class="req">r1</span></p>')
+  (outcome,) = _run("sitrep", _write(tmp_path, doc))["fork-explainer"]
+  assert not outcome.passed
+  assert outcome.detail == "fork #1 (section '1 S1') explainer has no body"
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +598,7 @@ def test_cli_plan_template_assertions_only_passes_and_prints_ok_lines(
       "ok sections-numbered",
       "ok foot-present",
       "ok fork-open-shape",
+      "ok fork-explainer",
       f"ok goal-budget 13 weighted chars (budget {artifact_check.GOAL_WEIGHTED_BUDGET})",
       f"ok page-height 800 px (budget {artifact_check.PAGE_HEIGHT_BUDGET})",
       "ok ordinal-named 0 external labels named in reach",
@@ -609,6 +629,32 @@ def test_cli_two_open_forks_without_explainer_report_two_locations_and_skip_the_
   assert fail_lines == [
       "FAIL fork-explainer: fork #1 (section '1 What waits on you?') has no details.details-layer",
       "FAIL fork-explainer: fork #2 (section '1 What waits on you?') has no details.details-layer",
+  ]
+  assert "--- cold read ---" not in out
+  assert not factory_called
+
+
+def test_cli_plan_two_open_forks_without_explainer_report_two_locations_and_skip_the_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  """Plan page with two open forks lacking details.details-layer: two FAIL lines, exit 1, no model call."""
+  doc = plan_page_html().replace(
+      '<h2><span class="n">5</span> Trade-offs</h2>',
+      f'<h2><span class="n">5</span> Trade-offs</h2>{_OPEN_FORK}{_OPEN_FORK}')
+  artifact = _write(tmp_path, doc)
+  factory_called: list = []
+
+  def factory(option, cfg):
+    factory_called.append(option.id)
+    raise AssertionError("the probe must never run when an assertion failed")
+
+  monkeypatch.setattr(artifact_check, "build_backend", factory)
+  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
+  assert _run_cli([str(artifact), "--genre", "plan", "--assertions-only"]) == 1
+  out = capsys.readouterr().out
+  fail_lines = [line for line in out.splitlines() if line.startswith("FAIL fork-explainer")]
+  assert fail_lines == [
+      "FAIL fork-explainer: fork #1 (section '5 Trade-offs') has no details.details-layer",
+      "FAIL fork-explainer: fork #2 (section '5 Trade-offs') has no details.details-layer",
   ]
   assert "--- cold read ---" not in out
   assert not factory_called

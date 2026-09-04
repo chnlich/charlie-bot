@@ -413,28 +413,48 @@ class NotifyFakeThreadManager(JudgmentShim):
     return Path("/tmp/events.jsonl")
 
 
-@pytest.mark.asyncio
-async def test_notify_reviewer_failure_triggers_retry(monkeypatch: pytest.MonkeyPatch) -> None:
-  """When a reviewer fails, _notify_completion retries with next backend."""
-  review_thread = _make_review_thread(tried_backends=["kimi-k2.5"])
-  original_thread = _make_original_thread()
+async def _run_notify_rig(
+    monkeypatch: pytest.MonkeyPatch,
+    thread: ThreadMetadata,
+    *,
+    exit_code: int,
+    spawn_result: bool,
+) -> tuple[list[dict], list[str]]:
+  """Run review.maybe_spawn_reviewer against the notify fakes; return (spawn_calls, trigger_calls).
 
-  thread_mgr = NotifyFakeThreadManager({
-      "review-thread-id": review_thread,
-      "origin-thread-id": original_thread,
-  })
+  The thread manager serves *thread* plus the origin thread when the thread carries
+  ``review_of`` — the pair the notify path re-reads.
+  """
+  thread_map: dict[str, ThreadMetadata] = {thread.id: thread}
+  if thread.review_of:
+    thread_map[thread.review_of] = _make_original_thread()
 
   spawn_calls: list[dict] = []
   trigger_calls: list[str] = []
 
-  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
-
-  monkeypatch.setattr(review, "spawn_review_worker", _make_fake_spawn_review(spawn_calls))
+  monkeypatch.setattr(review, "spawn_review_worker", _make_fake_spawn_review(spawn_calls, result=spawn_result))
   monkeypatch.setattr(review, "trigger_master", _make_fake_trigger(trigger_calls))
   monkeypatch.setattr(spawner, "read_events_summary", _fake_read_events_summary)
 
   await review.maybe_spawn_reviewer(
-      "session-id", review_thread, 1, "(events summary)", "(full summary)", thread_mgr, NotifyFakeSessionManager(), cfg)
+      "session-id",
+      thread,
+      exit_code,
+      "(events summary)",
+      "(full summary)",
+      NotifyFakeThreadManager(thread_map),
+      NotifyFakeSessionManager(),
+      _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID]),
+  )
+  return spawn_calls, trigger_calls
+
+
+@pytest.mark.asyncio
+async def test_notify_reviewer_failure_triggers_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+  """When a reviewer fails, _notify_completion retries with next backend."""
+  review_thread = _make_review_thread(tried_backends=["kimi-k2.5"])
+
+  spawn_calls, trigger_calls = await _run_notify_rig(monkeypatch, review_thread, exit_code=1, spawn_result=True)
 
   assert len(spawn_calls) == 1
   assert spawn_calls[0]["tried_backends"] == ["kimi-k2.5"]
@@ -445,24 +465,8 @@ async def test_notify_reviewer_failure_triggers_retry(monkeypatch: pytest.Monkey
 async def test_notify_reviewer_success_no_retry(monkeypatch: pytest.MonkeyPatch) -> None:
   """When a reviewer succeeds, no retry; trigger master directly."""
   review_thread = _make_review_thread(tried_backends=["kimi-k2.5"])
-  original_thread = _make_original_thread()
 
-  thread_mgr = NotifyFakeThreadManager({
-      "review-thread-id": review_thread,
-      "origin-thread-id": original_thread,
-  })
-
-  spawn_calls: list[dict] = []
-  trigger_calls: list[str] = []
-
-  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
-
-  monkeypatch.setattr(review, "spawn_review_worker", _make_fake_spawn_review(spawn_calls))
-  monkeypatch.setattr(review, "trigger_master", _make_fake_trigger(trigger_calls))
-  monkeypatch.setattr(spawner, "read_events_summary", _fake_read_events_summary)
-
-  await review.maybe_spawn_reviewer(
-      "session-id", review_thread, 0, "(events summary)", "(full summary)", thread_mgr, NotifyFakeSessionManager(), cfg)
+  spawn_calls, trigger_calls = await _run_notify_rig(monkeypatch, review_thread, exit_code=0, spawn_result=True)
 
   assert not spawn_calls
   assert len(trigger_calls) == 1
@@ -472,24 +476,8 @@ async def test_notify_reviewer_success_no_retry(monkeypatch: pytest.MonkeyPatch)
 async def test_notify_retries_exhausted_triggers_master(monkeypatch: pytest.MonkeyPatch) -> None:
   """When all retries are exhausted, trigger master instead of retrying."""
   review_thread = _make_review_thread(tried_backends=["kimi-k2.5", OPUS_BACKEND_ID, "codex-o3"])
-  original_thread = _make_original_thread()
 
-  thread_mgr = NotifyFakeThreadManager({
-      "review-thread-id": review_thread,
-      "origin-thread-id": original_thread,
-  })
-
-  spawn_calls: list[dict] = []
-  trigger_calls: list[str] = []
-
-  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
-
-  monkeypatch.setattr(review, "spawn_review_worker", _make_fake_spawn_review(spawn_calls, result=False))
-  monkeypatch.setattr(review, "trigger_master", _make_fake_trigger(trigger_calls))
-  monkeypatch.setattr(spawner, "read_events_summary", _fake_read_events_summary)
-
-  await review.maybe_spawn_reviewer(
-      "session-id", review_thread, 1, "(events summary)", "(full summary)", thread_mgr, NotifyFakeSessionManager(), cfg)
+  spawn_calls, trigger_calls = await _run_notify_rig(monkeypatch, review_thread, exit_code=1, spawn_result=False)
 
   assert len(spawn_calls) == 1
   assert len(trigger_calls) == 1
@@ -513,21 +501,7 @@ async def test_require_review_false_skips_reviewer_triggers_master(monkeypatch: 
       worktree_path=_WORKTREE_PATH,
   )
 
-  thread_mgr = NotifyFakeThreadManager({
-      "worker-thread-id": worker_thread,
-  })
-
-  spawn_calls: list[dict] = []
-  trigger_calls: list[str] = []
-
-  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
-
-  monkeypatch.setattr(review, "spawn_review_worker", _make_fake_spawn_review(spawn_calls))
-  monkeypatch.setattr(review, "trigger_master", _make_fake_trigger(trigger_calls))
-  monkeypatch.setattr(spawner, "read_events_summary", _fake_read_events_summary)
-
-  await review.maybe_spawn_reviewer(
-      "session-id", worker_thread, 0, "(events summary)", "(full summary)", thread_mgr, NotifyFakeSessionManager(), cfg)
+  spawn_calls, trigger_calls = await _run_notify_rig(monkeypatch, worker_thread, exit_code=0, spawn_result=True)
 
   # No reviewer spawned
   assert not spawn_calls
@@ -550,21 +524,7 @@ async def test_require_review_true_spawns_reviewer(monkeypatch: pytest.MonkeyPat
       worktree_path=_WORKTREE_PATH,
   )
 
-  thread_mgr = NotifyFakeThreadManager({
-      "worker-thread-id": worker_thread,
-  })
-
-  spawn_calls: list[dict] = []
-  trigger_calls: list[str] = []
-
-  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
-
-  monkeypatch.setattr(review, "spawn_review_worker", _make_fake_spawn_review(spawn_calls))
-  monkeypatch.setattr(review, "trigger_master", _make_fake_trigger(trigger_calls))
-  monkeypatch.setattr(spawner, "read_events_summary", _fake_read_events_summary)
-
-  await review.maybe_spawn_reviewer(
-      "session-id", worker_thread, 0, "(events summary)", "(full summary)", thread_mgr, NotifyFakeSessionManager(), cfg)
+  spawn_calls, trigger_calls = await _run_notify_rig(monkeypatch, worker_thread, exit_code=0, spawn_result=True)
 
   # Reviewer spawned
   assert len(spawn_calls) == 1

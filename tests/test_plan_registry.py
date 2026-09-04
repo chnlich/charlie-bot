@@ -790,7 +790,6 @@ async def test_present_rejection_lists_every_failed_assertion(tmp_path: Path) ->
 # Fork-explainer gate: present/amend enforce the open Trade-off explainer
 # ---------------------------------------------------------------------------
 
-
 _PLAN_OPEN_FORK = (
     '<div class="fork"><p class="q"><span class="fn">1</span>Scope?</p>'
     '<p class="rec"><b>Recommendation:</b> R</p><p class="trade">Tradeoff: T</p></div>')
@@ -812,8 +811,7 @@ async def test_present_rejects_open_trade_off_without_explainer_block(tmp_path: 
 
 @pytest.mark.asyncio
 async def test_present_rejects_open_trade_off_with_bodyless_explainer(tmp_path: Path) -> None:
-  bodyless = _PLAN_OPEN_FORK.replace("</div>",
-                                     '<details class="details-layer"><summary>Why</summary></details></div>')
+  bodyless = _PLAN_OPEN_FORK.replace("</div>", '<details class="details-layer"><summary>Why</summary></details></div>')
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_plan_doc_with_open_fork(bodyless))
   with pytest.raises(ValueError, match="fork-explainer.*explainer has no body"):

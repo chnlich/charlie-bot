@@ -12,11 +12,9 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from conftest import make_page_request
+from conftest import _ok_asgi_downstream, make_page_request, run_through_asgi_middleware
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from starlette.requests import Request
-from starlette.responses import Response
 
 import server
 from src.api import auth, pages
@@ -41,21 +39,6 @@ def _client() -> TestClient:
   for prefix in PREFIXES:
     app.include_router(files_api.router, prefix=prefix)
   return TestClient(app)
-
-
-async def _served(request: Request) -> Response:
-  return Response("served", status_code=200)
-
-
-def _navigation(path: str) -> Request:
-  return Request(
-      {
-          "type": "http",
-          "method": "GET",
-          "path": path,
-          "headers": [(b"accept", b"text/html")],
-          "query_string": b"",
-      })
 
 
 def test_one_handler_is_mounted_under_both_prefixes() -> None:
@@ -139,9 +122,16 @@ async def test_a_navigation_under_either_prefix_needs_no_token(
     prefix: str,
 ) -> None:
   monkeypatch.setattr(auth, "get_config", lambda: SimpleNamespace(charliebot_access_key="secret"))
-  middleware = auth.AuthMiddleware(app=None)
-  response = await middleware.dispatch(_navigation(f"{prefix}/tmp/trace.json"), _served)
-  assert response.status_code == 200
+  scope = {
+      "type": "http",
+      "method": "GET",
+      "path": f"{prefix}/tmp/trace.json",
+      "headers": [(b"accept", b"text/html")],
+      "query_string": b"",
+  }
+  sent = await run_through_asgi_middleware(auth.AuthMiddleware(app=_ok_asgi_downstream), scope)
+  start = next(m for m in sent if m["type"] == "http.response.start")
+  assert start["status"] == 200
 
 
 @pytest.mark.parametrize("prefix", PREFIXES)

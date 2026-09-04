@@ -5,12 +5,17 @@
 
 ``reply`` posts the file's text to the thread the session was summoned from,
 through the internal slack/reply endpoint, and prints the server's readback as
-one JSON line: ``posted``, ``chars``, ``chunks``, ``over_budget`` (past the
+one JSON line: ``posted``, ``text`` (what actually went out — the reply path
+publishes the file-server artifacts the text links and swaps the URLs to the
+published ones before posting), ``operator_only_note`` (one line naming the
+application-route links that stay as written and reach the operator alone, null
+when there are none), ``chars``, ``chunks``, ``over_budget`` (past the
 500-character reply budget) and ``answers`` (the summon event id the reply
 answers, or null for a round no summon started). A refusal (unread eligible
 thread messages → the 412 ``stale_thread`` payload, no Slack thread, blank
-text, Slack rejected the post) exits non-zero with a JSON error on stderr and
-persists nothing. ``ack`` marks the given thread messages (Slack ts) as read,
+text, a linked artifact gone or the publish lane unconfigured, Slack rejected
+the post) exits non-zero with a JSON error on stderr and persists nothing — no
+chunk of the reply posts. ``ack`` marks the given thread messages (Slack ts) as read,
 advancing the session's read watermark, and prints the readback JSON
 (``acked``, ``watermark_ts``); every read message's id must be passed — none
 may be skipped. The session comes from the server-written CHARLIEBOT_SESSION_ID

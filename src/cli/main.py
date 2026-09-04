@@ -7,6 +7,7 @@ Canonical invocations:
   charliebot schedule-trigger ...
   charliebot remote-launch ...
   charliebot session ...
+  charliebot publish <artifact-path>
   charliebot slack reply --file <path>
 
 The legacy ``python -m src.cli.<command>`` entrypoints remain owned by their
@@ -27,6 +28,7 @@ _COMMANDS = {
     "remote-launch": "src.cli.remote_launch",
     "gc-trash": "src.cli.gc_trash",
     "plan": "src.cli.plan",
+    "publish": "src.cli.publish",
     "memory": "src.cli.memory",
     "session": "src.cli.session",
     "slack": "src.cli.slack",

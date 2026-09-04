@@ -30,6 +30,13 @@ where it is written. Examples:
 The server answers on the alias `/files/` as well, which is the prefix links already sent carry and
 the prefix the web UI builds its own URLs with.
 
+## Publish Lane
+
+Links that reach readers beyond the operator come from `charliebot publish <artifact-path>`: the
+command copies the file into the publish directory and prints the published URL, and the Slack
+reply path rewrites the file-server URLs of an outbound reply to published ones on its own. The
+server-port links above serve the operator's own review in the browser and the chat embeds.
+
 ## Behavior
 
 - **File path**: returns the file for download (auto-detected MIME type)

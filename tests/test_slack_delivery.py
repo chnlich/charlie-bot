@@ -274,7 +274,15 @@ async def test_reply_in_a_summon_round_posts_persists_and_clears_the_eye(tmp_pat
     result = await post_reply(sid, "the answer", cfg, session_mgr)
     await asyncio.gather(*ack_tasks)
 
-  assert result == {"posted": True, "chars": 10, "chunks": 1, "over_budget": False, "answers": summon["id"]}
+  assert result == {
+      "posted": True,
+      "text": "the answer",
+      "operator_only_note": None,
+      "chars": 10,
+      "chunks": 1,
+      "over_budget": False,
+      "answers": summon["id"],
+  }
   assert client.posts == [{"channel": _CHANNEL, "text": "the answer", "thread_ts": _THREAD}]
   replies = _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
   assert len(replies) == 1
@@ -458,7 +466,15 @@ async def test_reply_binds_the_running_round_when_the_metadata_cache_holds_no_ru
   finally:
     master_cc_state._current_items.pop(sid, None)
 
-  assert result == {"posted": True, "chars": 10, "chunks": 1, "over_budget": False, "answers": summon["id"]}
+  assert result == {
+      "posted": True,
+      "text": "the answer",
+      "operator_only_note": None,
+      "chars": 10,
+      "chunks": 1,
+      "over_budget": False,
+      "answers": summon["id"],
+  }
   reply = _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)[0]
   assert reply["slack_reply"] == {"answers": summon["id"], "chars": 10, "chunks": 1}
   assert client.remove_calls == [{"channel": _CHANNEL, "name": "eyes", "ts": _THREAD}]
@@ -569,6 +585,123 @@ async def test_reply_binding_tracks_the_running_round_under_metadata_churn(tmp_p
 
 
 # ---------------------------------------------------------------------------
+# Reply: the publish-lane rewrite before any chunk posts
+# ---------------------------------------------------------------------------
+
+_PUB_BASE = "https://pub.example.test/charliebot_pub"
+_FILE_HOST = "https://agent.example.test:18498"
+
+
+def _pub_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """The slack rig's cfg with the publish lane deployed under tmp_path."""
+  publish_dir = tmp_path / "publish"
+  publish_dir.mkdir(parents=True, exist_ok=True)
+  return build_slack_cfg(tmp_path).model_copy(update={"publish_dir": publish_dir, "public_base_url": _PUB_BASE})
+
+
+def _rig_with_publish_lane(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, _FakeSlackClient]:
+  """The slack rig with the publish lane deployed: the rewrite tests' shared fixture."""
+  cfg = _pub_cfg(tmp_path)
+  return cfg, SessionManager(cfg), _FakeSlackClient()
+
+
+def _write_artifact(tmp_path: Path, name: str, body: str) -> Path:
+  path = tmp_path / "artifacts" / name
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_text(body, encoding="utf-8")
+  return path
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ["files", "absolute_filepath"])
+async def test_reply_rewrites_a_file_server_url_to_the_published_one_and_keeps_query_and_fragment(
+    tmp_path: Path, prefix: str) -> None:
+  cfg, session_mgr, client = _rig_with_publish_lane(tmp_path)
+  artifact = _write_artifact(tmp_path, "sitrep.html", "<p>sitrep body</p>")
+  sid = await _slack_session(session_mgr)
+
+  with _listener_seam(client):
+    result = await post_reply(sid, f"details: {_FILE_HOST}/{prefix}/{artifact}?v=2#summary thanks", cfg, session_mgr)
+
+  published_url = f"{_PUB_BASE}/sitrep.html?v=2#summary"
+  assert client.posts == [{"channel": _CHANNEL, "text": f"details: {published_url} thanks", "thread_ts": _THREAD}]
+  assert result["text"] == f"details: {published_url} thanks"
+  assert result["operator_only_note"] is None
+  published = cfg.publish_dir / "sitrep.html"
+  assert published.read_text(encoding="utf-8") == "<p>sitrep body</p>"
+  reply = _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)[0]
+  assert reply["content"] == f"details: {published_url} thanks"
+
+
+@pytest.mark.asyncio
+async def test_reply_refuses_as_a_whole_when_the_linked_file_is_gone(tmp_path: Path) -> None:
+  cfg, session_mgr, client = _rig_with_publish_lane(tmp_path)
+  gone = tmp_path / "artifacts" / "gone.html"
+  sid = await _slack_session(session_mgr)
+
+  with _listener_seam(client), pytest.raises(SlackReplyError) as excinfo:
+    await post_reply(sid, f"details: {_FILE_HOST}/files/{gone}", cfg, session_mgr)
+
+  assert excinfo.value.status == 422
+  assert f"{_FILE_HOST}/files/{gone}" in excinfo.value.detail
+  assert not client.posts
+  assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
+  assert not any(cfg.publish_dir.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_reply_refuses_as_a_whole_when_the_publish_lane_is_unconfigured(tmp_path: Path) -> None:
+  cfg, session_mgr, client = _rig(tmp_path)  # no publish_dir, no public_base_url
+  artifact = _write_artifact(tmp_path, "sitrep.html", "<p>sitrep body</p>")
+  sid = await _slack_session(session_mgr)
+
+  with _listener_seam(client), pytest.raises(SlackReplyError) as excinfo:
+    await post_reply(sid, f"details: {_FILE_HOST}/files/{artifact}", cfg, session_mgr)
+
+  assert excinfo.value.status == 422
+  assert "publish_dir" in excinfo.value.detail
+  assert not client.posts
+  assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
+
+
+@pytest.mark.asyncio
+async def test_reply_leaves_application_route_urls_written_and_names_them_for_the_operator(tmp_path: Path) -> None:
+  cfg, session_mgr, client = _rig_with_publish_lane(tmp_path)
+  sid = await _slack_session(session_mgr)
+  text = (
+      f"diff: {_FILE_HOST}/diff?repo=alpha trace: {_FILE_HOST}/perfetto base: {_FILE_HOST} "
+      f"thread: https://fake.slack.test/archives/C_TEST/p1")
+
+  with _listener_seam(client):
+    result = await post_reply(sid, text, cfg, session_mgr)
+
+  assert client.posts == [{"channel": _CHANNEL, "text": text, "thread_ts": _THREAD}]
+  assert result["text"] == text
+  note = result["operator_only_note"]
+  assert f"{_FILE_HOST}/diff?repo=alpha" in note
+  assert f"{_FILE_HOST}/perfetto" in note
+  assert f"{_FILE_HOST}" in note
+  assert "https://fake.slack.test/archives/C_TEST/p1" not in note
+  assert "operator alone" in note
+
+
+@pytest.mark.asyncio
+async def test_reply_with_a_file_server_url_on_another_port_stays_as_written(tmp_path: Path) -> None:
+  """Only this server's port names the file service; another service's URL is nobody's rewrite target."""
+  cfg, session_mgr, client = _rig_with_publish_lane(tmp_path)
+  artifact = _write_artifact(tmp_path, "sitrep.html", "<p>sitrep body</p>")
+  sid = await _slack_session(session_mgr)
+  text = f"details: https://other.example.test:9999/files/{artifact}"
+
+  with _listener_seam(client):
+    result = await post_reply(sid, text, cfg, session_mgr)
+
+  assert client.posts[0]["text"] == text
+  assert result["operator_only_note"] is None
+  assert not any(cfg.publish_dir.iterdir())
+
+
+# ---------------------------------------------------------------------------
 # Reply: the internal route
 # ---------------------------------------------------------------------------
 
@@ -614,7 +747,15 @@ def test_route_returns_the_readback_json() -> None:
     resp = http.post("/api/internal/slack/reply", json={"session_id": "s1", "text": "hi"})
 
   assert resp.status_code == 200
-  assert resp.json() == {"posted": True, "chars": 2, "chunks": 1, "over_budget": False, "answers": None}
+  assert resp.json() == {
+      "posted": True,
+      "text": "hi",
+      "operator_only_note": None,
+      "chars": 2,
+      "chunks": 1,
+      "over_budget": False,
+      "answers": None,
+  }
   assert [p["text"] for p in client.posts] == ["hi"]
   assert [ev["type"] for _, ev in session_mgr.persisted] == [ET.SLACK_REPLY]
 

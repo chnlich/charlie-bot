@@ -28,6 +28,12 @@ under an unstable walk order: cross-file dedupe arbitrates verbatim replays, whi
 identical token values, so first-wins cannot move a sum. The opencode db stays outside that
 corpus memo: its WAL sidecar moves under plain serve traffic, so its entry always round-trips
 the persisted document, and the miss path is incremental per message row (see row memo below).
+One more memo sits above both: the whole-tally memo, keyed on the walk signature plus the
+opencode db signature, holds the built rows and notes of the last collect. A hit serves the
+tally without loading the persisted document, replaying a record, or opening the db, because
+every input to those steps signs into the key. The walk signature itself walks with string
+paths and raw os.stat: Path construction per file measures over twice the stat syscall's cost
+on this corpus, and the signature pays it on every collect, hit or miss.
 Vocabulary (opencode row memo):
   key         ``(message id, time_updated)`` of one row in the db's message table. opencode
               (drizzle ORM, ``$onUpdate(() => Date.now())`` on the column) bumps time_updated
@@ -67,6 +73,7 @@ import re
 import sqlite3
 import time
 from collections import defaultdict
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
@@ -273,7 +280,17 @@ class TallyCache:
     self._next[source][str(path)] = entry
 
 
-def _iter_jsonl(root: Path, t: _Tally, source: str, label: str):
+def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str) -> Callable[[OSError], None]:
+  """The os.walk onerror hook turning an unreadable directory into a per-account note."""
+
+  def _onerror(exc: OSError) -> None:
+    if not isinstance(exc, FileNotFoundError):
+      t.notes.append(f"{source}: unreadable {label}/{root_name}: {exc}")
+
+  return _onerror
+
+
+def _iter_jsonl(root: Path, t: _Tally, source: str, label: str) -> Iterator[Path]:
   """Yield ``*.jsonl`` under *root*, recording a note when a directory is unreadable.
 
   ``Path.rglob`` swallows ``PermissionError`` while walking (shell-glob semantics), so an
@@ -281,15 +298,20 @@ def _iter_jsonl(root: Path, t: _Tally, source: str, label: str):
   gets the error instead, which becomes a per-account note; a missing directory is not an error
   here (``discover_homes`` already filters those out for the real on-disk layout).
   """
-
-  def _onerror(exc: OSError) -> None:
-    if not isinstance(exc, FileNotFoundError):
-      t.notes.append(f"{source}: unreadable {label}/{root.name}: {exc}")
-
-  for dirpath, _, filenames in os.walk(root, onerror=_onerror):
+  for dirpath, _, filenames in os.walk(root, onerror=_walk_error_hook(t, source, label, root.name)):
     for name in filenames:
       if name.endswith(".jsonl"):
         yield Path(dirpath) / name
+
+
+def _iter_jsonl_paths(root: Path, t: _Tally, source: str, label: str) -> Iterator[str]:
+  """String-path sibling of ``_iter_jsonl`` (same walk, same notes) for callers that never
+  open the file, like the signature walk below: Path construction per file measures over
+  twice the stat syscall's cost on this corpus."""
+  for dirpath, _, filenames in os.walk(root, onerror=_walk_error_hook(t, source, label, root.name)):
+    for name in filenames:
+      if name.endswith(".jsonl"):
+        yield os.path.join(dirpath, name)
 
 
 def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path]) -> tuple:
@@ -301,12 +323,12 @@ def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path
     entries = []
     for label, home in homes.items():
       per_home = []
-      for path in _iter_jsonl(home / sub, probe, source, label):
+      for path in _iter_jsonl_paths(home / sub, probe, source, label):
         try:
-          st = path.stat()
-          per_home.append((str(path), st.st_mtime_ns, st.st_size))
+          st = os.stat(path)
+          per_home.append((path, st.st_mtime_ns, st.st_size))
         except OSError as exc:
-          per_home.append((str(path), None, repr(exc)))
+          per_home.append((path, None, repr(exc)))
       entries.append((label, tuple(sorted(per_home))))
     home_pairs = tuple(sorted((label, str(path)) for label, path in homes.items()))
     sig.append((source, home_pairs, tuple(entries), tuple(probe.notes)))
@@ -316,6 +338,12 @@ def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path
 # The aggregate memo pair (walk signature, partial); see the module docstring.
 _aggregate_memo: tuple[tuple, _SourceAggregate] | None = None
 
+# The whole-tally memo: ((walk signature, opencode db signature), rows, notes) of the last
+# collect; see the module docstring for the key's contract. The db half of the key is the
+# signature the rows were read at (collect_opencode's return), not a pre-walk lookup value.
+# Served tallies copy out of the stored containers via ``_materialize_rows``.
+_tally_memo: tuple[tuple, list[dict], list[str]] | None = None
+
 # Per-row memo for the opencode message table: db path -> {message id: (time_updated, record
 # or None)}; see the module docstring for the key's contract.
 _opencode_row_memos: dict[str, dict[str, tuple[int, list | None]]] = {}
@@ -323,8 +351,9 @@ _opencode_row_memos: dict[str, dict[str, tuple[int, list | None]]] = {}
 
 def _reset_aggregate_memo() -> None:
   """Drop the collection's process-wide memos (test isolation)."""
-  global _aggregate_memo
+  global _aggregate_memo, _tally_memo
   _aggregate_memo = None
+  _tally_memo = None
   _opencode_row_memos.clear()
 
 
@@ -575,10 +604,13 @@ def _opencode_db_signature(db: Path) -> list | None:
   return [st.st_mtime_ns, st.st_size, wal_sig]
 
 
-def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> None:
+def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> list | None:
+  """Tally the opencode db. Returns the signature the rows were read at — None when no
+  signature applies (absent, unstatable, or unreadable db), so the whole-tally memo never
+  signs rows it cannot key."""
   if not db.exists():
     t.notes.append("opencode: db absent")
-    return
+    return None
   sig = _opencode_db_signature(db)
   entry = cache.lookup_sig("opencode", str(db), sig) if cache is not None and sig is not None else None
   if entry is None:
@@ -594,7 +626,7 @@ def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> None:
         con.close()
     except sqlite3.Error as exc:
       t.notes.append(f"opencode: unreadable db: {exc}")
-      return
+      return None
     t.scanned_bytes += nbytes
     records = [rec for _, rec in memo.values() if rec is not None]
     if cache is not None and sig is not None:
@@ -612,6 +644,7 @@ def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> None:
         cache_read=cache_read,
         output=output)
   t.notes.append(f"opencode: {len(records):,} assistant messages with token counts")
+  return sig
 
 
 def _scan_opencode_rows(con: sqlite3.Connection, memo: dict[str, tuple[int, list | None]]) -> int:
@@ -673,8 +706,14 @@ def _build(t: _Tally) -> list[dict]:
             "last": (hi or "")[:10],
             "accounts": acct_rows,
         })
-  rows.sort(key=lambda r: -r["total"])
+    rows.sort(key=lambda r: -r["total"])
   return rows
+
+
+def _materialize_rows(rows: list[dict]) -> list[ModelRow]:
+  """One ModelRow set per collect from the built row dicts; the accounts list copies, so a
+  served tally never shares a mutable container with the whole-tally memo's stored rows."""
+  return [ModelRow(**{**row, "accounts": list(row["accounts"])}) for row in rows]
 
 
 def collect_token_usage(
@@ -691,7 +730,6 @@ def collect_token_usage(
   described at module level. None collects cacheless.
   """
   start = time.perf_counter()
-  t = _Tally()
   if claude_homes is None or codex_homes is None:
     discovered_claude, discovered_codex = discover_homes(DEFAULT_CLAUDE_DIR, DEFAULT_CODEX_HOME)
     claude_homes = claude_homes if claude_homes is not None else discovered_claude
@@ -699,8 +737,19 @@ def collect_token_usage(
   if opencode_db is None:
     opencode_db = DEFAULT_OPENCODE_DB
 
-  global _aggregate_memo
+  global _aggregate_memo, _tally_memo
   signature = _corpus_signature(claude_homes, codex_homes)
+  lookup_sig = _opencode_db_signature(opencode_db)
+  tally_memo = _tally_memo
+  if lookup_sig is not None and tally_memo is not None and tally_memo[0] == (signature, lookup_sig):
+    _, rows, notes = tally_memo
+    return TokenTally(
+        rows=_materialize_rows(rows),
+        notes=list(notes),
+        elapsed_s=time.perf_counter() - start,
+        scanned_bytes=0,
+    )
+  t = _Tally()
   cache = TallyCache.load(cache_path, t.notes) if cache_path is not None else None
   memo = _aggregate_memo
   fresh_sources = memo is None or memo[0] != signature
@@ -711,7 +760,7 @@ def collect_token_usage(
     _aggregate_memo = (signature, _SourceAggregate.snapshot(t, notes_from))
   else:
     memo[1].apply(t)
-  collect_opencode(t, opencode_db, cache)
+  read_sig = collect_opencode(t, opencode_db, cache)
   # Save only on the source-walk path: its lookups refreshed the next document. A memo hit's
   # only fresh entry is the opencode db's, whose WAL sig the next load recomputes anyway.
   if cache is not None and fresh_sources:
@@ -720,9 +769,11 @@ def collect_token_usage(
     except OSError as exc:
       t.notes.append(f"Tally cache: save failed: {exc}")
   rows = _build(t)
+  if read_sig is not None:
+    _tally_memo = ((signature, read_sig), rows, list(t.notes))
   elapsed = time.perf_counter() - start
   return TokenTally(
-      rows=[ModelRow(**row) for row in rows],
+      rows=_materialize_rows(rows),
       notes=t.notes,
       elapsed_s=elapsed,
       scanned_bytes=t.scanned_bytes,

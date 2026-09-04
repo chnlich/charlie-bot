@@ -37,6 +37,8 @@ Known-alive symbols:
   `_reset_config_caches` (`tests/test_charliebot_home.py`), `_clear_once_keys`
   (`tests/test_follow_silence_recheck.py`), `_reset_token_usage_single_flight` (`tests/test_pages.py`),
   `_worktree_paths` (`tests/test_reviewer_model_preference.py`),
+  `_fresh_search_read_failure_registry` (`tests/test_session_search_content.py`),
+  `_reset_declared_window_warnings` (`tests/test_session_usage.py`),
   `_clean_sidebar_state` (`tests/test_sidebar_state_snapshot.py`),
   `_clear_events_cache` (`tests/test_thread_worker_events.py`),
   `_clear_tolerant_read_memo` (`tests/test_plans_tolerant_memo.py`),

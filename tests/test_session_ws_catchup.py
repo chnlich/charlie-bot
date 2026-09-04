@@ -277,6 +277,6 @@ async def test_replay_stops_at_first_send_failure_with_match_count() -> None:
   total = len(_catchup_frames(events, 0))
   # 1 frame landed, the second send failed, the remaining total - 2 frames
   # were never attempted.
-  assert 2 <= total
+  assert total >= 2
   assert len(ws.sent) == 1
   assert sent == 1

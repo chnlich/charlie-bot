@@ -1,12 +1,13 @@
 """NDJSON (newline-delimited JSON) file utilities."""
 
+import asyncio
 import json
+import os
 import threading
 from collections import OrderedDict
 from pathlib import Path
 from typing import BinaryIO
 
-import aiofiles
 import numpy as np
 import structlog
 
@@ -256,8 +257,25 @@ def parse_ndjson_range(path: Path, start: int, end: int) -> tuple[list[dict], bo
   return events, start > 0
 
 
+def _append_ndjson_sync(path: Path, line: str) -> None:
+  """One open(O_APPEND)+write+close per append.
+
+  The handle is opened per call on purpose: O_APPEND re-resolves the path, so
+  an append after an atomic archive rewrite (or a recreate) lands on the new
+  file, never behind a stale handle pointing at a swapped-out inode. The loop
+  keeps the io stack's write-all contract: a short write keeps going instead
+  of publishing a torn line.
+  """
+  view = memoryview(line.encode("utf-8"))
+  fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+  try:
+    while view:
+      view = view[os.write(fd, view):]
+  finally:
+    os.close(fd)
+
+
 async def append_ndjson(path: Path, data: dict) -> None:
   """Async-append a single JSON line to an NDJSON file."""
   path.parent.mkdir(parents=True, exist_ok=True)
-  async with aiofiles.open(path, "a", encoding="utf-8") as f:
-    await f.write(json.dumps(data) + "\n")
+  await asyncio.to_thread(_append_ndjson_sync, path, json.dumps(data) + "\n")

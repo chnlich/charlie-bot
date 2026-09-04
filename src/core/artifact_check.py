@@ -46,6 +46,11 @@ GOAL_WEIGHTED_BUDGET = 240
 
 _GOAL_SECTION_RE = re.compile(r"Problem / Goal</h2>(.*?)</section>", re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
+# Revision marks ride outside the goal budget: the plan template clears them at the next revision,
+# and the page-height probe hides these same two classes before measuring. Each is dropped whole,
+# inline tags and content included; the two elements do not nest in practice.
+_REVNOTE_RE = re.compile(r'<div\b[^>]*\bclass="[^"]*\brevnote\b[^"]*"[^>]*>.*?</div>', re.DOTALL)
+_REVBADGE_RE = re.compile(r'<span\b[^>]*\bclass="[^"]*\brevbadge\b[^"]*"[^>]*>.*?</span>', re.DOTALL)
 # CJK ideographs, CJK punctuation, and fullwidth forms count double, so the same
 # information density spends the same budget in Chinese and English.
 _CJK_RANGES = ((0x3000, 0x303F), (0x4E00, 0x9FFF), (0xFF00, 0xFFEF))
@@ -60,7 +65,10 @@ def _measure_goal_weighted(artifact: Path) -> int:
   section = _GOAL_SECTION_RE.search(artifact.read_text(encoding="utf-8"))
   if section is None:
     raise ValueError(f"artifact {artifact.name!r} has no 'Problem / Goal' section")
-  text = html.unescape(_TAG_RE.sub("", section.group(1)))
+  body = section.group(1)
+  for mark in (_REVNOTE_RE, _REVBADGE_RE):
+    body = mark.sub("", body)
+  text = html.unescape(_TAG_RE.sub("", body))
   return _weighted_goal_length(re.sub(r"\s+", " ", text).strip())
 
 

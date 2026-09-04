@@ -20,31 +20,31 @@ from unittest.mock import AsyncMock
 import pytest
 import yaml
 from conftest import (
-  OPUS_BACKEND_ID,
-  OPUS_BACKEND_OPTION,
-  REVIEW_TRIGGER_MASTER_PATCH_TARGET,
-  SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
-  SCHEDULER_GET_CONFIG_PATCH_TARGET,
-  SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
-  _noop,
-  build_scheduler_cfg,
-  close_create_logged_task,
-  read_chat_events,
+    OPUS_BACKEND_ID,
+    OPUS_BACKEND_OPTION,
+    REVIEW_TRIGGER_MASTER_PATCH_TARGET,
+    SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
+    SCHEDULER_GET_CONFIG_PATCH_TARGET,
+    SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
+    _noop,
+    build_scheduler_cfg,
+    close_create_logged_task,
+    read_chat_events,
 )
 
 from src.core import event_types as ET
 from src.core import task_chain
 from src.core.config import (
-  ScheduledTaskConfig,
-  StepConfig,
-  _load_cron_file,
+    ScheduledTaskConfig,
+    StepConfig,
+    _load_cron_file,
 )
 from src.core.models import (
-  CreateSessionRequest,
-  SessionMetadata,
-  SpawnRequest,
-  TaskType,
-  ThreadMetadata,
+    CreateSessionRequest,
+    SessionMetadata,
+    SpawnRequest,
+    TaskType,
+    ThreadMetadata,
 )
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
@@ -55,11 +55,12 @@ REVIEWER_BODY = "Review the memory diff.\n"
 SELECTOR_RESULT = "revise entries/workflow/focus.md plus three proof lines"
 REVIEWER_RESULT = "report written to the session artifacts"
 
-
 # --- (a) loader --------------------------------------------------------------
 
 
-def _seed_steps_task(cron_dir: Path, tmp_path: Path, extra_body: dict | None = None) -> tuple[Path, Path, Path, str, str]:
+def _seed_steps_task(cron_dir: Path,
+                     tmp_path: Path,
+                     extra_body: dict | None = None) -> tuple[Path, Path, Path, str, str]:
   """Write a two-step 'chained' job; returns (yaml, selector_md, reviewer_md, bodies).
 
   The host file carries the paths to its prompt sources and the pointed files
@@ -74,11 +75,20 @@ def _seed_steps_task(cron_dir: Path, tmp_path: Path, extra_body: dict | None = N
   rev_body = "Review the diff.\n"
   rev_path.write_text(rev_body, encoding="utf-8")
   body: dict[str, Any] = {
-      "cron": "0 3 * * *",
-      "steps": [
-          {"name": "selector", "prompt_file": str(sel_path)},
-          {"name": "reviewer", "prompt_file": str(rev_path), "backend": "codex-o3"},
-      ],
+      "cron":
+          "0 3 * * *",
+      "steps":
+          [
+              {
+                  "name": "selector",
+                  "prompt_file": str(sel_path)
+              },
+              {
+                  "name": "reviewer",
+                  "prompt_file": str(rev_path),
+                  "backend": "codex-o3"
+              },
+          ],
   }
   body.update(extra_body or {})
   yaml_path = cron_dir / "chained.yaml"
@@ -132,10 +142,10 @@ def test_load_cron_file_rejects_steps_with_loop(tmp_path: Path) -> None:
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True)
   error = _load_error(
-      cron_dir,
-      tmp_path,
-      {"loop": {
-          "backlog": "backlog/backlog.yaml", "role": "agent", "scope_files": ["src/"]
+      cron_dir, tmp_path, {"loop": {
+          "backlog": "backlog/backlog.yaml",
+          "role": "agent",
+          "scope_files": ["src/"]
       }})
   assert "exactly one of" in error and "'loop'" in error and "'steps'" in error
 
@@ -155,10 +165,17 @@ def test_load_cron_file_rejects_duplicate_step_names(tmp_path: Path) -> None:
   sel_path.parent.mkdir(parents=True, exist_ok=True)
   sel_path.write_text("Select.\n", encoding="utf-8")
   body = {
-      "cron": "0 3 * * *",
+      "cron":
+          "0 3 * * *",
       "steps": [
-          {"name": "selector", "prompt_file": str(sel_path)},
-          {"name": "selector", "prompt_file": str(sel_path)},
+          {
+              "name": "selector",
+              "prompt_file": str(sel_path)
+          },
+          {
+              "name": "selector",
+              "prompt_file": str(sel_path)
+          },
       ],
   }
   yaml_path = cron_dir / "chained.yaml"
@@ -184,9 +201,10 @@ def test_load_cron_file_rejects_step_with_inline_prompt(tmp_path: Path) -> None:
   cfg = build_scheduler_cfg(tmp_path)
   body = {
       "cron": "0 3 * * *",
-      "steps": [
-          {"name": "selector", "prompt": "inline body"},
-      ],
+      "steps": [{
+          "name": "selector",
+          "prompt": "inline body"
+      },],
   }
   yaml_path = cron_dir / "chained.yaml"
   yaml_path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
@@ -202,9 +220,9 @@ def test_load_cron_file_rejects_step_without_prompt_source(tmp_path: Path) -> No
   cfg = build_scheduler_cfg(tmp_path)
   body = {
       "cron": "0 3 * * *",
-      "steps": [
-          {"name": "selector"},
-      ],
+      "steps": [{
+          "name": "selector"
+      },],
   }
   yaml_path = cron_dir / "chained.yaml"
   yaml_path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
@@ -223,11 +241,7 @@ def _steps_task_cfg() -> ScheduledTaskConfig:
       backend=OPUS_BACKEND_ID,
       steps=[
           StepConfig(name="selector", prompt=SELECTOR_BODY, prompt_file="prompts/selector.md"),
-          StepConfig(
-              name="reviewer",
-              prompt=REVIEWER_BODY,
-              prompt_file="prompts/reviewer.md",
-              backend="codex-o3"),
+          StepConfig(name="reviewer", prompt=REVIEWER_BODY, prompt_file="prompts/reviewer.md", backend="codex-o3"),
       ],
   )
 
@@ -253,8 +267,7 @@ def _patch_chain_pipes(monkeypatch: pytest.MonkeyPatch, spawns: list[dict[str, A
 
 async def _make_chain_session(cfg: Any, session_mgr: SessionManager) -> SessionMetadata:
   return await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: chained", scheduled_task="chained"),
-      backend=OPUS_BACKEND_ID)
+      CreateSessionRequest(name="Scheduled: chained", scheduled_task="chained"), backend=OPUS_BACKEND_ID)
 
 
 async def _make_chain_thread(
@@ -276,9 +289,7 @@ def _write_result_events(cfg: Any, session_id: str, thread_id: str, result_text:
   """Stage a thread events log whose last RESULT event carries result_text."""
   events_path = cfg.sessions_dir / session_id / "threads" / thread_id / "data" / "events.jsonl"
   events_path.parent.mkdir(parents=True, exist_ok=True)
-  events_path.write_text(
-      json.dumps({"type": ET.RESULT, "result": result_text}) + "\n",
-      encoding="utf-8")
+  events_path.write_text(json.dumps({"type": ET.RESULT, "result": result_text}) + "\n", encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -308,8 +319,7 @@ async def test_fire_spawns_first_step_thread(tmp_path: Path, monkeypatch: pytest
   assert request.prompt_override == SELECTOR_BODY
   assert request.task_type == TaskType.IMPLEMENT
   delegated = [
-      e for e in read_chat_events(cfg.charliebot_home, result["session_id"])
-      if e.get("type") == ET.TASK_DELEGATED
+      e for e in read_chat_events(cfg.charliebot_home, result["session_id"]) if e.get("type") == ET.TASK_DELEGATED
   ]
   assert len(delegated) == 1
   assert delegated[0]["task"] == "chained"
@@ -416,9 +426,21 @@ async def test_last_step_completion_wakes_master_once_with_block_per_step(
   # The persisted wake state (terminal summary followed by master output) makes
   # a rerun of the completion handler converge: no spawn, no second wake.
   await session_mgr.persist_and_broadcast(
-      session.id, {"type": ET.WORKER_SUMMARY, "thread_id": step1.id, "status": "completed"})
+      session.id, {
+          "type": ET.WORKER_SUMMARY,
+          "thread_id": step1.id,
+          "status": "completed"
+      })
   await session_mgr.persist_and_broadcast(
-      session.id, {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": "done"}]}})
+      session.id, {
+          "type": ET.ASSISTANT,
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "done"
+              }]
+          }
+      })
   again = await task_chain.handle_step_completion(
       session.id, step1, 0, "(events summary)", "(full summary)", thread_mgr, session_mgr, cfg)
   assert again is True

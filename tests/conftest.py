@@ -807,6 +807,35 @@ def write_plans(cfg: CharlieBotConfig, session_id: str, data: dict) -> Path:
   return plans_path
 
 
+def plan_version_v1(file: str = "artifacts/plan_01.html") -> dict:
+  """One plan-registry version in the current schema: v1, initial trigger, no base, fixed timestamp."""
+  return {
+      "v": 1,
+      "file": file,
+      "created_at": "2026-07-20T00:00:00+00:00",
+      "trigger": "initial",
+      "base": None,
+  }
+
+
+def plan_doc(
+    plan_id: int = 1,
+    versions: list[dict] | None = None,
+    *,
+    title: str = "Plan",
+    takeoff: dict | None = None,
+    closed: dict | None = None,
+) -> dict:
+  """One plan-registry document wrapping versions (default: one plan_version_v1) in the registry schema."""
+  return {
+      "id": plan_id,
+      "title": title,
+      "versions": versions if versions is not None else [plan_version_v1()],
+      "takeoff": takeoff,
+      "closed": closed,
+  }
+
+
 def write_trigger(path: Path, trigger: models.PendingTrigger) -> None:
   """Write trigger as a pending-trigger JSON file at path, creating parent dirs."""
   path.parent.mkdir(parents=True, exist_ok=True)

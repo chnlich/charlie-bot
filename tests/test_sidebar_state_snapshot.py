@@ -17,6 +17,7 @@ import pytest
 from conftest import (
     append_events,
     make_home_session,
+    plan_doc,
     write_plans,
     write_thread_meta,
     write_trigger,
@@ -221,28 +222,7 @@ async def test_first_and_forced_poll_match_direct_probing(tmp_path: Path) -> Non
       cfg.sessions_dir / busy.id / "triggers" / "pending.json",
       PendingTrigger(id="pending", session_id=busy.id, fire_at=now + timedelta(minutes=3), message="wake"),
   )
-  write_plans(
-      cfg, busy.id, {
-          "plans":
-              [
-                  {
-                      "id": 1,
-                      "title": "Plan",
-                      "versions":
-                          [
-                              {
-                                  "v": 1,
-                                  "file": "artifacts/plan_01.html",
-                                  "created_at": "2026-07-20T00:00:00+00:00",
-                                  "trigger": "initial",
-                                  "base": None,
-                              }
-                          ],
-                      "takeoff": None,
-                      "closed": None,
-                  }
-              ]
-      })
+  write_plans(cfg, busy.id, {"plans": [plan_doc()]})
   (cfg.sessions_dir / busy.id / "artifacts").mkdir(parents=True, exist_ok=True)
   (cfg.sessions_dir / busy.id / "artifacts" / "plan_01.html").write_text("<html></html>", encoding="utf-8")
   busy_meta = await mgr.get_session(busy.id)

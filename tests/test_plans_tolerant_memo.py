@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import count_path_read_text
+from conftest import count_path_read_text, plan_doc, plan_version_v1
 
 import src.core.plans as plans_module
 from src.core.plans import read_plans_tolerant
@@ -19,24 +19,7 @@ def _clear_tolerant_read_memo():
 
 
 def _write_registry(path: Path, count: int) -> None:
-  plans = [
-      {
-          "id": i,
-          "title": f"plan {i}",
-          "versions":
-              [
-                  {
-                      "v": 1,
-                      "file": f"plan_{i}_v1.html",
-                      "created_at": "2026-09-01T00:00:00+00:00",
-                      "trigger": "initial",
-                      "base": None,
-                  }
-              ],
-          "takeoff": None,
-          "closed": None,
-      } for i in range(count)
-  ]
+  plans = [plan_doc(i, [plan_version_v1(f"plan_{i}_v1.html")], title=f"plan {i}") for i in range(count)]
   path.write_text(json.dumps({"plans": plans}), encoding="utf-8")
 
 

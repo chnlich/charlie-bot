@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from conftest import make_plan_setup as _setup
-from conftest import plan_page_html
+from conftest import plan_doc, plan_page_html
 from conftest import write_plan_artifact as _write_artifact
 from conftest import write_stub_chrome as _write_stub_chrome
 
@@ -19,25 +19,6 @@ from src.core.plans import (
 # ---------------------------------------------------------------------------
 # Derived-state truth table (pure function of closed, takeoff)
 # ---------------------------------------------------------------------------
-
-
-def _plan(closed=None, takeoff=None) -> dict:
-  return {
-      "id": 1,
-      "title": "P",
-      "versions":
-          [
-              {
-                  "v": 1,
-                  "file": "artifacts/plan_01.html",
-                  "created_at": "2026-07-20T00:00:00+00:00",
-                  "trigger": "initial",
-                  "base": None,
-              }
-          ],
-      "takeoff": takeoff,
-      "closed": closed,
-  }
 
 
 @pytest.mark.parametrize(
@@ -71,12 +52,12 @@ def _plan(closed=None, takeoff=None) -> dict:
     ],
 )
 def test_derive_state_str_truth_table(closed, takeoff, expected) -> None:
-  assert derive_state_str(_plan(closed=closed, takeoff=takeoff)) == expected
+  assert derive_state_str(plan_doc(closed=closed, takeoff=takeoff)) == expected
 
 
 def test_derive_state_str_unknown_closed_as_raises() -> None:
   with pytest.raises(ValueError, match=r"unknown closed\.as"):
-    derive_state_str(_plan(closed={"as": "weird", "at": "x"}))
+    derive_state_str(plan_doc(closed={"as": "weird", "at": "x"}))
 
 
 def test_derive_state_str_empty_versions_raises() -> None:
@@ -450,34 +431,7 @@ def test_derived_state_enum_reserves_zero_unknown() -> None:
 
 def _good_plus_bad_plans_payload() -> dict:
   """One loadable plan (id 1, one initial version) and one that fails per-plan validation (id 2, empty versions)."""
-  return {
-      "plans":
-          [
-              {
-                  "id": 1,
-                  "title": "Good",
-                  "versions":
-                      [
-                          {
-                              "v": 1,
-                              "file": "artifacts/plan_01.html",
-                              "created_at": "2026-07-20T00:00:00+00:00",
-                              "trigger": "initial",
-                              "base": None,
-                          }
-                      ],
-                  "takeoff": None,
-                  "closed": None,
-              },
-              {
-                  "id": 2,
-                  "title": "Bad",
-                  "versions": [],
-                  "takeoff": None,
-                  "closed": None,
-              },
-          ]
-  }
+  return {"plans": [plan_doc(title="Good"), plan_doc(2, [], title="Bad")]}
 
 
 def test_read_plans_tolerant_missing_file(tmp_path: Path) -> None:

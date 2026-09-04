@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — low-util Move 2: would-kill → 直接 cancel（执行端独立）</title>
+<style>
+  :root{
+    --bg:#f3f5f7; --panel:#ffffff; --panel2:#eef1f5; --bd:#d9dfe6;
+    --tx:#1b2430; --mut:#5b6774; --acc:#1163c0; --grn:#187f37;
+    --amb:#9a6700; --red:#cf222e; --vio:#6a3fc0;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:24px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:21px;margin:0 0 4px;letter-spacing:-.2px}
+  .sub{color:var(--mut);margin:0 0 18px;font-size:13px}
+  .status{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.6px;background:var(--grn);color:#ffffff;border-radius:5px;padding:2px 7px;vertical-align:middle;margin-left:8px}
+  h2{font-size:15px;margin:26px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:8px}
+  h2 .n{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--acc);color:#ffffff;font-size:12px;font-weight:700;align-items:center;justify-content:center}
+  h2 .nb{background:var(--vio)}
+  h3{font-size:13.5px;margin:16px 0 8px;color:var(--tx)}
+  h3 .sn{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:700;color:#ffffff;background:var(--vio);border-radius:5px;padding:1px 7px;margin-right:7px;vertical-align:baseline}
+  h3 .sn.read{background:var(--grn)}
+  h3 .layer{font-size:11px;font-weight:600;color:var(--mut);margin-left:7px}
+  p{margin:7px 0}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+  .mtag{font-size:11.5px;font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:3px 9px;color:var(--tx)}
+  .plan-section{margin:0 0 18px}
+  ul,ol{margin:6px 0 0;padding-left:18px}
+  li{margin:3px 0}
+  li .m,.muted{color:var(--mut)}
+  .src{font-size:11px;color:#66707b}
+  code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:12.5px;color:#7a4b00}
+  pre{background:#f6f8fa;border:1px solid var(--bd);border-radius:8px;padding:11px 13px;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.5;color:#24292f;margin:9px 0 0}
+  table{border-collapse:collapse;width:100%;margin:6px 0 0;font-size:12.5px}
+  th,td{border:1px solid var(--bd);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--acc);font-weight:600}
+  td .f,.f{font-family:var(--mono);color:#7a4b00}
+  .new{color:var(--grn);font-weight:600}
+  .edit{color:var(--amb);font-weight:600}
+  .callout{background:rgba(88,166,255,.08);border:1px solid #b6d3f2;border-left:3px solid var(--acc);border-radius:8px;padding:11px 14px;margin:14px 0;font-size:12.5px;color:#1c3f66}
+  .callout p{margin:0}
+  .callout.warn{background:rgba(210,153,34,.08);border-color:#e6d09b;border-left-color:var(--amb);color:#6b4e00}
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--bd);border-radius:9px;padding:13px;margin:6px 0 0;font-size:12.5px}
+  .flow .b{background:var(--panel2);border:1px solid var(--bd);border-radius:6px;padding:5px 9px;font-family:var(--mono);font-size:11.5px;white-space:nowrap}
+  .flow .b.n{border-color:var(--grn);color:#187f37}
+  .flow .ar{color:var(--mut)}
+  .fork{background:var(--panel);border:1px solid var(--bd);border-left:3px solid var(--amb);border-radius:8px;padding:12px 15px;margin:12px 0}
+  .fork .q{display:flex;align-items:baseline;gap:9px;font-weight:600;margin:0 0 4px}
+  .fork .fn{display:inline-flex;width:20px;height:20px;border-radius:6px;background:var(--amb);color:#ffffff;font-size:11.5px;font-weight:700;align-items:center;justify-content:center;flex:0 0 auto}
+  .fork .rec{margin:4px 0 0;font-size:12.5px}
+  .fork .rec b{color:var(--grn)}
+  .fork .trade{margin:3px 0 0;font-size:12.5px;color:var(--mut)}
+  .fork .resolved{margin:8px 0 0;padding-top:8px;border-top:1px dashed var(--bd);font-size:12.5px;font-weight:600;color:#187f37}
+  details.details-layer{background:var(--panel);border:1px solid var(--bd);border-radius:9px;margin:6px 0 0}
+  details.details-layer summary{cursor:pointer;padding:11px 15px;font-size:13px;font-weight:600;color:var(--mut)}
+  details.details-layer summary:hover{color:var(--tx)}
+  details.details-layer[open] summary{color:var(--tx);border-bottom:1px solid var(--bd)}
+  details.details-layer ul{margin:0;padding:10px 16px 13px 34px}
+  .foot{margin-top:22px;padding:13px 15px;background:linear-gradient(90deg,rgba(188,140,255,.10),transparent);border:1px solid var(--bd);border-radius:9px;color:var(--mut);font-size:12.5px}
+  .foot p{margin:0}
+  .revbadge{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.4px;background:rgba(210,153,34,.18);color:#7a5a00;border:1px solid #e0c97f;border-radius:5px;padding:1px 6px;margin-left:6px;vertical-align:middle}
+  .revnote{background:rgba(210,153,34,.07);border-left:3px solid var(--amb);border-radius:0 6px 6px 0;padding:6px 11px;margin:8px 0;font-size:12px;color:#7a5a00}
+  @media(max-width:760px){body{padding:18px}}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>Plan：low-util Move 2 — 从 would-kill 切换到直接取消作业（执行端独立于 collector）</h1>
+  <div class="meta">
+    <span class="mtag">understanding · artifacts/understanding_low-util-direct-kill_v1.html（待决项已定）· baselines CB 7d23e87 / deps fa189daa1 · v10 2026-09-03</span>
+  </div>
+
+  <section class="plan-section">
+    <h2><span class="n">1</span> Problem / Goal</h2>
+    <p>把三生产集群的 low_utilization 从只报不取消的 shadow 模式切换为命中即取消，并把 <code>NOKILL-</code> 自申报豁免与每日频道审计一并交付，令算力回收、豁免可见、审计同日生效。</p>
+  </section>
+
+  <section class="plan-section">
+    <h2><span class="n">2</span> Context<span class="revbadge">changed · r10</span></h2>
+    <div class="revnote">r10 · 读者裁决：collector 不执行取消。执行端从零重设计为独立 kill-executor Deployment；collector KillActor 代码删除。verify 按 full 重跑。</div>
+    <details class="details-layer">
+      <summary>判据/机制现状、gpu-remediator 执行先例、collector 既有令牌画像、四项缺口 — 事实与证据锚</summary>
+      <ul>
+        <li>判据（gpu_min 32 / min_runtime 7200s / window 3600s / mean_below 0.30）与 shadow 通知已在生产，<code>kill_enabled_clusters: []</code>；理解页四条待决项已定：不单独延窗、公告用户自办非前置门、NOKILL- + 每日频道 digest（每日审计帖）、三集群同时启用。<span class="src">锚：deployments values-mgmt.yaml @fa189daa1；本 session artifacts/understanding_low-util-direct-kill_v1.html</span></li>
+        <li>数据面与后端机制：collector 把作业扫描写到 stdout，经 grafana-alloy 入 Loki，后端从 Loki 读回并判定；后端侧取消机制已部署且默认关：orders/outcome 路由（bearer 令牌缺失即 503）、白名单与 killed 去重、pyspy_ref、outcome 回帖。<span class="src">锚：ClusterBoard backend/app/routers/cop.py:1-7,315-455、cop_actor.py；cop.py:365 起 orders 端点</span></li>
+        <li>执行端定论：gpu-remediator 三集群现役（forles:351 / fpt:687 / moonlite:174，指基线 helmfile 行号），独立 namespace + 专用 RBAC，critical 时 kubectl exec 进 slurm-controller-0 的 slurmctld 容器跑 <code>scontrol drain</code>——专属的集群内执行 pod 是既有形态，且 exec 进 slurmctld 是已被生产采纳的取消类动作通道。collector 内 KillActor 取消前复核、默认每 60 s 最多取消 3 个，是已随镜像发布但从未启用的代码，本 plan 删除。<span class="src">锚：gpu-remediator chart serviceaccount.yaml + configmap.yaml；基线三 environ helmfile；train-cop-collector/pkg/copcollect/actor.go:159-223</span></li>
+        <li>缺口 1（配置面）：mgmt values 的 kill list 为空；执行侧无独立部署，唯一成形的 actor 只挂在 collector 镜像里。<span class="src">锚：deployments values-mgmt.yaml；三 environ helmfile 无 executor 类 release</span></li>
+        <li>缺口 2（机密面）：后端 <code>COP_KILL_ACTOR_TOKEN</code> 已以 optional secretKeyRef 接 <code>cluster-board-secrets</code> 的 <code>kill-actor-token</code> 键（ASM = AWS Secrets Manager，机密存库）；三集群都有 external-secrets（ESO），执行端按各 environ 前缀同步同一值即可；collector 侧的令牌需求随 actor 删除消失。<span class="src">锚：cluster-board/templates/backend-deployment.yaml:46-56；k8s/environ/{forles,fpt,moonlite} 的 external-secrets releases</span></li>
+        <li>缺口 3（可达面）：<code>mlops.in.meshy.team</code> vhost 全站（含 <code>/api*</code>）在 <code>authorize with devops-policy</code>（Okta）之后反代后端；训练集群的机器调用过不了 Okta，需要路径例外。TLS 在 Caddy 前的 LB 终结。<span class="src">锚：mgmt-hub/values-mgmt.yaml:191-219；training-agent README 的 https webhook</span></li>
+        <li>缺口 4（豁免与审计）：白名单文件现为空；digest 无任何现存实现。<span class="src">锚：ledger 09-02 行；后端 copnotify 无 digest 模块</span></li>
+        <li>既有令牌画像（本 plan 之外的存量）：collector 的 slurmrestd 令牌以 SLURM 管理员账号 <code>slurm</code> 签发、寿命 87600h；降权（只读账号化）另案跟进，见 §6。<span class="src">锚：train-cop-collector/values.yaml restd.user / token.lifetime</span></li>
+        <li>术语速览（按首现排序）：SLURM=集群作业调度器；slurmctld=其控制守护进程（每集群 slurm-controller-0 pod 的容器）；scontrol/scancel=其管理/取消命令，sacct=记账查询；slurmrestd=SLURM 的 REST API（ClusterIP=仅集群内可达的 service 类型）；TRES=SLURM 资源记账字段；Loki=日志库，grafana-alloy=日志采集器；Okta=SSO 登录；Caddy=mgmt 集群入口反向代理（mgmt-hub 是其 chart 名），vhost=其下的一个域名站点块；RBAC=Kubernetes 权限体系，pods/exec=进容器执行命令的权限动词，kubectl exec=执行该动作；PVC=Kubernetes 持久卷；py-spy=Python 栈采样器，pyspy_ref=其样本链接；helmfile=多环境的 helm 发布清单工具，helm uninstall=卸载一个 release；PT=太平洋时间；ESO=external-secrets 操作器（把机密从外部存库同步成 k8s Secret）；ASM=AWS Secrets Manager（AWS 机密存库）；CB=ClusterBoard；squeue=SLURM 作业队列查询；drain=节点排空（scontrol 的子动作，拒收新作业）；SM 均值=GPU 流多处理器（Streaming Multiprocessor）利用率的窗口均值；SA=Kubernetes ServiceAccount；LB=负载均衡器；时间戳尾缀 Z=UTC；devops-policy=mgmt-hub Caddy 里那道 Okta 授权策略的名字；ledger.md=本会话维护的 shadow 判定台账文件；train-cop=训练作业监控 cop 的通称（collector + 后端检测）；forles/fpt/moonlite=三个训练集群在 deployments 仓库的 environ 目录名，对应后端 cluster id 依次是 aws-b200、fpt-h200、moonlite（锚：ClusterBoard backend/config.yaml）；critical=gpu-remediator 规则的严重级档位（critical 触发处置动作，warning 只发 Slack）；Disposition=后端给每条通知打的处置标注（shadow 期 WOULD-KILL、启用后 KILL ENABLED）；slurm-auth-jwt=SLURM 侧签发 JWT 的密钥所在的 k8s Secret 名；meshyai/=Docker Hub 组织名；.svc=Kubernetes 集群内 service DNS 后缀。</li>
+      </ul>
+    </details>
+  </section>
+
+  <section class="plan-section">
+    <h2><span class="n">3</span> High Level Solution<span class="revbadge">changed · r10</span></h2>
+    <div class="revnote">r10 · 执行端重写：kill actor 从 collector 拆出为独立 Deployment，执行通道由 slurmrestd 改为 kubectl exec；其余部件不动。</div>
+    <ul>
+      <li><b>ClusterBoard 后端</b>（mgmt；机制已部署、默认关）：判定低利用率并发 Slack 通知；列入 <code>kill_enabled_clusters</code> 集群的未豁免命中作业进 orders。</li>
+      <li><b>train-cop-kill-executor</b>（新；每集群一个独立 Deployment，唯一可取消作业的 pod）：60 秒一轮带令牌拉单，同一次 kubectl exec 内 <code>scontrol</code> 复核后 <code>scancel</code>，回报 outcome，后端回帖 killed。</li>
+      <li><b>collector</b>（每集群一个）回归纯扫描：KillActor 及其 config、main 接线删除，镜像不含取消代码；SA 无 pods/exec，构造上取消不了作业。</li>
+      <li><b>白名单文件</b>（后端读）：集群+owner 或正则匹配，命中不进派单，通知照发标注 exempt。</li>
+    </ul>
+    <div class="flow">
+      <span class="b">collector 扫描</span><span class="ar">→</span>
+      <span class="b">Loki</span><span class="ar">→</span>
+      <span class="b">判定+白名单</span><span class="ar">→</span>
+      <span class="b">orders</span><span class="ar">→</span>
+      <span class="b n">executor 拉单·复核·scancel</span><span class="ar">→</span>
+      <span class="b">outcome</span><span class="ar">→</span>
+      <span class="b">回帖 killed</span>
+    </div>
+    <p><b>可观察契约</b>：命中未豁免即一个轮询周期内被 scancel 并回帖 killed；<code>NOKILL-</code> 永不进派单；令牌缺失即报错不取消；collector 构造上无取消能力；回退=开关改空。</p>
+  </section>
+
+  <section class="plan-section">
+    <h2><span class="n">4</span> Detailed Design<span class="revbadge">changed · r10</span></h2>
+    <div class="revnote">r10 · 4.1 由七项改九项，4.2 部署序与检查按新执行端重写。</div>
+
+    <h3><span class="sn read">4.1</span>Schema<span class="layer">precision-read layer</span></h3>
+    <details class="details-layer">
+      <summary>九项：开关/executor 部署/exec RBAC/令牌/机密/Caddy/digest/白名单/collector 删码 — 展开</summary>
+    <ul>
+      <li><code>cop_detect.low_utilization.kill_enabled_clusters</code>（values-mgmt.yaml）：<code>[]</code>→三集群全列；orders 端点只对列入集群出单。</li>
+      <li>新 chart <code>apps/train-cop-kill-executor</code>（Deployment 1 副本 + SA + slurm 命名空间 Role + ExternalSecret）：配置块 enabled / <code>orders_url: https://mlops.in.meshy.team/api/cop/kill-actor/orders?cluster=&lt;label&gt;</code> / poll_seconds 60 / max_kills_per_poll 3（<label> 按集群填 fpt-h200、moonlite、aws-b200）；三 environ（fpt、moonlite、forles）各一 release。</li>
+      <li>exec RBAC：Role 照 <code>gpu-remediator-slurm-exec</code> 形状——slurm 命名空间 pods get/list + pods/exec create,get，绑 executor SA；执行目标 <code>kubectl exec -n slurm slurm-controller-0 -c slurmctld</code>，每单一轮 <code>sh -c 'scontrol show job …; scancel …'</code>。</li>
+      <li>新 env <code>COP_KILL_ACTOR_TOKEN</code>（双端同名同值、均 secretKeyRef）：后端已 wired；executor 由 ESO 同步进其命名空间的 Secret 以 secretKeyRef 注入；token 永不进 ConfigMap 明文。</li>
+      <li>机密存放：ASM <code>k8s/mgmt/cluster-board/secrets</code> 增键 <code>kill-actor-token</code>；三 environ 按各自 ESO 前缀存同一值并同步进 executor namespace。</li>
+      <li>mgmt-hub <code>mlops.in.meshy.team</code> vhost：<code>handle /api*</code> 前插两个 exact-path handle——<code>/api/cop/kill-actor/orders</code> 与 <code>/api/cop/kill-actor/outcome</code>（不带 authorize）反代同一 backend；其余 /api 保持 Okta。</li>
+      <li>新配置 <code>cop_notify.nokill_digest</code>：<code>{time_pt: "09:00"}</code>；每日该时刻发一帖列近 24h 所见 <code>NOKILL-</code> 作业（名字、owner、是否命中豁免），缺键即关。</li>
+      <li>白名单内容行（机制零改动）：三行 <code>&lt;cluster&gt;\t*\t^NOKILL-\tself-declared via NOKILL- prefix (daily-audited)</code>，kubectl exec 追加，幂等，小时级热加载。</li>
+      <li>collector 侧代码删除：ClusterBoard 删除 <code>pkg/copcollect/actor.go</code>、copconfig 的 Actor 块与校验、cmd/collector 接线；新增 <code>train-cop-collector/cmd/kill-executor</code> 主程序（复用 orders/outcome 类型与 HTTP 客户端）与独立 Dockerfile；构建工作流照 <code>.github/workflows/build-train-cop-collector.yml</code> 增一条，发新镜像 <code>meshyai/clusterboard-train-cop-kill-executor</code>；后端零改动。</li>
+    </ul>
+
+    </details>
+    <h3><span class="sn">4.2</span>Design Details<span class="layer">optional-read layer</span></h3>
+    <details class="details-layer">
+      <summary>digest 语义、部署序与回退、检查与观察、PR 划分、预检 — 展开</summary>
+      <ul>
+        <li><b>digest 语义</b>：backend 进程内一本滚动 24h 窗口的内存登记簿——每次运行快照刷新登记所见 <code>NOKILL-</code> 作业（名字、owner、时刻），每次 notify cycle 给同键作业标注 flagged-exempt，&gt;24h 的旧记录剔除；每日 09:00 PT 发帖渲染窗口：「NOKILL jobs today (N): &lt;job&gt; (&lt;owner&gt;) [running / flagged-exempt]…」。纯内存、零 PVC 新增；重启后窗口内记录即空（接受），极短命到赶不上一个快照节拍的作业会漏（接受：审计目标是反复占用而非逐次举证）。sync（问 owner 为什么、怎么修）由人做，digest 只负责列出名单。<span class="src">数据源只能是这本登记簿：后端现有的 finding 持有态（notified map）随活跃集裁剪且不含名字/owner。锚：backend/app/copnotify/lifecycle.py:89-92,213-217</span></li>
+        <li><b>部署序与中间态</b>：① PR① 合入后 executor 新镜像与无-actor collector 镜像发布，线上零行为变化；② PR② 落地后 token 四处同步、Caddy 例外打开、executor 在三集群起 pod 并每 60s 拉单，因 kill list 为空恒得 <code>[]</code>、无害空跑（此状态即联通性验证），collector 滚动到无-actor 镜像；③ 白名单三行预铺后豁免即生效（shadow 下也标注 whitelisted exempt，观察一日）；④ 启用 commit 单独成 PR③（kill list 三集群），revert 它即回纯 shadow，镜像与 token 留存无副作用；如需撤执行授权，再 helm uninstall executor 三 release。</li>
+        <li><b>启用前五项检查（go/no-go 断言）</b>：Ⓐ NOKILL- 与三集群近 30 天作业名历史查重=0 命中（sacct 一次性查询）；Ⓑ ASM 四处 kill-actor-token 键读回存在，与后端/executor env 拼接一致；Ⓒ Caddy 例外上线后无 token→401、带 token→200 且 orders=[]；Ⓓ digest 首帖在启用前一日已在频道出现（哪怕 N=0）；Ⓔ 每集群预检：kubectl exec 进 slurm-controller-0/slurmctld 执行 <code>command -v scancel squeue</code> 存在，executor SA <code>auth can-i create pods/exec</code> 断言通过。</li>
+        <li><b>启用后观察</b>：本会话挂 4h 自续 watch，首批 killed 逐个复核（sacct CANCELLED + Slack killed 回帖 + pyspy_ref 可达）；kill_failed 出现即查 executor pod 日志/RBAC/令牌；Disposition 标注由 WOULD-KILL 切 KILL ENABLED 逐条抽查；发现误判取消立即 revert PR③。</li>
+        <li><b>PR 划分与文档</b>：ClusterBoard 一个 PR（kill-executor 主程序 + Dockerfile + 构建工作流 + collector 侧删除 + 单测）；deployments PR②（executor chart + 三 environ releases + ESO 四处 + collector 镜像 tag 指向无-actor 镜像 + mgmt-hub 例外），PR③ 仅 values 启用一个 commit；system-design.md 的 rollout state machine 更新为"executor 独立部署、已启用"终态，cookbook 增 NOKILL- 小节（公告文本口径随它）；gpu-remediator 只作先例，不合并、不改。</li>
+        <li><b>预检（实现期自查，非验收）</b>：executor 镜像内 scancel/squeue 的可用性由检查 Ⓔ 落实（生产证据：gpu-remediator 日常同容器 scontrol drain；同镜像族判定，不凭推断放行）；<code>scontrol show job</code> 字段格式（TRES/RunTime/State）实测后定型复核解析；executor pod 出网到 mlops.in.meshy.team 的 DNS/egress 实测（该 pod 的首个出网需求）；mgmt-hub 例外顺序在 Caddyfile 渲染后再人工读一眼 handle 顺序。</li>
+      </ul>
+    </details>
+  </section>
+
+  <section class="plan-section">
+    <h2><span class="n">5</span> Trade-offs<span class="revbadge">changed · r10</span></h2>
+    <div class="revnote">r10 · 1/2 措辞随执行端改名；新增 3（取消通道）。</div>
+    <div class="fork">
+      <p class="q"><span class="fn">1</span> kill-executor 调后端只能走 mlops.in.meshy.team（全站 Okta、机器过不去）：两路径开令牌例外，还是新开机器域名？</p>
+      <p class="rec"><b>Recommendation:</b> 两个精确路径开例外：mgmt-hub 的 Caddy 加几行，其余 <code>/api</code> 照旧 Okta，令牌校验在后端。</p>
+      <p class="trade">泄露可伪造回报或读派单（可轮换）；新域名多 DNS/证书/站点各一套，收益不成比例。</p>
+      <details class="details-layer">
+        <summary>背景与一个可手算的例子 — 展开</summary>
+        <ul>
+          <li>现状：<code>mlops.in.meshy.team</code> 由 mgmt 集群入口 Caddy 提供；站点块在 <code>handle /api*</code> 之前先 <code>authorize with devops-policy</code>（Okta），之后反代 <code>cluster-board-backend.cluster-board.svc:8000</code>。<span class="src">锚：deployments mgmt-hub/values-mgmt.yaml:191-219</span></li>
+          <li>为什么机器过不去：Okta authorize 是浏览器登录流程（重定向到登录页换会话 cookie），executor 的 HTTP 客户端没有浏览器，拿不到 cookie。</li>
+          <li>例子：executor 每 60 秒 GET <code>/api/cop/kill-actor/orders?cluster=fpt-h200</code>，头带 <code>Authorization: Bearer &lt;令牌&gt;</code>。开通例外后：无令牌 → 后端拒绝（401/503）；带令牌 → 200，启用前返回 <code>[]</code>。其余路径（如 <code>/api/cop/state</code>）仍要求 Okta 登录。TLS 在 Caddy 前的 LB 终结，与既有 Grafana webhook 同型。<span class="src">锚：ClusterBoard backend/app/routers/cop.py:315-455</span></li>
+          <li>另一方案：新域名（如 <code>cop-actor.in.meshy.team</code>）单独站点块不带 authorize，同样反代后端；需要 DNS 记录、证书、LB 配置各一份，两个域名指向同一后端。</li>
+        </ul>
+      </details>
+    </div>
+    <div class="fork">
+      <p class="q"><span class="fn">2</span> 启用那一刻处于命中态的作业会同时进入待取消名单，executor 默认每 60 秒一轮、每轮最多取消 3 个：首日维持，还是收紧到每轮 1 个？</p>
+      <p class="rec"><b>Recommendation:</b> 维持默认。shadow 台账每轮命中 0–1 个，首批不会批量取消；首批每次取消人工复核，异常即 revert 启用 commit。</p>
+      <p class="trade">收紧到每轮 1 个只改变首批节奏，代价是回收变慢；公告已给预告。</p>
+      <details class="details-layer">
+        <summary>背景与一个可手算的例子 — 展开</summary>
+        <ul>
+          <li>节拍参数：executor 默认 poll 60 s、每轮最多取消 3 个；chart 配置块的 <code>poll_seconds</code> / <code>max_kills_per_poll</code> 可改（4.1 第 2 项）。</li>
+          <li>例子：若启用时有 5 个命中作业，默认节拍第 1 轮取消 3 个、第 2 轮取消 2 个，2 分钟清空；每轮 1 个则 5 分钟清空。差别只在首 5 分钟。</li>
+          <li>当前存量：新判据（32 GPU、满 2 h、近 1 h SM 均值 &lt; 0.30）09-02 生效后，shadow 08:11Z 轮出现首个命中、12:11Z 轮为空，存量 0–1 个。<span class="src">锚：~/.charliebot/projects/training-cop/ledger.md 09-02 行</span></li>
+          <li>每次取消前 executor 在同一次 exec 内复核（作业仍在跑、GPU 数不低于下限、与派单首见时刻一致），复核不通过则跳过并报 kill_failed；取消后线程回帖 killed 并附 py-spy 栈，首批逐个对 sacct CANCELLED 核对。</li>
+        </ul>
+      </details>
+    </div>
+    <div class="fork">
+      <p class="q"><span class="fn">3</span> executor 执行取消走哪条通道：kubectl exec 进 slurmctld 容器跑 scontrol/scancel（gpu-remediator 同款），还是持 slurmrestd 长效 JWT？</p>
+      <p class="rec"><b>Recommendation:</b> kubectl exec。RBAC 本身就是凭据，不新增 SLURM 令牌；通道有 gpu-remediator 生产先例；复核与取消同次 exec 内原子完成。</p>
+      <p class="trade">exec 每单两次触达控制面容器（≤6 次/60 s）；JWT 不触控制面，但再造一张可杀任意作业的长效令牌（collector 现有那张已是 slurm 管理员、87600h，另案降权）。</p>
+      <details class="details-layer">
+        <summary>背景与一个可手算的例子 — 展开</summary>
+        <ul>
+          <li>先例：gpu-remediator 独立 namespace + 专用 SA，slurm 命名空间 Role 仅 pods get/list 与 pods/exec create,get；规则命中 critical 时执行 <code>kubectl exec -n slurm slurm-controller-0 -c slurmctld -- scontrol drain &lt;node&gt;</code>，三集群现役。<span class="src">锚：gpu-remediator chart serviceaccount.yaml、configmap.yaml（drain 执行段）；基线三 environ helmfile</span></li>
+          <li>例子：executor 拿到 order <code>{job_id: 12345, first_seen: …}</code> → <code>kubectl exec … sh -c 'scontrol show job 12345'</code> 解析 State=RUNNING、TRES gres/gpu≥32、启动时刻与 first_seen 一致 → 同轮继续 <code>scancel 12345</code> → 回报 <code>killed</code>；任一复核项不过则跳过、回报 <code>kill_failed</code> 并注明原因。挂载 slurm-controller-0 的 scontrol/scancel 与 gpu-remediator 的 scontrol 同容器同镜像。</li>
+          <li>JWT 方案镜像 collector 读通道：executor 持用 <code>slurm-auth-jwt</code> 签的长效 JWT 调 <code>http://slurm-restapi:6820</code>（ClusterIP，仅集群内可达）<span class="src">锚：train-cop-collector/values.yaml restd 段</span></li>
+        </ul>
+      </details>
+    </div>
+  </section>
+
+  <section class="plan-section">
+    <h2><span class="n">6</span> Other Details<span class="revbadge">changed · r10</span></h2>
+    <div class="revnote">r10 · collector 侧令牌条目随 actor 删除移除；新增执行端命名、端点名保留、既有令牌降权跟进三条。</div>
+    <details class="details-layer">
+      <summary>自主决定项 — 展开</summary>
+      <ul>
+        <li>digest 时刻定 09:00 PT；窗口=近 24h 滚动（自然日桶会让 09:00 后出现的作业在次日帖里缺席，滚动窗口全覆盖）；重启后窗口内记录清空，自下一节拍重新积累。<span class="m">— 零 PVC 新增；页内唯一新状态是该内存表。</span></li>
+        <li>令牌投递走环境变量：双端同名 env <code>COP_KILL_ACTOR_TOKEN</code>，均 secretKeyRef；executor 侧由 ESO 从 ASM 同步成 k8s Secret 后注入。<span class="m">— 唯一既不落明文、又与后端同形的投递方式。</span></li>
+        <li>执行端命名：chart / release / namespace 统一 <code>train-cop-kill-executor</code>，镜像 <code>meshyai/clusterboard-train-cop-kill-executor</code>，与 <code>train-cop-collector</code> 家族对齐；API 端点名 <code>/api/cop/kill-actor/*</code>保持原名（后端标识，executor 成为其唯一客户端；改名只是端点名与后端同改，无行为收益）。<span class="m">— 命名决策一处生效。</span></li>
+        <li>executor 复核语义沿用 v9 actor 判定（仍在跑、GPU 数、与首见时刻一致），仅通道由 slurmrestd 换成同一次 exec 内的 scontrol。<span class="m">— 判定逻辑单源，换的是通道。</span></li>
+        <li>collector 既有 slurmrestd 令牌（slurm 管理员账号、寿命 87600h）降权为只读账号：列入后续跟进，不进本 plan。<span class="m">— 存量过度授权先于本 plan；本 plan 删除其 kill 使用方后，降权不再影响任何功能。</span></li>
+        <li>公告文案建议口径（用户自办）：NOKILL- 契约=声明方式和逐日 digest/sync 惯例。<span class="m">— 外写不随本计划发出。</span></li>
+      </ul>
+    </details>
+  </section>
+
+  <div class="foot">
+    <p><b>How to respond:</b> reply by Trade-off number to override a recommendation; unmentioned items accept it. Ask to control any Other Details entry and it joins the approval object. Say <b>take off</b> to start.</p>
+  </div>
+</main>
+</body></html>

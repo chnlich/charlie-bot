@@ -757,6 +757,13 @@ def build_codex_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
+def build_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig for tests that create and remove worktree dirs: both the charliebot-home and the
+  worktrees dirs live under tmp_path so each test owns its own tree — the default (~/worktrees) would
+  touch real host worktrees."""
+  return CharlieBotConfig(charliebot_home=tmp_path / "home", worktree_dir=str(tmp_path / "worktrees"))
+
+
 def build_recovery_cfg(home: Path) -> CharlieBotConfig:
   """CharlieBotConfig for restart-recovery tests: the home dir is caller-chosen (the install-invariance test
   runs its two arms under different homes), the worktrees dir lives under it, and the backend list registers

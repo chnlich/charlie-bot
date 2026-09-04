@@ -4,13 +4,14 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import build_worktree_cfg
 
 from src.cli import gc_trash
 from src.core.config import CharlieBotConfig
 
 
 def _cfg_with_trash(tmp_path: Path) -> CharlieBotConfig:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", worktree_dir=str(tmp_path / "worktrees"))
+  cfg = build_worktree_cfg(tmp_path)
   trash = Path(cfg.worktree_dir) / ".trash"
   for name in ("charliebot-task-a", "charliebot-task-b"):
     entry = trash / name
@@ -56,7 +57,7 @@ def test_gc_trash_yes_hard_deletes(
 
 def test_gc_trash_empty_reports_and_returns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", worktree_dir=str(tmp_path / "worktrees"))
+  cfg = build_worktree_cfg(tmp_path)
   monkeypatch.setattr(gc_trash, "get_config", lambda: cfg)
   monkeypatch.setattr(sys, "argv", ["charliebot gc-trash", "--yes"])
 

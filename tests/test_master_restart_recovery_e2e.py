@@ -50,10 +50,10 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-  MASTER_RECOVERY_TASK_PREFIXES,
-  await_recovery_tasks,
-  patch_instructions_content,
-  read_chat_events,
+    MASTER_RECOVERY_TASK_PREFIXES,
+    await_recovery_tasks,
+    patch_instructions_content,
+    read_chat_events,
 )
 from structlog.testing import capture_logs
 from test_restart_recovery_e2e import _wait_for
@@ -255,7 +255,14 @@ def _cfg(home: Path, shim: Path) -> CharlieBotConfig:
       charliebot_home=home,
       worktree_dir=str(home / "worktrees"),
       backend_options=[
-          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=str(shim), prompt_overlay="none")],
+          BackendOption(
+              id="fake",
+              label="Fake",
+              type="cc-claude",
+              model="fake-model",
+              cli_binary=str(shim),
+              prompt_overlay="none")
+      ],
   )
 
 
@@ -289,8 +296,14 @@ def _install_shim(tmp_path: Path) -> tuple[Path, Path]:
   return shim, state
 
 
-def _launch_driver(tmp_path: Path, home: Path, shim: Path, kind: str, shim_mode: str,
-                   extra_args: list[str] | None = None, extra_env: dict[str, str] | None = None) -> tuple[subprocess.Popen, str]:
+def _launch_driver(
+    tmp_path: Path,
+    home: Path,
+    shim: Path,
+    kind: str,
+    shim_mode: str,
+    extra_args: list[str] | None = None,
+    extra_env: dict[str, str] | None = None) -> tuple[subprocess.Popen, str]:
   shim_dir = tmp_path / "shim"
   driver = shim_dir / "driver.py"
   driver.write_text(DRIVER, encoding="utf-8")
@@ -303,7 +316,8 @@ def _launch_driver(tmp_path: Path, home: Path, shim: Path, kind: str, shim_mode:
   if extra_env:
     env.update(extra_env)
   proc = subprocess.Popen(
-      [sys.executable, str(driver), str(home), str(shim), kind, *(extra_args or [])],
+      [sys.executable, str(driver), str(home),
+       str(shim), kind, *(extra_args or [])],
       stdout=subprocess.DEVNULL,
       stderr=subprocess.DEVNULL,
       env=env,
@@ -377,19 +391,14 @@ def _round_transported_events(events: list[dict], *, skip_user_event: bool) -> l
   start = 0
   if skip_user_event:
     start = next(i for i, e in enumerate(events) if e.get("type") == "user") + 1
-  return [
-      {k: v for k, v in e.items() if k not in ("id", "timestamp", "event_index")}
-      for e in events[start:done_idx]
-  ]
+  return [{k: v for k, v in e.items() if k not in ("id", "timestamp", "event_index")} for e in events[start:done_idx]]
 
 
 def _full_projection(home: Path, session_id: str, cfg: CharlieBotConfig) -> list[dict]:
   """Project the recorded turn's whole raw log from offset 0, fresh translate."""
   raw = _raw_logs(home, session_id)[0]
   option = cfg.get_backend_option(_session_meta(home, session_id)["backend"])
-  return runs.project_raw_events(
-      runs.parse_raw_lines(raw.read_bytes()),
-      master_cc._build_fresh_translate(cfg, option))
+  return runs.project_raw_events(runs.parse_raw_lines(raw.read_bytes()), master_cc._build_fresh_translate(cfg, option))
 
 
 def _assert_round_operable(events: list[dict]) -> None:
@@ -449,8 +458,8 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   def turn_started() -> bool:
     raw = _raw_logs(home, session_id)
     record = _session_meta(home, session_id)["master_run"]
-    return bool(raw) and record is not None and "ASSISTANT-INV-1" in raw[0].read_text(encoding="utf-8",
-                                                                                      errors="replace")
+    return bool(raw) and record is not None and "ASSISTANT-INV-1" in raw[0].read_text(
+        encoding="utf-8", errors="replace")
 
   _wait_for(turn_started, timeout=20.0, what="master turn did not start/persist identity")
   proc.kill()
@@ -472,8 +481,7 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   # Keep the run "live": is_run_alive requires started_at to postdate the most
   # recent host boot (nothing survives a reboot), and _reconcile_master_runs
   # funnels this same value into the liveness closure it hands the re-attach.
-  monkeypatch.setattr(runs, "read_host_boot_time",
-                      lambda: backdated - timedelta(hours=1))
+  monkeypatch.setattr(runs, "read_host_boot_time", lambda: backdated - timedelta(hours=1))
 
   patch_instructions_content(monkeypatch)
   monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
@@ -500,8 +508,9 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   # from the persisted record, not from the restart's enqueue.
   master_done = [e for e in events if e.get("type") == "master_done"]
   assert len(master_done) == 1
-  assert master_done[0].get("thinking_seconds", 0) >= 600, (
-      f"interval must count the backdated start; got {master_done[0].get('thinking_seconds')}s")
+  assert master_done[0].get(
+      "thinking_seconds",
+      0) >= 600, (f"interval must count the backdated start; got {master_done[0].get('thinking_seconds')}s")
 
 
 @pytest.mark.asyncio
@@ -544,8 +553,8 @@ async def test_queued_message_answered_after_restart(tmp_path: Path, monkeypatch
   shim, state = _install_shim(tmp_path)
   proc, session_id = _launch_driver(tmp_path, home, shim, "queued", "sleep_first")
   _wait_for(
-      lambda: _session_meta(home, session_id)["master_run"] is not None
-      and any("ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
+      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
+          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
       timeout=20.0,
       what="turn A did not start/persist identity and first output")
   proc.kill()
@@ -581,8 +590,8 @@ async def test_queued_message_answered_after_restart(tmp_path: Path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_replayed_delegate_readback_lands_on_existing_thread(tmp_path: Path,
-                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_replayed_delegate_readback_lands_on_existing_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A replayed turn re-issues the same `delegate` call across the restart;
   the sent-but-lost CLI read-back deterministically resolves to the thread the
   first attempt already created (thread count stays 1)."""
@@ -590,8 +599,7 @@ async def test_replayed_delegate_readback_lands_on_existing_thread(tmp_path: Pat
   shim, state = _install_shim(tmp_path)
   spec_file = tmp_path / "task_spec.md"
   spec_file.write_text(SPEC_TEXT, encoding="utf-8")
-  proc, session_id = _launch_driver(
-      tmp_path, home, shim, "delegate", "hang", extra_args=[str(spec_file)])
+  proc, session_id = _launch_driver(tmp_path, home, shim, "delegate", "hang", extra_args=[str(spec_file)])
   _wait_for(
       lambda: _session_meta(home, session_id)["master_run"] is not None,
       timeout=20.0,
@@ -631,7 +639,8 @@ async def test_replayed_delegate_readback_lands_on_existing_thread(tmp_path: Pat
   threads_dir = home / "sessions" / session_id / "threads"
   thread_metas = [
       json.loads((p / "metadata.json").read_text(encoding="utf-8"))
-      for p in threads_dir.iterdir() if (p / "metadata.json").exists()
+      for p in threads_dir.iterdir()
+      if (p / "metadata.json").exists()
   ]
   matching = [m for m in thread_metas if m.get("description") == SPEC_TEXT]
   assert len(matching) == 1, "the replayed delegate spawned a duplicate worker thread"
@@ -648,8 +657,8 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
   shim, state = _install_shim(tmp_path)
   proc, session_id = _launch_driver(tmp_path, home, shim, "chat", "sleep_first")
   _wait_for(
-      lambda: _session_meta(home, session_id)["master_run"] is not None
-      and any("ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
+      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
+          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
       timeout=20.0,
       what="turn A did not start/persist identity and first output")
   # Kill the server; the producer then finishes while nobody is consuming.
@@ -699,8 +708,8 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_missing_pid_start_turn_reattached_after_server_kill(tmp_path: Path,
-                                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_missing_pid_start_turn_reattached_after_server_kill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The recorded turn's pid_start is scrubbed (death unprovable): recovery
   keeps it on the RUNNING channel — re-attached with a constant-true probe,
   master_run kept while following, the user message never replayed — and the
@@ -710,8 +719,8 @@ async def test_missing_pid_start_turn_reattached_after_server_kill(tmp_path: Pat
   # sleep_first: assistant line, ~3s of silence, then the result event.
   proc, session_id = _launch_driver(tmp_path, home, shim, "chat", "sleep_first")
   _wait_for(
-      lambda: _session_meta(home, session_id)["master_run"] is not None
-      and any("ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
+      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
+          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
       timeout=20.0,
       what="turn A did not start/persist identity and first output")
   proc.kill()
@@ -756,16 +765,16 @@ async def test_missing_pid_start_turn_reattached_after_server_kill(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_completed_delegate_wake_drained_after_server_kill(tmp_path: Path,
-                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_completed_delegate_wake_drained_after_server_kill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A delegate/cron wake has no user event to replay: a result that landed
   during downtime is still drained and closed — never left silent."""
   home = tmp_path / "home"
   shim, state = _install_shim(tmp_path)
   proc, session_id = _launch_driver(tmp_path, home, shim, "wake", "sleep_first")
   _wait_for(
-      lambda: _session_meta(home, session_id)["master_run"] is not None
-      and any("ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
+      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
+          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
       timeout=20.0,
       what="wake turn did not start/persist identity and first output")
   proc.kill()
@@ -813,8 +822,8 @@ async def test_stalled_turn_reattached_after_server_kill(tmp_path: Path, monkeyp
   shim, state = _install_shim(tmp_path)
   proc, session_id = _launch_driver(tmp_path, home, shim, "chat", "hang")
   _wait_for(
-      lambda: _session_meta(home, session_id)["master_run"] is not None
-      and any("ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
+      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
+          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
       timeout=20.0,
       what="turn A did not start/persist identity and first output")
   # Only the server dies; the agent hangs on, silent.
@@ -851,8 +860,7 @@ async def test_stalled_turn_reattached_after_server_kill(tmp_path: Path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_midrun_death_delegate_wake_drained_as_failure(tmp_path: Path,
-                                                             monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_midrun_death_delegate_wake_drained_as_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A delegate/cron wake killed mid-run (no result): no user message exists
   that pass 2 could replay, so the leftover bytes are drained and the round
   closes as a failure — exactly one answer, no spawn, no replay."""
@@ -860,8 +868,8 @@ async def test_midrun_death_delegate_wake_drained_as_failure(tmp_path: Path,
   shim, state = _install_shim(tmp_path)
   proc, session_id = _launch_driver(tmp_path, home, shim, "wake", "hang")
   _wait_for(
-      lambda: _session_meta(home, session_id)["master_run"] is not None
-      and any("ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
+      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
+          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
       timeout=20.0,
       what="wake turn did not start/persist identity and first output")
   proc.kill()
@@ -888,8 +896,8 @@ async def test_midrun_death_delegate_wake_drained_as_failure(tmp_path: Path,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_user_message", [True, False], ids=["user-wake", "delegate-wake"])
-async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                                            with_user_message: bool) -> None:
+async def test_uncovered_transport_turn_cleared_not_drained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_user_message: bool) -> None:
   """An interrupted turn on an uncovered backend transport (opencode /
   antigravity / tui-cli) is drained NEVER: with the pid_start pin present the
   dead instance's death is provable, so the record resolves DIED with the
@@ -958,8 +966,8 @@ async def test_uncovered_transport_turn_cleared_not_drained(tmp_path: Path, monk
 
 
 @pytest.mark.asyncio
-async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(tmp_path: Path,
-                                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The provably-ALIVE counterpart of the dead pinned row: a pinned
   opencode-flavored master_run whose recorded process still lives resolves
   RUNNING uncovered-alive — reported exactly once, record kept, user message
@@ -1023,8 +1031,8 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(tmp_pat
     [(999999, "1"), (None, None)],
     ids=["legacy-raw-missing", "never-started"],
 )
-async def test_undrainable_dead_turn_replayed_with_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                                          pid, pid_start) -> None:
+async def test_undrainable_dead_turn_replayed_with_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pid, pid_start) -> None:
   """Raw log missing (pre-transport record) or turn never spawned: nothing is
   drainable, the record clears, and the user message is replayed with the
   marker — exactly one answer, by replay and only by replay."""

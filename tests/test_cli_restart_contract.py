@@ -128,8 +128,7 @@ def test_connect_never_established_bounded_wall_clock_with_real_clock(
   assert json.loads(capsys.readouterr().err)["code"] == "server_unavailable"
 
 
-def test_listener_absent_then_appears_mid_budget_succeeds(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_listener_absent_then_appears_mid_budget_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The operationally important case: no listener yet, one appears mid-retry, call succeeds."""
   cfg = _cfg(tmp_path)
   monkeypatch.setattr(common, "get_config", lambda: cfg)
@@ -177,7 +176,8 @@ def test_server_rejection_reports_full_triple_and_hint(
   monkeypatch.setattr(common, "get_config", lambda: cfg)
   monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_rejection(409, "stale version")))
   monkeypatch.setattr(
-      common, "_maybe_version_skew_hint", lambda cfg: "server running abc123, repo at def456 — server restart may be required")
+      common, "_maybe_version_skew_hint",
+      lambda cfg: "server running abc123, repo at def456 — server restart may be required")
 
   with pytest.raises(SystemExit) as exc_info:
     common.post_internal_api("/api/internal/x", {"a": 1})
@@ -288,14 +288,15 @@ def test_schedule_trigger_readback_resolves_to_seeded_trigger_on_sent_but_lost(
   triggers_dir = cfg.sessions_dir / session_id / "triggers"
   triggers_dir.mkdir(parents=True)
   (triggers_dir / "trg1.json").write_text(
-      json.dumps({
-          "id": "trg1",
-          "message": "Check the job",
-          "watch_targets": [],
-          "fire_at": "2024-01-01T00:00:00+00:00",
-          "created_at": "2024-01-01T00:00:00+00:00",
-          "status": "pending",
-      }),
+      json.dumps(
+          {
+              "id": "trg1",
+              "message": "Check the job",
+              "watch_targets": [],
+              "fire_at": "2024-01-01T00:00:00+00:00",
+              "created_at": "2024-01-01T00:00:00+00:00",
+              "status": "pending",
+          }),
       encoding="utf-8")
 
   monkeypatch.setattr(
@@ -343,14 +344,15 @@ def test_schedule_trigger_readback_ignores_fired_trigger_reports_outcome_unknown
   triggers_dir = cfg.sessions_dir / session_id / "triggers"
   triggers_dir.mkdir(parents=True)
   (triggers_dir / "trg-fired.json").write_text(
-      json.dumps({
-          "id": "trg-fired",
-          "message": "renew the watch",
-          "watch_targets": [],
-          "fire_at": "2024-01-01T00:00:00+00:00",
-          "created_at": "2024-01-01T00:00:00+00:00",
-          "status": "fired",
-      }),
+      json.dumps(
+          {
+              "id": "trg-fired",
+              "message": "renew the watch",
+              "watch_targets": [],
+              "fire_at": "2024-01-01T00:00:00+00:00",
+              "created_at": "2024-01-01T00:00:00+00:00",
+              "status": "fired",
+          }),
       encoding="utf-8")
 
   monkeypatch.setattr(
@@ -380,24 +382,26 @@ def test_schedule_trigger_readback_picks_pending_over_fired_historical_leg(
   triggers_dir = cfg.sessions_dir / session_id / "triggers"
   triggers_dir.mkdir(parents=True)
   (triggers_dir / "trg-old.json").write_text(
-      json.dumps({
-          "id": "trg-old",
-          "message": "renew the watch",
-          "watch_targets": [],
-          "fire_at": "2024-01-01T00:00:00+00:00",
-          "created_at": "2024-01-01T00:00:00+00:00",
-          "status": "fired",
-      }),
+      json.dumps(
+          {
+              "id": "trg-old",
+              "message": "renew the watch",
+              "watch_targets": [],
+              "fire_at": "2024-01-01T00:00:00+00:00",
+              "created_at": "2024-01-01T00:00:00+00:00",
+              "status": "fired",
+          }),
       encoding="utf-8")
   (triggers_dir / "trg-new.json").write_text(
-      json.dumps({
-          "id": "trg-new",
-          "message": "renew the watch",
-          "watch_targets": [],
-          "fire_at": "2024-02-01T00:00:00+00:00",
-          "created_at": "2024-02-01T00:00:00+00:00",
-          "status": "pending",
-      }),
+      json.dumps(
+          {
+              "id": "trg-new",
+              "message": "renew the watch",
+              "watch_targets": [],
+              "fire_at": "2024-02-01T00:00:00+00:00",
+              "created_at": "2024-02-01T00:00:00+00:00",
+              "status": "pending",
+          }),
       encoding="utf-8")
 
   monkeypatch.setattr(
@@ -450,17 +454,20 @@ class _StubPlanListener:
 def test_plan_readback_resolves_to_seeded_plan_on_sent_but_lost(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   plans_payload = {
-      "plans": [{
-          "id": 7,
-          "title": "My Plan",
-          "state": "open",
-          "takeoff": None,
-          "closed": None,
-          "versions": [{
-              "v": 1,
-              "file": "artifacts/plan_01.html"
-          }],
-      }]
+      "plans":
+          [
+              {
+                  "id": 7,
+                  "title": "My Plan",
+                  "state": "open",
+                  "takeoff": None,
+                  "closed": None,
+                  "versions": [{
+                      "v": 1,
+                      "file": "artifacts/plan_01.html"
+                  }],
+              }
+          ]
   }
   stub = _StubPlanListener(plans_payload)
   try:
@@ -483,7 +490,8 @@ def test_plan_readback_reports_outcome_unknown_when_nothing_matches(
     monkeypatch.setattr(common, "get_config", lambda: cfg)
 
     with pytest.raises(SystemExit) as exc_info:
-      plan_module.main(["present", "--session", "sess-plan-miss", "--file", "artifacts/plan_01.html", "--title", "My Plan"])
+      plan_module.main(
+          ["present", "--session", "sess-plan-miss", "--file", "artifacts/plan_01.html", "--title", "My Plan"])
 
     assert exc_info.value.code == 1
     error = json.loads(capsys.readouterr().err)
@@ -538,8 +546,7 @@ def test_find_local_thread_verify_and_implement_never_cross_match(
   monkeypatch.setattr(common, "get_config", lambda: cfg)
 
   session_id = "sess-verify-vs-implement"
-  _write_thread(
-      cfg, session_id, "verify-thread", description="check the plan", task_type="verify", status="running")
+  _write_thread(cfg, session_id, "verify-thread", description="check the plan", task_type="verify", status="running")
 
   # The verify thread must not satisfy an implement call's readback...
   assert common.find_local_thread(session_id, description="check the plan", task_type="implement") is None

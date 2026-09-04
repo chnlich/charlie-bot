@@ -14,11 +14,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from conftest import (
-  CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-  CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
-  FakeSessionManager,
-  _noop,
-  make_json_response,
+    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
+    FakeSessionManager,
+    _noop,
+    make_json_response,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -65,10 +65,11 @@ def test_takeoff_gate_agent_message_does_not_mint_takeoff() -> None:
 
 
 def test_takeoff_gate_agent_message_does_not_revoke_takeoff() -> None:
-  session_mgr = FakeSessionManager([
-      _user_event("take off"),
-      _agent_message_event("One more ordinary relayed message"),
-  ])
+  session_mgr = FakeSessionManager(
+      [
+          _user_event("take off"),
+          _agent_message_event("One more ordinary relayed message"),
+      ])
 
   check_takeoff_gate("session-id", session_mgr)
 
@@ -140,10 +141,11 @@ def test_session_message_404_when_target_missing() -> None:
 
 
 def test_session_message_409_when_target_archived() -> None:
-  session_mgr = RouteSessionManager({
-      "caller": SessionMetadata(id="caller", name="Caller"),
-      "target": SessionMetadata(id="target", name="Target", status=SessionStatus.ARCHIVED),
-  })
+  session_mgr = RouteSessionManager(
+      {
+          "caller": SessionMetadata(id="caller", name="Caller"),
+          "target": SessionMetadata(id="target", name="Target", status=SessionStatus.ARCHIVED),
+      })
   with _build_route_client(session_mgr) as client:
     resp = client.post("/api/internal/session-message", json=_payload())
   assert resp.status_code == 409
@@ -151,13 +153,12 @@ def test_session_message_409_when_target_archived() -> None:
   assert not session_mgr.persisted
 
 
-def test_session_message_relay_persists_event_and_wakes_master(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  session_mgr = RouteSessionManager({
-      "caller": SessionMetadata(id="caller", name="Caller PM"),
-      "target": SessionMetadata(id="target", name="Target Task"),
-  })
+def test_session_message_relay_persists_event_and_wakes_master(monkeypatch: pytest.MonkeyPatch,) -> None:
+  session_mgr = RouteSessionManager(
+      {
+          "caller": SessionMetadata(id="caller", name="Caller PM"),
+          "target": SessionMetadata(id="target", name="Target Task"),
+      })
   triggered: list[tuple[str, str]] = []
 
   def fake_trigger_master(session_id: str, summary: str, *args: Any, **kwargs: Any) -> Coroutine[Any, Any, None]:
@@ -194,7 +195,9 @@ def test_session_message_request_rejects_extra_fields() -> None:
   with _build_route_client(session_mgr) as client:
     resp = client.post(
         "/api/internal/session-message",
-        json={**_payload(), "surprise": "field"},
+        json={
+            **_payload(), "surprise": "field"
+        },
     )
   assert resp.status_code == 422
 
@@ -310,26 +313,29 @@ def test_cli_session_send_missing_file_is_usage_error(tmp_path: Path) -> None:
 
 def test_agent_message_aggregates_to_message_delta() -> None:
   agg = MessageAggregator()
-  deltas = list(agg.feed({
-      "type": ET.AGENT_MESSAGE,
-      "content": "status please",
-      "from_session": "caller-id",
-      "from_session_name": "Caller PM",
-      "timestamp": "2026-08-11T08:00:00Z",
-  }))
-
-  assert deltas == [
-      {
-          "type": "message",
-          "message": {
-              "role": "agent_message",
+  deltas = list(
+      agg.feed(
+          {
+              "type": ET.AGENT_MESSAGE,
               "content": "status please",
               "from_session": "caller-id",
               "from_session_name": "Caller PM",
               "timestamp": "2026-08-11T08:00:00Z",
-              "event_index": 0,
-              "id": "legacy:0",
-          },
+          }))
+
+  assert deltas == [
+      {
+          "type": "message",
+          "message":
+              {
+                  "role": "agent_message",
+                  "content": "status please",
+                  "from_session": "caller-id",
+                  "from_session_name": "Caller PM",
+                  "timestamp": "2026-08-11T08:00:00Z",
+                  "event_index": 0,
+                  "id": "legacy:0",
+              },
       }
   ]
 

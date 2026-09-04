@@ -73,6 +73,7 @@ import re
 import sqlite3
 import time
 from collections import defaultdict
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
@@ -279,7 +280,7 @@ class TallyCache:
     self._next[source][str(path)] = entry
 
 
-def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str):
+def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str) -> Callable[[OSError], None]:
   """The os.walk onerror hook turning an unreadable directory into a per-account note."""
 
   def _onerror(exc: OSError) -> None:
@@ -289,7 +290,7 @@ def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str):
   return _onerror
 
 
-def _iter_jsonl(root: Path, t: _Tally, source: str, label: str):
+def _iter_jsonl(root: Path, t: _Tally, source: str, label: str) -> Iterator[Path]:
   """Yield ``*.jsonl`` under *root*, recording a note when a directory is unreadable.
 
   ``Path.rglob`` swallows ``PermissionError`` while walking (shell-glob semantics), so an
@@ -303,7 +304,7 @@ def _iter_jsonl(root: Path, t: _Tally, source: str, label: str):
         yield Path(dirpath) / name
 
 
-def _iter_jsonl_paths(root: Path, t: _Tally, source: str, label: str):
+def _iter_jsonl_paths(root: Path, t: _Tally, source: str, label: str) -> Iterator[str]:
   """String-path sibling of ``_iter_jsonl`` (same walk, same notes) for callers that never
   open the file, like the signature walk below: Path construction per file measures over
   twice the stat syscall's cost on this corpus."""
@@ -338,8 +339,9 @@ def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path
 _aggregate_memo: tuple[tuple, _SourceAggregate] | None = None
 
 # The whole-tally memo: ((walk signature, opencode db signature), rows, notes) of the last
-# collect; see the module docstring for the key's contract. Rows are the ``_build`` output;
-# callers read but never mutate them.
+# collect; see the module docstring for the key's contract. The db half of the key is the
+# signature the rows were read at (collect_opencode's return), not a pre-walk lookup value.
+# Served tallies copy out of the stored containers via ``_materialize_rows``.
 _tally_memo: tuple[tuple, list[dict], list[str]] | None = None
 
 # Per-row memo for the opencode message table: db path -> {message id: (time_updated, record
@@ -602,10 +604,13 @@ def _opencode_db_signature(db: Path) -> list | None:
   return [st.st_mtime_ns, st.st_size, wal_sig]
 
 
-def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> None:
+def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> list | None:
+  """Tally the opencode db. Returns the signature the rows were read at — None when no
+  signature applies (absent, unstatable, or unreadable db), so the whole-tally memo never
+  signs rows it cannot key."""
   if not db.exists():
     t.notes.append("opencode: db absent")
-    return
+    return None
   sig = _opencode_db_signature(db)
   entry = cache.lookup_sig("opencode", str(db), sig) if cache is not None and sig is not None else None
   if entry is None:
@@ -621,7 +626,7 @@ def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> None:
         con.close()
     except sqlite3.Error as exc:
       t.notes.append(f"opencode: unreadable db: {exc}")
-      return
+      return None
     t.scanned_bytes += nbytes
     records = [rec for _, rec in memo.values() if rec is not None]
     if cache is not None and sig is not None:
@@ -639,6 +644,7 @@ def collect_opencode(t: _Tally, db: Path, cache: TallyCache | None) -> None:
         cache_read=cache_read,
         output=output)
   t.notes.append(f"opencode: {len(records):,} assistant messages with token counts")
+  return sig
 
 
 def _scan_opencode_rows(con: sqlite3.Connection, memo: dict[str, tuple[int, list | None]]) -> int:
@@ -700,8 +706,14 @@ def _build(t: _Tally) -> list[dict]:
             "last": (hi or "")[:10],
             "accounts": acct_rows,
         })
-  rows.sort(key=lambda r: -r["total"])
+    rows.sort(key=lambda r: -r["total"])
   return rows
+
+
+def _materialize_rows(rows: list[dict]) -> list[ModelRow]:
+  """One ModelRow set per collect from the built row dicts; the accounts list copies, so a
+  served tally never shares a mutable container with the whole-tally memo's stored rows."""
+  return [ModelRow(**{**row, "accounts": list(row["accounts"])}) for row in rows]
 
 
 def collect_token_usage(
@@ -727,12 +739,12 @@ def collect_token_usage(
 
   global _aggregate_memo, _tally_memo
   signature = _corpus_signature(claude_homes, codex_homes)
-  opencode_sig = _opencode_db_signature(opencode_db)
+  lookup_sig = _opencode_db_signature(opencode_db)
   tally_memo = _tally_memo
-  if opencode_sig is not None and tally_memo is not None and tally_memo[0] == (signature, opencode_sig):
+  if lookup_sig is not None and tally_memo is not None and tally_memo[0] == (signature, lookup_sig):
     _, rows, notes = tally_memo
     return TokenTally(
-        rows=[ModelRow(**row) for row in rows],
+        rows=_materialize_rows(rows),
         notes=list(notes),
         elapsed_s=time.perf_counter() - start,
         scanned_bytes=0,
@@ -748,7 +760,7 @@ def collect_token_usage(
     _aggregate_memo = (signature, _SourceAggregate.snapshot(t, notes_from))
   else:
     memo[1].apply(t)
-  collect_opencode(t, opencode_db, cache)
+  read_sig = collect_opencode(t, opencode_db, cache)
   # Save only on the source-walk path: its lookups refreshed the next document. A memo hit's
   # only fresh entry is the opencode db's, whose WAL sig the next load recomputes anyway.
   if cache is not None and fresh_sources:
@@ -757,11 +769,11 @@ def collect_token_usage(
     except OSError as exc:
       t.notes.append(f"Tally cache: save failed: {exc}")
   rows = _build(t)
-  if opencode_sig is not None:
-    _tally_memo = ((signature, opencode_sig), rows, list(t.notes))
+  if read_sig is not None:
+    _tally_memo = ((signature, read_sig), rows, list(t.notes))
   elapsed = time.perf_counter() - start
   return TokenTally(
-      rows=[ModelRow(**row) for row in rows],
+      rows=_materialize_rows(rows),
       notes=t.notes,
       elapsed_s=elapsed,
       scanned_bytes=t.scanned_bytes,

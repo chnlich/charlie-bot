@@ -58,6 +58,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M45 session-WS catchup replay event-loop lag, stale-cursor reconnect | M45 collector below | seconds of loop lag + wall per `_replay_aggregated_catchup` run, worst on-disk live chat corpus, cursor 50 events behind (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.05 s | — (introduced with its first history row) |
 | M46 cron tasks list payload and handler time, steady state | M46 collector below | seconds per request + response body bytes, live cron corpus | median < 0.02 s; body < 20 KB | — (introduced with its first history row) |
 | M47 claude declared-window warning stream, steady state | M47 collector below | warnings per 60 steady-state declared-window resolutions | 0 warnings after the first sighting per process | — (introduced with its first history row) |
+| M48 search content-scan missing-file debug stream, steady state | M48 collector below | debug lines per 60 steady-state content scans of an active session whose live chat file is missing | 0 lines after the first sighting per (session, error) per process | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2527,6 +2528,55 @@ print(f"60 steady-state declared-window resolutions; claude_declared_window_degr
 EOF
 ```
 
+M48 — search content-scan missing-file debug stream, steady state. Every
+sidebar search (`GET /api/sessions/search?q=…`) content-scans the active
+sessions whose names miss the query, and the scan's stat of a session whose
+live chat file cannot be read (a fresh session's data/ stays empty until its
+first event lands) logs `search_read_failed` on every request — 30 lines in
+the 11.92 h live server log sampled 2026-09-04, all naming the one such
+session — while one sighting per (session, error) carries the whole signal:
+a repeat round that sees the same failure re-fires a fired alarm. The cost
+is background log volume invisible to HTTP probes, so the collector creates
+one fresh session in a scratch `CHARLIEBOT_HOME` and drives `search_sessions`
+with an absent needle: one first-sighting scan, as at a process start, then
+60 steady-state repeat scans, counting the event. A line in the repeat
+window is a re-fired alarm; the count is the metric. Evidence while the live
+server runs older code points the same collector at the branch checkout
+(`sys.path.insert` at the worktree root), the same shape as the M22
+protocol:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, sys, tempfile
+from pathlib import Path
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.core import sessions as sessions_mod
+from src.core.config import CharlieBotConfig
+from src.core.models import CreateSessionRequest
+from src.core.sessions import SessionManager
+
+# Corpus shape: one fresh active session whose data/ holds no live chat file
+# (a scheduled-session creation carries no events until its first turn).
+work = Path(tempfile.mkdtemp(prefix="m48-search-scan-"))
+cfg = CharlieBotConfig(charliebot_home=work / "home")
+mgr = SessionManager(cfg)
+asyncio.run(mgr.create_session(CreateSessionRequest(name="M48")))
+
+events = []
+orig = sessions_mod.log.debug
+sessions_mod.log.debug = lambda event, **kw: events.append(event)
+try:
+    asyncio.run(mgr.search_sessions("zzq48neverpresent"))  # first sighting, as at a process start; not counted
+    events.clear()
+    for _ in range(60):  # steady-state repeat content scans of the sidebar search
+        asyncio.run(mgr.search_sessions("zzq48neverpresent"))
+finally:
+    sessions_mod.log.debug = orig
+n = sum(1 for event in events if event == "search_read_failed")
+print(f"60 steady-state content scans of a no-live-file session; search_read_failed debug lines: {n}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2589,3 +2639,4 @@ EOF
 | 2026-09-04 | this PR | M45 stale-cursor replay loop-lag median 0.0259 s → 0.0102 s, max 0.0281 s → 0.0102 s (collector verbatim, 20534-event worst live corpus at cursor 20484, 47 frames replayed, scratch CHARLIEBOT_HOME A/B, frame-list digest identical 314dfbe9fd89 across arms; main checkout before vs branch after back-to-back at load 1.77/1.32/0.91 and 1.79/1.33/0.91; replay wall 0.0259 s → 0.0242 s — the walk's CPU still runs, now off the loop; suite pins ws.sent == _catchup_frames output and the stop-at-first-failure send count) | session-WS catchup replay's full-history aggregator walk moved off the event loop: `_catchup_frames` builds the ordered frame list via asyncio.to_thread and `_replay_aggregated_catchup` only sends it in order; M45 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M46 GET /api/cron/tasks body 96235 B → 3745 B (resolved-prompt bytes 90348 → 0 of 12 task rows), handler median 2.71 ms → 1.90 ms, max 3.12 ms → 2.31 ms (collector verbatim, live cron corpus read-only through TestClient, main checkout before at load 0.40/0.77/0.82 vs branch head after at load 1.02/1.22/0.93, back-to-back; row keys identical minus prompt; live-log corroboration 96 KB fetch bodies) | cron tasks list dump excludes prompt, the resolved body the in-process scheduler/master reads while every consumer of the route edits prompt_file (POST/PUT responses never carried it), mirroring M36's description prefix cut; M46 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M47 60 → 0 claude_declared_window_degraded warnings per 60 steady-state resolutions (collector verbatim, main checkout before vs branch after; live-log corroboration 62 lines in the 7.89 h server log ≈ 8/h, host exports CLAUDE_CODE_MAX_CONTEXT_TOKENS=400000) | declared-window degradation warnings routed through an (event, variable, value) warn-once guard — one line per degradation per process, a swapped bad value earns one new line; M47 definition and healthy range introduced with this PR |
+| 2026-09-04 | this PR | M48 60 → 0 search_read_failed debug lines per 60 steady-state content scans of a no-live-file session (collector verbatim, main checkout before vs branch after back-to-back at load 0.75/0.78/0.64; live-log corroboration 30 lines in the 11.92 h server log, all naming the one active session with no live chat file; search results and M8 monitoring shape unchanged) | both search content-scan failed-read loggers (the stat failure and the scan-open failure) routed through a (session, error) warn-once guard — one line per reported failure per process, a swapped path or errno earns one new line; M48 definition and healthy range introduced with this PR |

@@ -49,16 +49,19 @@ _TAG_RE = re.compile(r"<[^>]+>")
 # Revision marks ride outside the goal budget: the plan template clears them at the next revision,
 # and the page-height probe hides these same two classes before measuring. Each is dropped whole,
 # inline tags and content included; the two elements do not nest in practice.
-_REVNOTE_RE = re.compile(
-    r'<div\b(?=[^>]*(?<!\S)class\s*=\s*'
-    r'(?:(?:"(?:[^"]*\s)?revnote(?:\s[^"]*)?")|(?:\'(?:[^\']*\s)?revnote(?:\s[^\']*)?\')|revnote(?:\s|>))'
-    r')[^>]*>.*?</div>',
-    re.DOTALL)
-_REVBADGE_RE = re.compile(
-    r'<span\b(?=[^>]*(?<!\S)class\s*=\s*'
-    r'(?:(?:"(?:[^"]*\s)?revbadge(?:\s[^"]*)?")|(?:\'(?:[^\']*\s)?revbadge(?:\s[^\']*)?\')|revbadge(?:\s|>))'
-    r')[^>]*>.*?</span>',
-    re.DOTALL)
+
+
+def _revision_mark_re(tag: str, cls: str) -> re.Pattern[str]:
+  """A regex dropping one revision-mark element whole; the class token must match exactly."""
+  return re.compile(
+      rf'<{tag}\b(?=[^>]*(?<!\S)class\s*=\s*'
+      rf'(?:(?:"(?:[^"]*\s)?{cls}(?:\s[^"]*)?")|(?:\'(?:[^\']*\s)?{cls}(?:\s[^\']*)?\')|{cls}(?:\s|>))'
+      rf')[^>]*>.*?</{tag}>',
+      re.DOTALL)
+
+
+_REVNOTE_RE = _revision_mark_re("div", "revnote")
+_REVBADGE_RE = _revision_mark_re("span", "revbadge")
 # CJK ideographs, CJK punctuation, and fullwidth forms count double, so the same
 # information density spends the same budget in Chinese and English.
 _CJK_RANGES = ((0x3000, 0x303F), (0x4E00, 0x9FFF), (0xFF00, 0xFFEF))

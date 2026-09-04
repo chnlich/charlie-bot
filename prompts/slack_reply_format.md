@@ -22,7 +22,8 @@ follows the same language.
 The reply reaches the thread through `charliebot slack reply --file <path>`, run from the session
 directory: the command posts the file's text to the summoning thread and prints a readback with the
 character count. A round that answers a summon posts exactly one reply this way; everything addressed
-to the operator stays in the session, since nothing else is posted.
+to the operator stays in the session, since nothing else is posted. A page the reply links reaches
+the thread as a published URL, produced by the reply path itself from the file-server URL you wrote.
 
 Every sentence of the reply speaks to the thread and answers the summoner.
 

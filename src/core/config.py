@@ -343,6 +343,12 @@ class CharlieBotConfig(BaseModel):
   twitter_access_token: str | None = None
   twitter_access_token_secret: str | None = None
   public_base_url: str | None = None
+  # Publish lane — the pair the outbound-link rewrite consumes (src/core/publish.py):
+  # publish_dir is the directory the host's 443 static lane serves, and public_base_url
+  # is the base of the links readers outside the operator's devices open. Unconfigured
+  # (either one) makes publish unavailable; the reply path then refuses instead of
+  # falling back to a server-port link.
+  publish_dir: Path | None = None
 
   @model_validator(mode="before")
   @classmethod
@@ -362,6 +368,8 @@ class CharlieBotConfig(BaseModel):
     values["workspace_dirs"] = [os.path.expanduser(p) for p in ws]
     wd = values.get("worktree_dir", "~/worktrees")
     values["worktree_dir"] = os.path.expanduser(wd)
+    if values.get("publish_dir"):
+      values["publish_dir"] = os.path.expanduser(values["publish_dir"])
     # Migrate old backlog_repo (singular) → backlog_repos list
     if values.get("backlog_repo") and not values.get("backlog_repos"):
       label = values.pop("backlog_label", "Backlog")

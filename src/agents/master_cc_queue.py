@@ -244,9 +244,8 @@ async def run_message(
       has_completed_round).
     skip_user_event: If True, skip persisting/broadcasting the user event
       (used when the master is triggered by a worker completion, not a real user message).
-    auto_trigger: If True, the turn is a machine wake (worker completion),
-      not user input; surfaced on the sidebar RUNNING_CHANGED broadcast's
-      ``auto_trigger`` key.
+    auto_trigger: If True, the turn is a machine wake, not user input;
+      carried on the sidebar RUNNING_CHANGED broadcast payload.
     backend_option: Backend this turn spawns; None defers to the consumer,
       which re-resolves from ``session_meta.backend``.
     extra_claude_flags: Extra CLI flags appended to the spawned claude

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from conftest import FakeWebSocket
 
-from server import _replay_aggregated_catchup, _send_session_catchup
+from server import _catchup_frames, _replay_aggregated_catchup, _send_session_catchup
 
 VOICE_KEY = "is_" + "voice"
 
@@ -201,3 +201,82 @@ async def test_session_catchup_fast_skips_when_cursor_is_current() -> None:
   assert total == 7
   assert ws.sent == []
   assert mgr.full_load_called is False
+
+
+def _mixed_replay_corpus() -> list[dict]:
+  return [
+      {
+          "type": "user",
+          "content": "hi",
+          "timestamp": "t0"
+      },
+      {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "A"
+              }]
+          },
+          "timestamp": "t1",
+      },
+      {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "B"
+              }]
+          },
+          "timestamp": "t2",
+      },
+      {
+          "type": "master_done",
+          "thinking_seconds": 1,
+          "timestamp": "t3"
+      },
+      {
+          "type": "scheduled_trigger",
+          "content": "fire",
+          "timestamp": "t4"
+      },
+      {
+          "type": "user",
+          "content": "tail",
+          "timestamp": "t5"
+      },
+  ]
+
+
+@pytest.mark.asyncio
+async def test_replay_sends_exactly_the_thread_built_frame_list() -> None:
+  # The replay's only producer of frames is _catchup_frames running in a
+  # thread; the async half sends that list in order and nothing else.
+  events = _mixed_replay_corpus()
+  for cursor in (0, 2, len(events)):
+    ws = FakeWebSocket()
+    sent = await _replay_aggregated_catchup(ws, events, cursor=cursor, session_id="s")
+    expected = _catchup_frames(events, cursor)
+    assert ws.sent == expected
+    assert sent == len(expected)
+
+
+@pytest.mark.asyncio
+async def test_replay_stops_at_first_send_failure_with_match_count() -> None:
+
+  class FailingWebSocket(FakeWebSocket):
+
+    async def send_json(self, payload: dict) -> None:
+      if len(self.sent) == 1:
+        raise RuntimeError("closed")
+      self.sent.append(payload)
+
+  events = _mixed_replay_corpus()
+  ws = FailingWebSocket()
+  sent = await _replay_aggregated_catchup(ws, events, cursor=0, session_id="s")
+  total = len(_catchup_frames(events, 0))
+  # 1 frame landed, the second send failed, the remaining total - 2 frames
+  # were never attempted.
+  assert 2 <= total
+  assert len(ws.sent) == 1
+  assert sent == 1

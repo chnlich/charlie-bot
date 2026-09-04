@@ -120,20 +120,21 @@ async def test_crash_recovery_report_no_successor_writes_into_itself_without_ori
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_improve_final_summary_lands_in_successor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  mgr = SessionManager(build_worktree_cfg(tmp_path))
-  parent_id = await _make_parent(mgr)
-  child_id = await _elone(mgr, parent_id)
-
-  patch_improve_git_ops(monkeypatch)
-  monkeypatch.setattr(improve_command, "trigger_master", AsyncMock())
-
+async def _run_succession_loop(
+    tmp_path: Path,
+    mgr: SessionManager,
+    session_id: str,
+    *,
+    iterations: int,
+    repo_name: str,
+) -> None:
+  """run_improve_loop on the succession tests' shared call tail: goal ``tune``,
+  ``improve/test`` off ``main``, the OPUS backend, ``merge_back=False``."""
   with _broadcast_patch():
     await run_improve_loop(
-        session_id=parent_id,
-        repo_path=str(tmp_path / "repo"),
-        iterations=0,
+        session_id=session_id,
+        repo_path=str(tmp_path / repo_name),
+        iterations=iterations,
         goal="tune",
         cfg=build_worktree_cfg(tmp_path),
         session_mgr=mgr,
@@ -144,6 +145,17 @@ async def test_improve_final_summary_lands_in_successor(tmp_path: Path, monkeypa
         resolved_backend=OPUS_BACKEND_ID,
         resolved_model=OPUS_BACKEND_OPTION.model,
     )
+
+
+@pytest.mark.asyncio
+async def test_improve_final_summary_lands_in_successor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  mgr = SessionManager(build_worktree_cfg(tmp_path))
+  parent_id = await _make_parent(mgr)
+  child_id = await _elone(mgr, parent_id)
+
+  patch_improve_git_ops(monkeypatch)
+  monkeypatch.setattr(improve_command, "trigger_master", AsyncMock())
+  await _run_succession_loop(tmp_path, mgr, parent_id, iterations=0, repo_name="repo")
 
   child_events = mgr.load_chat_events_sync(child_id)
   summary = next(ev for ev in child_events if ev.get("type") == ET.IMPROVE_COMPLETED)
@@ -164,22 +176,7 @@ async def test_improve_worktree_creation_failure_lands_in_successor(
 
   monkeypatch.setattr(improve_command, "git_create_worktree", fake_fail_create_worktree)
   monkeypatch.setattr(improve_command, "trigger_master", AsyncMock())
-
-  with _broadcast_patch():
-    await run_improve_loop(
-        session_id=parent_id,
-        repo_path=str(tmp_path / "missing"),
-        iterations=3,
-        goal="tune",
-        cfg=build_worktree_cfg(tmp_path),
-        session_mgr=mgr,
-        thread_mgr=MagicMock(),
-        base_branch="main",
-        work_branch="improve/test",
-        merge_back=False,
-        resolved_backend=OPUS_BACKEND_ID,
-        resolved_model=OPUS_BACKEND_OPTION.model,
-    )
+  await _run_succession_loop(tmp_path, mgr, parent_id, iterations=3, repo_name="missing")
 
   child_events = mgr.load_chat_events_sync(child_id)
   failure = next(ev for ev in child_events if ev.get("type") == ET.IMPROVE_FAILED)
@@ -195,22 +192,7 @@ async def test_improve_final_summary_no_successor_writes_into_itself_without_ori
 
   patch_improve_git_ops(monkeypatch)
   monkeypatch.setattr(improve_command, "trigger_master", AsyncMock())
-
-  with _broadcast_patch():
-    await run_improve_loop(
-        session_id=session_id,
-        repo_path=str(tmp_path / "repo"),
-        iterations=0,
-        goal="tune",
-        cfg=build_worktree_cfg(tmp_path),
-        session_mgr=mgr,
-        thread_mgr=MagicMock(),
-        base_branch="main",
-        work_branch="improve/test",
-        merge_back=False,
-        resolved_backend=OPUS_BACKEND_ID,
-        resolved_model=OPUS_BACKEND_OPTION.model,
-    )
+  await _run_succession_loop(tmp_path, mgr, session_id, iterations=0, repo_name="repo")
 
   own_events = mgr.load_chat_events_sync(session_id)
   summary = next(ev for ev in own_events if ev.get("type") == ET.IMPROVE_COMPLETED)

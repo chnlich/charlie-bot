@@ -38,7 +38,6 @@ Known-alive symbols:
   (`tests/test_follow_silence_recheck.py`), `_reset_token_usage_single_flight` (`tests/test_pages.py`),
   `_worktree_paths` (`tests/test_reviewer_model_preference.py`),
   `_fresh_search_read_failure_registry` (`tests/test_session_search_content.py`),
-  `_reset_declared_window_warnings` (`tests/test_session_usage.py`),
   `_clean_sidebar_state` (`tests/test_sidebar_state_snapshot.py`),
   `_clear_events_cache` (`tests/test_thread_worker_events.py`),
   `_clear_tolerant_read_memo` (`tests/test_plans_tolerant_memo.py`),
@@ -51,6 +50,10 @@ Known-alive symbols:
   `pidfd_open_available` (`tests/conftest.py`, shared skip gate for the pid/slurm watch
   tests), but it is named in the parameter lists of the tests that use it, so the Step 3
   grep already finds its references; no list entry needed.
+- `_reset_declared_window_warnings` (`tests/test_session_usage.py`) — pytest `autouse=True`
+  fixture, reached by fixture-name discovery like the block above. A substring grep for the
+  name finds matches, but all of them are `_reset_declared_window_warnings_for_tests`, the
+  live reset helper the fixture calls; a word-match grep finds only the definition.
 - `session_websocket`, `voice_websocket` — `@app.websocket` handlers in `server.py`
   (`/ws/sessions/{session_id}`, `/ws/voice/{session_id}`), reached by URL string:
   `web/static/js/websocket.js` dials `/ws/sessions/${SESSION_ID}` and `web/static/js/voice-input.js`

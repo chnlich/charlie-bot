@@ -83,15 +83,16 @@ def test_list_body_memo_invalidates_on_metadata_rewrite(tmp_path: Path) -> None:
   assert third.content != first.content
 
 
-def test_list_poll_repeating_the_rendered_etag_gets_a_bodyless_304(tmp_path: Path) -> None:
+def test_list_poll_repeating_the_rendered_etag_gets_a_bodyless_204(tmp_path: Path) -> None:
   client, session_id, _ = _seeded_client(tmp_path)
   threads_api._list_body_memo.clear()
   url = f"/api/threads/{session_id}/list"
 
   first = client.get(url)
   etag = first.headers["ETag"]
-  conditional = client.get(url, headers={"If-None-Match": etag})
-  assert conditional.status_code == 304
+  assert first.headers["Cache-Control"] == "no-store"
+  conditional = client.get(url, params={"etag": etag})
+  assert conditional.status_code == 204
   assert conditional.content == b""
   assert conditional.headers["ETag"] == etag
 
@@ -100,8 +101,8 @@ def test_list_poll_repeating_the_rendered_etag_gets_a_bodyless_304(tmp_path: Pat
   any_id = next(iter(rows))
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
-  stale = client.get(url, headers={"If-None-Match": etag})
+  stale = client.get(url, params={"etag": etag})
   assert stale.status_code == 200
   assert stale.content != first.content
   assert stale.headers["ETag"] != etag
-  assert client.get(url, headers={"If-None-Match": stale.headers["ETag"]}).status_code == 304
+  assert client.get(url, params={"etag": stale.headers["ETag"]}).status_code == 204

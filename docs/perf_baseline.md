@@ -46,7 +46,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M33 assistant-stream draft render, full-turn replay | M33 collector below | seconds per replay of the largest on-disk assistant draft, 200 B deltas at 40 ms virtual cadence | median < 1.0 s | — (introduced with its first history row) |
 | M34 worker-events poll fetch at rendered count | M34 collector below | seconds + response bytes per events fetch, worst on-disk worker log | after=total median < 0.02 s; empty-tail body < 200 B | — (introduced with its first history row) |
 | M35 chat message-page responses, steady state | M35 collector below | seconds per request, worst projection corpus | events page median < 0.03 s | — (introduced with its first history row) |
-| M36 worker list poll payload and handler time, steady state | M36 collector below | seconds per list request + response body bytes, worst thread-metadata corpus; the conditional repeat (If-None-Match) of an unchanged poll | full median < 0.02 s; full body < 200 KB; conditional body 0 B (304) | — (introduced with its first history row) |
+| M36 worker list poll payload and handler time, steady state | M36 collector below | seconds per list request + response body bytes, worst thread-metadata corpus; the conditional repeat (?etag=) of an unchanged poll | full median < 0.02 s; full body < 200 KB; conditional body 0 B (204) | — (introduced with its first history row) |
 | M37 archived-session chat tail page, steady state | M37 collector below | seconds per `parse_ndjson_tail(200)` call, worst on-disk archived live file | median < 0.005 s | — (introduced with its first history row) |
 | M38 session stream-broadcast fan-out, worst on-disk turn replay | M38 collector below | stream frames and json.dumps calls/seconds per turn replay, instant feed, one subscriber | dumps total < 0.02 s; final-frame parity true | — (introduced with its first history row) |
 | M39 tui/status busy check, steady state | M39 collector below | seconds of loop lag + wall per per-session busy check, live ~/.claude/projects corpus (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.01 s; wall median < 0.001 s | — (introduced with its first history row) |
@@ -1753,9 +1753,12 @@ EOF
 
 M36 — worker list poll payload and handler time, steady state. The 3 s
 workers-panel poll (``GET /api/threads/{sid}/list``) serves an unchanged
-session from the whole-body memo; a poll repeating the ETag it rendered gets a
-bodyless 304 instead of the full rows, so the steady state transfers zero body
-bytes and the client skips its JSON.parse. The collector drives the endpoint
+session from the whole-body memo; a poll repeating the ETag it rendered via
+``?etag=`` gets a bodyless 204 instead of the full rows, so the steady state
+transfers zero body bytes and the client skips its JSON.parse. The conditional
+rides a query param rather than If-None-Match because the browser's HTTP cache
+fulfils a revalidation itself and fetch never surfaces the 304; no-store on
+every answer keeps each poll a real request. The collector drives the endpoint
 through TestClient over the session whose threads directory carries the most
 metadata bytes (live state read-only), with the thread and trigger managers
 built once as the server's dependency singletons are — per-request manager
@@ -1816,11 +1819,11 @@ full_times.sort()
 cond_times, cond_bytes = [], 0
 for _ in range(7):
     t0 = time.perf_counter()
-    r = client.get(url, headers={"If-None-Match": etag})
+    r = client.get(url, params={"etag": etag})
     cond_times.append(time.perf_counter() - t0)
     cond_bytes = len(r.content)
 cond_times.sort()
-assert r.status_code == 304 and cond_bytes == 0, (r.status_code, cond_bytes)
+assert r.status_code == 204 and cond_bytes == 0, (r.status_code, cond_bytes)
 rows = client.get(url).json()
 trunc = sum(1 for row in rows if "description_full_len" in row)
 print(f"{best_n / 1e3:.0f} KB thread metadata over {len(rows)} rows in session {SID} ({trunc} truncated); "
@@ -2816,4 +2819,4 @@ EOF
 | 2026-09-04 | this PR | M49 60 → 0 opencode_part_unhandled debug lines per 60 steady-state parts of one unhandled type (collector verbatim, main checkout before vs branch after back-to-back at load 0.25/0.59/0.86; live-log corroboration 152 lines in the 12.88 h server log, every line type=patch; unhandled parts still translate to []) | the part type falling through `_translate_part` routed through a part-type warn-once registry — one line per unmapped type per process; M49 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M50 60 → 0 ext_usage_no_access_token warnings per 60 steady-state credential reads of a tokenless file (collector verbatim, main checkout before at load 0.97/0.75/0.66 vs branch after at load 0.29/0.59/0.62, back-to-back; live-log corroboration 135 lines in the 13.89 h server log ≈ 10/h, every line ext_usage_no_access_token naming the same path; every read still returns None and a token-bearing read re-arms the path) | both `_read_credentials` failure-site warnings (ext_usage_credentials_not_found, ext_usage_no_access_token) routed through a recovery-aware warn-once registry — one line per (event, path) per broken streak, a read returning a token re-arms the path; M50 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M51 post-write deep probe median 25.82/25.62 ms → 6.12/6.30 ms, max 26.22/25.98 ms → 6.33/8.04 ms (collector verbatim, 339-file worst threads corpus, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×2 at load 1.16-1.70/1.18-1.32/0.95-1.04; probe verdicts identical — unchanged-sig sweep re-measured 0.0021 s vs 0.0022 s standing M21, no regression) | the sidebar deep probe's thread-metadata scan (`iter_recent_thread_metas`, shared with the boot recovery scan) memoizes each in-window metadata file's parsed dict on (path, mtime_ns, size) — every writer publishes through the atomic tmp-file rename so a content change always moves mtime_ns, the signature is taken before the read so a mid-rewrite entry keys the older signature, only successful parses memoize, and yielded dicts are shared read-only; a post-write probe re-parses the moved file alone instead of all 339; M51 definition and healthy range introduced with this PR |
-| 2026-09-04 | this PR | M36 unchanged-poll body 168209 B → 0 B (conditional If-None-Match repeat answers 304; collector with the conditional round, 2551 KB / 339-row worst worker-list corpus, live state read-only, main checkout before vs branch head after back-to-back ×2 at load 0.85/1.13/0.89; full-poll first-paint path unchanged — medians 4.27/4.66 ms → 4.25/5.06 ms with the byte-identical 168209 B body; live read-only check confirms the running instance still serves 200 full) | the list body carries a strong content-addressed ETag (sha1 of the body bytes) plus Cache-Control: no-cache; the poll repeats the ETag it rendered and the whole-body memo's unchanged signature serves a bodyless 304 — the client keeps its rendered rows and skips the 339-row JSON.parse while nothing behind the list moved; conditional sub-metric added to the M36 definition and collector in this PR |
+| 2026-09-04 | this PR | M36 unchanged-poll body 168209 B → 0 B (conditional ?etag= repeat answers 204; collector with the conditional round, 2551 KB / 339-row worst worker-list corpus, live state read-only, main checkout before vs branch head after back-to-back ×2 at load 0.85/1.13/0.89 and 1.42/2.84/2.64; full-poll first-paint path unchanged — medians 4.27/4.66/6.09 ms → 4.25/5.06/4.57 ms with the byte-identical 168209 B body; live read-only check confirms the running instance still serves 200 full) | the list body carries a strong content-addressed ETag (sha1 of the body bytes) plus Cache-Control: no-store; the poll repeats the ETag it rendered via ?etag= and the whole-body memo's unchanged signature serves a bodyless 204 — the client keeps its rendered rows and skips the 339-row JSON.parse while nothing behind the list moved (a query param, not If-None-Match, because the browser's HTTP cache fulfils a revalidation itself and fetch never surfaces the 304); conditional sub-metric added to the M36 definition and collector in this PR |

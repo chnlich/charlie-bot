@@ -12,11 +12,11 @@ const ROW = {
 };
 
 // fetch responses the harness hands out in order; each records the request it
-// served so the test can assert the conditional request's headers.
+// served so the test can assert the conditional request's URL and options.
 function stubFetch(rounds) {
   const calls = [];
   const fetch = (url, opts) => {
-    calls.push({url, headers: (opts && opts.headers) || {}});
+    calls.push({url, opts: opts || {}});
     const round = rounds[Math.min(calls.length - 1, rounds.length - 1)];
     return Promise.resolve({
       ok: round.status === 200,
@@ -28,7 +28,7 @@ function stubFetch(rounds) {
   return {fetch, calls};
 }
 
-test('the workers poll repeats the rendered ETag and skips the repaint on 304', async () => {
+test('the workers poll repeats the rendered ETag via ?etag= and skips the repaint on 204', async () => {
   const container = {
     innerHTML: '',
     children: [],
@@ -37,7 +37,7 @@ test('the workers poll repeats the rendered ETag and skips the repaint on 304', 
   };
   const {fetch, calls} = stubFetch([
     {status: 200, etag: '"e1"', items: [ROW]},
-    {status: 304},
+    {status: 204},
   ]);
   const context = loadSidebarWorkersContext({
     document: {
@@ -50,16 +50,17 @@ test('the workers poll repeats the rendered ETag and skips the repaint on 304', 
   });
 
   await context.ensureWorkersLoadedForActiveSession({force: true});
-  assert.equal(calls[0].headers['If-None-Match'], undefined);
+  assert.equal(calls[0].url, '/api/threads/session-a/list');
   assert.equal(context.workersListEtag, '"e1"');
   assert.match(container.innerHTML, /thread-1/);
 
   await context.pollWorkers();
-  assert.equal(calls[1].headers['If-None-Match'], '"e1"');
+  assert.equal(calls[1].url, '/api/threads/session-a/list?etag=%22e1%22');
+  assert.equal(calls[1].opts.cache, 'no-store');
   assert.equal(context.workersListEtag, '"e1"');
 });
 
-test('a 200 after a 304 refreshes the stored ETag for the next poll', async () => {
+test('a 200 after a 204 refreshes the stored ETag for the next poll', async () => {
   const container = {
     innerHTML: '',
     children: [],
@@ -82,6 +83,6 @@ test('a 200 after a 304 refreshes the stored ETag for the next poll', async () =
 
   await context.ensureWorkersLoadedForActiveSession({force: true});
   await context.pollWorkers();
-  assert.equal(calls[1].headers['If-None-Match'], '"e1"');
+  assert.equal(calls[1].url, '/api/threads/session-a/list?etag=%22e1%22');
   assert.equal(context.workersListEtag, '"e2"');
 });

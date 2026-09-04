@@ -197,12 +197,14 @@ function pollWorkers() {
     ensureWorkersLoadedForActiveSession({force: true});
     return;
   }
-  // The list body carries an ETag; repeating it asks the server for a 304
-  // instead of the full rows when nothing behind the list moved.
-  const headers = workersListEtag ? {'If-None-Match': workersListEtag} : undefined;
-  fetch('/api/threads/' + pollSessionId + '/list', {headers: headers})
+  // The list body carries an ETag; repeating it via ?etag= asks the server
+  // for a bodyless 204 instead of the full rows when nothing behind the list
+  // moved. no-store keeps every poll a real request (the browser's HTTP cache
+  // would fulfil a revalidation itself and hide the answer).
+  const etagParam = workersListEtag ? '?etag=' + encodeURIComponent(workersListEtag) : '';
+  fetch('/api/threads/' + pollSessionId + '/list' + etagParam, {cache: 'no-store'})
     .then(r => {
-      if (r.status === 304) return null;
+      if (r.status === 204) return null;
       if (!r.ok) return null;
       const etag = r.headers.get('ETag');
       if (etag) workersListEtag = etag;

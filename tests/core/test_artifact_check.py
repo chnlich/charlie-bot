@@ -649,7 +649,7 @@ def test_cli_plan_two_open_forks_without_explainer_report_two_locations_and_skip
 
   monkeypatch.setattr(artifact_check, "build_backend", factory)
   monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
-  assert _run_cli([str(artifact), "--genre", "plan", "--assertions-only"]) == 1
+  assert _run_cli([str(artifact), "--genre", "plan", "--trigger", "where are we?"]) == 1
   out = capsys.readouterr().out
   fail_lines = [line for line in out.splitlines() if line.startswith("FAIL fork-explainer")]
   assert fail_lines == [

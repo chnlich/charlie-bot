@@ -1,13 +1,18 @@
 """Tests for the recap summary path (generate_and_cache_summary, _write_cache_entry)."""
 
 import json
-import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from conftest import (
+    JSON_UTILS_OS_REPLACE_PATCH_TARGET,
+    make_home_session,
+    make_one_shot_backend,
+    make_os_replace_spy,
+    make_read_at_os_replace,
+)
 from conftest import append_events as _append_events
-from conftest import make_home_session, make_one_shot_backend
 
 from src.core import recap
 from src.core.config import CharlieBotConfig
@@ -325,9 +330,6 @@ async def test_extract_memo_drops_with_session_runtime_state(tmp_path: Path) -> 
   assert not any(key[0] == session.id for key in recap._extract_memo)
 
 
-_REAL_REPLACE = os.replace
-
-
 @pytest.mark.asyncio
 async def test_recap_cache_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
   """The recap summary cache write goes through os.replace on recap_summaries.json.
@@ -342,11 +344,7 @@ async def test_recap_cache_write_swaps_target_via_os_replace(tmp_path: Path) -> 
 
   replaced_targets: list[str] = []
 
-  def _capture_replace(src: str, dst: str) -> None:
-    replaced_targets.append(str(dst))
-    return _REAL_REPLACE(src, dst)
-
-  with patch("src.core.json_utils.os.replace", side_effect=_capture_replace):
+  with patch(JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=make_os_replace_spy(replaced_targets)):
     recap._write_cache_entry(mgr, session.id, 0, "summary")
 
   assert str(target) in replaced_targets
@@ -364,11 +362,7 @@ async def test_recap_cache_read_at_swap_observes_previous_document(tmp_path: Pat
 
   read_at_swap: list[str] = []
 
-  def _read_then_replace(src: str, dst: str) -> None:
-    read_at_swap.append(target.read_text(encoding="utf-8"))
-    return _REAL_REPLACE(src, dst)
-
-  with patch("src.core.json_utils.os.replace", side_effect=_read_then_replace):
+  with patch(JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=make_read_at_os_replace(read_at_swap, target)):
     recap._write_cache_entry(mgr, session.id, 1, "after")
 
   assert len(read_at_swap) == 1

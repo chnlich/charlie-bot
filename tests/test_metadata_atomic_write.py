@@ -13,18 +13,23 @@ specific wrong implementation.
 """
 
 import asyncio
-import os
 import threading
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from conftest import OPUS_BACKEND_ID
+from conftest import (
+    JSON_UTILS_OS_REPLACE_PATCH_TARGET,
+    OPUS_BACKEND_ID,
+    REAL_OS_REPLACE,
+    make_os_replace_spy,
+    make_read_at_os_replace,
+)
 from conftest import make_session_mgr as _make_session_mgr
 
 from src.core.models import SessionMetadata
 
-_REAL_REPLACE = os.replace
+_REAL_REPLACE = REAL_OS_REPLACE
 
 
 @pytest.mark.asyncio
@@ -42,11 +47,7 @@ async def test_atomic_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
 
   replaced_targets: list[str] = []
 
-  def _capture_replace(src: str, dst: str) -> None:
-    replaced_targets.append(str(dst))
-    return _REAL_REPLACE(src, dst)
-
-  with patch("src.core.json_utils.os.replace", side_effect=_capture_replace):
+  with patch(JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=make_os_replace_spy(replaced_targets)):
     updated = meta.model_copy()
     updated.name = "changed"
     await mgr.save_metadata(updated)
@@ -69,11 +70,7 @@ async def test_atomic_read_observes_previous_document_at_swap(tmp_path: Path) ->
 
   read_at_swap: list[str] = []
 
-  def _read_then_replace(src: str, dst: str) -> None:
-    read_at_swap.append(target.read_text(encoding="utf-8"))
-    return _REAL_REPLACE(src, dst)
-
-  with patch("src.core.json_utils.os.replace", side_effect=_read_then_replace):
+  with patch(JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=make_read_at_os_replace(read_at_swap, target)):
     updated = meta.model_copy()
     updated.name = "after"
     await mgr.save_metadata(updated)
@@ -134,7 +131,7 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
   def _coordinated_replace(src: str, dst: str) -> None:
     return harness.replace(src, dst)
 
-  with patch("src.core.json_utils.os.replace", side_effect=_coordinated_replace):
+  with patch(JSON_UTILS_OS_REPLACE_PATCH_TARGET, side_effect=_coordinated_replace):
     results = await asyncio.gather(
         mgr.save_metadata(first),
         mgr.save_metadata(second),

@@ -106,6 +106,7 @@ Chat.expose([
   'showMoreToggleHtml',
   'thinkingToggleHtml',
   'toolNameChipHtml',
+  'formatBubbleTime',
   'STIMULUS_ROLES',
 ]);
 

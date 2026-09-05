@@ -16,17 +16,6 @@ function updateRelativeTimes() {
 }
 
 // ---------------------------------------------------------------------------
-// Absolute last-run time formatting (for scheduled sessions)
-// ---------------------------------------------------------------------------
-function formatLastRun(isoString) {
-  if (!isoString) return '';
-  const d = new Date(isoString);
-  const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  const timeStr = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' });
-  return dateStr + ', ' + timeStr;
-}
-
-// ---------------------------------------------------------------------------
 // Right-edge panel resize (LaTeX and backlog panels): drag-left enlarges.
 // Width follows the mouse in px and persists as a parent percentage on
 // release; the left-docked sidebar keeps its own px-bounded handler.

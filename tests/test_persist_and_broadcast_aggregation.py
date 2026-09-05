@@ -4,7 +4,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, make_home_session
+from conftest import (
+    BROADCAST_PATCH_TARGET,
+    assistant_text_tool_use_event,
+    make_home_session,
+)
 
 from src.core.sessions import SessionManager
 
@@ -87,27 +91,7 @@ async def test_aggregator_state_persists_across_calls(tmp_path: Path) -> None:
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
     await mgr.persist_and_broadcast(
-        session.id, {
-            "type": "assistant",
-            "message":
-                {
-                    "content":
-                        [
-                            {
-                                "type": "text",
-                                "text": "Running"
-                            },
-                            {
-                                "type": "tool_use",
-                                "name": "Bash",
-                                "input": {
-                                    "command": "ls"
-                                }
-                            },
-                        ]
-                },
-            "timestamp": "t1",
-        })
+        session.id, assistant_text_tool_use_event("Running", "Bash", {"command": "ls"}, "t1"))
     await mgr.persist_and_broadcast(
         session.id, {
             "type": "user",

@@ -80,6 +80,28 @@ function fixNestedFences(md) {
   }
 
   const renderer = new marked.Renderer();
+  // Every streaming paint re-parses the whole accumulated draft, so unchanged
+  // code blocks re-highlight on every paint, and highlightAuto scores the block
+  // against every registered language (~0.26 s per 24 KB on the served
+  // highlight.js 11.9.0 common build). Highlight output is a pure function of
+  // (lang, code), so a bounded LRU serves repeat blocks without re-running it.
+  const highlightCache = new Map();
+  const HIGHLIGHT_CACHE_CAP = 32;
+  function cachedHighlight(lang, code, run) {
+    const key = lang + '\u0000' + code;
+    let value = highlightCache.get(key);
+    if (value !== undefined) {
+      highlightCache.delete(key);
+      highlightCache.set(key, value);
+      return value;
+    }
+    value = run();
+    highlightCache.set(key, value);
+    if (highlightCache.size > HIGHLIGHT_CACHE_CAP) {
+      highlightCache.delete(highlightCache.keys().next().value);
+    }
+    return value;
+  }
   renderer.html = function(token) {
     // Support both marked v4 (html string) and v5+ ({ text } object), same
     // tolerance as renderer.code. Escape so raw tags render as literal text.
@@ -93,9 +115,9 @@ function fixNestedFences(md) {
     const trimmed = code.replace(/\n$/, '');
     let highlighted;
     if (lang && hljs.getLanguage(lang)) {
-      highlighted = hljs.highlight(trimmed, { language: lang }).value;
+      highlighted = cachedHighlight(lang, trimmed, () => hljs.highlight(trimmed, { language: lang }).value);
     } else {
-      highlighted = hljs.highlightAuto(trimmed).value;
+      highlighted = cachedHighlight('', trimmed, () => hljs.highlightAuto(trimmed).value);
     }
     const displayLang = escapeText(lang || 'text');
     const isMarkdown = (lang === 'markdown' || lang === 'md');

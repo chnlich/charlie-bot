@@ -208,6 +208,29 @@ def assistant_event(content: str, event_id: str = "assistant") -> dict:
   }
 
 
+def assistant_text_tool_use_event(text: str, tool_name: str, tool_input: dict, timestamp: str) -> dict:
+  """An ASSISTANT event whose message is one text block followed by one tool_use block: the
+  draft-with-tools shape the aggregator tool_result tests feed through both entry points."""
+  return {
+      "type": ET.ASSISTANT,
+      "message":
+          {
+              "content": [
+                  {
+                      "type": "text",
+                      "text": text
+                  },
+                  {
+                      "type": "tool_use",
+                      "name": tool_name,
+                      "input": tool_input
+                  },
+              ]
+          },
+      "timestamp": timestamp,
+  }
+
+
 def queued_user_reorder_events() -> list[dict]:
   """Two runs on one session: thinking + tool_use + tool_result + assistant + master_done in the first, a queued
   USER event inside the first run's interval, then a repeated session_id marker and a second assistant + master_done.

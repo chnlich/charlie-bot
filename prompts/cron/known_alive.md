@@ -289,6 +289,13 @@ Known-alive symbols:
   ``file-chip file-chip--${file.status}``, and `tests/chat_attachments_render.test.js` asserts
   the failed and uploaded variants by name. A dead-selector scan that greps each full class
   name finds no template or JS literal, so it flags them as unused CSS.
+- `d2h-wrapper`, `d2h-file-header`, `d2h-del`, `d2h-ins` (`web/static/css/styles.css`, scoped
+  under `.diff-modal-body`) — reached by library DOM construction: the diff2html bundle both
+  templates load from jsdelivr CDN emits every one of these class names when it renders the
+  diff, and the rules restyle that output. A dead-selector scan that greps each full class
+  name finds no template or JS literal, so it flags them as unused CSS. (Other `d2h-*`
+  selectors in the same block, e.g. `.d2h-code-linenumber`, are reached directly by
+  `diff_comments.js` `querySelector` calls.)
 - `turn-row-tag-trigger`, `turn-row-tag-turn`, `turn-row-tag-worker`, `turn-row-tag-you`
   (`web/static/css/styles.css`) — reached by string construction: `chat/rendering.js` emits
   ``turn-row-tag turn-row-tag-' + label.toLowerCase()``, with the labels

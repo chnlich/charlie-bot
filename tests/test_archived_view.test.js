@@ -6,16 +6,9 @@
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
-const { createElement, createEscapingElement } = require('./dom_element_stub');
-const { buildSidebarFilterElements } = require('./session_context_stub');
-
-const COMPAT_LOADER_JS = readStatic('compat-loader.js');
-const CHAT_JS = readStatic('chat.js');
-const SIDEBAR_JS = readStatic('sidebar.js');
-const PAGE_TIMERS_JS = readStatic('page-timers.js');
+const { createElement } = require('./dom_element_stub');
+const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext } = require('./session_context_stub');
 
 function makeArchivedSession(id, overrides = {}) {
   return {
@@ -54,56 +47,31 @@ function makePage(sessions, {hasMore = false, groups = null} = {}) {
 }
 
 function buildContext(overrides = {}) {
-  const elements = overrides.elements || new Map();
   const fetchCalls = [];
-  const context = {
-    SESSION_ID: 'session-live',
-    INITIAL_SESSIONS: [],
-    INITIAL_LOAD_ERRORS: [],
-    location: {href: '', protocol: 'http:', host: 'localhost:8000', search: ''},
-    history: {pushState: () => {}},
-    console: {error: () => {}, log: () => {}},
-    localStorage: {getItem: () => null, setItem: () => {}, removeItem: () => {}},
-    setInterval: () => 0,
-    setTimeout: (fn) => { fn(); return 0; },
-    clearInterval: () => {},
-    clearTimeout: () => {},
-    fetch: overrides.fetch || (async (url) => { throw new Error('unexpected fetch ' + url); }),
-    document: {
-      getElementById: (id) => elements.get(id) || null,
-      querySelectorAll: overrides.querySelectorAll || (() => []),
-      querySelector: () => null,
-      createElement: createEscapingElement,
-      body: createElement({tagName: 'BODY'}),
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    },
-    window: {addEventListener: () => {}, innerHeight: 800},
-    CSS: {escape: (value) => String(value)},
-    relativeTime: (txt) => txt,
-    updateRelativeTimes: () => {},
-    marked: {parse: (txt) => txt},
-    fixNestedFences: (txt) => txt,
-    BACKEND_OPTIONS: {},
-    BACKEND_TYPES: {},
-    switchSession: async () => {},
-    renderNoActiveSessionView: () => {},
-    updateSidebarHighlight: () => {},
-    showToast: () => {},
-    confirm: () => true,
-    alert: () => {},
-  };
-  Object.defineProperty(context, 'fetchCalls', {value: fetchCalls});
-  const innerFetch = context.fetch;
+  const {context, elements} = baseSessionContext(overrides);
+
+  // Fork mutations land before createChatSidebarContext: the loaded modules
+  // bind or shadow these globals at load time.
+  context.SESSION_ID = 'session-live';
+  context.INITIAL_SESSIONS = [];
+  context.INITIAL_LOAD_ERRORS = [];
+  context.setInterval = () => 0;
+  context.setTimeout = (fn) => { fn(); return 0; };
+  context.clearInterval = () => {};
+  context.clearTimeout = () => {};
+  context.document.getElementById = (id) => elements.get(id) || null;
+  context.document.querySelectorAll = overrides.querySelectorAll || (() => []);
+  context.document.querySelector = () => null;
+  context.switchSession = async () => {};
+  context.renderNoActiveSessionView = () => {};
+  context.confirm = () => true;
+  context.alert = () => {};
+  const innerFetch = overrides.fetch || (async (url) => { throw new Error('unexpected fetch ' + url); });
   context.fetch = async (url, opts = {}) => {
     fetchCalls.push(url);
     return innerFetch(url, opts);
   };
-  vm.createContext(context);
-  vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
-  vm.runInContext(COMPAT_LOADER_JS, context, {filename: 'compat-loader.js'});
-  vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
-  vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
+  createChatSidebarContext(context);
   return {context, elements, fetchCalls};
 }
 

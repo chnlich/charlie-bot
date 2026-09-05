@@ -76,8 +76,7 @@ def test_inject_appends_when_no_body() -> None:
   assert out.rstrip().endswith(SCRIPT)
 
 
-def test_injected_script_tag_carries_the_cache_bust_version(
-    monkeypatch: pytest.MonkeyPatch) -> None:
+def test_injected_script_tag_carries_the_cache_bust_version(monkeypatch: pytest.MonkeyPatch) -> None:
   """The artifact tray script is fetched with the same cache-bust query every
   template uses, so an upgrade cannot leave a browser on a stale copy."""
   monkeypatch.setattr(pages_api, "_RUNTIME_GIT_VERSION", "abc1234 · 03-24")

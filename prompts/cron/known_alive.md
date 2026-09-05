@@ -88,11 +88,10 @@ Known-alive symbols:
   one grep away from looking phase-1-deletable. Vulture also flags pydantic response-model
   fields served to `web/` (`schedule_cron`/`schedule_enabled`/`schedule_next_run`/
   `schedule_timezone`/`schedule_project`/`schedule_allow_failure` on `SessionMetadata`,
-  `parent_session_id` likewise, `lines_added` on `WorkerEvent`, `attach_command`/
-  `attach_available` on `ThreadMetadataResponse`, `placeholder` on `SlashCommandParam`,
-  `fired_at` on `PendingTrigger`) as unused variables/attributes, but every one of those names
-  is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS, Jinja templates), so
-  the Step 3 grep already protects them and they get no entries.
+  `parent_session_id` likewise, `lines_added` on `WorkerEvent`, `placeholder` on
+  `SlashCommandParam`, `fired_at` on `PendingTrigger`) as unused variables/attributes, but every
+  one of those names is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS,
+  Jinja templates), so the Step 3 grep already protects them and they get no entries.
 - `pytestmark` (`tests/test_voice_sherpa_streaming.py`) — module-level
   `pytest.mark.local_only` assignment that pytest's collection reads by attribute name (the
   marker is registered in `pyproject.toml`). Exactly one whole-repo match (the assignment

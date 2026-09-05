@@ -252,24 +252,25 @@ Known-alive symbols:
   `("has-session", "-t", "charliebot-terminal")` with no `check=`, so deleting the parameter
   stays green; the mirror keeps the stub a faithful drop-in. Vulture flags it at 100%
   confidence as an unused variable.
-- `feishu_app_id`, `feishu_app_secret`, `feishu_refresh_token`, `feishu_user_access_token`,
-  `gemini_api_key`, `gemini_model`, `google_client_id`, `google_client_secret`,
-  `google_docs_client_id`, `google_docs_client_secret`, `google_docs_default_folder_id`,
-  `google_docs_refresh_token`, `google_refresh_token`, `linear_api_key`, `slack_user_token`,
-  `twitter_api_key`, `twitter_api_secret`, `twitter_access_token`,
-  `twitter_access_token_secret`, `public_base_url` (`src/core/config.py`,
-  `CharlieBotConfig` fields) — yaml keys hosts carry in `config.yaml` / `config.d/*.yaml`,
-  kept deliberately: consumers read the raw yaml outside this repo. Ten of the twenty are
-  quoted by name in the skill files that read them (`skills/feishu/SKILL.md`,
-  `skills/gmail/SKILL.md`, `skills/google-sheets/SKILL.md`, `skills/google-docs/SKILL.md`,
-  `skills/linear/SKILL.md`, `skills/slack/SKILL.md`); the other ten — `gemini_api_key`,
-  `gemini_model`, `google_docs_client_id`, `google_docs_client_secret`, the four
-  `twitter_*` keys, and `public_base_url` — have no in-repo script consumer
-  (`gemini_api_key` surfaces only in README/setup/template prose). The four `twitter_*`
-  keys are read by the host-only `x-posting` skill, which is not mirrored into `skills/`,
-  so no in-repo grep can reach it; they were deleted on zero-match evidence in PR #455 and
-  that broke startup for every command going through `load_config()`. For this whole
-  block, an absent in-repo consumer is not evidence: the consumer is out of repo by
+- `aigw_api_key`, `feishu_app_id`, `feishu_app_secret`, `feishu_refresh_token`,
+  `feishu_user_access_token`, `gemini_api_key`, `gemini_model`, `google_client_id`,
+  `google_client_secret`, `google_docs_client_id`, `google_docs_client_secret`,
+  `google_docs_default_folder_id`, `google_docs_refresh_token`, `google_refresh_token`,
+  `linear_api_key`, `slack_user_token`, `twitter_api_key`, `twitter_api_secret`,
+  `twitter_access_token`, `twitter_access_token_secret`, `public_base_url`
+  (`src/core/config.py`, `CharlieBotConfig` fields) — yaml keys hosts carry in
+  `config.yaml` / `config.d/*.yaml`, kept deliberately: consumers read the raw yaml outside
+  this repo. Ten of the twenty-one are quoted by name in the skill files that read them
+  (`skills/feishu/SKILL.md`, `skills/gmail/SKILL.md`, `skills/google-sheets/SKILL.md`,
+  `skills/google-docs/SKILL.md`, `skills/linear/SKILL.md`, `skills/slack/SKILL.md`); the
+  other eleven — `aigw_api_key`, `gemini_api_key`, `gemini_model`, `google_docs_client_id`,
+  `google_docs_client_secret`, `google_docs_refresh_token`, the four `twitter_*` keys, and
+  `public_base_url` — have no in-repo script consumer (`gemini_api_key` surfaces only in
+  README/setup/template prose, `aigw_api_key` only in its own field comment). The four
+  `twitter_*` keys are read by the host-only `x-posting` skill, which is not mirrored into
+  `skills/`, so no in-repo grep can reach it; they were deleted on zero-match evidence in
+  PR #455 and that broke startup for every command going through `load_config()`. For this
+  whole block, an absent in-repo consumer is not evidence: the consumer is out of repo by
   construction, so the zero-match bar of `code_health.md` Step 3 can never clear it. The
   fields exist so `extra='forbid'` keeps those host files loadable — the
   block comment directly above the fields in `config.py` states this for the whole set.
@@ -309,3 +310,29 @@ Known-alive symbols:
   the copy-on-select `mouseup` listener; deleting it silently kills terminal
   copy-on-select. A JS unreferenced-method scan finds only the definition, so it flags
   the method as dead; `dispose` in the same object literal is reached the same way.
+- `render` (`FastJsonResponse` in `src/api/responses.py`) — template-method override of
+  starlette `JSONResponse.render`: the base `Response.__init__` calls `self.render(content)`
+  by that name when FastAPI serializes a response. As a Python identifier the name has zero
+  matches outside its definition, so a Python-scoped dead-method scan (vulture) flags it as
+  an unused method; a whole-repo grep is noisier — `render` is also ordinary web-JS DOM code
+  (`plan-panel.js` `function render()`, `backlogPanel.render()`, pdf.js `page.render(...)`)
+  that names unrelated methods. Same class as the `do_GET`/`do_POST`/`log_message`
+  stdlib-dispatch entry.
+- `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data`, `handle_entityref`,
+  `handle_charref` (`_Parser` in `src/core/plan_diff.py`, `handle_starttag`/
+  `handle_startendtag`/`handle_endtag`/`handle_data` also on `_DomParser` in
+  `tests/test_plan_diff.py`) — template-method overrides of stdlib `html.parser.HTMLParser`,
+  same class as the `_TreeBuilder` entry above; `feed()` drives the base scanner, which
+  invokes these under their contract-fixed names while each parser builds its DOM. The
+  `_TreeBuilder` entry covers only artifact_check's class; each name still has zero
+  whole-repo matches outside the three parser definitions, so vulture flags each as an
+  unused method. `handle_entityref`/`handle_charref` exist only on `_Parser` and fire
+  because it is constructed with `convert_charrefs=False`; the other two parsers pass the
+  `True` default, under which the stdlib folds references into `handle_data` and never
+  calls those two.
+- `isolation_level` (`src/core/storage_cool.py`) — attribute write on a stdlib
+  `sqlite3.Connection`; the sqlite3 C module reads it back when executing statements
+  (`None` switches the connection to per-statement autocommit transactions, which the
+  inline comment pins: one failed DELETE keeps the rest of the batch alive). Nothing in
+  the repo reads the name, so vulture flags the write as an unused attribute. Same class
+  as the sherpa-onnx `vad_config` attribute-write entry above.

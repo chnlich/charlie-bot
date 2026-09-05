@@ -18,6 +18,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const { fetchUrl } = require('./stream_collector_common');
+const { hljsStub } = require('./hljs_stub');
 
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
 const MARKED_URL = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
@@ -78,11 +79,7 @@ function pageCorpus() {
 async function loadContext(hljsSource) {
   const context = {
     console: { error() {}, warn() {}, log() {} },
-    hljs: {
-      getLanguage: () => null,
-      highlightAuto: (s) => ({ value: String(s) }),
-      highlight: (s) => ({ value: String(s) }),
-    },
+    hljs: hljsStub,
     document: { querySelectorAll: () => [] },
     platform: {},
   };

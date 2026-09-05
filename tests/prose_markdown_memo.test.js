@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 const { readStatic } = require('./read_static');
+const { hljsStub } = require('./hljs_stub');
 
 // Fake marked counts parse calls; the Renderer/use surface is what
 // markdown-renderer.js touches at load.
@@ -17,11 +18,7 @@ globalThis.marked = {
 function loadRenderer() {
   const context = {
     console: { error() {}, warn() {}, log() {} },
-    hljs: {
-      getLanguage: () => null,
-      highlightAuto: (s) => ({ value: String(s) }),
-      highlight: (s) => ({ value: String(s) }),
-    },
+    hljs: hljsStub,
     document: { querySelectorAll: () => [] },
     platform: {},
   };

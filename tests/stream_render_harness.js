@@ -8,6 +8,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+const { hljsStub } = require('./hljs_stub');
+
 // CHECKOUT overrides the code under test (the M33 A/B protocol); the default is
 // this harness's own repo root so behavior tests exercise their own checkout.
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
@@ -47,11 +49,7 @@ function buildStreamHarness(markedSource, options = {}) {
   // options.hljsSource loads the page's real highlight.js build; without it the
   // stub keeps the M33 metric on the marked-parse cost alone.
   if (!options.hljsSource) {
-    context.hljs = {
-      getLanguage: () => null,
-      highlightAuto: (s) => ({ value: String(s) }),
-      highlight: (s) => ({ value: String(s) }),
-    };
+    context.hljs = hljsStub;
   }
   vm.createContext(context);
   if (options.hljsSource) {

@@ -21,6 +21,7 @@ from conftest import cfg_with_repo as _cfg_with_repo
 from src.cli import slack as slack_cli
 from src.cli.main import _COMMANDS
 from src.core import event_types as ET
+from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SlackOrigin
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
@@ -110,11 +111,15 @@ def _origin(event: dict) -> SlackOrigin:
   return SlackOrigin(team_id=event["team"], channel_id=event["channel"], thread_ts=_thread_ts(event))
 
 
+def _rig(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, _FakeSlackClient]:
+  """Summon rig: cfg and session manager rooted at tmp_path, plus the recording fake client."""
+  cfg = build_slack_cfg(tmp_path)
+  return cfg, SessionManager(cfg), _FakeSlackClient()
+
+
 @pytest.mark.asyncio
 async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path: Path) -> None:
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  client = _FakeSlackClient()
+  cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event()
   tasks = _spawn_round_tasks()
 
@@ -243,9 +248,7 @@ def test_build_summon_prompt_missing_reply_format_doc_raises_with_path_and_cause
 
 @pytest.mark.asyncio
 async def test_same_thread_twice_reuses_the_session(tmp_path: Path) -> None:
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  client = _FakeSlackClient()
+  cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event()
 
   with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
@@ -260,9 +263,7 @@ async def test_same_thread_twice_reuses_the_session(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_disallowed_user_drops_with_no_side_effects(tmp_path: Path) -> None:
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  client = _FakeSlackClient()
+  cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event(user="U_OTHER")
 
   with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
@@ -275,9 +276,7 @@ async def test_disallowed_user_drops_with_no_side_effects(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_non_app_mention_message_drops_with_no_side_effects(tmp_path: Path) -> None:
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  client = _FakeSlackClient()
+  cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event(type="message")
 
   with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
@@ -290,9 +289,7 @@ async def test_non_app_mention_message_drops_with_no_side_effects(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_top_level_mention_uses_own_ts(tmp_path: Path) -> None:
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  client = _FakeSlackClient()
+  cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event()  # no thread_ts, so the mention's own ts is the thread
   tasks = _spawn_round_tasks()
 
@@ -313,8 +310,7 @@ async def test_top_level_mention_uses_own_ts(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_reactions_add_failure_still_spawns_the_round(tmp_path: Path) -> None:
   """A failing reactions.add costs only the eyes: the round still spawns and persists."""
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, _ = _rig(tmp_path)
   event = _make_event()
 
   class _FailingReactionClient(_FakeSlackClient):
@@ -347,8 +343,7 @@ async def test_reactions_add_failure_still_spawns_the_round(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_archived_session_is_unarchived_not_duplicated(tmp_path: Path) -> None:
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event()
   sid = _sid(event)
   await session_mgr.create_session(
@@ -356,7 +351,6 @@ async def test_archived_session_is_unarchived_not_duplicated(tmp_path: Path) -> 
   await session_mgr.archive_session(sid)
   assert (await session_mgr.get_session(sid)).status == "archived"
 
-  client = _FakeSlackClient()
   with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
     result = await handle_app_mention(event, cfg, session_mgr, client)
 
@@ -371,9 +365,7 @@ async def test_archived_session_is_unarchived_not_duplicated(tmp_path: Path) -> 
 async def test_new_summon_session_is_grouped_by_channel_name(tmp_path: Path) -> None:
   """A fresh summon session (slack_origin set, group empty) lands in `Slack #<name>`,
   and its session name carries the same resolved label."""
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  client = _FakeSlackClient()
+  cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event()
 
   with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
@@ -390,8 +382,7 @@ async def test_new_summon_session_is_grouped_by_channel_name(tmp_path: Path) -> 
 async def test_unresolvable_channel_name_groups_by_channel_id(tmp_path: Path) -> None:
   """A missing_scope-style resolution failure still groups, as `Slack #<channel_id>`,
   and the mention is still accepted and answered."""
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, _ = _rig(tmp_path)
   event = _make_event()
 
   class _UnresolvingClient(_FakeSlackClient):
@@ -424,15 +415,13 @@ async def test_unresolvable_channel_name_groups_by_channel_id(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_existing_group_is_never_overwritten(tmp_path: Path) -> None:
   """A repeat mention on a session with a non-empty group does not call set_group."""
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event()
   sid = _sid(event)
   await session_mgr.create_session(
       CreateSessionRequest(session_id=sid, name="slack-grouped", slack_origin=_origin(event)))
   await session_mgr.set_group(sid, "Manual Group")
 
-  client = _FakeSlackClient()
   with (
       patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()),
       patch.object(session_mgr, "set_group", new=AsyncMock()) as set_group,
@@ -447,15 +436,13 @@ async def test_existing_group_is_never_overwritten(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_unarchived_session_with_empty_group_is_grouped(tmp_path: Path) -> None:
   """The unarchive path groups an empty-group session exactly like the create path."""
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event()
   sid = _sid(event)
   await session_mgr.create_session(
       CreateSessionRequest(session_id=sid, name="slack-archived", slack_origin=_origin(event)))
   await session_mgr.archive_session(sid)
 
-  client = _FakeSlackClient()
   with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
     result = await handle_app_mention(event, cfg, session_mgr, client)
 
@@ -469,9 +456,7 @@ async def test_unarchived_session_with_empty_group_is_grouped(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_set_group_failure_does_not_break_handle_app_mention(tmp_path: Path) -> None:
   """A set_group failure is logged and swallowed: the mention is still accepted and answered."""
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  client = _FakeSlackClient()
+  cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event()
 
   with (
@@ -490,8 +475,7 @@ async def test_set_group_failure_does_not_break_handle_app_mention(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_ensure_slack_group_skips_sessions_without_slack_origin(tmp_path: Path) -> None:
   """The label form of ensure_slack_group writes nothing when the session has no slack_origin."""
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, _ = _rig(tmp_path)
   meta = await session_mgr.create_session(CreateSessionRequest(name="web-session"))
 
   with patch.object(session_mgr, "set_group", new=AsyncMock()) as set_group:
@@ -554,8 +538,7 @@ async def test_get_channel_name_missing_scope_caches_none(tmp_path: Path) -> Non
 async def test_trigger_master_forwards_user_event_id(tmp_path: Path) -> None:
   from src.core import master_trigger
 
-  cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
+  cfg, session_mgr, _ = _rig(tmp_path)
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"))
 
   with patch.object(master_trigger, "run_message", new=AsyncMock(return_value=None)) as run_mock:

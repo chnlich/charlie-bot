@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import count_path_read_text
+from conftest import count_path_read_text, write_memory_entry, write_memory_topics
 
 import src.core.memory as memory_module
 from src.core.memory import MemoryFormatError, assemble_master, load_store
@@ -17,34 +17,9 @@ def _clear_store_memo():
   memory_module._store_memo.clear()
 
 
-def _write_topics(memory_dir: Path) -> None:
-  memory_dir.mkdir(parents=True, exist_ok=True)
-  (memory_dir / "entries").mkdir(exist_ok=True)
-  (memory_dir / "topics").write_text("profile resident\n", encoding="utf-8")
-
-
-def _write_entry(memory_dir: Path, slug: str, *, title: str | None = None, body: str | None = None) -> Path:
-  topic_dir = memory_dir / "entries" / "profile"
-  topic_dir.mkdir(parents=True, exist_ok=True)
-  p = topic_dir / f"{slug}.md"
-  p.write_text(
-      "\n".join(
-          [
-              "---",
-              "scope: user",
-              "topic: profile",
-              "audience: master, worker",
-              f"title: {title or slug.replace('-', ' ').title()}",
-              "---",
-              body or f"body for {slug}\n",
-          ]),
-      encoding="utf-8")
-  return p
-
-
 def test_steady_state_load_pays_no_file_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "one")
+  write_memory_topics(tmp_path, ["profile resident"])
+  write_memory_entry(tmp_path, "profile", "one")
   first = load_store(tmp_path)
   assert len(first.entries) == 1
 
@@ -56,8 +31,8 @@ def test_steady_state_load_pays_no_file_read(tmp_path: Path, monkeypatch: pytest
 
 
 def test_entry_rewrite_rereads_and_serves_new_content(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  p = _write_entry(tmp_path, "one", title="Before")
+  write_memory_topics(tmp_path, ["profile resident"])
+  p = write_memory_entry(tmp_path, "profile", "one", title="Before")
   assert load_store(tmp_path).entries[0].title == "Before"
 
   p.write_text(p.read_text(encoding="utf-8").replace("Before", "After"), encoding="utf-8")
@@ -65,18 +40,18 @@ def test_entry_rewrite_rereads_and_serves_new_content(tmp_path: Path) -> None:
 
 
 def test_new_entry_file_rereads(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "one")
+  write_memory_topics(tmp_path, ["profile resident"])
+  write_memory_entry(tmp_path, "profile", "one")
   assert len(load_store(tmp_path).entries) == 1
 
-  _write_entry(tmp_path, "two")
+  write_memory_entry(tmp_path, "profile", "two")
   assert len(load_store(tmp_path).entries) == 2
 
 
 def test_entry_deletion_rereads(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "one")
-  p = _write_entry(tmp_path, "two")
+  write_memory_topics(tmp_path, ["profile resident"])
+  write_memory_entry(tmp_path, "profile", "one")
+  p = write_memory_entry(tmp_path, "profile", "two")
   assert len(load_store(tmp_path).entries) == 2
 
   p.unlink()
@@ -84,8 +59,8 @@ def test_entry_deletion_rereads(tmp_path: Path) -> None:
 
 
 def test_topics_rewrite_rereads(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "one")
+  write_memory_topics(tmp_path, ["profile resident"])
+  write_memory_entry(tmp_path, "profile", "one")
   assert [t.name for t in load_store(tmp_path).topics.values() if t.resident] == ["profile"]
 
   (tmp_path / "topics").write_text("profile\n", encoding="utf-8")
@@ -93,8 +68,8 @@ def test_topics_rewrite_rereads(tmp_path: Path) -> None:
 
 
 def test_malformed_store_raises_every_call(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  p = _write_entry(tmp_path, "one")
+  write_memory_topics(tmp_path, ["profile resident"])
+  p = write_memory_entry(tmp_path, "profile", "one")
   assert load_store(tmp_path).entries[0].slug == "one"
 
   p.write_text("---\nnot a header\n---\nbody\n", encoding="utf-8")
@@ -117,8 +92,8 @@ def test_memo_lru_evicts_least_recent_dir(tmp_path: Path, monkeypatch: pytest.Mo
   dirs = []
   for name in ("a", "b", "c"):
     d = tmp_path / name
-    _write_topics(d)
-    _write_entry(d, "one")
+    write_memory_topics(d, ["profile resident"])
+    write_memory_entry(d, "profile", "one")
     load_store(d)
     dirs.append(d)
 
@@ -130,8 +105,8 @@ def test_memo_lru_evicts_least_recent_dir(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_assemble_master_serves_memoized_store_without_new_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "one", title="First Fact", body="the one fact\n")
+  write_memory_topics(tmp_path, ["profile resident"])
+  write_memory_entry(tmp_path, "profile", "one", title="First Fact", body="the one fact\n")
   block = assemble_master(tmp_path)
   assert "the one fact" in block
 

@@ -10,29 +10,22 @@ frontmatter, comma-list audience, heading-free body).
 from pathlib import Path
 from types import SimpleNamespace
 
+from conftest import write_memory_entry, write_memory_topics
+
 from src.agents import master_cc
 from src.core import memory
 
 
 def _make_store(memory_dir: Path) -> None:
-  memory_dir.mkdir(parents=True, exist_ok=True)
-  (memory_dir / "entries").mkdir()
-  (memory_dir / "entries" / "profile").mkdir()
-  (memory_dir / "entries" / "charliebot").mkdir()
-  (memory_dir / "staging").mkdir()
-  (memory_dir / "topics").write_text("profile resident\ncommunication resident\ncharliebot\n", encoding="utf-8")
+  write_memory_topics(memory_dir, ["profile resident", "communication resident", "charliebot"])
   # Resident entry (full body injected, '# {title}' heading synthesized).
-  (memory_dir / "entries" / "profile" / "dark-mode.md").write_text(
-      "---\nscope: user\ntopic: profile\naudience: master, worker\ntitle: Dark Mode\n---\n"
-      "User prefers dark UI.\n",
-      encoding="utf-8")
+  write_memory_entry(memory_dir, "profile", "dark-mode", title="Dark Mode", body="User prefers dark UI.\n")
   # Non-resident entry (index line only).
-  (memory_dir / "entries" / "charliebot" / "cli-flags.md").write_text(
-      "---\nscope: user\ntopic: charliebot\naudience: master, worker\ntitle: CLI Flags\n---\n"
-      "Full body that must NOT be injected.\n",
-      encoding="utf-8")
+  write_memory_entry(
+      memory_dir, "charliebot", "cli-flags", title="CLI Flags", body="Full body that must NOT be injected.\n")
   # Staging candidate (never injected). Legacy body shape on purpose: the
   # relaxed staging rules keep such candidates parseable.
+  (memory_dir / "staging").mkdir()
   (memory_dir / "staging" / "20260728T120000Z-abcd1234-pending.md").write_text(
       "---\ntopic: profile\nscope: user\naudience: both\n---\n# Pending\n\nSTAGED BODY\n", encoding="utf-8")
 

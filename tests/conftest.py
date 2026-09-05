@@ -1002,6 +1002,92 @@ def write_cron_task(home: Path, name: str, text: str) -> Path:
   return p
 
 
+MEMORY_DEFAULT_TOPICS = [
+    "profile resident",
+    "communication resident",
+    "workflow resident",
+    "rulings resident",
+    "host resident",
+    "charliebot",
+]
+
+
+def memory_entry_text(
+    topic: str,
+    slug: str,
+    *,
+    scope: str = "user",
+    audience: str = "master, worker",
+    title: str | None = None,
+    revises: str | None = None,
+    body: str | None = None,
+) -> str:
+  """One format-v2 memory entry file's text: title in frontmatter, comma-list audience,
+  pure-markdown body."""
+  if title is None:
+    title = slug.replace("-", " ").title()
+  header = ["---", f"scope: {scope}", f"topic: {topic}", f"audience: {audience}", f"title: {title}"]
+  if revises is not None:
+    header.append(f"revises: {revises}")
+  header.append("---")
+  if body is None:
+    body = f"body for {slug}\n"
+  return "\n".join(header) + "\n" + body
+
+
+def legacy_memory_entry_text(
+    topic: str,
+    slug: str,
+    *,
+    scope: str = "user",
+    audience: str = "both",
+    created: str = "2026-07-28",
+    source: str = "test",
+    revises: str | None = None,
+    body: str | None = None,
+) -> str:
+  """One format-v1 (legacy) memory entry file's text: created/source header, three-value audience,
+  ``# <title>`` body opener."""
+  header = [
+      "---", f"scope: {scope}", f"topic: {topic}", f"audience: {audience}", f"created: {created}", f"source: {source}"
+  ]
+  if revises is not None:
+    header.append(f"revises: {revises}")
+  header.append("---")
+  if body is None:
+    body = f"# {slug.replace('-', ' ').title()}\n\nbody for {slug}\n"
+  return "\n".join(header) + "\n" + body
+
+
+def write_memory_topics(memory_dir: Path, lines: list[str] | None = None) -> None:
+  """Write a memory store's ``topics`` file (one topic per line, default ``MEMORY_DEFAULT_TOPICS``)
+  and create the ``entries/`` dir the loader scans."""
+  memory_dir.mkdir(parents=True, exist_ok=True)
+  (memory_dir / "entries").mkdir(exist_ok=True)
+  (memory_dir / "topics").write_text(
+      "".join(line + "\n" for line in (lines or MEMORY_DEFAULT_TOPICS)), encoding="utf-8")
+
+
+def write_memory_entry(memory_dir: Path, topic: str, slug: str, legacy: bool = False, **kw: Any) -> Path:
+  """Write one entry file ``entries/<topic>/<slug>.md`` via memory_entry_text (or
+  legacy_memory_entry_text with ``legacy=True``); the returned path is what assertions read back."""
+  d = memory_dir / "entries" / topic
+  d.mkdir(parents=True, exist_ok=True)
+  p = d / f"{slug}.md"
+  text = legacy_memory_entry_text(topic, slug, **kw) if legacy else memory_entry_text(topic, slug, **kw)
+  p.write_text(text, encoding="utf-8")
+  return p
+
+
+def write_memory_staging(memory_dir: Path, name: str, topic: str, slug: str, legacy: bool = False, **kw: Any) -> Path:
+  """Write one staging candidate ``staging/<name>.md``; same text rules as write_memory_entry."""
+  memory_dir.joinpath("staging").mkdir(parents=True, exist_ok=True)
+  p = memory_dir / "staging" / f"{name}.md"
+  text = legacy_memory_entry_text(topic, slug, **kw) if legacy else memory_entry_text(topic, slug, **kw)
+  p.write_text(text, encoding="utf-8")
+  return p
+
+
 class FakeWebSocket:
   """WebSocket double recording every send_json payload in .sent, for tests that pass it to server
   catchup/replay producers duck-typing the FastAPI WebSocket."""

@@ -30,7 +30,7 @@ async def handle_voice_websocket(websocket: WebSocket, session_id: str) -> None:
   """Run one local streaming transcription WebSocket."""
   cfg = get_config()
   try:
-    session = await asyncio.to_thread(create_transcription_session)
+    session = await asyncio.to_thread(create_transcription_session, cfg)
   except SpeechModelsNotReady as exc:
     await _send_error_and_close(websocket, str(exc))
     return

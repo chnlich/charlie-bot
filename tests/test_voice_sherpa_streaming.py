@@ -15,15 +15,16 @@ from src.agents import transcriber
 from src.api import voice
 from src.core.config import CharlieBotConfig
 
-SAMPLE_WAV = Path("/home/chaoli/.charliebot/sessions/8ad514a7-e599-4ce2-ad17-2ab351362e3b/acceptance_sample.wav")
-GROUNDTRUTH_TXT = Path(
-    "/home/chaoli/.charliebot/sessions/8ad514a7-e599-4ce2-ad17-2ab351362e3b/acceptance_sample_groundtruth.txt")
-AUDIO_DURATION_SECONDS = 48.06
-CHUNK_SAMPLES = 2048
-
 # Both tests stream the host's acceptance voice sample through locally cached
 # sherpa-onnx speech models; nothing they need exists on a CI runner.
 pytestmark = pytest.mark.local_only
+
+_DEFAULT_HOME = CharlieBotConfig().charliebot_home
+SAMPLE_WAV = _DEFAULT_HOME / "sessions" / "8ad514a7-e599-4ce2-ad17-2ab351362e3b" / "acceptance_sample.wav"
+GROUNDTRUTH_TXT = _DEFAULT_HOME / "sessions" / "8ad514a7-e599-4ce2-ad17-2ab351362e3b" / \
+    "acceptance_sample_groundtruth.txt"
+AUDIO_DURATION_SECONDS = 48.06
+CHUNK_SAMPLES = 2048
 
 
 def _require_voice_assets(cfg: CharlieBotConfig) -> None:
@@ -82,7 +83,7 @@ def test_sherpa_simulated_streaming_acceptance_baseline() -> None:
   cfg = CharlieBotConfig()
   _require_voice_assets(cfg)
 
-  session = transcriber.create_transcription_session()
+  session = transcriber.create_transcription_session(cfg)
   started = time.perf_counter()
   for chunk in _pcm_chunks(SAMPLE_WAV):
     session.accept_pcm(chunk)

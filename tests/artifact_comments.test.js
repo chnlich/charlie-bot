@@ -1283,6 +1283,17 @@ test('gutter mode never relocates the action bar as window width changes', async
 
 const FETCH_OK = async () => ({ok: true, status: 200, json: async () => ({name: 'S'})});
 
+// Seeds `drafts` against the session-270 plan page, then loads the script
+// there: sessionStorage carries the drafts, `children` are the body nodes the
+// re-anchor pass scans, and fetch is FETCH_OK.
+function loadWithDrafts(drafts, children) {
+  return loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
+    sessionStorage: seedDraft(SESSION_270_PLAN_PATH, drafts),
+    bodyChildren: children,
+    fetch: FETCH_OK,
+  });
+}
+
 // A 640px-wide article column at the default 1024px viewport keeps the one-band
 // reserve clean (640 <= 1024 - 316) but not the two-band one (640 > 1024 - 624),
 // so measureContent() puts the dock inside the card column in these tests.
@@ -1293,14 +1304,9 @@ function rectAt(top) {
 test('re-anchor hit: restores el and marks the block when quote matches', () => {
   const block = makeBlock('Unique commentable text for reanchor hit');
   block.getBoundingClientRect = rectAt(200);
-  const storage = seedDraft(SESSION_270_PLAN_PATH, [
-    {kind: 'block', quote: 'Unique commentable text for reanchor hit', context: '', comment: 'test comment'},
-  ]);
-  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    sessionStorage: storage,
-    bodyChildren: [block],
-    fetch: FETCH_OK,
-  });
+  const {body} = loadWithDrafts(
+    [{kind: 'block', quote: 'Unique commentable text for reanchor hit', context: '', comment: 'test comment'}],
+    [block]);
   assert.equal(block.classList.contains('__cbc-marked'), true, 'block carries __cbc-marked after re-anchor');
   const gutter = findChildByClass(body, '__cbc-gutter');
   assert.ok(gutter, 'gutter is active in gutter mode');
@@ -1309,14 +1315,9 @@ test('re-anchor hit: restores el and marks the block when quote matches', () => 
 
 test('re-anchor miss: entry stays unanchored, no block is marked, nothing throws', () => {
   const block = makeBlock('some commentable text');
-  const storage = seedDraft(SESSION_270_PLAN_PATH, [
-    {kind: 'block', quote: 'quote that matches no block', context: '', comment: 'no match'},
-  ]);
-  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    sessionStorage: storage,
-    bodyChildren: [block],
-    fetch: FETCH_OK,
-  });
+  const {body} = loadWithDrafts(
+    [{kind: 'block', quote: 'quote that matches no block', context: '', comment: 'no match'}],
+    [block]);
   assert.equal(block.classList.contains('__cbc-marked'), false, 'no block is marked on miss');
   const gutter = findChildByClass(body, '__cbc-gutter');
   assert.ok(!gutter, 'gutter is not created when no entry is anchored');
@@ -1327,14 +1328,9 @@ test('re-anchor never mis-anchors to a prefix-sharing block', () => {
   blockLong.getBoundingClientRect = rectAt(200);
   const blockShort = makeBlock('common prefix text');
   blockShort.getBoundingClientRect = rectAt(400);
-  const storage = seedDraft(SESSION_270_PLAN_PATH, [
-    {kind: 'block', quote: 'common prefix text', context: '', comment: 'should anchor to exact match'},
-  ]);
-  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    sessionStorage: storage,
-    bodyChildren: [blockLong, blockShort],
-    fetch: FETCH_OK,
-  });
+  const {body} = loadWithDrafts(
+    [{kind: 'block', quote: 'common prefix text', context: '', comment: 'should anchor to exact match'}],
+    [blockLong, blockShort]);
   assert.equal(blockShort.classList.contains('__cbc-marked'), true, 'exact-match block is marked');
   assert.equal(blockLong.classList.contains('__cbc-marked'), false, 'prefix-sharing block is NOT marked');
 });
@@ -1342,14 +1338,9 @@ test('re-anchor never mis-anchors to a prefix-sharing block', () => {
 test('re-anchor is idempotent: running twice does not change anchors or marks', () => {
   const block = makeBlock('idempotent reanchor text');
   block.getBoundingClientRect = rectAt(200);
-  const storage = seedDraft(SESSION_270_PLAN_PATH, [
-    {kind: 'block', quote: 'idempotent reanchor text', context: '', comment: 'test idempotence'},
-  ]);
-  const {window, body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    sessionStorage: storage,
-    bodyChildren: [block],
-    fetch: FETCH_OK,
-  });
+  const {window, body} = loadWithDrafts(
+    [{kind: 'block', quote: 'idempotent reanchor text', context: '', comment: 'test idempotence'}],
+    [block]);
   assert.equal(block.classList.contains('__cbc-marked'), true, 'block is marked after first re-anchor');
   const gutterBefore = findChildByClass(body, '__cbc-gutter');
   assert.ok(gutterBefore, 'gutter exists after first re-anchor');
@@ -1366,17 +1357,14 @@ test('gutter mode routes anchored entries to the gutter and unanchored entries t
   blockA.getBoundingClientRect = rectAt(200);
   const blockB = makeBlock('anchored block B for routing');
   blockB.getBoundingClientRect = rectAt(400);
-  const storage = seedDraft(SESSION_270_PLAN_PATH, [
-    {kind: 'block', quote: 'anchored block A for routing', context: '', comment: 'matched A'},
-    {kind: 'block', quote: 'nonexistent quote one matching nothing', context: '', comment: 'unmatched A'},
-    {kind: 'block', quote: 'anchored block B for routing', context: '', comment: 'matched B'},
-    {kind: 'block', quote: 'nonexistent quote two matching nothing', context: '', comment: 'unmatched B'},
-  ]);
-  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    sessionStorage: storage,
-    bodyChildren: [blockA, blockB],
-    fetch: FETCH_OK,
-  });
+  const {body} = loadWithDrafts(
+    [
+      {kind: 'block', quote: 'anchored block A for routing', context: '', comment: 'matched A'},
+      {kind: 'block', quote: 'nonexistent quote one matching nothing', context: '', comment: 'unmatched A'},
+      {kind: 'block', quote: 'anchored block B for routing', context: '', comment: 'matched B'},
+      {kind: 'block', quote: 'nonexistent quote two matching nothing', context: '', comment: 'unmatched B'},
+    ],
+    [blockA, blockB]);
   const gutter = findChildByClass(body, '__cbc-gutter');
   assert.ok(gutter, 'gutter is active in gutter mode');
   assert.equal(gutter.children.length, 2, 'gutter child count equals the anchored count');
@@ -1394,16 +1382,13 @@ test('gutter mode writes only stackCards tops to gutter children (single writer)
     b.getBoundingClientRect = () => ({left: 0, top: t, right: 640, bottom: t + 50, width: 640, height: 50});
     return b;
   });
-  const storage = seedDraft(SESSION_270_PLAN_PATH, [
-    ...tops.map((t) => ({kind: 'block', quote: 'single writer anchor ' + t, context: '', comment: 'anchored ' + t})),
-    {kind: 'block', quote: 'single writer unanchored one', context: '', comment: 'unanchored one'},
-    {kind: 'block', quote: 'single writer unanchored two', context: '', comment: 'unanchored two'},
-  ]);
-  const {window, body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    sessionStorage: storage,
-    bodyChildren: blocks,
-    fetch: FETCH_OK,
-  });
+  const {window, body} = loadWithDrafts(
+    [
+      ...tops.map((t) => ({kind: 'block', quote: 'single writer anchor ' + t, context: '', comment: 'anchored ' + t})),
+      {kind: 'block', quote: 'single writer unanchored one', context: '', comment: 'unanchored one'},
+      {kind: 'block', quote: 'single writer unanchored two', context: '', comment: 'unanchored two'},
+    ],
+    blocks);
   const stackCards = window.__cbcStackCards;
   const gap = window.__cbcGutterGap;
   const gutter = findChildByClass(body, '__cbc-gutter');
@@ -1429,14 +1414,9 @@ test('gutter mode writes only stackCards tops to gutter children (single writer)
 test('hover affordance: hovering a card highlights its anchor block with a distinct class', () => {
   const block = makeBlock('hover affordance target block');
   block.getBoundingClientRect = rectAt(200);
-  const storage = seedDraft(SESSION_270_PLAN_PATH, [
-    {kind: 'block', quote: 'hover affordance target block', context: '', comment: 'hover test'},
-  ]);
-  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    sessionStorage: storage,
-    bodyChildren: [block],
-    fetch: FETCH_OK,
-  });
+  const {body} = loadWithDrafts(
+    [{kind: 'block', quote: 'hover affordance target block', context: '', comment: 'hover test'}],
+    [block]);
   const gutter = findChildByClass(body, '__cbc-gutter');
   assert.ok(gutter, 'gutter exists');
   const card = gutter.children[0];
@@ -1456,14 +1436,9 @@ test('click affordance: clicking a card scrolls its anchor block into view', () 
   block.getBoundingClientRect = rectAt(200);
   let scrollCalls = 0;
   block.scrollIntoView = () => { scrollCalls++; };
-  const storage = seedDraft(SESSION_270_PLAN_PATH, [
-    {kind: 'block', quote: 'click affordance target block', context: '', comment: 'click test'},
-  ]);
-  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    sessionStorage: storage,
-    bodyChildren: [block],
-    fetch: FETCH_OK,
-  });
+  const {body} = loadWithDrafts(
+    [{kind: 'block', quote: 'click affordance target block', context: '', comment: 'click test'}],
+    [block]);
   const gutter = findChildByClass(body, '__cbc-gutter');
   assert.ok(gutter, 'gutter exists');
   const card = gutter.children[0];
@@ -1485,14 +1460,9 @@ test('click affordance: clicking an unanchored card is a no-op for scroll but st
   const block = makeBlock('some block text');
   let scrollCalls = 0;
   block.scrollIntoView = () => { scrollCalls++; };
-  const storage = seedDraft(SESSION_270_PLAN_PATH, [
-    {kind: 'block', quote: 'nonexistent quote', context: '', comment: 'unanchored'},
-  ]);
-  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    sessionStorage: storage,
-    bodyChildren: [block],
-    fetch: FETCH_OK,
-  });
+  const {body} = loadWithDrafts(
+    [{kind: 'block', quote: 'nonexistent quote', context: '', comment: 'unanchored'}],
+    [block]);
   const trayList = body.querySelector('.__cbc-tray-list');
   assert.ok(trayList, 'tray list exists in corner mode');
   const card = trayList.children[0];
@@ -1512,14 +1482,9 @@ test('click affordance: clicking an unanchored card is a no-op for scroll but st
 test('card click does not break the x button', () => {
   const block = makeBlock('block for remove test');
   block.getBoundingClientRect = rectAt(200);
-  const storage = seedDraft(SESSION_270_PLAN_PATH, [
-    {kind: 'block', quote: 'block for remove test', context: '', comment: 'remove test'},
-  ]);
-  const {body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    sessionStorage: storage,
-    bodyChildren: [block],
-    fetch: FETCH_OK,
-  });
+  const {body} = loadWithDrafts(
+    [{kind: 'block', quote: 'block for remove test', context: '', comment: 'remove test'}],
+    [block]);
   const gutter = findChildByClass(body, '__cbc-gutter');
   assert.ok(gutter, 'gutter exists');
   const card = gutter.children[0];
@@ -1584,13 +1549,9 @@ test('findBlock returns null for a block node planted inside the review layer', 
 
 test('re-anchor never marks a layer node, even when its text matches a draft quote', () => {
   const block = makeBlock('some artifact text');
-  const {window, body} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
-    sessionStorage: seedDraft(SESSION_270_PLAN_PATH, [
-      {kind: 'block', quote: '<some text>', context: '', comment: 'quote targets the planted node'},
-    ]),
-    bodyChildren: [block],
-    fetch: FETCH_OK,
-  });
+  const {window, body} = loadWithDrafts(
+    [{kind: 'block', quote: '<some text>', context: '', comment: 'quote targets the planted node'}],
+    [block]);
   const dock = dockOf(body);
   const planted = makeBlock('<some text>');
   dock.appendChild(planted);

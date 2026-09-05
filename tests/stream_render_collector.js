@@ -3,52 +3,12 @@
 // replay through the checkout's usage.js/markdown-renderer.js and the page-pinned
 // marked build: the largest on-disk assistant draft growing in 200-byte deltas at a
 // 40 ms virtual cadence. CHECKOUT picks the code under test; live state read-only.
-const fs = require('node:fs');
-const https = require('node:https');
-const path = require('node:path');
 const crypto = require('node:crypto');
 
 const { buildStreamHarness } = require('./stream_render_harness');
+const { fetchUrl, largestAssistantDraft } = require('./stream_collector_common');
 
 const MARKED_URL = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
-function fetchMarked() {
-  return new Promise((resolve, reject) => {
-    https.get(MARKED_URL, (res) => {
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', (c) => { data += c; });
-      res.on('end', () => resolve(data));
-    }).on('error', reject);
-  });
-}
-
-// The largest single assistant text block across live chat files; a block cannot
-// exceed its file's size, so files no larger than the current best are skipped.
-function resolveCorpus() {
-  const root = path.join(process.env.HOME, '.charliebot', 'sessions');
-  const files = [];
-  for (const d of fs.readdirSync(root)) {
-    const p = path.join(root, d, 'data', 'chat_events.jsonl');
-    try { files.push({ p, size: fs.statSync(p).size }); } catch { continue; }
-  }
-  files.sort((a, b) => a.size - b.size);
-  let best = '';
-  for (const f of files) {
-    if (f.size <= best.length) continue;
-    for (const line of fs.readFileSync(f.p, 'utf8').split('\n')) {
-      if (!line || line.indexOf('"assistant"') === -1) continue;
-      let ev;
-      try { ev = JSON.parse(line); } catch { continue; }
-      if (ev.type !== 'assistant' || !ev.message) continue;
-      for (const block of ev.message.content || []) {
-        if (block && block.type === 'text' && typeof block.text === 'string' && block.text.length > best.length) {
-          best = block.text;
-        }
-      }
-    }
-  }
-  return best;
-}
 
 // One replay: 200-byte deltas at a 40 ms virtual cadence; timers drain against
 // the virtual clock, so wall time covers only render work (the marked re-parse
@@ -65,9 +25,9 @@ function replay(markedSrc, text) {
 }
 
 (async () => {
-  const text = resolveCorpus();
+  const text = largestAssistantDraft(() => true);
   const digest = crypto.createHash('sha1').update(text).digest('hex').slice(0, 12);
-  const markedSrc = await fetchMarked();
+  const markedSrc = await fetchUrl(MARKED_URL);
 
   replay(markedSrc, text); // cold pass, as at the first streamed turn after a page load; not timed
   const times = [];

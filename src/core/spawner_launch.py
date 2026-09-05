@@ -11,7 +11,7 @@ from src.core import spawner_backends, spawner_prompt
 from src.core.config import CharlieBotConfig
 from src.core.git import (
     git_create_worktree,
-    git_remote_default_branch,
+    git_remote_default_branch_and_tip,
     git_worktree_dir_name,
 )
 from src.core.models import (
@@ -83,7 +83,15 @@ async def _create_worktree_and_process(
     # An unattended launch has nobody present to reconcile a local/remote
     # disagreement, so a request that names no base starts from the remote's
     # published default branch; the local checkout's refs never enter the decision.
-    base_branch = request.base_branch or f"origin/{await git_remote_default_branch(resolved_repo)}"
+    # The combined ls-remote returns the default branch and its tip in one
+    # network round-trip; resolve_base_branch re-uses the tip instead of
+    # re-probing the same ref it just learned.
+    remote_tip: str | None = None
+    if request.base_branch:
+      base_branch = request.base_branch
+    else:
+      default_branch, remote_tip = await git_remote_default_branch_and_tip(resolved_repo)
+      base_branch = f"origin/{default_branch}"
 
     branch_name = request.branch_name_override or f"charliebot/task-{int(time.time())}-{thread.id[:8]}"
 
@@ -99,7 +107,7 @@ async def _create_worktree_and_process(
       wt_path = Path(cfg.worktree_dir) / git_worktree_dir_name(branch_name)
 
       Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
-      resolution = await git_create_worktree(resolved_repo, base_branch, branch_name, wt_path)
+      resolution = await git_create_worktree(resolved_repo, base_branch, branch_name, wt_path, remote_tip=remote_tip)
       canonical_branch = resolution.canonical
       is_continuation = False
       start_point = resolution.start_point

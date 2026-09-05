@@ -72,6 +72,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M59 worker thread-detail poll payload and handler time, steady state | M59 collector below | seconds per request + response body bytes, worst thread-metadata corpus; the attach-mode repeat (`?attach=1`) of the unchanged poll | full-row median < 0.005 s; attach-mode median < 0.005 s, body < 300 B | — (introduced with its first history row) |
 | M60 chat message-body markdown parse, repeat page render | M60 collector below | ms per 40-body page render pass over the worst on-disk live chat file (the cold first render is reported, not the metric); the repeat is the session re-entry / re-render shape — every session switch rebuilds the turn engine and re-renders the same bodies | repeat median < 0.5 ms | — (introduced with its first history row) |
 | M61 session-metadata read after TTL expiry, idle-cold | M61 collector below | ms per listing/get_session over the live corpus with every cache entry aged past `_METADATA_CACHE_TTL` (archived entries never expire; the idle cost is the non-archived set's revalidation) | bare listing median < 2 ms; single get_session median < 0.1 ms | — (introduced with its first history row) |
+| M62 spawn base-resolution chain, base-less launch | M62 collector below | seconds per base-less base resolution (default branch + start point) against the real origin, quiet-remote steady state | median < 0.5 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3429,6 +3430,55 @@ asyncio.run(main())
 EOF
 ```
 
+M62 — spawn base-resolution chain, base-less launch. An unattended launch resolves its
+worktree base from the remote itself: the default branch (HEAD symref) plus that branch's
+published tip, then the start point. The pre-fix chain asked the remote three times in
+series — a filtered symref ls-remote, a second filtered ls-remote for the same branch, and
+an unconditional fetch — while one unfiltered listing answers both probes and the probe's
+own tip SHA proves the fetch a no-op whenever the remote-tracking ref is current. The cost
+sits on every worker spawn's pre-process latency (delegations, improve-loop iterations,
+cron launches), invisible to the standing HTTP probes, so the collector drives the
+resolution chain over the real workspace repo (read-only git ops; resolve fetches only
+when its probe shows the tracking ref behind), from the checkout under test: one warm
+pass, as at the first spawn after a server start, then five timed rounds, asserting the
+start point is round-stable. Evidence while the live server runs older code points the
+same collector at the branch checkout (`CHECKOUT` at the worktree root), the same shape as
+the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, time
+from pathlib import Path
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core import git as git_mod
+
+REPO = Path("/home/chaoli/workspace/charlie-bot")
+
+async def run_once() -> tuple[float, str]:
+    t0 = time.perf_counter()
+    combined = getattr(git_mod, "git_remote_default_branch_and_tip", None)
+    if combined is not None:
+        branch, tip = await combined(REPO)
+        resolution = await git_mod.resolve_base_branch(REPO, f"origin/{branch}", remote_tip=tip)
+    else:
+        branch = await git_mod.git_remote_default_branch(REPO)
+        resolution = await git_mod.resolve_base_branch(REPO, f"origin/{branch}")
+    return time.perf_counter() - t0, resolution.start_point
+
+async def main():
+    await run_once()  # warm pass, as at the first spawn after a server start; not timed
+    results = [await run_once() for _ in range(5)]
+    walls = sorted(r[0] for r in results)
+    starts = {r[1] for r in results}
+    assert len(starts) == 1, f"start point moved between rounds: {starts}"
+    print(f"base-less base-resolution chain median {walls[2]:.4f} s, max {walls[-1]:.4f} s over 5; "
+          f"start_point {starts.pop()[:12]}")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3516,3 +3566,4 @@ EOF
 | 2026-09-05 | this PR | M59 detail poll full row median 3.29/3.46 ms → 2.03/2.07 ms (two interleaved verbatim-collector rounds, 99.9 KB worst metadata.json, body 50221 B → 59259 B raw — parsed-identical, the documented \uXXXX escaping; maxima 4.43/5.22 → 3.45/3.33 ms), attach mode (?attach=1, the poll's new shape) median 1.90/1.78 ms, max 2.07/1.93 ms, body 48 B (main checkout before vs branch after back-to-back at load 1.8-2.0; 4500-passed suite) | the 5 s poll fetched the whole row — 50 KB description-bearing body, an uncached aiofiles read+parse per call, response-model validation + jsonable_encoder render — to read the attach pair; the detail endpoint now serves the parsed meta from a (mtime_ns, size) memo (the endpoint's consumer is read-only; mutating callers keep the uncached manager getter, and every writer publishes through the atomic tmp rename so the signature is taken before the read), renders both shapes through FastJsonResponse, drops `context` (no HTTP consumer reads it; the modal fetches description once per click), and the poll fetches `?attach=1` — the 48 B pair — while the modal and the description-full fetch keep the full row; M34 re-measured unchanged (full 0.0057 s / 860706 B byte-identical, after=total 0.0022 s / 40 B) after the events no-after branch was left mapped — a FastJsonResponse rider there measured 0.0103 s (2177 per-event model_dump calls beat by the single encoder walk) and was reverted |
 | 2026-09-05 | this PR | M8 warm absent-needle search, churn-modeled pool: median 99.71/107.45/101.95 ms → 27.80/38.46/33.19 ms, idle median 4.40/4.23/4.02 ms → 1.56/1.74/1.40 ms (three interleaved A/B rounds, manager-level collector over the shared 156.7 MB / 39-active-file + 1075-metadata snapshot home; 41 content candidates; churn model = 8 continuous 5 ms CPU bursts through the same default asyncio executor, the live server's pool shape; result digests identical across arms for absent, name-hit, and content-hit queries — 0/11/181 rows); live-before (verbatim M8 curls against the running instance) median 0.146-0.158 s, max 0.151-0.177 s at load 3.26-3.84 | the content-search classification (stat + proven-absent memo check) left the per-file executor round-trip — the default executor's ~cpu+4 workers are shared with every poll read, append, and probe, so the 41 per-file acquisitions queued ~2.4 ms each under the server's pool churn (live search 140-158 ms vs 27 ms for the name-hit shape that skips the fan-out; a fully-occupied pool stretched the warm search to 2013 ms in-process); classification now runs on the event loop (~0.1 ms of hot stats, no stall over the churn-only 20.6 ms ticker baseline — main's search measured 31.0 ms under the same ticker protocol) and only reads that move corpus bytes go to the pool; the window math moved verbatim into `_absence_rescan_start`, the suite pins scan counts and start offsets |
 | 2026-09-05 | this PR | M61 idle-cold metadata reads: bare listing median 2.98-3.14 ms → 1.15-1.20 ms, archived page (limit 100) 3.80-4.12 ms → 2.09-2.13 ms, all-sessions listing 7.50-7.65 ms → 5.50-5.78 ms, single get_session 0.526-0.573 ms → 0.037-0.055 ms (five interleaved verbatim-collector rounds, 1075 cached metas / 41 non-archived, live corpus read-only, main checkout before vs branch after at load 1.6-2.3, every paired round faster; warm steady state re-measured unchanged — M29 0.55-0.59 vs 0.56-0.57 ms, M56 2.40-2.59 vs 2.34-2.52 ms with identical digests, M40/M44 within noise; suite pins the stat-revalidation chain: unchanged file zero reads, moved file exactly one) | an expired metadata entry revalidates against metadata.json with one stat instead of a re-read: the cache entry carries the (st_mtime_ns, st_size) its read took before parsing, every writer publishes through the atomic tmp rename so a content change always moves the signature, and a same-signature stat re-times the entry — strictly fresher than the 30 s TTL it replaces (a write-funnel populate keeps no provable signature and follows today's evict-and-re-read); M61 definition and healthy range introduced with this PR |
+| 2026-09-05 | this PR | M62 base-less base-resolution chain median 1.03/1.00/0.92 s → 0.33/0.31/0.30 s, max 1.07 s → 0.37 s (three interleaved collector sets, main checkout before vs branch after against the real origin at load 2.33/2.11/1.32; start_point origin/main identical across arms; every paired set faster) | the base-less launch chain answered one unfiltered `git ls-remote --symref origin` listing — HEAD symref plus the default branch's tip — in a single round-trip instead of two filtered probes, and resolve_base_branch skips the fetch its own probe just proved a no-op (tracking ref already at the advertised tip; the probe is read straight from the remote, so no fetch could change that ref); the caller-fed `remote_tip` keeps the freshly-resolved start-point guarantee — the fetch still runs whenever the probe shows the tracking ref behind, and every error path is unchanged; M62 definition and healthy range introduced with this PR |

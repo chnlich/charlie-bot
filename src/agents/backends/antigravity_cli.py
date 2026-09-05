@@ -20,8 +20,6 @@ from src.agents.backends.base import (
     resolve_binary,
 )
 
-_PRINT_TIMEOUT = "24h"
-
 _SYSTEM_MESSAGE_BLOCK_RE = re.compile(r"<SYSTEM_MESSAGE>.*?</SYSTEM_MESSAGE>\s*", re.DOTALL)
 
 
@@ -36,8 +34,10 @@ class AgentGuard(ValueError):
 class AntigravityCliBackend(AgentBackend):
   """Runs `agy --print` and translates the JSON envelope into CC events."""
 
-  def __init__(self, *, model: str | None = None, **kwargs):
+  def __init__(self, *, model: str | None = None, print_timeout: str | None = None, **kwargs):
     super().__init__(model=model, **kwargs)
+    # agy --print turn budget: explicit config wins, otherwise the 1h default.
+    self._print_timeout = print_timeout if print_timeout is not None else "1h"
     self._agy_bin = resolve_binary("agy", USER_LOCAL_BIN)
 
   def _build_command(self, prompt: str) -> list[str]:
@@ -46,7 +46,7 @@ class AntigravityCliBackend(AgentBackend):
         self._agy_bin,
         f"--print={effective_prompt}",
         "--print-timeout",
-        _PRINT_TIMEOUT,
+        self._print_timeout,
         SKIP_PERMISSIONS_FLAG,
         "--output-format",
         "json",
@@ -108,7 +108,17 @@ class AntigravityCliBackend(AgentBackend):
 
     stdout_text = bytes(stdout_bytes).decode("utf-8", errors="replace").strip()
     if self.exit_code != 0:
-      message = stdout_text or f"Antigravity CLI exited with code {self.exit_code}"
+      # A print-timeout kill arrives as exit!=0 with a JSON envelope; name the
+      # cause instead of pasting the raw envelope. Any other failure keeps the
+      # raw stdout as the message.
+      envelope = self._parse_envelope(stdout_text)
+      envelope_error = envelope.get("error") if envelope is not None else None
+      if isinstance(envelope_error, str):
+        message = (
+            "agy turn budget exhausted (print-timeout fired); a known cause is an in-process "
+            f"timer/daemon wait keeping the process alive past its turn. agy error: {envelope_error}")
+      else:
+        message = stdout_text or f"Antigravity CLI exited with code {self.exit_code}"
       yield make_error_event(message)
       return
 

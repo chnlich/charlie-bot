@@ -54,13 +54,35 @@ def test_build_command_passes_prompt_as_print_flag_value(monkeypatch) -> None:
       "/usr/bin/agy",
       "--print=--dash-prefixed prompt",
       "--print-timeout",
-      "24h",
+      "1h",
       "--dangerously-skip-permissions",
       "--output-format",
       "json",
       "--sandbox",
   ]
   assert "--model" not in cmd
+
+
+def test_print_timeout_override_reaches_command(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, print_timeout="30m")
+
+  cmd = backend._build_command("hello")
+
+  assert cmd[cmd.index("--print-timeout") + 1] == "30m"
+
+
+def test_registry_forwards_print_timeout_option(monkeypatch) -> None:
+  monkeypatch.setattr(
+      ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
+      lambda name, fallback: "/usr/bin/agy",
+  )
+  option = BackendOption(id="agy", label="Antigravity", type="antigravity", print_timeout="30m")
+
+  backend = build_backend(option, CharlieBotConfig())
+
+  assert isinstance(backend, AntigravityCliBackend)
+  cmd = backend._build_command("hi")
+  assert cmd[cmd.index("--print-timeout") + 1] == "30m"
 
 
 def test_build_command_prepends_instructions_to_prompt(monkeypatch) -> None:
@@ -250,6 +272,28 @@ exit 7
   assert backend.exit_code == 7
 
 
+@pytest.mark.asyncio
+async def test_nonzero_exit_envelope_error_names_budget_cause(monkeypatch, tmp_path: Path) -> None:
+  _install_fake_agy(
+      monkeypatch,
+      tmp_path,
+      """
+printf '%s' '{"status":"ERROR","error":"timeout waiting for response"}'
+exit 1
+""",
+  )
+  backend = AntigravityCliBackend()
+
+  events = await _consume(backend, tmp_path)
+
+  assert backend.exit_code == 1
+  assert [e.get("type") for e in events] == ["error"]
+  message = events[0]["message"]
+  assert message.endswith("agy error: timeout waiting for response")
+  assert "turn budget exhausted" in message
+  assert "print-timeout" in message
+
+
 def test_prepare_env_strips_api_keys_for_oauth(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
@@ -281,7 +325,7 @@ def test_registry_builds_antigravity_backend(monkeypatch) -> None:
       "/usr/bin/agy",
       "--print=hi",
       "--print-timeout",
-      "24h",
+      "1h",
       "--dangerously-skip-permissions",
       "--output-format",
       "json",

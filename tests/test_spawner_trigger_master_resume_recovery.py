@@ -181,8 +181,7 @@ async def test_error_echo_persist_failure_is_logged_not_raised(monkeypatch: pyte
 
   assert persist_calls == [session_id]
   assert any(call.args[0] == "trigger_master_failed" for call in mock_log.error.call_args_list)
-  assert any(
-      call.args[0] == "trigger_master_error_event_persist_failed" for call in mock_log.warning.call_args_list)
+  assert any(call.args[0] == "trigger_master_error_event_persist_failed" for call in mock_log.warning.call_args_list)
 
 
 @pytest.mark.asyncio

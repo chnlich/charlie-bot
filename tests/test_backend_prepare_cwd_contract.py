@@ -16,15 +16,15 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-    CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
-    CODEX_RESOLVE_BINARY_PATCH_TARGET,
-    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-    build_cli_backend,
+  CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+  CODEX_RESOLVE_BINARY_PATCH_TARGET,
+  OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+  build_cli_backend,
 )
 
 from src.agents.backends.base import AgentBackend
-from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.agents.backends.charlie_code import CharlieCodeBackend
+from src.agents.backends.claude_code import ClaudeCodeBackend
 from src.agents.backends.codex import CodexBackend
 from src.agents.backends.opencode import OpenCodeBackend
 

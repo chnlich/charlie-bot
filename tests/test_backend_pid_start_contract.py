@@ -197,7 +197,7 @@ async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
 
 HarnessFn = Callable[[type[AgentBackend], pytest.MonkeyPatch, Path], Awaitable[None]]
 
-# Harness-by-class map: the six base-path classes share one harness driving the
+# Harness-by-class map: the base-path classes share one harness driving the
 # inherited base.run(); opencode and antigravity each drive their own run().
 # This map is the ONLY opt-in — enumeration does not consult it.
 HARNESSES: dict[type[AgentBackend], HarnessFn] = {

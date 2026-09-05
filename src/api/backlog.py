@@ -24,10 +24,11 @@ def _repo_path(repo: str | None) -> Path | None:
     return Path(repo).expanduser()
   from src.core.config import get_config
   cfg = get_config()
+  # The migrate_and_expand validator folds the legacy backlog_repo key into
+  # backlog_repos, so a validated config never has the singular set without the
+  # list; the list check above therefore covers every configured case.
   if cfg.backlog_repos:
     return Path(cfg.backlog_repos[0].path)
-  if cfg.backlog_repo:
-    return Path(cfg.backlog_repo)
   return None
 
 

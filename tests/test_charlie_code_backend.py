@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
-  CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
-  FLAG_LIKE_PROMPT,
-  build_cli_backend,
+    CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+    FLAG_LIKE_PROMPT,
+    build_cli_backend,
 )
 from pydantic import ValidationError
 
@@ -23,7 +23,10 @@ def _build_backend(monkeypatch, **kwargs) -> CharlieCodeBackend:
       CharlieCodeBackend,
       CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
       "/usr/bin/charlie-code",
-      defaults={"model": "charlie-code-test-model", "api_base": "http://test.invalid/v1"},
+      defaults={
+          "model": "charlie-code-test-model",
+          "api_base": "http://test.invalid/v1"
+      },
       **kwargs,
   )
 

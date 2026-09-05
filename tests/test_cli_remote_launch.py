@@ -126,9 +126,8 @@ def test_ssh_failure_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str])
   session = "sess-ssh-fail"
   cfg = _mock_config(_make_session_dir(tmp_path, session))
 
-  with _patched_launch(cfg, [
-      "--session", session, "--host", "nonexistent.invalid", "--cwd", str(tmp_path), "--cmd", "echo hi"
-  ]), pytest.raises(SystemExit) as exc_info:
+  with _patched_launch(cfg, ["--session", session, "--host", "nonexistent.invalid", "--cwd", str(tmp_path), "--cmd",
+                             "echo hi"]), pytest.raises(SystemExit) as exc_info:
     main()
 
   assert exc_info.value.code == 2

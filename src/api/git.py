@@ -2,14 +2,13 @@
 
 import asyncio
 import subprocess
-import threading
-from collections import OrderedDict
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.core.config import CharlieBotConfig, get_config
+from src.core.memo import BoundedMemo
 from src.core.timeouts import SUBPROCESS_GIT_DIFF_TIMEOUT, SUBPROCESS_GIT_READ_TIMEOUT
 
 router = APIRouter()
@@ -35,11 +34,8 @@ _ManifestKey = tuple[str, str, str, str, tuple[int, int] | None]
 # SHAs are content-addressed — so a repeat view of the same resolved range
 # (every /diff refresh until a branch moves) re-runs zero git diff
 # subprocesses. Served rows are shared across responses, the no-defensive-copy
-# idiom of the sibling memos. Handler and collector callers reach this through
-# executor threads, so get+move_to_end and insert+cap-eviction each hold the
-# lock, matching the sibling memo rule in chat_events.py.
-_diff_files_memo: OrderedDict[_ManifestKey, tuple[list[dict], int, int]] = OrderedDict()
-_diff_files_memo_lock = threading.Lock()
+# idiom of the sibling memos.
+_diff_files_memo: BoundedMemo[_ManifestKey, tuple[list[dict], int, int]] = BoundedMemo(_DIFF_FILES_MEMO_LIMIT)
 
 # Bound on _diff_file_memo in per-file bodies: a review pass expands files one
 # at a time across the branch pairs open in tabs, and an evicted entry simply
@@ -49,48 +45,10 @@ _DIFF_FILE_MEMO_LIMIT = 64
 # Memo key for one diff/file body: the manifest key (see _ManifestKey) plus the
 # pathspec the handler passes git. Same immutability argument as the manifest:
 # repeat expands — expand/collapse re-fetches, tab refreshes — of one resolved
-# ref pair re-run zero git diff subprocesses. Lock discipline mirrors
-# _diff_files_memo.
+# ref pair re-run zero git diff subprocesses.
 _FileDiffKey = tuple[str, str, str, str, tuple[int, int] | None, tuple[str, ...]]
 
-_diff_file_memo: OrderedDict[_FileDiffKey, str] = OrderedDict()
-_diff_file_memo_lock = threading.Lock()
-
-
-def _diff_file_memo_get(key: _FileDiffKey) -> str | None:
-  """Return the memoized per-file diff under *key*, or None on a miss."""
-  with _diff_file_memo_lock:
-    entry = _diff_file_memo.get(key)
-    if entry is not None:
-      _diff_file_memo.move_to_end(key)
-    return entry
-
-
-def _diff_file_memo_store(key: _FileDiffKey, entry: str) -> None:
-  """Store the per-file diff under *key* and cap the memo."""
-  with _diff_file_memo_lock:
-    _diff_file_memo[key] = entry
-    _diff_file_memo.move_to_end(key)
-    while len(_diff_file_memo) > _DIFF_FILE_MEMO_LIMIT:
-      _diff_file_memo.popitem(last=False)
-
-
-def _diff_files_memo_get(key: _ManifestKey) -> tuple[list[dict], int, int] | None:
-  """Return the memoized manifest under *key*, or None on a miss."""
-  with _diff_files_memo_lock:
-    entry = _diff_files_memo.get(key)
-    if entry is not None:
-      _diff_files_memo.move_to_end(key)
-    return entry
-
-
-def _diff_files_memo_store(key: _ManifestKey, entry: tuple[list[dict], int, int]) -> None:
-  """Store the manifest under *key* and cap the memo."""
-  with _diff_files_memo_lock:
-    _diff_files_memo[key] = entry
-    _diff_files_memo.move_to_end(key)
-    while len(_diff_files_memo) > _DIFF_FILES_MEMO_LIMIT:
-      _diff_files_memo.popitem(last=False)
+_diff_file_memo: BoundedMemo[_FileDiffKey, str] = BoundedMemo(_DIFF_FILE_MEMO_LIMIT)
 
 
 def _attributes_signature(repo_path: Path) -> tuple[int, int] | None:
@@ -280,7 +238,7 @@ async def diff_files(
   range_spec = _range_spec(base, head, mode)
   base_sha, head_sha = await _resolve_commits(repo_path, [base, head])
   key = (str(repo_path), base_sha, head_sha, mode, _attributes_signature(repo_path))
-  memoized = _diff_files_memo_get(key)
+  memoized = _diff_files_memo.get(key)
   if memoized is None:
     # Two independent manifest subprocesses over the same frozen range; they run
     # concurrently and a failure surfaces in the same order the sequential form
@@ -310,7 +268,7 @@ async def diff_files(
       total_additions += additions
       total_deletions += deletions
     memoized = (rows, total_additions, total_deletions)
-    _diff_files_memo_store(key, memoized)
+    _diff_files_memo.store(key, memoized)
   rows, total_additions, total_deletions = memoized
 
   return {
@@ -349,12 +307,12 @@ async def diff_file(
   pathspec = tuple([old_path, path] if old_path else [path])
   base_sha, head_sha = await _resolve_commits(repo_path, [base, head])
   key = (str(repo_path), base_sha, head_sha, mode, _attributes_signature(repo_path), pathspec)
-  diff_text = _diff_file_memo_get(key)
+  diff_text = _diff_file_memo.get(key)
   if diff_text is None:
     # The range over resolved SHAs, so a ref that moves before the subprocess
     # starts cannot key one pair's body under another pair.
     diff_text = await _run_git_diff(repo_path, [_range_spec(base_sha, head_sha, mode), "--", *pathspec])
-    _diff_file_memo_store(key, diff_text)
+    _diff_file_memo.store(key, diff_text)
   size_bytes = len(diff_text.encode("utf-8"))
   if not force and size_bytes > _DIFF_MAX_BYTES:
     return {"too_large": True, "size_bytes": size_bytes, "path": path}

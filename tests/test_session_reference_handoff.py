@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_ID, make_home_session
+from conftest import OPUS_BACKEND_ID, make_home_session, recycle_archive_cutoff_events
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
 
@@ -85,10 +85,7 @@ async def test_elone_session_writes_reference_and_archives_parent(tmp_path: Path
 @pytest.mark.asyncio
 async def test_reference_handoff_uses_global_event_index_with_archive_offset(tmp_path: Path) -> None:
   _cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
-
-  cutoff, events = _archive_cutoff_events()
-  _append_events(mgr.get_chat_events_path(parent.id), events)
-  await mgr.recycle_scheduled_session(parent.id, cutoff)
+  await recycle_archive_cutoff_events(mgr, parent.id)
 
   child = await mgr.fork_session(parent.id, event_index=6)
 

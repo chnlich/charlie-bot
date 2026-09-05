@@ -10,7 +10,11 @@ from typing import IO, Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, make_home_session
+from conftest import (
+  BROADCAST_PATCH_TARGET,
+  make_home_session,
+  recycle_archive_cutoff_events,
+)
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
 
@@ -141,11 +145,7 @@ async def test_recycle_noop_when_nothing_old(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_load_chat_events_range_spans_archive_and_live(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-
-  cutoff, events = _archive_cutoff_events()
-  live_path = mgr.get_chat_events_path(session.id)
-  _append_events(live_path, events)
-  await mgr.recycle_scheduled_session(session.id, cutoff)
+  await recycle_archive_cutoff_events(mgr, session.id)
 
   # Fully in archive
   archive_only, has_more = mgr.load_chat_events_range(session.id, 0, 3)
@@ -166,9 +166,7 @@ async def test_load_chat_events_range_spans_archive_and_live(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_archive_range_repeat_reads_reuse_memo(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, events = _archive_cutoff_events()
-  _append_events(mgr.get_chat_events_path(session.id), events)
-  await mgr.recycle_scheduled_session(session.id, cutoff)
+  await recycle_archive_cutoff_events(mgr, session.id)
 
   first, _ = mgr.load_chat_events_range(session.id, 0, 3)
 
@@ -190,9 +188,7 @@ async def test_archive_range_repeat_reads_reuse_memo(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_archive_range_reparses_after_archive_append(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, events = _archive_cutoff_events()
-  _append_events(mgr.get_chat_events_path(session.id), events)
-  await mgr.recycle_scheduled_session(session.id, cutoff)
+  cutoff, _ = await recycle_archive_cutoff_events(mgr, session.id)
 
   before, _ = mgr.load_chat_events_range(session.id, 0, 5)
   assert [e["content"] for e in before] == [f"e{i}" for i in range(5)]
@@ -209,10 +205,7 @@ async def test_archive_range_reparses_after_archive_append(tmp_path: Path) -> No
 @pytest.mark.asyncio
 async def test_live_range_repeat_reads_reuse_memo(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, events = _archive_cutoff_events()
-  live_path = mgr.get_chat_events_path(session.id)
-  _append_events(live_path, events)
-  await mgr.recycle_scheduled_session(session.id, cutoff)
+  await recycle_archive_cutoff_events(mgr, session.id)
 
   first, _ = mgr.load_chat_events_range(session.id, 5, 8)
 
@@ -234,10 +227,7 @@ async def test_live_range_repeat_reads_reuse_memo(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_live_range_reparses_after_append(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, events = _archive_cutoff_events()
-  live_path = mgr.get_chat_events_path(session.id)
-  _append_events(live_path, events)
-  await mgr.recycle_scheduled_session(session.id, cutoff)
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
 
   before, _ = mgr.load_chat_events_range(session.id, 5, 8)
   assert [e["content"] for e in before] == ["f0", "f1", "f2"]
@@ -252,10 +242,7 @@ async def test_live_range_reparses_after_append(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, events = _archive_cutoff_events()
-  live_path = mgr.get_chat_events_path(session.id)
-  _append_events(live_path, events)
-  await mgr.recycle_scheduled_session(session.id, cutoff)
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
 
   before, _ = mgr.load_chat_events_range(session.id, 5, 8)
   assert [e["content"] for e in before] == ["f0", "f1", "f2"]
@@ -315,10 +302,7 @@ async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_live_range_rewrite_with_larger_size_reparses_fully(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, events = _archive_cutoff_events()
-  live_path = mgr.get_chat_events_path(session.id)
-  _append_events(live_path, events)
-  await mgr.recycle_scheduled_session(session.id, cutoff)
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
 
   before, _ = mgr.load_chat_events_range(session.id, 5, 8)
   assert [e["content"] for e in before] == ["f0", "f1", "f2"]
@@ -344,10 +328,7 @@ async def test_live_range_rewrite_with_larger_size_reparses_fully(tmp_path: Path
 @pytest.mark.asyncio
 async def test_live_range_completed_partial_line_reparses_fully(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, events = _archive_cutoff_events()
-  live_path = mgr.get_chat_events_path(session.id)
-  _append_events(live_path, events)
-  await mgr.recycle_scheduled_session(session.id, cutoff)
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
 
   before, _ = mgr.load_chat_events_range(session.id, 5, 8)
   assert [e["content"] for e in before] == ["f0", "f1", "f2"]
@@ -369,10 +350,7 @@ async def test_live_range_completed_partial_line_reparses_fully(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_live_range_counts_physical_lines(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, events = _archive_cutoff_events()
-  live_path = mgr.get_chat_events_path(session.id)
-  _append_events(live_path, events)
-  await mgr.recycle_scheduled_session(session.id, cutoff)
+  _, live_path = await recycle_archive_cutoff_events(mgr, session.id)
 
   # blank/malformed lines consume a range index, mirroring parse_ndjson_range.
   live_path.write_text('{"content": "f0_first"}\n\n{bad json\n{"content": "f1"}\n{"content": "f2"}\n', encoding="utf-8")
@@ -386,10 +364,7 @@ async def test_live_range_counts_physical_lines(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-
-  cutoff, events = _archive_cutoff_events()
-  _append_events(mgr.get_chat_events_path(session.id), events)
-  await mgr.recycle_scheduled_session(session.id, cutoff)
+  await recycle_archive_cutoff_events(mgr, session.id)
 
   thread_mgr = AsyncMock()
   thread_mgr.list_threads.return_value = []

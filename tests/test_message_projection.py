@@ -13,9 +13,13 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, OPUS_BACKEND_ID, make_home_session
+from conftest import (
+  BROADCAST_PATCH_TARGET,
+  OPUS_BACKEND_ID,
+  make_home_session,
+  recycle_archive_cutoff_events,
+)
 from conftest import append_events as _append_events
-from conftest import archive_cutoff_events as _archive_cutoff_events
 from conftest import assistant_event as _assistant_event
 from conftest import queued_user_reorder_events as _reorder_events
 
@@ -637,9 +641,7 @@ async def test_archive_offset_returns_none_from_projection(tmp_path: Path) -> No
   """A session with archive_offset > 0 returns None from get_message_projection."""
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
-  cutoff, events = _archive_cutoff_events()
-  _append_events(mgr.get_chat_events_path(session.id), events)
-  await mgr.recycle_scheduled_session(session.id, cutoff)
+  await recycle_archive_cutoff_events(mgr, session.id)
 
   meta = await mgr.get_session(session.id)
   assert meta is not None
@@ -654,9 +656,7 @@ async def test_archive_fallback_serves_from_old_path(tmp_path: Path) -> None:
 
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
-  cutoff, events = _archive_cutoff_events()
-  _append_events(mgr.get_chat_events_path(session.id), events)
-  await mgr.recycle_scheduled_session(session.id, cutoff)
+  await recycle_archive_cutoff_events(mgr, session.id)
 
   # The events endpoint should use the fallback path (event-index cursor).
   # archive_offset=5, live has 3 events at global indices 5,6,7.

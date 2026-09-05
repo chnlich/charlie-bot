@@ -237,6 +237,36 @@ def _reset_search_read_failures_for_tests() -> None:
   _SEARCH_READ_FAILURES_SEEN.clear()
 
 
+def _absence_rescan_start(
+    roots: tuple[tuple[str, tuple[int, int, int]], ...],
+    sig: tuple[int, int, int],
+    query_lower: str,
+) -> int | None:
+  """Start offset for the absence re-scan of one chat file, or None when no read is needed.
+
+  None when a stored root's signature equals the file's current stat: the
+  root's absence proof covers every query it extends, so the file answers
+  without a read and without a fresh memo entry. Otherwise the largest
+  same-inode growth base among the roots the query extends gives the smallest
+  re-proof window (0 = full scan; a shrunken or inode-swapped file has no
+  base). A query occurrence crossing the old size starts at most 4 bytes per
+  char earlier, hence the seek window; +8 covers decode resync at the offset.
+  """
+  for _needle, root_sig in roots:
+    if query_lower.startswith(_needle) and root_sig == sig:
+      return None  # proven-absent memo verdict: no file read
+  best_size = -1
+  for needle, root_sig in roots:
+    if not query_lower.startswith(needle):
+      continue
+    old_size, old_ino = root_sig[1], root_sig[2]
+    if old_ino == sig[2] and sig[1] > old_size and old_size > best_size:
+      best_size = old_size
+  if best_size < 0:
+    return 0
+  return max(0, best_size - (4 * len(query_lower) + 8))
+
+
 def _scan_content_for_hit(path: Path, session_id: str, query_lower: str, start: int) -> bool | None:
   """Character-window scan of a chat-events file for *query_lower* (thread-pool work).
 
@@ -869,54 +899,39 @@ class SessionManager:
       if meta.status == SessionStatus.ACTIVE:
         content_candidates.append((meta, self.get_chat_events_path(meta.id)))
 
-    async def _check_content(meta: SessionMetadata, path: Path) -> SessionMetadata | None:
-      """Check if a session's chat events contain the query (runs file I/O in thread pool)."""
-      memo_key = str(path)
-      # Snapshot on the event loop: the worker thread reads these pairs while a
-      # concurrent search's memoize can mutate the live OrderedDict.
-      memo_roots = tuple((self._search_miss_memo.get(memo_key) or {}).items())
+    # Classification runs on the event loop: one hot stat per candidate plus a
+    # memo lookup measures ~0.1 ms for the whole set, while the same checks as
+    # per-file executor round-trips measured ~2.4 ms each under the server's
+    # pool churn (the default executor's ~cpu+4 workers are shared with every
+    # poll read, append, and probe, so each acquisition queues). Only reads
+    # that must move corpus bytes go to the pool.
+    read_jobs: list[tuple[SessionMetadata, Path, tuple[int, int, int], int]] = []
+    for meta, path in content_candidates:
+      key = str(path)
+      memo_roots = tuple((self._search_miss_memo.get(key) or {}).items())
+      try:
+        stat = path.stat()
+      except OSError as e:
+        _log_search_read_failed_once(meta.id, e)
+        continue
+      sig = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+      start = _absence_rescan_start(memo_roots, sig, query_lower)
+      if start is not None:
+        read_jobs.append((meta, path, sig, start))
 
-      def _read_and_check() -> tuple[bool, tuple[int, int, int] | None]:
-        try:
-          stat = path.stat()
-        except OSError as e:
-          _log_search_read_failed_once(meta.id, e)
-          return False, None
-        sig = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
-        # Any stored root the query extends proves absence over the bytes its
-        # own signature covers. An unchanged-signature root answers with no
-        # read; among the rest the largest same-inode growth base gives the
-        # smallest tail window to re-prove from.
-        for _needle, root_sig in memo_roots:
-          if query_lower.startswith(_needle) and root_sig == sig:
-            return False, None  # proven-absent memo verdict: no file read
-        best_size = -1
-        for needle, root_sig in memo_roots:
-          if not query_lower.startswith(needle):
-            continue
-          old_size, old_ino = root_sig[1], root_sig[2]
-          if old_ino == stat.st_ino and stat.st_size > old_size and old_size > best_size:
-            best_size = old_size
-        start = 0
-        if best_size >= 0:
-          # Same inode and larger: appends only, so the root needle's
-          # absence still holds over the old bytes. A query occurrence
-          # crossing the old size starts at most 4 bytes per char earlier,
-          # hence the seek window; +8 covers decode resync at the offset.
-          start = max(0, best_size - (4 * len(query_lower) + 8))
-        verdict = _scan_content_for_hit(path, meta.id, query_lower, start)
-        if verdict is None:
-          return False, None
-        return verdict, sig
-
-      hit, sig = await asyncio.to_thread(_read_and_check)
-      if hit:
+    async def _check_content(meta: SessionMetadata, path: Path, sig: tuple[int, int, int],
+                             start: int) -> SessionMetadata | None:
+      """Read a chat file whose classification demanded bytes (thread-pool work)."""
+      verdict = await asyncio.to_thread(_scan_content_for_hit, path, meta.id, query_lower, start)
+      if verdict is None:
+        return None  # errored scan proves no absence, so nothing is memoized
+      if verdict:
         return _stamp_thinking_since(meta.model_copy())
-      if sig is not None:
-        self._memoize_search_miss(memo_key, sig, query_lower)
+      self._memoize_search_miss(str(path), sig, query_lower)
       return None
 
-    content_hits = await asyncio.gather(*(_check_content(m, p) for m, p in content_candidates))
+    content_hits = await asyncio.gather(
+        *(_check_content(meta, path, sig, start) for meta, path, sig, start in read_jobs))
     results.extend(meta for meta in content_hits if meta is not None)
     enriched = await self._enrich_and_sort(
         results,

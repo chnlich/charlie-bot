@@ -311,6 +311,25 @@ def result_success(result: dict) -> bool:
   return result.get("subtype") in (None, "success") and result.get("is_error") in (None, False)
 
 
+def scan_result_exit(
+    raw_path: Path,
+    translate: Callable[[dict], list[dict]],
+) -> tuple[list[dict], dict | None, int]:
+  """Whole-file result scan: projected events, last result event, and its exit code.
+
+  A missing raw log is a legal drain input (never-started run, legacy thread
+  without the transport): it scans to no events, no result, exit -1. The
+  whole-file scan needs a FRESH translate — a stateful translate may not be
+  reused after it consumed a stream tail. Exit code: 0 only when a result
+  event exists and ``result_success`` holds, else -1, the code a died-mid-run
+  live turn reports for its missing result event.
+  """
+  events = project_raw_events(parse_raw_lines(raw_path.read_bytes()), translate) if raw_path.is_file() else []
+  result = summarize_result(events)
+  exit_code = 0 if result is not None and result_success(result) else -1
+  return events, result, exit_code
+
+
 # ---------------------------------------------------------------------------
 # Completion time and cursor
 # ---------------------------------------------------------------------------

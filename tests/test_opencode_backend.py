@@ -37,6 +37,28 @@ def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
   return OpenCodeBackend(**kwargs)
 
 
+def _rig_end_to_end_run(monkeypatch, backend: OpenCodeBackend, response) -> MagicMock:
+  """Mock the serve-and-connect path so backend.run() consumes `response` as the
+  /event stream end-to-end; returns the spawned process mock for spawn assertions."""
+  process = MagicMock()
+  process.pid = 4321
+  process.returncode = 0
+  process.wait = AsyncMock(return_value=0)
+  monkeypatch.setattr(
+      _CREATE_SUBPROCESS_EXEC_PATCH_TARGET, AsyncMock(return_value=process))
+  monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
+  monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
+  monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())
+  monkeypatch.setattr(backend, "_check_health", AsyncMock())
+  monkeypatch.setattr(backend, "_fetch_model_limit", AsyncMock(return_value=None))
+  monkeypatch.setattr(backend, "_create_session", AsyncMock(return_value="session-1"))
+  monkeypatch.setattr(backend, "_send_prompt", AsyncMock())
+  monkeypatch.setattr(
+      "src.agents.backends.opencode.httpx.AsyncClient",
+      lambda **kwargs: _FakeRunHttpClient(response))
+  return process
+
+
 class _FakeEventStream:
   """Async-iterable of pre-baked SSE event dicts for _consume_sse_events tests."""
 
@@ -149,22 +171,7 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
   assert parsed == [json.loads(payload)]
   assert parsed[0]["properties"]["part"]["text"] == part_text
 
-  process = MagicMock()
-  process.pid = 4321
-  process.returncode = 0
-  process.wait = AsyncMock(return_value=0)
-  monkeypatch.setattr(
-      _CREATE_SUBPROCESS_EXEC_PATCH_TARGET, AsyncMock(return_value=process))
-  monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
-  monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
-  monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())
-  monkeypatch.setattr(backend, "_check_health", AsyncMock())
-  monkeypatch.setattr(backend, "_fetch_model_limit", AsyncMock(return_value=None))
-  monkeypatch.setattr(backend, "_create_session", AsyncMock(return_value="session-1"))
-  monkeypatch.setattr(backend, "_send_prompt", AsyncMock())
-  monkeypatch.setattr(
-      "src.agents.backends.opencode.httpx.AsyncClient",
-      lambda **kwargs: _FakeRunHttpClient(FakeChunkedResponse(chunks)))
+  _rig_end_to_end_run(monkeypatch, backend, FakeChunkedResponse(chunks))
 
   events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
 
@@ -1232,30 +1239,14 @@ async def test_sse_watchdog_timeout_fails_run_end_to_end(monkeypatch, tmp_path: 
   exit_code, and serve cleanup through the existing failure path."""
   _patch_watchdog_timeout(monkeypatch)
   backend = _build_backend(monkeypatch, model="provider/model")
-  process = MagicMock()
-  process.pid = 4321
-  process.returncode = 0
-  process.wait = AsyncMock(return_value=0)
-  monkeypatch.setattr(
-      _CREATE_SUBPROCESS_EXEC_PATCH_TARGET, AsyncMock(return_value=process))
-  monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
-  monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
-  monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())
-  monkeypatch.setattr(backend, "_check_health", AsyncMock())
-  monkeypatch.setattr(backend, "_fetch_model_limit", AsyncMock(return_value=None))
-  monkeypatch.setattr(backend, "_create_session", AsyncMock(return_value="session-1"))
-  monkeypatch.setattr(backend, "_send_prompt", AsyncMock())
-  abort_session = AsyncMock()
-  monkeypatch.setattr(backend, "_abort_session", abort_session)
-
   heartbeat_line = 'data: {"type": "server.heartbeat", "properties": {}}'
   lines = [(0.0, 'data: {"type": "server.connected", "properties": {}}'), (0.0, "")]
   for _ in range(50):
     lines.extend([(0.02, heartbeat_line), (0.0, "")])
   stream_response = _FakeDelayedStreamResponse(lines)
-  monkeypatch.setattr(
-      "src.agents.backends.opencode.httpx.AsyncClient",
-      lambda **kwargs: _FakeRunHttpClient(stream_response))
+  process = _rig_end_to_end_run(monkeypatch, backend, stream_response)
+  abort_session = AsyncMock()
+  monkeypatch.setattr(backend, "_abort_session", abort_session)
 
   events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
 

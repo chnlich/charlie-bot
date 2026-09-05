@@ -140,3 +140,54 @@ async def test_thread_metadata_endpoint_exposes_derived_attach_fields(tmp_path: 
                   "metadata.json").read_text(encoding="utf-8")
   assert "attach_command" not in raw_metadata
   assert "attach_available" not in raw_metadata
+
+
+@pytest.mark.asyncio
+async def test_thread_metadata_endpoint_attach_mode_serves_only_the_pair(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "home",
+      backend_options=[
+          BackendOption(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),
+      ],
+  )
+  thread_mgr = ThreadManager(cfg)
+  worktree = tmp_path / "worktree"
+  worktree.mkdir()
+  thread = _thread(
+      backend="claude-opus",
+      session_id="session-id",
+      worktree_path=str(worktree),
+      claude_session_id="session-123",
+      description="x" * 5000,
+  )
+  await thread_mgr.save_metadata(thread)
+
+  with _build_client(cfg, thread_mgr) as client:
+    attach_data = client.get(f"/api/threads/{thread.session_id}/threads/{thread.id}?attach=1").json()
+    assert set(attach_data) == {"attach_command", "attach_available"}
+    assert attach_data["attach_command"] == f"cd {worktree} && claude --resume session-123"
+    assert attach_data["attach_available"] is True
+
+    full_data = client.get(f"/api/threads/{thread.session_id}/threads/{thread.id}").json()
+    assert full_data["attach_command"] == attach_data["attach_command"]
+    assert full_data["attach_available"] == attach_data["attach_available"]
+    # The task-spec body has no reader on this endpoint; the modal reads
+    # description once per click.
+    assert "context" not in full_data
+    assert full_data["description"] == "x" * 5000
+
+
+@pytest.mark.asyncio
+async def test_thread_metadata_endpoint_serves_a_rewritten_row(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  thread_mgr = ThreadManager(cfg)
+  thread = _thread(session_id="session-id", description="before")
+  await thread_mgr.save_metadata(thread)
+
+  with _build_client(cfg, thread_mgr) as client:
+    url = f"/api/threads/{thread.session_id}/threads/{thread.id}"
+    assert client.get(url).json()["description"] == "before"
+
+    thread.description = "after"
+    await thread_mgr.save_metadata(thread)
+    assert client.get(url).json()["description"] == "after"

@@ -17,7 +17,9 @@ async function fetchAndRenderEvents(threadId, sessionId) {
   const known = loadedEventCounts.get(threadId) || 0;
   const [eventsRes, metadataRes] = await Promise.all([
     fetch(`/api/threads/${sessionId}/threads/${threadId}/events?after=${known}`),
-    fetch(`/api/threads/${sessionId}/threads/${threadId}`)
+    // The poll reads only the attach pair; the full row stays the modal's
+    // on-click fetch.
+    fetch(`/api/threads/${sessionId}/threads/${threadId}?attach=1`)
   ]);
   const payload = await eventsRes.json();
   const metadata = await metadataRes.json();

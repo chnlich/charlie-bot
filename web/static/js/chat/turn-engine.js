@@ -1021,14 +1021,9 @@
   }
 
   Chat.TurnEngine = {
-    SCROLL_QUIET_MS,
     MAX_WINDOW_TURNS,
-    supportsTurnEngine,
     mountIfAvailable,
     activeFor,
-    isHosted(container) {
-      return Boolean(activeFor(container));
-    },
     debug(container) {
       const engine = activeFor(container);
       if (!engine) return null;

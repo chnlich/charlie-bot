@@ -409,16 +409,7 @@ async def _notify_completion(
     # A chain thread (a cron steps task) is owned end to end by the chain:
     # it advances the next step or wakes the master once, and never enters the
     # reviewer path. Threads without step_index take today's path unchanged.
-    if await task_chain.handle_step_completion(
-        session_id,
-        thread,
-        outcome.exit_code,
-        events_summary,
-        full_summary,
-        thread_mgr,
-        session_mgr,
-        cfg,
-    ):
+    if await task_chain.handle_step_completion(session_id, thread, outcome.exit_code, thread_mgr, session_mgr, cfg):
       return
 
     await review.maybe_spawn_reviewer(

@@ -341,8 +341,7 @@ async def test_step_success_spawns_next_step_with_previous_result(
   master = AsyncMock()
   monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, master)
 
-  owned = await task_chain.handle_step_completion(
-      session.id, step0, 0, "(events summary)", "(full summary)", thread_mgr, session_mgr, cfg)
+  owned = await task_chain.handle_step_completion(session.id, step0, 0, thread_mgr, session_mgr, cfg)
 
   assert owned is True
   assert len(spawns) == 1
@@ -358,8 +357,7 @@ async def test_step_success_spawns_next_step_with_previous_result(
   master.assert_not_awaited()
 
   # A rerun of the same completion (finalize rerun) spawns nothing more.
-  again = await task_chain.handle_step_completion(
-      session.id, step0, 0, "(events summary)", "(full summary)", thread_mgr, session_mgr, cfg)
+  again = await task_chain.handle_step_completion(session.id, step0, 0, thread_mgr, session_mgr, cfg)
   assert again is True
   assert len(spawns) == 1
   master.assert_not_awaited()
@@ -380,8 +378,7 @@ async def test_step_failure_spawns_nothing_and_wakes_master(
   master = AsyncMock()
   monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, master)
 
-  owned = await task_chain.handle_step_completion(
-      session.id, step0, 1, "(events summary)", "(full summary)", thread_mgr, session_mgr, cfg)
+  owned = await task_chain.handle_step_completion(session.id, step0, 1, thread_mgr, session_mgr, cfg)
 
   assert owned is True
   assert not spawns
@@ -407,8 +404,7 @@ async def test_last_step_completion_wakes_master_once_with_block_per_step(
   master = AsyncMock()
   monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, master)
 
-  owned = await task_chain.handle_step_completion(
-      session.id, step1, 0, "(events summary)", "(full summary)", thread_mgr, session_mgr, cfg)
+  owned = await task_chain.handle_step_completion(session.id, step1, 0, thread_mgr, session_mgr, cfg)
 
   assert owned is True
   assert not spawns
@@ -436,8 +432,7 @@ async def test_last_step_completion_wakes_master_once_with_block_per_step(
               }]
           }
       })
-  again = await task_chain.handle_step_completion(
-      session.id, step1, 0, "(events summary)", "(full summary)", thread_mgr, session_mgr, cfg)
+  again = await task_chain.handle_step_completion(session.id, step1, 0, thread_mgr, session_mgr, cfg)
   assert again is True
   master.assert_awaited_once()
   assert not spawns
@@ -457,8 +452,7 @@ async def test_empty_previous_result_stops_chain_and_notes_it(
   master = AsyncMock()
   monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, master)
 
-  owned = await task_chain.handle_step_completion(
-      session.id, step0, 0, "(events summary)", "(full summary)", thread_mgr, session_mgr, cfg)
+  owned = await task_chain.handle_step_completion(session.id, step0, 0, thread_mgr, session_mgr, cfg)
 
   assert owned is True
   assert not spawns

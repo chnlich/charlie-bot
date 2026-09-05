@@ -87,48 +87,46 @@ def clear_snapshot() -> None:
   _tex_snapshot = None
 
 
+async def _git_rev_parse(project_dir: str, *args: str) -> str | None:
+  """Run `git -C <project_dir> rev-parse <args>` and return stripped stdout.
+
+  Returns None when git exits nonzero. A timeout kills the process, logs
+  ``get_git_info_timeout``, and re-raises, so the caller aborts instead of
+  mistaking an unreadable repo for a failed ref.
+  """
+  proc = await asyncio.create_subprocess_exec(
+      'git',
+      '-C',
+      project_dir,
+      'rev-parse',
+      *args,
+      stdout=asyncio.subprocess.PIPE,
+      stderr=asyncio.subprocess.DEVNULL,
+  )
+  try:
+    out, _ = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+  except TimeoutError:
+    proc.kill()
+    log.warning('get_git_info_timeout', cmd='rev-parse ' + ' '.join(args))
+    raise
+  if proc.returncode != 0:
+    return None
+  return out.decode().strip()
+
+
 async def get_git_info() -> dict | None:
   """Return git repo info for the project dir, or None if not a git repo."""
   project_dir = str(LATEX_PROJECT['project_dir'])
   try:
-    root_proc = await asyncio.create_subprocess_exec(
-        'git',
-        '-C',
-        project_dir,
-        'rev-parse',
-        '--show-toplevel',
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    try:
-      root_out, _ = await asyncio.wait_for(root_proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
-    except TimeoutError:
-      root_proc.kill()
-      log.warning('get_git_info_timeout', cmd='rev-parse --show-toplevel')
+    repo_path = await _git_rev_parse(project_dir, '--show-toplevel')
+    if repo_path is None:
       return None
-    if root_proc.returncode != 0:
-      return None
-    repo_path = root_out.decode().strip()
-
-    branch_proc = await asyncio.create_subprocess_exec(
-        'git',
-        '-C',
-        project_dir,
-        'rev-parse',
-        '--abbrev-ref',
-        'HEAD',
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    try:
-      branch_out, _ = await asyncio.wait_for(branch_proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
-    except TimeoutError:
-      branch_proc.kill()
-      log.warning('get_git_info_timeout', cmd='rev-parse --abbrev-ref HEAD')
-      return None
-    branch = branch_out.decode().strip() if branch_proc.returncode == 0 else 'unknown'
-
+    branch = await _git_rev_parse(project_dir, '--abbrev-ref', 'HEAD')
+    if branch is None:
+      branch = 'unknown'
     return {'repo_name': Path(repo_path).name, 'repo_path': repo_path, 'branch': branch}
+  except TimeoutError:
+    return None
   except Exception as e:
     log.warning('get_git_info_error', error=str(e))
     return None

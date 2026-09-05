@@ -46,3 +46,13 @@ class BoundedMemo(Generic[K, V]):
       self._entries.move_to_end(key)
       while len(self._entries) > self._limit:
         self._entries.popitem(last=False)
+
+  def drop(self, key: K) -> None:
+    """Remove *key*'s entry when present; a no-op otherwise."""
+    with self._lock:
+      self._entries.pop(key, None)
+
+  def clear(self) -> None:
+    """Remove every entry (the tests' cross-test pollution reset)."""
+    with self._lock:
+      self._entries.clear()

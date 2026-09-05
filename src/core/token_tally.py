@@ -85,6 +85,7 @@ from typing import NamedTuple
 
 from src.core.config import get_config
 from src.core.json_utils import write_json_atomically
+from src.core.models import BackendType
 
 DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
@@ -195,9 +196,9 @@ def discover_homes(claude_default: Path, codex_default: Path) -> tuple[dict[str,
   claude: set[Path] = {claude_default}
   codex: set[Path] = {codex_default}
   for opt in cfg.backend_options:
-    if opt.type == "cc-claude" and opt.claude_config_dir:
+    if opt.type == BackendType.CC_CLAUDE and opt.claude_config_dir:
       claude.add(Path(opt.claude_config_dir).expanduser())
-    elif opt.type == "codex" and opt.codex_home:
+    elif opt.type == BackendType.CODEX and opt.codex_home:
       codex.add(Path(opt.codex_home).expanduser())
 
   claude_map = {_account_label(p, ".claude"): p for p in sorted(claude) if (p / "projects").is_dir()}

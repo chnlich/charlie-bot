@@ -25,6 +25,7 @@ from src.api.message_utils import extract_text_from_message, extract_tool_result
 from src.api.responses import FastJsonResponse
 from src.core.config import CharlieBotConfig, get_config
 from src.core.models import (
+    BackendType,
     ThreadMetadata,
     ThreadStatus,
     WorkerEvent,
@@ -73,9 +74,9 @@ def _tmux_attach_command(session_id: str, *, read_only: bool = False) -> str:
 
 
 def _tmux_attach_id(thread: ThreadMetadata, dispatch: _BackendDispatch) -> str | None:
-  if dispatch.type == "tui-cli":
+  if dispatch.type == BackendType.TUI_CLI:
     return thread.session_id
-  if dispatch.type == "cc-claude" and dispatch.cli_binary == "claude-sub":
+  if dispatch.type == BackendType.CC_CLAUDE and dispatch.cli_binary == "claude-sub":
     return thread.claude_session_id
   return None
 
@@ -85,28 +86,28 @@ def build_attach_command(thread: ThreadMetadata, cfg: CharlieBotConfig | None = 
   if dispatch is None:
     return None
 
-  if dispatch.type == "cc-claude":
+  if dispatch.type == BackendType.CC_CLAUDE:
     tmux_id = _tmux_attach_id(thread, dispatch)
     if tmux_id:
       return _tmux_attach_command(tmux_id, read_only=dispatch.cli_binary == "claude-sub")
     if not thread.worktree_path or not thread.claude_session_id:
       return None
     return f"cd {shlex.quote(thread.worktree_path)} && claude --resume {shlex.quote(thread.claude_session_id)}"
-  if dispatch.type == "cc-kimi":
+  if dispatch.type == BackendType.CC_KIMI:
     return None
-  if dispatch.type == "cc-openai-compatible":
+  if dispatch.type == BackendType.CC_OPENAI_COMPATIBLE:
     return None
-  if dispatch.type == "codex":
+  if dispatch.type == BackendType.CODEX:
     return None
-  if dispatch.type == "charlie-code":
+  if dispatch.type == BackendType.CHARLIE_CODE:
     return None
-  if dispatch.type == "gemini":
+  if dispatch.type == BackendType.GEMINI:
     return None
-  if dispatch.type == "opencode":
+  if dispatch.type == BackendType.OPENCODE:
     return None
-  if dispatch.type == "antigravity":
+  if dispatch.type == BackendType.ANTIGRAVITY:
     return None
-  if dispatch.type == "tui-cli":
+  if dispatch.type == BackendType.TUI_CLI:
     tmux_id = _tmux_attach_id(thread, dispatch)
     if tmux_id is None:
       return None
@@ -119,26 +120,26 @@ async def _attach_available(thread: ThreadMetadata, cfg: CharlieBotConfig) -> bo
   if dispatch is None:
     return False
 
-  if dispatch.type == "cc-claude":
+  if dispatch.type == BackendType.CC_CLAUDE:
     tmux_id = _tmux_attach_id(thread, dispatch)
     if tmux_id:
       return await tmux_session_exists(tmux_id)
     return bool(thread.claude_session_id and thread.worktree_path and os.path.isdir(thread.worktree_path))
-  if dispatch.type == "cc-kimi":
+  if dispatch.type == BackendType.CC_KIMI:
     return False
-  if dispatch.type == "cc-openai-compatible":
+  if dispatch.type == BackendType.CC_OPENAI_COMPATIBLE:
     return False
-  if dispatch.type == "codex":
+  if dispatch.type == BackendType.CODEX:
     return False
-  if dispatch.type == "charlie-code":
+  if dispatch.type == BackendType.CHARLIE_CODE:
     return False
-  if dispatch.type == "gemini":
+  if dispatch.type == BackendType.GEMINI:
     return False
-  if dispatch.type == "opencode":
+  if dispatch.type == BackendType.OPENCODE:
     return False
-  if dispatch.type == "antigravity":
+  if dispatch.type == BackendType.ANTIGRAVITY:
     return False
-  if dispatch.type == "tui-cli":
+  if dispatch.type == BackendType.TUI_CLI:
     tmux_id = _tmux_attach_id(thread, dispatch)
     return bool(tmux_id and await tmux_session_exists(tmux_id))
   return False

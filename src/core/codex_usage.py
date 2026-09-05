@@ -8,6 +8,7 @@ import structlog
 
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import CharlieBotConfig
+from src.core.models import BackendType
 from src.core.ndjson import iter_ndjson_events
 
 log = structlog.get_logger()
@@ -126,7 +127,7 @@ class CodexUsageResolver:
   def is_codex_backend(self, backend_id: str) -> bool:
     option = self._cfg.get_backend_option(backend_id)
     if option is not None:
-      return option.type == "codex"
+      return option.type == BackendType.CODEX
     # A session pinned to a backend id since removed from config admits by prefix.
     return backend_id.startswith("codex")
 
@@ -247,7 +248,7 @@ class CodexUsageResolver:
       _add(Path(own_option.codex_home).expanduser())
 
     for opt in self._cfg.backend_options:
-      if opt.type == "codex" and opt.codex_home:
+      if opt.type == BackendType.CODEX and opt.codex_home:
         _add(Path(opt.codex_home).expanduser())
 
     _add(_DEFAULT_CODEX_HOME)

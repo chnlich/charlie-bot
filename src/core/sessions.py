@@ -31,6 +31,7 @@ from src.core.message_projection import MessageProjection
 from src.core.models import (
     TERMINAL_THREAD_STATUSES,
     BackendOption,
+    BackendType,
     CreateSessionRequest,
     MasterRunRecord,
     SessionCallbacks,
@@ -575,7 +576,7 @@ class SessionManager:
     # Only tui-cli backends carry tmux lifecycle state, and the create and
     # destroy hooks must agree on which sessions that covers.
     option = self._cfg.get_backend_option(backend_id)
-    return option if option is not None and option.type == "tui-cli" else None
+    return option if option is not None and option.type == BackendType.TUI_CLI else None
 
   async def _backend_create_hook(self, meta: SessionMetadata) -> None:
     """Run backend-specific session-create work (e.g. spawn tmux for tui-cli)."""

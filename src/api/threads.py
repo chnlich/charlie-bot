@@ -145,11 +145,11 @@ async def _attach_available(thread: ThreadMetadata, cfg: CharlieBotConfig) -> bo
 
 
 def _thread_list_item(t: ThreadMetadata) -> dict:
-  """One thread row of the workers-panel list payload.
+  """One thread row of the workers-panel list and session-view payloads.
 
   The description ships as a prefix: the card it backs paints one CSS-truncated
-  line and the full-text modal fetches the thread row on click, so the 3 s
-  poll never ships task-spec-length descriptions (~KB each). A truncated row
+  line and the full-text modal fetches the thread row on click, so neither
+  payload ships task-spec-length descriptions (~KB each). A truncated row
   carries ``description_full_len`` so the client knows to fetch.
   """
   description = t.description or ""

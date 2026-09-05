@@ -11,6 +11,7 @@ from conftest import (
   OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
   SYNTHETIC_MODEL,
   FakeChunkedResponse,
+  build_cli_backend,
 )
 
 import src.agents.backends.opencode as opencode_mod
@@ -32,11 +33,8 @@ _CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.opencode.asyncio.cre
 
 
 def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
-  monkeypatch.setattr(
-      OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-      lambda name, fallback: "/usr/bin/opencode",
-  )
-  return OpenCodeBackend(**kwargs)
+  return build_cli_backend(
+      monkeypatch, OpenCodeBackend, OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", **kwargs)
 
 
 def _rig_end_to_end_run(monkeypatch, backend: OpenCodeBackend, response) -> MagicMock:

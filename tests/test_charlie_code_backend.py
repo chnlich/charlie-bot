@@ -2,7 +2,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import FLAG_LIKE_PROMPT
+from conftest import (
+  CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+  FLAG_LIKE_PROMPT,
+  build_cli_backend,
+)
 from pydantic import ValidationError
 
 from src.agents.backends.base import USER_LOCAL_BIN, AgentBackend
@@ -14,13 +18,14 @@ from src.core.models import BackendOption
 
 
 def _build_backend(monkeypatch, **kwargs) -> CharlieCodeBackend:
-  monkeypatch.setattr(
-      "src.agents.backends.charlie_code.resolve_binary",
-      lambda name, fallback: "/usr/bin/charlie-code",
+  return build_cli_backend(
+      monkeypatch,
+      CharlieCodeBackend,
+      CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+      "/usr/bin/charlie-code",
+      defaults={"model": "charlie-code-test-model", "api_base": "http://test.invalid/v1"},
+      **kwargs,
   )
-  kwargs.setdefault("model", "charlie-code-test-model")
-  kwargs.setdefault("api_base", "http://test.invalid/v1")
-  return CharlieCodeBackend(**kwargs)
 
 
 def test_translate_success_stream_preserves_tool_pair_ids_and_usage(monkeypatch) -> None:
@@ -381,7 +386,7 @@ def test_prepare_env_without_api_key_leaves_env_untouched(monkeypatch) -> None:
 
 def test_registry_propagates_context_window_into_charlie_code_backend(monkeypatch) -> None:
   monkeypatch.setattr(
-      "src.agents.backends.charlie_code.resolve_binary",
+      CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/charlie-code",
   )
   option = BackendOption(
@@ -401,7 +406,7 @@ def test_registry_propagates_context_window_into_charlie_code_backend(monkeypatc
 
 def test_registry_propagates_api_key_into_charlie_code_backend(monkeypatch) -> None:
   monkeypatch.setattr(
-      "src.agents.backends.charlie_code.resolve_binary",
+      CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/charlie-code",
   )
   option = BackendOption(
@@ -421,7 +426,7 @@ def test_registry_propagates_api_key_into_charlie_code_backend(monkeypatch) -> N
 
 def test_api_base_required(monkeypatch) -> None:
   monkeypatch.setattr(
-      "src.agents.backends.charlie_code.resolve_binary",
+      CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/charlie-code",
   )
 

@@ -9,6 +9,7 @@ from conftest import (
   CODEX_RESOLVE_BINARY_PATCH_TARGET,
   FLAG_LIKE_PROMPT,
   FakeStdout,
+  build_cli_backend,
 )
 from pydantic import ValidationError
 
@@ -31,12 +32,14 @@ def _fake_one_shot_proc(lines: list[bytes], *, stderr: bytes = b"", returncode: 
 
 
 def _build_backend(monkeypatch, **kwargs) -> CodexBackend:
-  monkeypatch.setattr(
+  return build_cli_backend(
+      monkeypatch,
+      CodexBackend,
       CODEX_RESOLVE_BINARY_PATCH_TARGET,
-      lambda name, fallback: "/usr/bin/codex",
+      "/usr/bin/codex",
+      defaults={"model": "codex-test-model"},
+      **kwargs,
   )
-  kwargs.setdefault("model", "codex-test-model")
-  return CodexBackend(**kwargs)
 
 
 def test_prepare_cwd_writes_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:

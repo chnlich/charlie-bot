@@ -70,6 +70,7 @@ function baseSessionContext(overrides = {}) {
     switchTab: () => {},
     marked: {parse: (txt) => txt},
     fixNestedFences: (txt) => txt,
+    renderProseMarkdown: (txt) => txt,
     renderChatMath: () => {},
     formatBubbleTime: (txt) => txt,
     shouldAutoScroll: () => true,

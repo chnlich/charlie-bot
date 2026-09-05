@@ -209,6 +209,34 @@ function fixNestedFences(md) {
   }});
 })();
 
+// ---------------------------------------------------------------------------
+// Memoized message-body parse for the chat message path.
+//
+// Every session switch rebuilds the turn engine, so the same page's message
+// bodies re-run marked.parse on every re-entry (and every repeat render of an
+// unchanged body). The parse is a pure function of the text — the renderer and
+// tokenizer are registered once at load — so a bounded LRU serves repeat
+// renders. Cap holds the 64 most recently rendered bodies: the tail pages a
+// re-entry renders. The streaming draft paint (usage.js) stays off this memo
+// on purpose: its content grows every delta, so it would only evict.
+// ---------------------------------------------------------------------------
+const PROSE_PARSE_CACHE_CAP = 64;
+const proseParseCache = new Map();
+function renderProseMarkdown(text) {
+  let html = proseParseCache.get(text);
+  if (html !== undefined) {
+    proseParseCache.delete(text);
+    proseParseCache.set(text, html);
+    return html;
+  }
+  html = marked.parse(fixNestedFences(text));
+  proseParseCache.set(text, html);
+  if (proseParseCache.size > PROSE_PARSE_CACHE_CAP) {
+    proseParseCache.delete(proseParseCache.keys().next().value);
+  }
+  return html;
+}
+
 function renderChatMath(el) {
   // throwOnError:false keeps stray dollar amounts ("$5 ... $10") from
   // breaking the whole bubble — invalid math renders as red inline text.

@@ -27,7 +27,8 @@ function loadChatRenderingModules(context) {
 // makeChatRenderContext builds the sandbox shared by the chat/rendering.js vm
 // harnesses: a FakeElement-backed document over an element map, plus the page
 // globals the chat render paths read, so they run without a browser
-// (marked/fixNestedFences/renderChatMath stand in for markdown-renderer.js).
+// (marked/fixNestedFences/renderProseMarkdown/renderChatMath stand in for
+// markdown-renderer.js).
 function makeChatRenderContext(elements = new Map()) {
   return {
     document: {
@@ -39,6 +40,7 @@ function makeChatRenderContext(elements = new Map()) {
     console: { error: () => {}, log: () => {} },
     marked: { parse: (v) => '<p>' + String(v || '') + '</p>' },
     fixNestedFences: (v) => String(v || ''),
+    renderProseMarkdown: (v) => '<p>' + String(v || '') + '</p>',
     renderChatMath: () => {},
     CSS: { escape: (v) => String(v) },
     SESSION_ID: 'sess-1',
@@ -66,6 +68,7 @@ function loadToggleHarness(extraModule, extraStubs = {}) {
     console: { error: () => {}, log: () => {}, warn: () => {} },
     marked: { parse: (v) => '<p>' + String(v || '') + '</p>' },
     fixNestedFences: (v) => String(v || ''),
+    renderProseMarkdown: (v) => '<p>' + String(v || '') + '</p>',
     renderChatMath: () => {},
     CSS: { escape: (v) => String(v) },
     SESSION_ID: 'sess-1',

@@ -14,10 +14,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-  BROADCAST_PATCH_TARGET,
-  OPUS_BACKEND_ID,
-  make_home_session,
-  recycle_archive_cutoff_events,
+    BROADCAST_PATCH_TARGET,
+    OPUS_BACKEND_ID,
+    make_home_session,
+    recycle_archive_cutoff_events,
 )
 from conftest import append_events as _append_events
 from conftest import assistant_event as _assistant_event

@@ -66,6 +66,8 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M53 config reload failure re-fire, broken steady state | M53 collector below | warnings + re-parses per 60 steady-state `get_config` calls of a persistently-broken config corpus | 0 warnings after the first sighting per (event, error) per process; 0 re-parses (one fingerprint stat set per call) | — (introduced with its first history row) |
 | M54 stream-draft paint work, code-bearing draft, real highlight.js | M54 collector below | seconds of paint work per full-turn replay of the largest fence-bearing on-disk assistant draft, 200 B deltas at 40 ms virtual cadence, page-pinned marked + hljs 11.9.0 common builds | median < 0.2 s | — (introduced with its first history row) |
 | M55 artifact compare-view serve, steady state | M55 collector below | seconds per repeat `?diff=` compare-view request over the worst on-disk artifact pair, plus the request's worst event-loop gap (the 5 ms ticker floor like M14) | repeat-view median < 0.010 s; loop-lag median < 0.010 s | — (introduced with its first history row) |
+| M56 sidebar status poll, steady state | M56 collector below | seconds per `GET /api/sessions/status` request over the active-session id set | median < 0.0028 s | — (introduced with its first history row) |
+| M57 plan-registry poll, steady state | M57 collector below | seconds per `GET /api/sessions/{id}/plans` request, worst on-disk plans corpus | median < 0.0030 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3036,6 +3038,120 @@ print(f"{TARGET} vs {BASE}; first view {cold:.4f} s; repeat-view median {times[4
 EOF
 ```
 
+M56 — sidebar status poll, steady state. The sidebar polls `GET /api/sessions/status?ids=…` every
+3 s per open dashboard tab with the sessions it renders (this host's second-busiest route after
+the workers-panel list); the handler resolves every id's metadata plus the derived sidebar state
+and the pre-fix mapped return paid FastAPI's jsonable_encoder pass over the 41-row dict. The cost
+is per-poll latency invisible to the standing HTTP probes (M3 reads the 401 floor), so the
+collector drives the endpoint through TestClient over the live corpus (read-only), ids resolved
+from the active-session listing, from the checkout under test: one cold pass, as at first
+sidebar paint after a server start, then nine timed requests, with a parsed-body digest so a
+corpus change between arms cannot masquerade as a payload difference.
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, hashlib, json, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from src.api.deps import get_session_manager
+from src.api.sessions import router as sessions_router
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+# The sidebar polls the sessions it renders; the active set is that corpus.
+async def ids():
+    cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+    mgr = SessionManager(cfg)
+    metas = await asyncio.to_thread(mgr.list_active_session_metas)
+    return ",".join(m.id for m in metas)
+
+IDS = asyncio.run(ids())
+
+cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+mgr = SessionManager(cfg)
+app = FastAPI()
+app.include_router(sessions_router, prefix="/api/sessions")
+app.dependency_overrides[get_session_manager] = lambda: mgr
+client = TestClient(app)
+url = f"/api/sessions/status?ids={IDS}"
+
+def digest(body):
+    return hashlib.sha256(json.dumps(json.loads(body), sort_keys=True).encode()).hexdigest()[:12]
+
+client.get(url)  # cold pass, as at first sidebar paint after a server start; not timed
+times, body = [], None
+for _ in range(9):
+    t0 = time.perf_counter()
+    r = client.get(url)
+    times.append(time.perf_counter() - t0)
+    body = r.content
+times.sort()
+print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {len(IDS.split(','))} sidebar ids; "
+      f"/status request median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms, "
+      f"body {len(body)} B, digest {digest(body)}")
+EOF
+```
+
+M57 — plan-registry poll, steady state. The plan panel polls `GET /api/sessions/{id}/plans` every
+3 s while open; M27 memoized the registry read itself (10.6 µs steady state) but the endpoint's
+mapped dict return still paid FastAPI's jsonable_encoder pass over the 12-plan payload on every
+poll. The cost is per-poll latency invisible to the standing HTTP probes, so the collector drives
+the endpoint through TestClient over the worst on-disk plans corpus (the session whose plans.json
+carries the most bytes, live state read-only), from the checkout under test: one cold pass, as at
+first panel paint after a server start, then nine timed requests, with a parsed-body digest.
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import hashlib, json, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from src.api.deps import get_plan_manager
+from src.api.sessions import router as sessions_router
+from src.core.config import CharlieBotConfig
+from src.core.plans import PlanRegistryManager
+from src.core.sessions import SessionManager
+
+# Worst plans corpus: the session whose plans.json carries the most bytes.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "plans.json"
+    if p.is_file():
+        n = p.stat().st_size
+        if n > best_n:
+            best, best_n = p, n
+SID = best.parent.name
+
+cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+mgr = SessionManager(cfg)
+plan_mgr = PlanRegistryManager(cfg, mgr)
+app = FastAPI()
+app.include_router(sessions_router, prefix="/api/sessions")
+app.dependency_overrides[get_plan_manager] = lambda: plan_mgr
+client = TestClient(app)
+url = f"/api/sessions/{SID}/plans"
+
+def digest(body):
+    return hashlib.sha256(json.dumps(json.loads(body), sort_keys=True).encode()).hexdigest()[:12]
+
+client.get(url)  # cold pass, as at first panel paint after a server start; not timed
+times, body = [], None
+for _ in range(9):
+    t0 = time.perf_counter()
+    r = client.get(url)
+    times.append(time.perf_counter() - t0)
+    body = r.content
+times.sort()
+print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: session {SID}, {best_n / 1e3:.1f} KB plans.json; "
+      f"/plans request median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms, "
+      f"body {len(body)} B, digest {digest(body)}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3113,3 +3229,5 @@ EOF
 | 2026-09-04 | this PR | M54 paint-work median 0.299/0.323 s → 0.141/0.142 s, maxima 0.390/0.406 s → 0.219/0.236 s (collector verbatim, 11.4 KB worst fence-bearing on-disk assistant draft sha1 b155f860788f, 59 deltas at 40 ms virtual cadence, 12 paints, page-pinned marked + hljs 11.9.0 common build (36 languages), main checkout before vs branch after interleaved back-to-back ×2 at load 2.24/1.15/0.80; final-frame parity true both arms; M33 stubbed-hljs replay re-measured 0.396 s median vs the 0.378 s standing row at a higher load, no regression) | highlight results memoized in renderer.code on (lang, code) with a 32-entry LRU — highlight is a pure function of its inputs, but every streaming paint re-parsed the whole draft and re-ran highlightAuto (a 36-language scoring pass, ~0.26 s per 24 KB measured) on every unchanged code block, and every message re-render paid it again; M54 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M8 interleaved-family warm search: family B median 145.22 ms → 4.08 ms, family A 4.78 ms → 3.99 ms (two unrelated absent-needle families alternating over 6 interleaved rounds, collector over the identical 155 MB / 40-file snapshot corpus, main checkout before vs branch after back-to-back; rows 0 both families both arms; content scans across the 12 timed rounds 240 → 0 (collector totals 320 → 80 including the two cold passes); live corroboration: the running instance re-reads 151 MB per repeat search (rchar delta) and answers in 74-160 ms because its one-slot memo is occupied by shorter real-search needles) | the content-search miss memo keeps a per-file LRU of proven-absent roots (needle → signature, cap 8) instead of one shortest-needle slot — the one-slot form let the shortest needle ever searched permanently occupy the proof and sent every query family outside its superstrings back to a full 155 MB corpus scan per request |
 | 2026-09-05 | this PR | M55 artifact compare-view repeat median 0.2484/0.2675 s → 0.0028/0.0025 s, maxima 0.2706/0.3052 s → 0.0035/0.0031 s (collector verbatim, 1.5 MB worst artifact pair understanding_packed-batch-cost-balance_v10.html vs _v9.html, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×2 at load 0.89-0.97; served body byte-identical across arms — 150741 B, digest a82879fdc034; first view unchanged at 0.2270-0.2532 s both arms, now off the loop) | the `?diff=` annotate moved off the event loop into one thread hop and its result memoized on both files' (path, mtime_ns, size) signatures plus the injection flag — the marks are a pure function of the two files' bytes and artifact pages are only ever written whole, so a repeat compare view re-runs zero annotate; the pre-fix inline annotate froze the event loop 246.2 ms per repeat request (raw-ASGI 5 ms-ticker round: loop-lag 246.2 ms, wall 246.6 ms before vs 5.2 ms / 1.6 ms after), the same pathology M14 measured on the git diff endpoints; the clean artifact view's comment-layer injection also left the event loop; M55 definition and healthy range introduced with this PR |
+| 2026-09-04 | this PR | M56 /status request median 3.03/2.89 ms → 2.30/2.37 ms, maxima 8.57/8.55 ms → 7.65/7.72 ms (collector verbatim, 41 active-session ids, live corpus read-only, main checkout before vs branch after interleaved back-to-back ×2 at load 2.0-2.1; parsed-body digest identical a344862b7fe2 across arms; the 34-id live-poll shape measured 2.81/2.65 ms → 2.37/2.28 ms in the same interleaved protocol) | the sidebar's 3 s poll renders through FastJsonResponse, skipping FastAPI's jsonable_encoder pass over the 41-row derived-state dict; M56 definition and healthy range introduced with this PR |
+| 2026-09-04 | this PR | M57 /plans request median 3.63/3.54 ms → 2.77/2.74 ms, maxima 4.43/4.53 ms → 3.62/3.49 ms (collector verbatim, 15.4 KB worst plans corpus of session a9bb2346, live state read-only, main checkout before vs branch after interleaved back-to-back ×2 at load 2.0-2.1; parsed-body digest identical f0098c1aae15 across arms) | the plan panel's 3 s poll renders through FastJsonResponse, skipping FastAPI's jsonable_encoder pass over the 12-plan dict (the registry read itself is already the M27 memo at 10.6 µs); M57 definition and healthy range introduced with this PR |

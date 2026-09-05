@@ -267,8 +267,12 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
 
 
 async def git_create_worktree(
-    repo_path: Path, base_branch: str, branch_name: str, wt_path: Path, *, remote_tip: str | None = None
-) -> BaseResolution:
+    repo_path: Path,
+    base_branch: str,
+    branch_name: str,
+    wt_path: Path,
+    *,
+    remote_tip: str | None = None) -> BaseResolution:
   """Create a git worktree and fail loudly if git reports an error.
 
   Resolves the start-point via `resolve_base_branch` so that a stale local copy

@@ -91,10 +91,10 @@ def iter_recent_thread_metas(
     now: datetime,
     log_event: str,
     window: timedelta = RUNNING_SCAN_WINDOW,
-) -> Iterator[tuple[Path, Path, dict]]:
+) -> Iterator[tuple[str, str, dict]]:
   """Yield ``(thread_dir, meta_path, meta)`` for threads modified within *window*.
 
-  Cheap-first: ``os.scandir`` the threads dir and ``stat`` each ``metadata.json``,
+  Cheap-first: ``os.scandir`` the threads dir and ``os.stat`` each ``metadata.json``,
   only ``load_json_meta`` (read + parse) the ones whose mtime is at least
   ``now - window``. Threads whose metadata is older than the window are skipped
   with zero content reads, as are dirs with missing/unreadable metadata. In-window
@@ -102,6 +102,11 @@ def iter_recent_thread_metas(
   so a repeat scan over unchanged files costs one stat per file. Shared by
   ``_scan_interrupted_runs`` (init) and ``has_running_tasks_sync`` (sessions) so the
   stat-before-read scan stays identical at both sites.
+
+  The yielded paths and the stat go through scandir's plain strings, not Path
+  objects: the sidebar deep probe re-enters this scan on every post-write poll,
+  and the Path allocations measured over half the scan's cost on the 339-thread
+  worst corpus (the same finding the sidebar signature pass fixed).
   """
   if not threads_dir.is_dir():
     return
@@ -110,36 +115,37 @@ def iter_recent_thread_metas(
     for entry in entries:
       if not entry.is_dir():
         continue
-      meta_path = Path(entry.path) / "metadata.json"
+      # entry.path is the str join scandir already built; appending "/metadata.json"
+      # directly yields the same string Path(entry.path) / "metadata.json" would.
+      meta_path = f"{entry.path}/metadata.json"
       try:
-        st = meta_path.stat()
+        st = os.stat(meta_path)
       except FileNotFoundError:
         continue  # thread dir without metadata.json (mid-creation) — nothing to read
       except OSError as e:
-        log.debug(log_event, path=str(meta_path), error=str(e))
+        log.debug(log_event, path=meta_path, error=str(e))
         continue
       if st.st_mtime < cutoff:
         continue
-      key = str(meta_path)
       with _thread_meta_memo_lock:
-        cached = _thread_meta_memo.get(key)
+        cached = _thread_meta_memo.get(meta_path)
         if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-          _thread_meta_memo.move_to_end(key)
+          _thread_meta_memo.move_to_end(meta_path)
           cached_meta: dict | None = cached[2]
         else:
           cached_meta = None
       if cached_meta is not None:
-        yield Path(entry.path), meta_path, cached_meta
+        yield entry.path, meta_path, cached_meta
         continue
-      meta = load_json_meta(meta_path, log_event)
+      meta = load_json_meta(Path(meta_path), log_event)
       if meta is None:
         continue
       with _thread_meta_memo_lock:
-        _thread_meta_memo[key] = (st.st_mtime_ns, st.st_size, meta)
-        _thread_meta_memo.move_to_end(key)
+        _thread_meta_memo[meta_path] = (st.st_mtime_ns, st.st_size, meta)
+        _thread_meta_memo.move_to_end(meta_path)
         while len(_thread_meta_memo) > _THREAD_META_MEMO_LIMIT:
           _thread_meta_memo.popitem(last=False)
-      yield Path(entry.path), meta_path, meta
+      yield entry.path, meta_path, meta
 
 
 @dataclass(frozen=True)
@@ -199,7 +205,7 @@ def _scan_interrupted_runs(cfg: CharlieBotConfig, boot_time: datetime) -> tuple[
         archived[session_id] = _session_archived(session_dir)
       if archived[session_id]:
         continue
-      interrupted.append(_InterruptedRun(session_id=session_id, thread_dir=thread_dir, meta=meta))
+      interrupted.append(_InterruptedRun(session_id=session_id, thread_dir=Path(thread_dir), meta=meta))
   # One line, not one per session: every archived session holding an in-window
   # thread matches, which on a long-lived host is dozens of them at every boot.
   skipped = sum(archived.values())
@@ -579,13 +585,14 @@ def _effects_maybe_missing(meta: dict, chat_events: list[dict], session_threads:
   return False
 
 
-def _started_before_boot(meta: dict, thread_dir: Path, boot_time: datetime) -> bool:
+def _started_before_boot(meta: dict, thread_dir: str, boot_time: datetime) -> bool:
   """Return True if a running thread was started before this server boot.
 
   A genuine post-boot worker always carries a fresh started_at, so anything
   earlier than *boot_time* is orphaned. When started_at is missing or
   unparseable, fall back to the thread directory's ctime; if even that is
   unavailable, treat the thread as pre-boot and recover it (errs safe).
+  *thread_dir* is the scan's plain-string path (see ``iter_recent_thread_metas``).
   """
   started_at = meta.get("started_at")
   if started_at:
@@ -594,7 +601,7 @@ def _started_before_boot(meta: dict, thread_dir: Path, boot_time: datetime) -> b
     except (ValueError, TypeError):
       log.warning("recover_unparseable_started_at", thread=meta.get("id"), started_at=started_at)
   try:
-    ctime = datetime.fromtimestamp(thread_dir.stat().st_ctime, tz=UTC)
+    ctime = datetime.fromtimestamp(os.stat(thread_dir).st_ctime, tz=UTC)
   except OSError:
     return True
   return ctime < boot_time

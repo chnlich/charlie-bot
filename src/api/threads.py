@@ -120,20 +120,6 @@ def build_attach_command(thread: ThreadMetadata, cfg: CharlieBotConfig | None = 
     if not thread.worktree_path or not thread.claude_session_id:
       return None
     return f"cd {shlex.quote(thread.worktree_path)} && claude --resume {shlex.quote(thread.claude_session_id)}"
-  if dispatch.type == BackendType.CC_KIMI:
-    return None
-  if dispatch.type == BackendType.CC_OPENAI_COMPATIBLE:
-    return None
-  if dispatch.type == BackendType.CODEX:
-    return None
-  if dispatch.type == BackendType.CHARLIE_CODE:
-    return None
-  if dispatch.type == BackendType.GEMINI:
-    return None
-  if dispatch.type == BackendType.OPENCODE:
-    return None
-  if dispatch.type == BackendType.ANTIGRAVITY:
-    return None
   if dispatch.type == BackendType.TUI_CLI:
     tmux_id = _tmux_attach_id(thread, dispatch)
     if tmux_id is None:
@@ -152,20 +138,6 @@ async def _attach_available(thread: ThreadMetadata, cfg: CharlieBotConfig) -> bo
     if tmux_id:
       return await tmux_session_exists(tmux_id)
     return bool(thread.claude_session_id and thread.worktree_path and os.path.isdir(thread.worktree_path))
-  if dispatch.type == BackendType.CC_KIMI:
-    return False
-  if dispatch.type == BackendType.CC_OPENAI_COMPATIBLE:
-    return False
-  if dispatch.type == BackendType.CODEX:
-    return False
-  if dispatch.type == BackendType.CHARLIE_CODE:
-    return False
-  if dispatch.type == BackendType.GEMINI:
-    return False
-  if dispatch.type == BackendType.OPENCODE:
-    return False
-  if dispatch.type == BackendType.ANTIGRAVITY:
-    return False
   if dispatch.type == BackendType.TUI_CLI:
     tmux_id = _tmux_attach_id(thread, dispatch)
     return bool(tmux_id and await tmux_session_exists(tmux_id))

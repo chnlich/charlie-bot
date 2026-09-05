@@ -22,6 +22,7 @@ from conftest import (
     _noop,
     make_home_config,
     make_json_response,
+    make_task_spawner,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -161,15 +162,10 @@ async def test_session_message_to_archived_target_relays_and_pulls_back(tmp_path
 
   spawned: list[asyncio.Task] = []
 
-  def fake_create_logged_task(coro: Coroutine[Any, Any, Any], name: str | None = None) -> asyncio.Task:
-    task = asyncio.get_running_loop().create_task(coro, name=name)
-    spawned.append(task)
-    return task
-
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
       patch("src.core.master_trigger.run_message_with_resume_recovery", new=AsyncMock()) as mock_run,
-      patch.object(internal, "create_logged_task", fake_create_logged_task),
+      patch.object(internal, "create_logged_task", make_task_spawner(spawned)),
   ):
     resp = await internal.session_message(
         SessionMessageRequest(session_id=caller.id, target_session_id=target.id, content="status please"),

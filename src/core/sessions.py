@@ -67,14 +67,22 @@ ELONE_BOOTSTRAP_OPENER = "You're taking over because the user wasn't satisfied w
 _METADATA_CACHE_TTL = 30.0  # seconds
 _SEARCH_RESULT_LIMIT = 200  # newest rows a name/content search returns; keeps the render bounded
 _PROJECTION_LRU_LIMIT = 8
-# LRU cap on the content-search miss memo: chat-file path -> ((mtime_ns, size, ino),
-# shortest absence-proven lowercase needle). Absence of N proves every
-# superstring of N absent while the file keeps that signature, so the debounced
-# sidebar's growing query string re-reads a file only after the file moves.
-# Chat files mutate only by append between atomic archive rewrites (inode
-# swap), so a same-inode file that grew kept its old bytes: a query the stored
-# needle prefixes re-proves absence by scanning the appended tail alone.
+# LRU cap on the content-search miss memo: chat-file path -> {proven-absent
+# lowercase needle -> the (mtime_ns, size, ino) the absence was proven at}.
+# Absence of N proves every superstring of N absent while the file keeps that
+# signature, so the debounced sidebar's growing query string re-reads a file
+# only after the file moves. One slot per file is not enough: the shortest
+# needle ever searched would occupy it forever, and every query family outside
+# its superstrings would re-scan the whole active corpus on every request (the
+# whole corpus, ~155 MB on the seed host, per search). Chat files mutate only
+# by append between atomic archive rewrites (inode swap), so a same-inode file
+# that grew kept its old bytes: a query some stored needle prefixes re-proves
+# absence by scanning the appended tail alone.
 _SEARCH_MISS_MEMO_LIMIT = 256
+# Roots kept per file, LRU: needle families beyond the cap degrade to a scan
+# for the evicted family only, the same cost the one-slot form paid for every
+# non-dominant family.
+_SEARCH_MISS_ROOTS_PER_FILE = 8
 # str.lower() and substring search hold the GIL for the whole input, so the
 # sidebar content search reads chat files in windows of this many characters:
 # each lower()/scan call's GIL hold stays bounded instead of scaling with the
@@ -506,7 +514,7 @@ class SessionManager:
     # hit requires the cached event_count to equal the live event count
     # (get_message_projection), so a stale projection is never served.
     self._projection_cache: OrderedDict[str, MessageProjection] = OrderedDict()
-    self._search_miss_memo: OrderedDict[str, tuple[tuple[int, int, int], str]] = OrderedDict()
+    self._search_miss_memo: OrderedDict[str, OrderedDict[str, tuple[int, int, int]]] = OrderedDict()
 
   # ---------------------------------------------------------------------------
   # Session CRUD
@@ -863,7 +871,7 @@ class SessionManager:
     async def _check_content(meta: SessionMetadata, path: Path) -> SessionMetadata | None:
       """Check if a session's chat events contain the query (runs file I/O in thread pool)."""
       memo_key = str(path)
-      memo_entry = self._search_miss_memo.get(memo_key)
+      memo_roots = self._search_miss_memo.get(memo_key)
 
       def _read_and_check() -> tuple[bool, tuple[int, int, int] | None]:
         try:
@@ -872,17 +880,27 @@ class SessionManager:
           _log_search_read_failed_once(meta.id, e)
           return False, None
         sig = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
-        start = 0
-        if memo_entry is not None and query_lower.startswith(memo_entry[1]):
-          if memo_entry[0] == sig:
+        # Any stored root the query extends proves absence over the bytes its
+        # own signature covers. An unchanged-signature root answers with no
+        # read; among the rest the largest same-inode growth base gives the
+        # smallest tail window to re-prove from.
+        for _needle, root_sig in (memo_roots or {}).items():
+          if query_lower.startswith(_needle) and root_sig == sig:
             return False, None  # proven-absent memo verdict: no file read
-          old_size, old_ino = memo_entry[0][1], memo_entry[0][2]
-          if old_ino == stat.st_ino and stat.st_size > old_size:
-            # Same inode and larger: appends only, so the stored needle's
-            # absence still holds over the old bytes. A query occurrence
-            # crossing the old size starts at most 4 bytes per char earlier,
-            # hence the seek window; +8 covers decode resync at the offset.
-            start = max(0, old_size - (4 * len(query_lower) + 8))
+        best_size = -1
+        for needle, root_sig in (memo_roots or {}).items():
+          if not query_lower.startswith(needle):
+            continue
+          old_size, old_ino = root_sig[1], root_sig[2]
+          if old_ino == stat.st_ino and stat.st_size > old_size and old_size > best_size:
+            best_size = old_size
+        start = 0
+        if best_size >= 0:
+          # Same inode and larger: appends only, so the root needle's
+          # absence still holds over the old bytes. A query occurrence
+          # crossing the old size starts at most 4 bytes per char earlier,
+          # hence the seek window; +8 covers decode resync at the offset.
+          start = max(0, best_size - (4 * len(query_lower) + 8))
         verdict = _scan_content_for_hit(path, meta.id, query_lower, start)
         if verdict is None:
           return False, None
@@ -905,17 +923,23 @@ class SessionManager:
     return enriched[:_SEARCH_RESULT_LIMIT]
 
   def _memoize_search_miss(self, memo_key: str, sig: tuple[int, int, int], needle: str) -> None:
-    """Record a clean-scan miss under the shorter of the known needles.
+    """Record a clean-scan miss as one more proven-absent root for the file.
 
-    The shorter needle subsumes more superstrings, so an existing entry under
-    the same signature wins when it is no longer than the fresh one; a moved
-    signature (append) always replaces with the new tail scan's signature,
-    since the old entry says nothing about the appended bytes.
+    Each root covers its own superstrings while its signature holds, so
+    unrelated query families keep serving from the memo beside each other;
+    one needle per file would let the shortest needle ever searched occupy
+    the proof and send every other family back to a full corpus scan. The
+    per-file root LRU (``_SEARCH_MISS_ROOTS_PER_FILE``) and the file LRU
+    (``_SEARCH_MISS_MEMO_LIMIT``) bound both maps.
     """
-    existing = self._search_miss_memo.get(memo_key)
-    if existing is not None and existing[0] == sig and len(existing[1]) <= len(needle):
-      return
-    self._search_miss_memo[memo_key] = (sig, needle)
+    roots = self._search_miss_memo.get(memo_key)
+    if roots is None:
+      roots = OrderedDict()
+      self._search_miss_memo[memo_key] = roots
+    roots[needle] = sig
+    roots.move_to_end(needle)
+    while len(roots) > _SEARCH_MISS_ROOTS_PER_FILE:
+      roots.popitem(last=False)
     self._search_miss_memo.move_to_end(memo_key)
     while len(self._search_miss_memo) > _SEARCH_MISS_MEMO_LIMIT:
       self._search_miss_memo.popitem(last=False)

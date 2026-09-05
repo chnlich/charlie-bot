@@ -71,6 +71,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M58 per-request config read, steady state | M58 collector below | seconds per `get_config` call, live config corpus | median < 0.0001 s | — (introduced with its first history row) |
 | M59 worker thread-detail poll payload and handler time, steady state | M59 collector below | seconds per request + response body bytes, worst thread-metadata corpus; the attach-mode repeat (`?attach=1`) of the unchanged poll | full-row median < 0.005 s; attach-mode median < 0.005 s, body < 300 B | — (introduced with its first history row) |
 | M60 chat message-body markdown parse, repeat page render | M60 collector below | ms per 40-body page render pass over the worst on-disk live chat file (the cold first render is reported, not the metric); the repeat is the session re-entry / re-render shape — every session switch rebuilds the turn engine and re-renders the same bodies | repeat median < 0.5 ms | — (introduced with its first history row) |
+| M61 session-metadata read after TTL expiry, idle-cold | M61 collector below | ms per listing/get_session over the live corpus with every cache entry aged past `_METADATA_CACHE_TTL` (archived entries never expire; the idle cost is the non-archived set's revalidation) | bare listing median < 2 ms; single get_session median < 0.1 ms | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3347,6 +3348,87 @@ protocol:
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node /home/chaoli/workspace/charlie-bot/tests/message_render_collector.js
 ```
 
+M61 — session-metadata read after TTL expiry, idle-cold. Every dashboard listing (`GET /api/sessions`,
+`/starred`, `/archived`, `/scheduled`, search) and every single-session read routes through the
+metadata cache, whose entries expire after `_METADATA_CACHE_TTL` (30 s) — the state any of those
+requests hits when no tab has polled for 30 s. Archived entries never expire (served regardless of
+age), so the idle cost is the non-archived set's revalidation: the pre-fix form re-read and re-parsed
+each expired active metadata.json (three aiofiles executor hops per single read, one batched
+read+parse per listing), while the fixed form revalidates the entry with one stat against the
+(st_mtime_ns, st_size) its read took before parsing — every writer publishes through the atomic tmp
+rename, so unchanged bytes always match and only a moved file re-reads. The cost is a per-request
+latency no standing probe isolates (the polls keep their own sessions fresh), so the collector warms
+every entry as the live server's polls do, then rewinds each entry's timestamp past the TTL before
+every timed call (preserving the entry's signature half, whatever the checkout's tuple shape) —
+replaying the idle window without waiting it, read-only over the live home. One cold pass, as at the
+first read after the idle window, then five timed calls per scenario. Evidence points the same
+collector at the before and after checkouts (`CHECKOUT` at each root), the same shape as the M18
+protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, statistics, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+TTL = 30.0
+
+def age_cache(mgr: SessionManager) -> None:
+    for sid, entry in list(mgr._metadata_cache.items()):
+        meta = entry[0]
+        sig = entry[2] if len(entry) > 2 else None
+        aged = (meta, time.monotonic() - TTL - 1.0, sig) if len(entry) > 2 else (meta, time.monotonic() - TTL - 1.0)
+        mgr._metadata_cache[sid] = aged
+
+async def main():
+    cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+    mgr = SessionManager(cfg)
+    await mgr._load_session_metas()  # warm every entry, as the live server's polls do
+    n = len(mgr._metadata_cache)
+    n_active = sum(1 for entry in mgr._metadata_cache.values() if entry[0].status.value != "archived")
+
+    async def timed(call):
+        age_cache(mgr)
+        t0 = time.perf_counter()
+        await call()
+        return time.perf_counter() - t0
+
+    async def archived_page():
+        await mgr.list_archived_page(limit=100)
+
+    async def all_sessions():
+        await mgr.list_sessions(status=None, scheduled=False, include_running_status=True,
+                                include_pending_trigger_status=True, include_pending_plan_approval=True)
+
+    async def single_get():
+        sid = next(sid for sid, entry in mgr._metadata_cache.items() if entry[0].status.value != "archived")
+        await mgr.get_session(sid)
+
+    async def bare_listing():
+        await mgr._load_session_metas()
+
+    scenarios = {"archived-page": archived_page, "all-sessions": all_sessions,
+                 "single-get": single_get, "bare-listing": bare_listing}
+    for call in scenarios.values():
+        age_cache(mgr)
+        await call()  # cold pass, as at the first read after the idle window; not timed
+    med, mx = {}, {}
+    for name, call in scenarios.items():
+        times = [await timed(call) for _ in range(5)]
+        med[name] = statistics.median(times)
+        mx[name] = max(times)
+    print(f"checkout {CHECKOUT.rsplit('/', 1)[-1]}: {n} cached metas ({n_active} non-archived); idle-cold "
+          f"archived-page median {med['archived-page']*1000:.2f} ms (max {mx['archived-page']*1000:.2f}), "
+          f"all-sessions median {med['all-sessions']*1000:.2f} ms (max {mx['all-sessions']*1000:.2f}), "
+          f"single get_session median {med['single-get']*1000:.3f} ms (max {mx['single-get']*1000:.3f}), "
+          f"bare listing median {med['bare-listing']*1000:.2f} ms (max {mx['bare-listing']*1000:.2f})")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3433,3 +3515,4 @@ CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node /home/chaoli/works
 | 2026-09-05 | this PR | M60 repeat-page median 13.16/10.52/13.13 ms → 0.01/0.01/0.01 ms, maxima 16.57/11.59/16.26 ms → 0.03/0.02/0.03 ms (collector verbatim, 40 largest bodies / 57.7 KB, page-corpus sha1 490505464120, of the 36.3 MB worst live chat file, marked + hljs 11.9.0 common build, main checkout before vs branch after interleaved back-to-back ×3 at load ~1.7; repeat bodies byte-identical to a direct cold render both arms — parity true; cold first render unchanged 0.210-0.250 s, the M54 highlight cache already serving its repeat slice) | chat message-body parse (marked + fence fix) memoized on the body text (renderProseMarkdown, LRU 64 next to the M54 highlight cache) — every session switch rebuilds the turn engine and re-parsed every re-rendered body, so a repeat page render paid the full re-parse; the streaming draft paint stays off the memo on purpose (its content grows every delta and would only evict); M60 definition and healthy range introduced with this PR |
 | 2026-09-05 | this PR | M59 detail poll full row median 3.29/3.46 ms → 2.03/2.07 ms (two interleaved verbatim-collector rounds, 99.9 KB worst metadata.json, body 50221 B → 59259 B raw — parsed-identical, the documented \uXXXX escaping; maxima 4.43/5.22 → 3.45/3.33 ms), attach mode (?attach=1, the poll's new shape) median 1.90/1.78 ms, max 2.07/1.93 ms, body 48 B (main checkout before vs branch after back-to-back at load 1.8-2.0; 4500-passed suite) | the 5 s poll fetched the whole row — 50 KB description-bearing body, an uncached aiofiles read+parse per call, response-model validation + jsonable_encoder render — to read the attach pair; the detail endpoint now serves the parsed meta from a (mtime_ns, size) memo (the endpoint's consumer is read-only; mutating callers keep the uncached manager getter, and every writer publishes through the atomic tmp rename so the signature is taken before the read), renders both shapes through FastJsonResponse, drops `context` (no HTTP consumer reads it; the modal fetches description once per click), and the poll fetches `?attach=1` — the 48 B pair — while the modal and the description-full fetch keep the full row; M34 re-measured unchanged (full 0.0057 s / 860706 B byte-identical, after=total 0.0022 s / 40 B) after the events no-after branch was left mapped — a FastJsonResponse rider there measured 0.0103 s (2177 per-event model_dump calls beat by the single encoder walk) and was reverted |
 | 2026-09-05 | this PR | M8 warm absent-needle search, churn-modeled pool: median 99.71/107.45/101.95 ms → 27.80/38.46/33.19 ms, idle median 4.40/4.23/4.02 ms → 1.56/1.74/1.40 ms (three interleaved A/B rounds, manager-level collector over the shared 156.7 MB / 39-active-file + 1075-metadata snapshot home; 41 content candidates; churn model = 8 continuous 5 ms CPU bursts through the same default asyncio executor, the live server's pool shape; result digests identical across arms for absent, name-hit, and content-hit queries — 0/11/181 rows); live-before (verbatim M8 curls against the running instance) median 0.146-0.158 s, max 0.151-0.177 s at load 3.26-3.84 | the content-search classification (stat + proven-absent memo check) left the per-file executor round-trip — the default executor's ~cpu+4 workers are shared with every poll read, append, and probe, so the 41 per-file acquisitions queued ~2.4 ms each under the server's pool churn (live search 140-158 ms vs 27 ms for the name-hit shape that skips the fan-out; a fully-occupied pool stretched the warm search to 2013 ms in-process); classification now runs on the event loop (~0.1 ms of hot stats, no stall over the churn-only 20.6 ms ticker baseline — main's search measured 31.0 ms under the same ticker protocol) and only reads that move corpus bytes go to the pool; the window math moved verbatim into `_absence_rescan_start`, the suite pins scan counts and start offsets |
+| 2026-09-05 | this PR | M61 idle-cold metadata reads: bare listing median 2.98-3.14 ms → 1.15-1.20 ms, archived page (limit 100) 3.80-4.12 ms → 2.09-2.13 ms, all-sessions listing 7.50-7.65 ms → 5.50-5.78 ms, single get_session 0.526-0.573 ms → 0.037-0.055 ms (five interleaved verbatim-collector rounds, 1075 cached metas / 41 non-archived, live corpus read-only, main checkout before vs branch after at load 1.6-2.3, every paired round faster; warm steady state re-measured unchanged — M29 0.55-0.59 vs 0.56-0.57 ms, M56 2.40-2.59 vs 2.34-2.52 ms with identical digests, M40/M44 within noise; suite pins the stat-revalidation chain: unchanged file zero reads, moved file exactly one) | an expired metadata entry revalidates against metadata.json with one stat instead of a re-read: the cache entry carries the (st_mtime_ns, st_size) its read took before parsing, every writer publishes through the atomic tmp rename so a content change always moves the signature, and a same-signature stat re-times the entry — strictly fresher than the 30 s TTL it replaces (a write-funnel populate keeps no provable signature and follows today's evict-and-re-read); M61 definition and healthy range introduced with this PR |

@@ -910,6 +910,11 @@ def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
       lambda: SimpleNamespace(server_base_url="https://server", charliebot_access_key="", sessions_dir=sessions_dir))
 
 
+def schedule_trigger_argv(message: str, *extra: str) -> list[str]:
+  """The schedule_trigger CLI argv the CLI tests share: session s1, --max-wait 60, --message."""
+  return ["schedule_trigger", "--session", "s1", "--max-wait", "60", "--message", message, *extra]
+
+
 def make_task_spawner(tasks: list[asyncio.Task]) -> Callable[..., asyncio.Task]:
   """A create_logged_task substitute that spawns eagerly and captures every task."""
 

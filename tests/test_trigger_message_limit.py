@@ -14,6 +14,7 @@ from conftest import (
     TRIGGER_MASTER_PATCH_TARGET,
     fake_cli_cfg,
     make_home_config,
+    schedule_trigger_argv,
 )
 from pydantic import ValidationError
 
@@ -35,15 +36,7 @@ from src.core.triggers import TriggerManager
 def test_cli_rejects_201_char_message(monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   triggers_dir = tmp_path / "s1" / "triggers"
   triggers_dir.mkdir(parents=True)
-  argv = [
-      "schedule_trigger",
-      "--session",
-      "s1",
-      "--max-wait",
-      "60",
-      "--message",
-      "x" * 201,
-  ]
+  argv = schedule_trigger_argv("x" * 201)
   fake_cli_cfg(monkeypatch, triggers_dir)
 
   with (

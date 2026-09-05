@@ -21,6 +21,7 @@ from conftest import (
     assert_trigger_fired_timeout,
     fake_cli_cfg,
     patch_trigger_fire,
+    schedule_trigger_argv,
 )
 from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
@@ -411,19 +412,7 @@ def _fake_200_post(captured: dict):
 
 
 def test_cli_accepts_mixed_kinds(monkeypatch) -> None:
-  argv = [
-      "schedule_trigger",
-      "--session",
-      "s1",
-      "--max-wait",
-      "60",
-      "--message",
-      "m",
-      "--watch",
-      "1234",
-      "neptune:5678",
-      "slurm:99",
-  ]
+  argv = schedule_trigger_argv("m", "--watch", "1234", "neptune:5678", "slurm:99")
   captured: dict = {}
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
 
@@ -449,17 +438,7 @@ def test_cli_accepts_mixed_kinds(monkeypatch) -> None:
 
 
 def test_cli_watch_pid_flag_removed() -> None:
-  argv = [
-      "schedule_trigger",
-      "--session",
-      "s1",
-      "--max-wait",
-      "60",
-      "--message",
-      "m",
-      "--watch-pid",
-      "1234",
-  ]
+  argv = schedule_trigger_argv("m", "--watch-pid", "1234")
   with patch.object(sys, "argv", argv), pytest.raises(SystemExit):
     cli_module.main()
 
@@ -479,15 +458,7 @@ def test_cli_renamed_flag_delay_no_longer_accepted() -> None:
 
 
 def test_cli_max_wait_accepted(monkeypatch) -> None:
-  argv = [
-      "schedule_trigger",
-      "--session",
-      "s1",
-      "--max-wait",
-      "60",
-      "--message",
-      "hello",
-  ]
+  argv = schedule_trigger_argv("hello")
   captured: dict = {}
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
 
@@ -503,17 +474,7 @@ def test_cli_max_wait_accepted(monkeypatch) -> None:
 
 
 def test_cli_remote_dead_exits_with_code_2(monkeypatch) -> None:
-  argv = [
-      "schedule_trigger",
-      "--session",
-      "s1",
-      "--max-wait",
-      "60",
-      "--message",
-      "hello",
-      "--watch",
-      "neptune:5678",
-  ]
+  argv = schedule_trigger_argv("hello", "--watch", "neptune:5678")
   fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
 
   class _FakeResp:

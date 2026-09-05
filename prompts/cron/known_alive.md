@@ -336,3 +336,13 @@ Known-alive symbols:
   inline comment pins: one failed DELETE keeps the rest of the batch alive). Nothing in
   the repo reads the name, so vulture flags the write as an unused attribute. Same class
   as the sherpa-onnx `vad_config` attribute-write entry above.
+- `base_html`, `new_html` (`tests/test_files_artifact_injection.py`, parameters of the `explode`
+  stub installed for `plan_diff.annotate` via `monkeypatch.setattr`) — signature-mirror
+  parameters of the stub that guards the annotate memo: the replaced `annotate`
+  (src/core/plan_diff.py) is called with two positional arguments by its one production call
+  site (src/api/files.py), so the stub keeps both parameters to stay a drop-in mirror, and a
+  memo regression that reaches the stub fails with the stub's own assertion message rather
+  than a TypeError. A tests-only vulture scan flags both at 100% confidence as unused
+  variables (a combined src+tests scan does not: the production `annotate` parameters carry
+  the same names, so the names are not zero-match repo-wide — the flags only appear in a
+  tests-only scan). Same class as the `check`/`format` signature-mirror entry above.

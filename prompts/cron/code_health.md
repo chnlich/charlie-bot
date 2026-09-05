@@ -81,20 +81,23 @@ cleanup-mode PR the vulture/grep probes plus the full-suite green line.
 
 Step 6: review the diff on the pull request.
 Compose the review task file: `prompts/cron/code_review_prompt.md` verbatim, plus one
-final line `PR: <number> <url>`. Run the review with the repo's own reviewer CLI, with
-the model, api_base, and context_window of the `charlie-code-kimi-k3` entry in
+final line `PR: <number> <url>`. Run the review with the repo's own reviewer CLI from a
+scratch directory outside this worktree (`mktemp -d`), with `--json`, and with the
+model, api_base, and context_window of the `charlie-code-kimi-k3` entry in
 backend_options:
 
-    charlie-code --model openai/moonshotai/Kimi-K3 \
+    charlie-code --json \
+      --model openai/moonshotai/Kimi-K3 \
       --api-base https://fpt-jp-slurm-kimi-k3.onca-snapper.ts.net/v1 \
       --context-window 262144 \
       --task-file <task-file>
 
-The reviewer reads the diff and checks naming, leftover references, out-of-scope edits, import
-form, and docstring claims against source; its stdout is a human-readable trajectory whose last
-`[thought]` block is the verdict. Post the verdict as one PR comment (findings, or the
-no-issues record), then act on findings on the same branch before merging; judging the design
-direction stays with the human reading the PR. A review that cannot run (endpoint unreachable, run cut short, or any other cause) MUST be reported explicitly with the reason in the run's final summary; a silent skip is a contract violation.
+The scratch cwd keeps the reviewer's own git checkouts away from this worktree's HEAD.
+The reviewer reads the diff and checks naming, leftover references, out-of-scope edits,
+import form, and docstring claims against source; its stdout is an NDJSON event stream
+whose final `result` event carries the verdict in `final_output`. Post the verdict as
+one PR comment (findings, or the no-issues record), then act on findings on the same
+branch before merging; judging the design direction stays with the human reading the PR. A review that cannot run (endpoint unreachable, run cut short, or any other cause) MUST be reported explicitly with the reason in the run's final summary; a silent skip is a contract violation.
 
 Step 7: land it, or abandon it.
 Wait for the checks in this run:

@@ -59,10 +59,12 @@ gh pr checks <PR> --watch --fail-fast
 Retry the watch a few times, several seconds apart, while it reports no checks reported; the
 workflow needs a moment to register the checks after the push.
 Before merging, run the PR review per `prompts/cron/code_review_prompt.md` with
-charlie-code (model, api_base, and context_window from the `charlie-code-kimi-k3` backend
-entry; task file is the prompt verbatim plus a final `PR: <number> <url>` line), post its
-verdict as one PR comment, act on its findings on the same branch, and report a skipped
-review, with its reason, in the summary. With the checks green, confirm the
+charlie-code (`--json`, from a scratch directory outside the worktree; model, api_base,
+and context_window from the `charlie-code-kimi-k3` backend entry; task file is the
+prompt verbatim plus a final `PR: <number> <url>` line; the verdict is the final
+`result` event's `final_output`), post the verdict as one PR comment, act on its
+findings on the same branch, and report a skipped review, with its reason, in the
+summary. With the checks green, confirm the
 request still carries net content against a fresh `main`; a rival run that already merged the same
 fix is invisible to the open-request scan, so this guard lives at merge time, and a non-empty diff
 merges:

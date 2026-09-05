@@ -1,13 +1,18 @@
 """Session usage resolution — a read-only projection over the in-memory event list.
 
-Usage is computed on demand in ONE pass over the full chat-event stream; no
-incremental cache is maintained. A whole-result memo, keyed on the in-memory
-events list's identity and length, serves a repeat resolution of an unchanged
-list without rescanning: the ``/api/sessions/<id>/usage`` endpoint is polled
-every 3 s per browser tab while the viewed session is thinking, so an idle
-view pays nothing and a streaming one pays one pass per new event batch. Load
-and scan run in one ``asyncio.to_thread`` so the pass never stalls the event
-loop. See the plan ``panel-usage-readout-fix`` for the tier contract.
+Usage is computed on demand as one fold over the chat-event stream. The fold
+state is carried across resolutions in a per-session memo keyed on the
+in-memory events list's identity and length: an unchanged list serves its
+facts without touching a single event, and a list extended in place by
+``save_chat_event`` (the only in-place mutation the chat-events cache
+performs) folds just the appended suffix into the carried state, so the
+``/api/sessions/<id>/usage`` endpoint — polled every 3 s per browser tab
+while the viewed session is thinking — costs O(new events) during a streamed
+turn instead of O(history) per poll. Any wholesale list replacement (a
+cache eviction, an archive recycle) has a new identity and rebuilds from a
+fresh fold. Load and scan run in one ``asyncio.to_thread`` so the fold never
+stalls the event loop. See the plan ``panel-usage-readout-fix`` for the tier
+contract.
 
 The usage dict carries four context fields plus cost and model:
 
@@ -70,6 +75,93 @@ class _UsageFacts:
   cost: float | None
 
 
+class _UsageFold:
+  """Mutable fold state of the usage scan over an append-only event list.
+
+  Every field the scan reports is carried forward event by event, so feeding
+  a suffix into the carried state lands on the same state as a fresh fold
+  over the whole list: a qualifying ``assistant`` event overwrites the chosen
+  reading and resets its boundary, a later ``compact_boundary`` overwrites
+  the boundary, ``model_windows`` merges last-wins, and the cost sum adds in
+  event order either way (the additions run in the same sequence, so the
+  result is bit-identical to the single pass). ``facts()`` snapshots the
+  carried state into the frozen :class:`_UsageFacts`; ``model_windows`` is
+  copied per snapshot so a facts object already handed out never observes a
+  later ``feed``.
+  """
+
+  __slots__ = (
+      "chosen_prompt_tokens", "chosen_model", "post_compact_tokens", "model_windows", "snapshot", "total_cost",
+      "unknown_cost")
+
+  def __init__(self) -> None:
+    self.chosen_prompt_tokens = 0
+    self.chosen_model = ""
+    self.post_compact_tokens: int | None = None
+    self.model_windows: dict[str, int] = {}
+    self.snapshot: dict | None = None
+    self.total_cost = 0.0
+    self.unknown_cost = False
+
+  def feed(self, events: list[dict]) -> None:
+    """Fold *events* into the carried state."""
+    for ev in events:
+      kind = ev.get("type")
+      if kind == ET.ASSISTANT:
+        if ev.get("parent_tool_use_id"):
+          continue
+        message = ev.get("message") or {}
+        prompt_tokens = _prompt_token_sum(message.get("usage") or {})
+        if prompt_tokens > 0:
+          self.chosen_prompt_tokens = prompt_tokens
+          self.chosen_model = message.get("model") or ""
+          self.post_compact_tokens = None
+      elif kind == ET.SYSTEM:
+        if self.chosen_prompt_tokens > 0 and ev.get("subtype") == ET.COMPACT_BOUNDARY:
+          candidate = (ev.get(ET.COMPACT_METADATA) or {}).get("post_tokens")
+          if isinstance(candidate, int):
+            self.post_compact_tokens = candidate
+      elif kind == ET.RESULT:
+        for model_name, info in (ev.get("modelUsage") or {}).items():
+          window = info.get("contextWindow")
+          if isinstance(window, int):
+            self.model_windows[model_name] = window
+        candidate_snapshot = ev.get("context_snapshot")
+        if isinstance(candidate_snapshot, dict):
+          self.snapshot = candidate_snapshot
+        event_cost = ev.get("total_cost_usd", 0.0)
+        if event_cost is None:
+          self.unknown_cost = True
+        else:
+          self.total_cost += event_cost
+
+  def facts(self) -> _UsageFacts:
+    """Snapshot the carried state as the frozen facts the tiers read."""
+    cost = round(self.total_cost, 4)
+    if self.unknown_cost or self.total_cost <= 0:
+      cost = None
+    return _UsageFacts(
+        chosen_prompt_tokens=self.chosen_prompt_tokens,
+        chosen_model=self.chosen_model,
+        post_compact_tokens=self.post_compact_tokens,
+        model_windows=dict(self.model_windows),
+        snapshot=self.snapshot,
+        cost=cost,
+    )
+
+  def copy(self) -> "_UsageFold":
+    """Independent deep-enough copy of the carried state (the dict is copied too)."""
+    out = _UsageFold()
+    out.chosen_prompt_tokens = self.chosen_prompt_tokens
+    out.chosen_model = self.chosen_model
+    out.post_compact_tokens = self.post_compact_tokens
+    out.model_windows = dict(self.model_windows)
+    out.snapshot = self.snapshot
+    out.total_cost = self.total_cost
+    out.unknown_cost = self.unknown_cost
+    return out
+
+
 def _scan_usage_facts(events: list[dict]) -> _UsageFacts:
   """Collect every tier's inputs in one pass over *events*.
 
@@ -78,53 +170,9 @@ def _scan_usage_facts(events: list[dict]) -> _UsageFacts:
   so the final value is the latest ``post_tokens`` strictly after the chosen
   assistant — the same set a suffix scan from the chosen index would consider.
   """
-  chosen_prompt_tokens = 0
-  chosen_model = ""
-  post_compact_tokens: int | None = None
-  model_windows: dict[str, int] = {}
-  snapshot: dict | None = None
-  total_cost = 0.0
-  unknown_cost = False
-  for ev in events:
-    kind = ev.get("type")
-    if kind == ET.ASSISTANT:
-      if ev.get("parent_tool_use_id"):
-        continue
-      message = ev.get("message") or {}
-      prompt_tokens = _prompt_token_sum(message.get("usage") or {})
-      if prompt_tokens > 0:
-        chosen_prompt_tokens = prompt_tokens
-        chosen_model = message.get("model") or ""
-        post_compact_tokens = None
-    elif kind == ET.SYSTEM:
-      if chosen_prompt_tokens > 0 and ev.get("subtype") == ET.COMPACT_BOUNDARY:
-        candidate = (ev.get(ET.COMPACT_METADATA) or {}).get("post_tokens")
-        if isinstance(candidate, int):
-          post_compact_tokens = candidate
-    elif kind == ET.RESULT:
-      for model_name, info in (ev.get("modelUsage") or {}).items():
-        window = info.get("contextWindow")
-        if isinstance(window, int):
-          model_windows[model_name] = window
-      candidate_snapshot = ev.get("context_snapshot")
-      if isinstance(candidate_snapshot, dict):
-        snapshot = candidate_snapshot
-      event_cost = ev.get("total_cost_usd", 0.0)
-      if event_cost is None:
-        unknown_cost = True
-      else:
-        total_cost += event_cost
-  cost = round(total_cost, 4)
-  if unknown_cost or total_cost <= 0:
-    cost = None
-  return _UsageFacts(
-      chosen_prompt_tokens=chosen_prompt_tokens,
-      chosen_model=chosen_model,
-      post_compact_tokens=post_compact_tokens,
-      model_windows=model_windows,
-      snapshot=snapshot,
-      cost=cost,
-  )
+  fold = _UsageFold()
+  fold.feed(events)
+  return fold.facts()
 
 
 def _usage_dict(
@@ -253,13 +301,14 @@ class SessionUsageResolver:
   ):
     self._load_chat_events_sync = load_chat_events_sync_fn
     self._codex_resolver = CodexUsageResolver(cfg, events_cache, chat_events_path_fn)
-    # session_id -> (events list, len at scan time, facts). Pinning the list
-    # keeps id() stable, so an identity+length match can never be an id-reuse
+    # session_id -> (events list, len at last fold, fold state). Pinning the
+    # list keeps id() stable, so an identity match can never be an id-reuse
     # collision with a different list; the chat-events cache mutates the list
-    # only by append (save_chat_event) or wholesale replacement, and both
-    # change the key. Runs under asyncio.to_thread, so mutating the memo there
-    # matches the load path's thread context; dict ops stay GIL-atomic.
-    self._facts_memo: OrderedDict[str, tuple[list[dict], int, _UsageFacts]] = OrderedDict()
+    # only by in-place append (save_chat_event) or wholesale replacement, and
+    # a replacement is a new object. Runs under asyncio.to_thread, so mutating
+    # the memo there matches the load path's thread context; dict ops stay
+    # GIL-atomic.
+    self._facts_memo: OrderedDict[str, tuple[list[dict], int, _UsageFold]] = OrderedDict()
 
   async def resolve_session_usage(
       self,
@@ -303,17 +352,40 @@ class SessionUsageResolver:
     """Load the session's events and return them with their usage facts.
 
     Serves the facts from the per-session memo when the cached events list is
-    unchanged since the last scan; rescans (one full pass) on any append or
-    replacement. Runs off the event loop via asyncio.to_thread.
+    unchanged since the last resolution; folds the appended suffix into a
+    private copy of the carried state when the list only grew; rebuilds from
+    a fresh fold on any wholesale replacement (a new list object). Runs off
+    the event loop via asyncio.to_thread.
+
+    The extension feeds a copy, never the stored fold: two concurrent
+    resolutions of the same session (the 3 s poll against the view/bootstrap
+    handlers) read the same stale entry after one append, and ``total_cost``
+    folds by ``+=``, so feeding the shared fold would double-count the
+    suffix. A stored fold is therefore never fed again, and ``facts()``
+    snapshots never race a feed. The memo claims exactly the folded length:
+    the suffix is sliced once and the covered count grows by the slice's own
+    length, so an append landing between the slice and the store is folded
+    by the next resolution instead of being claimed unseen.
     """
     events = self._load_chat_events_sync(session_id)
     cached = self._facts_memo.get(session_id)
-    if cached is not None and cached[0] is events and cached[1] == len(events):
+    if cached is not None and cached[0] is events:
+      covered, prev = cached[1], cached[2]
+      if covered < len(events):
+        fold = prev.copy()
+        suffix = events[covered:]
+        fold.feed(suffix)
+        covered += len(suffix)
+        self._facts_memo[session_id] = (events, covered, fold)
+        self._facts_memo.move_to_end(session_id)
+        return events, fold.facts()
       self._facts_memo.move_to_end(session_id)
-      return events, cached[2]
-    facts = _scan_usage_facts(events)
-    self._facts_memo[session_id] = (events, len(events), facts)
+      return events, prev.facts()
+    count = len(events)
+    fold = _UsageFold()
+    fold.feed(events[:count])
+    self._facts_memo[session_id] = (events, count, fold)
     self._facts_memo.move_to_end(session_id)
     while len(self._facts_memo) > _FACTS_MEMO_CAP:
       self._facts_memo.popitem(last=False)
-    return events, facts
+    return events, fold.facts()

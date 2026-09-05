@@ -16,7 +16,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M3 API latency, 401 path | M3 collector below | seconds per request | median < 0.05 s | median 0.002 s, max 0.002 s |
 | M4 turns | M4 collector below | seconds per turn; hung sessions | median < 300 s; hung = 0 | median 53 s, max 1133 s; 0 hung |
 | M5 threads/list latency | M5 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
-| M6 session usage latency | M6 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
+| M6 session usage latency | M6 collector below | seconds per request, worst session; the append-round repeat (one appended event before each timed resolution — the 3 s usage poll during a streamed turn — scratch home) | median < 0.05 s; append-round median < 0.005 s | — (introduced with its first history row) |
 | M7 token-usage page | M7 collector below | seconds per page load | median < 3 s | — (introduced with its first history row) |
 | M8 sidebar search, absent needle | M8 collector below | seconds per request | median < 0.5 s | — (introduced with its first history row) |
 | M9 ext-usage codex spend rescan, steady state | M9 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
@@ -217,6 +217,75 @@ for d in root.iterdir():
             best, best_n = d, n
 print(best.name, best_n)
 ')"; echo "session $SID, $N chat events"; for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: Bearer $KEY" "http://127.0.0.1:18498/api/sessions/$SID/usage"; done | sort -n | awk '{a[NR]=$1} END {printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
+```
+
+M6 append-round — usage resolution during a streamed turn. The standing collector above reads
+the live instance, where the unchanged-list memo serves every poll; the streamed-turn shape
+appends one chat event per delta, so a poll's resolution must fold only the appended suffix
+into the carried fold state instead of re-scanning the whole history. A round writes state,
+so the collector copies the session whose live chat file carries the most events into a
+scratch `CHARLIEBOT_HOME` under /tmp (metadata.json and data/ only; live home read once for
+the copy, never written), warms the fold as the view's first resolution does, then appends
+one probe event before each timed resolution — the poll-during-a-streamed-turn shape —
+asserting the resolved usage equals a fresh full-scan reference:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core import session_usage
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+# Worst usage corpus: the session whose LIVE chat file carries the most events;
+# a streamed turn appends one event per delta to exactly this file.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        with open(p, errors="replace") as f:
+            n = sum(1 for _ in f)
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
+# session's metadata.json and data/; live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m6-append-home-", dir="/tmp"))
+dst = home / "sessions" / SID
+dst.mkdir(parents=True)
+shutil.copy2(best / "metadata.json", dst / "metadata.json")
+shutil.copytree(best / "data", dst / "data")
+
+cfg = CharlieBotConfig(charliebot_home=home)
+mgr = SessionManager(cfg)
+
+async def main():
+    meta = await mgr.get_session(SID)
+    await asyncio.to_thread(mgr._session_usage._load_and_scan, SID)  # warm the fold, as the view's first resolution does
+    times = []
+    parity = True
+    for i in range(9):
+        await mgr.save_chat_event(SID, {"id": f"m6-append-probe-{i}", "type": "assistant",
+                                        "message": {"content": [{"type": "text", "text": "probe"}]},
+                                        "timestamp": "2026-09-05T00:00:00Z"})
+        t0 = time.perf_counter()
+        usage = await mgr.resolve_session_usage(SID, meta)
+        times.append(time.perf_counter() - t0)
+        events = mgr.load_chat_events_sync(SID)
+        facts = session_usage._scan_usage_facts(events)
+        reference = (session_usage._resolve_claude_tier(facts) or session_usage._resolve_snapshot_tier(facts)
+                     or (None if not events else session_usage._resolve_no_source_tier(facts)))
+        parity = parity and usage == reference
+    times.sort()
+    print(f"{best_n}-event corpus; append-round usage resolution median {times[4] * 1000:.2f} ms, "
+          f"max {times[-1] * 1000:.2f} ms over 9; parity {parity}")
+    shutil.rmtree(home)
+
+asyncio.run(main())
+EOF
 ```
 
 M7 — token-usage page load: five timed requests of the rendered page. The page builds a
@@ -3231,3 +3300,4 @@ EOF
 | 2026-09-05 | this PR | M55 artifact compare-view repeat median 0.2484/0.2675 s → 0.0028/0.0025 s, maxima 0.2706/0.3052 s → 0.0035/0.0031 s (collector verbatim, 1.5 MB worst artifact pair understanding_packed-batch-cost-balance_v10.html vs _v9.html, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×2 at load 0.89-0.97; served body byte-identical across arms — 150741 B, digest a82879fdc034; first view unchanged at 0.2270-0.2532 s both arms, now off the loop) | the `?diff=` annotate moved off the event loop into one thread hop and its result memoized on both files' (path, mtime_ns, size) signatures plus the injection flag — the marks are a pure function of the two files' bytes and artifact pages are only ever written whole, so a repeat compare view re-runs zero annotate; the pre-fix inline annotate froze the event loop 246.2 ms per repeat request (raw-ASGI 5 ms-ticker round: loop-lag 246.2 ms, wall 246.6 ms before vs 5.2 ms / 1.6 ms after), the same pathology M14 measured on the git diff endpoints; the clean artifact view's comment-layer injection also left the event loop; M55 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M56 /status request median 3.03/2.89 ms → 2.30/2.37 ms, maxima 8.57/8.55 ms → 7.65/7.72 ms (collector verbatim, 41 active-session ids, live corpus read-only, main checkout before vs branch after interleaved back-to-back ×2 at load 2.0-2.1; parsed-body digest identical a344862b7fe2 across arms; the 34-id live-poll shape measured 2.81/2.65 ms → 2.37/2.28 ms in the same interleaved protocol) | the sidebar's 3 s poll renders through FastJsonResponse, skipping FastAPI's jsonable_encoder pass over the 41-row derived-state dict; M56 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M57 /plans request median 3.63/3.54 ms → 2.77/2.74 ms, maxima 4.43/4.53 ms → 3.62/3.49 ms (collector verbatim, 15.4 KB worst plans corpus of session a9bb2346, live state read-only, main checkout before vs branch after interleaved back-to-back ×2 at load 2.0-2.1; parsed-body digest identical f0098c1aae15 across arms) | the plan panel's 3 s poll renders through FastJsonResponse, skipping FastAPI's jsonable_encoder pass over the 12-plan dict (the registry read itself is already the M27 memo at 10.6 µs); M57 definition and healthy range introduced with this PR |
+| 2026-09-05 | this PR | M6 append-round usage resolution median 6.38 ms → 0.12 ms, max 9.02 ms → 0.15 ms (collector + append-round rounds, 20534-event worst live corpus of session d321b9ad, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×3 at load 4.4-6.5, every paired round faster: 6.05/7.33/7.47 → 0.10/0.14/0.13 ms; resolved usage dict equals the full-scan reference on the real corpus both arms; unchanged-list steady state re-measured 0.13 ms → 0.14 ms, no regression) | the usage scan is a fold whose state now carries across resolutions in the per-session memo — an appending list (one chat event per streamed delta, the 3 s usage poll's steady companion during a turn) folds only the appended suffix instead of re-scanning the whole history per poll, and a wholesale list replacement (new identity) rebuilds from a fresh fold; append-round sub-metric added to the M6 definition and collector in this PR |

@@ -7,12 +7,9 @@
 // load time.
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
-const { createElement, createEscapingElement } = require('./dom_element_stub');
+const {readStatic, chatModules, sidebarModules, runStaticModules} = require('./read_static');
+const {createElement, createEscapingElement} = require('./dom_element_stub');
 
-const COMPAT_LOADER_JS = readStatic('compat-loader.js');
-const CHAT_JS = readStatic('chat.js');
-const SIDEBAR_JS = readStatic('sidebar.js');
 const PAGE_TIMERS_JS = readStatic('page-timers.js');
 
 function baseSessionContext(overrides = {}) {
@@ -93,15 +90,14 @@ function baseSessionContext(overrides = {}) {
   return {context, elements, localStorageData};
 }
 
-// page-timers before chat/sidebar, matching the script order in
-// web/templates/index.html; compat-loader before sidebar.js, which fans out to
-// sidebar/*.js through it (see the header of web/static/js/sidebar.js).
+// page-timers before the chat and sidebar modules, matching the script order
+// in web/templates/index.html; the chat and sidebar lists are that page's
+// /static/js/chat/ and /static/js/sidebar/ script tags in document order.
 function createChatSidebarContext(context) {
   vm.createContext(context);
   vm.runInContext(PAGE_TIMERS_JS, context, {filename: 'page-timers.js'});
-  vm.runInContext(COMPAT_LOADER_JS, context, {filename: 'compat-loader.js'});
-  vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
-  vm.runInContext(SIDEBAR_JS, context, {filename: 'sidebar.js'});
+  runStaticModules(context, chatModules());
+  runStaticModules(context, sidebarModules());
 }
 
 // Map keys are the element ids web/static/js/sidebar/filters.js reaches:

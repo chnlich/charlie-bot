@@ -2,12 +2,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const {readStatic, chatModules, runStaticModules} = require('./read_static');
 const { createClassList } = require('./dom_element_stub');
 const { escapeForFakeDom } = require('./fake_dom');
-
-const COMPAT_LOADER_JS = readStatic('compat-loader.js');
-const CHAT_JS = readStatic('chat.js');
 
 const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;
@@ -292,8 +289,7 @@ function loadChatContext(document) {
   };
 
   vm.createContext(context);
-  vm.runInContext(COMPAT_LOADER_JS, context, {filename: 'compat-loader.js'});
-  vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
+  runStaticModules(context, chatModules());
   return {context, nowIso};
 }
 

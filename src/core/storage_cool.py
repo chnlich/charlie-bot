@@ -45,6 +45,7 @@ from src.core.config import (
 )
 from src.core.json_utils import load_json_meta
 from src.core.models import SessionStatus, parse_utc_datetime
+from src.core.timeouts import SQLITE_LOCK_WAIT_MS, SQLITE_LOCK_WAIT_SECONDS
 from src.core.token_tally import DEFAULT_OPENCODE_DB
 
 log = structlog.get_logger()
@@ -689,7 +690,7 @@ def _sweep_opencode(
   if session_id is not None and not targets:
     return
   try:
-    connection = sqlite3.connect(db, timeout=5.0)
+    connection = sqlite3.connect(db, timeout=SQLITE_LOCK_WAIT_SECONDS)
   except sqlite3.Error as e:
     log.warning("storage_cool_opencode_connect_failed", db=str(db), error=str(e))
     return
@@ -722,7 +723,7 @@ def _sweep_opencode(
 def _vacuum_opencode_db(connection: sqlite3.Connection, db: Path, *, force: bool) -> None:
   """Hand the freed pages back to the filesystem; leave them for the next run on a lock loss."""
   try:
-    connection.execute("PRAGMA busy_timeout=2000")
+    connection.execute(f"PRAGMA busy_timeout={SQLITE_LOCK_WAIT_MS}")
     if not force:
       row = connection.execute("PRAGMA freelist_count").fetchone()
       if not row or not row[0]:

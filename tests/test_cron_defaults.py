@@ -107,13 +107,16 @@ def test_seed_idempotence(temp_home: Path) -> None:
 
 def test_existing_entry_untouched(temp_home: Path) -> None:
   cfg = get_config()
-  _write_task_text(temp_home, "memory-curator", _dump({"cron": "5 5 * * *", "prompt_file": "prompts/whatever.md"}))
-  path = _cron_d_dir(temp_home) / "memory-curator.yaml"
-  before_bytes = path.read_bytes()
+  defaults = load_yaml(cfg.charlie_bot_repo / "configs" / "cron.default.yaml", default={}).get("scheduled_tasks", [])
+  for entry in defaults:
+    _write_task_text(temp_home, entry["name"], _dump({"cron": "5 5 * * *", "prompt_file": "prompts/whatever.md"}))
+  cron_dir = _cron_d_dir(temp_home)
+  before = {p.name: p.read_bytes() for p in sorted(cron_dir.glob("*.yaml"))}
 
   report = seed_default_cron_tasks(cfg)
   assert all(it["status"] == "exists" for it in report)
-  assert path.read_bytes() == before_bytes  # nothing written
+  after = {p.name: p.read_bytes() for p in sorted(cron_dir.glob("*.yaml"))}
+  assert after == before  # nothing written
 
 
 # --- 3. startup never writes cron config -------------------------------------

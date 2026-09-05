@@ -108,8 +108,8 @@ async def test_content_search_miss_memo_skips_rereads(tmp_path: Path, monkeypatc
   assert await mgr.search_sessions("ABSENT NEEDLE") == []
   assert count() == 1
 
-  # A shorter needle is not covered by the longer memo entry: one rescan, then
-  # the shorter entry replaces and covers both.
+  # A shorter needle is not covered by the longer root: one rescan joins it as
+  # its own root, and both families now serve without a read.
   assert await mgr.search_sessions("abs") == []
   assert count() == 2
   assert await mgr.search_sessions("absent needle") == []
@@ -124,6 +124,73 @@ async def test_content_search_miss_memo_skips_rereads(tmp_path: Path, monkeypatc
   [found] = await mgr.search_sessions("absent needle")
   assert found.id == session.id
   assert count() == 3
+
+
+@pytest.mark.asyncio
+async def test_content_search_miss_memo_serves_independent_needle_families(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = make_home_config(tmp_path)
+  mgr = SessionManager(cfg)
+  await _session_with_chat_content(mgr, '{"type":"user","content":"nothing relevant"}\n', "sess")
+  count = _counting_scan(monkeypatch)
+
+  # Two unrelated families cold-scan once each.
+  assert await mgr.search_sessions("alpha") == []
+  assert await mgr.search_sessions("omega") == []
+  assert count() == 2
+  # Repeats of either family serve from their own root: a needle outside the
+  # other family's superstrings must never evict it back into full rescans.
+  for _ in range(3):
+    assert await mgr.search_sessions("alpha") == []
+    assert await mgr.search_sessions("omega") == []
+  assert count() == 2
+
+
+@pytest.mark.asyncio
+async def test_content_search_miss_memo_root_cap_is_per_file_lru(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr("src.core.sessions._SEARCH_MISS_ROOTS_PER_FILE", 2)
+  cfg = make_home_config(tmp_path)
+  mgr = SessionManager(cfg)
+  await _session_with_chat_content(mgr, '{"type":"user","content":"nothing relevant"}\n', "sess")
+  count = _counting_scan(monkeypatch)
+
+  assert await mgr.search_sessions("one") == []
+  assert await mgr.search_sessions("two") == []
+  assert count() == 2
+  # A third family evicts the oldest root ("one"); "two" still serves.
+  assert await mgr.search_sessions("three") == []
+  assert count() == 3
+  assert await mgr.search_sessions("two") == []
+  assert count() == 3
+  # The evicted family rescans once, rejoins as the newest root, and serves again.
+  assert await mgr.search_sessions("one") == []
+  assert count() == 4
+  assert await mgr.search_sessions("one") == []
+  assert await mgr.search_sessions("three") == []
+  assert count() == 4
+
+
+@pytest.mark.asyncio
+async def test_content_search_memoize_landing_mid_round_does_not_disturb_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = make_home_config(tmp_path)
+  mgr = SessionManager(cfg)
+  await _session_with_chat_content(mgr, '{"type":"user","content":"nothing relevant"}\n', "sess")
+  real_scan = sessions_mod._scan_content_for_hit
+
+  def _concurrent_memorizing_scan(path, session_id, query_lower, start):
+    # A concurrent search's memoize lands on the same file while this round's
+    # worker is inside its scan (the per-keystroke sidebar's overlapping
+    # requests); the in-flight round reads its snapshot and completes.
+    st = path.stat()
+    mgr._memoize_search_miss(str(path), (st.st_mtime_ns, st.st_size, st.st_ino), "concurrent")
+    return real_scan(path, session_id, query_lower, start)
+
+  monkeypatch.setattr(sessions_mod, "_scan_content_for_hit", _concurrent_memorizing_scan)
+
+  assert await mgr.search_sessions("absent") == []
+  assert await mgr.search_sessions("absent") == []
 
 
 @pytest.mark.asyncio

@@ -10,9 +10,9 @@ List open pull requests whose head branch matches `code-health/*`; if more
 than one is open, adopt the oldest. An adopted PR is this run's whole job:
 work on its branch, then
 
-1. Step 6 (review with `--comment`), unless the PR's comments or reviews
-   already carry the code-review findings or an explicit skip-note; a review
-   that cannot run is reported with its reason, same as for a fresh PR.
+1. Step 6 (review), unless the PR's comments or reviews already carry the
+   review findings or an explicit skip-note; a review that cannot run is
+   reported with its reason, same as for a fresh PR.
 2. Step 7 exactly as written: checks watch, fresh-main diff guard, squash
    merge; a red check earns the fix-on-branch ladder, and a PR that stays
    red or fails from outside its diff is abandoned with a
@@ -80,12 +80,21 @@ an `## Evidence` section: the Step 3 command-plus-output triple for each deletio
 cleanup-mode PR the vulture/grep probes plus the full-suite green line.
 
 Step 6: review the diff on the pull request.
-Run the `code-review` skill against the pull request with `--comment`, so its findings land as
-inline PR comments, then act on them on the same branch before merging. The skill catches naming,
-leftover references, and out-of-scope edits; judging the design direction stays with the human
-reading the PR. The skill ships with the Claude CLI. A skipped review (plugin missing, run cut
-short, or any other cause) MUST be reported explicitly with the reason in the run's final
-summary; a silent skip is a contract violation.
+Compose the review task file: `prompts/cron/code_review_prompt.md` verbatim, plus one
+final line `PR: <number> <url>`. Run the review with the repo's own reviewer CLI, with
+the model, api_base, and context_window of the `charlie-code-kimi-k3` entry in
+backend_options:
+
+    charlie-code --model openai/moonshotai/Kimi-K3 \
+      --api-base https://fpt-jp-slurm-kimi-k3.onca-snapper.ts.net/v1 \
+      --context-window 262144 \
+      --task-file <task-file>
+
+The reviewer reads the diff and checks naming, leftover references, out-of-scope edits, import
+form, and docstring claims against source; its stdout is a human-readable trajectory whose last
+`[thought]` block is the verdict. Post the verdict as one PR comment (findings, or the
+no-issues record), then act on findings on the same branch before merging; judging the design
+direction stays with the human reading the PR. A review that cannot run (endpoint unreachable, run cut short, or any other cause) MUST be reported explicitly with the reason in the run's final summary; a silent skip is a contract violation.
 
 Step 7: land it, or abandon it.
 Wait for the checks in this run:

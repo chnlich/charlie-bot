@@ -4,6 +4,8 @@ import asyncio
 import html
 import json
 import mimetypes
+import threading
+from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -18,6 +20,63 @@ from src.core.config import get_config
 router = APIRouter()
 
 _ARTIFACT_SCRIPT_TAG = "<script src=/static/js/artifact-comments.js></script>"
+
+# Bound on _annotate_memo in annotated diff pages: one compare view reads one
+# page against one base at a time, so the cap covers every compare view open
+# across tabs, and one slot holds the ~1.5 MB worst annotated page.
+_DIFF_ANNOTATE_MEMO_LIMIT = 8
+
+# Memo key for one annotated diff page: both resolved paths plus each file's
+# (mtime_ns, size) taken before its read, and whether the artifact-comments
+# injection rode along. The marks are a pure function of the two files' bytes
+# and an artifact page is only ever written whole, so an unchanged signature
+# pair proves the stored page current; an entry keyed from bytes read before a
+# concurrent rewrite is unreachable for the newer bytes. Served strings are
+# shared across responses, the no-defensive-copy idiom of the sibling memos.
+_AnnotateKey = tuple[str, int, int, str, int, int, bool]
+
+_annotate_memo: OrderedDict[_AnnotateKey, str] = OrderedDict()
+_annotate_memo_lock = threading.Lock()
+
+
+def _file_signature(path: Path) -> tuple[int, int]:
+  """(mtime_ns, size) of *path*; artifact writers publish whole files, so a rewrite always moves it."""
+  st = path.stat()
+  return (st.st_mtime_ns, st.st_size)
+
+
+def _annotated_diff_page(base_path: Path, page_path: Path, inject_ui: bool, session_id: str) -> str:
+  """The diff page's target annotated against its base, repeats served from the memo.
+
+  A cold annotate parses both pages end to end (~0.25 s on a 1 MB pair,
+  measured) — work per request no repeat view must re-run, since neither bytes
+  nor marks can change between views.
+  """
+  try:
+    base_sig = (str(base_path), *_file_signature(base_path))
+  except OSError as e:
+    raise HTTPException(status_code=404, detail=f"diff base not found: {base_path}") from e
+  page_sig = (str(page_path), *_file_signature(page_path))
+  key: _AnnotateKey = (*base_sig, *page_sig, inject_ui)
+  with _annotate_memo_lock:
+    hit = _annotate_memo.get(key)
+    if hit is not None:
+      _annotate_memo.move_to_end(key)
+      return hit
+  try:
+    base_text = base_path.read_text(encoding="utf-8")
+  except OSError as e:
+    raise HTTPException(status_code=404, detail=f"diff base not found: {base_path}") from e
+  page_text = page_path.read_text(encoding="utf-8")
+  page = plan_diff.annotate(base_text, page_text)
+  if inject_ui:
+    page = _inject_artifact_ui(page, session_id)
+  with _annotate_memo_lock:
+    _annotate_memo[key] = page
+    _annotate_memo.move_to_end(key)
+    while len(_annotate_memo) > _DIFF_ANNOTATE_MEMO_LIMIT:
+      _annotate_memo.popitem(last=False)
+  return page
 
 
 def _artifact_session_id(fs_path: Path) -> str | None:
@@ -53,8 +112,8 @@ def _inject_artifact_ui(html_text: str, session_id: str) -> str:
   return html_text[:idx] + tags + "\n" + html_text[idx:]
 
 
-def _read_diff_base(session_id: str, diff_param: str) -> str:
-  """Read the base page named by the ``?diff=`` query parameter of a diff request.
+def _resolve_diff_base(session_id: str, diff_param: str) -> Path:
+  """Resolve the ``?diff=`` query parameter of a diff request to the base page's path.
 
   The parameter is a session-relative artifact path — the plan registry's ``versions[].file``
   form, e.g. ``artifacts/plan_01_v1.html``. It must resolve to a ``.html`` page whose
@@ -66,10 +125,7 @@ def _read_diff_base(session_id: str, diff_param: str) -> str:
   candidate = (get_config().sessions_dir / session_id / diff_param).resolve()
   if candidate.suffix.lower() != ".html" or _artifact_session_id(candidate) is None:
     raise HTTPException(status_code=400, detail=f"diff base is not a session artifact page: {diff_param}")
-  try:
-    return candidate.read_text(encoding="utf-8")
-  except OSError as e:
-    raise HTTPException(status_code=404, detail=f"diff base not found: {candidate}") from e
+  return candidate
 
 
 def _human_size(size: int) -> str:
@@ -174,16 +230,17 @@ async def serve_file(path: str, request: Request):
     # are spliced into the response before the optional comment layer below.
     if session_id is None:
       raise HTTPException(status_code=400, detail=f"diff target is not a session artifact page: {fs_path}")
-    base_text = await asyncio.to_thread(_read_diff_base, session_id, diff_param)
-    html_text = await asyncio.to_thread(lambda: fs_path.read_text(encoding="utf-8"))
-    html_text = plan_diff.annotate(base_text, html_text)
-    if request_has_access_key(request, get_config().charliebot_access_key):
-      html_text = _inject_artifact_ui(html_text, session_id)
+    base_path = _resolve_diff_base(session_id, diff_param)
+    inject_ui = request_has_access_key(request, get_config().charliebot_access_key)
+    # A cold annotate parses both pages whole (~0.25 s on a 1 MB pair), so the
+    # build runs off the event loop; a memo hit answers with zero file bytes.
+    html_text = await asyncio.to_thread(_annotated_diff_page, base_path, fs_path, inject_ui, session_id)
     return HTMLResponse(html_text, media_type="text/html")
 
   if session_id is not None and request_has_access_key(request, get_config().charliebot_access_key):
     html_text = await asyncio.to_thread(lambda: fs_path.read_text(encoding="utf-8"))
-    return HTMLResponse(_inject_artifact_ui(html_text, session_id), media_type="text/html")
+    html_text = await asyncio.to_thread(_inject_artifact_ui, html_text, session_id)
+    return HTMLResponse(html_text, media_type="text/html")
 
   # Serve the file with auto-detected MIME type
   media_type, _ = mimetypes.guess_type(str(fs_path))

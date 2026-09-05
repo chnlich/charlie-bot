@@ -4,8 +4,8 @@ import asyncio
 import json
 import os
 import re
+import stat
 from pathlib import Path
-from stat import S_ISREG
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -591,7 +591,7 @@ def _scan_fragments(config_d: str) -> list[tuple[str, os.stat_result]]:
         st = entry.stat()
       except OSError:
         continue
-      if not S_ISREG(st.st_mode):
+      if not stat.S_ISREG(st.st_mode):
         continue
       found.append((name, st))
   return sorted(found)

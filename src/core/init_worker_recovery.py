@@ -285,6 +285,36 @@ def _liveness_probe(pid: int | None, pid_start: str | None, started_at: datetime
   return runs.run_alive_probe(pid, pid_start, started_at, host_boot)
 
 
+def _start_drain_finalize(
+    spawner: ModuleType,
+    session_id: str,
+    description: str,
+    thread_id: str,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    thread_mgr: ThreadManager,
+    interrupt_reason: str,
+) -> None:
+  """Start one drain-finalize resume for a run that is already over.
+
+  A drained run has nothing to follow: the liveness probe is constant-false and
+  no silence re-check mounts. ``interrupt_reason`` rides into the finalize
+  error, so it stays empty for a run with nothing to report.
+  """
+  create_logged_task(
+      spawner.resume_worker(
+          session_id,
+          description,
+          thread_id,
+          cfg,
+          session_mgr,
+          thread_mgr,
+          is_alive=lambda: False,
+          interrupt_reason=interrupt_reason,
+          on_silence=None),
+      name=f"resume-drain-{thread_id[:8]}")
+
+
 async def _reconcile_one(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
@@ -333,18 +363,8 @@ async def _reconcile_one(
       return True
     # Reviewers are replaced by the retry chain, improve iterations by nothing
     # (loop continuation is a non-goal): drain-finalize them as failed.
-    create_logged_task(
-        spawner.resume_worker(
-            session_id,
-            description,
-            thread_id,
-            cfg,
-            session_mgr,
-            thread_mgr,
-            is_alive=lambda: False,
-            interrupt_reason="",
-            on_silence=None),
-        name=f"resume-drain-{thread_id[:8]}")
+    _start_drain_finalize(
+        spawner, session_id, description, thread_id, cfg, session_mgr, thread_mgr, interrupt_reason="")
     return True
 
   if resolution.outcome in (runs.RunOutcome.RUNNING, runs.RunOutcome.STALLED):
@@ -384,18 +404,8 @@ async def _reconcile_one(
   # DIED carries resolve_run's reason (transport not covered, no result event,
   # …) into the finalize error, so the master's summary states why the run
   # failed instead of a bare exit -1; COMPLETED has no reason and is unaffected.
-  create_logged_task(
-      spawner.resume_worker(
-          session_id,
-          description,
-          thread_id,
-          cfg,
-          session_mgr,
-          thread_mgr,
-          is_alive=lambda: False,
-          interrupt_reason=resolution.reason,
-          on_silence=None),
-      name=f"resume-drain-{thread_id[:8]}")
+  _start_drain_finalize(
+      spawner, session_id, description, thread_id, cfg, session_mgr, thread_mgr, interrupt_reason=resolution.reason)
 
   # Descendants that outlived the run while holding its raw-log fd are killed
   # via the existing kill_process_group and named in the report.

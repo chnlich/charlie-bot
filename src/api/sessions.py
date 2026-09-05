@@ -373,7 +373,10 @@ async def all_sessions_status(
         "next_trigger_at": meta.next_trigger_at.isoformat() if meta.next_trigger_at else None,
         "has_pending_plan_approval": meta.has_pending_plan_approval,
     }
-  return result
+  # The sidebar's 3 s poll is this host's second-busiest route; FastJsonResponse
+  # skips the jsonable_encoder pass FastAPI runs on mapped returns (the
+  # message-page cost reason in get_session_events_page).
+  return FastJsonResponse(result)
 
 
 @router.get('/tui/status')
@@ -848,4 +851,7 @@ async def list_plans(
   Unknown session → 404. Known session → always 200 with ``{"plans": [...], "errors": [...]}``;
   a corrupt registry produces 200 with empty plans and one error entry, never 5xx.
   """
-  return await plan_mgr.list_plans(session_id)
+  # The plan panel polls this route; FastJsonResponse skips the jsonable_encoder
+  # pass FastAPI runs on mapped returns (the message-page cost reason in
+  # get_session_events_page).
+  return FastJsonResponse(await plan_mgr.list_plans(session_id))

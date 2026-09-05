@@ -266,7 +266,7 @@ async def test_all_sessions_status_pending_plan_approval_awaiting_approval(tmp_p
   # not closed, no takeoff, latest verify_state clean -> derived "awaiting approval"
   _write_plans(cfg, session.id, {"plans": [plan_doc(1, [_make_version(1, _PLAN_V1_REL, "clean")]),]})
 
-  status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
   assert status[session.id]["has_pending_plan_approval"] is True
 
 
@@ -287,7 +287,7 @@ async def test_all_sessions_status_pending_plan_approval_approved_is_unset(tmp_p
               ]
       })
 
-  status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
   assert status[session.id]["has_pending_plan_approval"] is False
 
 
@@ -308,7 +308,7 @@ async def test_all_sessions_status_pending_plan_approval_closed_is_unset(tmp_pat
               ]
       })
 
-  status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
   assert status[session.id]["has_pending_plan_approval"] is False
 
 
@@ -316,7 +316,7 @@ async def test_all_sessions_status_pending_plan_approval_closed_is_unset(tmp_pat
 async def test_all_sessions_status_pending_plan_approval_no_plans_json_is_unset(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="NoPlans")
 
-  status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
   assert status[session.id]["has_pending_plan_approval"] is False
 
 
@@ -338,7 +338,7 @@ async def test_all_sessions_status_pending_plan_approval_mixed_lineages(tmp_path
               ]
       })
 
-  status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
   assert status[session.id]["has_pending_plan_approval"] is True
 
 
@@ -348,7 +348,7 @@ async def test_pending_plan_approval_not_persisted_to_metadata(tmp_path: Path) -
 
   _write_plans(cfg, session.id, {"plans": [plan_doc(1, [_make_version(1, _PLAN_V1_REL, "clean")]),]})
 
-  status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
   assert status[session.id]["has_pending_plan_approval"] is True
 
   raw_metadata = json.loads((cfg.sessions_dir / session.id / "metadata.json").read_text(encoding="utf-8"))
@@ -366,7 +366,7 @@ async def test_pending_plan_approval_archived_session_is_unset(tmp_path: Path) -
   meta.status = SessionStatus.ARCHIVED
   await mgr.save_metadata(meta)
 
-  status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
   assert status[session.id]["has_pending_plan_approval"] is False
 
 
@@ -379,7 +379,7 @@ async def test_pending_plan_approval_no_parse_cost_without_plans_json(tmp_path: 
   assert await asyncio.to_thread(
       has_pending_plan_approval_sync, cfg.sessions_dir / session.id / "plans.json", session.id) is False
 
-  status = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
   assert status[session.id]["has_pending_plan_approval"] is False
 
 

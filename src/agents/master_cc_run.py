@@ -11,14 +11,14 @@ import structlog
 
 from src.agents import master_cc_state
 from src.agents.backends.base import (
-    AgentBackend,
-    _read_stderr_tail,
-    make_text_event,
-    tail_follow_events,
+  AgentBackend,
+  _read_stderr_tail,
+  make_text_event,
+  tail_follow_events,
 )
 from src.agents.backends.claude_code import (
-    claude_supervisor_env,
-    out_of_family_served_models,
+  claude_supervisor_env,
+  out_of_family_served_models,
 )
 from src.core import event_types as ET
 from src.core import runs
@@ -28,6 +28,7 @@ from src.core.memory import assemble_master
 from src.core.models import (
     PROJECT_ROLE,
     BackendOption,
+    BackendType,
     MasterRunRecord,
     SessionCallbacks,
     SessionMetadata,
@@ -242,8 +243,9 @@ async def _salvage_silent_turn(
   log.info("master_cc_silent_turn_salvaged", session=session_id)
 
 
-_CLAUDE_RESUME_FLAG_BACKEND_TYPES = {"cc-claude", "cc-kimi", "cc-openai-compatible"}
-_NATIVE_RESUME_SESSION_BACKEND_TYPES = {"codex", "gemini", "opencode", "charlie-code", "antigravity"}
+_CLAUDE_RESUME_FLAG_BACKEND_TYPES = {BackendType.CC_CLAUDE, BackendType.CC_KIMI, BackendType.CC_OPENAI_COMPATIBLE}
+_NATIVE_RESUME_SESSION_BACKEND_TYPES = {
+    BackendType.CODEX, BackendType.GEMINI, BackendType.OPENCODE, BackendType.CHARLIE_CODE, BackendType.ANTIGRAVITY}
 # Every backend that can resume a prior session (via --resume or a native id).
 # The pre-flight anchor-missing alarm fires only for these.
 _RESUME_CAPABLE_BACKEND_TYPES = _CLAUDE_RESUME_FLAG_BACKEND_TYPES | _NATIVE_RESUME_SESSION_BACKEND_TYPES

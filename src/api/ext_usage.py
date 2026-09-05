@@ -16,6 +16,7 @@ from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import get_config
 from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
+from src.core.models import BackendType
 from src.core.streaming import streaming_manager
 from src.core.timeouts import EXT_USAGE_ROUND_GAP_SECONDS, HTTP_OAUTH_TIMEOUT
 
@@ -114,8 +115,8 @@ def _derive_provider_accounts(
 def _derive_accounts() -> dict[str, list[tuple[str, str]]]:
   """Derive the full account set for both providers from the live config."""
   cfg = get_config()
-  claude_opts = [o for o in cfg.backend_options if o.type == "cc-claude"]
-  codex_opts = [o for o in cfg.backend_options if o.type == "codex"]
+  claude_opts = [o for o in cfg.backend_options if o.type == BackendType.CC_CLAUDE]
+  codex_opts = [o for o in cfg.backend_options if o.type == BackendType.CODEX]
   return {
       "claude": _derive_provider_accounts("claude", CLAUDE_DEFAULT_DIR, claude_opts, lambda o: o.claude_config_dir),
       "codex": _derive_provider_accounts("codex", CODEX_DEFAULT_DIR, codex_opts, lambda o: o.codex_home),

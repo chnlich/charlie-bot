@@ -43,7 +43,7 @@ from src.core.init import (
     run_crash_recovery,
 )
 from src.core.message_aggregator import MessageAggregator
-from src.core.models import SessionMetadata, utc_now
+from src.core.models import BackendType, SessionMetadata, utc_now
 from src.core.scheduler import Scheduler
 from src.core.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
 from src.core.streaming import streaming_manager
@@ -297,7 +297,7 @@ async def session_websocket(websocket: WebSocket, session_id: str):
 
     cfg = get_config()
     backend_option = cfg.get_backend_option(meta.backend) if meta and meta.backend else None
-    if backend_option is not None and backend_option.type == "tui-cli":
+    if backend_option is not None and backend_option.type == BackendType.TUI_CLI:
       from src.agents.backends.tui import run_tui_attachment
       await run_tui_attachment(websocket, session_id, cfg.sessions_dir)
     else:

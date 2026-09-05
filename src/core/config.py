@@ -19,7 +19,7 @@ from pydantic import (
     model_validator,
 )
 
-from src.core.models import BackendOption
+from src.core.models import BackendOption, BackendType
 from src.core.tasks import create_logged_task
 from src.core.yaml_utils import load_yaml
 
@@ -287,17 +287,25 @@ class CharlieBotConfig(BaseModel):
   # ~/.charliebot/config.yaml -> backend_options.
   backend_options: list[BackendOption] = [
       BackendOption(
-          id="claude-opus-4.8", label="CC \u00b7 Opus 5", type="cc-claude", model="claude-opus-5", effort="xhigh"),
+          id="claude-opus-4.8",
+          label="CC \u00b7 Opus 5",
+          type=BackendType.CC_CLAUDE,
+          model="claude-opus-5",
+          effort="xhigh"),
       BackendOption(
           id="claude-opus-4.8-fast",
           label="CC \u00b7 Opus 4.8 Fast",
-          type="cc-claude",
+          type=BackendType.CC_CLAUDE,
           model="claude-opus-4-8",
           effort="medium",
           fast_mode=True),
       BackendOption(
-          id="claude-fable-5", label="CC \u00b7 Fable 5", type="cc-claude", model="claude-fable-5", effort="max"),
-      BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
+          id="claude-fable-5",
+          label="CC \u00b7 Fable 5",
+          type=BackendType.CC_CLAUDE,
+          model="claude-fable-5",
+          effort="max"),
+      BackendOption(id="claude-tui", label="Claude TUI", type=BackendType.TUI_CLI),
   ]
 
   # Ordered preference list of BackendOption ids, consumed by two selectors:

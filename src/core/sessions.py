@@ -21,16 +21,17 @@ from src.core.chat_events import ChatEventStore
 from src.core.config import CharlieBotConfig
 from src.core.init import RUNNING_SCAN_WINDOW, iter_recent_thread_metas
 from src.core.json_utils import (
-    atomic_write_stream,
-    atomic_write_text,
-    load_json_meta,
-    write_json_atomically,
+  atomic_write_stream,
+  atomic_write_text,
+  load_json_meta,
+  write_json_atomically,
 )
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection
 from src.core.models import (
     TERMINAL_THREAD_STATUSES,
     BackendOption,
+    BackendType,
     CreateSessionRequest,
     MasterRunRecord,
     SessionCallbacks,
@@ -41,9 +42,9 @@ from src.core.models import (
 )
 from src.core.ndjson import append_ndjson
 from src.core.scheduled_sessions import (
-    # re-export: src/api/cron.py imports ScheduledSessionBusyError from this module
-    ScheduledSessionBusyError,
-    ScheduledSessionStore,
+  # re-export: src/api/cron.py imports ScheduledSessionBusyError from this module
+  ScheduledSessionBusyError,
+  ScheduledSessionStore,
 )
 from src.core.session_usage import SessionUsageResolver
 from src.core.streaming import streaming_manager
@@ -575,7 +576,7 @@ class SessionManager:
     # Only tui-cli backends carry tmux lifecycle state, and the create and
     # destroy hooks must agree on which sessions that covers.
     option = self._cfg.get_backend_option(backend_id)
-    return option if option is not None and option.type == "tui-cli" else None
+    return option if option is not None and option.type == BackendType.TUI_CLI else None
 
   async def _backend_create_hook(self, meta: SessionMetadata) -> None:
     """Run backend-specific session-create work (e.g. spawn tmux for tui-cli)."""

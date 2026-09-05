@@ -169,10 +169,10 @@ def _mixed_replay_corpus() -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_replay_sends_exactly_the_thread_built_frame_list() -> None:
-  # The replay's only producer of frames is _catchup_frames running in a
-  # thread; the async half sends that list in order and nothing else, as
-  # pre-rendered wire text whose bytes match WebSocket.send_json's rendering.
+async def test_replay_sends_exactly_the_built_frame_list() -> None:
+  # The replay's only producer of frames is the _CatchupWalk feed, sliced on
+  # the event loop; the async half sends that list in order and nothing else,
+  # as pre-rendered wire text whose bytes match WebSocket.send_json's rendering.
   events = _mixed_replay_corpus()
   for cursor in (0, 2, len(events)):
     ws = FakeWebSocket()

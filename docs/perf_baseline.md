@@ -2452,9 +2452,12 @@ flap), `_send_session_catchup` replays the events past the cursor through
 state (a run interval that opened before the cursor drives the deltas after it). The
 pre-fix form ran that feed loop inline on the event loop — 22 ms measured 2026-09-04
 on the 20534-event worst live corpus — freezing every concurrent request and WebSocket
-for the walk's wall time; the fixed form builds the frame list in a thread through
-`_catchup_frames` and sends it in order, so the loop sees only the sends (identical
-wire bytes, identical stop-at-first-failure count).
+for the walk's wall time; the 2026-09-04 form moved it to a whole-corpus thread run,
+which traded the inline freeze for loop-lag behind GIL handoffs (10.2 ms measured
+2026-09-05); the fixed form feeds the same walk in ~1 ms on-loop slices through
+`_CatchupWalk` and sends pre-rendered wire text in order, so no slice holds the loop
+past the poll cadences' resolution (identical frame list and wire bytes, identical
+stop-at-first-failure count).
 The cursor==total fast-skip never enters the replay, which the past day's 85 live
 `session_ws_catchup_sent` log lines confirm (all sent=0), so this is a cold-path
 insurance metric, invisible to the standing probes; the collector resolves the session

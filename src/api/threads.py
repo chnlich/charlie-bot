@@ -24,6 +24,7 @@ from src.api.deps import get_thread_manager, get_trigger_manager
 from src.api.message_utils import extract_text_from_message, extract_tool_result_text
 from src.api.responses import FastJsonResponse
 from src.core.config import CharlieBotConfig, get_config
+from src.core.memo import BoundedMemo
 from src.core.models import (
     BackendType,
     ThreadMetadata,
@@ -51,7 +52,7 @@ _LIST_DESCRIPTION_CAP = 240
 # so an entry recorded mid-rewrite keys the older signature and can never be
 # served for the newer bytes.
 _DETAIL_META_MEMO_LIMIT = 32
-_detail_meta_memo: OrderedDict[str, tuple[tuple[int, int], ThreadMetadata]] = OrderedDict()
+_detail_meta_memo: BoundedMemo[str, tuple[tuple[int, int], ThreadMetadata]] = BoundedMemo(_DETAIL_META_MEMO_LIMIT)
 
 
 async def _detail_thread_meta(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> ThreadMetadata | None:
@@ -60,19 +61,16 @@ async def _detail_thread_meta(thread_mgr: ThreadManager, session_id: str, thread
   try:
     st = os.stat(path)
   except OSError:
-    _detail_meta_memo.pop(key, None)
+    _detail_meta_memo.drop(key)
     return None
   sig = (st.st_mtime_ns, st.st_size)
   hit = _detail_meta_memo.get(key)
   if hit is not None and hit[0] == sig:
-    _detail_meta_memo.move_to_end(key)
     return hit[1]
   meta = await thread_mgr.get_thread(session_id, thread_id)
   if meta is None:
     return None
-  _detail_meta_memo[key] = (sig, meta)
-  while len(_detail_meta_memo) > _DETAIL_META_MEMO_LIMIT:
-    _detail_meta_memo.popitem(last=False)
+  _detail_meta_memo.store(key, (sig, meta))
   return meta
 
 
@@ -175,7 +173,8 @@ def _thread_list_item(t: ThreadMetadata) -> dict:
 # cap: one slot holds the ~140 KB worst body, and deeper caps buy nothing
 # because a session's poll reuses its one slot.
 _LIST_BODY_MEMO_LIMIT = 8
-_list_body_memo: OrderedDict[str, tuple[tuple[tuple[str, int, int], ...], bytes, str]] = OrderedDict()
+_list_body_memo: BoundedMemo[str, tuple[tuple[tuple[str, int, int], ...], bytes,
+                                        str]] = BoundedMemo(_LIST_BODY_MEMO_LIMIT)
 
 
 def _list_body_signature(threads_dir: str, triggers_dir: str) -> tuple[tuple[str, int, int], ...]:
@@ -226,7 +225,6 @@ async def list_threads(
   sig = await asyncio.to_thread(_list_body_signature, str(session_dir / "threads"), str(session_dir / "triggers"))
   hit = _list_body_memo.get(session_id)
   if hit is not None and hit[0] == sig:
-    _list_body_memo.move_to_end(session_id)
     if etag == hit[2]:
       return Response(status_code=204, headers={"ETag": hit[2], "Cache-Control": "no-store"})
     return Response(
@@ -260,10 +258,7 @@ async def list_threads(
   # memo hit and a fresh build are indistinguishable on the wire.
   body = json.dumps(combined, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
   etag_value = '"' + hashlib.sha1(body).hexdigest() + '"'
-  _list_body_memo[session_id] = (sig, body, etag_value)
-  _list_body_memo.move_to_end(session_id)
-  while len(_list_body_memo) > _LIST_BODY_MEMO_LIMIT:
-    _list_body_memo.popitem(last=False)
+  _list_body_memo.store(session_id, (sig, body, etag_value))
   if etag == etag_value:
     return Response(status_code=204, headers={"ETag": etag_value, "Cache-Control": "no-store"})
   return Response(

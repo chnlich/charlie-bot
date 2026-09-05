@@ -42,6 +42,7 @@ from src.core.plans import PlanRegistryManager  # noqa: E402
 from src.core.scheduler import Scheduler  # noqa: E402
 from src.core.sessions import SessionManager  # noqa: E402
 from src.core import spawner  # noqa: E402
+from src.core import spawner_finalize  # noqa: E402
 from src.core.threads import ThreadManager  # noqa: E402
 from src.core.triggers import TriggerManager  # noqa: E402
 
@@ -1353,23 +1354,19 @@ def build_worker_prompt(
 def recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Awaitable[None]]:
   """A spawner_finalize._notify_completion stand-in recording the finalized outcome and thread.
 
-  The signature mirrors the production call in spawner_finalize._run_finalize_effects; each
-  monkeypatching test reads back only the captured fields it asserts on.
+  The signature mirrors the production call in spawner_finalize._run_finalize_effects
+  (one _FinalizeCtx plus keyword-only verify_report); each monkeypatching test reads back
+  only the captured fields it asserts on.
   """
 
   async def fake_notify_completion(
-      session_id: str,
-      description: str,
-      thread_meta: models.ThreadMetadata,
-      outcome: spawner._WorkerRunOutcome,
-      thread_mgr: Any,
-      session_mgr: Any,
-      _notify_cfg: CharlieBotConfig,
+      ctx: spawner_finalize._FinalizeCtx,
       verify_report: str | None = None,
   ) -> None:
+    del verify_report
     captures["notified"] = True
-    captures["notify_exit_code"] = outcome.exit_code
-    captures["notify_thread"] = thread_meta
+    captures["notify_exit_code"] = ctx.outcome.exit_code
+    captures["notify_thread"] = ctx.thread
 
   return fake_notify_completion
 

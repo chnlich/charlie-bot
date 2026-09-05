@@ -90,22 +90,21 @@ class _Parser(HTMLParser):
     node.text_parts.append(part)
 
   def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-    start = self._offset()
-    raw = self.get_starttag_text()
-    if raw is None or self.source[start:start + len(raw)] != raw:
-      raise ValueError(f"could not locate start tag at offset {start}")
-    node = _Node(tag, {name.lower(): value for name, value in attrs}, self._stack[-1], start, start + len(raw))
-    self._stack[-1].children.append(node)
+    node = self._open_node(tag, attrs)
     if tag not in _VOID_TAGS:
       self._stack.append(node)
 
   def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    self._open_node(tag, attrs)
+
+  def _open_node(self, tag: str, attrs: list[tuple[str, str | None]]) -> _Node:
     start = self._offset()
     raw = self.get_starttag_text()
     if raw is None or self.source[start:start + len(raw)] != raw:
       raise ValueError(f"could not locate start tag at offset {start}")
     node = _Node(tag, {name.lower(): value for name, value in attrs}, self._stack[-1], start, start + len(raw))
     self._stack[-1].children.append(node)
+    return node
 
   def handle_endtag(self, tag: str) -> None:
     start = self._offset()
@@ -128,23 +127,22 @@ class _Parser(HTMLParser):
     self._append_part(start, end, data, [(start + index, start + index + 1) for index in range(len(data))])
 
   def handle_entityref(self, name: str) -> None:
-    start = self._offset()
-    raw = self.source[start:]
-    length = len(name) + 1
-    if raw.startswith("&" + name + ";"):
-      length += 1
-    raw = self.source[start:start + length]
-    text = _html.unescape(raw)
-    self._append_part(start, start + length, text, [(start, start + length)] * len(text))
+    self._append_ref(name, ("&" + name + ";",), 1)
 
   def handle_charref(self, name: str) -> None:
+    self._append_ref(name, ("&#x" + name + ";", "&#" + name + ";"), 2)
+
+  def _append_ref(self, name: str, refs: tuple[str, ...], base_punct: int) -> None:
+    # The tokenizer consumes the reference body plus its opening punctuation
+    # ("&" vs "&#") but reports the body alone; the trailing semicolon is part
+    # of the source span only when present. Unescape must run over exactly the
+    # consumed span, so the length rule and the splice offsets stay in one place.
     start = self._offset()
     raw = self.source[start:]
-    length = len(name) + 2
-    if raw.startswith("&#x" + name + ";") or raw.startswith("&#" + name + ";"):
+    length = len(name) + base_punct
+    if any(raw.startswith(ref) for ref in refs):
       length += 1
-    raw = self.source[start:start + length]
-    text = _html.unescape(raw)
+    text = _html.unescape(self.source[start:start + length])
     self._append_part(start, start + length, text, [(start, start + length)] * len(text))
 
 

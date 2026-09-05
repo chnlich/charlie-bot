@@ -63,6 +63,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M50 ext-usage credentials read warning stream, steady state | M50 collector below | warnings per 60 steady-state `_read_credentials` calls of a tokenless file | 0 warnings after the first sighting per (event, path) per broken streak | — (introduced with its first history row) |
 | M51 sidebar dirty-session deep probe, post-write | M51 collector below | seconds per post-write deep probe of the worst on-disk threads corpus (scratch copy, one atomic metadata rewrite per round) | median < 0.010 s | — (introduced with its first history row) |
 | M52 chat-event append, per event | M52 collector below | seconds per `save_chat_event` append of one probe event, worst on-disk live-events corpus, scratch home | median < 0.0003 s | — (introduced with its first history row) |
+| M53 config reload failure re-fire, broken steady state | M53 collector below | warnings + re-parses per 60 steady-state `get_config` calls of a persistently-broken config corpus | 0 warnings after the first sighting per (event, error) per process; 0 re-parses (one fingerprint stat set per call) | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2837,6 +2838,80 @@ asyncio.run(main())
 EOF
 ```
 
+M53 — config reload failure re-fire, broken steady state. `get_config` is the
+per-request config read (the auth middleware calls it on every HTTP request,
+the scheduler on every tick), and while the corpus stays broken a failed
+reload re-ran the full YAML parse + model validation and re-fired
+`config_reload_failed` on every call — the pre-fix form left `_config_mtime`
+at the old fingerprint, so the reload condition never went false (the live
+burst: 4431 lines in a 24.9 h server log, ~1/s inside the 16:00-18:00 window
+of 2026-09-04, three distinct error strings). The fixed form memoizes the
+failed reload on its fingerprint — re-parse only when a file moves, the same
+freshness rule the success path follows — and routes the warning through a
+warn-once registry, one line per error string per process, cleared on a
+successful load so a relapse earns one new line. The cost is per-request work
+invisible to the standing probes while the corpus is broken (a state the live
+host entered for a 2 h window), so the collector seeds a good config in a
+scratch `CHARLIEBOT_HOME`, breaks it with a fragment declaring a key the
+model does not declare (the burst's error shape), and drives `get_config`:
+one onset pass, as at the first call after the corpus breaks, then 60 timed
+steady-state calls asserting the served instance's identity, then one
+fingerprint-move round asserting the freshness survived. Evidence points the
+same collector at the before and after checkouts (`CHECKOUT` at each root),
+the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core import config as core_config
+
+# Broken-config corpus: config.yaml plus one fragment declaring a key the model
+# does not declare — the live burst's error shape (unknown config key(s) ...).
+# Scratch CHARLIEBOT_HOME; the live home is never read or written here.
+work = Path(tempfile.mkdtemp(prefix="m53-reload-"))
+home = work / "home"
+(home / "config.d").mkdir(parents=True)
+(home / "config.yaml").write_text("", encoding="utf-8")
+os.environ["CHARLIEBOT_HOME"] = str(home)
+
+core_config._config = None
+core_config._config_mtime = 0.0
+cached = core_config.get_config()  # seed: the running server's last-good config; not timed
+
+(home / "config.d" / "broken.yaml").write_text("unknown_m53_key: 1\n", encoding="utf-8")
+
+warns = []
+parses = []
+orig_warn = core_config.log.warning
+orig_load = core_config.load_config
+core_config.log.warning = lambda event, **kw: warns.append({"event": event, **kw})
+core_config.load_config = lambda: (parses.append(1), orig_load())[1]
+try:
+    core_config.get_config()  # onset pass, as at the first call after the corpus breaks; not timed
+    onset_warns, onset_parses = len(warns), len(parses)
+    times = []
+    for _ in range(60):  # steady-state repeat calls of the per-request auth path
+        t0 = time.perf_counter()
+        got = core_config.get_config()
+        times.append(time.perf_counter() - t0)
+        assert got is cached, "served config identity changed across a broken steady state"
+    steady_warns, steady_parses = len(warns), len(parses)
+    os.utime(home / "config.d" / "broken.yaml", (0, 0))  # fingerprint move: freshness must survive
+    core_config.get_config()
+    moved_warns, moved_parses = len(warns) - steady_warns, len(parses) - steady_parses
+finally:
+    core_config.log.warning = orig_warn
+    core_config.load_config = orig_load
+times.sort()
+print(f"60 steady-state get_config calls of a persistently-broken corpus; config_reload_failed warnings "
+      f"{steady_warns} (onset {onset_warns}), re-parses {steady_parses} (onset {onset_parses}); "
+      f"call wall median {times[30] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms; "
+      f"fingerprint-move round: re-parse {moved_parses}, new warnings {moved_warns}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2910,3 +2985,4 @@ EOF
 | 2026-09-04 | this PR | M7 live-before warm median 0.327 s and 0.751 s across two rounds, max 0.926 s (verbatim M7 curls against the running instance at load 0.82-0.91) → scratch-after warm median 0.056 s, max 0.574 s (scratch server on the branch with a scratch CHARLIEBOT_HOME, cold 9.516 s; verbatim M7 curls back-to-back with the live rounds); in-process forced-WAL-miss A/B: before median 0.3557 s → after median 0.1406 s (collect_token_usage interleaved back-to-back over the live corpora with the db signature forced to move every round — the trigger a WAL write produces, rows untouched; rows+notes digests identical on the 8 signature-stable rounds of 9, one skipped round's corpus moved mid-pair) | whole-tally memo gains a second hit tier keyed on the row memo's change epoch: the moved-WAL miss pays one incremental key-diff scan instead of the 12.9 MB cache-document load plus the ~50k-record opencode replay, an unchanged epoch re-serves the memo rows and re-signs them at the scan's own signature, and the cache document loads only on the source-walk path that needs it |
 | 2026-09-04 | this PR | M35 events page median 9.29/9.41/8.59 ms → 6.10/5.58/5.61 ms (633236 B), view median 8.51/8.66/8.32 ms → 6.89/6.88/6.50 ms, bootstrap median 3.69/3.96/3.76 ms → 3.39/3.39/3.30 ms (three interleaved rounds of the verbatim collector, main checkout before vs branch after back-to-back on the shared M35 snapshot at load 4.9-5.8; every paired round faster; parsed bodies equal across arms — raw bodies differ by design, \uXXXX escaping) | the five hot JSONResponse sites (events pages, view, bootstrap, worker-events envelope) render through FastJsonResponse, whose render is a plain ASCII-escaped dumps — CPython's C JSON encoder is ~3x faster with ensure_ascii=True on CJK-bearing payloads (render 5.4 vs 1.9 ms measured on the 559 KB page; the sessions corpus here is Chinese-heavy) and never slower on ASCII-only ones; NaN/Infinity still raise at render time, and the M34 steady-state envelope re-measured unchanged (0.0024 s median) |
 | 2026-09-04 | this PR | M51 post-write deep probe median 6.83/7.01/6.26 ms → 3.47/3.62/3.32 ms, maxima 7.08/7.71/6.66 ms → 3.62/4.51/3.38 ms (collector verbatim, 339-file worst threads corpus of session 3b91d606, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×3 at load 2.5-3.4, every paired round faster; M21 unchanged-signal sweep re-measured 0.0023 s vs the 0.0038 s standing row, no regression) | the deep probe's thread-metadata scan (`iter_recent_thread_metas`, shared with the boot recovery scan) walks scandir's plain strings — `entry.path + "/metadata.json"` into raw `os.stat`, str memo keys, string yields, Path built only at the rare content read and the interrupted-run collection point — dropping the two per-entry Path allocations plus the Path.stat() indirection that measured 5.4 ms of the 339-file walk against 1.3 ms for the same files through raw os.stat, the same conversion the M21 signature pass took |
+| 2026-09-04 | this PR | M53 61 → 1 warnings and 61 → 1 re-parses per 61 calls (onset 1 + 60 steady-state, collector verbatim, scratch broken-config corpus, main checkout before vs branch after interleaved back-to-back ×2 at load 3.03-3.12; call wall median 0.45/0.46 ms → 0.08/0.08 ms on the collector's minimal corpus, with the live corpus's full parse measured at 9.25 ms — the per-request cost while the live home was broken; fingerprint-move round re-parse 1 both arms, new warnings 1 → 0; served config identity `is`-asserted across all 60 steady-state calls both arms; live-log corroboration 4431 config_reload_failed lines in the 24.9 h server log, ~1/s inside the 16:00-18:00 burst window, three distinct error strings) | get_config memoizes the failed reload on its fingerprint — re-parse only when a file moves, the same freshness rule the success path follows, so an unchanged broken corpus costs one fingerprint stat set per call instead of a full parse + warning per call — and routes config_reload_failed through a warn-once registry, one line per error string per process, cleared on a successful load so a later relapse earns one new line; M53 definition and healthy range introduced with this PR |

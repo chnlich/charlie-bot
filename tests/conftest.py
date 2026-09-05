@@ -936,6 +936,8 @@ def reset_config_caches() -> None:
   """
   core_config._config = None
   core_config._config_mtime = 0.0
+  core_config._config_failed_mtime = None
+  core_config._config_reload_errors_seen.clear()
   core_config._cron_snapshot = core_config._CronSnapshot()
 
 

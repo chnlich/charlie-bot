@@ -64,8 +64,8 @@ def test_qwen3_hf_engine_builds_gpu_bundle(monkeypatch: pytest.MonkeyPatch) -> N
 
   monkeypatch.setattr(transcriber, "create_qwen3_hf_bundle", fake_gpu)
   monkeypatch.setattr(
-      transcriber, "create_sherpa_bundle",
-      lambda *_: (_ for _ in ()).throw(AssertionError("sherpa factory must not run")))
+      transcriber, "create_sherpa_bundle", lambda *_:
+      (_ for _ in ()).throw(AssertionError("sherpa factory must not run")))
 
   paths = transcriber.voice_model_paths(cfg)
   bundle = transcriber._get_model_bundle(cfg, paths)
@@ -74,8 +74,7 @@ def test_qwen3_hf_engine_builds_gpu_bundle(monkeypatch: pytest.MonkeyPatch) -> N
   assert received == [(cfg, paths)]
 
 
-def test_gpu_engine_failure_falls_back_to_sherpa_with_warning(
-    monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_gpu_engine_failure_falls_back_to_sherpa_with_warning(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
   """A GPU init error warns and decodes on the CPU engine instead of failing the session."""
   cfg = CharlieBotConfig(voice_engine="qwen3_hf", charliebot_home=tmp_path)
   sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
@@ -116,10 +115,8 @@ def test_gpu_fallback_result_is_cached_under_the_requested_engine(monkeypatch: p
     raise RuntimeError("missing CUDA driver")
 
   monkeypatch.setattr(transcriber, "create_qwen3_hf_bundle", fail_gpu)
-  monkeypatch.setattr(
-      transcriber, "create_sherpa_bundle", lambda paths: sherpa_calls.append(1) or sherpa)
-  monkeypatch.setattr(
-      transcriber, "_ensure_sherpa_paths_cached", lambda cfg_: transcriber.voice_model_paths(cfg_))
+  monkeypatch.setattr(transcriber, "create_sherpa_bundle", lambda paths: sherpa_calls.append(1) or sherpa)
+  monkeypatch.setattr(transcriber, "_ensure_sherpa_paths_cached", lambda cfg_: transcriber.voice_model_paths(cfg_))
 
   first = transcriber._get_model_bundle(cfg, transcriber.voice_model_paths(cfg))
   second = transcriber._get_model_bundle(cfg, transcriber.voice_model_paths(cfg))

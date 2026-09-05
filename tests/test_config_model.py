@@ -141,8 +141,7 @@ def test_load_config_reads_voice_keys(temp_home: Path) -> None:
   """The YAML config path parses both keys (config.yaml -> CharlieBotConfig)."""
   config_path = temp_home / ".charliebot" / "config.yaml"
   config_path.parent.mkdir(parents=True)
-  config_path.write_text(
-      "voice_engine: qwen3_hf\nvoice_model_id: Qwen/Qwen3-ASR-0.6B-hf\n", encoding="utf-8")
+  config_path.write_text("voice_engine: qwen3_hf\nvoice_model_id: Qwen/Qwen3-ASR-0.6B-hf\n", encoding="utf-8")
   cfg = load_config()
   assert cfg.voice_engine == "qwen3_hf"
   assert cfg.voice_model_id == "Qwen/Qwen3-ASR-0.6B-hf"

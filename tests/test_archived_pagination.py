@@ -212,12 +212,56 @@ async def test_archived_entries_survive_ttl_active_entries_expire(
   active = await _add_session(mgr, "live", status=SessionStatus.ACTIVE, minutes=1)
 
   # Age every cache entry past the TTL without touching the clock machinery.
-  for sid, (meta, _ts) in list(mgr._metadata_cache.items()):
-    mgr._metadata_cache[sid] = (meta, time.monotonic() - 3600)
+  # Signature None: the expired entry cannot revalidate by stat and re-reads.
+  for sid, (meta, _ts, _sig) in list(mgr._metadata_cache.items()):
+    mgr._metadata_cache[sid] = (meta, time.monotonic() - 3600, None)
 
   reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
   listed = await mgr.list_sessions()
   assert {s.id for s in listed} == {archived.id, active.id}
+  assert [p.parent.name for p in reads] == [active.id]
+
+
+@pytest.mark.asyncio
+async def test_expired_active_entry_revalidates_by_stat_until_the_file_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An expired entry whose stat signature still matches re-serves without a read.
+
+  The revalidation chain on the listing path: a read-keyed entry (signature
+  taken before the read) survives TTL expiry on one stat; a rewrite that moves
+  metadata.json's signature forces exactly one re-read, and the new bytes are
+  what the next listing serves.
+  """
+  mgr = make_session_mgr(tmp_path)
+  active = await _add_session(mgr, "live", status=SessionStatus.ACTIVE, minutes=1)
+
+  # The save-populated entry carries no provable signature: ageing it past the
+  # TTL forces the first read, whose pre-read stat keys the entry.
+  for sid, (meta, _ts, _sig) in list(mgr._metadata_cache.items()):
+    mgr._metadata_cache[sid] = (meta, time.monotonic() - 3600, None)
+  reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
+  listed = await mgr.list_sessions(status=SessionStatus.ACTIVE)
+  assert [s.name for s in listed] == ["live"]
+  assert [p.parent.name for p in reads] == [active.id]
+
+  # Unchanged file: the expired entry revalidates by stat, zero reads.
+  for sid, (meta, _ts, sig) in list(mgr._metadata_cache.items()):
+    mgr._metadata_cache[sid] = (meta, time.monotonic() - 3600, sig)
+  reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
+  listed = await mgr.list_sessions(status=SessionStatus.ACTIVE)
+  assert [s.name for s in listed] == ["live"]
+  assert reads == []
+
+  # Moved file: the signature stat mismatches, one re-read serves the new bytes.
+  path = mgr._metadata_path(active.id)
+  moved = SessionMetadata.model_validate_json(path.read_text(encoding="utf-8"))
+  moved.name = "renamed on disk"
+  path.write_text(moved.model_dump_json(), encoding="utf-8")
+  for sid, (meta, _ts, sig) in list(mgr._metadata_cache.items()):
+    mgr._metadata_cache[sid] = (meta, time.monotonic() - 3600, sig)
+  reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
+  listed = await mgr.list_sessions(status=SessionStatus.ACTIVE)
+  assert [s.name for s in listed] == ["renamed on disk"]
   assert [p.parent.name for p in reads] == [active.id]
 
 

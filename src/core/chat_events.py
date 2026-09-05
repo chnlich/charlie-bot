@@ -78,7 +78,7 @@ class ChatEventStore:
       self,
       session_dir_fn: Callable[[str], Path],
       metadata_path_fn: Callable[[str], Path],
-      metadata_cache: dict[str, tuple[SessionMetadata, float]],
+      metadata_cache: dict[str, tuple[SessionMetadata, float, tuple[int, int] | None]],
   ):
     self._session_dir = session_dir_fn
     self._metadata_path = metadata_path_fn

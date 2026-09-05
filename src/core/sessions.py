@@ -66,6 +66,24 @@ FORK_BOOTSTRAP_OPENER = "This session continues a prior conversation."
 ELONE_BOOTSTRAP_OPENER = "You're taking over because the user wasn't satisfied with the previous session."
 
 _METADATA_CACHE_TTL = 30.0  # seconds
+
+
+def _stat_metadata_signature(path: Path) -> tuple[int, int] | None:
+  """(st_mtime_ns, st_size) of *path*, or None when it cannot be stat'ed.
+
+  The metadata cache's revalidation key, taken before the read that parses the
+  file: a later same-signature stat proves the parsed bytes unchanged, because
+  every metadata writer publishes through the atomic tmp rename and a rename
+  always moves st_mtime_ns. A vanished file (OSError) returns None, the
+  never-provable signature, so the entry re-reads instead of serving.
+  """
+  try:
+    st = os.stat(path)
+  except OSError:
+    return None
+  return (st.st_mtime_ns, st.st_size)
+
+
 _SEARCH_RESULT_LIMIT = 200  # newest rows a name/content search returns; keeps the render bounded
 _PROJECTION_LRU_LIMIT = 8
 # LRU cap on the content-search miss memo: chat-file path -> {proven-absent
@@ -515,9 +533,14 @@ class SessionManager:
 
   def __init__(self, cfg: CharlieBotConfig) -> None:
     self._cfg = cfg
-    # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp).
-    # TTL-based to avoid repeated disk reads within the same poll cycle.
-    self._metadata_cache: dict[str, tuple[SessionMetadata, float]] = {}
+    # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp, disk signature).
+    # The signature is the (st_mtime_ns, st_size) of metadata.json taken BEFORE the read
+    # that produced the entry (None for entries populated by a write, which cannot prove
+    # the on-disk signature their bytes carry). TTL-based to bound the per-read work within
+    # a poll cycle; on expiry the signature revalidates the entry with one stat instead of
+    # a re-read — every writer publishes through the atomic tmp rename, so a content change
+    # always moves st_mtime_ns, and a same-signature stat proves the parsed bytes current.
+    self._metadata_cache: dict[str, tuple[SessionMetadata, float, tuple[int, int] | None]] = {}
     # Per-session asyncio.Lock guarding metadata read-modify-write operations.
     # Prevents clobber races between concurrent mutators (e.g. mark_unread vs
     # update_thinking_state), which both load meta, mutate disjoint fields, and
@@ -634,7 +657,12 @@ class SessionManager:
     """Load session metadata, using in-memory cache when available."""
     meta = self._fresh_cached_meta(session_id)
     cache_hit = meta is not None
+    sig: tuple[int, int] | None = None
     if meta is None:
+      # The signature is taken before the read: a write landing between the two
+      # keys the entry under the older signature, which the next expiry stat
+      # mismatches — an entry can never be served for bytes it did not parse.
+      sig = _stat_metadata_signature(self._metadata_path(session_id))
       raw = await self._read_metadata_raw(session_id)
       if raw is None:
         return None
@@ -645,7 +673,7 @@ class SessionManager:
     if self._migrate_round_rating_keys(meta):
       await self.save_metadata(meta)
     elif not cache_hit:
-      self._metadata_cache[session_id] = (meta, time.monotonic())
+      self._metadata_cache[session_id] = (meta, time.monotonic(), sig)
     return _stamp_thinking_since(meta.model_copy())
 
   async def _get_session_bypassing_cache(self, session_id: str) -> SessionMetadata | None:
@@ -1528,9 +1556,10 @@ class SessionManager:
       if not meta_path.exists():
         continue
       try:
+        sig = _stat_metadata_signature(meta_path)  # before the read, the cache revalidation key
         raw = meta_path.read_text(encoding="utf-8")
         meta = SessionMetadata.model_validate_json(raw)
-        self._metadata_cache[d.name] = (meta, now)
+        self._metadata_cache[d.name] = (meta, now, sig)
         if meta.status == SessionStatus.ACTIVE:
           results.append(_stamp_thinking_since(meta.model_copy()))
       except (OSError, ValueError) as e:
@@ -1717,7 +1746,14 @@ class SessionManager:
     only through the in-process write funnel (``save_metadata`` refreshes the
     entry, ``delete_session_permanently`` invalidates it), so a TTL re-read
     buys nothing there and the archived set stays listable without disk scans.
-    Active entries keep the ``_METADATA_CACHE_TTL`` freshness window. The two
+    Active entries keep the ``_METADATA_CACHE_TTL`` freshness window; an expired
+    entry revalidates against metadata.json with one stat — a same-signature
+    stat proves the parsed bytes unchanged (every writer publishes through the
+    atomic tmp rename, so a content change always moves ``st_mtime_ns``) and
+    re-times the entry, while a moved or unprovable signature (``None``, the
+    write-funnel populate) evicts for the caller's disk read. The stat is
+    strictly fresher than the TTL it replaces: the old form re-read at best
+    every 30 s, this one serves only while the bytes provably stand. The two
     TTL-checked metadata readers (``get_session`` and ``_load_session_metas``)
     route through this one check, and a stale entry is evicted here, so the
     two cannot drift on freshness semantics. ``list_active_session_metas``
@@ -1727,11 +1763,19 @@ class SessionManager:
     cached = self._metadata_cache.get(session_id)
     if cached is None:
       return None
-    meta, ts = cached
+    meta, ts, sig = cached
     if meta.status == SessionStatus.ARCHIVED:
       return meta
     if (time.monotonic() - ts) < _METADATA_CACHE_TTL:
       return meta
+    if sig is not None:
+      try:
+        st = os.stat(self._metadata_path(session_id))
+        if (st.st_mtime_ns, st.st_size) == sig:
+          self._metadata_cache[session_id] = (meta, time.monotonic(), sig)
+          return meta
+      except OSError:
+        pass
     del self._metadata_cache[session_id]
     return None
 
@@ -1817,6 +1861,7 @@ class SessionManager:
         cached_metas[session_id] = meta
 
     parsed_by_id: dict[str, SessionMetadata] = {}
+    parsed_sigs: dict[str, tuple[int, int] | None] = {}
     empty_ids: set[str] = set()
     load_failures: dict[str, Exception] = {}
     if missing_ids:
@@ -1824,6 +1869,10 @@ class SessionManager:
       def _read_and_parse_missing() -> None:
         for session_id in missing_ids:
           path = self._metadata_path(session_id)
+          # Signature before the read, per file: an entry keys only the bytes
+          # it parsed (see get_session's same rule), so a write landing between
+          # the two is re-read at the next expiry stat instead of served stale.
+          sig = _stat_metadata_signature(path)
           try:
             if not path.exists():
               continue
@@ -1836,6 +1885,7 @@ class SessionManager:
             continue
           try:
             parsed_by_id[session_id] = SessionMetadata.model_validate_json(raw)
+            parsed_sigs[session_id] = sig
           except Exception as exc:
             load_failures[session_id] = exc
 
@@ -1866,7 +1916,7 @@ class SessionManager:
         continue
 
       if not loaded_from_cache and not migrated:
-        self._metadata_cache.setdefault(session_id, (meta, time.monotonic()))
+        self._metadata_cache.setdefault(session_id, (meta, time.monotonic(), parsed_sigs.get(session_id)))
       if status is None or meta.status == status:
         result.append(meta)
     return result
@@ -2057,7 +2107,10 @@ class SessionManager:
     serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)
 
     await asyncio.to_thread(atomic_write_text, path, serialized)
-    self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic())
+    # Signature stays None: a write cannot prove the on-disk signature its bytes
+    # carry (a concurrent rename could land before any post-write stat), so the
+    # entry re-reads at its next expiry and re-keys from that read's own stat.
+    self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic(), None)
     # The single funnel for every session-metadata write (35+ call sites, plus
     # the ScheduledSessionStore delegate): status transitions (archive/unarchive)
     # land here, so the sidebar snapshot must re-probe this session.

@@ -401,12 +401,6 @@ def _add_insertion(insertions: dict[int, list[str]], offset: int, value: str) ->
   insertions.setdefault(offset, []).append(value)
 
 
-def _attr_value_insert_offset(raw: str, match: re.Match[str]) -> int:
-  if match.groupdict().get("quote"):
-    return match.end("value")
-  return match.end("value")
-
-
 def _add_class(source: str, node: _Node, class_name: str, insertions: dict[int, list[str]]) -> None:
   if node.start is None or node.start_end is None:
     raise ValueError("cannot annotate an element without a start tag")
@@ -415,7 +409,7 @@ def _add_class(source: str, node: _Node, class_name: str, insertions: dict[int, 
   if class_match is not None:
     classes = class_match.group("value").split()
     if class_name not in classes:
-      _add_insertion(insertions, node.start + _attr_value_insert_offset(raw, class_match), " " + class_name)
+      _add_insertion(insertions, node.start + class_match.end("value"), " " + class_name)
     return
   unquoted = _UNQUOTED_CLASS_RE.search(raw)
   if unquoted is not None:
@@ -700,19 +694,24 @@ def _splice(source: str, insertions: dict[int, list[str]]) -> str:
   return "".join(result)
 
 
-def _append_style_and_header(source: str) -> str:
+def _parse(source: str) -> _Parser:
   parser = _Parser(source)
   parser.feed(source)
   parser.close()
+  return parser
+
+
+def _append_style_and_header(source: str) -> str:
+  parser = _parse(source)
   insertions: dict[int, list[str]] = {}
+  style_tag = f'<style data-cbd-style>{_CBD_STYLE}</style>'
   head = _first_descendant(parser.root, "head")
-  if head is not None and head.end is not None:
-    _add_insertion(insertions, head.end, f'<style data-cbd-style>{_CBD_STYLE}</style>')
-  else:
-    body = _first_descendant(parser.root, "body")
-    offset = body.start if body is not None and body.start is not None else 0
-    _add_insertion(insertions, offset, f'<style data-cbd-style>{_CBD_STYLE}</style>')
   body = _first_descendant(parser.root, "body")
+  if head is not None and head.end is not None:
+    _add_insertion(insertions, head.end, style_tag)
+  else:
+    offset = body.start if body is not None and body.start is not None else 0
+    _add_insertion(insertions, offset, style_tag)
   if body is not None and body.start_end is not None:
     offset = body.start_end
   elif parser.root.end is not None:
@@ -725,12 +724,8 @@ def _append_style_and_header(source: str) -> str:
 
 
 def _analyse(base_html: str, new_html: str) -> tuple[_Parser, _Parser, list[_LeafChange], list[_Leaf], list[_Leaf]]:
-  base_parser = _Parser(base_html)
-  base_parser.feed(base_html)
-  base_parser.close()
-  new_parser = _Parser(new_html)
-  new_parser.feed(new_html)
-  new_parser.close()
+  base_parser = _parse(base_html)
+  new_parser = _parse(new_html)
   base_leaves = _collect_leaves(_document_root(base_parser))
   new_leaves = _collect_leaves(_document_root(new_parser))
   return base_parser, new_parser, _align(base_leaves, new_leaves), base_leaves, new_leaves

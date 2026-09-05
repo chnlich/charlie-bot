@@ -64,6 +64,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M51 sidebar dirty-session deep probe, post-write | M51 collector below | seconds per post-write deep probe of the worst on-disk threads corpus (scratch copy, one atomic metadata rewrite per round) | median < 0.010 s | — (introduced with its first history row) |
 | M52 chat-event append, per event | M52 collector below | seconds per `save_chat_event` append of one probe event, worst on-disk live-events corpus, scratch home | median < 0.0003 s | — (introduced with its first history row) |
 | M53 config reload failure re-fire, broken steady state | M53 collector below | warnings + re-parses per 60 steady-state `get_config` calls of a persistently-broken config corpus | 0 warnings after the first sighting per (event, error) per process; 0 re-parses (one fingerprint stat set per call) | — (introduced with its first history row) |
+| M54 stream-draft paint work, code-bearing draft, real highlight.js | M54 collector below | seconds of paint work per full-turn replay of the largest fence-bearing on-disk assistant draft, 200 B deltas at 40 ms virtual cadence, page-pinned marked + hljs 11.9.0 common builds | median < 0.2 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2912,6 +2913,22 @@ print(f"60 steady-state get_config calls of a persistently-broken corpus; config
 EOF
 ```
 
+M54 — stream-draft paint work with the page's real highlight.js build. The
+M33 harness stubs hljs, so the standing replay metric never sees
+highlightAuto's cost: with the served 11.9.0 common build (36 languages),
+highlightAuto scores the block against every language (~0.26 s per 24 KB
+measured), and every streaming paint re-parses the whole draft, re-running it
+on every unchanged code block in the draft. The collector loads the pinned
+hljs build into the same harness and replays the largest on-disk assistant
+draft containing a bare code fence — the corpus shape whose paint cost
+highlightAuto dominates. Evidence points the collector at the before and
+after checkouts (`CHECKOUT` at each root, live state read-only), the same
+shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node /home/chaoli/workspace/charlie-bot/tests/stream_hl_render_collector.js
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -2986,3 +3003,4 @@ EOF
 | 2026-09-04 | this PR | M35 events page median 9.29/9.41/8.59 ms → 6.10/5.58/5.61 ms (633236 B), view median 8.51/8.66/8.32 ms → 6.89/6.88/6.50 ms, bootstrap median 3.69/3.96/3.76 ms → 3.39/3.39/3.30 ms (three interleaved rounds of the verbatim collector, main checkout before vs branch after back-to-back on the shared M35 snapshot at load 4.9-5.8; every paired round faster; parsed bodies equal across arms — raw bodies differ by design, \uXXXX escaping) | the five hot JSONResponse sites (events pages, view, bootstrap, worker-events envelope) render through FastJsonResponse, whose render is a plain ASCII-escaped dumps — CPython's C JSON encoder is ~3x faster with ensure_ascii=True on CJK-bearing payloads (render 5.4 vs 1.9 ms measured on the 559 KB page; the sessions corpus here is Chinese-heavy) and never slower on ASCII-only ones; NaN/Infinity still raise at render time, and the M34 steady-state envelope re-measured unchanged (0.0024 s median) |
 | 2026-09-04 | this PR | M51 post-write deep probe median 6.83/7.01/6.26 ms → 3.47/3.62/3.32 ms, maxima 7.08/7.71/6.66 ms → 3.62/4.51/3.38 ms (collector verbatim, 339-file worst threads corpus of session 3b91d606, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×3 at load 2.5-3.4, every paired round faster; M21 unchanged-signal sweep re-measured 0.0023 s vs the 0.0038 s standing row, no regression) | the deep probe's thread-metadata scan (`iter_recent_thread_metas`, shared with the boot recovery scan) walks scandir's plain strings — `entry.path + "/metadata.json"` into raw `os.stat`, str memo keys, string yields, Path built only at the rare content read and the interrupted-run collection point — dropping the two per-entry Path allocations plus the Path.stat() indirection that measured 5.4 ms of the 339-file walk against 1.3 ms for the same files through raw os.stat, the same conversion the M21 signature pass took |
 | 2026-09-04 | this PR | M53 61 → 1 warnings and 61 → 1 re-parses per 61 calls (onset 1 + 60 steady-state, collector verbatim, scratch broken-config corpus, main checkout before vs branch after interleaved back-to-back ×2 at load 3.03-3.12; call wall median 0.45/0.46 ms → 0.08/0.08 ms on the collector's minimal corpus, with the live corpus's full parse measured at 9.25 ms — the per-request cost while the live home was broken; fingerprint-move round re-parse 1 both arms, new warnings 1 → 0; served config identity `is`-asserted across all 60 steady-state calls both arms; live-log corroboration 4431 config_reload_failed lines in the 24.9 h server log, ~1/s inside the 16:00-18:00 burst window, three distinct error strings) | get_config memoizes the failed reload on its fingerprint — re-parse only when a file moves, the same freshness rule the success path follows, so an unchanged broken corpus costs one fingerprint stat set per call instead of a full parse + warning per call — and routes config_reload_failed through a warn-once registry, one line per error string per process, cleared on a successful load so a later relapse earns one new line; M53 definition and healthy range introduced with this PR |
+| 2026-09-04 | this PR | M54 paint-work median 0.299/0.323 s → 0.141/0.142 s, maxima 0.390/0.406 s → 0.219/0.236 s (collector verbatim, 11.4 KB worst fence-bearing on-disk assistant draft sha1 b155f860788f, 59 deltas at 40 ms virtual cadence, 12 paints, page-pinned marked + hljs 11.9.0 common build (36 languages), main checkout before vs branch after interleaved back-to-back ×2 at load 2.24/1.15/0.80; final-frame parity true both arms; M33 stubbed-hljs replay re-measured 0.396 s median vs the 0.378 s standing row at a higher load, no regression) | highlight results memoized in renderer.code on (lang, code) with a 32-entry LRU — highlight is a pure function of its inputs, but every streaming paint re-parsed the whole draft and re-ran highlightAuto (a 36-language scoring pass, ~0.26 s per 24 KB measured) on every unchanged code block, and every message re-render paid it again; M54 definition and healthy range introduced with this PR |

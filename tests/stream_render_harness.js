@@ -13,7 +13,7 @@ const vm = require('node:vm');
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
 const read = (name) => fs.readFileSync(path.join(CHECKOUT, 'web/static/js', name), 'utf8');
 
-function buildStreamHarness(markedSource) {
+function buildStreamHarness(markedSource, options = {}) {
   let virtualNow = 0, paintMs = 0, nextTimerId = 1, htmlStore = '';
   const timers = new Map(), elements = new Map(), frames = [];
   const mkEl = () => ({ classList: { add() {}, remove() {} }, scrollTop: 0, scrollHeight: 0 });
@@ -35,11 +35,6 @@ function buildStreamHarness(markedSource) {
     // KaTeX's per-paint DOM re-walk is stubbed identically wherever the harness
     // runs, so comparisons under- rather than over-state the coalescing win.
     renderMathInElement() {},
-    hljs: {
-      getLanguage: () => null,
-      highlightAuto: (s) => ({ value: String(s) }),
-      highlight: (s) => ({ value: String(s) }),
-    },
     platform: {},
     Date: { now: () => virtualNow },
     setTimeout(fn, ms) {
@@ -49,7 +44,19 @@ function buildStreamHarness(markedSource) {
     },
     clearTimeout(id) { timers.delete(id); },
   };
+  // options.hljsSource loads the page's real highlight.js build; without it the
+  // stub keeps the M33 metric on the marked-parse cost alone.
+  if (!options.hljsSource) {
+    context.hljs = {
+      getLanguage: () => null,
+      highlightAuto: (s) => ({ value: String(s) }),
+      highlight: (s) => ({ value: String(s) }),
+    };
+  }
   vm.createContext(context);
+  if (options.hljsSource) {
+    vm.runInContext(options.hljsSource, context, { filename: 'highlight.min.js' });
+  }
   vm.runInContext(markedSource, context, { filename: 'marked.js' });
   vm.runInContext(read('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
   vm.runInContext(read('usage.js'), context, { filename: 'usage.js' });

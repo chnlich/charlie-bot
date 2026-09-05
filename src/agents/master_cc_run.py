@@ -854,21 +854,13 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
       tracker.on_event(event)
       cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)
 
-    # Whole-file result scan with a FRESH translate instance (stateful
-    # translates may not reuse the one that consumed the stream tail). -1
-    # matches the worker side's "no result event" code for died-mid-run.
-    if raw_path.is_file():
-      events = runs.project_raw_events(runs.parse_raw_lines(raw_path.read_bytes()), _build_fresh_translate(cfg, option))
-    else:
-      events = []
+    events, result, exit_code = runs.scan_result_exit(raw_path, _build_fresh_translate(cfg, option))
     # Recover the manual-compaction observation from the same whole-file
     # projection the result summary uses (zero new I/O): the persisted cursor
     # may already sit past the boundary line, so the cursor-forward tail above
     # cannot be the observation's only evidence channel.
     if any(_is_manual_compact_boundary(event) for event in events):
       tracker.note_manual_compact()
-    result = runs.summarize_result(events)
-    exit_code = 0 if (result is not None and runs.result_success(result)) else -1
 
     stderr_text = await asyncio.to_thread(_read_stderr_tail, stderr_path)
     if stderr_text:

@@ -194,17 +194,7 @@ class Worker:
       ):
         await self._process_event(event, log_file)
 
-    # Whole-file result scan with a FRESH translate instance (stateful
-    # translates may not reuse one that already consumed a stream tail). A
-    # missing raw log is a legal drain input (never-started respawn fallback,
-    # legacy thread without the new transport): it scans to no result.
-    fresh_backend = self._build_backend(None)
-    if raw_path.is_file():
-      events = runs.project_raw_events(runs.parse_raw_lines(raw_path.read_bytes()), fresh_backend.translate_event)
-    else:
-      events = []
-    result = runs.summarize_result(events)
-    exit_code = 0 if (result is not None and runs.result_success(result)) else -1
+    _, result, exit_code = runs.scan_result_exit(raw_path, self._build_backend(None).translate_event)
 
     # The loop ended on the post-result timeout while the process is still
     # alive: same contract as the live path's cleanup — capture diagnostics,

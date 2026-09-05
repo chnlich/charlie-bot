@@ -35,6 +35,23 @@ function loadGroupCollapsedState(storageKey) {
   try { return JSON.parse(localStorage.getItem(storageKey) || '{}'); } catch (e) { return {}; }
 }
 
+// The one key order both grouped renderers use: named groups alphabetically,
+// '' (the keyless bucket) last.
+function groupSessionsBySortedKeys(sessions, keyFn) {
+  const groups = {};
+  sessions.forEach(s => {
+    const key = keyFn(s) || '';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(s);
+  });
+  const sortedKeys = Object.keys(groups).sort((a, b) => {
+    if (a === '') return 1;
+    if (b === '') return -1;
+    return a.localeCompare(b);
+  });
+  return {groups, sortedKeys};
+}
+
 function shouldLimitHideSession(session, index, expanded) {
   if (expanded) return false;
   if (index < GROUP_SESSION_PREVIEW_LIMIT) return false;
@@ -364,19 +381,7 @@ function renderGroupedScheduledList(sessions, options = {}) {
     nav.innerHTML = badgeHtml + renderEmptyNote('No scheduled sessions');
     return;
   }
-  // Group by project
-  const groups = {};
-  sessions.forEach(s => {
-    const key = s.schedule_project || '';
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(s);
-  });
-  // Sort: named groups alphabetically, '' (no project) last
-  const sortedKeys = Object.keys(groups).sort((a, b) => {
-    if (a === '') return 1;
-    if (b === '') return -1;
-    return a.localeCompare(b);
-  });
+  const {groups, sortedKeys} = groupSessionsBySortedKeys(sessions, s => s.schedule_project);
   const collapsedState = loadGroupCollapsedState(CRON_GROUP_COLLAPSED_STORAGE_KEY);
   const limitState = loadGroupLimitState(CRON_GROUP_LIMIT_STORAGE_KEY);
 
@@ -587,19 +592,7 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
   }
   lastGroupedRenderArgs = {sessions, filter};
   if (!options.skipRefresh) scheduleProjectManagerRefresh();
-  // Group by s.group
-  const groups = {};
-  sessions.forEach(s => {
-    const key = s.group || '';
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(s);
-  });
-  // Sort: named groups alphabetically, '' (no group) last
-  const sortedKeys = Object.keys(groups).sort((a, b) => {
-    if (a === '') return 1;
-    if (b === '') return -1;
-    return a.localeCompare(b);
-  });
+  const {groups, sortedKeys} = groupSessionsBySortedKeys(sessions, s => s.group);
   const collapsedState = loadGroupCollapsedState(SESSION_GROUP_COLLAPSED_STORAGE_KEY);
   const limitState = loadGroupLimitState(SESSION_GROUP_LIMIT_STORAGE_KEY);
 

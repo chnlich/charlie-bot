@@ -186,12 +186,12 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
   Resolution matrix (the only accepted forms; everything else raises
   BaseBranchResolutionError):
     - 40-hex SHA      → pinned base, verified present; no freshness semantics, no network.
-    - origin/<b>      → explicit remote: must exist on origin; start at the freshly fetched
-                        origin/<b> regardless of any local state.
+    - origin/<b>      → explicit remote: must exist on origin; start at origin/<b>'s freshly
+                        resolved tip (see *remote_tip*) regardless of any local state.
     - <b> (bare)      → if the remote branch exists, the local branch must be absent or
                         point at exactly the same commit (else hard error);
-                        start at freshly fetched origin/<b>. If the remote branch does not
-                        exist (or no origin remote is configured), require the branch to
+                        start at the freshly resolved origin/<b>. If the remote branch does
+                        not exist (or no origin remote is configured), require the branch to
                         exist locally and start there (unpublished-branch case).
   A reachable-check that fails (network/auth) is a hard error, never a silent local
   fallback; use a full SHA to pin a base while offline.

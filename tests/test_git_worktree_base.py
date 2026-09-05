@@ -486,7 +486,9 @@ async def test_crash_respawn_reaches_the_same_fallback(
 
 
 @pytest.mark.asyncio
-async def test_probe_equal_tracking_ref_skips_fetch(repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_probe_equal_tracking_ref_skips_fetch(
+    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
   """When the ls-remote probe shows the local remote-tracking ref already holds the
   tip origin advertises, the fetch is provably a no-op and must not run: the probe
   is read straight from the remote, so no fetch could change that ref."""
@@ -533,7 +535,9 @@ async def test_probe_mismatch_still_fetches(repo_setup: dict[str, Path], monkeyp
 
 
 @pytest.mark.asyncio
-async def test_caller_supplied_tip_skips_the_probe(repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_caller_supplied_tip_skips_the_probe(
+    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
   """A remote_tip from the caller's own ls-remote replaces this function's probe:
   no ls-remote runs, the equality check still gates the fetch."""
   from src.core import git as git_mod

@@ -138,8 +138,6 @@ async def handle_step_completion(
     session_id: str,
     thread: ThreadMetadata,
     exit_code: int,
-    events_summary: str,
-    full_summary: str,
     thread_mgr: ThreadManager,
     session_mgr: SessionManager,
     cfg: CharlieBotConfig,

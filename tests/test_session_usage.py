@@ -1029,6 +1029,32 @@ async def test_facts_memo_rescans_only_after_new_events(tmp_path: Path, monkeypa
   assert fourth == third
 
 
+@pytest.mark.asyncio
+async def test_facts_memo_extension_feeds_a_private_copy(tmp_path: Path) -> None:
+  """An extension never feeds the stored fold: two concurrent resolutions of
+  the same session read the same stale entry, and total_cost folds by +=, so
+  a shared fold would double-count the suffix."""
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-copy", name="Copy", backend=OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, [
+      _assistant_event("claude-opus-4-6", input_tokens=10_000),
+      _result_event(0.10, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
+  ])
+  await session_mgr.resolve_session_usage(meta.id, meta)
+  memo = session_mgr._session_usage._facts_memo
+  stored_fold = memo[meta.id][2]
+  stored_facts = stored_fold.facts()
+
+  await session_mgr.save_chat_event(
+      meta.id, _result_event(0.20, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=2000))
+  await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert memo[meta.id][2] is not stored_fold
+  assert stored_fold.facts() == stored_facts
+  assert memo[meta.id][2].facts().cost == pytest.approx(0.30)
+
+
 def test_usage_fold_of_appended_suffixes_matches_full_scan() -> None:
   """Feeding a list in suffixes lands on the same facts as one full pass."""
   events = [

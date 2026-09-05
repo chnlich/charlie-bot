@@ -1680,8 +1680,9 @@ class SessionManager:
   ) -> dict | None:
     """Resolve display usage for a session view as a projection over its events.
 
-    Usage is computed on demand from the full chat-event stream (no incremental
-    cache). See ``src/core/session_usage.py`` for the tier contract.
+    Usage is computed on demand as a fold over the chat-event stream whose
+    state carries across resolutions in a per-session memo. See
+    ``src/core/session_usage.py`` for the tier contract.
     """
     return await self._session_usage.resolve_session_usage(session_id, session_meta)
 

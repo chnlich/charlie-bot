@@ -149,6 +149,18 @@ class _UsageFold:
         cost=cost,
     )
 
+  def copy(self) -> "_UsageFold":
+    """Independent deep-enough copy of the carried state (the dict is copied too)."""
+    out = _UsageFold()
+    out.chosen_prompt_tokens = self.chosen_prompt_tokens
+    out.chosen_model = self.chosen_model
+    out.post_compact_tokens = self.post_compact_tokens
+    out.model_windows = dict(self.model_windows)
+    out.snapshot = self.snapshot
+    out.total_cost = self.total_cost
+    out.unknown_cost = self.unknown_cost
+    return out
+
 
 def _scan_usage_facts(events: list[dict]) -> _UsageFacts:
   """Collect every tier's inputs in one pass over *events*.
@@ -340,26 +352,39 @@ class SessionUsageResolver:
     """Load the session's events and return them with their usage facts.
 
     Serves the facts from the per-session memo when the cached events list is
-    unchanged since the last resolution; folds the appended suffix into the
-    carried state when the list only grew; rebuilds from a fresh fold on any
-    wholesale replacement (a new list object). Runs off the event loop via
-    asyncio.to_thread.
+    unchanged since the last resolution; folds the appended suffix into a
+    private copy of the carried state when the list only grew; rebuilds from
+    a fresh fold on any wholesale replacement (a new list object). Runs off
+    the event loop via asyncio.to_thread.
+
+    The extension feeds a copy, never the stored fold: two concurrent
+    resolutions of the same session (the 3 s poll against the view/bootstrap
+    handlers) read the same stale entry after one append, and ``total_cost``
+    folds by ``+=``, so feeding the shared fold would double-count the
+    suffix. A stored fold is therefore never fed again, and ``facts()``
+    snapshots never race a feed. The memo claims exactly the folded length:
+    the suffix is sliced once and the covered count grows by the slice's own
+    length, so an append landing between the slice and the store is folded
+    by the next resolution instead of being claimed unseen.
     """
     events = self._load_chat_events_sync(session_id)
     cached = self._facts_memo.get(session_id)
     if cached is not None and cached[0] is events:
-      scanned_len, fold = cached[1], cached[2]
-      if scanned_len == len(events):
+      covered, prev = cached[1], cached[2]
+      if covered < len(events):
+        fold = prev.copy()
+        suffix = events[covered:]
+        fold.feed(suffix)
+        covered += len(suffix)
+        self._facts_memo[session_id] = (events, covered, fold)
         self._facts_memo.move_to_end(session_id)
         return events, fold.facts()
-      if scanned_len < len(events):
-        fold.feed(events[scanned_len:])
-        self._facts_memo[session_id] = (events, len(events), fold)
-        self._facts_memo.move_to_end(session_id)
-        return events, fold.facts()
+      self._facts_memo.move_to_end(session_id)
+      return events, prev.facts()
+    count = len(events)
     fold = _UsageFold()
-    fold.feed(events)
-    self._facts_memo[session_id] = (events, len(events), fold)
+    fold.feed(events[:count])
+    self._facts_memo[session_id] = (events, count, fold)
     self._facts_memo.move_to_end(session_id)
     while len(self._facts_memo) > _FACTS_MEMO_CAP:
       self._facts_memo.popitem(last=False)

@@ -68,6 +68,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M55 artifact compare-view serve, steady state | M55 collector below | seconds per repeat `?diff=` compare-view request over the worst on-disk artifact pair, plus the request's worst event-loop gap (the 5 ms ticker floor like M14) | repeat-view median < 0.010 s; loop-lag median < 0.010 s | — (introduced with its first history row) |
 | M56 sidebar status poll, steady state | M56 collector below | seconds per `GET /api/sessions/status` request over the active-session id set | median < 0.0028 s | — (introduced with its first history row) |
 | M57 plan-registry poll, steady state | M57 collector below | seconds per `GET /api/sessions/{id}/plans` request, worst on-disk plans corpus | median < 0.0030 s | — (introduced with its first history row) |
+| M58 per-request config read, steady state | M58 collector below | seconds per `get_config` call, live config corpus | median < 0.0001 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3221,6 +3222,38 @@ print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: session {SID}, {be
 EOF
 ```
 
+M58 — per-request config read, steady state. `get_config` is the per-request config read (the
+auth middleware calls it on every HTTP request, the scheduler on every tick), and its reload
+check re-derives the config fingerprint on every call — after M53 the steady state is one
+fingerprint walk per call, so that walk is the per-request floor's dominant slice (the raw-ASGI
+401 path measured ~150 µs total, ~130 µs of it the pre-fix fingerprint's pathlib machinery).
+The cost is per-request latency the HTTP standing probes only see mixed into their totals, so
+the collector times `get_config` itself over the live config corpus (read-only: a fresh stat
+set per call, never a write), from the checkout under test: one cold pass, as at a server
+start, then nine timed calls. The healthy range bounds the fresh-stat walk; a jump toward the
+parse-sized costs (the M53 broken-corpus wall) means a fingerprint miss is landing per call.
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+os.environ.pop("CHARLIEBOT_HOME", None)  # the live profile: ~/.charliebot
+from src.core import config as core_config
+
+core_config.get_config()  # cold pass, as at a server start; not timed
+times = []
+for _ in range(9):
+    t0 = time.perf_counter()
+    core_config.get_config()
+    times.append(time.perf_counter() - t0)
+times.sort()
+frag = len(os.listdir(Path.home() / ".charliebot" / "config.d"))
+print(f"{frag} config.d entries; steady-state get_config "
+      f"median {times[4] * 1e6:.1f} us, max {times[-1] * 1e6:.1f} us")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3301,3 +3334,4 @@ EOF
 | 2026-09-04 | this PR | M56 /status request median 3.03/2.89 ms → 2.30/2.37 ms, maxima 8.57/8.55 ms → 7.65/7.72 ms (collector verbatim, 41 active-session ids, live corpus read-only, main checkout before vs branch after interleaved back-to-back ×2 at load 2.0-2.1; parsed-body digest identical a344862b7fe2 across arms; the 34-id live-poll shape measured 2.81/2.65 ms → 2.37/2.28 ms in the same interleaved protocol) | the sidebar's 3 s poll renders through FastJsonResponse, skipping FastAPI's jsonable_encoder pass over the 41-row derived-state dict; M56 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M57 /plans request median 3.63/3.54 ms → 2.77/2.74 ms, maxima 4.43/4.53 ms → 3.62/3.49 ms (collector verbatim, 15.4 KB worst plans corpus of session a9bb2346, live state read-only, main checkout before vs branch after interleaved back-to-back ×2 at load 2.0-2.1; parsed-body digest identical f0098c1aae15 across arms) | the plan panel's 3 s poll renders through FastJsonResponse, skipping FastAPI's jsonable_encoder pass over the 12-plan dict (the registry read itself is already the M27 memo at 10.6 µs); M57 definition and healthy range introduced with this PR |
 | 2026-09-05 | this PR | M6 append-round usage resolution median 6.38 ms → 0.12 ms, max 9.02 ms → 0.15 ms (collector + append-round rounds, 20534-event worst live corpus of session d321b9ad, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×3 at load 4.4-6.5, every paired round faster: 6.05/7.33/7.47 → 0.10/0.14/0.13 ms; resolved usage dict equals the full-scan reference on the real corpus both arms; unchanged-list steady state re-measured 0.13 ms → 0.14 ms, no regression) | the usage scan is a fold whose state now carries across resolutions in the per-session memo — an appending list (one chat event per streamed delta, the 3 s usage poll's steady companion during a turn) folds only the appended suffix instead of re-scanning the whole history per poll, and a wholesale list replacement (new identity) rebuilds from a fresh fold; append-round sub-metric added to the M6 definition and collector in this PR |
+| 2026-09-05 | this PR | M58 steady-state get_config median 79.4/85.6/84.0 µs → 29.6/27.3/27.3 µs, maxima ~120 µs → ~51 µs (collector verbatim, live config corpus of 2 fragments + cron.d read-only, main checkout before vs branch after interleaved back-to-back ×3 at load 1.4-2.5; raw-ASGI 401 floor median 78 → 24 µs, max 162 → 70 µs over 300 calls on a scratch home; M53 collector re-run on its broken corpus: call wall 80 → 20 µs with the M53 metric unchanged — 1 onset warning, 0 steady re-parses, fingerprint-move freshness intact) | the per-request fingerprint walk left pathlib: the resolved home is memoized on the (CHARLIEBOT_HOME, HOME) env pair — resolve() is a per-component symlink walk and Path.home()/str(Path) re-parse per call, and both public readers (charliebot_home_dir, default_charliebot_home) serve one cached entry so callers comparing their home against the default stay coherent — and the config.d fragment scan is one shared os.scandir + raw-stat walker (name/dotfile/cron.yaml rule and S_ISREG gate in one place) used by both the loader and the fingerprint; M58 definition and healthy range introduced with this PR |

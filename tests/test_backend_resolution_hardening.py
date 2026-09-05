@@ -121,6 +121,7 @@ def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypa
   monkeypatch.setattr(core_config, "_config", None)
   monkeypatch.setattr(core_config, "_config_mtime", 0.0)
   monkeypatch.setattr(core_config, "_config_failed_mtime", None)
+  monkeypatch.setattr(core_config, "_home_cache", {})
 
   first = core_config.get_config()
   holder = first  # a long-lived singleton captures the object here
@@ -144,6 +145,7 @@ def test_get_config_keeps_previous_value_when_reload_fails(tmp_path: Path, monke
   monkeypatch.setattr(core_config, "_config", None)
   monkeypatch.setattr(core_config, "_config_mtime", 0.0)
   monkeypatch.setattr(core_config, "_config_failed_mtime", None)
+  monkeypatch.setattr(core_config, "_home_cache", {})
 
   first = core_config.get_config()
   cfg_path.write_text("server_port: 2222\n", encoding="utf-8")

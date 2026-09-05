@@ -5,6 +5,7 @@ import json
 import os
 import re
 from pathlib import Path
+from stat import S_ISREG
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -40,10 +41,41 @@ HOUSE_TIMEZONE = "America/Los_Angeles"
 # sidebar/modals.js) that cannot import from Python — a change moves all four sites.
 DEFAULT_TIMEZONE = HOUSE_TIMEZONE
 
+# The resolved home and its string form, per raw ``CHARLIEBOT_HOME`` value plus
+# ``HOME`` (``""`` raw is the default home, and a ``~`` value derives from
+# HOME). The env values are the process's profile identity, fixed for the
+# process life, while resolve() is a per-component symlink walk and
+# ``Path.home()``/``str(Path)`` re-parse the path — per-request-fingerprint
+# work on every call if repeated. Both public readers serve the same cached
+# entry, so a caller comparing its home against the default sees one answer.
+_home_cache: dict[tuple[str, str], tuple[Path, str]] = {}
+
+
+def _home_cached(raw: str) -> tuple[Path, str]:
+  """The home for *raw* (``""`` is the default) as ``(Path, str)``, resolved once per env pair."""
+  key = (raw, os.environ.get("HOME", ""))
+  cached = _home_cache.get(key)
+  if cached is None:
+    if raw:
+      home = Path(raw).expanduser().resolve()
+    else:
+      home = Path.home() / ".charliebot"
+    cached = (home, str(home))
+    _home_cache[key] = cached
+  return cached
+
+
+def _resolve_home() -> tuple[Path, str]:
+  """The validated profile home as ``(Path, str)``."""
+  raw = os.environ.get(CHARLIEBOT_HOME_ENV, "").strip()
+  if raw and not raw.startswith(("~", "/")):
+    raise ValueError(f"{CHARLIEBOT_HOME_ENV} must be an absolute path or start with '~'; got {raw!r}")
+  return _home_cached(raw)
+
 
 def default_charliebot_home() -> Path:
   """The state directory used when ``CHARLIEBOT_HOME`` is unset."""
-  return Path.home() / ".charliebot"
+  return _home_cached("")[0]
 
 
 def charliebot_home_dir() -> Path:
@@ -59,12 +91,7 @@ def charliebot_home_dir() -> Path:
   server, the CLI and every worker a different home, so it is rejected here
   instead of surfacing later as a write into the wrong profile.
   """
-  raw = os.environ.get(CHARLIEBOT_HOME_ENV, "").strip()
-  if not raw:
-    return default_charliebot_home()
-  if not raw.startswith(("~", "/")):
-    raise ValueError(f"{CHARLIEBOT_HOME_ENV} must be an absolute path or start with '~'; got {raw!r}")
-  return Path(raw).expanduser().resolve()
+  return _resolve_home()[0]
 
 
 class ImprovementLoopConfig(BaseModel):
@@ -543,23 +570,37 @@ def _reset_config_reload_failures_for_tests() -> None:
   _config_reload_errors_seen.clear()
 
 
+def _scan_fragments(config_d: str) -> list[tuple[str, os.stat_result]]:
+  """config.d/*.yaml fragment stats, sorted by name; dotfiles and the legacy cron.yaml excluded.
+
+  One scandir walk shared by the loader (which wants paths) and the fingerprint
+  (which wants ``(name, mtime, size)``), so the fragment rule lives here once.
+  A fragment removed between the scandir and its stat is skipped — the settled
+  set lands on the next call, the same skip ``Path.is_file`` gave a raced
+  entry — and a directory or special file named ``*.yaml`` is not a fragment.
+  """
+  if not os.path.isdir(config_d):
+    return []
+  found = []
+  with os.scandir(config_d) as entries:
+    for entry in entries:
+      name = entry.name
+      if not name.endswith(".yaml") or name.startswith(".") or name == "cron.yaml":
+        continue
+      try:
+        st = entry.stat()
+      except OSError:
+        continue
+      if not S_ISREG(st.st_mode):
+        continue
+      found.append((name, st))
+  return sorted(found)
+
+
 def _config_fragments(home: Path) -> list[Path]:
   """config.d/*.yaml, sorted by name; dotfiles and the legacy cron.yaml excluded."""
   config_d = home / "config.d"
-  if not config_d.is_dir():
-    return []
-  return sorted(
-      (p for p in config_d.glob("*.yaml") if p.is_file() and not p.name.startswith(".") and p.name != "cron.yaml"),
-      key=lambda p: p.name)
-
-
-def _stat_mtime_size(path: Path) -> tuple[float, int]:
-  """``(mtime, size)`` for *path*; a missing file contributes a fixed sentinel."""
-  try:
-    st = path.stat()
-  except OSError:
-    return (0.0, 0)
-  return (st.st_mtime, st.st_size)
+  return [config_d / name for name, _ in _scan_fragments(str(config_d))]
 
 
 def _config_fingerprint() -> tuple:
@@ -572,12 +613,20 @@ def _config_fingerprint() -> tuple:
   would miss silently. A content change that preserves both mtime and size is
   deliberately not covered. A missing file stats to a sentinel rather than
   raising.
+
+  This is the per-request path (the auth middleware's ``get_config``), so the
+  walk stays on raw strings and ``os`` calls: per-call ``Path`` allocation and
+  ``resolve`` measured ~130 µs of the ~150 µs middleware floor on the live
+  corpus, against ~10 µs of unavoidable fresh stats.
   """
-  home = charliebot_home_dir()
-  return (
-      _stat_mtime_size(home / "config.yaml"),
-      tuple((p.name, *_stat_mtime_size(p)) for p in _config_fragments(home)),
-  )
+  home_str = _resolve_home()[1]
+  try:
+    st = os.stat(os.path.join(home_str, "config.yaml"))
+  except OSError:
+    main = (0.0, 0)
+  else:
+    main = (st.st_mtime, st.st_size)
+  return (main, tuple((name, s.st_mtime, s.st_size) for name, s in _scan_fragments(os.path.join(home_str, "config.d"))))
 
 
 def load_config() -> CharlieBotConfig:

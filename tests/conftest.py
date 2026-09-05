@@ -288,6 +288,18 @@ def archive_cutoff_events() -> tuple[datetime, list[dict]]:
   return cutoff, events
 
 
+async def recycle_archive_cutoff_events(mgr: SessionManager, session_id: str) -> tuple[datetime, Path]:
+  """Seed archive_cutoff_events()'s corpus on the session's live file and recycle at the cutoff;
+  returns (cutoff, live path). The 5 e-events end up in the weekly archive and the 3 f-events stay
+  live (archive_offset == 5). A test that asserts on recycle's return value, or that must read
+  between seed and recycle, keeps the explicit calls instead."""
+  cutoff, events = archive_cutoff_events()
+  live_path = mgr.get_chat_events_path(session_id)
+  append_events(live_path, events)
+  await mgr.recycle_scheduled_session(session_id, cutoff)
+  return cutoff, live_path
+
+
 async def make_parent(mgr: SessionManager, *, name: str = "Parent") -> str:
   """A session ready to elone: the two seed events give succession tests a cut point to reference."""
   parent = await mgr.create_session(models.CreateSessionRequest(name=name), backend=OPUS_BACKEND_ID)

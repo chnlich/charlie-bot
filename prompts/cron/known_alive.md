@@ -312,9 +312,12 @@ Known-alive symbols:
   the method as dead; `dispose` in the same object literal is reached the same way.
 - `render` (`FastJsonResponse` in `src/api/responses.py`) — template-method override of
   starlette `JSONResponse.render`: the base `Response.__init__` calls `self.render(content)`
-  by that name when FastAPI serializes a response. Nothing in the repo calls it, the name
-  has exactly zero whole-repo matches outside its definition, and vulture flags it as an
-  unused method. Same class as the `do_GET`/`do_POST`/`log_message` stdlib-dispatch entry.
+  by that name when FastAPI serializes a response. As a Python identifier the name has zero
+  matches outside its definition, so a Python-scoped dead-method scan (vulture) flags it as
+  an unused method; a whole-repo grep is noisier — `render` is also ordinary web-JS DOM code
+  (`plan-panel.js` `function render()`, `backlogPanel.render()`, pdf.js `page.render(...)`)
+  that names unrelated methods. Same class as the `do_GET`/`do_POST`/`log_message`
+  stdlib-dispatch entry.
 - `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data`, `handle_entityref`,
   `handle_charref` (`_Parser` in `src/core/plan_diff.py`, `handle_starttag`/
   `handle_startendtag`/`handle_endtag`/`handle_data` also on `_DomParser` in

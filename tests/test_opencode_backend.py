@@ -14,11 +14,13 @@ from conftest import (
 )
 
 import src.agents.backends.opencode as opencode_mod
+from src.agents.backends.base import make_error_event
 from src.agents.backends.opencode import (
     SSE_EVENT_MESSAGE_PART_UPDATED,
     SSE_EVENT_MESSAGE_UPDATED,
     SSE_EVENT_PERMISSION_ASKED,
     SSE_EVENT_SERVER_CONNECTED,
+  SSE_EVENT_SESSION_ERROR,
   SSE_EVENT_SESSION_IDLE,
   OpenCodeBackend,
   OpenCodeSseSilenceError,
@@ -1281,3 +1283,491 @@ def test_unhandled_part_type_logs_once_per_process(monkeypatch) -> None:
 
   lines = [line for line in logged if line["event"] == "opencode_part_unhandled"]
   assert [(line["type"]) for line in lines] == ["patch", "snapshot"]
+
+
+# --- SQLite lock-retry harness: a stub `opencode serve` (fake process + fake
+# HTTP/SSE endpoints; no real opencode binary) driving run() end to end. ---
+
+_LOCK_STDERR_CHUNKS = [b"2026-09-05 ERROR database is locked (code 5)\n"]
+
+
+class _StubServeProcess:
+  """`opencode serve` process double: canned stdout URL line + scripted stderr chunks.
+
+  The real ``_stream_stderr`` runs against ``stderr.read`` so the backend's
+  bounded in-memory tail holds exactly ``stderr_chunks`` once the per-attempt
+  cleanup drains the pipe (read() returns b"" from then on).
+  """
+
+  def __init__(self, stderr_chunks: list[bytes]) -> None:
+    self.pid = 4242
+    self.returncode = 0
+    self._stderr_chunks = list(stderr_chunks)
+    self.stdout = MagicMock()
+    self.stdout.readline = AsyncMock(return_value=b"opencode server listening on http://127.0.0.1:15331\n")
+    self.stdout.read = AsyncMock(return_value=b"")
+    self.stderr = MagicMock()
+    self.stderr.read = self._read_stderr
+    self.wait = AsyncMock(return_value=0)
+
+  async def _read_stderr(self, _size: int) -> bytes:
+    return self._stderr_chunks.pop(0) if self._stderr_chunks else b""
+
+
+class _StubHttpResponse:
+  """Minimal httpx.Response double: status code, JSON payload, raise_for_status."""
+
+  def __init__(self, status_code: int, payload: dict | None = None) -> None:
+    self.status_code = status_code
+    self._payload = payload if payload is not None else {}
+    self.text = json.dumps(self._payload)
+
+  def raise_for_status(self) -> None:
+    if self.status_code < 400:
+      return
+    request = httpx.Request("GET", "http://127.0.0.1:15331")
+    raise httpx.HTTPStatusError(
+        f"stub serve returned HTTP {self.status_code}",
+        request=request,
+        response=httpx.Response(self.status_code, request=request))
+
+  def json(self) -> dict:
+    return self._payload
+
+
+class _StubEventStreamResponse(_StubHttpResponse):
+  """/event stream double: an immediate HTTP failure status, or a canned SSE event feed."""
+
+  def __init__(self, status_code: int, sse_events: list[dict] | None = None) -> None:
+    super().__init__(status_code)
+    self._sse_events = sse_events or []
+
+  async def aiter_bytes(self):
+    for event in self._sse_events:
+      yield ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+
+
+class _StubStreamContext:
+  """Async context manager handing the scripted /event response to run()."""
+
+  def __init__(self, response: _StubEventStreamResponse) -> None:
+    self._response = response
+
+  async def __aenter__(self) -> _StubEventStreamResponse:
+    return self._response
+
+  async def __aexit__(self, *exc) -> bool:
+    return False
+
+
+class _StubServeScript:
+  """Per-test scripting + recording shared across the retry attempts' HTTP clients."""
+
+  def __init__(self, session_id: str) -> None:
+    self.session_id = session_id
+    self.event_streams: list[_StubEventStreamResponse] = []
+    self.prompt_statuses: list[int] = []
+    self.create_session_calls = 0
+    self.prompt_posts: list[tuple[str, dict]] = []
+    self.abort_posts: list[str] = []
+
+
+class _StubServeHttpClient:
+  """httpx.AsyncClient double over ``_StubServeScript`` (fake endpoints, no real server)."""
+
+  def __init__(self, script: _StubServeScript) -> None:
+    self._script = script
+
+  async def __aenter__(self) -> "_StubServeHttpClient":
+    return self
+
+  async def __aexit__(self, *exc) -> bool:
+    return False
+
+  async def get(self, path: str) -> _StubHttpResponse:
+    if path == "/global/health":
+      return _StubHttpResponse(200)
+    if path == "/config/providers":
+      return _StubHttpResponse(200, {"providers": []})
+    raise AssertionError(f"unexpected GET {path}")
+
+  async def post(self, path: str, json: dict | None = None) -> _StubHttpResponse:
+    script = self._script
+    if path == "/session":
+      script.create_session_calls += 1
+      return _StubHttpResponse(200, {"id": script.session_id})
+    if path.endswith("/prompt_async"):
+      script.prompt_posts.append((path, json))
+      status = script.prompt_statuses.pop(0) if script.prompt_statuses else 204
+      return _StubHttpResponse(status)
+    if path.endswith("/abort"):
+      script.abort_posts.append(path)
+      return _StubHttpResponse(200)
+    raise AssertionError(f"unexpected POST {path}")
+
+  def stream(self, method: str, path: str, timeout=None) -> _StubStreamContext:
+    assert method == "GET" and path == "/event"
+    return _StubStreamContext(self._script.event_streams.pop(0))
+
+
+def _rig_stub_serve_run(
+    monkeypatch,
+    backend: OpenCodeBackend,
+    script: _StubServeScript,
+    stderr_chunks_per_attempt: list[list[bytes]],
+) -> tuple[AsyncMock, list[float]]:
+  """Patch spawn + httpx so run() drives the stub-serve script; return (spawn mock, sleep record).
+
+  Attempt N spawns the Nth fake serve process (fed the Nth stderr chunk list),
+  so the spawn mock's await_count is the number of attempts the run made. The
+  retry backoff seam is replaced by a recorder — no test sleeps real seconds.
+  """
+  processes = [_StubServeProcess(chunks) for chunks in stderr_chunks_per_attempt]
+  create_process = AsyncMock(side_effect=processes)
+  monkeypatch.setattr(_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, create_process)
+  monkeypatch.setattr("src.agents.backends.opencode.httpx.AsyncClient", lambda **kwargs: _StubServeHttpClient(script))
+  sleep_calls: list[float] = []
+
+  async def _record_sleep(seconds: float) -> None:
+    sleep_calls.append(seconds)
+
+  backend._sleep = _record_sleep
+  return create_process, sleep_calls
+
+
+def _sse_connected() -> dict:
+  return {"type": SSE_EVENT_SERVER_CONNECTED, "properties": {}}
+
+
+def _sse_session_idle(session_id: str) -> dict:
+  return {"type": SSE_EVENT_SESSION_IDLE, "properties": {"sessionID": session_id}}
+
+
+def _sse_session_error(session_id: str, message: str) -> dict:
+  return {
+      "type": SSE_EVENT_SESSION_ERROR,
+      "properties": {
+          "sessionID": session_id,
+          "error": {
+              "data": {
+                  "message": message
+              }
+          }
+      },
+  }
+
+
+def _sse_assistant_text(session_id: str, message_id: str, part_id: str, text: str) -> list[dict]:
+  return [
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "sessionID": session_id,
+              "info": {
+                  "id": message_id,
+                  "role": "assistant"
+              }
+          },
+      },
+      {
+          "type": SSE_EVENT_MESSAGE_PART_UPDATED,
+          "properties":
+              {
+                  "sessionID": session_id,
+                  "part": {
+                      "messageID": message_id,
+                      "id": part_id,
+                      "type": "text",
+                      "text": text
+                  },
+              },
+      },
+  ]
+
+
+def _assistant_text_event(text: str) -> dict:
+  return {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def _prompt_bodies(script: _StubServeScript) -> list[str]:
+  return [json.dumps(body, sort_keys=True) for _, body in script.prompt_posts]
+
+
+@pytest.mark.asyncio
+async def test_run_lock_failure_retries_same_session_mid_stream(monkeypatch, tmp_path: Path, capsys) -> None:
+  """Lock retry 1: an attempt dying on session.error with the lock stderr signature
+  retries once, resuming the SAME opencode session with a byte-identical prompt.
+  The run yields attempt-1 partial events + attempt-2 events; the held
+  session.error translation is never emitted."""
+  sid = "ses-lock-mid"
+  backend = _build_backend(monkeypatch, model="provider/model")
+  script = _StubServeScript(sid)
+  script.event_streams = [
+      _StubEventStreamResponse(
+          200, [
+              _sse_connected(),
+              *_sse_assistant_text(sid, "m1", "p1", "hello "),
+              _sse_session_error(sid, "attempt-1 lock death"),
+          ]),
+      _StubEventStreamResponse(
+          200, [
+              _sse_connected(),
+              *_sse_assistant_text(sid, "m2", "p2", "world"),
+              _sse_session_idle(sid),
+          ]),
+  ]
+  create_process, sleep_calls = _rig_stub_serve_run(monkeypatch, backend, script, [_LOCK_STDERR_CHUNKS, []])
+
+  prompt = "fix the flaky test"
+  events = [event async for event in backend.run(prompt, str(tmp_path), {"PATH": "/usr/bin"})]
+
+  assert create_process.await_count == 2
+  assert sleep_calls == [10.0]
+  # Attempt 2 resumed: no second POST /session, prompt re-sent to the same id.
+  assert script.create_session_calls == 1
+  assert [path for path, _ in script.prompt_posts] == [f"/session/{sid}/prompt_async"] * 2
+  bodies = _prompt_bodies(script)
+  assert bodies[0] == bodies[1]
+  assert json.loads(bodies[0])["parts"] == [{"type": "text", "text": prompt}]
+  assert events == [
+      {
+          "session_id": sid
+      },
+      _assistant_text_event("hello "),
+      {
+          "session_id": sid
+      },
+      _assistant_text_event("world"),
+      backend._make_accumulated_result(),
+  ]
+  assert backend.exit_code == 0
+  out = capsys.readouterr().out
+  assert "opencode_lock_retry" in out
+  assert sid in out
+  assert not [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+
+
+@pytest.mark.asyncio
+async def test_run_lock_failure_retries_after_event_connect_500(monkeypatch, tmp_path: Path, capsys) -> None:
+  """Lock retry 2 (boot death): /event connect dies with HTTP 500 + lock stderr on
+  attempt 1; attempt 2 uses the resume branch (no second POST /session) and succeeds."""
+  sid = "ses-lock-boot"
+  backend = _build_backend(monkeypatch, model="provider/model")
+  script = _StubServeScript(sid)
+  script.event_streams = [
+      _StubEventStreamResponse(500),
+      _StubEventStreamResponse(200, [_sse_connected(), _sse_session_idle(sid)]),
+  ]
+  create_process, sleep_calls = _rig_stub_serve_run(
+      monkeypatch, backend, script, [[b"LockTimeoutError: insert into \"project\" timed out\n"], []])
+
+  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
+
+  assert create_process.await_count == 2
+  assert sleep_calls == [10.0]
+  assert script.create_session_calls == 1
+  assert [path for path, _ in script.prompt_posts] == [f"/session/{sid}/prompt_async"]
+  assert events == [
+      {
+          "session_id": sid
+      },
+      {
+          "session_id": sid
+      },
+      backend._make_accumulated_result(),
+  ]
+  assert backend.exit_code == 0
+  assert "opencode_lock_retry" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_lock_failure_retries_after_prompt_async_500(monkeypatch, tmp_path: Path, capsys) -> None:
+  """Lock retry 3 (the production-observed case): prompt_async's boot-time HTTP 500
+  with the lock stderr signature MUST retry; attempt 2 re-sends the identical
+  prompt to the same session and succeeds."""
+  sid = "ses-lock-prompt"
+  backend = _build_backend(monkeypatch, model="provider/model")
+  script = _StubServeScript(sid)
+  script.event_streams = [
+      _StubEventStreamResponse(200, [_sse_connected()]),
+      _StubEventStreamResponse(
+          200, [
+              _sse_connected(),
+              *_sse_assistant_text(sid, "m1", "p1", "recovered"),
+              _sse_session_idle(sid),
+          ]),
+  ]
+  script.prompt_statuses = [500]
+  create_process, sleep_calls = _rig_stub_serve_run(monkeypatch, backend, script, [_LOCK_STDERR_CHUNKS, []])
+
+  prompt = "same bytes please"
+  events = [event async for event in backend.run(prompt, str(tmp_path), {"PATH": "/usr/bin"})]
+
+  assert create_process.await_count == 2
+  assert sleep_calls == [10.0]
+  assert script.create_session_calls == 1
+  assert [path for path, _ in script.prompt_posts] == [f"/session/{sid}/prompt_async"] * 2
+  bodies = _prompt_bodies(script)
+  assert bodies[0] == bodies[1]
+  assert json.loads(bodies[0])["parts"] == [{"type": "text", "text": prompt}]
+  assert events == [
+      {
+          "session_id": sid
+      },
+      {
+          "session_id": sid
+      },
+      _assistant_text_event("recovered"),
+      backend._make_accumulated_result(),
+  ]
+  assert backend.exit_code == 0
+  assert "opencode_lock_retry" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_lock_failure_exhausts_budget_with_single_error_event(monkeypatch, tmp_path: Path, capsys) -> None:
+  """Lock retry 4 (budget): both attempts locked -> exactly 2 attempts, exactly one
+  terminal error event (attempt 2's; attempt 1's held error is discarded), one
+  recorded 10-second backoff, exit_code 1."""
+  sid = "ses-lock-budget"
+  backend = _build_backend(monkeypatch, model="provider/model")
+  script = _StubServeScript(sid)
+  script.event_streams = [
+      _StubEventStreamResponse(200, [_sse_connected(), _sse_session_error(sid, "lock boom 1")]),
+      _StubEventStreamResponse(200, [_sse_connected(), _sse_session_error(sid, "lock boom 2")]),
+  ]
+  create_process, sleep_calls = _rig_stub_serve_run(
+      monkeypatch, backend, script, [_LOCK_STDERR_CHUNKS, [b"LockTimeoutError: still locked\n"]])
+
+  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
+
+  assert create_process.await_count == 2
+  assert sleep_calls == [10.0]
+  assert script.create_session_calls == 1
+  assert events == [
+      {
+          "session_id": sid
+      },
+      {
+          "session_id": sid
+      },
+      make_error_event("lock boom 2"),
+  ]
+  assert backend.exit_code == 1
+  assert backend._failed is True
+  out = capsys.readouterr().out
+  assert out.count("opencode_lock_retry") == 1
+  assert not [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+
+
+@pytest.mark.asyncio
+async def test_run_session_error_without_lock_signature_no_retry(monkeypatch, tmp_path: Path, capsys) -> None:
+  """Lock retry 5a (no signature): an unrelated session.error keeps today's
+  single-attempt behaviour and the unchanged error event."""
+  sid = "ses-unrelated"
+  backend = _build_backend(monkeypatch, model="provider/model")
+  script = _StubServeScript(sid)
+  script.event_streams = [
+      _StubEventStreamResponse(200, [_sse_connected(), _sse_session_error(sid, "model exploded")]),
+  ]
+  create_process, sleep_calls = _rig_stub_serve_run(monkeypatch, backend, script, [[b"something else broke\n"]])
+
+  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
+
+  assert create_process.await_count == 1
+  assert sleep_calls == []
+  assert events == [
+      {
+          "session_id": sid
+      },
+      make_error_event("model exploded"),
+  ]
+  assert backend.exit_code == 1
+  assert "opencode_lock_retry" not in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_permission_ask_without_lock_signature_no_retry(monkeypatch, tmp_path: Path, capsys) -> None:
+  """Lock retry 5b (no signature): permission.asked is untouched by the retry
+  path — single attempt and the pre-patch error text."""
+  sid = "ses-perm"
+  backend = _build_backend(monkeypatch, model="provider/model")
+  script = _StubServeScript(sid)
+  permission_properties = {
+      "id": "perm-1",
+      "sessionID": sid,
+      "permission": "external_directory",
+      "patterns": ["/etc"],
+  }
+  script.event_streams = [
+      _StubEventStreamResponse(
+          200, [
+              _sse_connected(),
+              {
+                  "type": SSE_EVENT_PERMISSION_ASKED,
+                  "properties": permission_properties
+              },
+          ]),
+  ]
+  create_process, sleep_calls = _rig_stub_serve_run(monkeypatch, backend, script, [[b"plain logs\n"]])
+
+  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
+
+  assert create_process.await_count == 1
+  assert sleep_calls == []
+  assert events == [
+      {
+          "session_id": sid
+      },
+      make_error_event(backend._format_permission_error(permission_properties)),
+  ]
+  assert backend.exit_code == 1
+  assert "opencode_lock_retry" not in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_http_failure_without_lock_signature_no_retry(monkeypatch, tmp_path: Path, capsys) -> None:
+  """Lock retry 5c (no signature): a plain HTTP failure stays a single attempt
+  with the pre-patch 'OpenCode backend failed' error text."""
+  sid = "ses-http"
+  backend = _build_backend(monkeypatch, model="provider/model")
+  script = _StubServeScript(sid)
+  script.event_streams = [_StubEventStreamResponse(500)]
+  create_process, sleep_calls = _rig_stub_serve_run(monkeypatch, backend, script, [[b"unrelated crash\n"]])
+
+  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
+
+  assert create_process.await_count == 1
+  assert sleep_calls == []
+  assert len(events) == 2
+  assert events[0] == {"session_id": sid}
+  assert events[1]["type"] == ET.ERROR
+  assert events[1]["message"].startswith("OpenCode backend failed: stub serve returned HTTP 500")
+  assert backend.exit_code == 1
+  assert "opencode_lock_retry" not in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_run_lock_failure_never_retries_after_terminate(monkeypatch, tmp_path: Path, capsys) -> None:
+  """Lock retry 6 (cancellation): terminate() never retries, even with the lock
+  signature present; the held error is emitted on that single attempt."""
+  sid = "ses-cancel"
+  backend = _build_backend(monkeypatch, model="provider/model")
+  backend.terminated = True
+  script = _StubServeScript(sid)
+  script.event_streams = [
+      _StubEventStreamResponse(200, [_sse_connected(), _sse_session_error(sid, "lock boom")]),
+  ]
+  create_process, sleep_calls = _rig_stub_serve_run(monkeypatch, backend, script, [_LOCK_STDERR_CHUNKS])
+
+  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
+
+  assert create_process.await_count == 1
+  assert sleep_calls == []
+  assert events == [
+      {
+          "session_id": sid
+      },
+      make_error_event("lock boom"),
+  ]
+  assert "opencode_lock_retry" not in capsys.readouterr().out

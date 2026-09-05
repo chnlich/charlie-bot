@@ -10,6 +10,7 @@ transition; disk stays the single source of truth.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -44,6 +45,11 @@ def _clean_sidebar_state():
   sidebar_state.reset_for_tests()
   yield
   sidebar_state.reset_for_tests()
+
+
+async def _status_json(**kwargs) -> dict:
+  """Decode the status handler's FastJsonResponse body for direct-call assertions."""
+  return json.loads((await sessions_api.all_sessions_status(**kwargs)).body)
 
 
 def _counting_probes(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
@@ -246,8 +252,8 @@ async def test_first_and_forced_poll_match_direct_probing(tmp_path: Path) -> Non
   # Cold start: the fixture setup's writes marked sessions dirty, so clear the
   # registry — no snapshot entry, no dirty mark, the first poll is a full probe.
   sidebar_state.reset_for_tests()
-  first = await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)
-  forced = await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr, force=True)
+  first = await _status_json(ids=ids, session_mgr=mgr)
+  forced = await _status_json(ids=ids, session_mgr=mgr, force=True)
 
   expected = {
       busy.id: await _expected_status(mgr, busy.id, archived=False),
@@ -263,19 +269,19 @@ async def test_dirty_session_is_reprobed_and_snapshot_refreshed(tmp_path: Path) 
   cfg, mgr, session = await make_home_session(tmp_path, name="BecomesBusy")
   thread_mgr = ThreadManager(cfg)
 
-  first = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  first = await _status_json(ids=session.id, session_mgr=mgr)
   assert first[session.id]["has_running_tasks"] is False
 
   thread = await thread_mgr.create_thread(session, "work")
   await thread_mgr.update_status(session.id, thread.id, ThreadStatus.RUNNING)
   assert sidebar_state.is_dirty(session.id)
 
-  second = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  second = await _status_json(ids=session.id, session_mgr=mgr)
   assert second[session.id]["has_running_tasks"] is True
 
   # The re-probe consumed the dirty mark: the next poll is clean but still current.
   assert not sidebar_state.is_dirty(session.id)
-  third = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  third = await _status_json(ids=session.id, session_mgr=mgr)
   assert third == second
 
 
@@ -288,10 +294,10 @@ async def test_dirty_session_is_reprobed_and_snapshot_refreshed(tmp_path: Path) 
 async def test_clean_second_poll_does_no_probe_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="Quiet")
 
-  first = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  first = await _status_json(ids=session.id, session_mgr=mgr)
 
   calls = _counting_probes(monkeypatch)
-  second = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  second = await _status_json(ids=session.id, session_mgr=mgr)
 
   assert calls == {"running": 0, "trigger": 0, "plan": 0}
   assert second == first
@@ -301,10 +307,10 @@ async def test_clean_second_poll_does_no_probe_work(tmp_path: Path, monkeypatch:
 async def test_force_param_reprobes_clean_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="Forced")
 
-  await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  await _status_json(ids=session.id, session_mgr=mgr)
 
   calls = _counting_probes(monkeypatch)
-  forced = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr, force=True)
+  forced = await _status_json(ids=session.id, session_mgr=mgr, force=True)
 
   assert calls == {"running": 1, "trigger": 1, "plan": 1}
   assert forced[session.id]["has_running_tasks"] is False
@@ -319,16 +325,16 @@ async def test_every_tenth_poll_is_stat_only_when_probe_inputs_unchanged(
 
   ids = f"{first.id},{second.id}"
   # Poll 1 (cold) probes both and warms the snapshot.
-  await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)
+  await _status_json(ids=ids, session_mgr=mgr)
 
   calls = _counting_probes(monkeypatch)
   for _ in range(8):  # polls 2-9: clean -> zero probe work
-    await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)
+    await _status_json(ids=ids, session_mgr=mgr)
   assert calls == {"running": 0, "trigger": 0, "plan": 0}
 
   # Poll 10 sweeps every active session, but the stat-only probe-input
   # signature is unchanged, so no session pays the deep read+parse.
-  await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)
+  await _status_json(ids=ids, session_mgr=mgr)
   assert calls == {"running": 0, "trigger": 0, "plan": 0}
 
 
@@ -339,7 +345,7 @@ async def test_every_tenth_poll_heals_external_write_without_dirty_mark(
   second = await mgr.create_session(CreateSessionRequest(name="B"))
 
   ids = f"{first.id},{second.id}"
-  await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)  # poll 1 (cold)
+  await _status_json(ids=ids, session_mgr=mgr)  # poll 1 (cold)
 
   # An out-of-funnel writer (no mark_sidebar_dirty): the self-heal sweep must
   # still pick the file change up, and only for the session that changed.
@@ -347,10 +353,10 @@ async def test_every_tenth_poll_heals_external_write_without_dirty_mark(
 
   calls = _counting_probes(monkeypatch)
   for _ in range(8):  # polls 2-9: no dirty mark -> still the stale snapshot
-    await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)
+    await _status_json(ids=ids, session_mgr=mgr)
   assert calls == {"running": 0, "trigger": 0, "plan": 0}
 
-  healed = await sessions_api.all_sessions_status(ids=ids, session_mgr=mgr)  # poll 10
+  healed = await _status_json(ids=ids, session_mgr=mgr)  # poll 10
   assert calls == {"running": 1, "trigger": 1, "plan": 1}
   assert healed[second.id]["has_running_tasks"] is True
 
@@ -360,7 +366,7 @@ async def test_scan_window_rollover_reprobes_without_file_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, mgr, session = await make_home_session(tmp_path, name="Aging")
   write_thread_meta(cfg, session.id, {"id": "t1", "status": "running"})
-  first = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  first = await _status_json(ids=session.id, session_mgr=mgr)
   assert first[session.id]["has_running_tasks"] is True
 
   # Jump the clock past the 30-day scan window with no file changing. Polls
@@ -370,8 +376,8 @@ async def test_scan_window_rollover_reprobes_without_file_change(
   monkeypatch.setattr(sessions_core, "utc_now", lambda: future)
   monkeypatch.setattr(sessions_core.time, "time", lambda: future.timestamp())
   for _ in range(8):
-    interim = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+    interim = await _status_json(ids=session.id, session_mgr=mgr)
   assert interim[session.id]["has_running_tasks"] is True
 
-  tenth = await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)
+  tenth = await _status_json(ids=session.id, session_mgr=mgr)
   assert tenth[session.id]["has_running_tasks"] is False

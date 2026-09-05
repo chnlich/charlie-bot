@@ -302,3 +302,11 @@ def test_same_document_has_no_marks_and_diff_text_names_real_changes() -> None:
   assert "Context" in plain
   assert "Trade-offs" in plain
   assert "v10" in plain and "v11" in plain
+
+
+def test_replaced_direct_text_with_a_nested_block_stays_commentable() -> None:
+  base = '<html><body><div>old direct <p>unchanged child</p></div></body></html>'
+  new = '<html><body><div>new fresh <p>unchanged child</p></div></body></html>'
+  annotated = _assert_invariants(base, new)
+  assert '<div class="cbd-new">new fresh <p>unchanged child</p></div>' in annotated
+  assert '<ins class="cbd-ins">new fresh</ins>' not in annotated

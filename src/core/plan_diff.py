@@ -278,16 +278,22 @@ def _tokenise(text: str) -> list[tuple[str, int, int]]:
 
 
 def _leaf_tokens(leaf: _Leaf) -> list[_Token]:
-  # The leaf's tokens stay one sequence for alignment, but a token never spans
-  # a text-node boundary: parts join without whitespace (``beta<b>gamma</b>``),
-  # and fusing them into one token would mark unchanged words as changed.
-  raw_ranges, _ = _leaf_raw_map(leaf)
+  # Tokenise each text node separately: a token never spans a text-node
+  # boundary, so tokens and source ranges agree where markup meets text with
+  # no whitespace.  The tokens stay one sequence in leaf-text offsets, so
+  # alignment still sees the whole concatenated leaf at once.
   result: list[_Token] = []
   offset = 0
   for part in leaf.parts:
     for value, start, end in _tokenise(part.text):
       result.append(
-          _Token(value, offset + start, offset + end, raw_ranges[offset + start][0], raw_ranges[offset + end - 1][1]))
+          _Token(
+              value,
+              offset + start,
+              offset + end,
+              part.raw_ranges[start][0],
+              part.raw_ranges[end - 1][1],
+          ))
     offset += len(part.text)
   return result
 
@@ -484,29 +490,25 @@ def _token_text(leaf: _Leaf, tokens: list[_Token], start: int, end: int, include
   return leaf.text[logical_start:logical_end]
 
 
-def _wrap_erases_own_text(
-    leaf: _Leaf, new_tokens: list[_Token], changed_opcodes: list[tuple[str, int, int, int, int]]) -> bool:
-  # Commentability needs a direct text-node child with non-space text; an
-  # <ins> wrapper demotes the text it wraps to a grandchild.  Whenever the
-  # planned wrappers would cover every direct character, mark the block with
-  # its class instead of wrapping it (the all-new-block presentation).
-  wrapped = [(new_tokens[start].logical_start, new_tokens[end - 1].logical_end)
-             for _, _, _, start, end in changed_opcodes if start < end]
-  if not wrapped:
-    return False
-  has_own_text = False
-  offset = 0
-  for part in leaf.parts:
-    if part.node is leaf.element:
-      for index, char in enumerate(part.text):
-        if char.isspace():
-          continue
-        logical = offset + index
-        if not any(start <= logical < end for start, end in wrapped):
-          return False
-        has_own_text = True
-    offset += len(part.text)
-  return has_own_text
+def _wrapping_removes_direct_text(leaf: _Leaf, ranges: list[tuple[int, int]]) -> bool:
+  # A block stays commentable only while a direct text node keeps a non-space
+  # character (the panel has no heading/paragraph fallback).  Return True when
+  # the block has direct text and the planned <ins> ranges cover all of it:
+  # wrapping must then be replaced by a class mark on the block itself.  Blocks
+  # with no direct text of their own (rows, badge-only headings) are excluded:
+  # wrapping never takes a direct text node away from them.
+  has_direct_text = False
+  for child in leaf.element.children:
+    if not isinstance(child, _TextPart):
+      continue
+    for index, char in enumerate(child.text):
+      if char.isspace():
+        continue
+      has_direct_text = True
+      raw_start, raw_end = child.raw_ranges[index]
+      if not any(start <= raw_start and raw_end <= end for start, end in ranges):
+        return False
+  return has_direct_text
 
 
 def _descendant_nodes(node: _Node) -> Iterable[_Node]:
@@ -565,7 +567,8 @@ def _ghost_parent(root: _Node, leaves: list[_Leaf], index: int, old: _Leaf) -> _
 
 def _ghost_markup(old: _Leaf) -> str:
   tag = old.element.tag
-  data = _html.escape(old.text, quote=True)
+  text = old.text if old.whole else "".join(part.text for part in _visible_parts(old.element))
+  data = _html.escape(text, quote=True)
   if tag == "tr":
     cells = [child for child in old.element.children if isinstance(child, _Node) and child.tag in {"td", "th"}]
     colspan = max(1, len(cells))
@@ -620,7 +623,17 @@ def _render_leaf_changes(
     details: set[_Node],
 ) -> None:
   new_positions = {id(leaf): index for index, leaf in enumerate(new_leaves)}
+  # A class-marked parent replaces its full visible subtree; do not add nested
+  # marks that would duplicate its ghost when the annotation is restored.
+  replaced_old: set[_Node] = set()
+  replaced_new: set[_Node] = set()
   for change in changes:
+    if change.old is not None and any(
+        root is not change.old.element and _is_ancestor(root, change.old.element) for root in replaced_old):
+      continue
+    if change.new is not None and any(
+        root is not change.new.element and _is_ancestor(root, change.new.element) for root in replaced_new):
+      continue
     if change.new is None:
       if change.old is None:
         raise ValueError("invalid empty leaf change")
@@ -650,8 +663,13 @@ def _render_leaf_changes(
     changed_opcodes = [opcode for opcode in opcodes if opcode[0] != "equal"]
     if not changed_opcodes:
       continue
-    if _wrap_erases_own_text(change.new, new_tokens, changed_opcodes):
+    wrap_ranges: list[tuple[int, int]] = []
+    for _, _, _, new_start, new_end in changed_opcodes:
+      wrap_ranges.extend(_raw_bounds(new_tokens, new_start, new_end, change.new))
+    if _wrapping_removes_direct_text(change.new, wrap_ranges):
       classes.setdefault(change.new.element, set()).add("cbd-new")
+      replaced_old.add(change.old.element)
+      replaced_new.add(change.new.element)
       _insert_ghost(source, root, change.old, new_leaves, new_position, insertions, details)
       continue
     details.update(_ancestor_details(change.new.element))

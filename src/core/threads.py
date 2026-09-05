@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +27,28 @@ log = structlog.get_logger()
 def thread_events_log_path(session_dir: Path, thread_id: str) -> Path:
   """Return the path to a thread's events.jsonl under its session directory."""
   return session_dir / "threads" / thread_id / "data" / "events.jsonl"
+
+
+def iter_thread_meta_stats(threads_dir: str | Path) -> Iterator[tuple[str, os.stat_result]]:
+  """Yield ``(metadata.json path, stat)`` for every thread directory under *threads_dir*.
+
+  A missing directory yields nothing; a metadata.json absent or unreadable at
+  stat time is skipped, the same "no thread row" verdict for every stat
+  failure. Paths are scandir's plain strings — this scan runs per poll, and
+  the pathlib join/str wrappers cost more CPU than the stat syscalls they drive.
+  """
+  try:
+    with os.scandir(threads_dir) as entries:
+      for entry in entries:
+        if not entry.is_dir():
+          continue
+        meta_path = entry.path + "/metadata.json"
+        try:
+          yield meta_path, os.stat(meta_path)
+        except OSError:
+          continue
+  except OSError:
+    pass
 
 
 class ThreadManager:
@@ -84,31 +107,18 @@ class ThreadManager:
     def load_all() -> list[ThreadMetadata]:
       # One executor hop for the whole scan: a per-file aiofiles read costs
       # ~0.5 ms in thread-pool hand-off, so per-file reads make the 3s
-      # workers-panel poll scale linearly with thread count. The scan itself
-      # runs on plain str paths: at this fan-out pathlib's join/str wrappers
-      # cost more CPU than the stat syscalls they drive.
-      if not threads_dir.is_dir():
-        return []
+      # workers-panel poll scale linearly with thread count.
       memo = self._list_memo
       refreshed: dict[str, tuple[int, int, ThreadMetadata]] = {}
       metas = []
-      for entry in os.scandir(threads_dir):
-        if not entry.is_dir():
-          continue
-        path = entry.path + "/metadata.json"
-        try:
-          st = os.stat(path)
-        except OSError:
-          # The pre-scandir gate was path.exists(), which also maps every
-          # stat failure (absent file, permission) to "skip this thread".
-          continue
-        hit = memo.get(path)
+      for meta_path, st in iter_thread_meta_stats(threads_dir):
+        hit = memo.get(meta_path)
         if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
           meta = hit[2]
         else:
-          with open(path, encoding="utf-8") as f:
+          with open(meta_path, encoding="utf-8") as f:
             meta = ThreadMetadata.model_validate_json(f.read())
-        refreshed[path] = (st.st_mtime_ns, st.st_size, meta)
+        refreshed[meta_path] = (st.st_mtime_ns, st.st_size, meta)
         metas.append(meta)
       # Swap whole dicts: concurrent load_all calls in the executor never mutate
       # the live map, and the swap keeps the memo down to threads still on disk.

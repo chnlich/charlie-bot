@@ -32,7 +32,7 @@ from src.core.models import (
 )
 from src.core.ndjson import iter_ndjson_events
 from src.core.process import kill_process_group
-from src.core.threads import ThreadManager
+from src.core.threads import ThreadManager, iter_thread_meta_stats
 from src.core.triggers import TriggerManager
 
 log = structlog.get_logger()
@@ -181,23 +181,13 @@ _list_body_memo: OrderedDict[str, tuple[tuple[tuple[str, int, int], ...], bytes,
 def _list_body_signature(threads_dir: str, triggers_dir: str) -> tuple[tuple[str, int, int], ...]:
   """(path, mtime_ns, size) of every row-source file of the list payload.
 
-  A missing directory contributes nothing, mirroring the managers' empty-list
-  verdict for it; a vanished file mid-scan is skipped the way ThreadManager's
-  scan skips it.
+  The thread scan is ``iter_thread_meta_stats``: a missing directory
+  contributes nothing and an unreadable metadata.json is skipped, so the
+  signature keys exactly the files the thread rows are built from.
   """
   sig: list[tuple[str, int, int]] = []
-  try:
-    for entry in os.scandir(threads_dir):
-      if not entry.is_dir():
-        continue
-      path = entry.path + "/metadata.json"
-      try:
-        st = os.stat(path)
-      except OSError:
-        continue
-      sig.append((path, st.st_mtime_ns, st.st_size))
-  except OSError:
-    pass
+  for meta_path, st in iter_thread_meta_stats(threads_dir):
+    sig.append((meta_path, st.st_mtime_ns, st.st_size))
   try:
     for entry in os.scandir(triggers_dir):
       if not entry.is_file() or not entry.name.endswith(".json"):

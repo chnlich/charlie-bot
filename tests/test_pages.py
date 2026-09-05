@@ -236,6 +236,18 @@ async def test_index_versions_local_static_assets(monkeypatch: pytest.MonkeyPatc
   assert 'src="/static/js/app.js?v=abc1234-03-24"' in body
 
 
+@pytest.mark.asyncio
+async def test_diff_viewer_versions_local_static_assets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  cfg = make_home_config(tmp_path)
+  monkeypatch.setattr(pages, "_RUNTIME_GIT_VERSION", "abc1234 · 03-24")
+
+  response = await pages.diff_viewer(request=make_page_request("/diff"), cfg=cfg)
+
+  body = response.body.decode("utf-8")
+  assert 'src="/static/js/diff_page.js?v=abc1234-03-24"' in body
+  assert 'src="/static/js/diff_comments.js?v=abc1234-03-24"' in body
+
+
 class PendingTriggerSessionManager(FakeSessionManager):
 
   def __init__(self, session: SessionMetadata):

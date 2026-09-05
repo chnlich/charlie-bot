@@ -8,9 +8,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import files as files_api
+from src.api import pages as pages_api
 from src.core import plan_diff
 
-SCRIPT = "<script src=/static/js/artifact-comments.js></script>"
+SCRIPT = f"<script src=/static/js/artifact-comments.js?v={pages_api._static_asset_version()}></script>"
 
 
 @pytest.fixture
@@ -73,6 +74,15 @@ def test_inject_appends_when_no_body() -> None:
   # Original content is left intact and the tags are appended after it.
   assert out.startswith(html)
   assert out.rstrip().endswith(SCRIPT)
+
+
+def test_injected_script_tag_carries_the_cache_bust_version(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  """The artifact tray script is fetched with the same cache-bust query every
+  template uses, so an upgrade cannot leave a browser on a stale copy."""
+  monkeypatch.setattr(pages_api, "_RUNTIME_GIT_VERSION", "abc1234 · 03-24")
+  out = files_api._inject_artifact_ui("<html><body></body></html>", "S")
+  assert "<script src=/static/js/artifact-comments.js?v=abc1234-03-24></script>" in out
 
 
 # --- route-level: inject vs not-inject decision, anchored on the sessions root ---

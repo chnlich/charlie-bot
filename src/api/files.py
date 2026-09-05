@@ -14,12 +14,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 from src.api.auth import request_has_access_key
+from src.api.pages import _static_asset_version
 from src.core import plan_diff
 from src.core.config import get_config
 
 router = APIRouter()
-
-_ARTIFACT_SCRIPT_TAG = "<script src=/static/js/artifact-comments.js></script>"
 
 # Bound on _annotate_memo in annotated diff pages: one compare view reads one
 # page against one base at a time, so the cap covers every compare view open
@@ -105,7 +104,7 @@ def _inject_artifact_ui(html_text: str, session_id: str) -> str:
   </body>, or append without one. The inline assignment precedes the external script tag
   so the id is set before artifact-comments.js runs."""
   tags = (f"<script>window.__cbcServerSessionId={json.dumps(session_id)};</script>\n"
-          f"{_ARTIFACT_SCRIPT_TAG}")
+          f"<script src=/static/js/artifact-comments.js?v={_static_asset_version()}></script>")
   idx = html_text.rfind("</body>")
   if idx == -1:
     return html_text + "\n" + tags + "\n"

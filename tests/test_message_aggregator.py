@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from conftest import assistant_event as _assistant_event
+from conftest import assistant_text_tool_use_event as _assistant_text_tool_use_event
 from conftest import queued_user_reorder_events as _reorder_events
 
 from src.api.message_utils import events_to_messages, events_to_view
@@ -171,29 +172,7 @@ def test_task_delegated_message_exposes_metadata_without_full_description_body()
 
 def test_tool_use_attaches_to_buffer_then_tool_result_updates_output() -> None:
   agg = MessageAggregator()
-  list(
-      agg.feed(
-          {
-              "type": "assistant",
-              "message":
-                  {
-                      "content":
-                          [
-                              {
-                                  "type": "text",
-                                  "text": "Running"
-                              },
-                              {
-                                  "type": "tool_use",
-                                  "name": "Bash",
-                                  "input": {
-                                      "command": "ls"
-                                  }
-                              },
-                          ],
-                  },
-              "timestamp": "t1",
-          }))
+  list(agg.feed(_assistant_text_tool_use_event("Running", "Bash", {"command": "ls"}, "t1")))
   # Internal CC tool_result event arrives as a user event with `message` only.
   list(
       agg.feed(

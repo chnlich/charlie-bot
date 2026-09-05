@@ -39,7 +39,6 @@ from src.core.git import (
     BaseResolution,
     git_create_worktree,
     git_current_branch,
-    git_remote_default_branch,
 )
 from src.core.models import SessionMetadata, SpawnRequest, ThreadMetadata
 
@@ -312,27 +311,6 @@ def remote_default_repo(tmp_path: Path) -> dict[str, Path]:
 
 
 @pytest.mark.asyncio
-async def test_remote_default_branch_read_from_remote(remote_default_repo: dict[str, Path]) -> None:
-  """The default branch comes from the remote, so clone-time metadata cannot
-  make a task silently build on the wrong branch."""
-  origin = remote_default_repo["origin"]
-  seed = remote_default_repo["seed"]
-  clone = remote_default_repo["clone"]
-
-  assert await git_remote_default_branch(clone) == "main"
-
-  # Publish a second branch and repoint the remote's HEAD at it.
-  _git(seed, "checkout", "-b", "develop")
-  _git(seed, "push", "-u", "origin", "develop")
-  _git(origin, "symbolic-ref", "HEAD", "refs/heads/develop")
-
-  # The clone's own symref still points at the old default (it is written at
-  # clone time only); the helper must follow the remote's new value regardless.
-  assert _git(clone, "symbolic-ref", "refs/remotes/origin/HEAD") == "refs/remotes/origin/main"
-  assert await git_remote_default_branch(clone) == "develop"
-
-
-@pytest.mark.asyncio
 async def test_baseless_launch_starts_at_remote_default_tip(remote_default_repo: dict[str, Path]) -> None:
   """origin's main advanced, local main stale, checkout on a branch origin does
   not have. A base-less launch must still start at origin's main tip."""
@@ -346,7 +324,7 @@ async def test_baseless_launch_starts_at_remote_default_tip(remote_default_repo:
 
   _git(clone, "checkout", "-b", "local-only")
 
-  base = f"origin/{await git_remote_default_branch(clone)}"
+  base = "origin/main"
   wt_path = tmp_path / "wt-baseless"
   resolution = await git_create_worktree(clone, base, "charliebot/task-baseless", wt_path)
 
@@ -448,7 +426,9 @@ async def test_baseless_spawn_request_never_reads_local_branch(
       thread_id="thread-baseless",
   )
 
-  assert thread.base_branch == await git_remote_default_branch(clone)
+  # The fixture pins the remote's HEAD at main; the base-less launch must have
+  # recorded exactly that remote default as the base.
+  assert thread.base_branch == "main"
 
 
 @pytest.mark.asyncio
@@ -479,7 +459,7 @@ async def test_crash_respawn_reaches_the_same_fallback(
       thread_id="thread-respawn",
   )
 
-  assert thread.base_branch == await git_remote_default_branch(clone)
+  assert thread.base_branch == "main"
 
 
 # --- probe-fed resolution: the ls-remote answer replaces the duplicate probe + no-op fetch ---

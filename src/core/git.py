@@ -133,36 +133,16 @@ def _ls_remote_ref_sha(out: str, ref: str) -> str | None:
   return None
 
 
-async def git_remote_default_branch(repo_path: Path) -> str:
-  """Read the remote's published default branch via `git ls-remote --symref origin HEAD`.
-
-  Deliberately never consults refs/remotes/origin/HEAD or any local branch: the
-  local symref is clone-time metadata that goes stale silently when upstream
-  changes its default branch. Raises BaseBranchResolutionError when origin is
-  not configured, unreachable, or advertises no symref -- a caller that cannot
-  read the remote's default must fail loudly, never substitute a local ref.
-  """
-  ok, out, err = await _git_stdout(
-      repo_path,
-      "ls-remote",
-      "--symref",
-      "origin",
-      "HEAD",
-      timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
-      timeout_label="git ls-remote",
-  )
-  if not ok:
-    raise BaseBranchResolutionError(f"cannot read origin's default branch in {repo_path} via git ls-remote: {err}")
-  return _default_branch_from_ls_remote(out, "git ls-remote --symref origin HEAD", repo_path)
-
-
 async def git_remote_default_branch_and_tip(repo_path: Path) -> tuple[str, str | None]:
   """The remote's default branch and its tip SHA from ONE `git ls-remote --symref origin`.
 
   The unfiltered listing carries the HEAD symref and every branch ref, so a
   caller that needs both the default branch and whether that branch is
-  published (plus its tip) pays one network round-trip instead of two. Same
-  fail-loud contract as git_remote_default_branch. The tip is None when the
+  published (plus its tip) pays one network round-trip instead of two. Never
+  consults refs/remotes/origin/HEAD or any local branch: the local symref is
+  clone-time metadata that goes stale silently when upstream changes its
+  default branch. Raises BaseBranchResolutionError when origin is not
+  configured, unreachable, or advertises no symref. The tip is None when the
   listing names a default branch without listing its ref — an inconsistent
   remote the caller's base resolution then reports through its own probe.
   """

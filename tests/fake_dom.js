@@ -4,11 +4,11 @@
 // children's `innerHTML` -- this mirrors real DOM semantics closely enough for
 // both `renderMessagesIntoContainer` (which replaces content wholesale via
 // `.innerHTML =`) and `_appendRenderedMessage` (which appends discrete child
-// wrappers), without needing an HTML parser.
+// wrappers), without needing an HTML parser. The classList and text-escape
+// primitives are the ones shared with dom_element_stub/escape_html_stub.
 // ---------------------------------------------------------------------------
-function escapeForFakeDom(str) {
-  return String(str).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-}
+const { createClassList } = require('./dom_element_stub');
+const { escapeHtmlText } = require('./escape_html_stub');
 
 class FakeElement {
   constructor(tag = 'DIV') {
@@ -16,21 +16,7 @@ class FakeElement {
     this.children = [];
     this.parentElement = null;
     this.dataset = {};
-    const classSet = new Set();
-    this.classList = {
-      add(...c) { c.forEach((x) => classSet.add(x)); },
-      remove(...c) { c.forEach((x) => classSet.delete(x)); },
-      toggle(c, force) {
-        if (force === undefined) {
-          if (classSet.has(c)) { classSet.delete(c); return false; }
-          classSet.add(c);
-          return true;
-        }
-        if (force) classSet.add(c); else classSet.delete(c);
-        return !!force;
-      },
-      contains(c) { return classSet.has(c); },
-    };
+    this.classList = createClassList();
     this._html = '';
     this._text = '';
     this.scrollTop = 0;
@@ -53,7 +39,7 @@ class FakeElement {
 
   set textContent(value) {
     this._text = String(value || '');
-    this.innerHTML = escapeForFakeDom(this._text);
+    this.innerHTML = escapeHtmlText(this._text);
   }
 
   get firstElementChild() {
@@ -102,4 +88,4 @@ class FakeElement {
   }
 }
 
-module.exports = { escapeForFakeDom, FakeElement };
+module.exports = { FakeElement };

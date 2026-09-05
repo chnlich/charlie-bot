@@ -7,13 +7,13 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 ### Orchestration
 
 - Master/worker/reviewer delegation in isolated git worktrees with ff-only merge
-- Pluggable backends: Claude Code, Codex, Gemini CLI, OpenCode, Charlie Code, Antigravity CLI
+- Pluggable backends: Claude Code, Kimi, OpenAI-compatible, Codex, Gemini CLI, OpenCode, Charlie Code, Antigravity CLI
 - `charliebot improve` autonomous change-run-verify iteration loops
 - Plan registry (`charliebot plan`) with HTML plan artifacts and anchored comments
 
 ### Automation
 
-- Cron scheduled tasks in prompt, handler, and loop modes
+- Cron scheduled tasks in prompt, handler, loop, and task-chain (`steps`) modes
 - Delayed triggers (`charliebot schedule-trigger`) watching local/remote PIDs and SLURM jobs; one trigger can watch many targets
 - `charliebot remote-launch` for long-running remote commands
 - Slash commands hot-reloaded from YAML

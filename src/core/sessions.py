@@ -919,8 +919,8 @@ class SessionManager:
       if start is not None:
         read_jobs.append((meta, path, sig, start))
 
-    async def _check_content(meta: SessionMetadata, path: Path, sig: tuple[int, int, int],
-                             start: int) -> SessionMetadata | None:
+    async def _check_content(
+        meta: SessionMetadata, path: Path, sig: tuple[int, int, int], start: int) -> SessionMetadata | None:
       """Read a chat file whose classification demanded bytes (thread-pool work)."""
       verdict = await asyncio.to_thread(_scan_content_for_hit, path, meta.id, query_lower, start)
       if verdict is None:

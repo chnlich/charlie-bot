@@ -16,10 +16,10 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-  CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
-  CODEX_RESOLVE_BINARY_PATCH_TARGET,
-  OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-  build_cli_backend,
+    CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+    CODEX_RESOLVE_BINARY_PATCH_TARGET,
+    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+    build_cli_backend,
 )
 
 from src.agents.backends.base import AgentBackend
@@ -34,9 +34,14 @@ from src.agents.backends.opencode import OpenCodeBackend
 # nothing, so it needs no patch target.
 _INSTRUCTIONS_BACKENDS = [
     (ClaudeCodeBackend, {}, None, "claude", "CLAUDE.md"),
-    (CharlieCodeBackend, {"model": "charlie-code-test-model", "api_base": "http://test.invalid/v1"},
-     CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/charlie-code", "AGENTS.md"),
-    (CodexBackend, {"model": "codex-test-model"}, CODEX_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/codex", "AGENTS.md"),
+    (
+        CharlieCodeBackend, {
+            "model": "charlie-code-test-model",
+            "api_base": "http://test.invalid/v1"
+        }, CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/charlie-code", "AGENTS.md"),
+    (CodexBackend, {
+        "model": "codex-test-model"
+    }, CODEX_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/codex", "AGENTS.md"),
     (OpenCodeBackend, {}, OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", "AGENTS.md"),
 ]
 _INSTRUCTIONS_BACKEND_IDS = [case[0].__name__ for case in _INSTRUCTIONS_BACKENDS]
@@ -104,8 +109,11 @@ def test_prepare_cwd_skips_instructions_file_when_unset(
 def test_opencode_prepare_cwd_writes_agents_md_even_when_config_exists(monkeypatch, tmp_path: Path) -> None:
   """AGENTS.md must be written even when opencode.json already exists (resumed sessions)."""
   backend = _build_backend(
-      OpenCodeBackend, {}, OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode",
-      monkeypatch, instructions_content="# Instructions")
+      OpenCodeBackend, {},
+      OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+      "/usr/bin/opencode",
+      monkeypatch,
+      instructions_content="# Instructions")
   config_dir = tmp_path / ".opencode"
   config_dir.mkdir()
   (config_dir / "opencode.json").write_text("{}", encoding="utf-8")

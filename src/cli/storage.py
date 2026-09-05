@@ -1,7 +1,7 @@
 """CLI: reclaim storage held by cold sessions and unreferenced backend records.
 
 Usage:
-  charliebot storage cool [--dry-run] [--min-idle-days N] [--session ID]
+  charliebot storage cool [--dry-run] [--min-idle-days N] [--session ID] [--vacuum] [--force]
 
 The sweep itself lives in src.core.storage_cool; the scheduler's ``cool_storage``
 handler calls the same function, so the two cannot drift.
@@ -20,6 +20,8 @@ def _cmd_cool(args: argparse.Namespace) -> None:
         dry_run=args.dry_run,
         min_idle_days=args.min_idle_days,
         session_id=args.session,
+        vacuum=args.vacuum,
+        force=args.force,
         cfg=get_config(),
     )
   except ValueError as e:
@@ -45,6 +47,16 @@ def main() -> None:
       default=MIN_IDLE_DAYS,
       help=f"Idle age (days) at which an archived session counts as cold (default: {MIN_IDLE_DAYS}).")
   cool.add_argument("--session", help="Limit the whole sweep to one session; the cold rule still applies.")
+  cool.add_argument(
+      "--vacuum",
+      action="store_true",
+      help="After the sweep, VACUUM the opencode store to hand freed pages back to the "
+      "filesystem; refuses while an opencode serve writer is alive unless --force.")
+  cool.add_argument(
+      "--force",
+      action="store_true",
+      help="With --vacuum only: vacuum past live opencode writers (and an empty freelist). "
+      "Ignored without --vacuum.")
 
   args = parser.parse_args()
   {"cool": _cmd_cool}[args.command](args)

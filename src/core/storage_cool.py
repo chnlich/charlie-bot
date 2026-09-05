@@ -18,8 +18,13 @@ The sweep reclaims exactly two things the approved design (plan 1 v10) names:
   session that is running right now, which refreshes its timestamp every few
   minutes). Claude Code transcript directories are recognized by the cwd encoding
   the CLI applies (separators, dots and underscores become hyphens); Codex rollout
-  file names embed the thread id; the opencode store loses ``event_sequence`` rows,
-  whose ``event`` rows disappear by foreign-key cascade.
+  file names embed the thread id; the opencode store loses ``event`` rows in
+  byte-capped delete transactions, then the ``event_sequence`` row, whose
+  foreign-key cascade picks up any stragglers.
+
+The sweep never compacts on its own: VACUUM of the opencode store is a manual
+``--vacuum`` option that refuses while an ``opencode serve`` writer is alive
+(``--force`` overrides) and reports the freelist either way.
 
 Everything else a cold session holds — chat events, archives, thread events, fork
 references, artifacts, uploads, HTML, metadata — is left byte-identical, so no read
@@ -31,6 +36,8 @@ import os
 import re
 import shutil
 import sqlite3
+import sys
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -82,6 +89,13 @@ WORKTREE_TRASH_DIR = ".trash"
 
 _SQL_PARAM_CHUNK = 500
 
+# opencode event deletion caps: every delete transaction stays within both the
+# byte cap (summed ``length(data)``) and the row cap, and the loop yields between
+# transactions so a live opencode writer interleaves instead of starving.
+_CHUNK_MAX_BYTES = 32 << 20
+_CHUNK_MAX_ROWS = 1000
+_CHUNK_YIELD_SECONDS = 0.025
+
 
 @dataclass(frozen=True)
 class CategoryResult:
@@ -95,9 +109,10 @@ class CategoryResult:
 
 @dataclass(frozen=True)
 class SweepResult:
-  """Per-category results of one sweep pass."""
+  """Per-category results of one sweep pass, plus the opencode store's freelist bytes."""
 
   categories: tuple[CategoryResult, ...]
+  freelist_bytes: int = 0
 
   @property
   def total_bytes(self) -> int:
@@ -665,12 +680,14 @@ def _sweep_opencode(
     dry_run: bool,
     session_id: str | None,
 ) -> None:
-  """Delete cold/unreferenced aggregates' event rows through the sequence table.
+  """Delete cold/unreferenced aggregates' event rows in byte-capped chunks, then the sequence row.
 
-  ``event`` carries the bytes and hangs off ``event_sequence`` by an
-  ON DELETE CASCADE foreign key, so deleting the sequence row per aggregate is
-  the whole deletion; ``session``, ``message`` and ``part`` stay, and usage
-  accounting keeps reading ``message``.
+  ``event`` carries the bytes: per aggregate, its rows go in delete transactions
+  bounded by both ``_CHUNK_MAX_BYTES`` and ``_CHUNK_MAX_ROWS`` so a live writer
+  interleaves instead of starving.  Once a read finds no event rows left, the
+  ``event_sequence`` row goes exactly once and its ON DELETE CASCADE picks up any
+  stragglers.  ``session``, ``message`` and ``part`` stay, and usage accounting
+  keeps reading ``message``.
   """
   if not db.exists():
     return
@@ -684,10 +701,7 @@ def _sweep_opencode(
       counter.count += 1
       counter.bytes += size
     return
-  # A scoped run must not compact unrelated database pages when its session is
-  # active or has no safely deletable backend record.  The unscoped scheduler
-  # pass is responsible for retrying a prior VACUUM lock failure.
-  if session_id is not None and not targets:
+  if not targets:
     return
   try:
     connection = sqlite3.connect(db, timeout=SQLITE_LOCK_WAIT_SECONDS)
@@ -702,22 +716,63 @@ def _sweep_opencode(
       log.warning("storage_cool_opencode_setup_failed", db=str(db), error=str(e))
       return
     connection.isolation_level = None  # per-statement transactions: one failure keeps the rest
-    deleted = False
     for aggregate_id, (count, size) in sorted(targets.items()):
+      _delete_aggregate_events(connection, aggregate_id)
       try:
         cursor = connection.execute("DELETE FROM event_sequence WHERE aggregate_id = ?", (aggregate_id,))
       except sqlite3.Error as e:
         log.warning("storage_cool_opencode_delete_failed", aggregate_id=aggregate_id, error=str(e))
         continue
       if cursor.rowcount:
-        deleted = True
         counter.count += 1
         counter.bytes += size
-    # A failed VACUUM leaves freelist pages behind.  Keep opening the database
-    # on later no-target runs so the short-lock attempt can be retried.
-    _vacuum_opencode_db(connection, db, force=deleted)
   finally:
     connection.close()
+
+
+def _delete_aggregate_events(connection: sqlite3.Connection, aggregate_id: str) -> None:
+  """Delete one aggregate's ``event`` rows in capped transactions, one at a time.
+
+  Each pass reads the next ``_CHUNK_MAX_ROWS`` rowids with their byte lengths
+  (a read, so under WAL it takes no write lock) and deletes them client-side
+  chunked by both the byte and the row cap, yielding between transactions so a
+  live writer can interleave.  A failed chunk ends the loop for this aggregate:
+  the sequence row's cascade and the next sweep pick up the stragglers, and the
+  sweep never loops forever on a delete that keeps failing.
+  """
+  while True:
+    rows = connection.execute(
+        "SELECT rowid, length(data) FROM event WHERE aggregate_id = ? ORDER BY rowid LIMIT ?",
+        (aggregate_id, _CHUNK_MAX_ROWS),
+    ).fetchall()
+    if not rows:
+      return
+    chunk: list[int] = []
+    chunk_bytes = 0
+    for rowid, data_length in rows:
+      row_bytes = int(data_length)
+      # A single row larger than the byte cap cannot be split, so it forms its own singleton chunk.
+      if chunk and chunk_bytes + row_bytes > _CHUNK_MAX_BYTES:
+        if not _delete_event_chunk(connection, aggregate_id, chunk):
+          return
+        time.sleep(_CHUNK_YIELD_SECONDS)
+        chunk = []
+        chunk_bytes = 0
+      chunk.append(rowid)
+      chunk_bytes += row_bytes
+    if not _delete_event_chunk(connection, aggregate_id, chunk):
+      return
+    time.sleep(_CHUNK_YIELD_SECONDS)
+
+
+def _delete_event_chunk(connection: sqlite3.Connection, aggregate_id: str, rowids: list[int]) -> bool:
+  """One chunked delete transaction; False when the statement failed (logged, best effort)."""
+  try:
+    connection.execute(f"DELETE FROM event WHERE rowid IN ({','.join('?' * len(rowids))})", rowids)
+  except sqlite3.Error as e:
+    log.warning("storage_cool_opencode_delete_failed", aggregate_id=aggregate_id, rows=len(rowids), error=str(e))
+    return False
+  return True
 
 
 def _vacuum_opencode_db(connection: sqlite3.Connection, db: Path, *, force: bool) -> None:
@@ -733,6 +788,66 @@ def _vacuum_opencode_db(connection: sqlite3.Connection, db: Path, *, force: bool
     log.warning("storage_cool_opencode_vacuum_failed", db=str(db), error=str(e))
 
 
+def _count_opencode_writers() -> int:
+  """Live ``opencode serve`` processes on this host, excluding this process.
+
+  CharlieBot spawns opencode servers with exactly that argv
+  (src/agents/backends/opencode.py builds ``[binary, "serve", ...]``), so a
+  cmdline match is a live writer to the opencode store.
+  """
+  my_pid = os.getpid()
+  count = 0
+  for entry in Path("/proc").iterdir():
+    if not entry.name.isdigit() or int(entry.name) == my_pid:
+      continue
+    try:
+      cmdline = (entry / "cmdline").read_bytes()
+    except OSError:
+      continue  # the process vanished, or its cmdline is not readable by us
+    if b"opencode serve" in cmdline.replace(b"\0", b" "):
+      count += 1
+  return count
+
+
+def _vacuum_opencode_store(*, force: bool) -> None:
+  """Manually vacuum the opencode store, refusing past live writers unless *force*.
+
+  Silently skipping a requested vacuum would be a silent fallback, so a refusal
+  is a hard stop instead: an error line on stderr and exit code 1, before the
+  database is touched for vacuum purposes at all.
+  """
+  writers = _count_opencode_writers()
+  if writers and not force:
+    print(
+        f"Error: refusing to vacuum {DEFAULT_OPENCODE_DB}: {writers} live opencode writer(s); "
+        "stop them or re-run with --force.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+  if not DEFAULT_OPENCODE_DB.exists():
+    return
+  try:
+    connection = sqlite3.connect(DEFAULT_OPENCODE_DB, timeout=SQLITE_LOCK_WAIT_SECONDS, isolation_level=None)
+  except sqlite3.Error as e:
+    log.warning("storage_cool_opencode_connect_failed", db=str(DEFAULT_OPENCODE_DB), error=str(e))
+    return
+  try:
+    _vacuum_opencode_db(connection, DEFAULT_OPENCODE_DB, force=force)
+  finally:
+    connection.close()
+
+
+def _opencode_freelist_bytes(db: Path) -> int:
+  """Free pages the opencode store holds, in bytes; reclaimable by a manual vacuum."""
+  if not db.exists():
+    return 0
+  pages = _opencode_query(db, "PRAGMA freelist_count")
+  page_size = _opencode_query(db, "PRAGMA page_size")
+  if not pages or not page_size:
+    return 0
+  return int(pages[0][0]) * int(page_size[0][0])
+
+
 # ---------------------------------------------------------------------------
 # Entry point shared by the CLI and the scheduler handler
 # ---------------------------------------------------------------------------
@@ -743,6 +858,8 @@ def run_cool_sweep(
     dry_run: bool = False,
     min_idle_days: int = MIN_IDLE_DAYS,
     session_id: str | None = None,
+    vacuum: bool = False,
+    force: bool = False,
     cfg: CharlieBotConfig | None = None,
     now: datetime | None = None,
 ) -> SweepResult:
@@ -750,17 +867,21 @@ def run_cool_sweep(
 
   Args:
     dry_run: Report what would be freed without deleting anything or issuing any
-      SQL that changes the database.
+      SQL that changes the database; combines with *vacuum* by skipping it.
     min_idle_days: Idle age a session must reach, on top of being archived, to
       count as cold.
     session_id: Limit the whole sweep to one session; the cold rule still applies,
       so a session that is not cold leaves the sweep nothing to do.
+    vacuum: After the sweep, VACUUM the opencode store to hand freed pages back to
+      the filesystem. Refuses (stderr + SystemExit) while an ``opencode serve``
+      writer is alive, unless *force*.
+    force: Vacuum past live-writer refusal; no effect without *vacuum*.
     cfg: Config to read paths and backend options from; defaults to the process
       config.
     now: Current time override for tests.
 
   Returns:
-    Per-category counts and freed bytes.
+    Per-category counts and freed bytes, plus the opencode store's freelist bytes.
   """
   cfg = cfg or get_config()
   now = now or datetime.now(UTC)
@@ -784,6 +905,8 @@ def run_cool_sweep(
   _sweep_claude_transcripts(cfg, facts, now, claude, dry_run=dry_run, session_id=session_id)
   _sweep_codex_rollouts(cfg, facts, references, now, codex, dry_run=dry_run, session_id=session_id)
   _sweep_opencode(DEFAULT_OPENCODE_DB, facts, references, now, opencode, dry_run=dry_run, session_id=session_id)
+  if vacuum and not dry_run:
+    _vacuum_opencode_store(force=force)
 
   result = SweepResult(
       categories=tuple(
@@ -792,7 +915,8 @@ def run_cool_sweep(
               CategoryResult(claude.name, claude.unit, claude.count, claude.bytes),
               CategoryResult(codex.name, codex.unit, codex.count, codex.bytes),
               CategoryResult(opencode.name, opencode.unit, opencode.count, opencode.bytes),
-          ]))
+          ]),
+      freelist_bytes=_opencode_freelist_bytes(DEFAULT_OPENCODE_DB))
   log.info(
       "storage_cool_sweep_done",
       dry_run=dry_run,
@@ -813,11 +937,12 @@ def format_sweep_line(result: SweepResult) -> str:
 
 
 def format_sweep_table(result: SweepResult) -> str:
-  """The command's report: one line per category, then the total."""
+  """The command's report: one line per category, then the opencode freelist, then the total."""
   lines = [
       f"{category.name:<18}{category.count:>7} {category.unit:<9}{_gib(category.bytes):>9.2f} GiB"
       for category in result.categories
   ]
+  lines.append(f"{'opencode-freelist':<18}{'':>17}{_gib(result.freelist_bytes):>9.2f} GiB (reclaimable via --vacuum)")
   lines.append(f"{'total':<18}{'':>17}{_gib(result.total_bytes):>9.2f} GiB")
   return "\n".join(lines)
 

@@ -24,6 +24,7 @@ from src.core.models import BackendOption
 from src.core.storage_cool import (
     claude_project_dir_name,
     codex_rollout_session_id,
+    format_sweep_table,
     is_cold_session,
     run_cool_sweep,
 )
@@ -462,7 +463,8 @@ CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEX
 def make_opencode_db(path: Path, aggregates: dict[str, dict]) -> None:
   """Fixture store with opencode's shape: a sequence row per aggregate, event rows
   carrying the bytes behind an ON DELETE CASCADE foreign key, message rows for
-  usage accounting."""
+  usage accounting.  ``event_sizes`` builds the payload with ``zeroblob`` so a
+  worst-case-sized row does not cost its byte count in Python memory."""
   path.parent.mkdir(parents=True, exist_ok=True)
   connection = sqlite3.connect(path)
   try:
@@ -477,6 +479,10 @@ def make_opencode_db(path: Path, aggregates: dict[str, dict]) -> None:
         connection.execute(
             "insert into event (id, aggregate_id, seq, type, data) values (?, ?, ?, 'message.updated', ?)",
             (f"{aggregate_id}-e{index}", aggregate_id, index, payload))
+      for index, size in enumerate(spec.get("event_sizes", [])):
+        connection.execute(
+            "insert into event (id, aggregate_id, seq, type, data) values (?, ?, ?, 'message.updated', zeroblob(?))",
+            (f"{aggregate_id}-z{index}", aggregate_id, index, size))
       for index in range(spec.get("messages", 0)):
         connection.execute(
             "insert into message (id, session_id, data) values (?, ?, '{}')",
@@ -504,6 +510,59 @@ def set_opencode_updated(db: Path, aggregate_id: str, updated_ms: int) -> None:
     connection.commit()
   finally:
     connection.close()
+
+
+class _SqlTracker:
+  """Records every statement and connect target the sweep issues through the seam."""
+
+  def __init__(self) -> None:
+    self.targets: list[str] = []
+    self.statements: list[str] = []
+    # (row count, summed length(data)) of every chunked event delete, measured
+    # against the rows right before their transaction deletes them.
+    self.event_deletes: list[tuple[int, int]] = []
+
+
+class _RecordingConnection:
+  """Delegating connection wrapper: C-level sqlite3.Connection cannot be patched directly."""
+
+  def __init__(self, connection: sqlite3.Connection, tracker: _SqlTracker) -> None:
+    object.__setattr__(self, "_connection", connection)
+    object.__setattr__(self, "_tracker", tracker)
+
+  def __getattr__(self, name: str):
+    return getattr(self._connection, name)
+
+  def __setattr__(self, name: str, value: object) -> None:
+    setattr(self._connection, name, value)
+
+  def execute(self, sql: str, parameters: tuple = ()) -> sqlite3.Cursor:
+    self._tracker.statements.append(sql)
+    if sql.startswith("DELETE FROM event WHERE rowid IN"):
+      row = self._connection.execute(
+          "select count(*), coalesce(sum(length(data)), 0) from event where rowid in "
+          f"({','.join('?' * len(parameters))})",
+          parameters,
+      ).fetchone()
+      self._tracker.event_deletes.append((int(row[0]), int(row[1])))
+    return self._connection.execute(sql, parameters)
+
+
+def track_sqlite(monkeypatch: pytest.MonkeyPatch) -> _SqlTracker:
+  """Instrument the connect/execute seam the sweep module uses (sqlite3.connect)."""
+  tracker = _SqlTracker()
+  real_connect = sqlite3.connect
+
+  def recording_connect(path: object, *args: object, **kwargs: object) -> _RecordingConnection:
+    tracker.targets.append(str(path))
+    return _RecordingConnection(real_connect(path, *args, **kwargs), tracker)
+
+  monkeypatch.setattr(sqlite3, "connect", recording_connect)
+  return tracker
+
+
+OLD_ORPHAN_MS = int((NOW - timedelta(days=3)).timestamp() * 1000)
+MIB = 1024 * 1024
 
 
 def test_opencode_delete_cascades_to_exactly_one_aggregates_events(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
@@ -574,8 +633,130 @@ def test_opencode_sequence_without_events_is_reclaimed_and_messages_remain(
   assert result.category("opencode-events").bytes == 0
 
 
-def test_opencode_vacuum_is_retried_after_a_failed_prior_attempt(
+def test_opencode_deletes_events_in_byte_and_row_capped_chunks(
     tmp_path: Path, cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Every delete transaction stays within both caps; an over-cap row ships alone."""
+  cfg = cool_env
+  db = tmp_path / "opencode.db"
+  aggregates = {
+      # The measured worst case: several 48-56 MiB data rows.
+      "ses_bigrows0000000000000000000000": [48 * MIB, 52 * MIB, 56 * MIB],
+      # One ~443 MiB aggregate of mixed row sizes (the measured largest session).
+      "ses_mixedbytes0000000000000000000":
+          [100 * MIB, 64 * MIB, 48 * MIB, 33 * MIB, 20 * MIB, 12 * MIB, 8 * MIB, 5 * MIB, 150 * MIB, 3 * MIB],
+      # A many-small-rows aggregate exercises the row cap instead of the byte cap.
+      "ses_manyrows000000000000000000000": [2048] * 2500,
+      "ses_small0000000000000000000000000": [1024, 1024, 1024],
+  }
+  make_opencode_db(
+      db, {
+          **{
+              aggregate_id: {
+                  "event_sizes": sizes,
+                  "updated_ms": OLD_ORPHAN_MS
+              } for aggregate_id, sizes in aggregates.items()
+          },
+          CC_OPENLIVE: {
+              "events": [b"keep"]
+          },
+      })
+  tracker = track_sqlite(monkeypatch)
+
+  result = run_cool_sweep(cfg=cfg, now=NOW)
+
+  # Every delete transaction honored both caps, except a row too big to split.
+  assert tracker.event_deletes
+  for rows, byte_sum in tracker.event_deletes:
+    assert rows <= storage_cool._CHUNK_MAX_ROWS
+    assert byte_sum <= storage_cool._CHUNK_MAX_BYTES or rows == 1
+  # Each >32 MiB row formed its own singleton transaction: 50-56 MiB ones in the
+  # worst-case aggregate, 100/64/48/33/150 MiB ones in the mixed aggregate.
+  singletons = [(rows, size) for rows, size in tracker.event_deletes if size > storage_cool._CHUNK_MAX_BYTES]
+  assert len(singletons) == 8
+  assert all(rows == 1 for rows, _ in singletons)
+  # The appending cap is inclusive: 20 MiB + 12 MiB share one exactly-at-cap chunk.
+  assert (2, 32 << 20) in tracker.event_deletes
+  row_counts = [rows for rows, _ in tracker.event_deletes]
+  assert row_counts.count(1000) == 2 and 500 in row_counts  # 2500 rows split at the row cap
+  assert sum(row_counts) == 3 + 10 + 2500 + 3
+
+  # Every target is fully gone, the non-target is untouched, and no dangling events remain.
+  connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+  try:
+    assert {row[0] for row in connection.execute("select aggregate_id from event_sequence")} == {CC_OPENLIVE}
+    assert {row[0] for row in connection.execute("select distinct aggregate_id from event")} == {CC_OPENLIVE}
+    assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+  finally:
+    connection.close()
+  opencode_result = result.category("opencode-events")
+  assert opencode_result.count == 4
+  assert opencode_result.bytes == (48 + 52 + 56 + 443) * MIB + 2500 * 2048 + 3 * 1024
+
+
+def test_opencode_chunk_loop_aborted_mid_sweep_resumes_cleanly(
+    tmp_path: Path, cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Killing the delete loop after its first transaction leaves resumable state."""
+  cfg = cool_env
+  db = tmp_path / "opencode.db"
+  first = "ses_abort0000000000000000000000"
+  second = "ses_resume000000000000000000000"
+  make_opencode_db(
+      db, {
+          first: {
+              "event_sizes": [40 * MIB, 40 * MIB, 10 * MIB],
+              "updated_ms": OLD_ORPHAN_MS
+          },
+          second: {
+              "event_sizes": [1024, 1024, 1024],
+              "updated_ms": OLD_ORPHAN_MS
+          },
+      })
+
+  # The bomb raises on the first inter-transaction yield only; later sleeps (the
+  # resume run) pass through. Never monkeypatch.undo() here: the fixture cache
+  # hands this test and cool_env the same MonkeyPatch instance, so undo() would
+  # also revert cool_env's HOME and DEFAULT_OPENCODE_DB isolation.
+  real_sleep = storage_cool.time.sleep
+  armed = True
+
+  def boom(seconds: float) -> None:
+    nonlocal armed
+    if armed:
+      armed = False
+      raise RuntimeError("abort after the first delete transaction for test")
+    real_sleep(seconds)
+
+  monkeypatch.setattr(storage_cool.time, "sleep", boom)
+
+  with pytest.raises(RuntimeError, match="abort after the first delete"):
+    run_cool_sweep(cfg=cfg, now=NOW)
+
+  # The abort left the first aggregate mid-flight: one chunk gone, the rest (and
+  # both sequence rows) still there.
+  assert opencode_row_counts(db) == {"event_sequence": 2, "event": 5, "message": 0, "part": 0}
+
+  result = run_cool_sweep(cfg=cfg, now=NOW)
+
+  connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+  try:
+    assert connection.execute("select count(*) from event_sequence").fetchone()[0] == 0
+    assert connection.execute("select count(*) from event").fetchone()[0] == 0
+    assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    # No event rows orphaned from a deleted event_sequence.
+    assert connection.execute(
+        "select count(*) from event where aggregate_id not in (select aggregate_id from event_sequence)").fetchone(
+        )[0] == 0
+  finally:
+    connection.close()
+  opencode_result = result.category("opencode-events")
+  assert opencode_result.count == 2
+  # The resume re-precomputes sizes from the remaining rows: no double counting.
+  assert opencode_result.bytes == 50 * MIB + 3 * 1024
+
+
+def test_default_sweep_never_vacuums(
+    tmp_path: Path, cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+  """VACUUM is opt-in now: even a sweep that frees pages never compacts on its own."""
   cfg = cool_env
   db = tmp_path / "opencode.db"
   make_opencode_db(db, {CC_OPENCOLD: {"events": [b"event-bytes"]}})
@@ -589,9 +770,87 @@ def test_opencode_vacuum_is_retried_after_a_failed_prior_attempt(
   monkeypatch.setattr(storage_cool, "_vacuum_opencode_db", pretend_vacuum)
 
   run_cool_sweep(cfg=cfg, now=NOW)
-  run_cool_sweep(cfg=cfg, now=NOW)
+  run_cool_sweep(cfg=cfg, now=NOW, force=True)  # --force without --vacuum has no effect
 
-  assert calls == [True, False]
+  assert calls == []
+
+
+def test_manual_vacuum_passes_force_through_to_the_executor(
+    tmp_path: Path, cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = cool_env
+  db = tmp_path / "opencode.db"
+  make_opencode_db(db, {CC_OPENORPHAN: {"events": [b"recent"], "updated_ms": OLD_ORPHAN_MS}})
+  calls: list[bool] = []
+
+  def pretend_vacuum(connection: sqlite3.Connection, db_path: Path, *, force: bool) -> None:
+    del connection, db_path
+    calls.append(force)
+
+  monkeypatch.setattr(storage_cool, "_vacuum_opencode_db", pretend_vacuum)
+  monkeypatch.setattr(storage_cool, "_count_opencode_writers", lambda: 0)
+
+  run_cool_sweep(cfg=cfg, now=NOW, vacuum=True)
+  monkeypatch.setattr(storage_cool, "_count_opencode_writers", lambda: 2)
+  run_cool_sweep(cfg=cfg, now=NOW, vacuum=True, force=True)
+
+  assert calls == [False, True]
+
+
+def test_manual_vacuum_refuses_past_live_writers_without_touching_the_store(
+    tmp_path: Path, cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = cool_env
+  db = tmp_path / "opencode.db"
+  make_opencode_db(db, {CC_OPENORPHAN: {"events": [b"recent"]}})  # nothing to sweep, only to vacuum
+  before_bytes = db.read_bytes()
+  before_stat = db.stat()
+  monkeypatch.setattr(storage_cool, "_count_opencode_writers", lambda: 2)
+
+  with pytest.raises(SystemExit) as exc_info:
+    run_cool_sweep(cfg=cfg, now=NOW, vacuum=True)
+
+  assert exc_info.value.code == 1
+  assert "2" in capsys.readouterr().err
+  # The refusal stopped before any vacuum write: the store is byte-identical.
+  assert db.read_bytes() == before_bytes
+  after_stat = db.stat()
+  assert (after_stat.st_size, after_stat.st_mtime_ns) == (before_stat.st_size, before_stat.st_mtime_ns)
+
+
+def test_freelist_row_reports_free_pages_and_dry_run_writes_nothing(
+    tmp_path: Path, cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = cool_env
+  db = tmp_path / "opencode.db"
+  make_opencode_db(
+      db, {CC_OPENORPHAN: {
+          "events": [b"e" * 65536, b"e" * 65536, b"e" * 65536],
+          "updated_ms": OLD_ORPHAN_MS
+      }})
+  tracker = track_sqlite(monkeypatch)
+
+  dry = run_cool_sweep(cfg=cfg, now=NOW, dry_run=True, vacuum=True)
+
+  # The dry run only ever connected read-only and never issued a write statement.
+  assert tracker.targets
+  assert all("mode=ro" in target for target in tracker.targets)
+  verbs = {statement.lstrip().split(None, 1)[0].upper() for statement in tracker.statements}
+  assert verbs <= {"SELECT", "PRAGMA"}
+  # --dry-run --vacuum performs no vacuum and the freelist line still prints.
+  assert dry.freelist_bytes == 0
+  dry_table = format_sweep_table(dry)
+  freelist_lines = [line for line in dry_table.splitlines() if line.startswith("opencode-freelist")]
+  assert len(freelist_lines) == 1
+  assert "reclaimable via --vacuum" in freelist_lines[0]
+  assert dry_table.splitlines()[-1].startswith("total")
+
+  real = run_cool_sweep(cfg=cfg, now=NOW)
+
+  assert real.freelist_bytes > 0  # the deleted rows' pages are on the freelist now
+  assert any(line.startswith("opencode-freelist") for line in format_sweep_table(real).splitlines())
+
+  # A later dry run against the swept store reads the same freelist, still read-only.
+  after = run_cool_sweep(cfg=cfg, now=NOW, dry_run=True)
+  assert after.freelist_bytes == real.freelist_bytes
 
 
 def test_scoped_backend_record_shared_with_live_session_survives(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
@@ -607,22 +866,18 @@ def test_scoped_backend_record_shared_with_live_session_survives(tmp_path: Path,
   assert opencode_row_counts(db)["event"] == 1
 
 
-def test_scoped_live_run_does_not_vacuum_unrelated_database_pages(
-    tmp_path: Path, cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_scoped_live_run_keeps_the_store_byte_identical(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+  """A scoped run on a live session found no target before, and finds none now that
+  vacuuming is manual: the database file is never opened for writing."""
   cfg = cool_env
   db = tmp_path / "opencode.db"
   make_opencode_db(db, {CC_OPENORPHAN: {"events": [b"unrelated"]}})
   write_session_meta(cfg, SID_LIVE, live_meta())
-  calls: list[bool] = []
-  monkeypatch.setattr(
-      storage_cool,
-      "_vacuum_opencode_db",
-      lambda connection, db_path, *, force: calls.append(force),
-  )
+  before = db.read_bytes()
 
   run_cool_sweep(cfg=cfg, now=NOW, session_id=SID_LIVE)
 
-  assert calls == []
+  assert db.read_bytes() == before
 
 
 def test_orphan_thread_metadata_keeps_backend_record_referenced(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
@@ -836,11 +1091,35 @@ def test_cli_storage_cool_prints_table_and_exits_zero(
   out = capsys.readouterr().out
   assert "raw-transport" in out
   assert "1 files" in out
-  report_lines = out.strip().splitlines()[-5:]
-  assert len(report_lines) == 5
+  report_lines = out.strip().splitlines()[-6:]
+  assert len(report_lines) == 6
   assert report_lines[0].startswith("raw-transport")
+  assert report_lines[-2].startswith("opencode-freelist")
+  assert "reclaimable via --vacuum" in report_lines[-2]
   assert report_lines[-1].startswith("total")
   assert "dry run" not in out
+
+
+def test_cli_storage_cool_vacuum_and_force_flags_wire_through(
+    cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  captured: dict[str, object] = {}
+
+  def pretend_sweep(**kwargs: object) -> storage_cool.SweepResult:
+    captured.update(kwargs)
+    return storage_cool.SweepResult(categories=(), freelist_bytes=3 * 1024**2)
+
+  monkeypatch.setattr(storage_cli, "run_cool_sweep", pretend_sweep)
+  monkeypatch.setattr(storage_cli, "get_config", lambda: cool_env)
+  monkeypatch.setattr(
+      sys, "argv", ["charliebot storage", "cool", "--dry-run", "--vacuum", "--force", "--min-idle-days", "30"])
+
+  storage_cli.main()
+
+  assert captured["vacuum"] is True
+  assert captured["force"] is True
+  assert captured["min_idle_days"] == 30
+  out = capsys.readouterr().out
+  assert "opencode-freelist" in out
 
 
 def test_cli_storage_cool_unknown_session_exits_nonzero(

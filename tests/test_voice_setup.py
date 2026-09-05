@@ -29,8 +29,7 @@ def _home(tmp_path: Path) -> Path:
 
 def test_write_voice_engine_appends_when_absent(tmp_path: Path) -> None:
   home = _home(tmp_path)
-  (home / "config.yaml").write_text(
-      "# host config\nserver_port: 18498\n", encoding="utf-8")
+  (home / "config.yaml").write_text("# host config\nserver_port: 18498\n", encoding="utf-8")
 
   action = voice_setup.write_voice_engine(home)
 
@@ -141,11 +140,9 @@ def test_enable_runs_preflight_then_writes_config(monkeypatch: pytest.MonkeyPatc
   preflight_reports: list[CharlieBotConfig] = []
   writes: list[Path] = []
   monkeypatch.setattr(
-      voice_setup, "run_gpu_preflight", lambda received_cfg: preflight_reports.append(received_cfg) or {
-          "decode_seconds": 0.3
-      })
-  monkeypatch.setattr(
-      voice_setup, "write_voice_engine", lambda home: writes.append(home) or "appended")
+      voice_setup, "run_gpu_preflight",
+      lambda received_cfg: preflight_reports.append(received_cfg) or {"decode_seconds": 0.3})
+  monkeypatch.setattr(voice_setup, "write_voice_engine", lambda home: writes.append(home) or "appended")
 
   report = voice_setup.enable(cfg)
 

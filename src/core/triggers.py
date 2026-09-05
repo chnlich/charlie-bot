@@ -545,8 +545,9 @@ class TriggerManager:
 
     Steady state (the workers-panel threads/list poll, the session view render) pays one
     scandir per call: a file whose (mtime_ns, size) matches its memo entry reuses the parsed
-    record. The key is sound because trigger files change only through the atomic
-    ``_save_trigger`` rewrite, which always replaces the inode and bumps mtime_ns. Files that
+    record. The key is sound because every trigger-file write goes through
+    ``write_model_json_atomically``, which replaces the inode and bumps mtime_ns; a rewrite
+    that edited the file in place would serve a stale memo. Files that
     fail to parse stay out of the memo, so an unreadable file keeps logging one warning per
     call exactly as an unmemoized read would.
     """
@@ -1042,8 +1043,10 @@ class TriggerManager:
     # with no coordination, so the write must stay atomic (a JSON parse
     # failure drops the trigger from one poll).
     await write_model_json_atomically(self._trigger_path(trigger.session_id, trigger.id), trigger)
-    # Single funnel for every trigger-file write (schedule/cancel/undeliverable):
-    # a pending-count change must reach the sidebar snapshot.
+    # Schedule, cancel, and undeliverable all move a session's pending count through
+    # this method, so the sidebar snapshot is told here. recover_pending's schema
+    # migration writes trigger files directly and preserves each trigger's status,
+    # so the pending count cannot change there and no dirty mark is owed.
     mark_sidebar_dirty(trigger.session_id)
 
   async def _load_trigger(self, session_id: str, trigger_id: str) -> PendingTrigger:

@@ -25,7 +25,7 @@ def _cmd_cool(args: argparse.Namespace) -> None:
   except ValueError as e:
     print(f"Error: {e}", file=sys.stderr)
     sys.exit(1)
-  print(format_sweep_table(result, dry_run=args.dry_run))
+  print(format_sweep_table(result))
 
 
 def main() -> None:

@@ -30,6 +30,7 @@ from src.agents.backends.pty_common import (
     tmux_session_exists,
     tmux_session_name,
 )
+from src.core.models import BackendType
 
 log = structlog.get_logger()
 
@@ -181,7 +182,7 @@ class TuiBackend:
   handler and session manager.
   """
 
-  type = "tui-cli"
+  type = BackendType.TUI_CLI
 
   def __init__(self, **_kwargs: object) -> None:
     # Validate tmux is available at construction time so config errors fail fast.

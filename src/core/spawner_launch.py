@@ -15,6 +15,7 @@ from src.core.git import (
     git_worktree_dir_name,
 )
 from src.core.models import (
+    BackendType,
     SpawnRequest,
     TaskType,
     ThreadMetadata,
@@ -41,7 +42,7 @@ async def _construct_worker(
   thread.model = backend_option.model
   if request.task_type == TaskType.VERIFY and backend_option.id not in thread.tried_backends:
     thread.tried_backends.append(backend_option.id)
-  if backend_option.type == "cc-claude" and thread.claude_session_id is None:
+  if backend_option.type == BackendType.CC_CLAUDE and thread.claude_session_id is None:
     thread.claude_session_id = str(uuid.uuid4())
   await thread_mgr.save_metadata(thread)
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)

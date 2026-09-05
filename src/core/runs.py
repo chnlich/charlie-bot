@@ -32,6 +32,7 @@ import structlog
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.models import BackendType
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 
 log = structlog.get_logger()
@@ -45,7 +46,8 @@ CURSOR_NAME = "agent.raw.cursor"
 # manage their own pipes). A restart cannot attach to those, so an interrupted
 # run on one of them still fails — but with this explicit reason, never
 # disguised as a crash.
-UNCOVERED_BACKEND_TYPES = frozenset({"opencode", "antigravity", "tui-cli"})
+UNCOVERED_BACKEND_TYPES: frozenset[BackendType] = frozenset(
+    {BackendType.OPENCODE, BackendType.ANTIGRAVITY, BackendType.TUI_CLI})
 TRANSPORT_NOT_COVERED_REASON = "backend transport not covered by restart-safe runtime"
 
 LEGACY_RAW_MISSING_REASON = "raw log missing (run predates restart-safe transport)"

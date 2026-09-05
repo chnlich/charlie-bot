@@ -15,6 +15,7 @@ from src.core.config import CharlieBotConfig
 from src.core.latex import get_tex_path, snapshot_tex
 from src.core.models import (
     BackendOption,
+    BackendType,
     MasterRunRecord,
     SessionCallbacks,
     SessionMetadata,
@@ -272,7 +273,7 @@ async def run_message(
   # claude SDK subprocess for them.
   backend_id = session_meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "")
   backend_lookup = cfg.get_backend_option(backend_id)
-  if backend_lookup is not None and backend_lookup.type == "tui-cli":
+  if backend_lookup is not None and backend_lookup.type == BackendType.TUI_CLI:
     log.info("master_cc_skip_tui_backend", session=session_meta.id, backend=backend_id)
     return None
 

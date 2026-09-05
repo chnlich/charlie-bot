@@ -36,6 +36,7 @@ from src.core.config import (
 from src.core.event_types import BACKEND_SWITCHED
 from src.core.models import (
     BackendOption,
+    BackendType,
     CreateSessionRequest,
     DeleteGroupRequest,
     EloneSessionRequest,
@@ -107,7 +108,7 @@ def _backend_domain(option: BackendOption) -> str | None:
   ``claude_config_dir`` (each account has its own transcript store). Every other
   backend family is its own, non-switchable domain.
   """
-  if option.type != "cc-claude":
+  if option.type != BackendType.CC_CLAUDE:
     return None
   return str(claude_config_dir(option))
 
@@ -141,7 +142,9 @@ def _switchable_backend_ids(
   if active_domain is None:
     return []
   return [
-      opt.id for opt in cfg.backend_options if opt.type == "cc-claude" and str(claude_config_dir(opt)) == active_domain
+      opt.id
+      for opt in cfg.backend_options
+      if opt.type == BackendType.CC_CLAUDE and str(claude_config_dir(opt)) == active_domain
   ]
 
 
@@ -173,7 +176,7 @@ def _resolve_requested_backend(
     return requested_backend
 
   if requested_backend is not None and requested_backend.startswith("codex"):
-    codex_option = next((opt for opt in cfg.backend_options if opt.type == "codex"), None)
+    codex_option = next((opt for opt in cfg.backend_options if opt.type == BackendType.CODEX), None)
     if codex_option:
       log.info("using_requested_backend_family_match", requested=requested_backend, backend=codex_option.id)
       return codex_option.id
@@ -390,7 +393,7 @@ async def tui_status_all(
   tui_sessions = []
   for meta in sessions:
     option = cfg.get_backend_option(meta.backend)
-    if option is not None and option.type == "tui-cli":
+    if option is not None and option.type == BackendType.TUI_CLI:
       tui_sessions.append(meta)
   if not tui_sessions:
     return {}
@@ -420,7 +423,7 @@ async def stop_tui(
     cfg: CharlieBotConfig = Depends(get_config),
 ):
   option = cfg.get_backend_option(meta.backend)
-  if option is None or option.type != "tui-cli":
+  if option is None or option.type != BackendType.TUI_CLI:
     raise HTTPException(status_code=400, detail="Session backend is not tui-cli")
 
   from src.agents.backends.tui import kill_tmux_session

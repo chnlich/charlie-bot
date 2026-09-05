@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.core.config import CharlieBotConfig, get_config
 from src.core.http import get_http_client
+from src.core.models import BackendType
 from src.core.sse import iter_sse_lines
 
 router = APIRouter()
@@ -498,7 +499,7 @@ async def openai_compatible_messages(
   option = cfg.get_backend_option(backend_id)
   if option is None:
     raise HTTPException(status_code=404, detail=f"unknown backend id: {backend_id}")
-  if option.type != "cc-openai-compatible":
+  if option.type != BackendType.CC_OPENAI_COMPATIBLE:
     raise HTTPException(
         status_code=400, detail=f"backend '{backend_id}' is not type 'cc-openai-compatible' (got '{option.type}')")
   if not option.api_base:

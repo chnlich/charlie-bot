@@ -22,7 +22,7 @@ from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
 from src.core import runs
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, ThreadMetadata
+from src.core.models import BackendOption, BackendType, ThreadMetadata
 from src.core.ndjson import append_ndjson
 from src.core.process import kill_group_escalating
 from src.core.streaming import handle_compaction_events, streaming_manager
@@ -98,7 +98,7 @@ class Worker:
           "instructions_content": self._instructions_content,
           "log_dir": self._events_log.parent,
       }
-      if self._backend_option.type == "cc-claude":
+      if self._backend_option.type == BackendType.CC_CLAUDE:
         backend_kwargs["claude_session_id"] = self._thread.claude_session_id
       if on_spawn is not None:
         return build_backend(self._backend_option, self._cfg, **backend_kwargs)

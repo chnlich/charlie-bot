@@ -19,7 +19,12 @@ from src.api.message_utils import (
 from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
-from src.core.models import SendMessageRequest, SessionMetadata, SessionStatus
+from src.core.models import (
+    BackendType,
+    SendMessageRequest,
+    SessionMetadata,
+    SessionStatus,
+)
 from src.core.sessions import SessionManager
 from src.core.slash_commands import SlashDispatchResult, dispatch_slash_command
 from src.core.tasks import create_logged_task
@@ -68,7 +73,7 @@ async def send_message(
 ):
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
   backend_option = cfg.get_backend_option(meta.backend) if meta.backend else None
-  if backend_option is not None and backend_option.type == "tui-cli":
+  if backend_option is not None and backend_option.type == BackendType.TUI_CLI:
     raise HTTPException(status_code=400, detail="Chat input is not supported for tui-cli sessions; use the terminal.")
 
   # The only content path that does not go through trigger_master: unarchive an

@@ -51,7 +51,7 @@ from src.core.config import (
     get_config,
 )
 from src.core.json_utils import load_json_meta
-from src.core.models import SessionStatus, parse_utc_datetime
+from src.core.models import BackendType, SessionStatus, parse_utc_datetime
 from src.core.timeouts import SQLITE_LOCK_WAIT_MS, SQLITE_LOCK_WAIT_SECONDS
 from src.core.token_tally import DEFAULT_OPENCODE_DB
 
@@ -337,9 +337,9 @@ def claude_projects_roots(cfg: CharlieBotConfig) -> list[Path]:
   CharlieBot session id nor the worktree prefix stays untouched no matter which
   tree it sits in.
   """
-  homes = {Path.home() / ".claude", claude_config_dir(BackendOption(id="-", label="-", type="cc-claude"))}
+  homes = {Path.home() / ".claude", claude_config_dir(BackendOption(id="-", label="-", type=BackendType.CC_CLAUDE))}
   for option in cfg.backend_options:
-    if option.type == "cc-claude":
+    if option.type == BackendType.CC_CLAUDE:
       homes.add(claude_config_dir(option))
   return sorted(home / "projects" for home in homes)
 
@@ -479,7 +479,7 @@ def codex_session_trees(cfg: CharlieBotConfig) -> list[Path]:
   """Every rollout tree a configured codex backend writes into, default included."""
   homes = {Path.home() / ".codex"}
   for option in cfg.backend_options:
-    if option.type == "codex" and option.codex_home:
+    if option.type == BackendType.CODEX and option.codex_home:
       homes.add(Path(option.codex_home).expanduser())
   return sorted(home / "sessions" for home in homes)
 

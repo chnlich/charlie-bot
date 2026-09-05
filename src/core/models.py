@@ -175,10 +175,24 @@ class PendingTrigger(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class BackendType(StrEnum):
+  """The BackendOption.type vocabulary; config.yaml carries the same strings."""
+
+  CC_CLAUDE = "cc-claude"
+  CC_KIMI = "cc-kimi"
+  CC_OPENAI_COMPATIBLE = "cc-openai-compatible"
+  CODEX = "codex"
+  CHARLIE_CODE = "charlie-code"
+  GEMINI = "gemini"
+  OPENCODE = "opencode"
+  ANTIGRAVITY = "antigravity"
+  TUI_CLI = "tui-cli"
+
+
 class BackendOption(BaseModel):
   id: str
   label: str
-  type: str  # 'cc-claude' | 'cc-kimi' | 'cc-openai-compatible' | 'codex' | 'charlie-code' | 'gemini' | 'opencode' | 'antigravity' | 'tui-cli'
+  type: str  # one of the BackendType values above
   model: str | None = None
   effort: str | None = None
   cli_binary: str | None = None
@@ -203,7 +217,7 @@ class BackendOption(BaseModel):
   print_timeout: str | None = None  # antigravity only: agy --print turn budget (Go duration, e.g. "1h")
 
 
-MODEL_OPTIONAL_ROUTING_BACKEND_TYPES = frozenset({"antigravity"})
+MODEL_OPTIONAL_ROUTING_BACKEND_TYPES: frozenset[BackendType] = frozenset({BackendType.ANTIGRAVITY})
 
 
 def backend_type_allows_missing_model(backend_type: str) -> bool:

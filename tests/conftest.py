@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
@@ -401,24 +401,29 @@ async def make_home_session(
   return cfg, mgr, session
 
 
-def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
-  """TestClient mounting the sessions router with cfg/session_mgr as dependency overrides; a test needing
+def make_router_client(
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    router: APIRouter,
+    prefix: str,
+) -> TestClient:
+  """TestClient mounting one router with cfg/session_mgr as dependency overrides; a test needing
   extra routers or overrides builds its own FastAPI app."""
   app = FastAPI()
-  app.include_router(sessions_router, prefix="/api/sessions")
+  app.include_router(router, prefix=prefix)
   app.dependency_overrides[get_config] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   return TestClient(app)
+
+
+def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
+  """make_router_client over the sessions router, mounted at /api/sessions."""
+  return make_router_client(cfg, session_mgr, sessions_router, "/api/sessions")
 
 
 def make_cron_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
-  """TestClient mounting the cron router with cfg/session_mgr as dependency overrides; a test needing
-  extra routers or overrides builds its own FastAPI app."""
-  app = FastAPI()
-  app.include_router(cron_router, prefix="/api/cron")
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  return TestClient(app)
+  """make_router_client over the cron router, mounted at /api/cron."""
+  return make_router_client(cfg, session_mgr, cron_router, "/api/cron")
 
 
 def make_page_request(path: str) -> Request:

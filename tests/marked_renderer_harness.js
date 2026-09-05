@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const https = require('node:https');
 
 const { readStatic } = require('./read_static');
+const { hljsStub } = require('./hljs_stub');
 
 // Fetch the exact marked build the browser serves (web/templates/index.html).
 // No version is pinned, so resolving the range today and caching it keeps the
@@ -47,11 +48,7 @@ async function loadRenderer(hljs) {
   const markedSrc = await loadMarkedSrc();
   const context = {
     console,
-    hljs: hljs || {
-      getLanguage: () => null,
-      highlightAuto: (s) => ({ value: String(s) }),
-      highlight: (s) => ({ value: String(s) }),
-    },
+    hljs: hljs || hljsStub,
     document: { querySelectorAll: () => [] },
     platform: {},
   };

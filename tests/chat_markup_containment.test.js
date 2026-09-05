@@ -3,6 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
+const { hljsStub } = require('./hljs_stub');
 
 // Load markdown-renderer.js in a fake environment that supplies marked, hljs,
 // and a stub document. Stubbing marked.use captures the renderer the file
@@ -16,11 +17,7 @@ function loadRenderer() {
       Renderer: function() {},
       use: function(opts) { captured = opts.renderer; },
     },
-    hljs: {
-      getLanguage: () => null,
-      highlightAuto: (s) => ({ value: String(s) }),
-      highlight: (s) => ({ value: String(s) }),
-    },
+    hljs: hljsStub,
     document: {
       querySelectorAll: () => [],
     },

@@ -3,44 +3,15 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { escapeHtml } = require('./escape_html_stub');
+const {createEscapingElement} = require('./dom_element_stub');
 const {loadChatRenderingModules} = require('./chat_rendering_context_stub');
 const {loadSidebarWorkersContext} = require('./sidebar_workers_context_stub');
-
-function fakeElement() {
-  let text = '';
-  return {
-    children: [],
-    dataset: {},
-    style: {},
-    classList: {toggle() {}, contains() { return false; }},
-    appendChild(child) {
-      this.children.push(child);
-      return child;
-    },
-    prepend(child) {
-      this.children.unshift(child);
-      return child;
-    },
-    querySelectorAll() {
-      return [];
-    },
-    remove() {},
-    get textContent() {
-      return text;
-    },
-    set textContent(value) {
-      text = String(value || '');
-      this.innerHTML = escapeHtml(text);
-    },
-    innerHTML: '',
-  };
-}
 
 function loadChatRendering() {
   const context = {
     CSS: {escape: (value) => String(value)},
     document: {
-      createElement: () => fakeElement(),
+      createElement: (tag) => createEscapingElement(tag),
       getElementById: () => null,
       querySelector: () => null,
     },
@@ -82,7 +53,7 @@ function assertWellFormedMarkup(html, label = 'html') {
 function loadSidebarWorkers(elements) {
   return loadSidebarWorkersContext({
     document: {
-      createElement: () => fakeElement(),
+      createElement: (tag) => createEscapingElement(tag),
       getElementById: (id) => elements.get(id) || null,
       querySelectorAll: () => [],
     },
@@ -341,7 +312,7 @@ test('renderMessage returns well-formed markup for every role branch', () => {
 });
 
 test('workers sidebar escapes full descriptions in initial and live cards', () => {
-  const container = fakeElement();
+  const container = createEscapingElement('div');
   const elements = new Map([['tab-workers', container]]);
   const context = loadSidebarWorkers(elements);
   const description = 'Quote "double" and \'single\' <tag>';

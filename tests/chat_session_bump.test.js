@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic, chatModules, runStaticModules} = require('./read_static');
+const {chatModules, runStaticModules} = require('./read_static');
 const { createClassList } = require('./dom_element_stub');
 const { escapeForFakeDom } = require('./fake_dom');
 

@@ -2,7 +2,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET, FLAG_LIKE_PROMPT, build_cli_backend
+from conftest import (
+  CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+  FLAG_LIKE_PROMPT,
+  build_cli_backend,
+)
 from pydantic import ValidationError
 
 from src.agents.backends.base import USER_LOCAL_BIN, AgentBackend

@@ -25,6 +25,7 @@ from conftest import (
     FakeThreadManager,
     _noop,
     close_create_logged_task,
+    make_task_spawner,
 )
 
 from src.core import event_types as ET
@@ -139,16 +140,11 @@ async def test_cron_master_wake_leaves_an_archived_session_archived(
 
   spawned: list[asyncio.Task] = []
 
-  def spawning_create_logged_task(coro: Coroutine[Any, Any, Any], name: str | None = None) -> asyncio.Task:
-    task = asyncio.get_running_loop().create_task(coro, name=name)
-    spawned.append(task)
-    return task
-
   # Hand the wake an archived session directly: selection itself only ever
   # returns active sessions, so this isolates the opted-out wake's behavior.
   monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=archived))
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, spawning_create_logged_task)
+  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, make_task_spawner(spawned))
 
   with patch("src.core.master_trigger.run_message_with_resume_recovery", new=AsyncMock()) as mock_run:
     await scheduler._execute_master_task(task_cfg)

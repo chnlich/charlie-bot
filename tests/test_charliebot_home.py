@@ -67,6 +67,20 @@ def test_relative_path_rejected(monkeypatch):
     core_config.charliebot_home_dir()
 
 
+def test_same_env_value_resolves_once(monkeypatch, tmp_path):
+  """The resolve walk runs once per raw env value; a new value re-resolves."""
+  profile = tmp_path / "profile"
+  profile.mkdir()
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(profile))
+  first = core_config.charliebot_home_dir()
+  assert core_config.charliebot_home_dir() is first
+
+  other = tmp_path / "other"
+  other.mkdir()
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(other))
+  assert core_config.charliebot_home_dir() == other
+
+
 def test_config_yaml_may_not_set_the_home(monkeypatch, tmp_path):
   profile = tmp_path / "profile"
   profile.mkdir()

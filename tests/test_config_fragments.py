@@ -289,6 +289,27 @@ def test_cron_files_are_not_config_fragments(profile_home: Path) -> None:
   assert cfg.server_port == 18498
 
 
+def test_fingerprint_fragment_set_matches_the_loader_set(profile_home: Path) -> None:
+  """The fingerprint's scan and the loader's fragment list agree on a tricky corpus.
+
+  Both read the same walker, so a drift would mean the reload check and the
+  load see different fragment sets; the tricky entries pin the exclusions on
+  the scan side (pathlib glob used to answer them per entry).
+  """
+  save_yaml(profile_home / "config.yaml", {"server_port": 18498})
+  config_d = profile_home / "config.d"
+  config_d.mkdir()
+  save_yaml(config_d / "a.yaml", {"worktree_dir": "w"})
+  (config_d / "cron.yaml").write_text("bogus_legacy_key: 1\n", encoding="utf-8")
+  (config_d / ".hidden.yaml").write_text("bogus_hidden_key: 1\n", encoding="utf-8")
+  (config_d / "dir.yaml").mkdir()
+  (config_d / "notes.txt").write_text("not a fragment\n", encoding="utf-8")
+
+  loader_names = [p.name for p in core_config._config_fragments(profile_home)]
+  fingerprint_names = [name for name, _, _ in core_config._config_fingerprint()[1]]
+  assert loader_names == fingerprint_names == ["a.yaml"]
+
+
 @pytest.mark.parametrize("with_empty_config_d", [False, True], ids=["no-config.d", "empty-config.d"])
 def test_without_fragments_matches_plain_config_yaml(profile_home: Path, with_empty_config_d: bool) -> None:
   """No config.d (or an empty one) is byte-for-byte the old single-file load."""

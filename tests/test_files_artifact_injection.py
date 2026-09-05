@@ -302,6 +302,7 @@ def test_serve_file_diff_repeat_view_reannotates_nothing(sessions_root: Path, mo
 
   def explode(base_html: str, new_html: str) -> str:
     raise AssertionError("repeat view re-ran plan_diff.annotate")
+
   monkeypatch.setattr(plan_diff, "annotate", explode)
   resp = client.get(url, cookies={"charliebot_access_key": "secret"})
   assert resp.status_code == 200

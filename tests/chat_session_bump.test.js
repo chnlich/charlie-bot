@@ -4,7 +4,7 @@ const vm = require('node:vm');
 
 const {chatModules, runStaticModules} = require('./read_static');
 const { createClassList } = require('./dom_element_stub');
-const { escapeForFakeDom } = require('./fake_dom');
+const { escapeHtmlText } = require('./escape_html_stub');
 
 const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;
@@ -91,7 +91,7 @@ class FakeElement {
     this._nodes = [];
     this.appendChild(new FakeText(value));
     // escapeHtml() round-trips text through textContent -> innerHTML.
-    this.innerHTML = escapeForFakeDom(value);
+    this.innerHTML = escapeHtmlText(value);
   }
 
   appendChild(child) {

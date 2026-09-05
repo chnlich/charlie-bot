@@ -696,7 +696,9 @@ class TriggerManager:
 
     Targets are grouped by kind and each group's sub-waiter runs concurrently
     against the shared ``fire_at`` deadline. The reason is 'completed' when all
-    groups finish, 'timeout' if the deadline arrives with anything still alive.
+    groups finish, 'timeout' if the deadline arrives with anything still alive;
+    a trigger with no watch targets has nothing to wait on and fires as
+    'timeout' at fire_at.
     The wait races a dormancy watchdog, so a session archived without a
     successor mid-wait cancels the trigger instead of firing.
     """

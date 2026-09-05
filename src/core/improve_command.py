@@ -355,7 +355,9 @@ async def _worktree_commit_delta(wt_path: Path, tip_before: str) -> tuple[str, i
 
 
 def _extract_iteration_summary(events: list[dict], iteration: int, status: str) -> str:
-  """Extract a summary from worker events, preferring the result event."""
+  """Extract a summary from worker events: newest-first scan, the first event
+  carrying a result text or assistant text wins.
+  """
   for event in reversed(events):
     if event.get("type") == ET.RESULT and event.get("result"):
       return event["result"][:500]
@@ -582,7 +584,9 @@ async def _run_single_iteration(
 
   # Write a fallback report if the worker wrote none. Validity was already
   # decided as missing_report before this write, so the fallback never flips the
-  # verdict. The event-extracted summary is used only here, never as loop context.
+  # verdict. The event-extracted summary never joins ``previous_summaries``
+  # (loop context comes from report files or invalid-iteration syntheses); the
+  # blocked path above delivers its own extracted copy to the successor.
   if not await asyncio.to_thread(report_path.exists):
     fallback_body = _extract_iteration_summary(events, i, status)
     await asyncio.to_thread(

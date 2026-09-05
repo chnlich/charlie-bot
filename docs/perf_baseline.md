@@ -65,6 +65,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M52 chat-event append, per event | M52 collector below | seconds per `save_chat_event` append of one probe event, worst on-disk live-events corpus, scratch home | median < 0.0003 s | — (introduced with its first history row) |
 | M53 config reload failure re-fire, broken steady state | M53 collector below | warnings + re-parses per 60 steady-state `get_config` calls of a persistently-broken config corpus | 0 warnings after the first sighting per (event, error) per process; 0 re-parses (one fingerprint stat set per call) | — (introduced with its first history row) |
 | M54 stream-draft paint work, code-bearing draft, real highlight.js | M54 collector below | seconds of paint work per full-turn replay of the largest fence-bearing on-disk assistant draft, 200 B deltas at 40 ms virtual cadence, page-pinned marked + hljs 11.9.0 common builds | median < 0.2 s | — (introduced with its first history row) |
+| M55 artifact compare-view serve, steady state | M55 collector below | seconds per repeat `?diff=` compare-view request over the worst on-disk artifact pair, plus the request's worst event-loop gap (the 5 ms ticker floor like M14) | repeat-view median < 0.010 s; loop-lag median < 0.010 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -2929,6 +2930,112 @@ shape as the M18 protocol:
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node /home/chaoli/workspace/charlie-bot/tests/stream_hl_render_collector.js
 ```
 
+M55 — artifact compare-view serve, steady state. The plan panel's 对比上一版
+toggle and every artifact `?diff=` link run the file server's annotate path:
+the pre-fix handler read both pages and ran `plan_diff.annotate` inline on the
+event loop per request — ~0.25 s of loop freeze per compare view of a 1 MB
+pair (the M14 pathology), re-computing an immutable result on every repeat
+view (the toggle flip, a plan update re-render, a refresh). The fixed handler
+builds the page in one thread hop and memoizes it on both files' (path,
+mtime_ns, size) signatures plus the injection flag — the marks are a pure
+function of the two files' bytes and artifact pages are only ever written
+whole, so a repeat view re-runs zero annotate. The cost is a per-click latency
+no standing probe covers, so the collector snapshots the worst artifact pair
+(the session whose artifacts dir carries the most .html bytes; target =
+biggest page, base = runner-up) into a scratch `CHARLIEBOT_HOME` under /tmp
+(live home read once for the copy, never written) and drives the route through
+TestClient in each checkout's process: one cold pass, as at first compare-view
+open, then nine timed repeats, asserting byte-identical bodies. Evidence
+points the same collector at the before and after checkouts (``CHECKOUT`` at
+each root, shared snapshot home), the same shape as the M35 protocol.
+Snapshot once:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import shutil, tempfile
+from pathlib import Path
+
+# Worst artifact-pair corpus: the session whose artifacts dir carries the most
+# .html bytes; target = biggest page, base = runner-up (the compare-view pair).
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n, target, base = None, -1, None, None
+for d in root.iterdir():
+    art = d / "artifacts"
+    if not art.is_dir():
+        continue
+    pages = sorted(art.glob("*.html"), key=lambda p: p.stat().st_size, reverse=True)
+    if len(pages) < 2:
+        continue
+    n = sum(p.stat().st_size for p in pages)
+    if n > best_n:
+        best, best_n = d, n
+        target, base = pages[0].name, pages[1].name
+print(f"worst artifact pair: session {best.name}, {best_n / 1e6:.1f} MB html "
+      f"({target} vs {base})")
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only the copied pair;
+# live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m55-artifact-home-", dir="/tmp"))
+dst = home / "sessions" / best.name / "artifacts"
+dst.mkdir(parents=True)
+shutil.copy2(best / "artifacts" / target, dst / target)
+shutil.copy2(best / "artifacts" / base, dst / base)
+print(f"export M55_HOME={home} M55_SID={best.name} M55_TARGET={target} M55_BASE={base}")
+EOF
+```
+
+Then run per checkout (``eval`` the snapshot export first):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import hashlib, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from src.api.files import router as files_router
+from src.core.config import CharlieBotConfig
+import src.api.files as files_mod
+
+home = Path(os.environ["M55_HOME"])
+SID = os.environ["M55_SID"]
+TARGET = os.environ["M55_TARGET"]
+BASE = os.environ["M55_BASE"]
+
+# Scratch wiring: the router's get_config resolves the snapshot home, never the
+# live one; the snapshot's empty access key makes every reader credentialed, so
+# the timed request carries the artifact-comments injection like a real view.
+cfg = CharlieBotConfig(charliebot_home=home)
+files_mod.get_config = lambda: cfg
+app = FastAPI()
+app.include_router(files_router, prefix="/files")
+client = TestClient(app)
+# The file server addresses pages by absolute filesystem path (the /files and
+# /absolute_filepath prefixes are aliases); ?diff= stays session-relative.
+url = f"/files/{home}/sessions/{SID}/artifacts/{TARGET}?diff=artifacts/{BASE}"
+
+t0 = time.perf_counter()
+r = client.get(url)  # cold pass, as at first compare-view open; not timed
+cold = time.perf_counter() - t0
+assert r.status_code == 200, (r.status_code, r.text[:200])
+assert "对比上一版" in r.text, "annotated page missing the compare header"
+
+times = []
+bodies = set()
+digest = ""
+for _ in range(9):
+    t0 = time.perf_counter()
+    r = client.get(url)
+    times.append(time.perf_counter() - t0)
+    bodies.add(len(r.content))
+    digest = hashlib.sha256(r.content).hexdigest()[:12]
+times.sort()
+assert len(bodies) == 1, f"repeat bodies differ: {bodies}"
+print(f"{TARGET} vs {BASE}; first view {cold:.4f} s; repeat-view median {times[4]:.4f} s, "
+      f"max {times[-1]:.4f} s over 9, body {bodies.pop()} B, digest {digest}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3005,3 +3112,4 @@ CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node /home/chaoli/works
 | 2026-09-04 | this PR | M53 61 → 1 warnings and 61 → 1 re-parses per 61 calls (onset 1 + 60 steady-state, collector verbatim, scratch broken-config corpus, main checkout before vs branch after interleaved back-to-back ×2 at load 3.03-3.12; call wall median 0.45/0.46 ms → 0.08/0.08 ms on the collector's minimal corpus, with the live corpus's full parse measured at 9.25 ms — the per-request cost while the live home was broken; fingerprint-move round re-parse 1 both arms, new warnings 1 → 0; served config identity `is`-asserted across all 60 steady-state calls both arms; live-log corroboration 4431 config_reload_failed lines in the 24.9 h server log, ~1/s inside the 16:00-18:00 burst window, three distinct error strings) | get_config memoizes the failed reload on its fingerprint — re-parse only when a file moves, the same freshness rule the success path follows, so an unchanged broken corpus costs one fingerprint stat set per call instead of a full parse + warning per call — and routes config_reload_failed through a warn-once registry, one line per error string per process, cleared on a successful load so a later relapse earns one new line; M53 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M54 paint-work median 0.299/0.323 s → 0.141/0.142 s, maxima 0.390/0.406 s → 0.219/0.236 s (collector verbatim, 11.4 KB worst fence-bearing on-disk assistant draft sha1 b155f860788f, 59 deltas at 40 ms virtual cadence, 12 paints, page-pinned marked + hljs 11.9.0 common build (36 languages), main checkout before vs branch after interleaved back-to-back ×2 at load 2.24/1.15/0.80; final-frame parity true both arms; M33 stubbed-hljs replay re-measured 0.396 s median vs the 0.378 s standing row at a higher load, no regression) | highlight results memoized in renderer.code on (lang, code) with a 32-entry LRU — highlight is a pure function of its inputs, but every streaming paint re-parsed the whole draft and re-ran highlightAuto (a 36-language scoring pass, ~0.26 s per 24 KB measured) on every unchanged code block, and every message re-render paid it again; M54 definition and healthy range introduced with this PR |
 | 2026-09-04 | this PR | M8 interleaved-family warm search: family B median 145.22 ms → 4.08 ms, family A 4.78 ms → 3.99 ms (two unrelated absent-needle families alternating over 6 interleaved rounds, collector over the identical 155 MB / 40-file snapshot corpus, main checkout before vs branch after back-to-back; rows 0 both families both arms; content scans across the 12 timed rounds 240 → 0 (collector totals 320 → 80 including the two cold passes); live corroboration: the running instance re-reads 151 MB per repeat search (rchar delta) and answers in 74-160 ms because its one-slot memo is occupied by shorter real-search needles) | the content-search miss memo keeps a per-file LRU of proven-absent roots (needle → signature, cap 8) instead of one shortest-needle slot — the one-slot form let the shortest needle ever searched permanently occupy the proof and sent every query family outside its superstrings back to a full 155 MB corpus scan per request |
+| 2026-09-05 | this PR | M55 artifact compare-view repeat median 0.2484/0.2675 s → 0.0028/0.0025 s, maxima 0.2706/0.3052 s → 0.0035/0.0031 s (collector verbatim, 1.5 MB worst artifact pair understanding_packed-batch-cost-balance_v10.html vs _v9.html, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×2 at load 0.89-0.97; served body byte-identical across arms — 150741 B, digest a82879fdc034; first view unchanged at 0.2270-0.2532 s both arms, now off the loop) | the `?diff=` annotate moved off the event loop into one thread hop and its result memoized on both files' (path, mtime_ns, size) signatures plus the injection flag — the marks are a pure function of the two files' bytes and artifact pages are only ever written whole, so a repeat compare view re-runs zero annotate; the pre-fix inline annotate froze the event loop 246.2 ms per repeat request (raw-ASGI 5 ms-ticker round: loop-lag 246.2 ms, wall 246.6 ms before vs 5.2 ms / 1.6 ms after), the same pathology M14 measured on the git diff endpoints; the clean artifact view's comment-layer injection also left the event loop; M55 definition and healthy range introduced with this PR |

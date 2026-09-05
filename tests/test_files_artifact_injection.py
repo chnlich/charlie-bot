@@ -286,3 +286,69 @@ def test_serve_file_diff_non_artifact_target_is_400(sessions_root: Path) -> None
       "/files" + str(sessions_root / "S" / "artifacts" / "directory.html") + "?diff=artifacts/plan_02.html",
       cookies={"charliebot_access_key": "secret"})
   assert resp.status_code == 400
+
+
+# --- diff requests: the annotate memo serves repeat views without re-annotating ---
+
+
+def test_serve_file_diff_repeat_view_reannotates_nothing(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An annotate is a pure function of the two files' bytes, so a repeat view of an
+  unchanged pair must serve the stored page with zero annotate calls."""
+  base, new = _write_pages(sessions_root)
+  client = _build_client()
+  url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
+  first = client.get(url, cookies={"charliebot_access_key": "secret"})
+  assert first.status_code == 200
+
+  def explode(base_html: str, new_html: str) -> str:
+    raise AssertionError("repeat view re-ran plan_diff.annotate")
+  monkeypatch.setattr(plan_diff, "annotate", explode)
+  resp = client.get(url, cookies={"charliebot_access_key": "secret"})
+  assert resp.status_code == 200
+  assert resp.text == first.text
+
+
+def test_serve_file_diff_reannotates_when_target_is_rewritten(sessions_root: Path) -> None:
+  """An artifact page is only ever written whole, so a rewrite always moves the
+  (mtime_ns, size) signature the memo keys on — the new bytes must be served."""
+  base, new = _write_pages(sessions_root)
+  client = _build_client()
+  url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
+  before = client.get(url, cookies={"charliebot_access_key": "secret"})
+  assert before.status_code == 200
+
+  new.write_text("<html><body><p>hello whole new world</p></body></html>", encoding="utf-8")
+  after = client.get(url, cookies={"charliebot_access_key": "secret"})
+  assert after.status_code == 200
+  assert after.text != before.text
+  # The inserted words are present under word-level marks, not as one literal run.
+  assert "cbd-ins" in after.text
+  assert ">whole new</ins>" in after.text
+
+
+def test_serve_file_diff_reannotates_when_base_is_rewritten(sessions_root: Path) -> None:
+  base, new = _write_pages(sessions_root)
+  client = _build_client()
+  url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
+  before = client.get(url, cookies={"charliebot_access_key": "secret"})
+  assert before.status_code == 200
+
+  base.write_text("<html><body><p>goodbye world</p></body></html>", encoding="utf-8")
+  after = client.get(url, cookies={"charliebot_access_key": "secret"})
+  assert after.status_code == 200
+  assert after.text != before.text
+
+
+def test_serve_file_diff_credential_and_anonymous_variants_are_served_separately(sessions_root: Path) -> None:
+  """The injection rides the memo key: an anonymous reader must never receive the
+  credentialed variant's comment layer, and neither view may poison the other."""
+  base, new = _write_pages(sessions_root)
+  client = _build_client()
+  url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
+
+  credentialed = client.get(url, cookies={"charliebot_access_key": "secret"})
+  anonymous = client.get(url)
+  assert SCRIPT in credentialed.text
+  assert SCRIPT not in anonymous.text
+  assert client.get(url, cookies={"charliebot_access_key": "secret"}).text == credentialed.text
+  assert client.get(url).text == anonymous.text

@@ -181,13 +181,16 @@ _list_body_memo: OrderedDict[str, tuple[tuple[tuple[str, int, int], ...], bytes,
 def _list_body_signature(threads_dir: str, triggers_dir: str) -> tuple[tuple[str, int, int], ...]:
   """(path, mtime_ns, size) of every row-source file of the list payload.
 
-  The thread scan is ``iter_thread_meta_stats``: a missing directory
-  contributes nothing and an unreadable metadata.json is skipped, so the
-  signature keys exactly the files the thread rows are built from.
+  The thread scan is ``iter_thread_meta_stats``; a directory that cannot be
+  scanned contributes nothing, and the signature keys exactly the files the
+  thread rows are built from.
   """
   sig: list[tuple[str, int, int]] = []
-  for meta_path, st in iter_thread_meta_stats(threads_dir):
-    sig.append((meta_path, st.st_mtime_ns, st.st_size))
+  try:
+    for meta_path, st in iter_thread_meta_stats(threads_dir):
+      sig.append((meta_path, st.st_mtime_ns, st.st_size))
+  except OSError:
+    pass
   try:
     for entry in os.scandir(triggers_dir):
       if not entry.is_file() or not entry.name.endswith(".json"):

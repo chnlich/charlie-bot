@@ -32,23 +32,22 @@ def thread_events_log_path(session_dir: Path, thread_id: str) -> Path:
 def iter_thread_meta_stats(threads_dir: str | Path) -> Iterator[tuple[str, os.stat_result]]:
   """Yield ``(metadata.json path, stat)`` for every thread directory under *threads_dir*.
 
-  A missing directory yields nothing; a metadata.json absent or unreadable at
-  stat time is skipped, the same "no thread row" verdict for every stat
-  failure. Paths are scandir's plain strings — this scan runs per poll, and
-  the pathlib join/str wrappers cost more CPU than the stat syscalls they drive.
+  Raises OSError when *threads_dir* itself cannot be scanned (missing or
+  unreadable): that verdict belongs to the caller. A metadata.json absent or
+  unreadable at stat time is skipped, the same "no thread row" verdict for
+  every stat failure. Paths are scandir's plain strings — this scan runs per
+  poll, and the pathlib join/str wrappers cost more CPU than the stat
+  syscalls they drive.
   """
-  try:
-    with os.scandir(threads_dir) as entries:
-      for entry in entries:
-        if not entry.is_dir():
-          continue
-        meta_path = entry.path + "/metadata.json"
-        try:
-          yield meta_path, os.stat(meta_path)
-        except OSError:
-          continue
-  except OSError:
-    pass
+  with os.scandir(threads_dir) as entries:
+    for entry in entries:
+      if not entry.is_dir():
+        continue
+      meta_path = entry.path + "/metadata.json"
+      try:
+        yield meta_path, os.stat(meta_path)
+      except OSError:
+        continue
 
 
 class ThreadManager:
@@ -108,6 +107,8 @@ class ThreadManager:
       # One executor hop for the whole scan: a per-file aiofiles read costs
       # ~0.5 ms in thread-pool hand-off, so per-file reads make the 3s
       # workers-panel poll scale linearly with thread count.
+      if not threads_dir.is_dir():
+        return []
       memo = self._list_memo
       refreshed: dict[str, tuple[int, int, ThreadMetadata]] = {}
       metas = []

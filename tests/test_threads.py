@@ -23,6 +23,27 @@ async def test_list_threads_empty_without_threads_dir(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_threads_raises_when_threads_dir_is_unreadable(tmp_path: Path) -> None:
+  """A threads dir that exists but cannot be scanned raises out of the scan.
+
+  iter_thread_meta_stats owns the per-file skip rule only: the directory-level
+  OSError is the caller's verdict, and the list manager's is to surface it — a
+  silent empty list would read as "no threads ever ran" on a permission fault.
+  """
+  cfg = make_home_config(tmp_path)
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="Locked"))
+  threads_dir = cfg.sessions_dir / session.id / "threads"
+  threads_dir.chmod(0o000)
+  try:
+    with pytest.raises(OSError):
+      await thread_mgr.list_threads(session.id)
+  finally:
+    threads_dir.chmod(0o700)
+
+
+@pytest.mark.asyncio
 async def test_list_threads_returns_newest_first_and_skips_dir_without_metadata(tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)

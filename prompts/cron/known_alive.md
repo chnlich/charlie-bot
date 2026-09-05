@@ -284,3 +284,14 @@ Known-alive symbols:
   button's `data-tab` attribute. A whole-repo grep for any full id finds only its
   definition, so a dead-id scan flags each as unused markup; the constructed
   `panel-${name}` match is what makes them live.
+- `file-chip--failed`, `file-chip--uploaded`, `file-chip--uploading` (`web/static/css/styles.css`)
+  — reached by string construction: `file-upload.js` emits
+  ``file-chip file-chip--${file.status}``, and `tests/chat_attachments_render.test.js` asserts
+  the failed and uploaded variants by name. A dead-selector scan that greps each full class
+  name finds no template or JS literal, so it flags them as unused CSS.
+- `turn-row-tag-trigger`, `turn-row-tag-turn`, `turn-row-tag-worker`, `turn-row-tag-you`
+  (`web/static/css/styles.css`) — reached by string construction: `chat/rendering.js` emits
+  ``turn-row-tag turn-row-tag-' + label.toLowerCase()``, with the labels
+  `You`/`Turn`/`Worker`/`Trigger` supplying the suffixes; `tests/chat_session_bump.test.js`
+  asserts the wrapper class by name. A dead-selector scan grepping each full class name
+  finds only its definition, so it flags them as unused CSS.

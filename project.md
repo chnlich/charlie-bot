@@ -12,7 +12,7 @@
 
 ## 2. Technical Stack
 - **Language**: Python 3.12+
-- **Master Agent**: Claude Code session (pluggable backends: Claude, Kimi, Codex, Gemini, OpenCode)
+- **Master Agent**: Claude Code session (pluggable backends)
 - **Worker Agent**: Claude Code (local CLI invocation, non-interactive mode)
 - **Backend**: FastAPI, WebSockets/SSE for real-time streaming, asyncio for concurrency
 - **Frontend**: vanilla JS + Tailwind CSS, served by FastAPI StaticFiles
@@ -78,11 +78,11 @@ charlie-bot/
 ### 4.1 Agent Roles
 | Role | Type | Responsibilities |
 |------|------|------------------|
-| **Master Agent** | Claude Code session (`src/agents/master_cc.py`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend (Claude, Kimi, Codex, Gemini). |
+| **Master Agent** | Claude Code session (`src/agents/master_cc.py`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend. |
 | **Worker Agent** | Claude Code CLI (`src/agents/worker.py`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
 | **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto base branch, merges (ff-only), and cleans up the worktree. Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `model_preference` config). |
 
-**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`), with implementations for Claude Code, Kimi, Codex, Gemini, OpenCode, and charlie-code. Backend selection is configured via `backend_options` and `model_preference` in `config.yaml`.
+**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`). The `BackendType` vocabulary (`src/core/models.py`) names the backends, and `src/agents/backends/registry.py` dispatches each `BackendOption.type` to its implementation. Backend selection is configured via `backend_options` and `model_preference` in `config.yaml`.
 
 ### 4.2 Session & Thread Model
 - **Session**: Represents a project/workspace. Each Session has:
@@ -258,7 +258,7 @@ Each Thread's `CLAUDE.md` contains:
 **Backend**
 - FastAPI server (`server.py`)
 - All API routes: `/api/sessions`, `/api/chat`, `/api/threads`, `/api/internal/delegate` (full list: the `include_router` calls in `server.py`)
-- Master Agent as Claude Code session (`src/agents/master_cc.py`) with `--resume` support for persistent conversations. Supports multiple backends (Claude, Kimi, Codex, Gemini, OpenCode) via pluggable `AgentBackend` interface
+- Master Agent as Claude Code session (`src/agents/master_cc.py`) with `--resume` support for persistent conversations. Supports any configured backend via the pluggable `AgentBackend` interface
 - Delegation CLI (`src/cli/delegate.py`) — called by the master to spawn workers via `POST /api/internal/delegate`
 - Worker spawner (`src/core/spawner.py`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
 - Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `model_preference`). Failed reviewers retry with the next untried backend

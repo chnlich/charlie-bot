@@ -3419,7 +3419,7 @@ async def main():
         times = [await timed(call) for _ in range(5)]
         med[name] = statistics.median(times)
         mx[name] = max(times)
-    print(f"checkout {CHECKOUT.rsplit('/', 1)[-1]}: {n} cached metas ({n_active} non-archived); idle-cold "
+    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {n} cached metas ({n_active} non-archived); idle-cold "
           f"archived-page median {med['archived-page']*1000:.2f} ms (max {mx['archived-page']*1000:.2f}), "
           f"all-sessions median {med['all-sessions']*1000:.2f} ms (max {mx['all-sessions']*1000:.2f}), "
           f"single get_session median {med['single-get']*1000:.3f} ms (max {mx['single-get']*1000:.3f}), "

@@ -165,6 +165,7 @@ async def test_batch_install_uses_setdefault_for_cache_entry_added_during_read(
             mgr._metadata_cache[disk_meta.id] = (
                 installed_during_read,
                 time.monotonic(),
+                None,
             )
         return result
 

@@ -19,3 +19,7 @@ scheduled_tasks:
         prompt_file: prompts/cron/memory_curator/memory_selector.md
       - name: reviewer
         prompt_file: prompts/cron/memory_curator/memory_reviewer.md
+  - name: storage-cool
+    cron: "30 4 * * *"
+    timezone: local
+    handler: cool_storage

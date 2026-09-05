@@ -156,6 +156,36 @@ async def test_non_recoverable_error_does_not_retry_and_failure_is_preserved(mon
 
 
 @pytest.mark.asyncio
+async def test_error_echo_persist_failure_is_logged_not_raised(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The in-chat error echo is best-effort: its own failure must log, never escape trigger_master."""
+  cfg = _build_cfg()
+  session_id = "session-5"
+  meta = SessionMetadata(id=session_id, name="Test Session", cc_session_id="valid-id", backend="codex-o3")
+  session_mgr = FakeSessionManager(meta)
+  persist_calls: list[str] = []
+
+  async def failing_persist(broadcast_session_id: str, event: dict) -> None:
+    persist_calls.append(broadcast_session_id)
+    raise RuntimeError("disk full")
+
+  session_mgr.persist_and_broadcast = failing_persist
+
+  async def failing_run_message(*args: object, **kwargs: object) -> str | None:
+    raise RuntimeError("backend crashed unexpectedly")
+
+  mock_log = Mock()
+  monkeypatch.setattr(_RUN_MESSAGE_PATCH_TARGET, failing_run_message)
+  monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
+
+  await trigger_master(session_id, "worker summary", cfg, session_mgr)
+
+  assert persist_calls == [session_id]
+  assert any(call.args[0] == "trigger_master_failed" for call in mock_log.error.call_args_list)
+  assert any(
+      call.args[0] == "trigger_master_error_event_persist_failed" for call in mock_log.warning.call_args_list)
+
+
+@pytest.mark.asyncio
 async def test_valid_resume_path_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
   """Successful run with valid resume ID should stay single-attempt."""
   cfg = _build_cfg()

@@ -196,8 +196,8 @@ async def trigger_master(
           'source': 'trigger_master',
       }
       await session_mgr.persist_and_broadcast(target_session_id, error_payload)
-    except Exception:
-      pass  # Last resort — nothing more we can do
+    except Exception as persist_error:
+      log.warning("trigger_master_error_event_persist_failed", session=target_session_id, error=str(persist_error))
 
 
 def is_resume_not_found_error(error: Exception) -> bool:

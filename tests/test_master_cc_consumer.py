@@ -396,7 +396,7 @@ async def test_stamp_recovers_after_unrelated_save_resets_cached_object(
   started_at, _created = thinking_state.mark_busy(session.id)
   try:
     await mgr.mark_unread(session.id)  # unrelated save fires every master round
-    cached_meta, _cached_ts = mgr._metadata_cache[session.id]
+    cached_meta, _cached_ts, _cached_sig = mgr._metadata_cache[session.id]
     assert cached_meta.thinking_since is None, "post-save cache rebuild must drop the derived field"
 
     # Cache-hit read within the 30s TTL re-stamps on the way out.

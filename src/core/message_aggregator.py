@@ -12,7 +12,9 @@ Two delta shapes are emitted:
     the in-progress assistant draft snapshot; replace the streaming preview.
 
 A subsequent flush-triggering event (user, master_done, etc.) emits a
-``message`` delta carrying the buffered content; the next ``stream`` delta
+``message`` delta carrying the buffered content; the one exception is a
+CC-internal user event that only carries tool_result output -- it attaches
+the output and emits no ``message`` delta. The next ``stream`` delta
 (or the absence of one) tells the client whether to keep or clear the preview.
 """
 

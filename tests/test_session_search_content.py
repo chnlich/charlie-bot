@@ -172,6 +172,28 @@ async def test_content_search_miss_memo_root_cap_is_per_file_lru(
 
 
 @pytest.mark.asyncio
+async def test_content_search_memoize_landing_mid_round_does_not_disturb_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = make_home_config(tmp_path)
+  mgr = SessionManager(cfg)
+  await _session_with_chat_content(mgr, '{"type":"user","content":"nothing relevant"}\n', "sess")
+  real_scan = sessions_mod._scan_content_for_hit
+
+  def _concurrent_memorizing_scan(path, session_id, query_lower, start):
+    # A concurrent search's memoize lands on the same file while this round's
+    # worker is inside its scan (the per-keystroke sidebar's overlapping
+    # requests); the in-flight round reads its snapshot and completes.
+    st = path.stat()
+    mgr._memoize_search_miss(str(path), (st.st_mtime_ns, st.st_size, st.st_ino), "concurrent")
+    return real_scan(path, session_id, query_lower, start)
+
+  monkeypatch.setattr(sessions_mod, "_scan_content_for_hit", _concurrent_memorizing_scan)
+
+  assert await mgr.search_sessions("absent") == []
+  assert await mgr.search_sessions("absent") == []
+
+
+@pytest.mark.asyncio
 async def test_content_search_errored_scan_is_not_memoized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = make_home_config(tmp_path)
   mgr = SessionManager(cfg)

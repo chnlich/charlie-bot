@@ -871,7 +871,9 @@ class SessionManager:
     async def _check_content(meta: SessionMetadata, path: Path) -> SessionMetadata | None:
       """Check if a session's chat events contain the query (runs file I/O in thread pool)."""
       memo_key = str(path)
-      memo_roots = self._search_miss_memo.get(memo_key)
+      # Snapshot on the event loop: the worker thread reads these pairs while a
+      # concurrent search's memoize can mutate the live OrderedDict.
+      memo_roots = tuple((self._search_miss_memo.get(memo_key) or {}).items())
 
       def _read_and_check() -> tuple[bool, tuple[int, int, int] | None]:
         try:
@@ -884,11 +886,11 @@ class SessionManager:
         # own signature covers. An unchanged-signature root answers with no
         # read; among the rest the largest same-inode growth base gives the
         # smallest tail window to re-prove from.
-        for _needle, root_sig in (memo_roots or {}).items():
+        for _needle, root_sig in memo_roots:
           if query_lower.startswith(_needle) and root_sig == sig:
             return False, None  # proven-absent memo verdict: no file read
         best_size = -1
-        for needle, root_sig in (memo_roots or {}).items():
+        for needle, root_sig in memo_roots:
           if not query_lower.startswith(needle):
             continue
           old_size, old_ino = root_sig[1], root_sig[2]

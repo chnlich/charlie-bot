@@ -996,24 +996,87 @@ async def test_facts_memo_rescans_only_after_new_events(tmp_path: Path, monkeypa
       _result_event(0.10, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
   ])
 
-  scans = 0
-  real_scan = session_usage._scan_usage_facts
+  fed = 0
+  real_feed = session_usage._UsageFold.feed
 
-  def counting_scan(events: list[dict]):
-    nonlocal scans
-    scans += 1
-    return real_scan(events)
+  def counting_feed(fold: session_usage._UsageFold, events: list[dict]):
+    nonlocal fed
+    fed += len(events)
+    return real_feed(fold, events)
 
-  monkeypatch.setattr(session_usage, "_scan_usage_facts", counting_scan)
+  monkeypatch.setattr(session_usage._UsageFold, "feed", counting_feed)
 
   first = await session_mgr.resolve_session_usage(meta.id, meta)
   second = await session_mgr.resolve_session_usage(meta.id, meta)
-  assert scans == 1
+  assert fed == 2
   assert second == first
 
-  # An appended event changes the memo key, so the next resolution rescans.
-  await session_mgr.save_chat_event(meta.id, _result_event(0.20, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=2000))
+  # An appended event folds the suffix into the carried state: only the new
+  # events are fed, and the resolved usage matches a fresh full-scan reference.
+  await session_mgr.save_chat_event(
+      meta.id, _result_event(0.20, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=2000))
   third = await session_mgr.resolve_session_usage(meta.id, meta)
-  assert scans == 2
+  assert fed == 3
   assert third is not None
   assert third["total_cost_usd"] == pytest.approx(0.30)
+  assert third == await session_mgr.resolve_session_usage(meta.id, meta)
+
+  # A wholesale list replacement (cache cleared, next load re-reads) rebuilds
+  # from a fresh fold over the whole list.
+  session_mgr._chat_events.clear_cache(meta.id)
+  fourth = await session_mgr.resolve_session_usage(meta.id, meta)
+  assert fed == 6
+  assert fourth == third
+
+
+@pytest.mark.asyncio
+async def test_facts_memo_extension_feeds_a_private_copy(tmp_path: Path) -> None:
+  """An extension never feeds the stored fold: two concurrent resolutions of
+  the same session read the same stale entry, and total_cost folds by +=, so
+  a shared fold would double-count the suffix."""
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-copy", name="Copy", backend=OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, [
+      _assistant_event("claude-opus-4-6", input_tokens=10_000),
+      _result_event(0.10, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
+  ])
+  await session_mgr.resolve_session_usage(meta.id, meta)
+  memo = session_mgr._session_usage._facts_memo
+  stored_fold = memo[meta.id][2]
+  stored_facts = stored_fold.facts()
+
+  await session_mgr.save_chat_event(
+      meta.id, _result_event(0.20, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=2000))
+  await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert memo[meta.id][2] is not stored_fold
+  assert stored_fold.facts() == stored_facts
+  assert memo[meta.id][2].facts().cost == pytest.approx(0.30)
+
+
+def test_usage_fold_of_appended_suffixes_matches_full_scan() -> None:
+  """Feeding a list in suffixes lands on the same facts as one full pass."""
+  events = [
+      _result_event(0.10, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
+      _assistant_event("claude-opus-4-6", input_tokens=10_000),
+      {
+          "type": "system",
+          "subtype": "compact_boundary",
+          "compact_metadata": {"post_tokens": 4_000},
+      },
+      _result_event(None, input_tokens=100),
+      _result_event(0.05, {"claude-opus-4-6": {"contextWindow": 180_000}}, input_tokens=2000),
+      _assistant_event("claude-opus-4-6", input_tokens=12_000, parent_tool_use_id="toolu_1"),
+      _assistant_event("claude-opus-4-6", input_tokens=11_000),
+      _result_event(0.02, {"other-model": {"contextWindow": 100_000}},
+                    context_snapshot=_snapshot("claude-opus-4-6", {"input": 500}, None)),
+  ]
+  fold = session_usage._UsageFold()
+  fold.feed(events[:3])
+  assert fold.facts() == session_usage._scan_usage_facts(events[:3])
+  fold.feed(events[3:6])
+  assert fold.facts() == session_usage._scan_usage_facts(events[:6])
+  fold.feed(events[6:])
+  fold.feed([])
+  assert fold.facts() == session_usage._scan_usage_facts(events)

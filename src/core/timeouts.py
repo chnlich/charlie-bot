@@ -197,9 +197,10 @@ SERVER_GRACEFUL_SHUTDOWN_TIMEOUT = 5  # seconds
 # SQLite lock waits (storage_cool's opencode-db pass)
 # ---------------------------------------------------------------------------
 
-# sqlite3.connect(timeout=...) bounds the busy-wait on the db lock for the
-# setup statements only (connect itself plus PRAGMA foreign_keys=ON); the
-# busy_timeout pragma below then lowers the bound for the real work, so the
-# pair is deliberately not one value.
-SQLITE_LOCK_WAIT_SECONDS = 5.0  # seconds
-SQLITE_LOCK_WAIT_MS = 2000  # milliseconds — PRAGMA busy_timeout for DELETE/VACUUM
+# sqlite3.connect(timeout=...) installs the connection's busy handler, so the
+# seconds value governs every statement until _vacuum_opencode_db issues the
+# busy_timeout pragma below: connect, PRAGMA foreign_keys=ON, and the DELETE
+# loop. The pragma then lowers the bound for its freelist check and VACUUM,
+# which take the lock for longer stretches — hence the shorter ms value.
+SQLITE_LOCK_WAIT_SECONDS = 5.0  # seconds — connect through the DELETE loop
+SQLITE_LOCK_WAIT_MS = 2000  # milliseconds — PRAGMA busy_timeout for VACUUM

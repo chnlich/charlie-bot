@@ -699,8 +699,9 @@ def _chunk_text(text: str, limit: int = _MAX_POST_CHARS) -> list[str]:
   Greedy packing over paragraph units (a paragraph plus its trailing
   blank-line separator); a unit longer than *limit* falls to newline units,
   and a single line longer than *limit* is hard-cut. Chunks keep the input
-  order and concatenate back to the input byte-for-byte — a boundary never
-  eats content.
+  order and no boundary eats content; the whitespace-only chunk dropped at
+  return (it carries no postable text) is the only way the posted chunks fall
+  short of the input.
   """
   if len(text) <= limit:
     return [text]

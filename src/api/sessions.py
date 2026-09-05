@@ -166,7 +166,8 @@ def _resolve_requested_backend(
 
   Raises HTTPException(400) for any non-None backend id -- whether it arrives
   explicitly via ``requested_backend`` or is inherited via ``fallback_backend``
-  -- that isn't a member of ``cfg.backend_options``.
+  -- that isn't a member of ``cfg.backend_options`` and doesn't resolve through
+  the codex-family alias below.
   """
   valid_backend_ids = {opt.id for opt in cfg.backend_options}
   resolved_fallback = fallback_backend or _default_backend_id(cfg)

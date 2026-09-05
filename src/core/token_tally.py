@@ -207,11 +207,12 @@ def discover_homes(claude_default: Path, codex_default: Path) -> tuple[dict[str,
 
 
 def _account_label(path: Path, stem: str) -> str:
-  """Derive an account label from a dir name: strip a leading '.' and the provider prefix.
+  """Derive an account label from a dir name: the suffix after the ``<stem>-`` prefix.
 
-  The provider default dir is labelled ``work (default)``; a custom dir ``.claude-ext-1`` reads
-  as ``ext-1``. Mirrors the derivation in ``src/api/ext_usage.py`` without importing it (core must
-  not depend on the api layer).
+  The provider default dir (``path.name == stem``) is labelled ``work (default)``; a custom
+  dir ``.claude-ext-1`` (stem ``.claude``) reads as ``ext-1``. Parallel to ``src/api/ext_usage.py``'s
+  account labels but not identical -- that one labels the default ``main`` and strips a leading
+  dot from every basename; core must not import the api layer, so the derivation is restated here.
   """
   if path.name == stem:
     return "work (default)"

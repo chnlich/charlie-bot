@@ -169,7 +169,7 @@ class _RunTimingTracker:
   def _zero_output_guard(self) -> bool:
     """True when this run settled with zero model output and must fail loudly.
 
-    Five-part conjunction, mirroring the salvage rule's shape: a terminal
+    Six-part conjunction, mirroring the salvage rule's shape: a terminal
     result event was received, its usage is all-zero, and the turn produced no
     assistant text, no thinking content, no tool_use events, and no manual
     compaction boundary. The result check is the same single guard for

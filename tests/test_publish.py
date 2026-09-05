@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from conftest import write_artifact
 
 from src.core.config import CharlieBotConfig
 from src.core.publish import PublishError, publish_artifact
@@ -19,13 +20,6 @@ def make_cfg(
       publish_dir=resolved_dir,
       public_base_url=public_base_url if public_base_url is not None else "https://pub.example.test/charliebot_pub",
   )
-
-
-def write_artifact(tmp_path: Path, name: str = "page.html", body: str = "<p>hello</p>") -> Path:
-  path = tmp_path / "artifacts" / name
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(body, encoding="utf-8")
-  return path
 
 
 @pytest.mark.parametrize(

@@ -200,6 +200,7 @@ class BackendOption(BaseModel):
   api_key_env: str | None = None  # cc-openai-compatible: env var holding the upstream API key
   fast_mode: bool = False  # cc-claude only: enable Claude Code fast mode via --settings '{"fastMode":true}'
   opencode_proxy_url: str | None = None  # opencode only: per-backend HTTP/HTTPS proxy URL
+  print_timeout: str | None = None  # antigravity only: agy --print turn budget (Go duration, e.g. "1h")
 
 
 MODEL_OPTIONAL_ROUTING_BACKEND_TYPES = frozenset({"antigravity"})

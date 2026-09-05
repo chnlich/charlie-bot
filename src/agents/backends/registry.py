@@ -80,7 +80,7 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
   if option.type == "opencode":
     return OpenCodeBackend(model=_require_model(option), opencode_proxy_url=option.opencode_proxy_url, **kwargs)
   if option.type == "antigravity":
-    return AntigravityCliBackend(**kwargs)
+    return AntigravityCliBackend(print_timeout=option.print_timeout, **kwargs)
   if option.type == "tui-cli":
     return TuiBackend(**kwargs)
   raise ValueError(f"Unknown backend type: {option.type}")

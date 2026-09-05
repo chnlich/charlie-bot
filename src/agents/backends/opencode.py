@@ -56,6 +56,14 @@ _IGNORED_SSE_EVENT_TYPES = {
 OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 _LOCAL_NO_PROXY_ENTRIES = ("localhost", "127.0.0.1", "::1")
 
+# opencode's SQLite store locking (e.g. the boot-time `insert into "project"`
+# collision observed in production) surfaces as an HTTP 500 or session.error
+# from an otherwise healthy serve process. A failed attempt whose drained
+# stderr tail carries this signature is retried once on the same session.
+_LOCK_SIGNATURE_RE = re.compile(r"database is locked|LockTimeoutError")
+_LOCK_RETRY_MAX_ATTEMPTS = 2
+_LOCK_RETRY_BACKOFF_SECONDS = 10.0
+
 # A part type the translator does not map re-fires once per unhandled part per
 # stream, while one sighting of a type carries the whole signal: the set of
 # mapped types is code, fixed for the process.
@@ -94,6 +102,8 @@ class OpenCodeBackend(AgentBackend):
     super().__init__(**kwargs)
     self._opencode_bin = resolve_binary("opencode", str(Path.home() / ".opencode" / "bin"))
     self._opencode_proxy_url = opencode_proxy_url
+    # Injectable seam so lock-retry tests never sleep real seconds.
+    self._sleep = asyncio.sleep
     self._reset_run_state()
 
   def _prepare_cwd(self, cwd: str) -> None:
@@ -158,46 +168,77 @@ class OpenCodeBackend(AgentBackend):
     }
 
   async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
-    """Drive OpenCode through its per-run HTTP server and SSE event stream."""
+    """Drive OpenCode through its per-run HTTP server and SSE event stream.
+
+    A failed attempt whose drained stderr tail carries the SQLite lock
+    signature (`database is locked` / `LockTimeoutError`) is retried once
+    after a backoff: the next attempt resumes the SAME opencode session id
+    via ``_resume_session_id`` and re-sends the original prompt argument
+    byte-identically. The failed attempt's terminal error event is held back
+    and only emitted when the failure is final, so a retried failure never
+    appears in the run's event stream.
+    """
     self._reset_run_state()
-    try:
-      await asyncio.to_thread(self._prepare_cwd, cwd)
-      cmd = self._build_command(prompt)
-      final_env = self._prepare_env(env)
-      stdout_log_path, stderr_log_path = self._log_paths()
+    attempt = 0
+    while True:
+      attempt += 1
+      held_error: dict | None = None
+      try:
+        await asyncio.to_thread(self._prepare_cwd, cwd)
+        cmd = self._build_command(prompt)
+        final_env = self._prepare_env(env)
+        stdout_log_path, stderr_log_path = self._log_paths()
 
-      await self._spawn_piped_and_pin_identity(cmd, cwd, final_env)
+        await self._spawn_piped_and_pin_identity(cmd, cwd, final_env)
 
-      self._stderr_task = asyncio.create_task(self._stream_stderr(stderr_log_path))
-      self._server_url = await self._read_server_url(stdout_log_path)
-      self._stdout_task = asyncio.create_task(self._stream_stdout(stdout_log_path))
+        self._stderr_task = asyncio.create_task(self._stream_stderr(stderr_log_path))
+        self._server_url = await self._read_server_url(stdout_log_path)
+        self._stdout_task = asyncio.create_task(self._stream_stdout(stdout_log_path))
 
-      async with httpx.AsyncClient(base_url=self._server_url, timeout=OPENCODE_HTTP_API_TIMEOUT) as client:
-        await self._check_health(client)
-        self._model_limit = await self._fetch_model_limit(client)
-        self._session_id = self._resume_session_id or await self._create_session(client)
-        yield {"session_id": self._session_id}
+        async with httpx.AsyncClient(base_url=self._server_url, timeout=OPENCODE_HTTP_API_TIMEOUT) as client:
+          await self._check_health(client)
+          self._model_limit = await self._fetch_model_limit(client)
+          self._session_id = self._resume_session_id or await self._create_session(client)
+          yield {"session_id": self._session_id}
 
-        async with client.stream("GET", "/event", timeout=None) as response:
-          response.raise_for_status()
-          sse_events = self._with_sse_progress_watchdog(self._iter_sse_events(response))
-          await self._wait_for_server_connected(sse_events)
-          await self._send_prompt(client, self._session_id, prompt)
+          async with client.stream("GET", "/event", timeout=None) as response:
+            response.raise_for_status()
+            sse_events = self._with_sse_progress_watchdog(self._iter_sse_events(response))
+            await self._wait_for_server_connected(sse_events)
+            await self._send_prompt(client, self._session_id, prompt)
 
-          async for translated in self._consume_sse_events(sse_events):
-            yield translated
-    except Exception as e:
-      if self._is_cancellation_disconnect(e):
-        # terminate() killed the server, which closes the /event stream mid-read. That
-        # transport error is cancellation cleanup, not the root failure — do not report it.
-        log.info("opencode_sse_closed_after_terminate", error=str(e))
-      else:
-        self._failed = True
-        log.exception("opencode_backend_failed", error=str(e))
-        detail = str(e) or e.__class__.__name__
-        yield make_error_event(f"OpenCode backend failed: {detail}")
-    finally:
-      await self._cleanup_server()
+            async for translated in self._consume_sse_events(sse_events):
+              if self._failed and translated.get("type") == ET.ERROR:
+                # The attempt's terminal error event: held back until the
+                # failure is final, so a retried attempt never emits it.
+                held_error = translated
+                continue
+              yield translated
+      except Exception as e:
+        if self._is_cancellation_disconnect(e):
+          # terminate() killed the server, which closes the /event stream mid-read. That
+          # transport error is cancellation cleanup, not the root failure — do not report it.
+          log.info("opencode_sse_closed_after_terminate", error=str(e))
+        else:
+          self._failed = True
+          log.exception("opencode_backend_failed", error=str(e))
+          detail = str(e) or e.__class__.__name__
+          held_error = make_error_event(f"OpenCode backend failed: {detail}")
+      finally:
+        await self._cleanup_server()
+
+      if self._should_retry_lock_failure(attempt):
+        log.info("opencode_lock_retry", session_id=self._session_id, attempt=attempt)
+        self._resume_session_id = self._session_id or self._resume_session_id
+        self._reset_run_state()
+        await self._sleep(_LOCK_RETRY_BACKOFF_SECONDS)
+        if self.terminated:
+          # Cancelled during the backoff: never start the retry attempt.
+          return
+        continue
+      if held_error is not None:
+        yield held_error
+      return
 
   async def _consume_sse_events(self, sse_events: AsyncIterator[dict]) -> AsyncIterator[dict]:
     """Translate parent-session SSE events until the turn ends.
@@ -220,11 +261,16 @@ class OpenCodeBackend(AgentBackend):
       if properties.get("sessionID") != self._session_id:
         continue
 
+      if event_type == SSE_EVENT_SESSION_ERROR:
+        # Flag before the translated error is yielded: run()'s retry wrapper
+        # reads `_failed` to hold the terminal event back while the failure
+        # is still retryable. Direct consumers see identical yields.
+        self._failed = True
+
       for translated in self._translate_sse_event(event):
         yield translated
 
       if event_type == SSE_EVENT_SESSION_ERROR:
-        self._failed = True
         return
 
       if event_type == SSE_EVENT_SESSION_IDLE:
@@ -238,6 +284,19 @@ class OpenCodeBackend(AgentBackend):
     A genuine unexpected disconnect (terminate() not called) stays a visible backend error.
     """
     return self.terminated and isinstance(error, httpx.RemoteProtocolError)
+
+  def _should_retry_lock_failure(self, attempt: int) -> bool:
+    """True when the just-failed attempt is retryable as an opencode SQLite lock timeout.
+
+    Called after ``_cleanup_server()`` for the attempt, which has already awaited
+    the stderr streamer — the bounded tail therefore holds every byte the
+    attempt's serve process logged before it was shut down. A deliberate
+    ``terminate()`` never retries.
+    """
+    if not self._failed or self.terminated or attempt >= _LOCK_RETRY_MAX_ATTEMPTS:
+      return False
+    stderr_tail = bytes(self._stderr_tail).decode("utf-8", errors="replace")
+    return _LOCK_SIGNATURE_RE.search(stderr_tail) is not None
 
   def _format_permission_error(self, properties: dict) -> str:
     return (

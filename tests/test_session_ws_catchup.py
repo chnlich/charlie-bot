@@ -8,6 +8,22 @@ from server import _catchup_frames, _replay_aggregated_catchup, _send_session_ca
 VOICE_KEY = "is_" + "voice"
 
 
+def _user_event(content: str, ts: str) -> dict:
+  return {"type": "user", "content": content, "timestamp": ts}
+
+
+def _assistant_event(text: str, ts: str) -> dict:
+  return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}, "timestamp": ts}
+
+
+def _master_done_event(thinking_seconds: int, ts: str) -> dict:
+  return {"type": "master_done", "thinking_seconds": thinking_seconds, "timestamp": ts}
+
+
+def _scheduled_trigger_event(content: str, ts: str) -> dict:
+  return {"type": "scheduled_trigger", "content": content, "timestamp": ts}
+
+
 class _CountOnlySessionManager:
 
   def __init__(self, count: int) -> None:
@@ -27,31 +43,10 @@ class _CountOnlySessionManager:
 @pytest.mark.asyncio
 async def test_replay_skips_pre_cursor_deltas_and_drops_raw_assistant_user() -> None:
   events = [
-      {
-          "type": "user",
-          "content": "hi",
-          "timestamp": "t0"
-      },
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "Hello"
-              }]
-          },
-          "timestamp": "t1"
-      },
-      {
-          "type": "master_done",
-          "thinking_seconds": 2,
-          "timestamp": "t2"
-      },
-      {
-          "type": "user",
-          "content": "again",
-          "timestamp": "t3"
-      },
+      _user_event("hi", "t0"),
+      _assistant_event("Hello", "t1"),
+      _master_done_event(2, "t2"),
+      _user_event("again", "t3"),
   ]
   ws = FakeWebSocket()
   sent_count = await _replay_aggregated_catchup(ws, events, cursor=2, session_id="s")
@@ -75,11 +70,7 @@ async def test_replay_skips_pre_cursor_deltas_and_drops_raw_assistant_user() -> 
 @pytest.mark.asyncio
 async def test_replay_drops_raw_scheduled_trigger() -> None:
   events = [
-      {
-          "type": "scheduled_trigger",
-          "content": "[Scheduled trigger fired] watch",
-          "timestamp": "t0"
-      },
+      _scheduled_trigger_event("[Scheduled trigger fired] watch", "t0"),
   ]
   ws = FakeWebSocket()
   sent_count = await _replay_aggregated_catchup(ws, events, cursor=0, session_id="s")
@@ -94,26 +85,8 @@ async def test_replay_drops_raw_scheduled_trigger() -> None:
 @pytest.mark.asyncio
 async def test_replay_emits_only_latest_stream_when_draft_is_dangling() -> None:
   events = [
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "A"
-              }]
-          },
-          "timestamp": "t0"
-      },
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "B"
-              }]
-          },
-          "timestamp": "t1"
-      },
+      _assistant_event("A", "t0"),
+      _assistant_event("B", "t1"),
   ]
   ws = FakeWebSocket()
   await _replay_aggregated_catchup(ws, events, cursor=0, session_id="s")
@@ -132,21 +105,8 @@ async def test_replay_emits_only_latest_stream_when_draft_is_dangling() -> None:
 @pytest.mark.asyncio
 async def test_replay_with_cursor_at_end_sends_nothing() -> None:
   events = [
-      {
-          "type": "user",
-          "content": "hi",
-          "timestamp": "t0"
-      },
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "ok"
-              }]
-          },
-          "timestamp": "t1"
-      },
+      _user_event("hi", "t0"),
+      _assistant_event("ok", "t1"),
   ]
   ws = FakeWebSocket()
   sent = await _replay_aggregated_catchup(ws, events, cursor=len(events), session_id="s")
@@ -158,16 +118,8 @@ async def test_replay_with_cursor_at_end_sends_nothing() -> None:
 @pytest.mark.asyncio
 async def test_replay_uses_global_cursor_after_archive_offset() -> None:
   events = [
-      {
-          "type": "user",
-          "content": "old-live",
-          "timestamp": "t0"
-      },
-      {
-          "type": "user",
-          "content": "missed",
-          "timestamp": "t1"
-      },
+      _user_event("old-live", "t0"),
+      _user_event("missed", "t1"),
   ]
   ws = FakeWebSocket()
 
@@ -205,46 +157,12 @@ async def test_session_catchup_fast_skips_when_cursor_is_current() -> None:
 
 def _mixed_replay_corpus() -> list[dict]:
   return [
-      {
-          "type": "user",
-          "content": "hi",
-          "timestamp": "t0"
-      },
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "A"
-              }]
-          },
-          "timestamp": "t1",
-      },
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "B"
-              }]
-          },
-          "timestamp": "t2",
-      },
-      {
-          "type": "master_done",
-          "thinking_seconds": 1,
-          "timestamp": "t3"
-      },
-      {
-          "type": "scheduled_trigger",
-          "content": "fire",
-          "timestamp": "t4"
-      },
-      {
-          "type": "user",
-          "content": "tail",
-          "timestamp": "t5"
-      },
+      _user_event("hi", "t0"),
+      _assistant_event("A", "t1"),
+      _assistant_event("B", "t2"),
+      _master_done_event(1, "t3"),
+      _scheduled_trigger_event("fire", "t4"),
+      _user_event("tail", "t5"),
   ]
 
 

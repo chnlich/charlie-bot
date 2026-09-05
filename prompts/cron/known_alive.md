@@ -295,3 +295,10 @@ Known-alive symbols:
   `You`/`Turn`/`Worker`/`Trigger` supplying the suffixes; `tests/chat_session_bump.test.js`
   asserts the wrapper class by name. A dead-selector scan grepping each full class name
   finds only its definition, so it flags them as unused CSS.
+- `activate` (`web/static/js/terminal_clipboard.js`, the object addon passed to
+  `term.loadAddon`) — xterm.js lifecycle dispatch: the library's `_addonManager.loadAddon`
+  ends with `t.activate(e)`, invoking the addon's `activate` method by that name
+  (verified against the CDN build the template loads, xterm 5.3.0). It is what attaches
+  the copy-on-select `mouseup` listener; deleting it silently kills terminal
+  copy-on-select. A JS unreferenced-method scan finds only the definition, so it flags
+  the method as dead; `dispose` in the same object literal is reached the same way.

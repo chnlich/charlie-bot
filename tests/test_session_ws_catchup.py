@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from conftest import FakeWebSocket
 
@@ -169,7 +171,8 @@ def _mixed_replay_corpus() -> list[dict]:
 @pytest.mark.asyncio
 async def test_replay_sends_exactly_the_thread_built_frame_list() -> None:
   # The replay's only producer of frames is _catchup_frames running in a
-  # thread; the async half sends that list in order and nothing else.
+  # thread; the async half sends that list in order and nothing else, as
+  # pre-rendered wire text whose bytes match WebSocket.send_json's rendering.
   events = _mixed_replay_corpus()
   for cursor in (0, 2, len(events)):
     ws = FakeWebSocket()
@@ -177,6 +180,7 @@ async def test_replay_sends_exactly_the_thread_built_frame_list() -> None:
     expected = _catchup_frames(events, cursor)
     assert ws.sent == expected
     assert sent == len(expected)
+    assert ws.sent_text == [json.dumps(frame, separators=(",", ":"), ensure_ascii=False) for frame in expected]
 
 
 @pytest.mark.asyncio
@@ -184,10 +188,10 @@ async def test_replay_stops_at_first_send_failure_with_match_count() -> None:
 
   class FailingWebSocket(FakeWebSocket):
 
-    async def send_json(self, payload: dict) -> None:
+    async def send_text(self, text: str) -> None:
       if len(self.sent) == 1:
         raise RuntimeError("closed")
-      self.sent.append(payload)
+      await super().send_text(text)
 
   events = _mixed_replay_corpus()
   ws = FailingWebSocket()

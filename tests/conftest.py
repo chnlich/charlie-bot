@@ -1094,14 +1094,24 @@ def write_memory_staging(memory_dir: Path, name: str, topic: str, slug: str, leg
 
 
 class FakeWebSocket:
-  """WebSocket double recording every send_json payload in .sent, for tests that pass it to server
-  catchup/replay producers duck-typing the FastAPI WebSocket."""
+  """WebSocket double recording every sent frame in .sent, for tests that pass it to server
+  catchup/replay producers duck-typing the FastAPI WebSocket.
+
+  Frames arrive as pre-rendered text (the replay's send path) or dicts
+  (send_json callers); both land parsed in .sent, and send_text keeps the raw
+  strings in .sent_text for wire-byte assertions.
+  """
 
   def __init__(self) -> None:
     self.sent: list[dict] = []
+    self.sent_text: list[str] = []
 
   async def send_json(self, payload: dict) -> None:
     self.sent.append(payload)
+
+  async def send_text(self, text: str) -> None:
+    self.sent_text.append(text)
+    self.sent.append(json.loads(text))
 
 
 class FakeSessionManager:

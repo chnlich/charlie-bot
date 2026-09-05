@@ -36,6 +36,7 @@ from conftest import (
 from src.core import event_types as ET
 from src.core import task_chain
 from src.core.config import (
+    CharlieBotConfig,
     ScheduledTaskConfig,
     StepConfig,
     _load_cron_file,
@@ -292,6 +293,36 @@ def _write_result_events(cfg: Any, session_id: str, thread_id: str, result_text:
   events_path.write_text(json.dumps({"type": ET.RESULT, "result": result_text}) + "\n", encoding="utf-8")
 
 
+async def _completion_rig(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    results: list[str | None],
+) -> tuple[CharlieBotConfig, SessionManager, ThreadManager, SessionMetadata, list[ThreadMetadata], list[dict[str, Any]],
+           AsyncMock]:
+  """Stage the chain-completion world: one persisted chain thread per *results* entry, named and
+  rooted as _steps_task_cfg's selector→reviewer pair, each non-None entry written as that thread's
+  last RESULT event. Patches the spawn pipes and the master-wake seam.
+
+  Returns (cfg, session_mgr, thread_mgr, session, threads, spawns, master).
+  """
+  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
+  thread_mgr = ThreadManager(cfg)
+  session = await _make_chain_session(cfg, session_mgr)
+  threads: list[ThreadMetadata] = []
+  for index, result_text in enumerate(results):
+    step_name = "selector" if index == 0 else "reviewer"
+    chain_root = None if index == 0 else threads[0].id
+    thread = await _make_chain_thread(thread_mgr, session, step_name, chain_root, index)
+    if result_text is not None:
+      _write_result_events(cfg, session.id, thread.id, result_text)
+    threads.append(thread)
+  spawns: list[dict[str, Any]] = []
+  _patch_chain_pipes(monkeypatch, spawns)
+  master = AsyncMock()
+  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, master)
+  return cfg, session_mgr, thread_mgr, session, threads, spawns, master
+
+
 @pytest.mark.asyncio
 async def test_fire_spawns_first_step_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
@@ -331,15 +362,9 @@ async def test_step_success_spawns_next_step_with_previous_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
-  thread_mgr = ThreadManager(cfg)
-  session = await _make_chain_session(cfg, session_mgr)
-  step0 = await _make_chain_thread(thread_mgr, session, "selector", None, 0)
-  _write_result_events(cfg, session.id, step0.id, SELECTOR_RESULT)
-  spawns: list[dict[str, Any]] = []
-  _patch_chain_pipes(monkeypatch, spawns)
-  master = AsyncMock()
-  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, master)
+  cfg, session_mgr, thread_mgr, session, threads, spawns, master = await _completion_rig(
+      tmp_path, monkeypatch, [SELECTOR_RESULT])
+  step0 = threads[0]
 
   owned = await task_chain.handle_step_completion(session.id, step0, 0, thread_mgr, session_mgr, cfg)
 
@@ -368,15 +393,9 @@ async def test_step_failure_spawns_nothing_and_wakes_master(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
-  thread_mgr = ThreadManager(cfg)
-  session = await _make_chain_session(cfg, session_mgr)
-  step0 = await _make_chain_thread(thread_mgr, session, "selector", None, 0)
-  _write_result_events(cfg, session.id, step0.id, SELECTOR_RESULT)
-  spawns: list[dict[str, Any]] = []
-  _patch_chain_pipes(monkeypatch, spawns)
-  master = AsyncMock()
-  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, master)
+  cfg, session_mgr, thread_mgr, session, threads, spawns, master = await _completion_rig(
+      tmp_path, monkeypatch, [SELECTOR_RESULT])
+  step0 = threads[0]
 
   owned = await task_chain.handle_step_completion(session.id, step0, 1, thread_mgr, session_mgr, cfg)
 
@@ -392,17 +411,9 @@ async def test_last_step_completion_wakes_master_once_with_block_per_step(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
-  thread_mgr = ThreadManager(cfg)
-  session = await _make_chain_session(cfg, session_mgr)
-  step0 = await _make_chain_thread(thread_mgr, session, "selector", None, 0)
-  step1 = await _make_chain_thread(thread_mgr, session, "reviewer", step0.id, 1)
-  _write_result_events(cfg, session.id, step0.id, SELECTOR_RESULT)
-  _write_result_events(cfg, session.id, step1.id, REVIEWER_RESULT)
-  spawns: list[dict[str, Any]] = []
-  _patch_chain_pipes(monkeypatch, spawns)
-  master = AsyncMock()
-  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, master)
+  cfg, session_mgr, thread_mgr, session, threads, spawns, master = await _completion_rig(
+      tmp_path, monkeypatch, [SELECTOR_RESULT, REVIEWER_RESULT])
+  step0, step1 = threads
 
   owned = await task_chain.handle_step_completion(session.id, step1, 0, thread_mgr, session_mgr, cfg)
 
@@ -443,14 +454,8 @@ async def test_empty_previous_result_stops_chain_and_notes_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
-  thread_mgr = ThreadManager(cfg)
-  session = await _make_chain_session(cfg, session_mgr)
-  step0 = await _make_chain_thread(thread_mgr, session, "selector", None, 0)
-  spawns: list[dict[str, Any]] = []
-  _patch_chain_pipes(monkeypatch, spawns)
-  master = AsyncMock()
-  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, master)
+  cfg, session_mgr, thread_mgr, session, threads, spawns, master = await _completion_rig(tmp_path, monkeypatch, [None])
+  step0 = threads[0]
 
   owned = await task_chain.handle_step_completion(session.id, step0, 0, thread_mgr, session_mgr, cfg)
 

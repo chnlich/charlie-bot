@@ -184,3 +184,23 @@ KILL_ESCALATION_POLL_SECONDS = 0.2  # seconds between liveness probes during the
 # roughly 10 ms per in-flight master_run record. The bound exists so a stalled
 # mount degrades to a raw log line instead of holding boot forever.
 MASTER_IDENTITY_BARRIER_TIMEOUT = 5.0  # seconds
+
+# ---------------------------------------------------------------------------
+# Uvicorn shutdown
+# ---------------------------------------------------------------------------
+
+# How long live HTTP handlers and WebSockets get to wind down after the
+# shutdown signal before uvicorn exits the process anyway.
+SERVER_GRACEFUL_SHUTDOWN_TIMEOUT = 5  # seconds
+
+# ---------------------------------------------------------------------------
+# SQLite lock waits (storage_cool's opencode-db pass)
+# ---------------------------------------------------------------------------
+
+# sqlite3.connect(timeout=...) installs the connection's busy handler, so the
+# seconds value governs every statement until _vacuum_opencode_db issues the
+# busy_timeout pragma below: connect, PRAGMA foreign_keys=ON, and the DELETE
+# loop. The pragma then lowers the bound for its freelist check and VACUUM,
+# which take the lock for longer stretches — hence the shorter ms value.
+SQLITE_LOCK_WAIT_SECONDS = 5.0  # seconds — connect through the DELETE loop
+SQLITE_LOCK_WAIT_MS = 2000  # milliseconds — PRAGMA busy_timeout for VACUUM

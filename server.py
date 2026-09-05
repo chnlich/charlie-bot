@@ -456,5 +456,5 @@ if __name__ == "__main__":
       port=cfg.server_port,
       reload=False,
       log_level="info",
-      timeout_graceful_shutdown=5,
+      timeout_graceful_shutdown=timeouts.SERVER_GRACEFUL_SHUTDOWN_TIMEOUT,
   )

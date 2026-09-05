@@ -20,6 +20,10 @@ Plus the launch path's base-less fallback (spawner._create_worktree_and_process)
     checkout is stale (local main behind origin, checkout on a local-only branch)
   - the local-branch read is tripwired off: the fallback must never call
     git_current_branch
+  - the probe-fed forms: a caller-supplied remote_tip replaces the duplicate
+    ls-remote, and a probe equal to the remote-tracking ref skips the no-op fetch
+  - git_remote_default_branch_and_tip returns the default branch and its tip
+    from one ls-remote
 """
 
 import subprocess
@@ -476,3 +480,109 @@ async def test_crash_respawn_reaches_the_same_fallback(
   )
 
   assert thread.base_branch == await git_remote_default_branch(clone)
+
+
+# --- probe-fed resolution: the ls-remote answer replaces the duplicate probe + no-op fetch ---
+
+
+@pytest.mark.asyncio
+async def test_probe_equal_tracking_ref_skips_fetch(repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+  """When the ls-remote probe shows the local remote-tracking ref already holds the
+  tip origin advertises, the fetch is provably a no-op and must not run: the probe
+  is read straight from the remote, so no fetch could change that ref."""
+  from src.core import git as git_mod
+
+  main_checkout = repo_setup["main_checkout"]
+  tip = _git(main_checkout, "rev-parse", "origin/feature")
+
+  async def _forbidden_fetch(repo_path: Path, remote: str, branch: str) -> tuple[bool, str]:
+    raise AssertionError(f"git fetch ran although the probe showed the tracking ref current ({remote} {branch})")
+
+  monkeypatch.setattr(git_mod, "git_fetch", _forbidden_fetch)
+
+  resolution = await git_mod.resolve_base_branch(main_checkout, "origin/feature")
+  assert resolution.start_point == "origin/feature"
+  assert _git(main_checkout, "rev-parse", resolution.start_point) == tip
+
+
+@pytest.mark.asyncio
+async def test_probe_mismatch_still_fetches(repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+  """When the probe shows origin ahead of the tracking ref, the fetch runs and the
+  start point is the freshly fetched tip."""
+  from src.core import git as git_mod
+
+  seed = repo_setup["seed"]
+  main_checkout = repo_setup["main_checkout"]
+
+  new_tip = _commit(seed, "advance.txt", "advance\n", "advance origin")
+  _git(seed, "push", "origin", "feature")
+  assert _git(main_checkout, "rev-parse", "origin/feature") != new_tip  # sanity: tracking ref behind
+
+  real_fetch = git_mod.git_fetch
+  calls: list[tuple[str, str]] = []
+
+  async def _counting_fetch(repo_path: Path, remote: str, branch: str) -> tuple[bool, str]:
+    calls.append((remote, branch))
+    return await real_fetch(repo_path, remote, branch)
+
+  monkeypatch.setattr(git_mod, "git_fetch", _counting_fetch)
+
+  resolution = await git_mod.resolve_base_branch(main_checkout, "origin/feature")
+  assert calls == [("origin", "feature")]
+  assert _git(main_checkout, "rev-parse", resolution.start_point) == new_tip
+
+
+@pytest.mark.asyncio
+async def test_caller_supplied_tip_skips_the_probe(repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+  """A remote_tip from the caller's own ls-remote replaces this function's probe:
+  no ls-remote runs, the equality check still gates the fetch."""
+  from src.core import git as git_mod
+
+  main_checkout = repo_setup["main_checkout"]
+  tip = _git(main_checkout, "rev-parse", "origin/feature")
+
+  real_stdout = git_mod._git_stdout
+
+  async def _no_ls_remote(repo_path: Path, *args: str, **kwargs: Any) -> tuple[bool, str, str]:
+    if "ls-remote" in args:
+      raise AssertionError(f"resolve_base_branch probed ls-remote despite a caller-supplied tip: {args}")
+    return await real_stdout(repo_path, *args, **kwargs)
+
+  monkeypatch.setattr(git_mod, "_git_stdout", _no_ls_remote)
+
+  resolution = await git_mod.resolve_base_branch(main_checkout, "origin/feature", remote_tip=tip)
+  assert resolution.start_point == "origin/feature"
+  assert _git(main_checkout, "rev-parse", resolution.start_point) == tip
+
+
+@pytest.mark.asyncio
+async def test_remote_default_branch_and_tip_reads_both_from_one_call(
+    remote_default_repo: dict[str, Path],
+) -> None:
+  """The combined ls-remote returns the remote's default branch and that branch's
+  tip, following the remote when its HEAD repoints (never clone-time metadata)."""
+  from src.core.git import git_remote_default_branch_and_tip
+
+  origin = remote_default_repo["origin"]
+  seed = remote_default_repo["seed"]
+  clone = remote_default_repo["clone"]
+
+  branch, tip = await git_remote_default_branch_and_tip(clone)
+  assert branch == "main"
+  assert tip == _git(origin, "rev-parse", "refs/heads/main")
+
+  _commit(seed, "advance.txt", "advance\n", "advance origin main")
+  _git(seed, "push", "origin", "main")
+
+  branch, tip = await git_remote_default_branch_and_tip(clone)
+  assert branch == "main"
+  assert tip == _git(origin, "rev-parse", "refs/heads/main")
+
+  # Repoint the remote's HEAD at develop; the combined call follows it.
+  _git(seed, "checkout", "-b", "develop")
+  _git(seed, "push", "-u", "origin", "develop")
+  _git(origin, "symbolic-ref", "HEAD", "refs/heads/develop")
+
+  branch, tip = await git_remote_default_branch_and_tip(clone)
+  assert branch == "develop"
+  assert tip == _git(origin, "rev-parse", "refs/heads/develop")

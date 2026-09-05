@@ -109,6 +109,30 @@ async def _git_rev_parse(repo_path: Path, ref: str) -> str | None:
   return out if ok and out else None
 
 
+_SYMREF_PREFIX = "ref: refs/heads/"
+
+
+def _default_branch_from_ls_remote(out: str, source: str, repo_path: Path) -> str:
+  """Parse the symref line of `git ls-remote --symref` output into the default branch name."""
+  for line in out.splitlines():
+    if line.startswith(_SYMREF_PREFIX):
+      branch = line[len(_SYMREF_PREFIX):].split("\t", 1)[0].strip()
+      if branch:
+        return branch
+  raise BaseBranchResolutionError(
+      f"{source} in {repo_path} advertised no {_SYMREF_PREFIX}<branch> symref "
+      f"line; refusing to infer a default from local refs. Output: {out!r}")
+
+
+def _ls_remote_ref_sha(out: str, ref: str) -> str | None:
+  """The SHA ls-remote reported for exactly *ref*, or None when it listed no such line."""
+  for line in out.splitlines():
+    sha, _, listed = line.partition("\t")
+    if listed.strip() == ref and sha:
+      return sha
+  return None
+
+
 async def git_remote_default_branch(repo_path: Path) -> str:
   """Read the remote's published default branch via `git ls-remote --symref origin HEAD`.
 
@@ -129,18 +153,34 @@ async def git_remote_default_branch(repo_path: Path) -> str:
   )
   if not ok:
     raise BaseBranchResolutionError(f"cannot read origin's default branch in {repo_path} via git ls-remote: {err}")
-  symref_prefix = "ref: refs/heads/"
-  for line in out.splitlines():
-    if line.startswith(symref_prefix):
-      branch = line[len(symref_prefix):].split("\t", 1)[0].strip()
-      if branch:
-        return branch
-  raise BaseBranchResolutionError(
-      f"git ls-remote --symref origin HEAD in {repo_path} advertised no {symref_prefix}<branch> symref "
-      f"line; refusing to infer a default from local refs. Output: {out!r}")
+  return _default_branch_from_ls_remote(out, "git ls-remote --symref origin HEAD", repo_path)
 
 
-async def resolve_base_branch(repo_path: Path, base_branch: str) -> BaseResolution:
+async def git_remote_default_branch_and_tip(repo_path: Path) -> tuple[str, str | None]:
+  """The remote's default branch and its tip SHA from ONE `git ls-remote --symref origin`.
+
+  The unfiltered listing carries the HEAD symref and every branch ref, so a
+  caller that needs both the default branch and whether that branch is
+  published (plus its tip) pays one network round-trip instead of two. Same
+  fail-loud contract as git_remote_default_branch. The tip is None when the
+  listing names a default branch without listing its ref — an inconsistent
+  remote the caller's base resolution then reports through its own probe.
+  """
+  ok, out, err = await _git_stdout(
+      repo_path,
+      "ls-remote",
+      "--symref",
+      "origin",
+      timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
+      timeout_label="git ls-remote",
+  )
+  if not ok:
+    raise BaseBranchResolutionError(f"cannot read origin's default branch in {repo_path} via git ls-remote: {err}")
+  branch = _default_branch_from_ls_remote(out, "git ls-remote --symref origin", repo_path)
+  return branch, _ls_remote_ref_sha(out, f"refs/heads/{branch}")
+
+
+async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: str | None = None) -> BaseResolution:
   """Resolve a --base-branch value to a worktree start point, failing loudly on ambiguity.
 
   Resolution matrix (the only accepted forms; everything else raises
@@ -149,12 +189,19 @@ async def resolve_base_branch(repo_path: Path, base_branch: str) -> BaseResoluti
     - origin/<b>      → explicit remote: must exist on origin; start at the freshly fetched
                         origin/<b> regardless of any local state.
     - <b> (bare)      → if the remote branch exists, the local branch must be absent or
-                        point at exactly the same commit (else hard error naming both SHAs);
+                        point at exactly the same commit (else hard error);
                         start at freshly fetched origin/<b>. If the remote branch does not
                         exist (or no origin remote is configured), require the branch to
                         exist locally and start there (unpublished-branch case).
   A reachable-check that fails (network/auth) is a hard error, never a silent local
   fallback; use a full SHA to pin a base while offline.
+
+  *remote_tip* is a caller's own fresh `git ls-remote` answer for
+  ``refs/heads/<branch>`` (None = the caller did not probe). Supplying it skips
+  this function's duplicate ls-remote; the fetch still runs unless the probe
+  showed the local remote-tracking ref already holds exactly the tip origin
+  advertises — the probe is read straight from the remote, so a fetch could not
+  change that ref and the start point keeps the freshly-resolved guarantee.
   """
   raw = (base_branch or "").strip()
   if not raw:
@@ -189,8 +236,7 @@ async def resolve_base_branch(repo_path: Path, base_branch: str) -> BaseResoluti
       timeout_label="git remote get-url",
   )
   origin_configured = ok
-  remote_exists = False
-  if origin_configured:
+  if origin_configured and remote_tip is None:
     ok, out, ls_err = await _git_stdout(
         repo_path,
         "ls-remote",
@@ -203,12 +249,15 @@ async def resolve_base_branch(repo_path: Path, base_branch: str) -> BaseResoluti
       raise BaseBranchResolutionError(
           f"cannot reach origin to resolve base branch {branch!r}: {ls_err}. "
           "Retry when the remote is reachable, or pass a full commit SHA to pin the base.")
-    remote_exists = bool(out.strip())
+    remote_tip = _ls_remote_ref_sha(out, f"refs/heads/{branch}")
 
+  remote_exists = remote_tip is not None
   if remote_exists:
-    fetched, fetch_err = await git_fetch(repo_path, "origin", branch)
-    if not fetched:
-      raise BaseBranchResolutionError(f"git fetch origin {branch} failed: {fetch_err}")
+    local_remote_sha = await _git_rev_parse(repo_path, f"refs/remotes/origin/{branch}")
+    if remote_tip != local_remote_sha:
+      fetched, fetch_err = await git_fetch(repo_path, "origin", branch)
+      if not fetched:
+        raise BaseBranchResolutionError(f"git fetch origin {branch} failed: {fetch_err}")
     remote_sha = await _git_rev_parse(repo_path, f"refs/remotes/origin/{branch}")
     if remote_sha is None:
       raise BaseBranchResolutionError(f"origin/{branch} listed by ls-remote but missing after fetch in {repo_path}")
@@ -237,16 +286,20 @@ async def resolve_base_branch(repo_path: Path, base_branch: str) -> BaseResoluti
       detail=f"local branch {branch} at {local_sha[:12]} (no matching origin branch)")
 
 
-async def git_create_worktree(repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> BaseResolution:
+async def git_create_worktree(
+    repo_path: Path, base_branch: str, branch_name: str, wt_path: Path, *, remote_tip: str | None = None
+) -> BaseResolution:
   """Create a git worktree and fail loudly if git reports an error.
 
   Resolves the start-point via `resolve_base_branch` so that a stale local copy
   of <base_branch> can never silently become a worker's base: ambiguous input
   raises BaseBranchResolutionError before any worktree is created. Returns the
   BaseResolution so callers can persist the canonical (bare) branch name and
-  audit the chosen start point.
+  audit the chosen start point. *remote_tip* forwards to resolve_base_branch
+  (see there); it must be the caller's own fresh ls-remote answer for
+  ``refs/heads/<branch>``.
   """
-  resolution = await resolve_base_branch(repo_path, base_branch)
+  resolution = await resolve_base_branch(repo_path, base_branch, remote_tip=remote_tip)
   start_point = resolution.start_point
   proc = await asyncio.create_subprocess_exec(
       "git",

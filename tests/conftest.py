@@ -1177,6 +1177,20 @@ def patch_trigger_fire(
     yield stack.enter_context(master_patch)
 
 
+@contextlib.contextmanager
+def patch_trigger_mocks() -> Iterator[AsyncMock]:
+  """Patch the two module seams a firing trigger reads: streaming broadcast and trigger_master.
+
+  Yields the trigger_master mock. Rigs that must run the real watch internals (real pids,
+  real sleeps) use this instead of patch_trigger_fire, whose subprocess stub would hide them.
+  """
+  with (
+      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
+      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
+  ):
+    yield mock_master
+
+
 async def assert_trigger_fired_completed(
     trigger_mgr: TriggerManager, session_id: str, trigger_id: str, mock_master: AsyncMock) -> str:
   """Asserts the trigger persisted FIRED with the "completed" reason and the standard fired prefix;

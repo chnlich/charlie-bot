@@ -652,6 +652,22 @@ CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.codex.resolve_binary"
 # helper (charlie_code.py, codex.py, gemini_cli.py, opencode.py) keep their own namespaces.
 ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.antigravity_cli.resolve_binary"
 
+# Import-path patch target for the binary resolution a CharlieCodeBackend construction
+# runs. src/agents/backends/charlie_code.py binds the helper at import scope (`from
+# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
+# stand-in on the src.agents.backends.charlie_code module attribute and
+# CharlieCodeBackend.__init__ reads it at call time; sibling backends binding the same
+# helper (antigravity_cli.py, codex.py, gemini_cli.py, opencode.py) keep their own namespaces.
+CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.charlie_code.resolve_binary"
+
+# Import-path patch target for the binary resolution a GeminiCliBackend construction runs.
+# src/agents/backends/gemini_cli.py binds the helper at import scope (`from
+# src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
+# stand-in on the src.agents.backends.gemini_cli module attribute and GeminiCliBackend.__init__
+# reads it at call time; sibling backends binding the same helper (antigravity_cli.py,
+# charlie_code.py, codex.py, opencode.py) keep their own namespaces.
+GEMINI_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.gemini_cli.resolve_binary"
+
 # Patch target for the atomic-write swap hook. src/core/json_utils.py publishes each staged
 # payload with an ``os.replace`` attribute lookup on its module-scope ``import os`` binding, and
 # atomic_write_stream's docstring pins that lookup as the test hook, so mock setattrs the
@@ -670,6 +686,27 @@ JSON_UTILS_OS_REPLACE_PATCH_TARGET = "src.core.json_utils.os.replace"
 TUI_KILL_TMUX_SESSION_PATCH_TARGET = "src.agents.backends.tui.kill_tmux_session"
 TUI_TMUX_SESSION_EXISTS_PATCH_TARGET = "src.agents.backends.tui.tmux_session_exists"
 TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET = "src.agents.backends.tui._claude_jsonl_busy"
+
+
+def build_cli_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    backend_cls: type[backend_base.AgentBackend],
+    resolve_patch_target: str,
+    fake_binary: str,
+    defaults: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> backend_base.AgentBackend:
+  """Construct a CLI backend with its resolve_binary pinned to *fake_binary*.
+
+  The one home of the backend-test construction contract: the patch lands the stand-in
+  on the module named by *resolve_patch_target* (each ``*_RESOLVE_BINARY_PATCH_TARGET``
+  constant above states that module's binding scope), so ``__init__`` never probes PATH,
+  and *defaults* fill kwargs the caller left out.
+  """
+  monkeypatch.setattr(resolve_patch_target, lambda name, fallback: fake_binary)
+  for key, value in (defaults or {}).items():
+    kwargs.setdefault(key, value)
+  return backend_cls(**kwargs)
 
 
 def plan_page_html(goal_body: str = "Ship the fix.") -> str:

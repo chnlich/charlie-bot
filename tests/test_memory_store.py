@@ -1,9 +1,9 @@
 """Tests for the labeled-entry memory store library (src/core/memory.py).
 
 Fixtures are entry format v2 (frontmatter ``title``, comma-list ``audience``,
-no ``created``/``source``, heading-free body); ``_legacy_entry_text`` builds v1
-files (``created``/``source``, ``both``, ``# <title>`` body opener) to cover
-the dual-read path.
+no ``created``/``source``, heading-free body); ``legacy_memory_entry_text``
+(conftest) builds v1 files (``created``/``source``, ``both``, ``# <title>``
+body opener) to cover the dual-read path.
 """
 
 import io
@@ -11,6 +11,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from conftest import memory_entry_text as _entry_text
+from conftest import write_memory_entry as _write_entry
+from conftest import write_memory_staging as _write_staging
+from conftest import write_memory_topics as _write_topics
 
 from src.core import memory
 from src.core.memory import (
@@ -21,75 +25,6 @@ from src.core.memory import (
     load_store,
     parse_entry,
 )
-
-_DEFAULT_TOPICS = [
-    "profile resident",
-    "communication resident",
-    "workflow resident",
-    "rulings resident",
-    "host resident",
-    "charliebot",
-]
-
-
-def _write_topics(memory_dir: Path, lines: list[str] | None = None) -> None:
-  memory_dir.mkdir(parents=True, exist_ok=True)
-  (memory_dir / "entries").mkdir(exist_ok=True)
-  (memory_dir / "topics").write_text("".join(line + "\n" for line in (lines or _DEFAULT_TOPICS)), encoding="utf-8")
-
-
-def _entry_text(
-    topic: str, slug: str, *, scope="user", audience="master, worker", title=None, revises=None, body=None) -> str:
-  """Format v2: title in frontmatter, comma-list audience, pure-markdown body."""
-  if title is None:
-    title = slug.replace("-", " ").title()
-  header = ["---", f"scope: {scope}", f"topic: {topic}", f"audience: {audience}", f"title: {title}"]
-  if revises is not None:
-    header.append(f"revises: {revises}")
-  header.append("---")
-  if body is None:
-    body = f"body for {slug}\n"
-  return "\n".join(header) + "\n" + body
-
-
-def _legacy_entry_text(
-    topic: str,
-    slug: str,
-    *,
-    scope="user",
-    audience="both",
-    created="2026-07-28",
-    source="test",
-    revises=None,
-    body=None) -> str:
-  """Format v1 (legacy): created/source header, three-value audience, ``# <title>`` body opener."""
-  header = [
-      "---", f"scope: {scope}", f"topic: {topic}", f"audience: {audience}", f"created: {created}", f"source: {source}"
-  ]
-  if revises is not None:
-    header.append(f"revises: {revises}")
-  header.append("---")
-  if body is None:
-    body = f"# {slug.replace('-', ' ').title()}\n\nbody for {slug}\n"
-  return "\n".join(header) + "\n" + body
-
-
-def _write_entry(memory_dir: Path, topic: str, slug: str, legacy: bool = False, **kw) -> Path:
-  d = memory_dir / "entries" / topic
-  d.mkdir(parents=True, exist_ok=True)
-  p = d / f"{slug}.md"
-  text = _legacy_entry_text(topic, slug, **kw) if legacy else _entry_text(topic, slug, **kw)
-  p.write_text(text, encoding="utf-8")
-  return p
-
-
-def _write_staging(memory_dir: Path, name: str, topic: str, slug: str, legacy: bool = False, **kw) -> Path:
-  memory_dir.joinpath("staging").mkdir(parents=True, exist_ok=True)
-  p = memory_dir / "staging" / f"{name}.md"
-  text = _legacy_entry_text(topic, slug, **kw) if legacy else _entry_text(topic, slug, **kw)
-  p.write_text(text, encoding="utf-8")
-  return p
-
 
 # --- parse_entry: v2 ----------------------------------------------------------
 

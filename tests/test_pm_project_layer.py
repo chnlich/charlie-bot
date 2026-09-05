@@ -28,6 +28,8 @@ from conftest import (
     make_cron_client,
     make_scheduler_setup,
     make_sessions_client,
+    write_memory_entry,
+    write_memory_topics,
 )
 from pydantic import ValidationError
 
@@ -422,12 +424,8 @@ def _instructions_cfg(tmp_path: Path) -> SimpleNamespace:
   (repo / "prompts").mkdir(parents=True)
   (repo / "prompts" / "master.md").write_text("BASE PROMPT", encoding="utf-8")
   memory_dir = home / "memory"
-  (memory_dir / "entries" / "profile").mkdir(parents=True)
-  (memory_dir / "topics").write_text("profile resident\n", encoding="utf-8")
-  (memory_dir / "entries" / "profile" / "note.md").write_text(
-      "---\nscope: user\ntopic: profile\naudience: master, worker\ntitle: Note\n---\n"
-      "MEMORY BODY\n",
-      encoding="utf-8")
+  write_memory_topics(memory_dir, ["profile resident"])
+  write_memory_entry(memory_dir, "profile", "note", title="Note", body="MEMORY BODY\n")
   return SimpleNamespace(charlie_bot_repo=repo, claude_md_file=home / "MASTER_AGENT_PROMPT.md", memory_dir=memory_dir)
 
 

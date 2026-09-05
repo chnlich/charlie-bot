@@ -327,8 +327,7 @@ def test_claude_user_cwd_dirs_never_touched(tmp_path: Path, cool_env: CharlieBot
     assert path.exists()
 
 
-def test_claude_projects_roots_include_default_home_beside_env_home(
-    tmp_path: Path, cool_env: CharlieBotConfig) -> None:
+def test_claude_projects_roots_include_default_home_beside_env_home(tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   """CLAUDE_CONFIG_DIR points at a non-default home with no configured override,
   yet the default home's projects tree stays in the search set."""
   roots = storage_cool.claude_projects_roots(cool_env)

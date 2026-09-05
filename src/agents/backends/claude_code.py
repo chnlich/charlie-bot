@@ -40,6 +40,12 @@ SUBSCRIPTION_DISALLOWED_TOOLS = "AskUserQuestion,ExitPlanMode"
 HEADLESS_CLAUDE_INVARIANT_ENV: dict[str, str] = {
     "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
 }
+# One spelling per Claude Code variable the declared-window logic touches: the
+# default pin, the forward allowlist, and the degradation checks must agree.
+AUTO_COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+AUTOCOMPACT_PCT_OVERRIDE_ENV = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"
+MAX_CONTEXT_TOKENS_ENV = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+
 # CharlieBot-chosen defaults, applied only when the host has not set the variable.
 # Claude Code compacts at window - min(max_output_tokens, 20000) - 13000, so declaring
 # a 433000 window puts the compaction point at 400000 tokens (433000 = 400000 + 13000
@@ -47,12 +53,12 @@ HEADLESS_CLAUDE_INVARIANT_ENV: dict[str, str] = {
 # terms are Claude Code internals: if a CLI upgrade changes them the compaction point
 # drifts silently and this constant has to be recomputed.
 HEADLESS_CLAUDE_DEFAULT_ENV: dict[str, str] = {
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "433000",
+    AUTO_COMPACT_WINDOW_ENV: "433000",
 }
 HEADLESS_CLAUDE_FORWARDED_ENV_NAMES: tuple[str, ...] = (
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+    AUTOCOMPACT_PCT_OVERRIDE_ENV,
+    MAX_CONTEXT_TOKENS_ENV,
+    AUTO_COMPACT_WINDOW_ENV,
     "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT",
 )
 
@@ -161,10 +167,10 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
   """
   env = headless_claude_env()
   raw_window = env.get(
-      "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-      HEADLESS_CLAUDE_DEFAULT_ENV["CLAUDE_CODE_AUTO_COMPACT_WINDOW"],
+      AUTO_COMPACT_WINDOW_ENV,
+      HEADLESS_CLAUDE_DEFAULT_ENV[AUTO_COMPACT_WINDOW_ENV],
   )
-  default_window = int(HEADLESS_CLAUDE_DEFAULT_ENV["CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
+  default_window = int(HEADLESS_CLAUDE_DEFAULT_ENV[AUTO_COMPACT_WINDOW_ENV])
 
   try:
     window = int(raw_window)
@@ -173,12 +179,12 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
   except (ValueError, TypeError):
     _warn_declared_window_once(
         "claude_declared_window_unparseable_window",
-        variable="CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        variable=AUTO_COMPACT_WINDOW_ENV,
         window=raw_window,
     )
     window = default_window
 
-  for override_name in ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_MAX_CONTEXT_TOKENS"):
+  for override_name in (AUTOCOMPACT_PCT_OVERRIDE_ENV, MAX_CONTEXT_TOKENS_ENV):
     if override_name in env:
       _warn_declared_window_once(
           "claude_declared_window_degraded",

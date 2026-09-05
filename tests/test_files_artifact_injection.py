@@ -28,10 +28,14 @@ def sessions_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   return tmp_path
 
 
-def _build_client() -> TestClient:
+def _build_client(access_key: str | None) -> TestClient:
+  """A files-router client that sends *access_key* as the charliebot_access_key
+  cookie; None sends no credential. The cookie rides the client because httpx
+  deprecates per-request cookies."""
   app = FastAPI()
   app.include_router(files_api.router, prefix="/files")
-  return TestClient(app)
+  cookies = {"charliebot_access_key": access_key} if access_key is not None else None
+  return TestClient(app, cookies=cookies)
 
 
 def _write(path: Path) -> Path:
@@ -90,7 +94,7 @@ def test_injected_script_tag_carries_the_cache_bust_version(monkeypatch: pytest.
 def test_serve_file_injects_for_artifact_path(sessions_root: Path) -> None:
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
 
-  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(page))
   assert resp.status_code == 200
   assert resp.headers["content-type"].startswith("text/html")
   body = resp.text
@@ -107,7 +111,7 @@ def test_serve_file_injects_for_artifact_path(sessions_root: Path) -> None:
 def test_serve_file_injects_thread_artifact_with_session_id_not_thread_id(sessions_root: Path) -> None:
   page = _write(sessions_root / "S" / "threads" / "T" / "artifacts" / "x.html")
 
-  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(page))
   assert resp.status_code == 200
   assert 'window.__cbcServerSessionId="S";' in resp.text
   assert '"T"' not in resp.text
@@ -118,7 +122,7 @@ def test_serve_file_injects_deeper_nested_artifact(sessions_root: Path) -> None:
   # page sits under <session>/... with an `artifacts` parent, not how deep.
   page = _write(sessions_root / "S" / "threads" / "T" / "sub" / "artifacts" / "x.html")
 
-  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(page))
   assert resp.status_code == 200
   assert 'window.__cbcServerSessionId="S";' in resp.text
 
@@ -126,7 +130,7 @@ def test_serve_file_injects_deeper_nested_artifact(sessions_root: Path) -> None:
 def test_serve_file_injects_via_bearer_header(sessions_root: Path) -> None:
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
 
-  resp = _build_client().get("/files" + str(page), headers={"Authorization": "Bearer secret"})
+  resp = _build_client(None).get("/files" + str(page), headers={"Authorization": "Bearer secret"})
   assert resp.status_code == 200
   assert "artifact-comments.js" in resp.text
   assert 'window.__cbcServerSessionId="S";' in resp.text
@@ -136,7 +140,7 @@ def test_serve_file_no_credential_returns_original_bytes(sessions_root: Path) ->
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
   original = page.read_text(encoding="utf-8")
 
-  resp = _build_client().get("/files" + str(page))
+  resp = _build_client(None).get("/files" + str(page))
   assert resp.status_code == 200
   assert resp.text == original
   assert "artifact-comments.js" not in resp.text
@@ -147,7 +151,7 @@ def test_serve_file_wrong_credential_returns_original_bytes(sessions_root: Path)
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
   original = page.read_text(encoding="utf-8")
 
-  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "wrong"})
+  resp = _build_client("wrong").get("/files" + str(page))
   assert resp.status_code == 200
   assert resp.text == original
   assert "artifact-comments.js" not in resp.text
@@ -159,7 +163,7 @@ def test_serve_file_empty_configured_key_injects(sessions_root: Path, monkeypatc
       files_api, "get_config", lambda: SimpleNamespace(sessions_dir=sessions_root, charliebot_access_key=""))
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
 
-  resp = _build_client().get("/files" + str(page))
+  resp = _build_client(None).get("/files" + str(page))
   assert resp.status_code == 200
   assert 'window.__cbcServerSessionId="S";' in resp.text
 
@@ -167,7 +171,7 @@ def test_serve_file_empty_configured_key_injects(sessions_root: Path, monkeypatc
 def test_serve_file_session_html_outside_artifacts_not_injected(sessions_root: Path) -> None:
   page = _write(sessions_root / "S" / "notes" / "x.html")
 
-  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(page))
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   # Kept as a FileResponse: served from disk with a last-modified validator.
@@ -178,7 +182,7 @@ def test_serve_file_root_level_artifacts_dir_not_injected(sessions_root: Path) -
   # <root>/artifacts/x.html belongs to no session — there is no session component.
   page = _write(sessions_root / "artifacts" / "x.html")
 
-  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(page))
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   assert "last-modified" in resp.headers
@@ -193,7 +197,7 @@ def test_serve_file_artifact_shape_outside_sessions_root_not_injected(
   outside = tmp_path_factory.mktemp("outside")
   page = _write(outside / "a" / "sessions" / "S" / "artifacts" / "x.html")
 
-  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(page))
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   assert "last-modified" in resp.headers
@@ -215,8 +219,7 @@ def _write_pages(sessions_root: Path) -> tuple[Path, Path]:
 def test_serve_file_diff_annotates_and_keeps_injection_layer(sessions_root: Path) -> None:
   base, new = _write_pages(sessions_root)
 
-  resp = _build_client().get(
-      "/files" + str(new) + "?diff=artifacts/plan_01.html", cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(new) + "?diff=artifacts/plan_01.html")
   assert resp.status_code == 200
   assert resp.headers["content-type"].startswith("text/html")
   # Byte-exact against composing the two layers the way the handler must:
@@ -233,7 +236,7 @@ def test_serve_file_diff_annotates_and_keeps_injection_layer(sessions_root: Path
 def test_serve_file_diff_without_credential_does_not_fall_back_to_clean_page(sessions_root: Path) -> None:
   _, new = _write_pages(sessions_root)
 
-  resp = _build_client().get("/files" + str(new) + "?diff=artifacts/plan_01.html")
+  resp = _build_client(None).get("/files" + str(new) + "?diff=artifacts/plan_01.html")
   assert resp.status_code == 200
   assert "cbd-ins" in resp.text
   assert SCRIPT not in resp.text
@@ -243,7 +246,7 @@ def test_serve_file_without_diff_is_byte_identical_to_pre_diff_response(sessions
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
   original = page.read_text(encoding="utf-8")
 
-  resp = _build_client().get("/files" + str(page), cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(page))
   assert resp.status_code == 200
   # Exactly the bytes the handler produced before the diff feature existed:
   # the page wrapped in the artifact UI, with no diff machinery involved.
@@ -254,8 +257,7 @@ def test_serve_file_diff_missing_base_is_404_naming_the_path(sessions_root: Path
   new = sessions_root / "S" / "artifacts" / "plan_02.html"
   _write(new)
 
-  resp = _build_client().get(
-      "/files" + str(new) + "?diff=artifacts/plan_01.html", cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(new) + "?diff=artifacts/plan_01.html")
   assert resp.status_code == 404
   assert "plan_01.html" in resp.text
 
@@ -264,8 +266,7 @@ def test_serve_file_diff_base_outside_session_artifacts_is_400(sessions_root: Pa
   _, new = _write_pages(sessions_root)
   _write(sessions_root / "S" / "notes" / "plan_01.html")
 
-  resp = _build_client().get(
-      "/files" + str(new) + "?diff=notes/plan_01.html", cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(new) + "?diff=notes/plan_01.html")
   assert resp.status_code == 400
 
 
@@ -273,8 +274,7 @@ def test_serve_file_diff_base_non_html_is_400(sessions_root: Path) -> None:
   _, new = _write_pages(sessions_root)
   (sessions_root / "S" / "artifacts" / "plan_01.txt").write_text("not html", encoding="utf-8")
 
-  resp = _build_client().get(
-      "/files" + str(new) + "?diff=artifacts/plan_01.txt", cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(new) + "?diff=artifacts/plan_01.txt")
   assert resp.status_code == 400
 
 
@@ -285,15 +285,12 @@ def test_serve_file_diff_non_artifact_target_is_400(sessions_root: Path) -> None
   text_file = sessions_root / "S" / "artifacts" / "file.txt"
   text_file.write_text("plain", encoding="utf-8")
 
-  resp = _build_client().get(
-      "/files" + str(notes_page) + "?diff=artifacts/plan_02.html", cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(notes_page) + "?diff=artifacts/plan_02.html")
   assert resp.status_code == 400
-  resp = _build_client().get(
-      "/files" + str(text_file) + "?diff=artifacts/plan_02.html", cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get("/files" + str(text_file) + "?diff=artifacts/plan_02.html")
   assert resp.status_code == 400
-  resp = _build_client().get(
-      "/files" + str(sessions_root / "S" / "artifacts" / "directory.html") + "?diff=artifacts/plan_02.html",
-      cookies={"charliebot_access_key": "secret"})
+  resp = _build_client("secret").get(
+      "/files" + str(sessions_root / "S" / "artifacts" / "directory.html") + "?diff=artifacts/plan_02.html")
   assert resp.status_code == 400
 
 
@@ -304,16 +301,16 @@ def test_serve_file_diff_repeat_view_reannotates_nothing(sessions_root: Path, mo
   """An annotate is a pure function of the two files' bytes, so a repeat view of an
   unchanged pair must serve the stored page with zero annotate calls."""
   base, new = _write_pages(sessions_root)
-  client = _build_client()
+  client = _build_client("secret")
   url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
-  first = client.get(url, cookies={"charliebot_access_key": "secret"})
+  first = client.get(url)
   assert first.status_code == 200
 
   def explode(base_html: str, new_html: str) -> str:
     raise AssertionError("repeat view re-ran plan_diff.annotate")
 
   monkeypatch.setattr(plan_diff, "annotate", explode)
-  resp = client.get(url, cookies={"charliebot_access_key": "secret"})
+  resp = client.get(url)
   assert resp.status_code == 200
   assert resp.text == first.text
 
@@ -322,13 +319,13 @@ def test_serve_file_diff_reannotates_when_target_is_rewritten(sessions_root: Pat
   """An artifact page is only ever written whole, so a rewrite always moves the
   (mtime_ns, size) signature the memo keys on — the new bytes must be served."""
   base, new = _write_pages(sessions_root)
-  client = _build_client()
+  client = _build_client("secret")
   url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
-  before = client.get(url, cookies={"charliebot_access_key": "secret"})
+  before = client.get(url)
   assert before.status_code == 200
 
   new.write_text("<html><body><p>hello whole new world</p></body></html>", encoding="utf-8")
-  after = client.get(url, cookies={"charliebot_access_key": "secret"})
+  after = client.get(url)
   assert after.status_code == 200
   assert after.text != before.text
   # The inserted words are present under word-level marks, not as one literal run.
@@ -338,13 +335,13 @@ def test_serve_file_diff_reannotates_when_target_is_rewritten(sessions_root: Pat
 
 def test_serve_file_diff_reannotates_when_base_is_rewritten(sessions_root: Path) -> None:
   base, new = _write_pages(sessions_root)
-  client = _build_client()
+  client = _build_client("secret")
   url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
-  before = client.get(url, cookies={"charliebot_access_key": "secret"})
+  before = client.get(url)
   assert before.status_code == 200
 
   base.write_text("<html><body><p>goodbye world</p></body></html>", encoding="utf-8")
-  after = client.get(url, cookies={"charliebot_access_key": "secret"})
+  after = client.get(url)
   assert after.status_code == 200
   assert after.text != before.text
 
@@ -353,12 +350,11 @@ def test_serve_file_diff_credential_and_anonymous_variants_are_served_separately
   """The injection rides the memo key: an anonymous reader must never receive the
   credentialed variant's comment layer, and neither view may poison the other."""
   base, new = _write_pages(sessions_root)
-  client = _build_client()
   url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
 
-  credentialed = client.get(url, cookies={"charliebot_access_key": "secret"})
-  anonymous = client.get(url)
+  credentialed = _build_client("secret").get(url)
+  anonymous = _build_client(None).get(url)
   assert SCRIPT in credentialed.text
   assert SCRIPT not in anonymous.text
-  assert client.get(url, cookies={"charliebot_access_key": "secret"}).text == credentialed.text
-  assert client.get(url).text == anonymous.text
+  assert _build_client("secret").get(url).text == credentialed.text
+  assert _build_client(None).get(url).text == anonymous.text

@@ -34,11 +34,15 @@ def _mounted_prefixes() -> list[str]:
 PREFIXES = _mounted_prefixes()
 
 
-def _client() -> TestClient:
+def _client(access_key: str | None) -> TestClient:
+  """A client carrying *access_key* as the charliebot_access_key cookie; None sends
+  no credential. The cookie rides the client because httpx deprecates per-request
+  cookies."""
   app = FastAPI()
   for prefix in PREFIXES:
     app.include_router(files_api.router, prefix=prefix)
-  return TestClient(app)
+  cookies = {"charliebot_access_key": access_key} if access_key is not None else None
+  return TestClient(app, cookies=cookies)
 
 
 def test_one_handler_is_mounted_under_both_prefixes() -> None:
@@ -64,7 +68,7 @@ def targets(tmp_path: Path) -> dict[str, Path]:
 
 
 def test_both_prefixes_return_the_same_status_and_bytes(targets: dict[str, Path]) -> None:
-  client = _client()
+  client = _client(None)
   for label, target in targets.items():
     responses = [client.get(f"{prefix}{target}") for prefix in PREFIXES]
     statuses = {response.status_code for response in responses}
@@ -84,21 +88,20 @@ def test_artifact_injection_decides_the_same_way_under_both_prefixes(
   monkeypatch.setattr(
       files_api, "get_config",
       lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions", charliebot_access_key="secret"))
-  client = _client()
-  creds = {"cookies": {"charliebot_access_key": "secret"}}
+  client = _client("secret")
   for label, target in targets.items():
-    injected = {ARTIFACT_SCRIPT in client.get(f"{prefix}{target}", **creds).text for prefix in PREFIXES}
+    injected = {ARTIFACT_SCRIPT in client.get(f"{prefix}{target}").text for prefix in PREFIXES}
     assert len(injected) == 1, f"{label}: injection differs between prefixes"
   # The predicate itself is unchanged: the artifact page gets the review UI, a plain page does not.
   for prefix in PREFIXES:
-    assert ARTIFACT_SCRIPT in client.get(f"{prefix}{targets['artifact page']}", **creds).text
-    assert ARTIFACT_SCRIPT not in client.get(f"{prefix}{targets['plain HTML file']}", **creds).text
+    assert ARTIFACT_SCRIPT in client.get(f"{prefix}{targets['artifact page']}").text
+    assert ARTIFACT_SCRIPT not in client.get(f"{prefix}{targets['plain HTML file']}").text
 
 
 def test_head_answers_the_same_status_as_get_under_both_prefixes(targets: dict[str, Path]) -> None:
   # The render-time probe asks with HEAD, so the marker only ever appears for a path the server
   # answers 404 for: a HEAD that came back 405 would mark nothing at all.
-  client = _client()
+  client = _client(None)
   for label, target in targets.items():
     for prefix in PREFIXES:
       url = f"{prefix}{target}"
@@ -109,7 +112,7 @@ def test_head_answers_the_same_status_as_get_under_both_prefixes(targets: dict[s
 
 
 def test_a_non_html_file_is_served_byte_for_byte_under_both_prefixes(targets: dict[str, Path]) -> None:
-  client = _client()
+  client = _client(None)
   target = targets["non-HTML file"]
   for prefix in PREFIXES:
     assert client.get(f"{prefix}{target}").content == target.read_bytes()

@@ -6,7 +6,12 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_ID, make_home_session, recycle_archive_cutoff_events
+from conftest import (
+    OPUS_BACKEND_ID,
+    make_home_session,
+    make_parent,
+    recycle_archive_cutoff_events,
+)
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
 
@@ -27,56 +32,32 @@ def _reference_path(session_mgr: SessionManager, session_id: str) -> Path:
 
 @pytest.mark.asyncio
 async def test_fork_session_writes_truncated_reference_and_live_banner(tmp_path: Path) -> None:
-  _cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
-  _append_events(
-      mgr.get_chat_events_path(parent.id),
-      [
-          {
-              "type": "user",
-              "content": "e0"
-          },
-          {
-              "type": "assistant",
-              "content": "e1"
-          },
-          {
-              "type": "user",
-              "content": "e2"
-          },
-      ],
-  )
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  parent = await make_parent(mgr)
+  # A third event past the fork point proves the reference truncates there.
+  _append_events(mgr.get_chat_events_path(parent), [{"type": "user", "content": "e2"}])
 
-  child = await mgr.fork_session(parent.id, event_index=1)
+  child = await mgr.fork_session(parent, event_index=1)
 
   assert [event["content"] for event in _read_events(_reference_path(mgr, child.id))] == ["e0", "e1"]
   live_events = _read_events(mgr.get_chat_events_path(child.id))
   assert len(live_events) == 1
   assert live_events[0]["type"] == ET.CLONE_START
-  assert live_events[0]["parent_session_id"] == parent.id
+  assert live_events[0]["parent_session_id"] == parent
 
 
 @pytest.mark.asyncio
 async def test_elone_session_writes_reference_and_archives_parent(tmp_path: Path) -> None:
-  _cfg, mgr, parent = await make_home_session(tmp_path, name="Parent", backend=OPUS_BACKEND_ID)
-  _append_events(
-      mgr.get_chat_events_path(parent.id),
-      [
-          {
-              "type": "user",
-              "content": "e0"
-          },
-          {
-              "type": "assistant",
-              "content": "e1"
-          },
-      ],
-  )
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  parent = await make_parent(mgr)
 
-  child = await mgr.elone_session(parent.id, event_index=0)
+  child = await mgr.elone_session(parent, event_index=0)
 
   assert [event["content"] for event in _read_events(_reference_path(mgr, child.id))] == ["e0"]
   assert [event["type"] for event in _read_events(mgr.get_chat_events_path(child.id))] == [ET.CLONE_START]
-  updated_parent = await mgr.get_session(parent.id)
+  updated_parent = await mgr.get_session(parent)
   assert updated_parent is not None
   assert updated_parent.status == SessionStatus.ARCHIVED
   assert updated_parent.rating == "thumbs_down"

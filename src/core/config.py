@@ -280,6 +280,15 @@ class CharlieBotConfig(BaseModel):
   server_host: str = "127.0.0.1"
   server_port: int = 18498
 
+  # Voice transcription engine. 'sherpa' runs the CPU ONNX pipeline everywhere; 'qwen3_hf'
+  # runs the official transformers Qwen3-ASR weights on NVIDIA GPUs (gpu-voice dependency
+  # group + weights, provisioned by scripts/setup.sh on hosts with nvidia-smi). Engine
+  # changes take effect on server restart.
+  voice_engine: Literal['sherpa', 'qwen3_hf'] = 'sherpa'
+  # Model repository id for the qwen3_hf engine; switching tiers (1.7B <-> 0.6B) is a
+  # one-value change.
+  voice_model_id: str = 'Qwen/Qwen3-ASR-1.7B-hf'
+
   # Paths — resolved per instantiation so CHARLIEBOT_HOME selects the profile
   charliebot_home: Path = Field(default_factory=charliebot_home_dir)
 

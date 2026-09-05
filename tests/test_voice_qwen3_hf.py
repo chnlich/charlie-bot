@@ -21,13 +21,9 @@ CHUNK_SAMPLES = 2048
 @pytest.fixture(autouse=True)
 def reset_bundle_cache():
   """Clear the process-wide bundle cache around each test so the GPU bundle stays local."""
-  with transcriber._state_lock:
-    transcriber._bundle = None
-    transcriber._bundle_engine = None
+  transcriber.reset_bundle_cache_for_tests()
   yield
-  with transcriber._state_lock:
-    transcriber._bundle = None
-    transcriber._bundle_engine = None
+  transcriber.reset_bundle_cache_for_tests()
 
 
 def _require_gpu_assets(cfg: CharlieBotConfig) -> None:

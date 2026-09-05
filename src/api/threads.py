@@ -43,10 +43,37 @@ router = APIRouter()
 # generously past the one truncated line the card paints at any sidebar width.
 _LIST_DESCRIPTION_CAP = 240
 
+# Parsed-meta memo behind the thread-detail endpoint. The endpoint reads the
+# meta without mutating it, so the memoized instance is shared read-only
+# (mutating callers go through ThreadManager.get_thread, which re-reads). Every
+# writer publishes metadata.json through the atomic tmp rename, so a content
+# change always moves (mtime_ns, size); the signature is taken before the read,
+# so an entry recorded mid-rewrite keys the older signature and can never be
+# served for the newer bytes.
+_DETAIL_META_MEMO_LIMIT = 32
+_detail_meta_memo: OrderedDict[str, tuple[tuple[int, int], ThreadMetadata]] = OrderedDict()
 
-class ThreadMetadataResponse(ThreadMetadata):
-  attach_command: str | None = None
-  attach_available: bool = False
+
+async def _detail_thread_meta(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> ThreadMetadata | None:
+  path = thread_mgr.thread_dir(session_id, thread_id) / "metadata.json"
+  key = str(path)
+  try:
+    st = os.stat(path)
+  except OSError:
+    _detail_meta_memo.pop(key, None)
+    return None
+  sig = (st.st_mtime_ns, st.st_size)
+  hit = _detail_meta_memo.get(key)
+  if hit is not None and hit[0] == sig:
+    _detail_meta_memo.move_to_end(key)
+    return hit[1]
+  meta = await thread_mgr.get_thread(session_id, thread_id)
+  if meta is None:
+    return None
+  _detail_meta_memo[key] = (sig, meta)
+  while len(_detail_meta_memo) > _DETAIL_META_MEMO_LIMIT:
+    _detail_meta_memo.popitem(last=False)
+  return meta
 
 
 @dataclass(frozen=True)
@@ -284,21 +311,37 @@ async def list_threads(
   )
 
 
-@router.get("/{session_id}/threads/{thread_id}", response_model=ThreadMetadataResponse)
+@router.get("/{session_id}/threads/{thread_id}")
 async def get_thread(
     session_id: str,
     thread_id: str,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config),
+    attach: bool = Query(default=False),
 ):
-  meta = await thread_mgr.get_thread(session_id, thread_id)
+  """Return a thread's metadata plus the derived attach pair.
+
+  With ``attach`` the response is only ``{"attach_command", "attach_available"}``
+  — the 5 s poll's shape (the poll reads nothing else of the row). Without it
+  the response is the full row minus ``context`` (the task-spec body; no HTTP
+  consumer reads it off this endpoint, and the modal fetches ``description``
+  once per click).
+  """
+  meta = await _detail_thread_meta(thread_mgr, session_id, thread_id)
   if not meta:
     raise HTTPException(status_code=404, detail="Thread not found")
-  return ThreadMetadataResponse(
-      **meta.model_dump(),
-      attach_command=build_attach_command(meta, cfg),
-      attach_available=await _attach_available(meta, cfg),
-  )
+  attach_command = build_attach_command(meta, cfg)
+  attach_available = await _attach_available(meta, cfg)
+  if attach:
+    return FastJsonResponse({
+        "attach_command": attach_command,
+        "attach_available": attach_available,
+    })
+  payload = meta.model_dump(mode="json")
+  del payload["context"]
+  payload["attach_command"] = attach_command
+  payload["attach_available"] = attach_available
+  return FastJsonResponse(payload)
 
 
 # Reads from read_thread_worker_events, per events-log path. The workers-panel

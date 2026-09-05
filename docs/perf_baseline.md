@@ -69,6 +69,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M56 sidebar status poll, steady state | M56 collector below | seconds per `GET /api/sessions/status` request over the active-session id set | median < 0.0028 s | — (introduced with its first history row) |
 | M57 plan-registry poll, steady state | M57 collector below | seconds per `GET /api/sessions/{id}/plans` request, worst on-disk plans corpus | median < 0.0030 s | — (introduced with its first history row) |
 | M58 per-request config read, steady state | M58 collector below | seconds per `get_config` call, live config corpus | median < 0.0001 s | — (introduced with its first history row) |
+| M59 worker thread-detail poll payload and handler time, steady state | M59 collector below | seconds per request + response body bytes, worst thread-metadata corpus; the attach-mode repeat (`?attach=1`) of the unchanged poll | full-row median < 0.005 s; attach-mode median < 0.005 s, body < 300 B | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3254,6 +3255,73 @@ print(f"{frag} config.d entries; steady-state get_config "
 EOF
 ```
 
+M59 — worker thread-detail poll payload and handler time, steady state. The workers panel polls
+`GET /api/threads/{sid}/threads/{tid}` every 5 s per expanded running worker (in the same
+`Promise.all` as the M34 events poll) and the pre-fix route served the whole row — description-KB
+payload, an uncached aiofiles read+parse per call, and FastAPI's response-model validation plus
+jsonable_encoder render — for the client to read two derived fields (`attach_command`,
+`attach_available`); the full row remains the description modal's once-per-click fetch. The cost
+is a poll slice invisible to the standing HTTP probes, so the collector drives the endpoint
+through TestClient over the thread whose metadata.json carries the most bytes (live state
+read-only), from the checkout under test: one cold pass per mode, as at first panel expand after
+a server start, then nine timed requests of the full row and nine of the attach-mode pair, with
+the payload contracts asserted. Evidence while the live server runs older code points the same
+collector at the branch checkout (`CHECKOUT` at the worktree root), the same shape as the M36
+protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from src.api.deps import get_thread_manager, get_config
+from src.api.threads import router as threads_router
+from src.core.config import CharlieBotConfig
+from src.core.threads import ThreadManager
+
+# Worst detail-poll corpus: the thread whose metadata.json carries the most
+# bytes; the endpoint reads live state read-only. Managers and config are
+# built once, as the server's dependency singletons are.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for p in root.glob("*/threads/*/metadata.json"):
+    n = p.stat().st_size
+    if n > best_n:
+        best, best_n = p, n
+SID, TID = best.parts[-4], best.parts[-2]
+
+cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+app = FastAPI()
+app.include_router(threads_router, prefix="/api/threads")
+app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
+app.dependency_overrides[get_config] = lambda: cfg
+client = TestClient(app)
+url = f"/api/threads/{SID}/threads/{TID}"
+
+def timed(target):
+    client.get(target)  # cold pass, as at first panel expand; not timed
+    times, body = [], None
+    for _ in range(9):
+        t0 = time.perf_counter()
+        r = client.get(target)
+        times.append(time.perf_counter() - t0)
+        body = r.content
+    times.sort()
+    return times, body, r
+
+ftimes, fbody, fr = timed(url)
+fjson = fr.json()
+assert "context" not in fjson and fjson["description"], "full-row contract changed"
+atimes, abody, ar = timed(url + "?attach=1")
+assert set(ar.json()) == {"attach_command", "attach_available"}, "attach-mode contract changed"
+print(f"{best_n / 1e3:.1f} KB metadata.json; full row median {ftimes[4]*1000:.2f} ms, "
+      f"max {ftimes[-1]*1000:.2f} ms, body {len(fbody)} B; attach mode median {atimes[4]*1000:.2f} ms, "
+      f"max {atimes[-1]*1000:.2f} ms, body {len(abody)} B")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3336,3 +3404,4 @@ EOF
 | 2026-09-05 | this PR | M6 append-round usage resolution median 6.38 ms → 0.12 ms, max 9.02 ms → 0.15 ms (collector + append-round rounds, 20534-event worst live corpus of session d321b9ad, scratch CHARLIEBOT_HOME, main checkout before vs branch after interleaved back-to-back ×3 at load 4.4-6.5, every paired round faster: 6.05/7.33/7.47 → 0.10/0.14/0.13 ms; resolved usage dict equals the full-scan reference on the real corpus both arms; unchanged-list steady state re-measured 0.13 ms → 0.14 ms, no regression) | the usage scan is a fold whose state now carries across resolutions in the per-session memo — an appending list (one chat event per streamed delta, the 3 s usage poll's steady companion during a turn) folds only the appended suffix instead of re-scanning the whole history per poll, and a wholesale list replacement (new identity) rebuilds from a fresh fold; append-round sub-metric added to the M6 definition and collector in this PR |
 | 2026-09-05 | this PR | M58 steady-state get_config median 79.4/85.6/84.0 µs → 29.6/27.3/27.3 µs, maxima ~120 µs → ~51 µs (collector verbatim, live config corpus of 2 fragments + cron.d read-only, main checkout before vs branch after interleaved back-to-back ×3 at load 1.4-2.5; raw-ASGI 401 floor median 78 → 24 µs, max 162 → 70 µs over 300 calls on a scratch home; M53 collector re-run on its broken corpus: call wall 80 → 20 µs with the M53 metric unchanged — 1 onset warning, 0 steady re-parses, fingerprint-move freshness intact) | the per-request fingerprint walk left pathlib: the resolved home is memoized on the (CHARLIEBOT_HOME, HOME) env pair — resolve() is a per-component symlink walk and Path.home()/str(Path) re-parse per call, and both public readers (charliebot_home_dir, default_charliebot_home) serve one cached entry so callers comparing their home against the default stay coherent — and the config.d fragment scan is one shared os.scandir + raw-stat walker (name/dotfile/cron.yaml rule and S_ISREG gate in one place) used by both the loader and the fingerprint; M58 definition and healthy range introduced with this PR |
 | 2026-09-05 | this PR | M46 steady-state GET /api/cron/tasks median 2.03/2.05/2.01 ms → 1.67/1.70/1.77 ms, maxima 2.34/2.20/2.34 ms → 1.96/1.99/2.00 ms (collector verbatim, 13 task rows, live cron corpus read-only, main checkout before vs branch after interleaved back-to-back ×3 at load 1.4-2.5; body 4154 B byte-identical, prompt bytes 0 both arms) | the cron tasks list renders through FastJsonResponse with a mode="json" model_dump, skipping jsonable_encoder's dict recursion on the mapped return — the same encoder pass M34 measured 6x slower than plain dumps on mapped lists; every dumped field is already a JSON primitive, so the bytes are identical to the encoder's output |
+| 2026-09-05 | this PR | M59 detail poll full row median 3.29/3.46 ms → 2.03/2.07 ms (two interleaved verbatim-collector rounds, 99.9 KB worst metadata.json, body 50221 B → 59259 B raw — parsed-identical, the documented \uXXXX escaping; maxima 4.43/5.22 → 3.45/3.33 ms), attach mode (?attach=1, the poll's new shape) median 1.90/1.78 ms, max 2.07/1.93 ms, body 48 B (main checkout before vs branch after back-to-back at load 1.8-2.0; 4500-passed suite) | the 5 s poll fetched the whole row — 50 KB description-bearing body, an uncached aiofiles read+parse per call, response-model validation + jsonable_encoder render — to read the attach pair; the detail endpoint now serves the parsed meta from a (mtime_ns, size) memo (the endpoint's consumer is read-only; mutating callers keep the uncached manager getter, and every writer publishes through the atomic tmp rename so the signature is taken before the read), renders both shapes through FastJsonResponse, drops `context` (no HTTP consumer reads it; the modal fetches description once per click), and the poll fetches `?attach=1` — the 48 B pair — while the modal and the description-full fetch keep the full row; M34 re-measured unchanged (full 0.0057 s / 860706 B byte-identical, after=total 0.0022 s / 40 B) after the events no-after branch was left mapped — a FastJsonResponse rider there measured 0.0103 s (2177 per-event model_dump calls beat by the single encoder walk) and was reverted |

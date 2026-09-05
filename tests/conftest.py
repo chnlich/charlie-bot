@@ -1421,8 +1421,12 @@ def make_fake_git_create_worktree(*,
   """
 
   async def fake_git_create_worktree(
-      repo_path: Path, base_branch: str, branch_name: str, wt_path: Path, *, remote_tip: str | None = None
-  ) -> BaseResolution:
+      repo_path: Path,
+      base_branch: str,
+      branch_name: str,
+      wt_path: Path,
+      *,
+      remote_tip: str | None = None) -> BaseResolution:
     del remote_tip
     if captures is not None:
       captures["git_create_worktree"] = {

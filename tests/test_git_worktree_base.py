@@ -467,8 +467,7 @@ async def test_crash_respawn_reaches_the_same_fallback(
 
 @pytest.mark.asyncio
 async def test_probe_equal_tracking_ref_skips_fetch(
-    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
+    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
   """When the ls-remote probe shows the local remote-tracking ref already holds the
   tip origin advertises, the fetch is provably a no-op and must not run: the probe
   is read straight from the remote, so no fetch could change that ref."""
@@ -516,8 +515,7 @@ async def test_probe_mismatch_still_fetches(repo_setup: dict[str, Path], monkeyp
 
 @pytest.mark.asyncio
 async def test_caller_supplied_tip_skips_the_probe(
-    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
+    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
   """A remote_tip from the caller's own ls-remote replaces this function's probe:
   no ls-remote runs, the equality check still gates the fetch."""
   from src.core import git as git_mod
@@ -540,9 +538,7 @@ async def test_caller_supplied_tip_skips_the_probe(
 
 
 @pytest.mark.asyncio
-async def test_remote_default_branch_and_tip_reads_both_from_one_call(
-    remote_default_repo: dict[str, Path],
-) -> None:
+async def test_remote_default_branch_and_tip_reads_both_from_one_call(remote_default_repo: dict[str, Path],) -> None:
   """The combined ls-remote returns the remote's default branch and that branch's
   tip, following the remote when its HEAD repoints (never clone-time metadata)."""
   from src.core.git import git_remote_default_branch_and_tip

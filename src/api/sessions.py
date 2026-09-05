@@ -26,6 +26,7 @@ from src.api.message_utils import (
     events_to_messages,
 )
 from src.api.responses import FastJsonResponse
+from src.api.threads import _thread_list_item
 from src.core.chat_events import chat_events_path
 from src.core.config import (
     CharlieBotConfig,
@@ -474,12 +475,16 @@ async def get_session_view(
   active_backend_opt = cfg.get_backend_option(active_backend)
   active_backend_type = active_backend_opt.type if active_backend_opt else ""
   # FastJsonResponse for the message-page cost reason in get_session_events_page.
+  # The workers tab paints one CSS-truncated description line per card and its
+  # full-text modal fetches the thread row on click (the workers-panel list's
+  # truncation contract), so the view ships the same prefixed rows — the
+  # worst session's whole-row dumps measured 2.6 MB of body per session open.
   return FastJsonResponse(
       {
           "session": meta.model_dump(mode="json"),
           "messages": view.messages,
           "pending_draft": view.pending_draft,
-          "threads": [t.model_dump(mode="json") for t in view.threads],
+          "threads": [_thread_list_item(t) for t in view.threads],
           "triggers": [tr.model_dump(mode="json") for tr in triggers],
           "event_count": view.total_event_count,
           "oldest_message_ordinal": view.oldest_message_ordinal,

@@ -1,5 +1,5 @@
-"""Description prefix + body-memo contract of the workers-panel list payload
-(src/api/threads.py list_threads)."""
+"""Description prefix + body-memo contract of the thread-row payloads
+(src/api/threads.py list_threads, src/api/sessions.py get_session_view)."""
 
 import asyncio
 from pathlib import Path
@@ -8,10 +8,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import threads as threads_api
-from src.api.deps import get_thread_manager, get_trigger_manager
+from src.api.deps import (
+    get_config,
+    get_session_manager,
+    get_thread_manager,
+    get_trigger_manager,
+)
+from src.api.sessions import router as sessions_router
 from src.api.threads import _LIST_DESCRIPTION_CAP
 from src.api.threads import router as threads_router
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, ThreadStatus
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
@@ -35,8 +41,10 @@ def _seeded_client(tmp_path: Path):
 
   app = FastAPI()
   app.include_router(threads_router, prefix="/api/threads")
+  app.include_router(sessions_router, prefix="/api/sessions")
   app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
   app.dependency_overrides[get_trigger_manager] = lambda: TriggerManager(cfg, sessions)
+  app.dependency_overrides[get_session_manager] = lambda: sessions
   app.dependency_overrides[get_config] = lambda: cfg
   return TestClient(app), session_id, long_thread_id
 
@@ -62,6 +70,21 @@ def test_thread_detail_still_serves_the_full_description(tmp_path: Path) -> None
   meta = client.get(f"/api/threads/{session_id}/threads/{long_thread_id}").json()
 
   assert meta["description"] == LONG_DESCRIPTION
+
+
+def test_session_view_ships_the_same_truncated_rows(tmp_path: Path) -> None:
+  client, session_id, long_thread_id = _seeded_client(tmp_path)
+
+  list_rows = {row["id"]: row for row in client.get(f"/api/threads/{session_id}/list").json()}
+  view_rows = {row["id"]: row for row in client.get(f"/api/sessions/{session_id}/view").json()["threads"]}
+
+  assert set(view_rows) == set(list_rows)
+  for tid, list_row in list_rows.items():
+    view_row = view_rows[tid]
+    assert view_row["description"] == list_row["description"]
+    assert view_row.get("description_full_len") == list_row.get("description_full_len")
+  assert view_rows[long_thread_id]["description"] == LONG_DESCRIPTION[:_LIST_DESCRIPTION_CAP]
+  assert view_rows[long_thread_id]["description_full_len"] == len(LONG_DESCRIPTION)
 
 
 def test_list_body_memo_invalidates_on_metadata_rewrite(tmp_path: Path) -> None:

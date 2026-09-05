@@ -73,6 +73,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M60 chat message-body markdown parse, repeat page render | M60 collector below | ms per 40-body page render pass over the worst on-disk live chat file (the cold first render is reported, not the metric); the repeat is the session re-entry / re-render shape — every session switch rebuilds the turn engine and re-renders the same bodies | repeat median < 0.5 ms | — (introduced with its first history row) |
 | M61 session-metadata read after TTL expiry, idle-cold | M61 collector below | ms per listing/get_session over the live corpus with every cache entry aged past `_METADATA_CACHE_TTL` (archived entries never expire; the idle cost is the non-archived set's revalidation) | bare listing median < 2 ms; single get_session median < 0.1 ms | — (introduced with its first history row) |
 | M62 spawn base-resolution chain, base-less launch | M62 collector below | seconds per base-less base resolution (default branch + start point) against the real origin, quiet-remote steady state | median < 0.5 s | — (introduced with its first history row) |
+| M63 session view thread payload, worst on-disk threads corpus | M63 collector below | ms per `get_session_view` handler call + response body bytes, worst thread-metadata corpus | handler median < 0.005 s; body < 300 KB | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3479,6 +3480,77 @@ asyncio.run(main())
 EOF
 ```
 
+M63 — session view thread payload, worst on-disk threads corpus. Every SPA switch and
+session open fetches `GET /api/sessions/{id}/view`, whose `threads` array rode as whole
+`ThreadMetadata` dumps — task-spec-length descriptions included, ~7.8 KB per row at the
+worst corpus — while the workers tab it feeds paints one CSS-truncated description line
+per card and its full-text modal fetches the thread row on click (the M36 list contract,
+which the same card builder already consumes). The fix ships the M36 prefixed rows, so
+the view body carries one prefix per thread instead of the whole metadata. The handler's
+mark_read write rules out driving the live instance, so the collector resolves the session
+whose threads directory carries the most metadata files (the M5 resolution rule), copies
+that session (metadata.json, data/, threads/) into a scratch `CHARLIEBOT_HOME` under /tmp
+(live home read once for the copy, never written), and times the handler function from the
+checkout under test: one cold pass, as at first view after a server start, then nine timed
+calls. The TestClient-level request cost rides the same harness floor on both arms and
+travels in the PR's Evidence section, not in this row.
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
+from src.api import sessions as sessions_api
+from src.api import deps as deps_api
+
+# Worst view-payload corpus: the session whose threads dir carries the most
+# metadata files (the M5 resolution rule); each thread row rides the view body.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    t = d / "threads"
+    if t.is_dir():
+        n = sum(1 for p in t.iterdir() if (p / "metadata.json").is_file())
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
+# session's metadata.json, data/, and threads/; live home read once for the
+# copy, never written (the view's mark_read lands on the copy).
+home = Path(tempfile.mkdtemp(prefix="m63-view-home-", dir="/tmp"))
+dst = home / "sessions" / SID
+dst.mkdir(parents=True)
+shutil.copy2(best / "metadata.json", dst / "metadata.json")
+shutil.copytree(best / "data", dst / "data")
+shutil.copytree(best / "threads", dst / "threads")
+
+cfg = CharlieBotConfig(charliebot_home=home)
+mgr = SessionManager(cfg)
+tm = ThreadManager(cfg)
+deps_api._trigger_manager = None
+
+async def main():
+    meta = await mgr.get_session(SID)
+    await sessions_api.get_session_view(SID, meta, mgr, tm, cfg)  # cold pass, as at first view after a server start; not timed
+    times, bodies = [], []
+    for _ in range(9):
+        t0 = time.perf_counter()
+        resp = await sessions_api.get_session_view(SID, meta, mgr, tm, cfg)
+        times.append(time.perf_counter() - t0)
+        bodies.append(len(resp.body))
+    times.sort()
+    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: session {SID}, {best_n} thread metadata files; "
+          f"/view handler median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms, body {bodies[0]} B")
+
+asyncio.run(main())
+shutil.rmtree(home)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3567,3 +3639,4 @@ EOF
 | 2026-09-05 | this PR | M8 warm absent-needle search, churn-modeled pool: median 99.71/107.45/101.95 ms → 27.80/38.46/33.19 ms, idle median 4.40/4.23/4.02 ms → 1.56/1.74/1.40 ms (three interleaved A/B rounds, manager-level collector over the shared 156.7 MB / 39-active-file + 1075-metadata snapshot home; 41 content candidates; churn model = 8 continuous 5 ms CPU bursts through the same default asyncio executor, the live server's pool shape; result digests identical across arms for absent, name-hit, and content-hit queries — 0/11/181 rows); live-before (verbatim M8 curls against the running instance) median 0.146-0.158 s, max 0.151-0.177 s at load 3.26-3.84 | the content-search classification (stat + proven-absent memo check) left the per-file executor round-trip — the default executor's ~cpu+4 workers are shared with every poll read, append, and probe, so the 41 per-file acquisitions queued ~2.4 ms each under the server's pool churn (live search 140-158 ms vs 27 ms for the name-hit shape that skips the fan-out; a fully-occupied pool stretched the warm search to 2013 ms in-process); classification now runs on the event loop (~0.1 ms of hot stats, no stall over the churn-only 20.6 ms ticker baseline — main's search measured 31.0 ms under the same ticker protocol) and only reads that move corpus bytes go to the pool; the window math moved verbatim into `_absence_rescan_start`, the suite pins scan counts and start offsets |
 | 2026-09-05 | this PR | M61 idle-cold metadata reads: bare listing median 2.98-3.14 ms → 1.15-1.20 ms, archived page (limit 100) 3.80-4.12 ms → 2.09-2.13 ms, all-sessions listing 7.50-7.65 ms → 5.50-5.78 ms, single get_session 0.526-0.573 ms → 0.037-0.055 ms (five interleaved verbatim-collector rounds, 1075 cached metas / 41 non-archived, live corpus read-only, main checkout before vs branch after at load 1.6-2.3, every paired round faster; warm steady state re-measured unchanged — M29 0.55-0.59 vs 0.56-0.57 ms, M56 2.40-2.59 vs 2.34-2.52 ms with identical digests, M40/M44 within noise; suite pins the stat-revalidation chain: unchanged file zero reads, moved file exactly one) | an expired metadata entry revalidates against metadata.json with one stat instead of a re-read: the cache entry carries the (st_mtime_ns, st_size) its read took before parsing, every writer publishes through the atomic tmp rename so a content change always moves the signature, and a same-signature stat re-times the entry — strictly fresher than the 30 s TTL it replaces (a write-funnel populate keeps no provable signature and follows today's evict-and-re-read); M61 definition and healthy range introduced with this PR |
 | 2026-09-05 | this PR | M62 base-less base-resolution chain median 1.03/1.00/0.92 s → 0.33/0.31/0.30 s, max 1.07 s → 0.37 s (three interleaved collector sets, main checkout before vs branch after against the real origin at load 2.33/2.11/1.32; start_point origin/main identical across arms; every paired set faster) | the base-less launch chain answered one unfiltered `git ls-remote --symref origin` listing — HEAD symref plus the default branch's tip — in a single round-trip instead of two filtered probes, and resolve_base_branch skips the fetch its own probe just proved a no-op (tracking ref already at the advertised tip; the probe is read straight from the remote, so no fetch could change that ref); the caller-fed `remote_tip` keeps the freshly-resolved start-point guarantee — the fetch still runs whenever the probe shows the tracking ref behind, and every error path is unchanged; M62 definition and healthy range introduced with this PR |
+| 2026-09-05 | this PR | M63 /view handler median 11.76/12.37/12.12 ms → 4.09/4.15/3.96 ms, maxima 16.74/13.94/13.54 ms → 4.79/4.57/4.81 ms, body 2640195 B → 277184 B (three interleaved rounds of the collector, 339-file worst threads corpus of session 3b91d606, scratch CHARLIEBOT_HOME, main checkout before vs branch after at load 1.85/1.45/1.03, every paired round faster; TestClient-level A/B over the same scratch snapshots 41.28/41.19/37.25 ms → 30.34/28.11/28.80 ms — the request harness floor dominates both arms, so the handler level is the standing row; component attribution before: 339 whole-row dumps 1.65 ms + 2.6 MB render 7.75 ms, after: prefixed-row builds 1.08 ms + 277 KB render 0.48 ms; M35's /view corpus (d321b9ad, 19 threads) re-measured 7.24/6.51 ms → 6.68 ms, body 292279 B → 182981 B, events page unchanged (5.84 ms / 633236 B, digest 46d1d509a0d6) — no regression) | the session view's `threads` array ships the workers-panel list's prefixed rows (`_thread_list_item`, the M36 truncation contract the same card builder already consumes: one CSS-truncated description line per card, the full-text modal fetches the row on click) instead of whole ThreadMetadata dumps — task-spec-length descriptions made the worst session's view body ~7.8 KB per row, 2.6 MB per session open, which the gzip lane then recompressed per request; M63 definition and healthy range introduced with this PR |

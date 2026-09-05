@@ -134,8 +134,8 @@ async function loadContext(hljsSource) {
   const parity = parse(worst) === direct && last.html === cold.html;
 
   console.log(
-    `${page.length} largest bodies (${(pageBytes / 1024).toFixed(1)} KB) of a ${(fileSize / 1e6).toFixed(1)} MB ` +
-    `live chat file (sha1 ${digest}), marked + hljs 11.9.0 common build (${languages} languages), ` +
+    `${page.length} largest bodies (${(pageBytes / 1024).toFixed(1)} KB, page-corpus sha1 ${digest}) of a ` +
+    `${(fileSize / 1e6).toFixed(1)} MB live chat file, marked + hljs 11.9.0 common build (${languages} languages), ` +
     `${memoized ? 'memoized' : 'pre-fix'} parse; cold pass ${(cold.ms / 1000).toFixed(3)} s; ` +
     `repeat-page median ${times[2].toFixed(2)} ms, max ${times[4].toFixed(2)} ms; parity ${parity}`
   );

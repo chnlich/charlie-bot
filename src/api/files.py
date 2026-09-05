@@ -4,8 +4,6 @@ import asyncio
 import html
 import json
 import mimetypes
-import threading
-from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -17,6 +15,7 @@ from src.api.auth import request_has_access_key
 from src.api.pages import _static_asset_version
 from src.core import plan_diff
 from src.core.config import get_config
+from src.core.memo import BoundedMemo
 
 router = APIRouter()
 
@@ -34,8 +33,7 @@ _DIFF_ANNOTATE_MEMO_LIMIT = 8
 # shared across responses, the no-defensive-copy idiom of the sibling memos.
 _AnnotateKey = tuple[str, int, int, str, int, int, bool]
 
-_annotate_memo: OrderedDict[_AnnotateKey, str] = OrderedDict()
-_annotate_memo_lock = threading.Lock()
+_annotate_memo: BoundedMemo[_AnnotateKey, str] = BoundedMemo(_DIFF_ANNOTATE_MEMO_LIMIT)
 
 
 def _file_signature(path: Path) -> tuple[int, int]:
@@ -57,11 +55,9 @@ def _annotated_diff_page(base_path: Path, page_path: Path, inject_ui: bool, sess
     raise HTTPException(status_code=404, detail=f"diff base not found: {base_path}") from e
   page_sig = (str(page_path), *_file_signature(page_path))
   key: _AnnotateKey = (*base_sig, *page_sig, inject_ui)
-  with _annotate_memo_lock:
-    hit = _annotate_memo.get(key)
-    if hit is not None:
-      _annotate_memo.move_to_end(key)
-      return hit
+  hit = _annotate_memo.get(key)
+  if hit is not None:
+    return hit
   try:
     base_text = base_path.read_text(encoding="utf-8")
   except OSError as e:
@@ -70,11 +66,7 @@ def _annotated_diff_page(base_path: Path, page_path: Path, inject_ui: bool, sess
   page = plan_diff.annotate(base_text, page_text)
   if inject_ui:
     page = _inject_artifact_ui(page, session_id)
-  with _annotate_memo_lock:
-    _annotate_memo[key] = page
-    _annotate_memo.move_to_end(key)
-    while len(_annotate_memo) > _DIFF_ANNOTATE_MEMO_LIMIT:
-      _annotate_memo.popitem(last=False)
+  _annotate_memo.store(key, page)
   return page
 
 

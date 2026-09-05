@@ -911,11 +911,7 @@ def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
 
 
 def schedule_trigger_argv(message: str, *extra: str) -> list[str]:
-  """The schedule_trigger CLI argv the CLI tests share: session s1, --max-wait 60, --message.
-
-  A test pinning a removed or renamed flag keeps that flag literal in its own argv
-  instead of routing it through ``extra``.
-  """
+  """The schedule_trigger CLI argv the CLI tests share: session s1, --max-wait 60, --message."""
   return ["schedule_trigger", "--session", "s1", "--max-wait", "60", "--message", message, *extra]
 
 

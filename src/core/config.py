@@ -635,10 +635,12 @@ def get_config() -> CharlieBotConfig:
     try:
       fresh = load_config()
     except Exception as e:
-      _config_failed_mtime = fingerprint
       _warn_config_reload_failed_once(e)
       if _config is None:
         raise
+      # Only a fallback config makes the failed fingerprint meaningful: with
+      # none, the raise above ends the process.
+      _config_failed_mtime = fingerprint
     else:
       if _config is None:
         _config = fresh

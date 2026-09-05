@@ -37,7 +37,7 @@ def _seed_good_config() -> None:
   core_config._config = None
   core_config._config_mtime = 0.0
   core_config._config_failed_mtime = None
-  core_config._config_reload_errors_seen.clear()
+  core_config._reset_config_reload_failures_for_tests()
   core_config.get_config()
 
 
@@ -70,13 +70,31 @@ def test_broken_steady_state_parses_once_and_warns_once(profile_home, reload_log
   assert [r["event"] for r in reload_log] == ["config_reload_failed"]
 
 
-def test_fragment_edit_reparses_without_a_new_line(profile_home, reload_log, counted_loads) -> None:
-  """A fingerprint move re-parses (freshness preserved) and the same failure
-  stays one line; a different failure earns its own line."""
+def test_same_error_across_a_fingerprint_move_stays_one_line(profile_home, reload_log, counted_loads) -> None:
+  """A rewritten fragment with the same unknown key moves the fingerprint —
+  the reload must re-run (freshness) while the alarm it re-fires stays one
+  line: the burst's exact shape."""
   _seed_good_config()
   _write_broken(profile_home, "broken.yaml", "unknown_m53_key")
   core_config.get_config()
   assert len(counted_loads) == 2 and len(reload_log) == 1  # seed load + onset parse
+
+  _write_broken(profile_home, "broken.yaml", "unknown_m53_key")  # same key, moved mtime
+  core_config.get_config()
+  assert len(counted_loads) == 3
+  assert [r["event"] for r in reload_log] == ["config_reload_failed"]
+
+  for _ in range(10):  # moved corpus, unchanged since: no parse, no line
+    core_config.get_config()
+  assert len(counted_loads) == 3 and len(reload_log) == 1
+
+
+def test_changed_error_earns_a_new_line(profile_home, reload_log, counted_loads) -> None:
+  """A reload that fails differently reports the new failure."""
+  _seed_good_config()
+  _write_broken(profile_home, "broken.yaml", "unknown_m53_key")
+  core_config.get_config()
+  assert len(counted_loads) == 2 and len(reload_log) == 1
 
   _write_broken(profile_home, "other.yaml", "another_unknown_key")  # fingerprint moves, still broken
   core_config.get_config()
@@ -131,7 +149,7 @@ def test_startup_with_broken_config_still_raises(profile_home, reload_log) -> No
 
 def test_reset_config_caches_clears_the_failed_state(profile_home, reload_log) -> None:
   """The conftest reset covers both new module states."""
-  from tests.conftest import reset_config_caches
+  from tests import conftest as conftest_mod
 
   _seed_good_config()
   _write_broken(profile_home, "broken.yaml", "unknown_m53_key")
@@ -139,6 +157,6 @@ def test_reset_config_caches_clears_the_failed_state(profile_home, reload_log) -
   assert core_config._config_failed_mtime is not None
   assert core_config._config_reload_errors_seen
 
-  reset_config_caches()
+  conftest_mod.reset_config_caches()
   assert core_config._config_failed_mtime is None
   assert not core_config._config_reload_errors_seen

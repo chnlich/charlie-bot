@@ -1,11 +1,12 @@
 // ---------------------------------------------------------------------------
-// Fake DOM and vm harness shared by the chat file-link tests
-// (chat_file_link_prefixes.test.js, chat_url_ascii_boundary.test.js): nodes
-// with real parent/child links, because the marking splits a text node and
-// hangs a sibling off an element, plus loadArtifactsScript, which loads the
-// real chat/namespace.js and chat/artifacts.js in a vm against stubs for every
-// non-artifacts global the modules touch. fetch is recorded, so tests read the
-// probe requests the render would have made.
+// Fake DOM and vm harness shared by the chat artifacts tests
+// (chat_file_link_prefixes.test.js, chat_url_ascii_boundary.test.js,
+// chat_artifact_cards.test.js): nodes with real parent/child links, because
+// the marking splits a text node and hangs a sibling off an element, plus
+// loadArtifactsScript, which loads the real chat/namespace.js and
+// chat/artifacts.js in a vm against stubs for every non-artifacts global the
+// modules touch. fetch is recorded, so tests read the probe requests the
+// render would have made.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
@@ -238,6 +239,18 @@ function makeTemplate() {
   };
 }
 
+// Expand target for the expandArtifactCard tests: a compact card carrying the
+// two data attributes the expand reads. isConnected must stay a writable data
+// property — the expand path skips a card detached while its fetch was in
+// flight, and FakeElement's own isConnected getter is read-only.
+function makeCard(absPath, fetchUrl) {
+  const card = parseCardHtml('<div class="artifact-compact-card html-artifact"></div>');
+  card.dataset.artifactPath = absPath;
+  card.dataset.artifactFetchUrl = fetchUrl;
+  Object.defineProperty(card, 'isConnected', {value: true, writable: true});
+  return card;
+}
+
 function loadArtifactsScript(opts) {
   const o = opts || {};
   const requests = [];
@@ -318,6 +331,7 @@ module.exports = {
   anchor,
   inlineCode,
   makeMessage,
+  makeCard,
   loadArtifactsScript,
   render,
   markersIn,

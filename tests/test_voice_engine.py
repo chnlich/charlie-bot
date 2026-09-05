@@ -19,13 +19,9 @@ from src.core.config import CharlieBotConfig
 @pytest.fixture(autouse=True)
 def reset_bundle_cache():
   """Clear the process-wide bundle cache before and after each test in this file."""
-  with transcriber._state_lock:
-    transcriber._bundle = None
-    transcriber._bundle_engine = None
+  transcriber.reset_bundle_cache_for_tests()
   yield
-  with transcriber._state_lock:
-    transcriber._bundle = None
-    transcriber._bundle_engine = None
+  transcriber.reset_bundle_cache_for_tests()
 
 
 def _stub_bundle(engine: str, model_id: str) -> transcriber._SpeechModelBundle:

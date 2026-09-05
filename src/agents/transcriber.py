@@ -102,6 +102,18 @@ _bundle: _SpeechModelBundle | None = None
 _bundle_engine: str | None = None
 
 
+def reset_bundle_cache_for_tests() -> None:
+  """Clear the process-wide bundle cache; the voice test suites call this around each test.
+
+  A stub (sherpa suite) or GPU (qwen3_hf suite) bundle left in the cache would
+  otherwise leak into whichever suite runs next in the same process.
+  """
+  global _bundle, _bundle_engine
+  with _state_lock:
+    _bundle = None
+    _bundle_engine = None
+
+
 def voice_model_paths(cfg: CharlieBotConfig) -> VoiceModelPaths:
   cache_dir = cfg.charliebot_home / "models"
   qwen3_dir = cache_dir / QWEN3_ASR_DIR_NAME

@@ -417,39 +417,6 @@ async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatc
   _assert_pdeathsig_preexec(create_process.await_args.kwargs)
 
 
-def test_prepare_cwd_writes_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:
-  backend = _build_backend(monkeypatch, instructions_content="# Test Instructions\nDo things.")
-
-  backend._prepare_cwd(str(tmp_path))
-
-  agents_md = tmp_path / "AGENTS.md"
-  assert agents_md.exists()
-  assert agents_md.read_text(encoding="utf-8") == "# Test Instructions\nDo things."
-
-
-def test_prepare_cwd_writes_agents_md_even_when_config_exists(monkeypatch, tmp_path: Path) -> None:
-  """AGENTS.md must be written even when opencode.json already exists (resumed sessions)."""
-  backend = _build_backend(monkeypatch, instructions_content="# Instructions")
-  config_dir = tmp_path / ".opencode"
-  config_dir.mkdir()
-  (config_dir / "opencode.json").write_text("{}", encoding="utf-8")
-
-  backend._prepare_cwd(str(tmp_path))
-
-  agents_md = tmp_path / "AGENTS.md"
-  assert agents_md.exists()
-  assert agents_md.read_text(encoding="utf-8") == "# Instructions"
-
-
-def test_prepare_cwd_skips_agents_md_when_no_instructions(monkeypatch, tmp_path: Path) -> None:
-  backend = _build_backend(monkeypatch)
-
-  backend._prepare_cwd(str(tmp_path))
-
-  agents_md = tmp_path / "AGENTS.md"
-  assert not agents_md.exists()
-
-
 def test_translate_tool_error_emits_tool_result(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 

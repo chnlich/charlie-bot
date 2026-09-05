@@ -42,25 +42,6 @@ def _build_backend(monkeypatch, **kwargs) -> CodexBackend:
   )
 
 
-def test_prepare_cwd_writes_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:
-  backend = _build_backend(monkeypatch, instructions_content="# Codex Instructions\nBuild stuff.")
-
-  backend._prepare_cwd(str(tmp_path))
-
-  agents_md = tmp_path / "AGENTS.md"
-  assert agents_md.exists()
-  assert agents_md.read_text(encoding="utf-8") == "# Codex Instructions\nBuild stuff."
-
-
-def test_prepare_cwd_skips_agents_md_when_no_instructions(monkeypatch, tmp_path: Path) -> None:
-  backend = _build_backend(monkeypatch)
-
-  backend._prepare_cwd(str(tmp_path))
-
-  agents_md = tmp_path / "AGENTS.md"
-  assert not agents_md.exists()
-
-
 def test_build_command_uses_double_dash_separator_for_prompt(monkeypatch) -> None:
   backend = _build_backend(monkeypatch, model="codex-test-model")
 

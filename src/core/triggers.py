@@ -666,6 +666,18 @@ class TriggerManager:
       if await self._is_dormant_target(trigger.session_id):
         return
 
+  async def _reload_pending(self, trigger: PendingTrigger) -> PendingTrigger | None:
+    """Re-read a trigger after a wait. None when the file vanished mid-wait (logged) or
+    another path already moved it off PENDING — either way the caller must not re-stamp."""
+    try:
+      fresh = await self._load_trigger(trigger.session_id, trigger.id)
+    except FileNotFoundError:
+      log.warning("trigger_file_missing_after_sleep", trigger_id=trigger.id)
+      return None
+    if fresh.status != TriggerStatus.PENDING:
+      return None
+    return fresh
+
   async def _cancel_undeliverable(self, fresh: PendingTrigger, reason: str) -> None:
     """Every _wait_and_fire exit where the event cannot be delivered ends the same
     way: stamp CANCELLED, persist, drop the in-memory task handle, log the path's reason."""
@@ -745,12 +757,8 @@ class TriggerManager:
       # Watchdog win: the chain end went dormant mid-wait. Same re-read as the
       # fire-time backstop below, so a trigger cancelled while we waited is not
       # re-stamped.
-      try:
-        fresh = await self._load_trigger(trigger.session_id, trigger.id)
-      except FileNotFoundError:
-        log.warning("trigger_file_missing_after_sleep", trigger_id=trigger.id)
-        return
-      if fresh.status != TriggerStatus.PENDING:
+      fresh = await self._reload_pending(trigger)
+      if fresh is None:
         return
       await self._cancel_undeliverable(fresh, reason="archived")
       return
@@ -758,12 +766,8 @@ class TriggerManager:
     reason, finished, still_alive = wait_task.result()
 
     # Re-load to check for cancellation during sleep
-    try:
-      fresh = await self._load_trigger(trigger.session_id, trigger.id)
-    except FileNotFoundError:
-      log.warning("trigger_file_missing_after_sleep", trigger_id=trigger.id)
-      return
-    if fresh.status != TriggerStatus.PENDING:
+    fresh = await self._reload_pending(trigger)
+    if fresh is None:
       return
 
     session_meta = await self._session_mgr.get_session(fresh.session_id)

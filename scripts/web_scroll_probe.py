@@ -120,6 +120,10 @@ PAGE_READY_TIMEOUT_S = 120.0
 PAGE_SETTLE_S = 6.0
 HOVER_SETTLE_S = 0.3
 BURST_SETTLE_S = 0.25
+HTTP_GET_TIMEOUT_S = 5.0
+CHROME_DEVTOOLS_TIMEOUT_S = 30.0
+TRACE_COLLECT_TIMEOUT_S = 60.0
+CHROME_REAP_TIMEOUT_S = 10.0
 GESTURE_BURSTS = (-600, -600, 600, 600)
 GESTURE_SPEED = 3000
 READY_EXPR = (
@@ -136,7 +140,7 @@ def fail(message: str) -> NoReturn:
 
 def http_json(url: str) -> dict:
   """GET a JSON document."""
-  with urllib.request.urlopen(url, timeout=5) as resp:
+  with urllib.request.urlopen(url, timeout=HTTP_GET_TIMEOUT_S) as resp:
     return json.load(resp)
 
 
@@ -414,7 +418,7 @@ async def drive_mode(args: argparse.Namespace) -> int:
   base_url = (args.url or f"http://127.0.0.1:{cfg.server_port}").rstrip("/")
   key = cfg.charliebot_access_key
   try:
-    with urllib.request.urlopen(f"{base_url}/", timeout=5) as resp:
+    with urllib.request.urlopen(f"{base_url}/", timeout=HTTP_GET_TIMEOUT_S) as resp:
       resp.read(1)
   except urllib.error.HTTPError:
     pass  # any HTTP response, including 401, proves the server is reachable
@@ -443,7 +447,7 @@ async def drive_mode(args: argparse.Namespace) -> int:
     try:
       devtools = f"http://127.0.0.1:{debug_port}"
       ver = None
-      deadline = time.monotonic() + 30
+      deadline = time.monotonic() + CHROME_DEVTOOLS_TIMEOUT_S
       while time.monotonic() < deadline:
         if proc.poll() is not None:
           fail(f"headless chrome exited early (code {proc.returncode}); binary: {chrome_bin}")
@@ -453,7 +457,7 @@ async def drive_mode(args: argparse.Namespace) -> int:
         except OSError:
           time.sleep(0.2)
       if ver is None:
-        fail(f"headless chrome devtools endpoint did not come up within 30s: {devtools}")
+        fail(f"headless chrome devtools endpoint did not come up within {CHROME_DEVTOOLS_TIMEOUT_S:.0f}s: {devtools}")
       print("CHROME", ver.get("Browser"))
 
       async with websockets.connect(ver["webSocketDebuggerUrl"], max_size=None) as ws:
@@ -538,14 +542,14 @@ async def drive_mode(args: argparse.Namespace) -> int:
             records.append({"leg": cpu_leg, "scrollable": False, "scroll_top_path": None})
 
           await cdp.send("Tracing.end", sid)
-          await asyncio.wait_for(done, timeout=60)
+          await asyncio.wait_for(done, timeout=TRACE_COLLECT_TIMEOUT_S)
         finally:
           recv.cancel()
     finally:
       # Fully reap chrome before the TemporaryDirectory cleanup reads the profile dir.
       proc.terminate()
       try:
-        proc.wait(timeout=10)
+        proc.wait(timeout=CHROME_REAP_TIMEOUT_S)
       except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()

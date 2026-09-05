@@ -41,12 +41,13 @@ async function loadMarkedSrc() {
 // context, mirroring the browser page order: marked.min.js defines the global
 // marked first, then markdown-renderer.js registers its renderer + tokenizer
 // via marked.use. Stubs cover only the non-marked globals (hljs, document,
-// platform) that the file touches.
-async function loadRenderer() {
+// platform) that the file touches; a caller-passed hljs replaces the stub so
+// tests can count or shape highlight calls.
+async function loadRenderer(hljs) {
   const markedSrc = await loadMarkedSrc();
   const context = {
     console,
-    hljs: {
+    hljs: hljs || {
       getLanguage: () => null,
       highlightAuto: (s) => ({ value: String(s) }),
       highlight: (s) => ({ value: String(s) }),

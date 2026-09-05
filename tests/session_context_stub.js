@@ -68,7 +68,6 @@ function baseSessionContext(overrides = {}) {
     updateRelativeTimes: () => {},
     formatTokens: (n) => `${Math.round(n / 1000)}k`,
     formatUsageCostValue: (cost) => cost == null ? 'N/A' : '$' + cost.toFixed(2),
-    formatLastRun: (txt) => txt,
     escapeHtml: (v) => v,
     renderWorkersTab: () => {},
     switchTab: () => {},

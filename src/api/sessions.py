@@ -142,7 +142,8 @@ def _switchable_backend_ids(
   if active_domain is None:
     return []
   return [
-      opt.id for opt in cfg.backend_options
+      opt.id
+      for opt in cfg.backend_options
       if opt.type == BackendType.CC_CLAUDE and str(claude_config_dir(opt)) == active_domain
   ]
 

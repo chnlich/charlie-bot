@@ -347,3 +347,27 @@ class ClaudeCodeBackend(AgentBackend):
     if proc.returncode != 0:
       raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {stderr.decode().strip()}")
     return stdout.decode().strip()
+
+
+class AnthropicEndpointBackend(ClaudeCodeBackend):
+  """Claude Code pointed at a non-Anthropic Anthropic-compatible endpoint by env.
+
+  The endpoint URL and bearer token ride ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN,
+  and claude_model_env pins every model-selection variable to one model, so the
+  ``claude`` binary must not see a ``--model`` flag (it would override the env).
+  Subclasses own where the endpoint and credential come from.
+  """
+
+  def __init__(self, *, base_url: str, auth_token: str, model: str, **kwargs):
+    self._base_url = base_url
+    self._auth_token = auth_token
+    self._env_model = model
+    super().__init__(model=None, **kwargs)
+
+  def _prepare_env(self, env: dict) -> dict:
+    return {
+        **super()._prepare_env(env),
+        "ANTHROPIC_BASE_URL": self._base_url,
+        "ANTHROPIC_AUTH_TOKEN": self._auth_token,
+        **claude_model_env(self._env_model),
+    }

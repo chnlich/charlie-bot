@@ -38,7 +38,7 @@ import src.agents.backends as backends_package
 from src.agents.backends.antigravity_cli import AntigravityCliBackend
 from src.agents.backends.base import AgentBackend
 from src.agents.backends.charlie_code import CharlieCodeBackend
-from src.agents.backends.claude_code import ClaudeCodeBackend
+from src.agents.backends.claude_code import AnthropicEndpointBackend, ClaudeCodeBackend
 from src.agents.backends.codex import CodexBackend
 from src.agents.backends.gemini_cli import GeminiCliBackend
 from src.agents.backends.kimi import KimiBackend
@@ -54,6 +54,12 @@ _SENTINEL_STAT: tuple[str, str] = ("314159contract-start", "R")
 # string; resolve_binary itself is patched where the constructor calls it.
 _BASE_CTOR_KWARGS: dict[type[AgentBackend], dict] = {
     ClaudeCodeBackend: {},
+    AnthropicEndpointBackend:
+        {
+            "base_url": "https://contract.invalid",
+            "auth_token": "contract-token",
+            "model": "contract-model",
+        },
     KimiBackend: {
         "api_key": "contract-key",
         "model": "contract-model"
@@ -191,7 +197,7 @@ async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
 
 HarnessFn = Callable[[type[AgentBackend], pytest.MonkeyPatch, Path], Awaitable[None]]
 
-# Harness-by-class map: the six base-path classes share one harness driving the
+# Harness-by-class map: the base-path classes share one harness driving the
 # inherited base.run(); opencode and antigravity each drive their own run().
 # This map is the ONLY opt-in — enumeration does not consult it.
 HARNESSES: dict[type[AgentBackend], HarnessFn] = {

@@ -568,7 +568,7 @@ function renderMessage(msg, sessionId) {
   }
   function mdDiv(text) {
     var raw = escapeHtml(text || "").replace(/"/g, "&quot;");
-    return "<div class=\"prose-msg\" data-raw=\"" + raw + "\">" + marked.parse(fixNestedFences(text || "")) + "</div>";
+    return "<div class=\"prose-msg\" data-raw=\"" + raw + "\">" + renderProseMarkdown(text || "") + "</div>";
   }
 
   if (msg.role === "user") {

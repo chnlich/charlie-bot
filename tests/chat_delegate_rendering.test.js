@@ -17,6 +17,7 @@ function loadChatRendering() {
     },
     marked: {parse: (value) => String(value || '')},
     fixNestedFences: (value) => String(value || ''),
+    renderProseMarkdown: (value) => String(value || ''),
     renderChatMath: () => {},
     renderUserMessageBubble: () => '',
   };
@@ -153,7 +154,7 @@ test('worker_summary renders non-clickable locator without worker result content
 test('assistant OpenCode protocol renders complete collapsed literal output without Markdown parsing', () => {
   const context = loadChatRendering();
   const parseCalls = [];
-  context.marked.parse = (value) => {
+  context.renderProseMarkdown = (value) => {
     parseCalls.push(value);
     return '<p>unexpected Markdown</p>';
   };
@@ -187,7 +188,7 @@ test('assistant OpenCode protocol renders complete collapsed literal output with
 test('assistant OpenCode protocol detection accepts leading whitespace', () => {
   const context = loadChatRendering();
   const parseCalls = [];
-  context.marked.parse = (value) => {
+  context.renderProseMarkdown = (value) => {
     parseCalls.push(value);
     return '<p>unexpected Markdown</p>';
   };
@@ -205,7 +206,7 @@ test('assistant OpenCode protocol detection accepts leading whitespace', () => {
 test('ordinary assistant Markdown keeps the existing marked.parse path', () => {
   const context = loadChatRendering();
   const parseCalls = [];
-  context.marked.parse = (value) => {
+  context.renderProseMarkdown = (value) => {
     parseCalls.push(value);
     return '<p><strong>ordinary</strong></p>';
   };

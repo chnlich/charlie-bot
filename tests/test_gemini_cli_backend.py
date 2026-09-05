@@ -1,13 +1,17 @@
+from conftest import GEMINI_RESOLVE_BINARY_PATCH_TARGET, build_cli_backend
+
 from src.agents.backends.gemini_cli import GeminiCliBackend
 
 
 def _build_backend(monkeypatch, **kwargs) -> GeminiCliBackend:
-  monkeypatch.setattr(
-      "src.agents.backends.gemini_cli.resolve_binary",
-      lambda name, fallback: "/usr/bin/gemini",
+  return build_cli_backend(
+      monkeypatch,
+      GeminiCliBackend,
+      GEMINI_RESOLVE_BINARY_PATCH_TARGET,
+      "/usr/bin/gemini",
+      defaults={"model": "gemini-test-model"},
+      **kwargs,
   )
-  kwargs.setdefault("model", "gemini-test-model")
-  return GeminiCliBackend(**kwargs)
 
 
 def test_build_command_wraps_instructions_and_resume(monkeypatch) -> None:

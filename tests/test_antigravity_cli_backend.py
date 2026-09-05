@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from conftest import ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET
+from conftest import ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, build_cli_backend
 
 from src.agents.backends.antigravity_cli import AntigravityCliBackend
 from src.agents.backends.registry import build_backend
@@ -10,11 +10,8 @@ from src.core.models import BackendOption
 
 
 def _build_backend(monkeypatch, **kwargs) -> AntigravityCliBackend:
-  monkeypatch.setattr(
-      ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
-      lambda name, fallback: "/usr/bin/agy",
-  )
-  return AntigravityCliBackend(**kwargs)
+  return build_cli_backend(
+      monkeypatch, AntigravityCliBackend, ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/agy", **kwargs)
 
 
 def _write_fake_agy(tmp_path: Path, body: str) -> Path:

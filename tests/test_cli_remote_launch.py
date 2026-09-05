@@ -8,7 +8,9 @@ import shutil
 import signal
 import subprocess
 import time
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -54,6 +56,25 @@ def _mock_config(home: Path) -> MagicMock:
   return cfg
 
 
+@contextlib.contextmanager
+def _patched_launch(cfg: MagicMock, argv_tail: list[str], run_patch: Any = None) -> Iterator[Any]:
+  """Install the patch stack every launch test shares: argv, both get_config bindings, and run_patch.
+
+  Yields the subprocess.run stand-in when run_patch is given, else None. Why two get_config
+  bindings are patched: see the patch-target comment above.
+  """
+  patches = [
+      patch("sys.argv", ["remote_launch", *argv_tail]),
+      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+  ]
+  if run_patch is not None:
+    patches.append(run_patch)
+  with contextlib.ExitStack() as stack:
+    handles = [stack.enter_context(p) for p in patches]
+    yield handles[-1] if run_patch is not None else None
+
+
 def _run_e2e(tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str):
   """Drive main() with the supplied ssh argv prefix and return parsed metadata."""
   session = "sess-e2e"
@@ -61,29 +82,8 @@ def _run_e2e(tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str):
   cfg = _mock_config(home)
   cwd = str(tmp_path)
 
-  patches = [
-      patch(
-          "sys.argv", [
-              "remote_launch",
-              "--session",
-              session,
-              "--host",
-              host,
-              "--cwd",
-              cwd,
-              "--cmd",
-              "sleep 2; echo hi",
-          ]),
-      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
-      patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg),
-  ]
-  for p in patches:
-    p.start()
-  try:
+  with _patched_launch(cfg, ["--session", session, "--host", host, "--cwd", cwd, "--cmd", "sleep 2; echo hi"]):
     main()
-  finally:
-    for p in patches:
-      p.stop()
 
   meta = json.loads(capsys.readouterr().out.strip())
   return meta, home, session
@@ -124,22 +124,11 @@ def test_end_to_end_localhost(tmp_path: Path, capsys: pytest.CaptureFixture[str]
 
 def test_ssh_failure_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   session = "sess-ssh-fail"
-  home = _make_session_dir(tmp_path, session)
-  cfg = _mock_config(home)
+  cfg = _mock_config(_make_session_dir(tmp_path, session))
 
-  with patch("sys.argv", [
-      "remote_launch",
-      "--session",
-      session,
-      "--host",
-      "nonexistent.invalid",
-      "--cwd",
-      str(tmp_path),
-      "--cmd",
-      "echo hi",
-  ]), patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       pytest.raises(SystemExit) as exc_info:
+  with _patched_launch(cfg, [
+      "--session", session, "--host", "nonexistent.invalid", "--cwd", str(tmp_path), "--cmd", "echo hi"
+  ]), pytest.raises(SystemExit) as exc_info:
     main()
 
   assert exc_info.value.code == 2
@@ -155,17 +144,11 @@ def test_missing_session_dir_exits_4(tmp_path: Path, capsys: pytest.CaptureFixtu
 
   fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="12345\n", stderr="")
 
-  with patch("sys.argv", [
-      "remote_launch",
-      "--session", "nonexistent-session",
-      "--host", "localhost",
-      "--cwd", str(tmp_path),
-      "--cmd", "echo hi",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc), \
-       pytest.raises(SystemExit) as exc_info:
+  with _patched_launch(
+      cfg,
+      ["--session", "nonexistent-session", "--host", "localhost", "--cwd", str(tmp_path), "--cmd", "echo hi"],
+      patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc),
+  ), pytest.raises(SystemExit) as exc_info:
     main()
 
   assert exc_info.value.code == 4
@@ -175,22 +158,15 @@ def test_missing_session_dir_exits_4(tmp_path: Path, capsys: pytest.CaptureFixtu
 
 def test_pid_parse_failure_exits_3(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   session = "sess-bad-pid"
-  home = _make_session_dir(tmp_path, session)
-  cfg = _mock_config(home)
+  cfg = _mock_config(_make_session_dir(tmp_path, session))
 
   fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="not-a-pid\n", stderr="")
 
-  with patch("sys.argv", [
-      "remote_launch",
-      "--session", session,
-      "--host", "localhost",
-      "--cwd", str(tmp_path),
-      "--cmd", "echo hi",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc), \
-       pytest.raises(SystemExit) as exc_info:
+  with _patched_launch(
+      cfg,
+      ["--session", session, "--host", "localhost", "--cwd", str(tmp_path), "--cmd", "echo hi"],
+      patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc),
+  ), pytest.raises(SystemExit) as exc_info:
     main()
 
   assert exc_info.value.code == 3
@@ -198,22 +174,15 @@ def test_pid_parse_failure_exits_3(tmp_path: Path, capsys: pytest.CaptureFixture
 
 def test_ssh_timeout_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   session = "sess-timeout"
-  home = _make_session_dir(tmp_path, session)
-  cfg = _mock_config(home)
+  cfg = _mock_config(_make_session_dir(tmp_path, session))
 
   timeout = subprocess.TimeoutExpired(cmd=["ssh"], timeout=30, stderr="still waiting")
 
-  with patch("sys.argv", [
-      "remote_launch",
-      "--session", session,
-      "--host", "localhost",
-      "--cwd", str(tmp_path),
-      "--cmd", "echo hi",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_SUBPROCESS_RUN_PATCH_TARGET, side_effect=timeout), \
-       pytest.raises(SystemExit) as exc_info:
+  with _patched_launch(
+      cfg,
+      ["--session", session, "--host", "localhost", "--cwd", str(tmp_path), "--cmd", "echo hi"],
+      patch(_SUBPROCESS_RUN_PATCH_TARGET, side_effect=timeout),
+  ), pytest.raises(SystemExit) as exc_info:
     main()
 
   assert exc_info.value.code == 2
@@ -232,16 +201,11 @@ def test_success_path_with_mocked_ssh(tmp_path: Path, capsys: pytest.CaptureFixt
   cwd = "/some where"
   cmd = "make build && echo done"
 
-  with patch("sys.argv", [
-      "remote_launch",
-      "--session", session,
-      "--host", "remote.example.com",
-      "--cwd", cwd,
-      "--cmd", cmd,
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc) as mock_run:
+  with _patched_launch(
+      cfg,
+      ["--session", session, "--host", "remote.example.com", "--cwd", cwd, "--cmd", cmd],
+      patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc),
+  ) as mock_run:
     main()
 
   stdout = capsys.readouterr().out.strip()
@@ -280,22 +244,17 @@ def test_success_path_derives_session_from_cwd(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
   session = "sess-cwd"
-  home = _make_session_dir(tmp_path, session)
-  cfg = _mock_config(home)
+  cfg = _mock_config(_make_session_dir(tmp_path, session))
   monkeypatch.chdir(cfg.sessions_dir / session)
   monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
 
   fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="24680\n", stderr="")
 
-  with patch("sys.argv", [
-      "remote_launch",
-      "--host", "remote.example.com",
-      "--cwd", str(tmp_path),
-      "--cmd", "echo hi",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc):
+  with _patched_launch(
+      cfg,
+      ["--host", "remote.example.com", "--cwd", str(tmp_path), "--cmd", "echo hi"],
+      patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc),
+  ):
     main()
 
   meta = json.loads(capsys.readouterr().out.strip())
@@ -310,22 +269,17 @@ def test_session_env_is_the_remote_launch_session_source(
 ) -> None:
   """From a cwd outside any session dir, the server-written variable supplies the launch's session."""
   session = "sess-env"
-  home = _make_session_dir(tmp_path, session)
-  cfg = _mock_config(home)
+  cfg = _mock_config(_make_session_dir(tmp_path, session))
   monkeypatch.chdir(tmp_path)
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session)
 
   fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="24680\n", stderr="")
 
-  with patch("sys.argv", [
-      "remote_launch",
-      "--host", "remote.example.com",
-      "--cwd", str(tmp_path),
-      "--cmd", "echo hi",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc):
+  with _patched_launch(
+      cfg,
+      ["--host", "remote.example.com", "--cwd", str(tmp_path), "--cmd", "echo hi"],
+      patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc),
+  ):
     main()
 
   meta = json.loads(capsys.readouterr().out.strip())

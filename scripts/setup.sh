@@ -139,4 +139,22 @@ if missing:
 print("OK: backend disallows " + ",".join(required))
 PY
 
+# GPU voice engine: on hosts with an NVIDIA GPU, install the optional gpu-voice
+# dependency group, then download the official Qwen3-ASR weights and preflight-assert
+# the GPU decode path (imports, cuda load, measured decode timing, free VRAM). Only
+# after a full preflight pass does the enable step flip voice_engine to qwen3_hf in the
+# deployment config (idempotent). Non-GPU hosts skip the branch and keep the default
+# sherpa CPU engine.
+if command -v nvidia-smi >/dev/null 2>&1; then
+  echo "==> NVIDIA GPU detected: provisioning the qwen3_hf voice engine"
+  if (( DRY_RUN )); then
+    echo "  dry-run: would run: uv sync --group gpu-voice; then python -m src.core.voice_setup enable"
+  else
+    uv sync --group gpu-voice
+    uv run --no-sync python -m src.core.voice_setup enable
+  fi
+else
+  echo "==> No NVIDIA GPU detected: voice engine stays sherpa (CPU)"
+fi
+
 echo "Setup complete."

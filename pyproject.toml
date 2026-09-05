@@ -31,6 +31,13 @@ dependencies = [
 dev = [
     "ruff==0.16.1",
 ]
+# Optional GPU voice engine (qwen3_hf): official transformers Qwen3-ASR weights on
+# NVIDIA GPUs. Not installed by default — setup.sh syncs this group only on hosts
+# with nvidia-smi, so plain `uv sync` and CI never pull torch.
+gpu-voice = [
+    "torch",
+    "transformers>=5.13",
+]
 
 [project.scripts]
 charliebot = "src.cli.main:main"

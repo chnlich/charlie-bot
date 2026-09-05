@@ -27,7 +27,7 @@ function loadGroups() {
     escapeHtml: escapeHtmlText,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     relativeTime: () => 'Jul 29, 5:12 PM',
-    formatLastRun: () => '',
+    formatBubbleTime: () => '',
     getSessionIndicatorState: () => 'idle',
     renderSessionIndicators: () => '',
     renderPendingTriggerIndicator: () => '',

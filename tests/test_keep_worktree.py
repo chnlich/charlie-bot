@@ -72,13 +72,15 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
   monkeypatch.setattr(git_module, "git_worktree_remove", fail_git_worktree_remove)
 
   await spawner._finalize_worker(
-      session_id="session-id",
-      description="slurm benchmark",
-      thread=thread,
-      outcome=CLEAN_EXIT_OUTCOME,
-      thread_mgr=CapturingThreadManager(thread, captures),
-      session_mgr=object(),
-      cfg=cfg,
+      spawner_finalize._FinalizeCtx(
+          session_id="session-id",
+          description="slurm benchmark",
+          thread=thread,
+          outcome=CLEAN_EXIT_OUTCOME,
+          thread_mgr=CapturingThreadManager(thread, captures),
+          session_mgr=object(),
+          cfg=cfg,
+      ),
       skip_notify=False,
       task_type=TaskType.IMPLEMENT,
       completed_at=None,

@@ -241,12 +241,15 @@ async def test_worker_finish_summary_is_locator_without_task_description(monkeyp
   monkeypatch.setattr(spawner_events, "_worker_summary_timestamp", lambda: "2026-07-01 12:35 PDT")
 
   events_summary, full_summary = await spawner._broadcast_completion(
-      "session-id",
-      "Sensitive task description",
-      thread,
-      CLEAN_EXIT_OUTCOME,
-      FakeThreadManager(),
-      FakeSessionManager(),
+      spawner_finalize._FinalizeCtx(
+          session_id="session-id",
+          description="Sensitive task description",
+          thread=thread,
+          outcome=CLEAN_EXIT_OUTCOME,
+          thread_mgr=FakeThreadManager(),
+          session_mgr=FakeSessionManager(),
+          cfg=CharlieBotConfig(),
+      ),
       verify_report=None,
   )
 
@@ -450,13 +453,15 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 
   await spawner._finalize_worker(
-      session_id="session-id",
-      description="Prompt-only task",
-      thread=thread,
-      outcome=CLEAN_EXIT_OUTCOME,
-      thread_mgr=CapturingThreadManager(thread, captures),
-      session_mgr=object(),
-      cfg=cfg,
+      spawner_finalize._FinalizeCtx(
+          session_id="session-id",
+          description="Prompt-only task",
+          thread=thread,
+          outcome=CLEAN_EXIT_OUTCOME,
+          thread_mgr=CapturingThreadManager(thread, captures),
+          session_mgr=object(),
+          cfg=cfg,
+      ),
       skip_notify=False,
       task_type=TaskType.IMPLEMENT,
       completed_at=None,

@@ -43,6 +43,24 @@ class _WorkerRunOutcome(NamedTuple):
 _QUOTA_EXHAUSTED_OUTCOME = _WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error="")
 
 
+class _FinalizeCtx(NamedTuple):
+  """The finalize chain's shared inputs: one session's thread, its managers, and the run outcome.
+
+  The chain hops pass one ctx instead of threading these seven values through every
+  signature. ``outcome`` is rewritten downstream (trailer gate, resume-error backfill),
+  so a hop that rewrites it passes a ``_replace``d ctx onward — NamedTuple fields are
+  never mutated in place.
+  """
+
+  session_id: str
+  description: str
+  thread: ThreadMetadata
+  outcome: _WorkerRunOutcome
+  thread_mgr: ThreadManager
+  session_mgr: SessionManager
+  cfg: CharlieBotConfig
+
+
 async def _stream_worker_events(
     worker: Worker,
     session_id: str,
@@ -147,13 +165,7 @@ def _should_skip_worktree_cleanup(thread: ThreadMetadata, exit_code: int) -> boo
 
 
 async def _run_finalize_effects(
-    session_id: str,
-    description: str,
-    thread: ThreadMetadata,
-    outcome: _WorkerRunOutcome,
-    thread_mgr: ThreadManager,
-    session_mgr: SessionManager,
-    cfg: CharlieBotConfig,
+    ctx: _FinalizeCtx,
     *,
     skip_notify: bool,
     verify_report: str | None,
@@ -163,15 +175,14 @@ async def _run_finalize_effects(
   Holds no status write: the caller owns that. Every effect behind this call is
   judgment-idempotent (src/core/finalize_effects), so repetition converges to a no-op.
   """
-  skip_cleanup = _should_skip_worktree_cleanup(thread, outcome.exit_code)
-  cleanup_error = await _cleanup_worker_directory(thread, skip_cleanup, Path(cfg.worktree_dir))
+  skip_cleanup = _should_skip_worktree_cleanup(ctx.thread, ctx.outcome.exit_code)
+  cleanup_error = await _cleanup_worker_directory(ctx.thread, skip_cleanup, Path(ctx.cfg.worktree_dir))
   if cleanup_error:
-    await session_mgr.deliver_to_successor(session_id, {"type": ET.ERROR, "content": cleanup_error})
+    await ctx.session_mgr.deliver_to_successor(ctx.session_id, {"type": ET.ERROR, "content": cleanup_error})
 
   if skip_notify:
     return
-  await _notify_completion(
-      session_id, description, thread, outcome, thread_mgr, session_mgr, cfg, verify_report=verify_report)
+  await _notify_completion(ctx, verify_report=verify_report)
 
 
 async def _thread_cancelled(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> bool:
@@ -198,13 +209,7 @@ async def _verify_report_for_task(
 
 
 async def _finalize_worker(
-    session_id: str,
-    description: str,
-    thread: ThreadMetadata,
-    outcome: _WorkerRunOutcome,
-    thread_mgr: ThreadManager,
-    session_mgr: SessionManager,
-    cfg: CharlieBotConfig,
+    ctx: _FinalizeCtx,
     *,
     skip_notify: bool,
     task_type: TaskType,
@@ -214,6 +219,8 @@ async def _finalize_worker(
 
   ``completed_at`` overrides the terminal-status timestamp when given.
   """
+  session_id, thread, outcome = ctx.session_id, ctx.thread, ctx.outcome
+  thread_mgr = ctx.thread_mgr
   cancelled = await _thread_cancelled(thread_mgr, session_id, thread.id)
   # One read of events.jsonl per finalize pass: the trailer gate below and the
   # notify chain's summary must judge and quote the identical string.
@@ -223,6 +230,7 @@ async def _finalize_worker(
     if trailer_error:
       outcome = outcome._replace(
           exit_code=-1, error=f"{outcome.error}; {trailer_error}" if outcome.error else trailer_error)
+      ctx = ctx._replace(outcome=outcome)
 
   if cancelled:
     # Cancel endpoint already set the status; don't overwrite.
@@ -240,26 +248,11 @@ async def _finalize_worker(
         session_id, thread.id, ThreadStatus.FAILED, exit_code=outcome.exit_code, completed_at=completed_at)
     log.warning("worker_failed_nonzero", thread_id=thread.id, exit_code=outcome.exit_code)
 
-  await _run_finalize_effects(
-      session_id,
-      description,
-      thread,
-      outcome,
-      thread_mgr,
-      session_mgr,
-      cfg,
-      skip_notify=skip_notify,
-      verify_report=verify_report)
+  await _run_finalize_effects(ctx, skip_notify=skip_notify, verify_report=verify_report)
 
 
 async def _finalize_worker_safely(
-    session_id: str,
-    description: str,
-    thread: ThreadMetadata,
-    outcome: _WorkerRunOutcome,
-    thread_mgr: ThreadManager,
-    session_mgr: SessionManager,
-    cfg: CharlieBotConfig,
+    ctx: _FinalizeCtx,
     *,
     skip_notify: bool,
     task_type: TaskType,
@@ -268,29 +261,19 @@ async def _finalize_worker_safely(
   try:
     # completed_at is the run's true end — its raw log's final mtime — so server
     # downtime before finalization never shifts the recorded end.
-    thread_dir = thread_mgr.thread_dir(session_id, thread.id)
+    thread_dir = ctx.thread_mgr.thread_dir(ctx.session_id, ctx.thread.id)
     completed_at = runs.raw_completion_time(runs.raw_log_path(thread_dir))
-    await _finalize_worker(
-        session_id,
-        description,
-        thread,
-        outcome,
-        thread_mgr,
-        session_mgr,
-        cfg,
-        skip_notify=skip_notify,
-        task_type=task_type,
-        completed_at=completed_at)
+    await _finalize_worker(ctx, skip_notify=skip_notify, task_type=task_type, completed_at=completed_at)
   except Exception as e:
-    log.error("spawn_worker_finalize_failed", session=session_id, traceback=traceback.format_exc())
+    log.error("spawn_worker_finalize_failed", session=ctx.session_id, traceback=traceback.format_exc())
     try:
-      await session_mgr.deliver_to_successor(
-          session_id, {
+      await ctx.session_mgr.deliver_to_successor(
+          ctx.session_id, {
               "type": ET.ERROR,
               "content": f"Worker finalization failed: {e}"
           })
     except Exception:
-      log.warning("spawn_worker_finalize_broadcast_failed", session=session_id, exc_info=True)
+      log.warning("spawn_worker_finalize_broadcast_failed", session=ctx.session_id, exc_info=True)
 
 
 async def recomplete_finalize_effects(
@@ -314,16 +297,16 @@ async def recomplete_finalize_effects(
   from exit_code alone.
   """
   verify_report = await _verify_report_for_task(task_type, session_id, thread.id, thread_mgr)
-  await _run_finalize_effects(
-      session_id,
-      description,
-      thread,
-      _WorkerRunOutcome(exit_code=exit_code, quota_exhausted=False, error=""),
-      thread_mgr,
-      session_mgr,
-      cfg,
-      skip_notify=False,
-      verify_report=verify_report)
+  ctx = _FinalizeCtx(
+      session_id=session_id,
+      description=description,
+      thread=thread,
+      outcome=_WorkerRunOutcome(exit_code=exit_code, quota_exhausted=False, error=""),
+      thread_mgr=thread_mgr,
+      session_mgr=session_mgr,
+      cfg=cfg,
+  )
+  await _run_finalize_effects(ctx, skip_notify=False, verify_report=verify_report)
 
 
 async def _persist_worker_summary_once(
@@ -349,12 +332,7 @@ async def _persist_worker_summary_once(
 
 
 async def _broadcast_completion(
-    session_id: str,
-    description: str,
-    thread: ThreadMetadata,
-    outcome: _WorkerRunOutcome,
-    thread_mgr: ThreadManager,
-    session_mgr: SessionManager,
+    ctx: _FinalizeCtx,
     *,
     verify_report: str | None,
 ) -> tuple[str, str]:
@@ -363,6 +341,9 @@ async def _broadcast_completion(
   A non-None ``verify_report`` marks the run as VERIFY: _verify_report_for_task returns
   None for every other task type.
   """
+  session_id, description, thread, outcome = ctx.session_id, ctx.description, ctx.thread, ctx.outcome
+  thread_mgr, session_mgr = ctx.thread_mgr, ctx.session_mgr
+
   if verify_report is not None:
     events_summary = verify_report
   else:
@@ -397,17 +378,13 @@ async def _broadcast_completion(
 
 
 async def _notify_completion(
-    session_id: str,
-    description: str,
-    thread: ThreadMetadata,
-    outcome: _WorkerRunOutcome,
-    thread_mgr: ThreadManager,
-    session_mgr: SessionManager,
-    cfg: CharlieBotConfig,
+    ctx: _FinalizeCtx,
     *,
     verify_report: str | None,
 ) -> None:
   """Broadcast worker_summary event to the session WebSocket and trigger master agent."""
+  session_id, thread, outcome = ctx.session_id, ctx.thread, ctx.outcome
+  thread_mgr, session_mgr, cfg = ctx.thread_mgr, ctx.session_mgr, ctx.cfg
   try:
     # Fetch session metadata exactly once for the whole notify chain; an
     # unscheduled session gives the Telegram notify nothing to look up.
@@ -418,8 +395,7 @@ async def _notify_completion(
       session_meta.updated_at = datetime.now(UTC)
       await session_mgr.save_metadata(session_meta)
       scheduled_task_name = session_meta.scheduled_task
-    events_summary, full_summary = await _broadcast_completion(
-        session_id, description, thread, outcome, thread_mgr, session_mgr, verify_report=verify_report)
+    events_summary, full_summary = await _broadcast_completion(ctx, verify_report=verify_report)
 
     if scheduled_task_name:
       try:

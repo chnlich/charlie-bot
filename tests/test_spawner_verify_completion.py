@@ -135,12 +135,15 @@ async def test_verify_completion_uses_untruncated_result_without_task_spec_prefi
   session_mgr = FakeSessionManager(thread.session_id)
 
   events_summary, full_summary = await spawner._broadcast_completion(
-      thread.session_id,
-      thread.description,
-      thread,
-      CLEAN_EXIT_OUTCOME,
-      thread_mgr,
-      session_mgr,
+      spawner_finalize._FinalizeCtx(
+          session_id=thread.session_id,
+          description=thread.description,
+          thread=thread,
+          outcome=CLEAN_EXIT_OUTCOME,
+          thread_mgr=thread_mgr,
+          session_mgr=session_mgr,
+          cfg=CharlieBotConfig(),
+      ),
       verify_report=report,
   )
 
@@ -265,22 +268,17 @@ async def test_verify_quota_exhaustion_retries_once_with_next_backend_in_same_th
       monkeypatch, worker_runs, spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error=""))
 
   async def fake_finalize_worker_safely(
-      session_id: str,
-      description: str,
-      thread_meta: ThreadMetadata,
-      outcome: spawner._WorkerRunOutcome,
-      manager: Any,
-      sessions: Any,
-      worker_cfg: CharlieBotConfig,
+      ctx: spawner_finalize._FinalizeCtx,
+      *,
       skip_notify: bool,
       task_type: TaskType = TaskType.IMPLEMENT,
   ) -> None:
-    del session_id, description, manager, sessions, worker_cfg, skip_notify
+    del skip_notify
     finalized.update(
-        thread=thread_meta,
-        exit_code=outcome.exit_code,
-        quota_exhausted=outcome.quota_exhausted,
-        error=outcome.error,
+        thread=ctx.thread,
+        exit_code=ctx.outcome.exit_code,
+        quota_exhausted=ctx.outcome.quota_exhausted,
+        error=ctx.outcome.error,
         task_type=task_type,
     )
 

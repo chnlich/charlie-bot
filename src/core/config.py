@@ -323,6 +323,7 @@ class CharlieBotConfig(BaseModel):
   # are load-bearing yaml keys. A whole-repo grep can never find the consumer — it
   # lives in a host skill dir — so zero matches is not evidence a field is unused.
   # Deleting one breaks startup on every host whose config carries the key.
+  aigw_api_key: str | None = None  # aigw LLM gateway virtual key; consumed outside repo code
   feishu_app_id: str | None = None
   feishu_app_secret: str | None = None
   feishu_refresh_token: str | None = None

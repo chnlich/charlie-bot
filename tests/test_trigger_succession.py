@@ -9,11 +9,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-    BROADCAST_PATCH_TARGET,
     OPUS_BACKEND_ID,
-    TRIGGER_MASTER_PATCH_TARGET,
     TRIGGERS_GET_CONFIG_PATCH_TARGET,
     make_home_session,
+    patch_trigger_mocks,
 )
 from conftest import make_parent as _make_parent
 from fastapi import HTTPException
@@ -125,8 +124,7 @@ async def test_firing_trigger_eloned_delivers_into_successor_and_wakes(tmp_path:
   trigger_mgr = TriggerManager(cfg, mgr)
 
   with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
+      patch_trigger_mocks() as mock_master,
       patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ):
     trigger = await trigger_mgr.create_trigger(parent_id, delay_seconds=0, message="wake successor")
@@ -161,10 +159,7 @@ async def test_watch_trigger_cancelled_when_session_archived_mid_wait(
   # Drive the clock: poll the dormancy predicate every 50ms instead of 60s.
   monkeypatch.setattr("src.core.triggers._DORMANCY_CHECK_SECONDS", 0.05)
 
-  with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
-  ):
+  with patch_trigger_mocks() as mock_master:
     # A pid that stays alive for the whole test: the wait would otherwise run to
     # its 3600s deadline, so only the watchdog can end this trigger.
     trigger = await trigger_mgr.create_trigger(
@@ -194,10 +189,7 @@ async def test_pure_delay_trigger_cancelled_when_session_archived_mid_wait(
   trigger_mgr = TriggerManager(cfg, mgr)
   monkeypatch.setattr("src.core.triggers._DORMANCY_CHECK_SECONDS", 0.05)
 
-  with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
-  ):
+  with patch_trigger_mocks() as mock_master:
     trigger = await trigger_mgr.create_trigger(session.id, delay_seconds=3600, message="pure delay")
     task = trigger_mgr._tasks[trigger.id]
     await mgr.archive_session(session.id)
@@ -216,10 +208,7 @@ async def test_fire_time_backstop_cancels_when_archive_lands_before_fire(tmp_pat
   cfg, mgr, session = await make_home_session(tmp_path, name="Late archive", backend=OPUS_BACKEND_ID)
   trigger_mgr = TriggerManager(cfg, mgr)
 
-  with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
-  ):
+  with patch_trigger_mocks() as mock_master:
     trigger = await trigger_mgr.create_trigger(session.id, delay_seconds=1, message="backstop")
     task = trigger_mgr._tasks[trigger.id]
     await mgr.archive_session(session.id)
@@ -245,8 +234,7 @@ async def test_trigger_archived_mid_wait_with_successor_still_fires_into_success
   trigger_mgr = TriggerManager(cfg, mgr)
 
   with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
+      patch_trigger_mocks() as mock_master,
       patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ):
     trigger = await trigger_mgr.create_trigger(parent_id, delay_seconds=1, message="wake the child")

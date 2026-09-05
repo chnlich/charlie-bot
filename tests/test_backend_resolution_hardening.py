@@ -4,18 +4,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from conftest import (
-    BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
-    TRIGGER_MASTER_PATCH_TARGET,
     TRIGGERS_GET_CONFIG_PATCH_TARGET,
     FakeBackend,
     make_home_config,
     make_work_item,
     patch_instructions_content,
+    patch_trigger_mocks,
 )
 
 from src.agents import master_cc
@@ -181,8 +180,7 @@ async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_pa
       backend_options=[models.BackendOption(id="added-later", label="New", type="cc-claude", model="m")],
   )
   with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
+      patch_trigger_mocks() as mock_master,
       patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=current),
   ):
     await trigger_mgr._wait_and_fire(trigger)

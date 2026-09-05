@@ -11,10 +11,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
-    BROADCAST_PATCH_TARGET,
     TRIGGER_MASTER_PATCH_TARGET,
     assert_trigger_fired_completed,
     assert_trigger_fired_timeout,
+    patch_trigger_mocks,
 )
 from conftest import make_trigger_setup as _make_mgr
 
@@ -47,10 +47,7 @@ async def test_pid_gone_immediate_fire(tmp_path: Path, pidfd_open_available: Non
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
   missing_pid = _find_unused_pid()
 
-  with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
-  ):
+  with patch_trigger_mocks() as mock_master:
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=30,
@@ -70,10 +67,7 @@ async def test_pid_exit_before_timeout(tmp_path: Path, pidfd_open_available: Non
 
   proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.5)"])
 
-  with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
-  ):
+  with patch_trigger_mocks() as mock_master:
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=30,
@@ -98,10 +92,7 @@ async def test_timeout_before_pid_exit(tmp_path: Path, pidfd_open_available: Non
 
   proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
   try:
-    with (
-        patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-        patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
-    ):
+    with patch_trigger_mocks() as mock_master:
       trigger = await trigger_mgr.create_trigger(
           session_id,
           delay_seconds=1,
@@ -126,10 +117,7 @@ async def test_multiple_pids_all_semantics(tmp_path: Path, pidfd_open_available:
   slow = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)"])
 
   try:
-    with (
-        patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-        patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
-    ):
+    with patch_trigger_mocks() as mock_master:
       trigger = await trigger_mgr.create_trigger(
           session_id,
           delay_seconds=30,
@@ -157,10 +145,7 @@ async def test_multiple_pids_all_semantics(tmp_path: Path, pidfd_open_available:
 async def test_time_only_path_unchanged(tmp_path: Path) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
 
-  with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
-  ):
+  with patch_trigger_mocks() as mock_master:
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=0,

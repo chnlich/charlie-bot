@@ -14,11 +14,11 @@ import yaml
 from conftest import (
     BROADCAST_PATCH_TARGET,
     OPUS_BACKEND_ID,
-    TRIGGER_MASTER_PATCH_TARGET,
     TRIGGERS_GET_CONFIG_PATCH_TARGET,
     build_sessions_cfg,
     build_two_backend_cfg,
     make_home_session,
+    patch_trigger_mocks,
 )
 from conftest import append_events as _append_events
 from conftest import make_parent as _make_parent
@@ -561,8 +561,7 @@ async def test_succession_keeps_scheduler_chain_intact_for_tick_and_triggers(
   scheduler = Scheduler(cfg, mgr)
 
   with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
+      patch_trigger_mocks() as mock_master,
       patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ):
     # A trigger stays pending on the parent across the succession.

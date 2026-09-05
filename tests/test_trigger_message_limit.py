@@ -6,14 +6,13 @@ import json
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from conftest import (
-    BROADCAST_PATCH_TARGET,
-    TRIGGER_MASTER_PATCH_TARGET,
     fake_cli_cfg,
     make_home_config,
+    patch_trigger_mocks,
     schedule_trigger_argv,
 )
 from pydantic import ValidationError
@@ -128,10 +127,7 @@ async def test_persisted_over_limit_message_fires_verbatim(tmp_path: Path) -> No
       encoding="utf-8",
   )
 
-  with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
-  ):
+  with patch_trigger_mocks() as mock_master:
     trigger = await trigger_mgr._load_trigger(session.id, trigger_id)
     await trigger_mgr._wait_and_fire(trigger)
 

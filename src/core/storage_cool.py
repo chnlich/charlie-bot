@@ -812,7 +812,7 @@ def format_sweep_line(result: SweepResult) -> str:
   return f"total {_gib(result.total_bytes):.2f} GiB ({'; '.join(parts)})"
 
 
-def format_sweep_table(result: SweepResult, *, dry_run: bool) -> str:
+def format_sweep_table(result: SweepResult) -> str:
   """The command's report: one line per category, then the total."""
   lines = [
       f"{category.name:<18}{category.count:>7} {category.unit:<9}{_gib(category.bytes):>9.2f} GiB"

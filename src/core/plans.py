@@ -286,7 +286,7 @@ class PlanRegistryManager:
       raise ValueError(f"file {file!r} not found inside the session directory")
     return relative.as_posix()
 
-  def _find_binding_by_file(self, session_id: str, data: dict, file: str) -> tuple[int, int] | None:
+  def _find_binding_by_file(self, data: dict, file: str) -> tuple[int, int] | None:
     """Return (plan_id, v) for the first version whose normalized file path equals ``file``.
 
     Both sides are normalized via ``posixpath.normpath`` so legacy rows with non-canonical
@@ -317,7 +317,7 @@ class PlanRegistryManager:
           "Recover headroom by folding, per the page-budget rules in the BLOCK KIT comment of "
           "prompts/plan_template.html. Measure locally with: "
           "charliebot artifact check <artifact.html> --genre plan --assertions-only")
-    existing_file = self._find_binding_by_file(session_id, data, file_relative)
+    existing_file = self._find_binding_by_file(data, file_relative)
     if existing_file is not None:
       raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")
     return file_relative

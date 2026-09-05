@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from src.api.deps import get_session_manager
+from src.api.responses import FastJsonResponse
 from src.core.config import (
     DEFAULT_TIMEZONE,
     CharlieBotConfig,
@@ -166,9 +167,15 @@ async def list_cron_tasks():
   # prompt is resolved from prompt_file for the in-process scheduler/master
   # reads; no consumer of this route reads it (the UI edits prompt_file), and
   # shipping the resolved bodies was ~90 KB of the 96 KB response. The steps
-  # exclusion is the same field one level down on a chain task.
+  # exclusion is the same field one level down on a chain task. The dump feeds
+  # json.dumps directly with no encoder pass left to convert types, so it must
+  # stay dumps-safe: mode="json" is that guarantee should a datetime or enum
+  # field join the model (today every field is already a primitive, so the
+  # bytes equal the encoder-rendered output the M46 row was taken with).
+  # Returning the mapped list instead would pay jsonable_encoder's dict
+  # recursion per request for the same bytes.
   valid = [
-      t.model_dump(exclude={
+      t.model_dump(mode="json", exclude={
           'prompt': True,
           'steps': {
               '__all__': {
@@ -186,7 +193,7 @@ async def list_cron_tasks():
           'enabled': e.enabled
       } for e in get_scheduled_task_errors()
   ]
-  return valid + broken
+  return FastJsonResponse(valid + broken)
 
 
 async def apply_task_yaml_update(

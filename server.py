@@ -55,6 +55,13 @@ log = structlog.get_logger()
 # Interval between WebSocket keepalive pings (seconds).
 _WS_KEEPALIVE_TIMEOUT = 30.0
 
+# Catchup replay slicing: events walked and frames rendered per on-loop slice.
+# The walk measures ~1.2 µs per event; a ticker waking mid-slice waits out the
+# rest of the slice (gap = its 5 ms sleep + the slice remainder), so slices stay
+# near 1 ms to keep the service delay under the GIL-handoff alternative.
+_CATCHUP_SLICE_EVENTS = 400
+_CATCHUP_RENDER_SLICE = 4
+
 
 class _CharlieBotGZipMiddleware(GZipMiddleware):
   """Skip HTTP transport compression for already-compressed trace files."""
@@ -347,44 +354,78 @@ async def _send_session_catchup(
   return sent, event_index_offset + len(events)
 
 
+class _CatchupWalk:
+  """Incremental catchup walk: the aggregator state and frame buffer behind `_catchup_frames`.
+
+  The walk is pure-Python CPU at ~1.2 µs per event; fed in slices from the event
+  loop with a yield between slices, no slice holds the loop longer than the
+  poll cadences' 5 ms resolution, while a whole-corpus thread run parks the
+  loop behind GIL handoffs for its full span (measured 10 ms loop-lag per
+  replay). `feed_slice` processes one event range; `finish` emits the ordered
+  frame list.
+  """
+
+  def __init__(self, cursor: int, event_index_offset: int = 0) -> None:
+    self._cursor = cursor
+    self._event_index_offset = event_index_offset
+    self._aggregator = MessageAggregator(event_index_offset=event_index_offset)
+    self._frames: list[dict] = []
+    self._latest_stream: dict | None = None
+
+  def feed_slice(self, events: list[dict], start: int, end: int) -> None:
+    """Feed events[start:end]; *start* is the slice's index in the full event list."""
+    for idx in range(start, end):
+      ev = events[idx]
+      global_idx = self._event_index_offset + idx
+      deltas = list(self._aggregator.feed(ev))
+      if global_idx < self._cursor:
+        continue
+      for delta in deltas:
+        if delta["type"] == "stream":
+          # Coalesce: only the most recent stream snapshot matters for catchup.
+          self._latest_stream = delta
+          continue
+        # A `message` commit makes any buffered stream obsolete -- the commit
+        # carries the same (or more complete) content and the client clears the
+        # streaming preview when it appends a committed bubble.
+        self._latest_stream = None
+        self._frames.append(delta)
+      if ev.get("type") in _RAW_EVENTS_REPLACED_BY_DELTAS:
+        continue
+      payload = dict(ev)
+      payload.setdefault("event_index", global_idx)
+      self._frames.append(payload)
+
+  def finish(self) -> list[dict]:
+    if self._latest_stream is not None:
+      self._frames.append(self._latest_stream)
+    return self._frames
+
+
 def _catchup_frames(events: list[dict], cursor: int, *, event_index_offset: int = 0) -> list[dict]:
-  """Build the ordered catchup frame list for events past *cursor* (thread-pool work).
+  """Build the ordered catchup frame list for events past *cursor*.
 
   Walks the full event list to keep the aggregator state aligned with how the
   client's SSR/SPA aggregator processed events[0..cursor-1]; deltas from events
   before the cursor are dropped from the result because the client has already
   rendered them. Raw events in `_RAW_EVENTS_REPLACED_BY_DELTAS` are suppressed
   because their content is represented by `message`/`stream` deltas on the wire.
-  Runs in a thread: a reconnecting client that is a few events behind a large
-  session still feeds the whole corpus, and that walk must not stall the event
-  loop the reconnect lives on.
+  Sync whole-corpus form; the live replay runs the same walk sliced through
+  `_CatchupWalk` (see its docstring for why).
   """
-  aggregator = MessageAggregator(event_index_offset=event_index_offset)
-  frames: list[dict] = []
-  latest_stream: dict | None = None
-  for idx, ev in enumerate(events):
-    global_idx = event_index_offset + idx
-    deltas = list(aggregator.feed(ev))
-    if global_idx < cursor:
-      continue
-    for delta in deltas:
-      if delta["type"] == "stream":
-        # Coalesce: only the most recent stream snapshot matters for catchup.
-        latest_stream = delta
-        continue
-      # A `message` commit makes any buffered stream obsolete -- the commit
-      # carries the same (or more complete) content and the client clears the
-      # streaming preview when it appends a committed bubble.
-      latest_stream = None
-      frames.append(delta)
-    if ev.get("type") in _RAW_EVENTS_REPLACED_BY_DELTAS:
-      continue
-    payload = dict(ev)
-    payload.setdefault("event_index", global_idx)
-    frames.append(payload)
-  if latest_stream is not None:
-    frames.append(latest_stream)
-  return frames
+  walk = _CatchupWalk(cursor, event_index_offset=event_index_offset)
+  walk.feed_slice(events, 0, len(events))
+  return walk.finish()
+
+
+def _render_frames(frames: list[dict]) -> list[str]:
+  """Render each catchup frame to the exact bytes WebSocket.send_json would send.
+
+  Starlette's WebSocket.send_json is ``json.dumps(data, separators=(",", ":"),
+  ensure_ascii=False)`` plus a text-mode send; the parameters here must match it,
+  or the wire bytes change.
+  """
+  return [json.dumps(frame, separators=(",", ":"), ensure_ascii=False) for frame in frames]
 
 
 async def _replay_aggregated_catchup(
@@ -397,16 +438,26 @@ async def _replay_aggregated_catchup(
 ) -> int:
   """Replay events past *cursor* as aggregator deltas + raw side-effect events.
 
-  The frame list is built whole by `_catchup_frames` in a thread, then sent in
-  order; websocket.send_json keeps its original coalescing and failure shape,
-  so the wire bytes and the stop-at-first-send-failure count are unchanged.
-  Returns the number of frames sent.
+  The frame list is built by `_CatchupWalk` in on-loop slices (a yield between
+  slices keeps every loop hold under the poll cadences' resolution) and rendered
+  to wire text by `_render_frames` under the same slicing, then sent in order;
+  the stop-at-first-send failure count is unchanged, so the wire bytes and
+  failure shape match the per-frame send_json form. Returns the number of
+  frames sent.
   """
-  frames = await asyncio.to_thread(_catchup_frames, events, cursor, event_index_offset=event_index_offset)
+  walk = _CatchupWalk(cursor, event_index_offset=event_index_offset)
+  for start in range(0, len(events), _CATCHUP_SLICE_EVENTS):
+    walk.feed_slice(events, start, min(start + _CATCHUP_SLICE_EVENTS, len(events)))
+    await asyncio.sleep(0)
+  frames = walk.finish()
+  texts: list[str] = []
+  for start in range(0, len(frames), _CATCHUP_RENDER_SLICE):
+    texts.extend(_render_frames(frames[start:start + _CATCHUP_RENDER_SLICE]))
+    await asyncio.sleep(0)
   sent = 0
-  for frame in frames:
+  for text in texts:
     try:
-      await websocket.send_json(frame)
+      await websocket.send_text(text)
       sent += 1
     except Exception as e:
       log.debug("session_ws_catchup_send_failed", session_id=session_id, error=str(e))

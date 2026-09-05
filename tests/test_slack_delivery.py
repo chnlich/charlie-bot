@@ -18,6 +18,7 @@ from conftest import (
     SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
     build_slack_cfg,
     make_task_spawner,
+    write_artifact,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -606,19 +607,12 @@ def _rig_with_publish_lane(tmp_path: Path) -> tuple[CharlieBotConfig, SessionMan
   return cfg, SessionManager(cfg), _FakeSlackClient()
 
 
-def _write_artifact(tmp_path: Path, name: str, body: str) -> Path:
-  path = tmp_path / "artifacts" / name
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(body, encoding="utf-8")
-  return path
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", ["files", "absolute_filepath"])
 async def test_reply_rewrites_a_file_server_url_to_the_published_one_and_keeps_query_and_fragment(
     tmp_path: Path, prefix: str) -> None:
   cfg, session_mgr, client = _rig_with_publish_lane(tmp_path)
-  artifact = _write_artifact(tmp_path, "sitrep.html", "<p>sitrep body</p>")
+  artifact = write_artifact(tmp_path, "sitrep.html", "<p>sitrep body</p>")
   sid = await _slack_session(session_mgr)
 
   with _listener_seam(client):
@@ -637,7 +631,7 @@ async def test_reply_rewrites_a_file_server_url_to_the_published_one_and_keeps_q
 @pytest.mark.asyncio
 async def test_reply_rewrites_a_percent_encoded_file_server_path(tmp_path: Path) -> None:
   cfg, session_mgr, client = _rig_with_publish_lane(tmp_path)
-  artifact = _write_artifact(tmp_path, "encoded.html", "<p>encoded body</p>")
+  artifact = write_artifact(tmp_path, "encoded.html", "<p>encoded body</p>")
   sid = await _slack_session(session_mgr)
   encoded_path = quote(str(artifact), safe="")
 
@@ -669,7 +663,7 @@ async def test_reply_refuses_as_a_whole_when_the_linked_file_is_gone(tmp_path: P
 @pytest.mark.asyncio
 async def test_reply_refuses_as_a_whole_when_the_publish_lane_is_unconfigured(tmp_path: Path) -> None:
   cfg, session_mgr, client = _rig(tmp_path)  # no publish_dir, no public_base_url
-  artifact = _write_artifact(tmp_path, "sitrep.html", "<p>sitrep body</p>")
+  artifact = write_artifact(tmp_path, "sitrep.html", "<p>sitrep body</p>")
   sid = await _slack_session(session_mgr)
 
   with _listener_seam(client), pytest.raises(SlackReplyError) as excinfo:
@@ -706,7 +700,7 @@ async def test_reply_leaves_application_route_urls_written_and_names_them_for_th
 async def test_reply_with_a_file_server_url_on_another_port_stays_as_written(tmp_path: Path) -> None:
   """Only this server's port names the file service; another service's URL is nobody's rewrite target."""
   cfg, session_mgr, client = _rig_with_publish_lane(tmp_path)
-  artifact = _write_artifact(tmp_path, "sitrep.html", "<p>sitrep body</p>")
+  artifact = write_artifact(tmp_path, "sitrep.html", "<p>sitrep body</p>")
   sid = await _slack_session(session_mgr)
   text = f"details: https://other.example.test:9999/files/{artifact}"
 

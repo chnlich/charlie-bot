@@ -871,6 +871,15 @@ def build_recovery_cfg(home: Path) -> CharlieBotConfig:
   )
 
 
+def write_artifact(tmp_path: Path, name: str = "page.html", body: str = "<p>hello</p>") -> Path:
+  """Write one fake artifact source file under tmp_path/artifacts and return its path; publish and
+  slack publish-lane tests stage here the file a published URL points at."""
+  path = tmp_path / "artifacts" / name
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_text(body, encoding="utf-8")
+  return path
+
+
 def write_plan_artifact(
     cfg: CharlieBotConfig, session_id: str, name: str = "plan_01.html", content: str | None = None) -> str:
   """Write one plan artifact under cfg's sessions dir and return its plan-relative path; the default content

@@ -2,15 +2,13 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
+const {readStatic, chatModules, runStaticModules} = require('./read_static');
 const { createClassList, createEscapingElement } = require('./dom_element_stub');
 
 const { escapeHtml } = require('./escape_html_stub');
 
 const { makeAnchor, makeProseRoot } = require('./chat_prose_stub');
 
-const COMPAT_LOADER_JS = readStatic('compat-loader.js');
-const CHAT_JS = readStatic('chat.js');
 const FILE_UPLOAD_JS = readStatic('file-upload.js');
 const SLASH_COMMANDS_JS = readStatic('slash-commands.js');
 
@@ -83,8 +81,7 @@ function loadChatScript() {
   };
 
   vm.createContext(context);
-  vm.runInContext(COMPAT_LOADER_JS, context, {filename: 'compat-loader.js'});
-  vm.runInContext(CHAT_JS, context, {filename: 'chat.js'});
+  runStaticModules(context, chatModules());
   return context;
 }
 

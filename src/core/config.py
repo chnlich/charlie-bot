@@ -504,6 +504,35 @@ _config: CharlieBotConfig | None = None
 # The last fingerprint _config_fingerprint() returned for the cached config; tests
 # assign a sentinel (e.g. 0.0) to force a reload.
 _config_mtime: object = None
+# The fingerprint whose load_config() last raised while a cached config existed:
+# the auth middleware's per-request get_config() call re-runs the full parse and
+# re-fires the warning on every request while the corpus stays broken unless the
+# failure is keyed to the fingerprint that produced it. Re-parse only when the
+# fingerprint moves — the same freshness rule the successful path follows.
+_config_failed_mtime: object = None
+# First sighting per error string per process: a persisting broken corpus
+# re-fires a fired alarm on every reload attempt otherwise. A successful load
+# clears the set, so a later relapse earns one new line (M50's recovery rule).
+_config_reload_errors_seen: set[str] = set()
+
+
+def _warn_config_reload_failed_once(error: Exception) -> None:
+  """Log one config_reload_failed per error string per process.
+
+  A caller relies on at most one line per error: a reload attempt that sees the
+  same failure re-fires a fired alarm, and the key is exactly the field the
+  line logs, so a changed failure earns one new line and nothing outside the
+  log statement drifts the key away from what was reported.
+  """
+  if str(error) in _config_reload_errors_seen:
+    return
+  _config_reload_errors_seen.add(str(error))
+  log.warning("config_reload_failed", error=str(error))
+
+
+def _reset_config_reload_failures_for_tests() -> None:
+  """Clear the warn-once registry, restoring the process-start state."""
+  _config_reload_errors_seen.clear()
 
 
 def _config_fragments(home: Path) -> list[Path]:
@@ -600,15 +629,18 @@ def get_config() -> CharlieBotConfig:
   in-flight coroutines) observe the new values without re-fetching. Replacing
   the object instead would leave every such holder pinned to a stale snapshot.
   """
-  global _config, _config_mtime
+  global _config, _config_mtime, _config_failed_mtime
   fingerprint = _config_fingerprint()
-  if _config is None or fingerprint != _config_mtime:
+  if _config is None or (fingerprint != _config_mtime and fingerprint != _config_failed_mtime):
     try:
       fresh = load_config()
     except Exception as e:
-      log.warning("config_reload_failed", error=str(e))
+      _warn_config_reload_failed_once(e)
       if _config is None:
         raise
+      # Only a fallback config makes the failed fingerprint meaningful: with
+      # none, the raise above ends the process.
+      _config_failed_mtime = fingerprint
     else:
       if _config is None:
         _config = fresh
@@ -618,6 +650,10 @@ def get_config() -> CharlieBotConfig:
         for name in type(fresh).model_fields:
           setattr(_config, name, getattr(fresh, name))
       _config_mtime = fingerprint
+      _config_failed_mtime = None
+      # The reported failure state ended: a later relapse is a new onset and
+      # earns one new line.
+      _config_reload_errors_seen.clear()
   return _config
 
 

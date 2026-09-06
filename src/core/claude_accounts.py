@@ -172,7 +172,7 @@ def healthy(account: ClaudeAccount, now: datetime | None = None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _model_family(model: str | None) -> str:
+def model_family(model: str | None) -> str:
   """The family word of a Claude model id: ``claude-fable-5-1`` -> ``fable``."""
   if not model:
     return ""
@@ -234,7 +234,7 @@ def _panel_reading(label: str, model: str | None) -> RateLimitReading | None:
   stored = _panel_readings.get(label)
   if stored is None:
     return None
-  family = _model_family(model)
+  family = model_family(model)
   values: list[float] = []
   for window in stored["windows"]:
     value = window.get("utilization")

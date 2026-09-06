@@ -75,7 +75,6 @@ class ImproveState(BaseModel):
   backend: str | None = None
   model: str | None = None
   created_at: str
-  iterations_completed: int = 0
 
 
 class ImproveLoopAlreadyRunningError(RuntimeError):
@@ -420,7 +419,6 @@ async def reserve_loop_state(
         backend=resolved_backend or None,
         model=resolved_model or None,
         created_at=utc_now().isoformat(),
-        iterations_completed=0,
     )
     await save_loop_state(session_id, state, cfg)
     await asyncio.to_thread(active_path.write_text, f"{loop_id}\n")
@@ -829,9 +827,6 @@ async def run_improve_loop(
         break
       if summary is None:
         break  # Stopped by user
-      state = await require_loop_state(session_id, loop_id, cfg)
-      state.iterations_completed += 1
-      await save_loop_state(session_id, state, cfg)
 
     # Check if we exited because the user stopped the loop
     state = await require_loop_state(session_id, loop_id, cfg)

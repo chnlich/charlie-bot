@@ -281,6 +281,15 @@ def _shim_prompt(state: Path, n: int) -> str:
   return (state / f"inv-{n}.prompt").read_text(encoding="utf-8")
 
 
+def _wait_turn_started(home: Path, session_id: str, what: str) -> None:
+  """Wait for the recorded turn's identity and its first assistant output to be durable."""
+  _wait_for(
+      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
+          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
+      timeout=20.0,
+      what=what)
+
+
 async def _await_recovery_tasks() -> None:
   await await_recovery_tasks(MASTER_RECOVERY_TASK_PREFIXES)
 
@@ -351,6 +360,29 @@ def _launch_master_graceful_driver(tmp_path: Path, home: Path, shim: Path) -> tu
   return proc, ids["session"]
 
 
+async def _recover(
+    monkeypatch: pytest.MonkeyPatch,
+    home: Path,
+    shim: Path,
+    state: Path,
+    cfg: CharlieBotConfig | None = None,
+    shim_mode: str = "immediate",
+    extra_env: dict[str, str] | None = None) -> CharlieBotConfig:
+  """Run startup crash recovery as process B: point the shim at `state`, run
+  `run_crash_recovery`, and wait out the recovery tasks. Returns the config.
+  The default `shim_mode` "immediate" makes any hypothetical respawn exit fast,
+  so a bug that respawns fails the inv-2 assertions instead of hanging."""
+  patch_instructions_content(monkeypatch)
+  monkeypatch.setenv("SHIM_MODE", shim_mode)
+  monkeypatch.setenv("SHIM_STATE", str(state))
+  for key, value in (extra_env or {}).items():
+    monkeypatch.setenv(key, value)
+  cfg = cfg if cfg is not None else _cfg(home, shim)
+  await init_module.run_crash_recovery(cfg, datetime.now(UTC))
+  await _await_recovery_tasks()
+  return cfg
+
+
 def _master_pid(home: Path, session_id: str) -> int:
   """The recorded master agent pid, or fail the wait if no record exists yet."""
   record = _session_meta(home, session_id)["master_run"]
@@ -408,6 +440,14 @@ def _assert_round_operable(events: list[dict]) -> None:
   separators = [m for m in messages if m.get("role") == "separator"]
   assert separators, "no separator row projected for the recovered round"
   assert all(m.get("event_index") is not None for m in separators)
+
+
+def _assert_round_closed_once(events: list[dict], home: Path, session_id: str, exit_code: int) -> None:
+  """Exactly one MASTER_DONE closed the round with `exit_code`, and the record cleared."""
+  master_done = [e for e in events if e.get("type") == "master_done"]
+  assert len(master_done) == 1
+  assert master_done[0].get("exit_code") == exit_code
+  assert _session_meta(home, session_id)["master_run"] is None
 
 
 class _BlackHoleServer:
@@ -483,11 +523,7 @@ async def test_master_reattach_after_server_kill(tmp_path: Path, monkeypatch: py
   # funnels this same value into the liveness closure it hands the re-attach.
   monkeypatch.setattr(runs, "read_host_boot_time", lambda: backdated - timedelta(hours=1))
 
-  patch_instructions_content(monkeypatch)
-  monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
-  monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
-  await _await_recovery_tasks()
+  await _recover(monkeypatch, home, shim, state)
 
   # The decisive re-attach proof: exactly one shim invocation ever happened —
   # the turn was followed, never respawned nor replayed.
@@ -527,11 +563,7 @@ async def test_master_replay_when_master_killed_with_server(tmp_path: Path, monk
   proc.wait(timeout=10)
   _kill_agent_only(home, session_id)
 
-  patch_instructions_content(monkeypatch)
-  monkeypatch.setenv("SHIM_MODE", "immediate")
-  monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
-  await _await_recovery_tasks()
+  await _recover(monkeypatch, home, shim, state)
 
   # The replay spawned exactly one new agent, with the replay marker + the
   # original content, and the original user event was not rewritten.
@@ -552,19 +584,11 @@ async def test_queued_message_answered_after_restart(tmp_path: Path, monkeypatch
   home = tmp_path / "home"
   shim, state = _install_shim(tmp_path)
   proc, session_id = _launch_driver(tmp_path, home, shim, "queued", "sleep_first")
-  _wait_for(
-      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
-          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
-      timeout=20.0,
-      what="turn A did not start/persist identity and first output")
+  _wait_turn_started(home, session_id, what="turn A did not start/persist identity and first output")
   proc.kill()
   proc.wait(timeout=10)
 
-  patch_instructions_content(monkeypatch)
-  monkeypatch.setenv("SHIM_MODE", "immediate")
-  monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
-  await _await_recovery_tasks()
+  await _recover(monkeypatch, home, shim, state)
 
   # A: re-attached, prompt unmarked. B: one new spawn, marked, only after A.
   assert "message A" in _shim_prompt(state, 1)
@@ -614,16 +638,19 @@ async def test_replayed_delegate_readback_lands_on_existing_thread(
   try:
     (home / "config.yaml").write_text(f"server_port: {black_hole.port}\n", encoding="utf-8")
 
-    patch_instructions_content(monkeypatch)
-    monkeypatch.setenv("SHIM_MODE", "delegate")
-    monkeypatch.setenv("SHIM_STATE", str(state))
-    monkeypatch.setenv("SHIM_DELEGATE_SESSION", session_id)
-    monkeypatch.setenv("SHIM_DELEGATE_REPO", str(REPO_ROOT))
-    monkeypatch.setenv("SHIM_DELEGATE_SPEC", str(spec_file))
-    monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-    monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
-    await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
-    await _await_recovery_tasks()
+    await _recover(
+        monkeypatch,
+        home,
+        shim,
+        state,
+        shim_mode="delegate",
+        extra_env={
+            "SHIM_DELEGATE_SESSION": session_id,
+            "SHIM_DELEGATE_REPO": str(REPO_ROOT),
+            "SHIM_DELEGATE_SPEC": str(spec_file),
+            "CHARLIEBOT_HOME": str(home),
+            "PYTHONPATH": str(REPO_ROOT),
+        })
   finally:
     black_hole.close()
 
@@ -656,11 +683,7 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
   home = tmp_path / "home"
   shim, state = _install_shim(tmp_path)
   proc, session_id = _launch_driver(tmp_path, home, shim, "chat", "sleep_first")
-  _wait_for(
-      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
-          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
-      timeout=20.0,
-      what="turn A did not start/persist identity and first output")
+  _wait_turn_started(home, session_id, what="turn A did not start/persist identity and first output")
   # Kill the server; the producer then finishes while nobody is consuming.
   proc.kill()
   proc.wait(timeout=10)
@@ -669,12 +692,7 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
       timeout=20.0,
       what="agent did not finish during the server-down window")
 
-  patch_instructions_content(monkeypatch)
-  monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
-  monkeypatch.setenv("SHIM_STATE", str(state))
-  cfg = _cfg(home, shim)
-  await init_module.run_crash_recovery(cfg, datetime.now(UTC))
-  await _await_recovery_tasks()
+  cfg = await _recover(monkeypatch, home, shim, state)
 
   # Exactly one answer: MASTER_DONE landed once, and the user message was NOT
   # replayed (a replay would have spawned a second agent). Both would mean
@@ -683,10 +701,7 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
   assert not (state / "inv-2.argv").exists(), "recovering a completed turn must start no agent process"
   events = read_chat_events(home, session_id)
   assert len([e for e in events if e.get("type") == "user"]) == 1
-  master_done = [e for e in events if e.get("type") == "master_done"]
-  assert len(master_done) == 1
-  assert master_done[0].get("exit_code") == 0
-  assert _session_meta(home, session_id)["master_run"] is None
+  _assert_round_closed_once(events, home, session_id, exit_code=0)
 
   # Lossless, duplicate-free: the round's transported events equal a full
   # projection of the raw log from offset 0 under a fresh translate, and the
@@ -718,11 +733,7 @@ async def test_missing_pid_start_turn_reattached_after_server_kill(
   shim, state = _install_shim(tmp_path)
   # sleep_first: assistant line, ~3s of silence, then the result event.
   proc, session_id = _launch_driver(tmp_path, home, shim, "chat", "sleep_first")
-  _wait_for(
-      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
-          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
-      timeout=20.0,
-      what="turn A did not start/persist identity and first output")
+  _wait_turn_started(home, session_id, what="turn A did not start/persist identity and first output")
   proc.kill()
   proc.wait(timeout=10)
 
@@ -757,10 +768,7 @@ async def test_missing_pid_start_turn_reattached_after_server_kill(
   assert not _shim_prompt(state, 1).startswith(master_cc_queue._REPLAY_MARKER)
   events = read_chat_events(home, session_id)
   assert len([e for e in events if e.get("type") == "user"]) == 1
-  master_done = [e for e in events if e.get("type") == "master_done"]
-  assert len(master_done) == 1
-  assert master_done[0].get("exit_code") == 0
-  assert _session_meta(home, session_id)["master_run"] is None
+  _assert_round_closed_once(events, home, session_id, exit_code=0)
   assert not any(e.get("source") == "crash_recovery" for e in events)
 
 
@@ -772,11 +780,7 @@ async def test_completed_delegate_wake_drained_after_server_kill(
   home = tmp_path / "home"
   shim, state = _install_shim(tmp_path)
   proc, session_id = _launch_driver(tmp_path, home, shim, "wake", "sleep_first")
-  _wait_for(
-      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
-          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
-      timeout=20.0,
-      what="wake turn did not start/persist identity and first output")
+  _wait_turn_started(home, session_id, what="wake turn did not start/persist identity and first output")
   proc.kill()
   proc.wait(timeout=10)
   _wait_for(
@@ -784,22 +788,14 @@ async def test_completed_delegate_wake_drained_after_server_kill(
       timeout=20.0,
       what="agent did not finish during the server-down window")
 
-  patch_instructions_content(monkeypatch)
-  monkeypatch.setenv("SHIM_MODE", "immediate")
-  monkeypatch.setenv("SHIM_STATE", str(state))
-  cfg = _cfg(home, shim)
-  await init_module.run_crash_recovery(cfg, datetime.now(UTC))
-  await _await_recovery_tasks()
+  cfg = await _recover(monkeypatch, home, shim, state)
 
   # Exactly one answer, delivered by the drain; the replay pass had nothing
   # to redeliver (the chat log holds no user event for this turn).
   assert not (state / "inv-2.argv").exists(), "recovering a completed turn must start no agent process"
   events = read_chat_events(home, session_id)
   assert not [e for e in events if e.get("type") == "user"]
-  master_done = [e for e in events if e.get("type") == "master_done"]
-  assert len(master_done) == 1
-  assert master_done[0].get("exit_code") == 0
-  assert _session_meta(home, session_id)["master_run"] is None
+  _assert_round_closed_once(events, home, session_id, exit_code=0)
 
   # Lossless, duplicate-free drain, cursor at file size, round operable, idempotent.
   assert _round_transported_events(events, skip_user_event=False) == _full_projection(home, session_id, cfg)
@@ -821,11 +817,7 @@ async def test_stalled_turn_reattached_after_server_kill(tmp_path: Path, monkeyp
   home = tmp_path / "home"
   shim, state = _install_shim(tmp_path)
   proc, session_id = _launch_driver(tmp_path, home, shim, "chat", "hang")
-  _wait_for(
-      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
-          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
-      timeout=20.0,
-      what="turn A did not start/persist identity and first output")
+  _wait_turn_started(home, session_id, what="turn A did not start/persist identity and first output")
   # Only the server dies; the agent hangs on, silent.
   proc.kill()
   proc.wait(timeout=10)
@@ -849,12 +841,9 @@ async def test_stalled_turn_reattached_after_server_kill(tmp_path: Path, monkeyp
 
   events = read_chat_events(home, session_id)
   assert len([e for e in events if e.get("type") == "user"]) == 1
-  master_done = [e for e in events if e.get("type") == "master_done"]
-  assert len(master_done) == 1
   # Drained without a trailing result: same failure code as the worker side's
   # died-mid-run (-1), never a spawned turn's 0.
-  assert master_done[0].get("exit_code") == -1
-  assert _session_meta(home, session_id)["master_run"] is None
+  _assert_round_closed_once(events, home, session_id, exit_code=-1)
   # No worker-side STALLED chat report on the master path.
   assert not any(e.get("source") == "crash_recovery" for e in events)
 
@@ -867,28 +856,17 @@ async def test_midrun_death_delegate_wake_drained_as_failure(tmp_path: Path, mon
   home = tmp_path / "home"
   shim, state = _install_shim(tmp_path)
   proc, session_id = _launch_driver(tmp_path, home, shim, "wake", "hang")
-  _wait_for(
-      lambda: _session_meta(home, session_id)["master_run"] is not None and any(
-          "ASSISTANT-INV-1" in r.read_text(encoding="utf-8", errors="replace") for r in _raw_logs(home, session_id)),
-      timeout=20.0,
-      what="wake turn did not start/persist identity and first output")
+  _wait_turn_started(home, session_id, what="wake turn did not start/persist identity and first output")
   proc.kill()
   proc.wait(timeout=10)
   _kill_agent_only(home, session_id)
 
-  patch_instructions_content(monkeypatch)
-  monkeypatch.setenv("SHIM_MODE", "immediate")
-  monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
-  await _await_recovery_tasks()
+  await _recover(monkeypatch, home, shim, state)
 
   assert not (state / "inv-2.argv").exists(), "a mid-run-dead wake must not spawn a new agent"
   events = read_chat_events(home, session_id)
   assert not [e for e in events if e.get("type") == "user"]
-  master_done = [e for e in events if e.get("type") == "master_done"]
-  assert len(master_done) == 1
-  assert master_done[0].get("exit_code") == -1
-  assert _session_meta(home, session_id)["master_run"] is None
+  _assert_round_closed_once(events, home, session_id, exit_code=-1)
   raw = _raw_logs(home, session_id)[0]
   assert runs.read_raw_cursor(raw.parent / runs.CURSOR_NAME) == raw.stat().st_size
   _assert_round_operable(events)
@@ -1052,11 +1030,7 @@ async def test_undrainable_dead_turn_replayed_with_marker(
   )
   await session_mgr.persist_master_run(meta.id, record)
 
-  patch_instructions_content(monkeypatch)
-  monkeypatch.setenv("SHIM_MODE", "immediate")
-  monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(cfg, datetime.now(UTC))
-  await _await_recovery_tasks()
+  await _recover(monkeypatch, home, shim, state, cfg=cfg)
 
   # Exactly one answer: one new agent, carrying the marker + the original
   # content; the original user event was not rewritten nor duplicated.
@@ -1095,17 +1069,10 @@ async def test_graceful_teardown_detached_turn_reattached_and_answered_once(
   assert not _session_meta(home, session_id).get("has_unread"), "teardown wrote terminal state"
 
   # Next boot: re-attach and finish — the round is answered exactly once.
-  patch_instructions_content(monkeypatch)
-  monkeypatch.setenv("SHIM_MODE", "immediate")  # any hypothetical respawn exits fast
-  monkeypatch.setenv("SHIM_STATE", str(state))
-  await init_module.run_crash_recovery(_cfg(home, shim), datetime.now(UTC))
-  await _await_recovery_tasks()
+  await _recover(monkeypatch, home, shim, state)
 
   assert not (state / "inv-2.argv").exists(), "a second master process was spawned"
   events = read_chat_events(home, session_id)
   markers = [e for e in events if "ASSISTANT-INV-1" in json.dumps(e)]
   assert len(markers) == 1, "the shim's assistant marker must land exactly once"
-  master_done = [e for e in events if e.get("type") == "master_done"]
-  assert len(master_done) == 1
-  assert master_done[0].get("exit_code") == 0
-  assert _session_meta(home, session_id)["master_run"] is None
+  _assert_round_closed_once(events, home, session_id, exit_code=0)

@@ -122,26 +122,6 @@ async def test_elone_route_accepts_valid_backend_override(two_backend_env: _Rout
 
 
 @pytest.mark.asyncio
-async def test_elone_route_rejects_unresolvable_explicit_backend_and_persists_nothing(
-    two_backend_env: _RouteEnv,) -> None:
-  cfg, session_mgr, _ = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend="codex-o3")
-  before = _session_dir_names(cfg)
-
-  with _build_client(cfg, session_mgr) as client:
-    response = client.post(
-        f"/api/sessions/{parent_id}/elone",
-        json={
-            "event_index": 1,
-            "backend": "missing-backend"
-        },
-    )
-
-  assert response.status_code == 400
-  assert _session_dir_names(cfg) == before
-
-
-@pytest.mark.asyncio
 async def test_fork_route_bootstrap_points_at_reference_file(two_backend_env: _RouteEnv) -> None:
   cfg, session_mgr, calls = two_backend_env
   parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
@@ -181,75 +161,49 @@ async def test_elone_route_bootstrap_points_at_reference_file(two_backend_env: _
   assert "recap" not in prompt.lower()
 
 
-# ------------------------------------------------- validate-or-raise: explicit id
+# ------------------------------------------------ validate-or-raise: unresolvable backend
+
+# parent_backend=None is the create route (no parent); the inherited rows seed a parent already
+# pinned to the unresolvable id and omit "backend" from the payload so the route inherits it.
+_REJECT_UNRESOLVABLE_BACKEND_ROWS = [
+    pytest.param("create", None, {"backend": "missing-backend"}, id="create-explicit"),
+    pytest.param("fork", OPUS_BACKEND_ID, {
+        "event_index": 1,
+        "backend": "missing-backend"
+    }, id="fork-explicit"),
+    pytest.param("fork", "missing-backend", {"event_index": 1}, id="fork-inherited"),
+    pytest.param("elone", "codex-o3", {
+        "event_index": 1,
+        "backend": "missing-backend"
+    }, id="elone-explicit"),
+    pytest.param("elone", "missing-backend", {"event_index": 1}, id="elone-inherited"),
+]
 
 
 @pytest.mark.asyncio
-async def test_create_route_rejects_unresolvable_backend_and_persists_nothing(two_backend_env: _RouteEnv,) -> None:
+@pytest.mark.parametrize(("route", "parent_backend", "payload"), _REJECT_UNRESOLVABLE_BACKEND_ROWS)
+async def test_route_rejects_unresolvable_backend_and_persists_nothing(
+    two_backend_env: _RouteEnv, route: str, parent_backend: str | None, payload: dict[str, Any]) -> None:
+  """Backend validation precedes every side effect: the route returns 400, persists no child
+  session, and leaves the parent's status and rating unchanged."""
   cfg, session_mgr, _ = two_backend_env
+  parent_id = None
+  parent_before = None
+  if parent_backend is not None:
+    parent_id = await _seed_parent(session_mgr, backend=parent_backend)
+    parent_before = await session_mgr.get_session(parent_id)
   before = _session_dir_names(cfg)
+  url = "/api/sessions/" if route == "create" else f"/api/sessions/{parent_id}/{route}"
 
   with _build_client(cfg, session_mgr) as client:
-    response = client.post("/api/sessions/", json={"backend": "missing-backend"})
+    response = client.post(url, json=payload)
 
   assert response.status_code == 400
   assert _session_dir_names(cfg) == before
-
-
-@pytest.mark.asyncio
-async def test_fork_route_rejects_unresolvable_explicit_backend_and_persists_nothing(
-    two_backend_env: _RouteEnv,) -> None:
-  cfg, session_mgr, _ = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
-  before = _session_dir_names(cfg)
-
-  with _build_client(cfg, session_mgr) as client:
-    response = client.post(
-        f"/api/sessions/{parent_id}/fork",
-        json={
-            "event_index": 1,
-            "backend": "missing-backend"
-        },
-    )
-
-  assert response.status_code == 400
-  assert _session_dir_names(cfg) == before
-
-
-# ---------------------------------------------- validate-or-raise: inherited id
-
-
-@pytest.mark.asyncio
-async def test_fork_route_rejects_unresolvable_inherited_backend_and_persists_nothing(
-    two_backend_env: _RouteEnv,) -> None:
-  cfg, session_mgr, _ = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend="missing-backend")
-  before = _session_dir_names(cfg)
-
-  with _build_client(cfg, session_mgr) as client:
-    response = client.post(f"/api/sessions/{parent_id}/fork", json={"event_index": 1})
-
-  assert response.status_code == 400
-  assert _session_dir_names(cfg) == before
-
-
-@pytest.mark.asyncio
-async def test_elone_route_rejects_unresolvable_inherited_backend_and_leaves_parent_untouched(
-    two_backend_env: _RouteEnv,) -> None:
-  """Failure must precede the parent archive/thumbs-down side effect."""
-  cfg, session_mgr, _ = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend="missing-backend")
-  parent_before = await session_mgr.get_session(parent_id)
-  before = _session_dir_names(cfg)
-
-  with _build_client(cfg, session_mgr) as client:
-    response = client.post(f"/api/sessions/{parent_id}/elone", json={"event_index": 1})
-
-  assert response.status_code == 400
-  assert _session_dir_names(cfg) == before
-  parent_after = await session_mgr.get_session(parent_id)
-  assert parent_after.status == parent_before.status
-  assert parent_after.rating == parent_before.rating
+  if parent_id is not None:
+    parent_after = await session_mgr.get_session(parent_id)
+    assert parent_after.status == parent_before.status
+    assert parent_after.rating == parent_before.rating
 
 
 # --------------------------------------------------------- store-level property

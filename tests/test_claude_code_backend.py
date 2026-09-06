@@ -17,8 +17,7 @@ _ENDPOINT_MODEL = "contract-model"
 
 
 def _endpoint_backend() -> AnthropicEndpointBackend:
-  return AnthropicEndpointBackend(
-      base_url=_ENDPOINT_BASE_URL, auth_token=_ENDPOINT_TOKEN, model=_ENDPOINT_MODEL)
+  return AnthropicEndpointBackend(base_url=_ENDPOINT_BASE_URL, auth_token=_ENDPOINT_TOKEN, model=_ENDPOINT_MODEL)
 
 
 def test_build_command_does_not_include_flag_like_prompt() -> None:

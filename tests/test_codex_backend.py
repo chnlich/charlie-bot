@@ -63,19 +63,24 @@ def test_build_command_resume_uses_double_dash_separator_for_prompt(monkeypatch)
   assert "sess-123" in cmd
 
 
-@pytest.mark.parametrize(
-    ("option_kwargs", "expected_effort"), [
-        pytest.param({}, "xhigh", id="defaults_to_xhigh"),
-        pytest.param({"model_reasoning_effort": "ultra"}, "ultra", id="custom_effort"),
-    ])
-def test_build_command_reasoning_effort(monkeypatch, option_kwargs: dict, expected_effort: str) -> None:
-  backend = _build_backend(monkeypatch, model="codex-test-model", **option_kwargs)
+def test_build_command_defaults_to_xhigh_reasoning_effort(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="codex-test-model")
 
   cmd = backend._build_command("do the thing")
 
-  expected_arg = f'model_reasoning_effort="{expected_effort}"'
-  assert expected_arg in cmd
-  assert cmd[cmd.index(expected_arg) - 1] == "--config"
+  assert 'model_reasoning_effort="xhigh"' in cmd
+  idx = cmd.index('model_reasoning_effort="xhigh"')
+  assert cmd[idx - 1] == "--config"
+
+
+def test_build_command_uses_custom_reasoning_effort(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="codex-test-model", model_reasoning_effort="ultra")
+
+  cmd = backend._build_command("do the thing")
+
+  assert 'model_reasoning_effort="ultra"' in cmd
+  idx = cmd.index('model_reasoning_effort="ultra"')
+  assert cmd[idx - 1] == "--config"
 
 
 def test_turn_completed_includes_codex_cost(monkeypatch) -> None:
@@ -257,15 +262,15 @@ def test_file_change_regular_file_emits_file_write_without_filename_field(monkey
             [
                 {
                     "text": "Inspect the code",
-                    "completed": False,
+                    "completed": False
                 },
                 {
                     "text": "Patch the bug",
-                    "completed": False,
+                    "completed": False
                 },
                 {
                     "text": "Run tests",
-                    "completed": True,
+                    "completed": True
                 },
             ],
             "- [ ] Inspect the code\n- [ ] Patch the bug\n- [x] Run tests",
@@ -276,15 +281,15 @@ def test_file_change_regular_file_emits_file_write_without_filename_field(monkey
             [
                 {
                     "step": "Write the failing test",
-                    "status": "pending",
+                    "status": "pending"
                 },
                 {
                     "step": "Implement the minimal fix",
-                    "status": "in_progress",
+                    "status": "in_progress"
                 },
                 {
                     "step": "Run the regression test",
-                    "status": "completed",
+                    "status": "completed"
                 },
             ],
             "- [ ] Write the failing test\n- [~] Implement the minimal fix\n- [x] Run the regression test",
@@ -295,11 +300,11 @@ def test_file_change_regular_file_emits_file_write_without_filename_field(monkey
             [
                 {
                     "label": "Keep label support",
-                    "status": "pending",
+                    "status": "pending"
                 },
                 {
                     "content": "Keep content support",
-                    "status": "completed",
+                    "status": "completed"
                 },
             ],
             "- [ ] Keep label support\n- [x] Keep content support",
@@ -311,19 +316,19 @@ def test_file_change_regular_file_emits_file_write_without_filename_field(monkey
                 {},
                 {
                     "label": "   ",
-                    "status": "pending",
+                    "status": "pending"
                 },
                 {
                     "content": "",
-                    "status": "completed",
+                    "status": "completed"
                 },
                 {
                     "step": "\n",
-                    "status": "in_progress",
+                    "status": "in_progress"
                 },
                 {
                     "text": "Keep the real step",
-                    "completed": False,
+                    "completed": False
                 },
             ],
             "- [ ] Keep the real step",

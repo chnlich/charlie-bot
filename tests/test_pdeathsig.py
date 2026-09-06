@@ -121,29 +121,17 @@ def test_preexec_factory_builds_callable_on_linux() -> None:
 
 
 @linux_only
-def test_sigkill_to_intermediate_kernel_reaps_child(tmp_path: Path) -> None:
+@pytest.mark.parametrize("sig", [signal.SIGKILL, signal.SIGTERM], ids=lambda sig: sig.name)
+def test_signal_to_intermediate_kernel_reaps_child(tmp_path: Path, sig: signal.Signals) -> None:
   intermediate, child_pid = _spawn_intermediate(tmp_path, use_helper=True)
   try:
-    os.kill(intermediate.pid, signal.SIGKILL)
+    os.kill(intermediate.pid, sig)
     intermediate.wait(timeout=10)
-    assert intermediate.returncode == -signal.SIGKILL
+    assert intermediate.returncode == -sig
     reaped = _wait_child_gone(child_pid)
   finally:
     _cleanup(intermediate, child_pid)
-  assert reaped, "child survived its parent's SIGKILL by more than 2 s — PDEATHSIG did not fire"
-
-
-@linux_only
-def test_unhandled_sigterm_to_intermediate_kernel_reaps_child(tmp_path: Path) -> None:
-  intermediate, child_pid = _spawn_intermediate(tmp_path, use_helper=True)
-  try:
-    os.kill(intermediate.pid, signal.SIGTERM)
-    intermediate.wait(timeout=10)
-    assert intermediate.returncode == -signal.SIGTERM
-    reaped = _wait_child_gone(child_pid)
-  finally:
-    _cleanup(intermediate, child_pid)
-  assert reaped, "child survived its parent's unhandled SIGTERM by more than 2 s — PDEATHSIG did not fire"
+  assert reaped, f"child survived its parent's {sig.name} by more than 2 s — PDEATHSIG did not fire"
 
 
 @linux_only

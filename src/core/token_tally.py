@@ -36,9 +36,8 @@ since the read (a stat-only check); a moved signature whose row memo the scan ju
 unchanged means the WAL wrote rows the tally never reads — the epoch counts row-memo changes,
 so an unchanged epoch re-serves the rows and re-signs them at the scan's own signature. Only
 memos built from a scan carry that epoch proof; rows served from the persisted document sign
-into the key by signature alone. The walk signature itself walks with string paths and raw
-os.stat: Path construction per file measures over twice the stat syscall's cost on this
-corpus, and the signature pays it on every collect, hit or miss.
+into the key by signature alone. The walk signature itself recurses scandir entries carrying
+their own stat — one syscall per jsonl — and pays it on every collect, hit or miss.
 Vocabulary (opencode row memo):
   key         ``(message id, time_updated)`` of one row in the db's message table. opencode
               (drizzle ORM, ``$onUpdate(() => Date.now())`` on the column) bumps time_updated
@@ -314,7 +313,9 @@ def _iter_jsonl(root: Path, t: _Tally, source: str, label: str) -> Iterator[Path
         yield Path(dirpath) / name
 
 
-def _iter_jsonl_stats(root: Path, t: _Tally, source: str, label: str) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
+def _iter_jsonl_stats(
+    root: Path, t: _Tally, source: str, label: str
+) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
   """Yield ``(path, stat, error)`` for every ``*.jsonl`` under *root* — the ``_iter_jsonl``
   walk contract with each file's stat attached, so the signature walk pays one syscall per
   file instead of one per file plus a re-stat. Like ``os.walk``: symlinked directories are
@@ -396,8 +397,9 @@ class _OpencodePartial(NamedTuple):
 class _OpencodeScan(NamedTuple):
   """One row-memo advance. ``ok`` is False when the db is absent or sqlite-unreadable
   (``error`` carries the message the collect note needs). ``deltas`` carries the scan's
-  per-row record moves — (old, new) for moved rows, (old, None) for vanished ids; None means
-  the memo was cold and the caller replays whole."""
+  per-row record moves as (old, new) record pairs — (None, new) for a row that landed,
+  (old, None) for one that vanished; None means the memo was cold and the caller replays
+  whole."""
 
   sig: list | None
   epoch: int
@@ -678,6 +680,9 @@ def _advance_opencode_rows(db: Path) -> _OpencodeScan:
     finally:
       con.close()
   except sqlite3.Error as exc:
+    # A failed scan leaves its memo partially advanced at worst; dropping the partial forces
+    # the next merge down the full replay, which rebuilds both from whatever the memo holds.
+    _opencode_partials[key] = None
     return _OpencodeScan(sig, 0, 0, False, str(exc))
   epoch = _opencode_row_epochs.get(key, 0)
   if deltas:
@@ -826,12 +831,14 @@ def _scan_opencode_rows(
   live = {mid: tu for mid, tu in con.execute(_OPENCODE_KEYS_SQL)}
   nbytes = 0
   if not memo:
+    fresh: dict[str, tuple[int, list | None]] = {}
     for row in con.execute(_OPENCODE_SCAN_SQL):
       nbytes += row[8]
-      memo[row[9]] = (row[10], _opencode_row(row[:8]))
+      fresh[row[9]] = (row[10], _opencode_row(row[:8]))
     for mid, tu in live.items():
-      if mid not in memo:
-        memo[mid] = (tu, None)
+      if mid not in fresh:
+        fresh[mid] = (tu, None)
+    memo.update(fresh)
     return nbytes, None
   removed_ids = [mid for mid in memo if mid not in live]
   changed_ids = [mid for mid, tu in live.items() if memo.get(mid, (None,))[0] != tu]

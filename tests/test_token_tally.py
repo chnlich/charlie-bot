@@ -893,7 +893,7 @@ def test_opencode_incremental_merge_matches_full_replay(tmp_path: Path) -> None:
   tt._opencode_row_epochs.clear()
   replay = _collect(None, None, db)
 
-  def opencode_rows(tally):
+  def opencode_rows(tally: tt.TokenTally) -> list:
     return [(r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output, r.first, r.last,
              [(a.name, a.calls, a.output, a.total) for a in r.accounts])
             for r in tally.rows if r.source == "opencode"]

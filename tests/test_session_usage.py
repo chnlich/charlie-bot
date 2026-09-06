@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from conftest import OPUS_BACKEND_ID, SYNTHETIC_MODEL
 
+from src.agents.backends.base import make_context_reading_event
 from src.agents.backends.claude_code import (
     CLAUDE_COMPACT_CONTEXT_RESERVE,
     CLAUDE_COMPACT_OUTPUT_RESERVE,
@@ -168,23 +169,6 @@ _SNAPSHOT_TOKENS = {
     "cache_write": 10_000,
 }
 _SNAPSHOT_LIMIT = {"context": 409_600, "input": 270_000, "output": 131_072}
-
-
-def _context_reading_event(
-    model: str, context_tokens: int | None, context_full: int | None, context_compact_at: int | None) -> dict:
-  """Build a persisted system/context_reading event (charlie-code backend's reading)."""
-  return {
-      "type": ET.SYSTEM,
-      "subtype": ET.CONTEXT_READING,
-      ET.CONTEXT_READING:
-          {
-              "model": model,
-              "context_tokens": context_tokens,
-              "context_full": context_full,
-              "context_compact_at": context_compact_at,
-          },
-  }
-
 
 # ---------------------------------------------------------------------------
 # Acceptance test 1: assistant event beats turn-cumulative result usage
@@ -879,7 +863,7 @@ _K3_MODEL = "openai/moonshotai/Kimi-K3"
 
 
 def _k3_reading() -> dict:
-  return _context_reading_event(_K3_MODEL, 118_234, 262_144, 170_393)
+  return make_context_reading_event(_K3_MODEL, 118_234, 262_144, 170_393)
 
 
 def _assert_k3_reading(usage: dict) -> None:
@@ -902,7 +886,7 @@ async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path
       session_mgr, meta, [
           _result_event(0.10, input_tokens=1_000_000),
           _result_event(0.20, input_tokens=2_000_000),
-          _context_reading_event("old/model", 10_000, 100_000, 90_000),
+          make_context_reading_event("old/model", 10_000, 100_000, 90_000),
           _k3_reading(),
       ])
 

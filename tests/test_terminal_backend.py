@@ -276,7 +276,7 @@ async def test_tui_attachment_still_uses_shared_pty_path(
   monkeypatch.setattr(tui, "ensure_tmux_session", fake_ensure_tmux_session)
   monkeypatch.setattr(tui, "PtyAttachment", _FakeAttachment)
   monkeypatch.setattr(pty_common, "_pump_pty_to_ws", fake_pump)
-  monkeypatch.setattr("src.api.deps.get_session_manager", lambda: FakeSessionManager())
+  monkeypatch.setattr("src.api.deps.session_manager", lambda: FakeSessionManager())
 
   await tui.run_tui_attachment(ws, "session-id", tmp_path / "sessions")
 

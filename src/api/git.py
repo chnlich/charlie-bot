@@ -177,7 +177,10 @@ def _walk_refs_tree(root: Path, sig: list[tuple[str, int, int]]) -> None:
       if entry.is_dir(follow_symlinks=False):
         stack.append(Path(entry.path))
       else:
-        st = entry.stat(follow_symlinks=False)
+        try:
+          st = entry.stat(follow_symlinks=False)
+        except OSError:
+          continue
         sig.append((entry.path, st.st_mtime_ns, st.st_size))
 
 
@@ -197,7 +200,13 @@ def _refs_signature(repo_path: Path) -> _RefSignature:
   with os.scandir(git_dir) as entries:
     for entry in entries:
       if entry.is_file(follow_symlinks=False):
-        st = entry.stat(follow_symlinks=False)
+        # A ref deleted between the listing and the stat (concurrent pack-refs,
+        # branch -D, auto-gc) drops from the signature; it cannot poison the
+        # memo because the next walk sees the same absence.
+        try:
+          st = entry.stat(follow_symlinks=False)
+        except OSError:
+          continue
         sig.append((entry.path, st.st_mtime_ns, st.st_size))
   for name in ("packed-refs", "shallow"):
     _stat_or_skip(common_dir / name, sig)

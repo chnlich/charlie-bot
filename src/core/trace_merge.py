@@ -140,8 +140,7 @@ def _merge_one_trace(
                 "args": {
                     "name": f"{rank_label}/{original_tid}"
                 },
-            }
-        )
+            })
     if event.get("ph") in {"s", "t", "f"} and "id" in event:
       event["id"] = get_numeric_flow_id(event["id"])
     batcher.add(event)
@@ -153,15 +152,7 @@ def _merge_one_trace(
         ("process_labels", {"labels": label}),
         ("process_sort_index", {"sort_index": sort_index}),
     ):
-      batcher.add(
-          {
-              "ph": "M",
-              "pid": synthetic_pid,
-              "tid": meta_tid,
-              "name": name,
-              "args": args
-          }
-      )
+      batcher.add({"ph": "M", "pid": synthetic_pid, "tid": meta_tid, "name": name, "args": args})
 
   return next_tid, next_flow_id
 

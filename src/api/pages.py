@@ -373,8 +373,7 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
   with path.open("rb") as validate_file:
     json.load(validate_file)
   with (path.open("rb") as source_file, open(out_path, "wb") as
-        raw_output, gzip.GzipFile(fileobj=raw_output, mode="wb",
-                                  compresslevel=_MERGE_COMPRESSLEVEL) as gzip_output):
+        raw_output, gzip.GzipFile(fileobj=raw_output, mode="wb", compresslevel=_MERGE_COMPRESSLEVEL) as gzip_output):
     shutil.copyfileobj(source_file, gzip_output, length=65536)
 
 

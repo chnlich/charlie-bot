@@ -74,6 +74,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M61 session-metadata read after TTL expiry, idle-cold | M61 collector below | ms per listing/get_session over the live corpus with every cache entry aged past `_METADATA_CACHE_TTL` (archived entries never expire; the idle cost is the non-archived set's revalidation) | bare listing median < 2 ms; single get_session median < 0.1 ms | — (introduced with its first history row) |
 | M62 spawn base-resolution chain, base-less launch | M62 collector below | seconds per base-less base resolution (default branch + start point) against the real origin, quiet-remote steady state | median < 0.5 s | — (introduced with its first history row) |
 | M63 session view thread payload, worst on-disk threads corpus | M63 collector below | ms per `get_session_view` handler call + response body bytes, worst thread-metadata corpus | handler median < 0.005 s; body < 300 KB | — (introduced with its first history row) |
+| M65 big-page gzip event-loop stall, whole-body JSON response | M65 collector below | seconds of loop lag + wall per 200-message events-page fetch through the real app stack (gzip + auth middleware), worst on-disk live chat corpus (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3551,6 +3552,110 @@ shutil.rmtree(home)
 EOF
 ```
 
+M65 — big-page gzip event-loop stall, whole-body JSON response. The app mounts
+`_CharlieBotGZipMiddleware` (level 6, bodies ≥ 1 KB), and Starlette's GZipResponder runs a
+whole-body response's entire deflate inside the send path — so every JSON page the browser
+fetches with `Accept-Encoding: gzip` freezes the event loop for the full compression while
+it also renders, an invisible sibling of the M14/M55 stalls. The collector drives the real
+app stack (gzip + auth middleware) raw-ASGI, with a concurrent 5 ms ticker, against a scratch
+`CHARLIEBOT_HOME` (its config carries an empty access key, which the auth middleware passes
+through) holding a copy of the worst on-disk live events corpus (metadata.json and data/,
+live home read once for the copy, never written), fetching the 200-message events page with
+gzip accepted: one cold pass, as at the first big page after a server start, then nine timed
+runs reporting the worst ticker gap and wall each. Streaming bodies (SSE) keep the inline
+per-chunk path and are out of this metric's shape.
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, shutil, sys, tempfile, time
+from pathlib import Path
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+
+# Worst big-page corpus: the session whose live chat file carries the most events.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        with open(p, errors="replace") as f:
+            n = sum(1 for _ in f)
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding a copy of that session's
+# metadata.json and data/ (live home read once for the copy, never written); the
+# scratch config carries an empty access key, which the auth middleware passes through.
+home = Path(tempfile.mkdtemp(prefix="m65-gzip-home-"))
+(home / "sessions" / SID).mkdir(parents=True)
+shutil.copy2(best / "metadata.json", home / "sessions" / SID / "metadata.json")
+shutil.copytree(best / "data", home / "sessions" / SID / "data")
+(home / "config.yaml").write_text("charliebot_access_key: ''\n")
+os.environ["CHARLIEBOT_HOME"] = str(home)
+
+import server  # noqa: E402  (the real app stack: _CharlieBotGZipMiddleware + AuthMiddleware)
+
+QUERY = f"/api/sessions/{SID}/events?before={best_n}&limit=200"
+SCOPE = {
+    "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+    "http_version": "1.1", "method": "GET", "scheme": "http",
+    "path": f"/api/sessions/{SID}/events", "raw_path": QUERY.encode(),
+    "query_string": f"before={best_n}&limit=200".encode(),
+    "root_path": "", "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+    "client": ("test", 123), "server": ("test", 80),
+}
+
+
+async def drive():
+    body = b""
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal body
+        if msg["type"] == "http.response.body":
+            body += msg.get("body", b"")
+
+    t0 = time.perf_counter()
+    await server.app(SCOPE, receive, send)
+    return time.perf_counter() - t0, body
+
+
+async def main():
+    await drive()  # cold pass, as at the first big page after a server start; not timed
+    worst, walls, wire = [], [], 0
+    for _ in range(9):
+        stop = False
+        gaps = []
+
+        async def ticker():
+            prev = time.perf_counter()
+            while not stop:
+                await asyncio.sleep(0.005)
+                now = time.perf_counter()
+                gaps.append(now - prev)
+                prev = now
+
+        t = asyncio.create_task(ticker())
+        dt, wire = await drive()
+        stop = True
+        await t
+        worst.append(max(gaps))
+        walls.append(dt)
+    worst.sort()
+    walls.sort()
+    print(f"{best_n}-event corpus, {len(wire)} B gzip wire; "
+          f"loop-lag median {worst[4] * 1000:.2f} ms, max {worst[-1] * 1000:.2f} ms; "
+          f"wall median {walls[4] * 1000:.2f} ms, max {walls[-1] * 1000:.2f} ms over 9")
+    shutil.rmtree(home)
+
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3641,3 +3746,4 @@ EOF
 | 2026-09-05 | this PR | M62 base-less base-resolution chain median 1.03/1.00/0.92 s → 0.33/0.31/0.30 s, max 1.07 s → 0.37 s (three interleaved collector sets, main checkout before vs branch after against the real origin at load 2.33/2.11/1.32; start_point origin/main identical across arms; every paired set faster) | the base-less launch chain answered one unfiltered `git ls-remote --symref origin` listing — HEAD symref plus the default branch's tip — in a single round-trip instead of two filtered probes, and resolve_base_branch skips the fetch its own probe just proved a no-op (tracking ref already at the advertised tip; the probe is read straight from the remote, so no fetch could change that ref); the caller-fed `remote_tip` keeps the freshly-resolved start-point guarantee — the fetch still runs whenever the probe shows the tracking ref behind, and every error path is unchanged; M62 definition and healthy range introduced with this PR |
 | 2026-09-05 | this PR | M63 /view handler median 11.76/12.37/12.12 ms → 4.09/4.15/3.96 ms, maxima 16.74/13.94/13.54 ms → 4.79/4.57/4.81 ms, body 2640195 B → 277184 B (three interleaved rounds of the collector, 339-file worst threads corpus of session 3b91d606, scratch CHARLIEBOT_HOME, main checkout before vs branch after at load 1.85/1.45/1.03, every paired round faster; TestClient-level A/B over the same scratch snapshots 41.28/41.19/37.25 ms → 30.34/28.11/28.80 ms — the request harness floor dominates both arms, so the handler level is the standing row; component attribution before: 339 whole-row dumps 1.65 ms + 2.6 MB render 7.75 ms, after: prefixed-row builds 1.08 ms + 277 KB render 0.48 ms; M35's /view corpus (d321b9ad, 19 threads) re-measured 7.24/6.51 ms → 6.68 ms, body 292279 B → 182981 B, events page unchanged (5.84 ms / 633236 B, digest 46d1d509a0d6) — no regression) | the session view's `threads` array ships the workers-panel list's prefixed rows (`_thread_list_item`, the M36 truncation contract the same card builder already consumes: one CSS-truncated description line per card, the full-text modal fetches the row on click) instead of whole ThreadMetadata dumps — task-spec-length descriptions made the worst session's view body ~7.8 KB per row, 2.6 MB per session open, which the gzip lane then recompressed per request; M63 definition and healthy range introduced with this PR |
 | 2026-09-05 | this PR | M19 framing median 0.0176/0.0174/0.0174/0.0173/0.0176 s → 0.0171/0.0168/0.0165/0.0167/0.0166 s, maxima 0.0178/0.0178/0.0175/0.0177/0.0180 s → 0.0173/0.0170/0.0167/0.0168/0.0168 s (five interleaved rounds of the verbatim collector, main checkout before vs branch after back-to-back at load 1.1-1.7, every paired round faster; the framing work itself, measured by feeding the framer pre-decoded chunks, 16.21 ms → 2.46 ms per 16 MB; LF-dense production shape unchanged 3.00 → 3.00 ms per 1.6 MB / 7000 lines / 16 KB chunks; yielded-line digests identical across both arms over 12 sparse/dense/mixed corpus shapes at 997 B / 16 KB / 64 KB / single-chunk splits, U+2028/U+0085 content, CRLF/CR/LF and unterminated tails; 4539-passed suite) | the resolved line's tail joins with the accumulated pieces instead of concatenating onto the join's fresh result — a concat on a just-allocated large string re-allocates through the mmap lane and re-faults the line's pages (~0.9 ms per 1 MB line measured vs ~0.03 ms for one join of the same pieces), which once per multi-hundred-KB frame was the framer's dominant cost; the collector's remaining wall sits on the per-line 1 MB str materialization and fresh-chunk page faults both arms share |
+| 2026-09-05 | this PR | M65 whole-body gzip loop-lag median 17.58/17.15/17.22 ms → 5.99/5.99/5.80 ms, maxima 18.20/17.81/17.79 → 6.06/6.08/6.10 ms (three interleaved rounds of the verbatim collector, 20534-event worst live corpus of session d321b9ad, scratch CHARLIEBOT_HOME, main checkout before vs branch after back-to-back at load 1.5-2.1; wire 165729 B in both arms (deflate payload equal with the header's wall-time mtime field zeroed — gzip embeds the construction time, so full bytes differ between runs) and wall median 17.29-17.73 → 18.23-18.75 ms, the compression now concurrent; live corroboration: the running instance answers the same events page 19.0 ms without Accept-Encoding: gzip and 30.4 ms with it, the delta the pre-fix loop pays inline) | whole-body responses' deflate moved off the event loop into one to_thread hop in a GZipResponder subclass (`_OffLoopWholeBodyGZipResponder`, threshold 8 KB — a smaller body's deflate costs less inline than the ~104 µs executor round-trip the M52 row measured); streaming bodies keep Starlette's inline per-chunk path (their gzip file state must not cross threads between writes); /perfetto/merged pass-through unchanged; wire bytes pinned equal to Starlette's inline output with the header mtime zeroed by the suite; M65 definition and healthy range introduced with this PR |

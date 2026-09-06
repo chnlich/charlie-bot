@@ -255,184 +255,101 @@ def test_file_change_regular_file_emits_file_write_without_filename_field(monkey
   }]
 
 
-def test_translate_todo_list_text_items_preserves_live_codex_plan_text(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("event_type", "items", "expected_text"), [
+        pytest.param(
+            "item.started",
+            [
+                {
+                    "text": "Inspect the code",
+                    "completed": False
+                },
+                {
+                    "text": "Patch the bug",
+                    "completed": False
+                },
+                {
+                    "text": "Run tests",
+                    "completed": True
+                },
+            ],
+            "- [ ] Inspect the code\n- [ ] Patch the bug\n- [x] Run tests",
+            id="text_items_preserves_live_codex_plan_text",
+        ),
+        pytest.param(
+            "item.updated",
+            [
+                {
+                    "step": "Write the failing test",
+                    "status": "pending"
+                },
+                {
+                    "step": "Implement the minimal fix",
+                    "status": "in_progress"
+                },
+                {
+                    "step": "Run the regression test",
+                    "status": "completed"
+                },
+            ],
+            "- [ ] Write the failing test\n- [~] Implement the minimal fix\n- [x] Run the regression test",
+            id="step_items_preserves_step_text",
+        ),
+        pytest.param(
+            "item.completed",
+            [
+                {
+                    "label": "Keep label support",
+                    "status": "pending"
+                },
+                {
+                    "content": "Keep content support",
+                    "status": "completed"
+                },
+            ],
+            "- [ ] Keep label support\n- [x] Keep content support",
+            id="label_and_content_items_remain_compatible",
+        ),
+        pytest.param(
+            "item.updated",
+            [
+                {},
+                {
+                    "label": "   ",
+                    "status": "pending"
+                },
+                {
+                    "content": "",
+                    "status": "completed"
+                },
+                {
+                    "step": "\n",
+                    "status": "in_progress"
+                },
+                {
+                    "text": "Keep the real step",
+                    "completed": False
+                },
+            ],
+            "- [ ] Keep the real step",
+            id="suppressed_blank_items",
+        ),
+    ])
+def test_translate_todo_list_renders_one_text_delta(
+    monkeypatch, event_type: str, items: list, expected_text: str) -> None:
   backend = _build_backend(monkeypatch)
 
-  translated = backend.translate_event(
-      {
-          "type": "item.started",
-          "item":
-              {
-                  "type":
-                      "todo_list",
-                  "items":
-                      [
-                          {
-                              "text": "Inspect the code",
-                              "completed": False
-                          },
-                          {
-                              "text": "Patch the bug",
-                              "completed": False
-                          },
-                          {
-                              "text": "Run tests",
-                              "completed": True
-                          },
-                      ],
-              },
-      })
+  translated = backend.translate_event({"type": event_type, "item": {"type": "todo_list", "items": items}})
 
-  assert translated == [
-      {
-          "type": "assistant",
-          "message":
-              {
-                  "content":
-                      [
-                          {
-                              "type": "text",
-                              "text": ("- [ ] Inspect the code\n"
-                                       "- [ ] Patch the bug\n"
-                                       "- [x] Run tests"),
-                          }
-                      ],
-              },
-      }
-  ]
-
-
-def test_translate_todo_list_step_items_preserves_step_text(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch)
-
-  translated = backend.translate_event(
-      {
-          "type": "item.updated",
-          "item":
-              {
-                  "type":
-                      "todo_list",
-                  "items":
-                      [
-                          {
-                              "step": "Write the failing test",
-                              "status": "pending"
-                          },
-                          {
-                              "step": "Implement the minimal fix",
-                              "status": "in_progress"
-                          },
-                          {
-                              "step": "Run the regression test",
-                              "status": "completed"
-                          },
-                      ],
-              },
-      })
-
-  assert translated == [
-      {
-          "type": "assistant",
-          "message":
-              {
-                  "content":
-                      [
-                          {
-                              "type":
-                                  "text",
-                              "text":
-                                  (
-                                      "- [ ] Write the failing test\n"
-                                      "- [~] Implement the minimal fix\n"
-                                      "- [x] Run the regression test"),
-                          }
-                      ],
-              },
-      }
-  ]
-
-
-def test_translate_todo_list_label_and_content_items_remain_compatible(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch)
-
-  translated = backend.translate_event(
-      {
-          "type": "item.completed",
-          "item":
-              {
-                  "type":
-                      "todo_list",
-                  "items":
-                      [
-                          {
-                              "label": "Keep label support",
-                              "status": "pending"
-                          },
-                          {
-                              "content": "Keep content support",
-                              "status": "completed"
-                          },
-                      ],
-              },
-      })
-
-  assert translated == [
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "- [ ] Keep label support\n- [x] Keep content support",
-              }],
-          },
-      }
-  ]
-
-
-def test_translate_todo_list_suppresses_blank_items(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch)
-
-  translated = backend.translate_event(
-      {
-          "type": "item.updated",
-          "item":
-              {
-                  "type":
-                      "todo_list",
-                  "items":
-                      [
-                          {},
-                          {
-                              "label": "   ",
-                              "status": "pending"
-                          },
-                          {
-                              "content": "",
-                              "status": "completed"
-                          },
-                          {
-                              "step": "\n",
-                              "status": "in_progress"
-                          },
-                          {
-                              "text": "Keep the real step",
-                              "completed": False
-                          },
-                      ],
-              },
-      })
-
-  assert translated == [
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "- [ ] Keep the real step",
-              }],
-          },
-      }
-  ]
+  assert translated == [{
+      "type": "assistant",
+      "message": {
+          "content": [{
+              "type": "text",
+              "text": expected_text,
+          }],
+      },
+  }]
 
 
 def test_translate_todo_list_suppresses_duplicate_snapshots(monkeypatch) -> None:
@@ -571,16 +488,12 @@ def test_reasoning_item_emits_thinking_deltas(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_command_omits_auto_compact_when_absent(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="codex-test-model")
-
-  cmd = backend._build_command("do the thing")
-
-  assert not any("model_auto_compact_token_limit" in arg for arg in cmd)
-
-
-def test_build_command_resume_omits_auto_compact_when_absent(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="codex-test-model", resume_session_id="sess-1")
+@pytest.mark.parametrize("resume_session_id", [
+    pytest.param(None, id="fresh"),
+    pytest.param("sess-1", id="resume"),
+])
+def test_build_command_omits_auto_compact_when_absent(monkeypatch, resume_session_id: str | None) -> None:
+  backend = _build_backend(monkeypatch, model="codex-test-model", resume_session_id=resume_session_id)
 
   cmd = backend._build_command("do the thing")
 

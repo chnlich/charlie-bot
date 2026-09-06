@@ -32,7 +32,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var GUTTER_GAP = 8;
     var COL_MAX = 300;
     var COL_MIN = 240;
-    var AUTH_MESSAGE = 'log in to comment';
     var NO_SESSION_MESSAGE = 'Cannot parse session id from this artifact URL.';
     var SECTION_SELECTOR = 'section';
     // Each shortcut owns a `kind`, which doubles as its dedup key and as the
@@ -856,22 +855,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       textarea.focus();
     }
 
-    async function postChatMessage(content) {
-      var targetId = resolveTargetSessionId();
-      var response = await fetch('/api/chat/' + encodeURIComponent(targetId) + '/message', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        credentials: 'same-origin',
-        body: JSON.stringify({content: content, uploaded_files: []}),
-      });
-      if (response.status === 401) {
-        throw new Error(AUTH_MESSAGE);
-      }
-      if (!response.ok) {
-        throw new Error('Comment post failed: HTTP ' + response.status);
-      }
-    }
-
     function submitComment(block, textarea) {
       var comment = textarea.value.trim();
       if (!comment) {
@@ -1483,7 +1466,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       sendBtn.disabled = true;
       sendBtn.textContent = 'Sending';
       try {
-        await postChatMessage(buildBatchMessage(ordered));
+        await postCommentMessage(resolveTargetSessionId(), buildBatchMessage(ordered));
         resetPending();
         showToast(count + ' comments sent to chat', false);
       } catch (err) {

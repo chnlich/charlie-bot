@@ -5,11 +5,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
-  ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
-  CODEX_RESOLVE_BINARY_PATCH_TARGET,
-  FLAG_LIKE_PROMPT,
-  FakeStdout,
-  build_cli_backend,
+    ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    CODEX_RESOLVE_BINARY_PATCH_TARGET,
+    FLAG_LIKE_PROMPT,
+    FakeStdout,
+    build_cli_backend,
 )
 from pydantic import ValidationError
 
@@ -86,25 +86,27 @@ def test_build_command_uses_custom_reasoning_effort(monkeypatch) -> None:
 def test_turn_completed_includes_codex_cost(monkeypatch) -> None:
   backend = _build_backend(monkeypatch, model="gpt-5.5")
 
-  translated = backend.translate_event({
-      "type": "turn.completed",
-      "usage": {
-          "input_tokens": 1000,
-          "cached_input_tokens": 400,
-          "output_tokens": 20,
-      },
-  })
+  translated = backend.translate_event(
+      {
+          "type": "turn.completed",
+          "usage": {
+              "input_tokens": 1000,
+              "cached_input_tokens": 400,
+              "output_tokens": 20,
+          },
+      })
 
   assert translated == [
       {
           "type": ET.RESULT,
           "result": "",
-          "usage": {
-              "input_tokens": 1000,
-              "output_tokens": 20,
-              "cache_read_input_tokens": 400,
-              "cache_creation_input_tokens": 0,
-          },
+          "usage":
+              {
+                  "input_tokens": 1000,
+                  "output_tokens": 20,
+                  "cache_read_input_tokens": 400,
+                  "cache_creation_input_tokens": 0,
+              },
           "total_cost_usd": 0.0038,
       }
   ]
@@ -117,17 +119,19 @@ def test_file_change_html_artifact_emits_file_write(monkeypatch, tmp_path: Path)
   artifact_path = artifact_dir / "x.html"
   artifact_path.write_text("<!doctype html><p>artifact</p>", encoding="utf-8")
 
-  translated = backend.translate_event({
-      "type": "item.completed",
-      "item": {
-          "type": "file_change",
-          "changes": [{
-              "path": str(artifact_path),
-              "kind": "update",
-          }],
-          "status": "completed",
-      },
-  })
+  translated = backend.translate_event(
+      {
+          "type": "item.completed",
+          "item":
+              {
+                  "type": "file_change",
+                  "changes": [{
+                      "path": str(artifact_path),
+                      "kind": "update",
+                  }],
+                  "status": "completed",
+              },
+      })
 
   assert translated == [
       {
@@ -146,23 +150,26 @@ def test_file_change_multi_file_emits_file_writes(monkeypatch, tmp_path: Path) -
   source_path = tmp_path / "kernel.cu"
   source_path.write_text("__global__ void k() {}\n", encoding="utf-8")
 
-  translated = backend.translate_event({
-      "type": "item.completed",
-      "item": {
-          "type": "file_change",
-          "changes": [
+  translated = backend.translate_event(
+      {
+          "type": "item.completed",
+          "item":
               {
-                  "path": str(artifact_path),
-                  "kind": "update",
+                  "type": "file_change",
+                  "changes":
+                      [
+                          {
+                              "path": str(artifact_path),
+                              "kind": "update",
+                          },
+                          {
+                              "path": str(source_path),
+                              "kind": "update",
+                          },
+                      ],
+                  "status": "completed",
               },
-              {
-                  "path": str(source_path),
-                  "kind": "update",
-              },
-          ],
-          "status": "completed",
-      },
-  })
+      })
 
   assert translated == [
       {
@@ -180,17 +187,19 @@ def test_file_change_missing_html_artifact_emits_file_write(monkeypatch, tmp_pat
   backend = _build_backend(monkeypatch)
   artifact_path = tmp_path / "artifacts" / "x.html"
 
-  translated = backend.translate_event({
-      "type": "item.completed",
-      "item": {
-          "type": "file_change",
-          "changes": [{
-              "path": str(artifact_path),
-              "kind": "update",
-          }],
-          "status": "completed",
-      },
-  })
+  translated = backend.translate_event(
+      {
+          "type": "item.completed",
+          "item":
+              {
+                  "type": "file_change",
+                  "changes": [{
+                      "path": str(artifact_path),
+                      "kind": "update",
+                  }],
+                  "status": "completed",
+              },
+      })
 
   assert translated == [{
       "type": ET.FILE_WRITE,
@@ -205,17 +214,19 @@ def test_file_change_started_html_artifact_emits_nothing(monkeypatch, tmp_path: 
   artifact_path = artifact_dir / "x.html"
   artifact_path.write_text("<p>started</p>", encoding="utf-8")
 
-  translated = backend.translate_event({
-      "type": "item.started",
-      "item": {
-          "type": "file_change",
-          "changes": [{
-              "path": str(artifact_path),
-              "kind": "update",
-          }],
-          "status": "in_progress",
-      },
-  })
+  translated = backend.translate_event(
+      {
+          "type": "item.started",
+          "item":
+              {
+                  "type": "file_change",
+                  "changes": [{
+                      "path": str(artifact_path),
+                      "kind": "update",
+                  }],
+                  "status": "in_progress",
+              },
+      })
 
   assert not translated
 
@@ -224,17 +235,19 @@ def test_file_change_regular_file_emits_file_write_without_filename_field(monkey
   backend = _build_backend(monkeypatch)
   source_path = tmp_path / "kernel.cu"
 
-  translated = backend.translate_event({
-      "type": "item.completed",
-      "item": {
-          "type": "file_change",
-          "changes": [{
-              "path": str(source_path),
-              "kind": "update",
-          }],
-          "status": "completed",
-      },
-  })
+  translated = backend.translate_event(
+      {
+          "type": "item.completed",
+          "item":
+              {
+                  "type": "file_change",
+                  "changes": [{
+                      "path": str(source_path),
+                      "kind": "update",
+                  }],
+                  "status": "completed",
+              },
+      })
 
   assert translated == [{
       "type": ET.FILE_WRITE,

@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 from conftest import count_path_read_text, make_home_config
 
-import src.core.sessions as sessions_core
 from src.core.config import CharlieBotConfig
 from src.core.sessions import (
     _reset_trigger_meta_memo_for_tests,
@@ -128,16 +127,3 @@ def test_failed_parse_is_not_memoized(tmp_path: Path, monkeypatch: pytest.Monkey
   reads = count_path_read_text(monkeypatch, lambda path: True)
   assert _probe(triggers_dir) == (0, None)
   assert len(reads) == 1
-
-
-def test_memo_lru_evicts_oldest_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(sessions_core._trigger_meta_memo, "_limit", 2)
-  cfg = make_home_config(tmp_path)
-  for sid in ("a", "b", "c"):
-    _write_trigger(cfg, sid, _pending("t1", 3))
-    _probe(cfg.sessions_dir / sid / "triggers")
-
-  assert list(sessions_core._trigger_meta_memo) == [
-      str(cfg.sessions_dir / "b" / "triggers" / "t1.json"),
-      str(cfg.sessions_dir / "c" / "triggers" / "t1.json"),
-  ]

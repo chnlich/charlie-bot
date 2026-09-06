@@ -92,11 +92,12 @@ def _artifact_session_id(fs_path: Path) -> str | None:
 
 
 def _inject_artifact_ui(html_text: str, session_id: str) -> str:
-  """Insert the session-id assignment and the artifact-comments script before the last
-  </body>, or append without one. The inline assignment precedes the external script tag
-  so the id is set before artifact-comments.js runs."""
+  """Insert the session-id assignment and the comment scripts before the last
+  </body>, or append without one. The inline assignment precedes the external
+  script tags so the id is set before the comment scripts run."""
   tags = (
       f"<script>window.__cbcServerSessionId={json.dumps(session_id)};</script>\n"
+      f"<script src=/static/js/comment_post.js?v={_static_asset_version()}></script>\n"
       f"<script src=/static/js/artifact-comments.js?v={_static_asset_version()}></script>")
   idx = html_text.rfind("</body>")
   if idx == -1:

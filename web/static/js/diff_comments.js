@@ -2,7 +2,6 @@
 (() => {
   const PREFIX = 'cbdc';
   const FILE_BODY_SELECTOR = '[data-cbdc-file-path]';
-  const AUTH_MESSAGE = 'log in to comment';
   const outputEl = document.getElementById('diff-output');
 
   let currentComparison = window.__cbdiffPage.getComparison();
@@ -737,17 +736,6 @@
     refreshTray();
   }
 
-  async function postChatMessage(sessionId, content) {
-    const response = await fetch(`/api/chat/${encodeURIComponent(sessionId)}/message`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
-      body: JSON.stringify({ content, uploaded_files: [] }),
-    });
-    if (response.status === 401) throw new Error(AUTH_MESSAGE);
-    if (!response.ok) throw new Error(`Comment post failed: HTTP ${response.status}`);
-  }
-
   async function sendBatch() {
     const target = targetSession();
     if (!target || pending.length === 0) return;
@@ -755,7 +743,7 @@
     refreshTray();
     const count = pending.length;
     try {
-      await postChatMessage(target.id, buildBatchMessage(batchContext, pending, overallInput.value));
+      await postCommentMessage(target.id, buildBatchMessage(batchContext, pending, overallInput.value));
       sending = false;
       clearAll();
       showToast(`${count} comments sent to ${target.name}`, false);

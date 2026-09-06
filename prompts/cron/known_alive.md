@@ -314,6 +314,12 @@ Known-alive symbols:
   the copy-on-select `mouseup` listener; deleting it silently kills terminal
   copy-on-select. A JS unreferenced-method scan finds only the definition, so it flags
   the method as dead; `dispose` in the same object literal is reached the same way.
+- `postCommentMessage` (`web/static/js/comment_post.js`) — cross-file browser global:
+  `diff_comments.js` and `artifact-comments.js` call it as a bare identifier resolved
+  through the page's script-tag global scope, each page loading the file before the
+  widget (`web/templates/diff.html`, and the `_inject_artifact_ui` tags in
+  `src/api/files.py` for artifact pages). A per-file dead-function scan finds only the
+  definition, so it flags the function as unused.
 - `render` (`FastJsonResponse` in `src/api/responses.py`) — template-method override of
   starlette `JSONResponse.render`: the base `Response.__init__` calls `self.render(content)`
   by that name when FastAPI serializes a response. As a Python identifier the name has zero

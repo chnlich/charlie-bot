@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const { readStatic } = require('./read_static');
 
 const DIFF_COMMENTS_JS = readStatic('diff_comments.js');
+const COMMENT_POST_JS = readStatic('comment_post.js');
 
 function makeElement() {
   return {
@@ -78,6 +79,7 @@ function loadDiffCommentsScript() {
     window,
   };
   vm.createContext(context);
+  vm.runInContext(COMMENT_POST_JS, context, {filename: 'comment_post.js'});
   vm.runInContext(DIFF_COMMENTS_JS, context, {filename: 'diff_comments.js'});
   return window;
 }

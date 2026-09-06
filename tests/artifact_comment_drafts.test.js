@@ -10,6 +10,7 @@ const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
 const {SESSIONS_ROOT} = require('./sessions_root_stub');
 
 const ARTIFACT_COMMENTS_JS = readStatic('artifact-comments.js');
+const COMMENT_POST_JS = readStatic('comment_post.js');
 
 const ARTIFACT_PATH = '/files' + SESSIONS_ROOT + '/sess-draft/artifacts/plan.html';
 const DRAFT_KEY = 'cbc-draft:' + ARTIFACT_PATH;
@@ -87,6 +88,7 @@ function loadScript(opts = {}) {
       },
   };
   vm.createContext(context);
+  vm.runInContext(COMMENT_POST_JS, context, {filename: 'comment_post.js'});
   vm.runInContext(ARTIFACT_COMMENTS_JS, context, {filename: 'artifact-comments.js'});
   return {context, window, head, body, storage};
 }
@@ -307,9 +309,10 @@ test('script loads with no sessionStorage global at all (try/catch guards access
   ctx.window.self = ctx.window;
   ctx.window.parent = ctx.window;
   vm.createContext(ctx);
-  assert.doesNotThrow(() =>
-    vm.runInContext(ARTIFACT_COMMENTS_JS, ctx, {filename: 'artifact-comments.js'})
-  );
+  assert.doesNotThrow(() => {
+    vm.runInContext(COMMENT_POST_JS, ctx, {filename: 'comment_post.js'});
+    vm.runInContext(ARTIFACT_COMMENTS_JS, ctx, {filename: 'artifact-comments.js'});
+  });
   assert.equal(typeof ctx.window.__cbcLoadDraft, 'function');
   jsonEqual(ctx.window.__cbcLoadDraft(ARTIFACT_PATH), []);
 });

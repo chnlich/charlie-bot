@@ -244,7 +244,22 @@ def test_diff_files_keeps_event_loop_responsive(tmp_path: Path, monkeypatch: pyt
   assert worst_gap < 0.15
 
 
-def test_diff_files_repeat_view_uses_memo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+# First view's subprocess sequence: one rev-parse resolving both refs, then the two
+# manifest diffs (files endpoint) or the single per-file diff (file endpoint).
+_REPEAT_VIEW_CASES = [
+    pytest.param("files", {"mode": "three-dot"}, ["rev-parse", "diff", "diff"], id="files"),
+    pytest.param("file", {"path": "keep.txt"}, ["rev-parse", "diff"], id="file"),
+]
+
+
+@pytest.mark.parametrize(("endpoint", "extra_params", "first_calls"), _REPEAT_VIEW_CASES)
+def test_diff_repeat_view_uses_memo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str,
+    extra_params: dict[str, str],
+    first_calls: list[str],
+) -> None:
   """A repeat view of the same resolved range re-runs zero git diff subprocesses."""
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
@@ -257,14 +272,13 @@ def test_diff_files_repeat_view_uses_memo(tmp_path: Path, monkeypatch: pytest.Mo
 
   monkeypatch.setattr(git_api.subprocess, "run", counting_run)
 
-  params = {"repo": str(repo), "base": "main", "head": "feature", "mode": "three-dot"}
-  first = client.get("/api/git/diff/files", params=params)
+  params = {"repo": str(repo), "base": "main", "head": "feature", **extra_params}
+  first = client.get(f"/api/git/diff/{endpoint}", params=params)
   assert first.status_code == 200
-  # One rev-parse resolving both refs, plus the two manifest diffs.
-  assert [c[1] for c in calls] == ["rev-parse", "diff", "diff"]
+  assert [c[1] for c in calls] == first_calls
 
   calls.clear()
-  second = client.get("/api/git/diff/files", params=params)
+  second = client.get(f"/api/git/diff/{endpoint}", params=params)
   assert second.status_code == 200
   assert second.json() == first.json()
   # The repeat view pays only the ref resolution.
@@ -286,33 +300,6 @@ def test_diff_files_head_move_busts_memo(tmp_path: Path) -> None:
   assert second["head_sha"] != first["head_sha"]
   by_path = {f["path"]: f for f in second["files"]}
   assert by_path["added.txt"]["additions"] == 3
-
-
-def test_diff_file_repeat_view_uses_memo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A repeat expand of the same file re-runs zero git diff subprocesses."""
-  repo = _build_repo(tmp_path)
-  client = _build_client(tmp_path)
-  calls: list[list[str]] = []
-  real_run = subprocess.run
-
-  def counting_run(*args, **kwargs):  # type: ignore[no-untyped-def]
-    calls.append(args[0])
-    return real_run(*args, **kwargs)
-
-  monkeypatch.setattr(git_api.subprocess, "run", counting_run)
-
-  params = {"repo": str(repo), "base": "main", "head": "feature", "path": "keep.txt"}
-  first = client.get("/api/git/diff/file", params=params)
-  assert first.status_code == 200
-  # One rev-parse resolving both refs, plus the per-file diff.
-  assert [c[1] for c in calls] == ["rev-parse", "diff"]
-
-  calls.clear()
-  second = client.get("/api/git/diff/file", params=params)
-  assert second.status_code == 200
-  assert second.json() == first.json()
-  # The repeat view pays only the ref resolution.
-  assert [c[1] for c in calls] == ["rev-parse"]
 
 
 def test_diff_file_head_move_busts_memo(tmp_path: Path) -> None:

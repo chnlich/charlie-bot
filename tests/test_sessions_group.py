@@ -59,12 +59,28 @@ async def test_set_group_broadcasts_sidebar_event() -> None:
 # ---------------------------------------------------------------------------
 
 
+async def _clone_child(
+    mgr: SessionManager,
+    op: str,
+    parent_id: str,
+    *,
+    backend: str | None,
+) -> SessionMetadata:
+  """Run the clone op under test: fork keeps the default event boundary, elone takes event 0."""
+  if op == "fork":
+    return await mgr.fork_session(parent_id, backend=backend)
+  if op == "elone":
+    return await mgr.elone_session(parent_id, event_index=0, backend=backend)
+  raise AssertionError(f"unknown clone op: {op}")
+
+
 @pytest.mark.asyncio
-async def test_fork_session_inherits_group(tmp_path: Path) -> None:
+@pytest.mark.parametrize("op", ["fork", "elone"])
+async def test_clone_inherits_group(tmp_path: Path, op: str) -> None:
   mgr = _make_session_mgr(tmp_path)
   parent = await _seed_parent(mgr, group="Research")
 
-  child = await mgr.fork_session(parent.id)
+  child = await _clone_child(mgr, op, parent.id, backend=None)
 
   assert child is not None
   assert child.group == "Research"
@@ -72,11 +88,12 @@ async def test_fork_session_inherits_group(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_fork_session_inherits_none_group(tmp_path: Path) -> None:
+@pytest.mark.parametrize("op", ["fork", "elone"])
+async def test_clone_inherits_none_group(tmp_path: Path, op: str) -> None:
   mgr = _make_session_mgr(tmp_path)
   parent = await _seed_parent(mgr, group=None)
 
-  child = await mgr.fork_session(parent.id)
+  child = await _clone_child(mgr, op, parent.id, backend=None)
 
   assert child is not None
   assert child.group is None
@@ -84,47 +101,12 @@ async def test_fork_session_inherits_none_group(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_fork_session_accepts_backend_override(tmp_path: Path) -> None:
+@pytest.mark.parametrize("op", ["fork", "elone"])
+async def test_clone_accepts_backend_override(tmp_path: Path, op: str) -> None:
   mgr = _make_session_mgr(tmp_path)
   parent = await _seed_parent(mgr, group="Research", backend=OPUS_BACKEND_ID)
 
-  child = await mgr.fork_session(parent.id, backend="codex-o3")
-
-  assert child is not None
-  assert child.group == "Research"
-  assert child.backend == "codex-o3"
-
-
-@pytest.mark.asyncio
-async def test_elone_session_inherits_group(tmp_path: Path) -> None:
-  mgr = _make_session_mgr(tmp_path)
-  parent = await _seed_parent(mgr, group="Research")
-
-  child = await mgr.elone_session(parent.id, event_index=0)
-
-  assert child is not None
-  assert child.group == "Research"
-  assert child.backend == parent.backend
-
-
-@pytest.mark.asyncio
-async def test_elone_session_inherits_none_group(tmp_path: Path) -> None:
-  mgr = _make_session_mgr(tmp_path)
-  parent = await _seed_parent(mgr, group=None)
-
-  child = await mgr.elone_session(parent.id, event_index=0)
-
-  assert child is not None
-  assert child.group is None
-  assert child.backend == parent.backend
-
-
-@pytest.mark.asyncio
-async def test_elone_session_accepts_backend_override(tmp_path: Path) -> None:
-  mgr = _make_session_mgr(tmp_path)
-  parent = await _seed_parent(mgr, group="Research", backend=OPUS_BACKEND_ID)
-
-  child = await mgr.elone_session(parent.id, event_index=0, backend="codex-o3")
+  child = await _clone_child(mgr, op, parent.id, backend="codex-o3")
 
   assert child is not None
   assert child.group == "Research"

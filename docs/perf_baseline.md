@@ -79,6 +79,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M67 sidebar deep-probe trigger scan, steady state | M67 collector below | seconds per `pending_trigger_state_sync` call, worst on-disk trigger corpus | median < 0.0005 s | — (introduced with its first history row) |
 | M68 worker-list marked changed-poll rebuild | M68 collector below | seconds per body rebuild after one writer mark, worst on-disk thread-metadata corpus; the unchanged poll and its conditional are M36's shapes | median < 0.007 s | — (introduced with its first history row) |
 | M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
+| M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.010 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3877,6 +3878,88 @@ print(f"60 steady-state unhandled todo.updated frames; opencode_sse_event_unhand
 EOF
 ```
 
+M70 — artifact clean-view serve, steady state. Every credentialed view of a session artifact page
+(`GET /files/…/<session>/artifacts/<page>.html`) read and re-injected the whole page per request,
+while the `?diff=` sibling served repeats from the M55 annotate memo. The chat log links plan and
+report pages that are re-opened repeatedly (794 of the 823 artifact views in the 69.85 h live log
+sampled 2026-09-06 were repeats of an already-viewed file), so each repeat paid the full-file read
+(~4.8 ms on the 1.08 MB worst artifact) plus the injection for identical bytes. The collector
+copies the largest on-disk artifact page into a scratch `CHARLIEBOT_HOME` under /tmp (live home
+read once for the copy, never written) and drives the files router through TestClient in each
+checkout's process: one cold pass, as at first artifact view, then nine timed requests, with the
+credentialed cookie the injection gate reads. Snapshot once:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import shutil, tempfile
+from pathlib import Path
+
+# Worst clean-view corpus: the largest .html artifact page on disk; the
+# credentialed view reads and re-injects the whole page per request.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for p in root.glob("*/artifacts/*.html"):
+    n = p.stat().st_size
+    if n > best_n:
+        best, best_n = p, n
+SID = best.parent.parent.name
+home = Path(tempfile.mkdtemp(prefix="m70-artifact-home-", dir="/tmp"))
+dst = home / "sessions" / SID / "artifacts"
+dst.mkdir(parents=True)
+shutil.copy2(best, dst / best.name)
+print(f"worst artifact: session {SID}, {best.name}, {best_n / 1e6:.2f} MB")
+print(f"export M70_HOME={home} M70_SID={SID} M70_NAME={best.name} M70_SIZE={best_n}")
+EOF
+```
+
+Then run per checkout (``eval`` the snapshot export first):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import hashlib, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from src.api.files import router as files_router
+from src.core.config import CharlieBotConfig
+import src.api.files as files_mod
+
+home = Path(os.environ["M70_HOME"])
+SID = os.environ["M70_SID"]
+NAME = os.environ["M70_NAME"]
+
+# Scratch wiring: the router's get_config resolves the snapshot home, never the
+# live one; the snapshot's empty access key makes every reader credentialed, so
+# the timed request carries the artifact-comments injection like a real view.
+cfg = CharlieBotConfig(charliebot_home=home)
+files_mod.get_config = lambda: cfg
+app = FastAPI()
+app.include_router(files_router, prefix="/files")
+client = TestClient(app)
+url = f"/files/{home}/sessions/{SID}/artifacts/{NAME}"
+
+t0 = time.perf_counter()
+r = client.get(url)  # cold pass, as at first artifact view; not timed
+cold = time.perf_counter() - t0
+assert r.status_code == 200, (r.status_code, r.text[:200])
+assert "comment_post.js" in r.text, "artifact-comments injection missing"
+times = []
+bodies = set()
+digest = ""
+for _ in range(9):
+    t0 = time.perf_counter()
+    r = client.get(url)
+    times.append(time.perf_counter() - t0)
+    bodies.add(len(r.content))
+    digest = hashlib.sha256(r.content).hexdigest()[:12]
+times.sort()
+assert len(bodies) == 1, f"repeat bodies differ: {bodies}"
+print(f"{NAME} ({os.environ['M70_SIZE']} B); first view {cold:.4f} s; repeat-view median {times[4]:.4f} s, "
+      f"max {times[-1]:.4f} s over 9, body {bodies.pop()} B, digest {digest}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3986,3 +4069,4 @@ EOF
 | 2026-09-06 | this PR | M68 marked changed-poll rebuild median 8.65/8.53/9.12 ms → 6.33/6.51/6.41 ms, maxima 10.16/10.27/10.03 ms → 7.16/6.97/7.18 ms (three interleaved rounds of the collector, 2551 KB / 339-row worst thread-metadata corpus of session 3b91d606, scratch CHARLIEBOT_HOME wired through get_config, main checkout vs branch worktree back-to-back at load 0.9-1.2, every paired round faster; body 168209 B byte-identical across arms; no-regression re-measures: M36 unchanged-poll 2.15 ms full / 2.16 ms conditional (204, 0 B) and M63 /view handler 4.24 ms / 277184 B, both at their standing readings; 4612-passed suite) | the marked rebuild paid two full scans of every thread metadata.json — the body signature's walk plus list_threads' own per-call scan (the deletion contract) — and rebuilt all 339 rows though _thread_list_item is a pure function of the per-file-parsed metadata; the rebuild now walks once (the walked pairs feed both the signature and a list_threads_from_stats parse-merge sharing list_threads' memo, so the proof and the rows behind the body describe one instant) and serves unmoved files' rows from a per-session row memo keyed on the same (mtime_ns, size) identity every atomic rename moves; M68 definition and healthy range introduced with this PR |
 | 2026-09-06 | this PR | raw-ASGI component A/B, identical drive harness, 100 timed calls each: workers-list 204 median 694 µs → 248 µs, list full 655 µs → 266 µs, /status 1-id 341 µs → 190 µs (main checkout before vs branch worktree after back-to-back at load 1.2-2.1); M36 TestClient interleaved ×2: full 2.21/2.11 ms → 2.08/2.07 ms, conditional 2.12/2.31 ms → 2.00/1.96 ms, body sha1 d97c45b013d6 identical across all four arms; M56 2.18 → 2.05 ms, digest e34b8b212e0b identical; M59 full row 2.09 → 2.05 ms, attach 1.85 → 1.80 ms; M44 3.20 → 2.94 ms; M57 2.55 → 2.30 ms, digest f0098c1aae15 identical; M35 view 6.45 → 5.98 ms, events/bootstrap within noise, digests 46d1d509a0d6 / ea2d0c6b27c3 / 8e4653af40df identical across arms; M68 5.66 → 6.27 ms (load noise; body 168209 B byte-identical); the M3 401 floor and the live instance are untouched by this diff | the four manager getters and the polled routes' config dependency were sync callables, so FastAPI resolved every Depends on them through an anyio threadpool handoff per request — cProfile attributes ~250 µs of the 694 µs memo-hit list poll to the three hops (thread round-trip + event-loop self-pipe wake each); the getters are now async (the loop awaits a dict check) with plain-name sync forms for the direct callers (startup, websocket, tui autoname), and the polled routes (workers list, thread detail, tui/status, view, bootstrap, usage) resolve cfg through get_config_on_loop, so all 62 manager-dep annotation sites shed their hops with no annotation edits; 4674-passed suite |
 | 2026-09-06 | this PR | M69 60 → 0 opencode_sse_event_unhandled debug lines per 60 steady-state `_translate_sse_event` frames of one unhandled type (collector verbatim, main checkout before at load 1.62/1.05/0.72 vs branch worktree after at load 2.73/1.84/1.11, back-to-back; live-log corroboration 306 lines in the 68.85 h server log, 295 type=todo.updated + 11 type=session.compacted; unhandled frames still translate to []; M49's part-type stream re-measured 0 lines per 60 rounds, no regression; 4675-passed suite) | the SSE event-type fallthrough routed through an event-type warn-once registry — one line per unmapped type per process, the M49 part-type registry's mechanism applied to the sibling SSE fallthrough; M69 definition and healthy range introduced with this PR |
+| 2026-09-06 | this PR | M70 repeat-view median 0.0118/0.0124 s → 0.0027/0.0029 s, maxima 0.0128/0.0141 s → 0.0034/0.0038 s (two interleaved rounds of the collector, shared 1.08 MB / 1084780 B served-body snapshot of session 3dfa5384's worst artifact page, main checkout before vs branch worktree after back-to-back at load 0.59-0.72, every paired round faster; first views unchanged 0.0200-0.0218 s → 0.0192-0.0199 s both arms; served bodies byte-identical across arms except the per-checkout cache-bust version query the injection embeds; M55 repeat-view re-measured 0.0025 s → 0.0026 s, no regression; 4677-passed suite) | the credentialed artifact view re-read and re-injected the whole page on every request — 823 artifact views in the 69.85 h live log, 794 of them repeats of an already-viewed file, the read alone ~4.8 ms of an ~11.5 ms repeat view on the 1.08 MB worst page — the injected body now memoizes on (path, mtime_ns, size) served as pre-encoded bytes behind one executor hop, mirroring the M55 annotate memo; M70 definition and healthy range introduced with this PR |

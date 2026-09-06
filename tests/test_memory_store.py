@@ -77,26 +77,27 @@ def test_parse_title_with_free_text(tmp_path: Path) -> None:
   assert e.title == "Prefers dark UI, everywhere & always"
 
 
-def test_parse_empty_title_value(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  d = tmp_path / "entries" / "profile"
-  d.mkdir(parents=True)
-  p = d / "emptytitle.md"
-  p.write_text("---\ntopic: profile\ntitle:    \n---\nbody\n", encoding="utf-8")
-  with pytest.raises(MemoryFormatError, match="empty 'title' header value"):
-    parse_entry(p)
-
-
 # --- parse_entry: structural errors -------------------------------------------
 
 
-def test_parse_bad_header_line(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("---\ntopic: profile\ntitle:    \n---\nbody\n", "empty 'title' header value"),
+        ("---\nscope: user\ntopic: profile\nNot A Header\n---\n# T\n", "malformed header line"),
+        ("scope: user\n---\n# T\n", "expected '---' front matter opener"),
+        ("---\ntopic: profile\nscope: user\nbogus: val\n---\n# T\n", "unknown header field"),
+    ],
+    ids=["empty-title-value", "bad-header-line", "missing-opener", "unknown-header-field"],
+)
+def test_parse_rejects_malformed_front_matter(tmp_path: Path, text: str, expected: str) -> None:
+  """Each malformed front-matter shape fails loudly with its own MemoryFormatError message."""
   _write_topics(tmp_path)
   d = tmp_path / "entries" / "profile"
   d.mkdir(parents=True)
   p = d / "bad.md"
-  p.write_text("---\nscope: user\ntopic: profile\nNot A Header\n---\n# T\n", encoding="utf-8")
-  with pytest.raises(MemoryFormatError, match="malformed header line"):
+  p.write_text(text, encoding="utf-8")
+  with pytest.raises(MemoryFormatError, match=expected):
     parse_entry(p)
 
 
@@ -114,16 +115,6 @@ def test_parse_non_title_fields_stay_slug_charset(tmp_path: Path) -> None:
     parse_entry(p)
 
 
-def test_parse_missing_opener(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  d = tmp_path / "entries" / "profile"
-  d.mkdir(parents=True)
-  p = d / "noopen.md"
-  p.write_text("scope: user\n---\n# T\n", encoding="utf-8")
-  with pytest.raises(MemoryFormatError, match="expected '---' front matter opener"):
-    parse_entry(p)
-
-
 def test_parse_missing_title_anywhere(tmp_path: Path) -> None:
   """No frontmatter title and no legacy '# <title>' body opener -> fail loud."""
   _write_topics(tmp_path)
@@ -132,16 +123,6 @@ def test_parse_missing_title_anywhere(tmp_path: Path) -> None:
   p = d / "notitle.md"
   p.write_text("---\ntopic: profile\nscope: user\naudience: both\n---\nno title here\n", encoding="utf-8")
   with pytest.raises(MemoryFormatError, match="no frontmatter 'title'"):
-    parse_entry(p)
-
-
-def test_parse_unknown_header_field(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  d = tmp_path / "entries" / "profile"
-  d.mkdir(parents=True)
-  p = d / "unknown.md"
-  p.write_text("---\ntopic: profile\nscope: user\nbogus: val\n---\n# T\n", encoding="utf-8")
-  with pytest.raises(MemoryFormatError, match="unknown header field"):
     parse_entry(p)
 
 

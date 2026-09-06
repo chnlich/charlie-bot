@@ -33,6 +33,7 @@ from src.core.models import (
 )
 from src.core.ndjson import iter_ndjson_events
 from src.core.process import kill_process_group
+from src.core.sidebar_state import session_revision
 from src.core.threads import ThreadManager, iter_thread_meta_stats
 from src.core.triggers import TriggerManager
 
@@ -176,6 +177,19 @@ _LIST_BODY_MEMO_LIMIT = 8
 _list_body_memo: BoundedMemo[str, tuple[tuple[tuple[str, int, int], ...], bytes,
                                         str]] = BoundedMemo(_LIST_BODY_MEMO_LIMIT)
 
+# Polls between signature walks, per session. Every writer of a row-source
+# file (thread metadata via _save_metadata, triggers via _save_trigger) marks
+# through mark_sidebar_dirty, so an unchanged session_revision proves the
+# stored signature still describes the files and the memo serves without the
+# per-file stat walk. The sweep walk every Nth poll bounds a mark its writer
+# path forgot to the same ~30 s window the sidebar's populate sweep accepts.
+_LIST_PROOF_SWEEP_EVERY = 10
+# session id -> (revision the stored body was proven current at, polls since
+# that proof). A revision read before the walk is stored, never after: a mark
+# landing mid-walk or mid-rebuild only raises the revision, so the next poll
+# re-walks instead of serving a body missing that write.
+_sig_gate: dict[str, tuple[int, int]] = {}
+
 
 def _list_body_signature(threads_dir: str, triggers_dir: str) -> tuple[tuple[str, int, int], ...]:
   """(path, mtime_ns, size) of every row-source file of the list payload.
@@ -222,8 +236,19 @@ async def list_threads(
   no-store on every answer keeps each poll a real request.
   """
   session_dir = cfg.sessions_dir / session_id
-  sig = await asyncio.to_thread(_list_body_signature, str(session_dir / "threads"), str(session_dir / "triggers"))
   hit = _list_body_memo.get(session_id)
+  rev = session_revision(session_id)
+  gate = _sig_gate.get(session_id)
+  if (hit is not None and gate is not None and gate[0] == rev
+      and gate[1] + 1 < _LIST_PROOF_SWEEP_EVERY):
+    _sig_gate[session_id] = (rev, gate[1] + 1)
+    sig = hit[0]
+  else:
+    sig = await asyncio.to_thread(_list_body_signature, str(session_dir / "threads"), str(session_dir / "triggers"))
+    if hit is not None and hit[0] == sig:
+      _sig_gate[session_id] = (rev, 0)
+    else:
+      _sig_gate.pop(session_id, None)
   if hit is not None and hit[0] == sig:
     if etag == hit[2]:
       return Response(status_code=204, headers={"ETag": hit[2], "Cache-Control": "no-store"})
@@ -259,6 +284,7 @@ async def list_threads(
   body = json.dumps(combined, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
   etag_value = '"' + hashlib.sha1(body).hexdigest() + '"'
   _list_body_memo.store(session_id, (sig, body, etag_value))
+  _sig_gate[session_id] = (rev, 0)
   if etag == etag_value:
     return Response(status_code=204, headers={"ETag": etag_value, "Cache-Control": "no-store"})
   return Response(

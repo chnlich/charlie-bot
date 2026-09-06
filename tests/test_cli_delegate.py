@@ -549,10 +549,20 @@ def test_main_rejects_task_spec_missing_required_heading(
   post_mock.assert_not_called()
 
 
-def test_main_rejects_nonexistent_absolute_source_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize(
+    ("source_line", "err_fragment"),
+    [
+        ("- /definitely/not/there/task-source.md", "/definitely/not/there/task-source.md"),
+        ("- relative/source.md", "absolute paths"),
+        ("", "Source Files section"),
+    ],
+    ids=["nonexistent-absolute", "relative-entry", "empty-section"],
+)
+def test_main_rejects_bad_source_files_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], source_line: str,
+    err_fragment: str) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  task_spec_file = _write_task_spec(tmp_path, _task_spec("- /definitely/not/there/task-source.md"))
+  task_spec_file = _write_task_spec(tmp_path, _task_spec(source_line))
 
   with (
       _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
@@ -560,37 +570,7 @@ def test_main_rejects_nonexistent_absolute_source_file(
   ):
     main()
 
-  assert_cli_reject_exit2(exc_info, capsys, "/definitely/not/there/task-source.md")
-  post_mock.assert_not_called()
-
-
-def test_main_rejects_relative_source_file_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  task_spec_file = _write_task_spec(tmp_path, _task_spec("- relative/source.md"))
-
-  with (
-      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
-      pytest.raises(SystemExit) as exc_info,
-  ):
-    main()
-
-  assert_cli_reject_exit2(exc_info, capsys, "absolute paths")
-  post_mock.assert_not_called()
-
-
-def test_main_rejects_empty_source_files_section(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  task_spec_file = _write_task_spec(tmp_path, _task_spec(""))
-
-  with (
-      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
-      pytest.raises(SystemExit) as exc_info,
-  ):
-    main()
-
-  assert_cli_reject_exit2(exc_info, capsys, "Source Files section")
+  assert_cli_reject_exit2(exc_info, capsys, err_fragment)
   post_mock.assert_not_called()
 
 

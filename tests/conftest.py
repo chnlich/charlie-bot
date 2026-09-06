@@ -37,6 +37,7 @@ from src.core import thinking_state  # noqa: E402
 from src.core import init_worker_recovery as worker_recovery_module  # noqa: E402
 from src.core import models  # noqa: E402
 from src.core import review  # noqa: E402
+from src.api.deps import get_config_on_loop  # noqa: E402
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402
 from src.core.git import BaseResolution  # noqa: E402
 from src.core.plans import PlanRegistryManager  # noqa: E402
@@ -453,6 +454,9 @@ def make_router_client(
   app = FastAPI()
   app.include_router(router, prefix=prefix)
   app.dependency_overrides[get_config] = lambda: cfg
+  # The polled routes resolve cfg through the on-loop dependency (same instance
+  # the sync key serves), so both keys carry the override.
+  app.dependency_overrides[get_config_on_loop] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   return TestClient(app)
 

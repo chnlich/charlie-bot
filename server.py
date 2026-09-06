@@ -34,7 +34,7 @@ from src.api import (
     voice,
 )
 from src.api.auth import AuthMiddleware, _credential_matches
-from src.api.deps import get_session_manager, get_thread_manager, set_trigger_manager
+from src.api.deps import session_manager, set_trigger_manager, thread_manager
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
 from src.core.config import CharlieBotConfig, get_config
@@ -205,7 +205,7 @@ async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identi
   started = utc_now()
   try:
     recovered = await run_crash_recovery(
-        cfg, boot_time, get_session_manager(), get_thread_manager(), master_identity=identity)
+        cfg, boot_time, session_manager(), thread_manager(), master_identity=identity)
     elapsed_ms = round((utc_now() - started).total_seconds() * 1000)
     log.info("crash_recovery_done", count=recovered, elapsed_ms=elapsed_ms)
   except Exception:
@@ -254,7 +254,7 @@ async def lifespan(app: FastAPI):
   # scheduler.start(), and trigger_mgr.recover_pending() below. Barrier on it
   # with a timeout; the shield keeps the one judgment running past the bound
   # and the recovery task re-awaits that same task for the replay pass.
-  session_mgr = get_session_manager()
+  session_mgr = session_manager()
   identity = asyncio.create_task(reconcile_master_identity(cfg, session_mgr, boot_time))
   try:
     await asyncio.wait_for(asyncio.shield(identity), timeout=timeouts.MASTER_IDENTITY_BARRIER_TIMEOUT)
@@ -385,7 +385,7 @@ async def session_websocket(websocket: WebSocket, session_id: str):
   await streaming_manager.subscribe(channel, websocket)
   await streaming_manager.subscribe("sidebar", websocket)
   try:
-    session_mgr = get_session_manager()
+    session_mgr = session_manager()
     meta = await session_mgr.get_session(session_id)
     try:
       sent, total_event_count = await _send_session_catchup(websocket, session_mgr, session_id, cursor, meta)

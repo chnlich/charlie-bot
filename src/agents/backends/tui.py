@@ -216,10 +216,10 @@ async def run_tui_attachment(websocket: WebSocket, session_id: str, sessions_dir
     await _run_pty_relay(websocket, attachment, pump_name=f"tui-pump-{session_id[:8]}")
   finally:
     try:
-      from src.api.deps import get_session_manager
+      from src.api.deps import session_manager
       from src.core.autonamer import maybe_auto_name_from_claude_ai_title
 
-      session_mgr = get_session_manager()
+      session_mgr = session_manager()
       meta = await session_mgr.get_session(session_id)
       if meta is None:
         log.warning("tui_autoname_session_missing", session_id=session_id)

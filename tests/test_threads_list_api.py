@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from src.api import threads as threads_api
 from src.api.deps import (
     get_config,
+    get_config_on_loop,
     get_session_manager,
     get_thread_manager,
     get_trigger_manager,
@@ -48,6 +49,7 @@ def _seeded_client(tmp_path: Path):
   app.dependency_overrides[get_trigger_manager] = lambda: TriggerManager(cfg, sessions)
   app.dependency_overrides[get_session_manager] = lambda: sessions
   app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[get_config_on_loop] = lambda: cfg
   return TestClient(app), session_id, long_thread_id
 
 

@@ -19,10 +19,10 @@ from src.agents.backends.pty_common import (
     tmux_session_exists,
     tmux_session_name,
 )
-from src.api.deps import get_thread_manager, get_trigger_manager
+from src.api.deps import get_config_on_loop, get_thread_manager, get_trigger_manager
 from src.api.message_utils import extract_text_from_message, extract_tool_result_text
 from src.api.responses import FastJsonResponse
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig
 from src.core.memo import BoundedMemo
 from src.core.models import (
     BackendType,
@@ -268,7 +268,7 @@ async def list_threads(
     etag: str | None = Query(default=None),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     trigger_mgr: TriggerManager = Depends(get_trigger_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> Response:
   """Return mixed list of thread and trigger summaries, sorted by created_at descending.
 
@@ -351,7 +351,7 @@ async def get_thread(
     session_id: str,
     thread_id: str,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
     attach: bool = Query(default=False),
 ):
   """Return a thread's metadata plus the derived attach pair.

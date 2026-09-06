@@ -1,6 +1,7 @@
 """LaTeX API routes — compile, serve PDF, read/write .tex source."""
 
 import asyncio
+from collections.abc import Callable
 
 import structlog
 from fastapi import APIRouter
@@ -79,19 +80,21 @@ async def get_diff():
   return JSONResponse(content={'old': proposal['old'], 'new': proposal['new']})
 
 
+async def _settle_proposal(settle: Callable[[], bool], log_event: str) -> dict | JSONResponse:
+  """Run one pending-proposal consumer off the event loop; 404 when none is pending."""
+  if await asyncio.to_thread(settle):
+    log.info(log_event)
+    return {'ok': True}
+  return JSONResponse(content={'error': 'No pending proposal'}, status_code=404)
+
+
 @router.post('/accept')
 async def accept_edit():
   """Accept the pending AI-proposed TeX edit."""
-  if await asyncio.to_thread(accept_proposal):
-    log.info('latex_proposal_accepted')
-    return {'ok': True}
-  return JSONResponse(content={'error': 'No pending proposal'}, status_code=404)
+  return await _settle_proposal(accept_proposal, 'latex_proposal_accepted')
 
 
 @router.post('/reject')
 async def reject_edit():
   """Reject the pending AI-proposed TeX edit."""
-  if await asyncio.to_thread(reject_proposal):
-    log.info('latex_proposal_rejected')
-    return {'ok': True}
-  return JSONResponse(content={'error': 'No pending proposal'}, status_code=404)
+  return await _settle_proposal(reject_proposal, 'latex_proposal_rejected')

@@ -5,8 +5,9 @@ dependency through a threadpool handoff per request (a thread round-trip plus
 an event-loop wake per dependency per call), while a coroutine dependency is
 awaited directly on the event loop. These getters only build or return a
 process singleton, so the async form costs a dict check. The plain-name
-``*_manager()`` functions are the sync forms for direct callers (startup,
-middleware paths); the ``get_*`` names are the Depends forms.
+``*_manager()`` functions are the sync forms for direct callers (startup and
+the websocket handlers in server.py and tui.py); the ``get_*`` names are the
+Depends forms.
 """
 
 from fastapi import Depends, HTTPException

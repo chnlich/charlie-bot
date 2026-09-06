@@ -11,6 +11,7 @@ let sessionOlderBeforeCursor = Infinity;
 let sessionLoadingMore = false;
 let suppressScrollLoad = false;
 let viewportFillCount = 0;
+let triggerZoneFillCount = 0;
 let lazySessionDataTimer = null;
 function getDefaultBackendId() {
   const backendIds = Object.keys(BACKEND_OPTIONS || {});
@@ -414,7 +415,10 @@ function initScrollPagination() {
 }
 
 async function loadOlderIfNeeded(container, isViewportFill) {
-  if (!isViewportFill) viewportFillCount = 0;
+  if (!isViewportFill) {
+    viewportFillCount = 0;
+    triggerZoneFillCount = 0;
+  }
   if (!sessionHasMore || sessionLoadingMore) return;
   // Trigger when within 80px of the top
   if (container.scrollTop > 80) return;
@@ -459,7 +463,7 @@ async function loadOlderIfNeeded(container, isViewportFill) {
       // derivation + height-estimate scroll adjustment, all engine-side. Keep
       // the pagination sentinel in place so its fixed top height cancels out
       // of the engine's scroll-anchor delta.
-      engine.prependMessages(data.messages);
+      const shift = engine.prependMessages(data.messages);
       if (!sessionHasMore && sentinel) {
         const heightBeforeSentinelRemoval = container.scrollHeight;
         sentinel.remove();
@@ -467,6 +471,13 @@ async function loadOlderIfNeeded(container, isViewportFill) {
         if (removedHeight) {
           engine.writeScrollTop(Math.max(0, container.scrollTop - removedHeight));
         }
+      }
+      // A page that merges entirely into the leading pending segment shifts
+      // nothing, so a viewport parked at scrollTop 0 stays there — where no
+      // scroll event can ever fire and pagination stalls. Lift by 1px so the
+      // next wheel gesture always produces a scroll event.
+      if (shift === 0 && sessionHasMore && container.scrollTop <= 0) {
+        engine.writeScrollTop(1);
       }
     } else {
       // The legacy path builds at container top, so remove the sentinel while
@@ -489,6 +500,12 @@ async function loadOlderIfNeeded(container, isViewportFill) {
       // Preserve scroll position — suppress the scroll event this dispatches
       suppressScrollLoad = true;
       container.scrollTop = container.scrollHeight - prevHeight;
+      // Same 1px lift as the engine path: a page that only merged into the
+      // leading segment restored scrollTop to <= 0, where no scroll event can
+      // ever fire. Lift by 1px so the next wheel gesture keeps pagination alive.
+      if (sessionHasMore && container.scrollTop <= 0) {
+        container.scrollTop = 1;
+      }
       setTimeout(() => { suppressScrollLoad = false; }, 0);
     }
 
@@ -512,14 +529,27 @@ async function loadOlderIfNeeded(container, isViewportFill) {
     sessionLoadingMore = false;
   }
 
-  // Bounded viewport fill: only after a page actually lands (not on failure —
-  // the failed sentinel must wait for a user click, not auto-retry). If the
-  // container is still not scrollable and more pages remain, fetch the next
-  // page automatically (at most 5 consecutive).
-  if (pageLanded && sessionHasMore && viewportFillCount < 5 &&
-      container.scrollHeight <= container.clientHeight + 80) {
-    viewportFillCount++;
-    await loadOlderIfNeeded(container, true);
+  // Bounded auto-continue: only after a page actually lands (not on failure —
+  // the failed sentinel must wait for a user click, not auto-retry). Both
+  // burst counters reset on a non-fill (user-gesture) call. Two cases:
+  // - viewport fill: the container is not scrollable, so no scroll event will
+  //   ever fire; fetch until it overflows (at most 5 consecutive).
+  // - trigger zone: the container is scrollable but the viewport is still
+  //   parked within 80px of the top — e.g. pages that merged into the leading
+  //   pending segment never moved the position; keep fetching until the
+  //   position leaves the zone (at most 30 consecutive).
+  if (pageLanded && sessionHasMore) {
+    if (container.scrollHeight <= container.clientHeight + 80) {
+      if (viewportFillCount < 5) {
+        viewportFillCount++;
+        await loadOlderIfNeeded(container, true);
+      }
+    } else if (container.scrollTop <= 80) {
+      if (triggerZoneFillCount < 30) {
+        triggerZoneFillCount++;
+        await loadOlderIfNeeded(container, true);
+      }
+    }
   }
 }
 

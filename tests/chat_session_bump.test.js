@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const {chatModules, runStaticModules} = require('./read_static');
 const { createClassList } = require('./dom_element_stub');
 const { escapeHtmlText } = require('./escape_html_stub');
+const { baseSessionContext, createChatSidebarContext } = require('./session_context_stub');
 
 const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;
@@ -1984,4 +1985,175 @@ test('turn engine: resize never pulls a reading user, keeps a pinned user', () =
   const repinned = engineDebug(context, root);
   assert.equal(repinned.window.end, repinned.segments - 1, 'window still covers the tail');
   assert.equal(distanceFromBottom(root), 0, 'a pinned user stays snapped to the bottom');
+});
+
+// ---------------------------------------------------------------------------
+// loadOlderIfNeeded pagination chain — the archived-session scroll-up stall.
+//
+// The pager runs against the real turn engine: the mounted tail is a span
+// with no separator, so every fetched page merges into that leading pending
+// segment and the engine's anchor shift stays 0 — the exact stall shape from
+// the debug report (viewport parked at the top, no scroll event possible).
+// The pager's own auto-continue (trigger zone) and 1px lift are what keep
+// history loading.
+// ---------------------------------------------------------------------------
+
+// Tail page with no trailing separator: one pending flat segment that every
+// fetched page merges into, so engine shift stays 0 forever.
+const PAGER_TAIL = [
+  {role: 'assistant', id: 'tail-1', content: 'tail continuation one'},
+  {role: 'assistant', id: 'tail-2', content: 'tail continuation two'},
+  {role: 'assistant', id: 'tail-3', content: 'tail continuation three'},
+  {role: 'assistant', id: 'tail-4', content: 'tail continuation four'},
+];
+
+function cursorOf(url) {
+  return parseInt(url.match(/before=(\d+)/)[1], 10);
+}
+
+// Each page: two fresh mid-turn messages, cursor stepping down one event.
+// has_more stays true within test ranges, so a chain stop can only be a cap.
+function mergePageFetch() {
+  return async (url) => {
+    const before = cursorOf(url);
+    return {
+      ok: true,
+      async json() {
+        return {
+          has_more: before - 1 > 0,
+          next_before: before - 1,
+          messages: [
+            {role: 'user', id: `u-${before}`, content: `older ask ${before}`},
+            {role: 'assistant', id: `a-${before}`, content: `older answer ${before}`},
+          ],
+        };
+      },
+    };
+  };
+}
+
+function mountPagerCase(fetchPage, {clientHeight = 100, baseHeight = 2000} = {}) {
+  const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
+  root.clientHeight = clientHeight;
+  // Stand-in for the history around the engine's window: keeps the container's
+  // scrollHeight far above the pin threshold even at the moment reproject has
+  // stripped the window DOM (a real archive is thousands of px tall).
+  root.__baseHeight = baseHeight;
+  const stream = new FakeElement('DIV', {id: 'streaming-msg'});
+  root.appendChild(stream);
+  const control = new FakeElement('DIV', {id: 'page-depth-control'});
+  for (const depth of DEPTHS) {
+    const btn = new FakeElement('BUTTON', {className: 'turn-depth-btn'});
+    btn.dataset.pageDepth = depth;
+    control.appendChild(btn);
+  }
+  const timers = makeEngineTimers();
+  const fetchCalls = [];
+  const {context} = baseSessionContext();
+  context.document.createElement = (tag) => new FakeElement(tag);
+  context.document.createTreeWalker = () => ({});
+  context.document.getElementById = (id) => {
+    if (id === 'messages') return root;
+    if (id === 'streaming-msg') return stream;
+    if (id === 'page-depth-control') return control;
+    for (const child of root.children) {
+      if (child.id === id) return child;
+    }
+    return null;
+  };
+  context.document.querySelector = () => null;
+  context.document.querySelectorAll = () => [];
+  context.performance = {now: () => timers.now};
+  context.requestIdleCallback = (fn) => (timers.idle.push(fn), timers.idle.length);
+  context.requestAnimationFrame = (fn) => (timers.raf.push(fn), timers.raf.length);
+  context.setTimeout = (fn) => (timers.timeout.push(fn), timers.timeout.length);
+  context.clearTimeout = () => {};
+  context.fetch = async (url) => {
+    fetchCalls.push(url);
+    return fetchPage(url);
+  };
+  createChatSidebarContext(context);
+  context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
+  context.renderSessionView({
+    session: {id: 'session-a', name: 'pager session', backend: 'claude-opus-4.6', round_ratings: {}},
+    messages: PAGER_TAIL,
+    pending_draft: null,
+    event_count: 104,
+    oldest_message_ordinal: 100,
+    active_backend: 'claude-opus-4.6',
+    active_backend_type: '',
+    has_more: true,
+  });
+  // The engine pins the viewport to the bottom at mount, so the render-time
+  // auto-fill call sees scrollTop > 80 and stays out of the way; drop the
+  // viewport to the top the way the user's scroll-up gesture would.
+  root.scrollTop = 0;
+  return {context, root, fetchCalls};
+}
+
+test('pager chains next-cursor fetches while parked in the trigger zone and stops at the 30-page cap', async () => {
+  const {context, root, fetchCalls} = mountPagerCase(mergePageFetch());
+
+  await context.loadOlderIfNeeded(root);
+
+  // 1 user-gesture page + 30 trigger-zone chained pages; every response still
+  // said has_more, so the stop is the cap — not history exhaustion.
+  assert.equal(fetchCalls.length, 31, '1 initial page + 30 chained trigger-zone pages');
+  assert.deepEqual(fetchCalls.map(cursorOf), Array.from({length: 31}, (_, i) => 100 - i),
+      'each chained fetch advanced the cursor');
+  // The reposition never escaped the zone (every page shifted 0), so the only
+  // thing that stopped the chain is the cap.
+  assert.ok(root.scrollTop <= 80, 'reposition is stuck in the trigger zone');
+});
+
+test('a shift-0 landing with has_more lifts a viewport parked at scrollTop 0 to 1px', async () => {
+  // The second fetch fails so the chain stops at the failure guard: a
+  // has_more:false page would legitimately drag the position back down via
+  // the sentinel-removal correction, hiding the lift under test.
+  const {context, root, fetchCalls} = mountPagerCase(async (url) => {
+    if (cursorOf(url) !== 100) return {ok: false, status: 500};
+    return {
+      ok: true,
+      async json() {
+        return {
+          has_more: true,
+          next_before: 99,
+          messages: [
+            {role: 'user', id: 'u-100', content: 'older ask 100'},
+            {role: 'assistant', id: 'a-100', content: 'older answer 100'},
+          ],
+        };
+      },
+    };
+  });
+
+  await context.loadOlderIfNeeded(root);
+
+  assert.deepEqual(fetchCalls.map(cursorOf), [100, 99], 'one landed page, one failed page');
+  assert.equal(root.scrollTop, 1, 'the parked viewport was lifted to 1px');
+});
+
+test('a user-gesture call resets both burst counters and re-arms the chains', async () => {
+  // Trigger-zone counter: the first gesture caps at 30 chained pages; the
+  // second gesture (no second argument) must reset it, re-arming a full chain.
+  const parked = mountPagerCase(mergePageFetch());
+  await parked.context.loadOlderIfNeeded(parked.root);
+  assert.equal(parked.fetchCalls.length, 31, 'first gesture: 1 page + 30 trigger-zone fills');
+  await parked.context.loadOlderIfNeeded(parked.root);
+  assert.equal(parked.fetchCalls.length, 62, 'second gesture reset the counter: another 1 + 30 fills');
+  assert.deepEqual(parked.fetchCalls.map(cursorOf), Array.from({length: 62}, (_, i) => 100 - i));
+
+  // Viewport-fill counter: an unscrollable container with empty pages keeps
+  // every page in the unscrollable branch (empty pages never rebuild the
+  // window, so the scrollHeight stays put); the 5-cap must re-arm too.
+  const unscrollable = mountPagerCase(async (url) => ({
+    ok: true,
+    async json() {
+      return {has_more: true, next_before: cursorOf(url) - 1, messages: []};
+    },
+  }), {clientHeight: 400, baseHeight: 0});
+  await unscrollable.context.loadOlderIfNeeded(unscrollable.root);
+  assert.equal(unscrollable.fetchCalls.length, 6, 'first gesture: 1 page + 5 viewport fills');
+  await unscrollable.context.loadOlderIfNeeded(unscrollable.root);
+  assert.equal(unscrollable.fetchCalls.length, 12, 'second gesture reset the counter: another 1 + 5 fills');
 });

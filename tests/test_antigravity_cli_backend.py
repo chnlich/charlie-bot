@@ -171,80 +171,53 @@ JSON
   assert (log_dir / "stderr.log").exists()
 
 
-@pytest.mark.asyncio
-async def test_run_strips_leading_paired_system_message_blocks(monkeypatch, tmp_path: Path) -> None:
-  _install_fake_agy(
-      monkeypatch,
-      tmp_path,
-      """
+_SYSTEM_MESSAGE_CASES = [
+    pytest.param(
+        """
 cat <<'JSON'
 {"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"<SYSTEM_MESSAGE>\\nblock A\\n</SYSTEM_MESSAGE>\\n<SYSTEM_MESSAGE>\\nblock B\\n</SYSTEM_MESSAGE>\\n\\nthe answer"}
 JSON
 """,
-  )
-  backend = AntigravityCliBackend()
-
-  events = await _consume(backend, tmp_path)
-
-  assert [e.get("type") for e in events] == [None, "assistant", "result"]
-  assert events[1]["message"]["content"][0]["text"] == "the answer"
-
-
-@pytest.mark.asyncio
-async def test_run_blocks_only_response_yields_empty_assistant_text(monkeypatch, tmp_path: Path) -> None:
-  _install_fake_agy(
-      monkeypatch,
-      tmp_path,
-      """
+        "the answer",
+        id="leading-paired-blocks-stripped"),
+    pytest.param(
+        """
 cat <<'JSON'
 {"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"<SYSTEM_MESSAGE>block A</SYSTEM_MESSAGE><SYSTEM_MESSAGE>block B</SYSTEM_MESSAGE>"}
 JSON
 """,
-  )
-  backend = AntigravityCliBackend()
-
-  events = await _consume(backend, tmp_path)
-
-  assert [e.get("type") for e in events] == [None, "assistant", "result"]
-  assert events[1]["message"]["content"][0]["text"] == ""
-
-
-@pytest.mark.asyncio
-async def test_run_unpaired_system_message_tag_passes_through_unchanged(monkeypatch, tmp_path: Path) -> None:
-  _install_fake_agy(
-      monkeypatch,
-      tmp_path,
-      """
+        "",
+        id="blocks-only-response-yields-empty-text"),
+    pytest.param(
+        """
 cat <<'JSON'
 {"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"<SYSTEM_MESSAGE>\\npartial"}
 JSON
 """,
-  )
-  backend = AntigravityCliBackend()
-
-  events = await _consume(backend, tmp_path)
-
-  assert [e.get("type") for e in events] == [None, "assistant", "result"]
-  assert events[1]["message"]["content"][0]["text"] == "<SYSTEM_MESSAGE>\npartial"
-
-
-@pytest.mark.asyncio
-async def test_run_strips_mid_text_system_message_block(monkeypatch, tmp_path: Path) -> None:
-  _install_fake_agy(
-      monkeypatch,
-      tmp_path,
-      """
+        "<SYSTEM_MESSAGE>\npartial",
+        id="unpaired-tag-passes-through"),
+    pytest.param(
+        """
 cat <<'JSON'
 {"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"para1\\n<SYSTEM_MESSAGE>x</SYSTEM_MESSAGE>\\npara2"}
 JSON
 """,
-  )
+        "para1\npara2",
+        id="mid-text-block-stripped"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agy_script, expected_text", _SYSTEM_MESSAGE_CASES)
+async def test_run_system_message_block_handling(
+    monkeypatch, tmp_path: Path, agy_script: str, expected_text: str) -> None:
+  _install_fake_agy(monkeypatch, tmp_path, agy_script)
   backend = AntigravityCliBackend()
 
   events = await _consume(backend, tmp_path)
 
   assert [e.get("type") for e in events] == [None, "assistant", "result"]
-  assert events[1]["message"]["content"][0]["text"] == "para1\npara2"
+  assert events[1]["message"]["content"][0]["text"] == expected_text
 
 
 @pytest.mark.asyncio
@@ -350,76 +323,31 @@ printf '%s' '{"status":"ERROR","error":"rate limited"}'
   }]
 
 
-@pytest.mark.asyncio
-async def test_success_envelope_missing_conversation_id_triggers_guard(monkeypatch, tmp_path: Path) -> None:
-  _install_fake_agy(
-      monkeypatch,
-      tmp_path,
-      """
-printf '%s' '{"status":"SUCCESS","response":"hi"}'
-""",
-  )
-  backend = AntigravityCliBackend()
-
-  events: list[dict] = []
-  with pytest.raises(ValueError, match="missing conversation_id"):
-    await _consume_raising(backend, tmp_path, events)
-  assert [event.get("type") for event in events] == ["error"]
-  assert not any("session_id" in event for event in events)
-  assert not any(event.get("type") == "assistant" for event in events)
+_GUARD_CASES = [
+    pytest.param(
+        '{"status":"SUCCESS","response":"hi"}',
+        "missing conversation_id",
+        None,
+        id="success-envelope-missing-conversation-id"),
+    pytest.param(
+        '{"status":"SUCCESS","conversation_id":"fresh-id","response":"hi","usage":{}}',
+        "does not match anchor anchor-id",
+        "anchor-id",
+        id="resume-envelope-id-mismatch"),
+    pytest.param("plain text, not json", "non-json stdout", None, id="non-envelope-stdout"),
+    pytest.param('{"response":"not an envelope"}', "non-json stdout", None, id="json-object-without-status"),
+]
 
 
 @pytest.mark.asyncio
-async def test_resume_envelope_id_mismatch_triggers_guard(monkeypatch, tmp_path: Path) -> None:
-  _install_fake_agy(
-      monkeypatch,
-      tmp_path,
-      """
-printf '%s' '{"status":"SUCCESS","conversation_id":"fresh-id","response":"hi","usage":{}}'
-""",
-  )
-  backend = AntigravityCliBackend(resume_session_id="anchor-id")
+@pytest.mark.parametrize("stdout_payload, expected_match, resume_session_id", _GUARD_CASES)
+async def test_envelope_guard_violation_raises_and_yields_only_an_error(
+    monkeypatch, tmp_path: Path, stdout_payload: str, expected_match: str, resume_session_id: str | None) -> None:
+  _install_fake_agy(monkeypatch, tmp_path, f"printf '%s' '{stdout_payload}'\n")
+  backend = AntigravityCliBackend(resume_session_id=resume_session_id)
 
   events: list[dict] = []
-  with pytest.raises(ValueError, match="does not match anchor anchor-id"):
-    await _consume_raising(backend, tmp_path, events)
-  assert [event.get("type") for event in events] == ["error"]
-  assert not any("session_id" in event for event in events)
-  assert not any(event.get("type") == "assistant" for event in events)
-
-
-@pytest.mark.asyncio
-async def test_non_envelope_stdout_exit_zero_triggers_guard(monkeypatch, tmp_path: Path) -> None:
-  _install_fake_agy(
-      monkeypatch,
-      tmp_path,
-      """
-printf 'plain text, not json'
-""",
-  )
-  backend = AntigravityCliBackend()
-
-  events: list[dict] = []
-  with pytest.raises(ValueError, match="non-json stdout"):
-    await _consume_raising(backend, tmp_path, events)
-  assert [event.get("type") for event in events] == ["error"]
-  assert not any("session_id" in event for event in events)
-  assert not any(event.get("type") == "assistant" for event in events)
-
-
-@pytest.mark.asyncio
-async def test_json_object_without_status_exit_zero_triggers_guard(monkeypatch, tmp_path: Path) -> None:
-  _install_fake_agy(
-      monkeypatch,
-      tmp_path,
-      """
-printf '%s' '{"response":"not an envelope"}'
-""",
-  )
-  backend = AntigravityCliBackend()
-
-  events: list[dict] = []
-  with pytest.raises(ValueError, match="non-json stdout"):
+  with pytest.raises(ValueError, match=expected_match):
     await _consume_raising(backend, tmp_path, events)
   assert [event.get("type") for event in events] == ["error"]
   assert not any("session_id" in event for event in events)

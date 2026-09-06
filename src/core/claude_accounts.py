@@ -43,10 +43,6 @@ log = structlog.get_logger()
 # Fable, Opus and Sonnet switch in place inside the pool without touching accounts.
 POOL_DOMAIN = "pool"
 
-# Utilization at which Claude Code starts reporting ``allowed_warning``; an
-# account at or above it is one to leave before the window rejects.
-WARNING_UTILIZATION = 0.90
-
 # An account whose last authentication failure is younger than this is skipped:
 # a failed OAuth refresh is not cleared by retrying within minutes.
 AUTH_FAILURE_COOLDOWN = timedelta(minutes=15)

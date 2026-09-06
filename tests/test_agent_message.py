@@ -24,6 +24,7 @@ from conftest import (
     make_internal_router_client,
     make_json_response,
     make_task_spawner,
+    user_event,
 )
 
 from src.api import internal
@@ -55,10 +56,6 @@ def _agent_message_event(content: str, timestamp: str | None = None) -> dict[str
   return event
 
 
-def _user_event(content: str) -> dict[str, Any]:
-  return {"type": ET.USER, "content": content}
-
-
 # ---------------------------------------------------------------------------
 # Gate: agent_message can neither mint nor revoke a takeoff window
 # ---------------------------------------------------------------------------
@@ -74,7 +71,7 @@ def test_takeoff_gate_agent_message_does_not_mint_takeoff() -> None:
 def test_takeoff_gate_agent_message_does_not_revoke_takeoff() -> None:
   session_mgr = FakeSessionManager(
       [
-          _user_event("take off"),
+          user_event("take off"),
           _agent_message_event("One more ordinary relayed message"),
       ])
 

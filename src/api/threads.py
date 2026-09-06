@@ -190,8 +190,8 @@ _LIST_PROOF_SWEEP_EVERY = 10
 _sig_gate: dict[str, tuple[int, int]] = {}
 
 
-def _row_source_stats(threads_dir: str, triggers_dir: str) -> tuple[list[tuple[str, os.stat_result]],
-                                                                    list[tuple[str, os.stat_result]]]:
+def _row_source_stats(threads_dir: str,
+                      triggers_dir: str) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
   """One scandir+stat walk of both row-source directories, split by directory.
 
   The list body's freshness signature and its thread rows read the same files,
@@ -219,8 +219,9 @@ def _row_source_stats(threads_dir: str, triggers_dir: str) -> tuple[list[tuple[s
   return thread_pairs, trigger_pairs
 
 
-def _signature_from_stats(thread_pairs: list[tuple[str, os.stat_result]],
-                          trigger_pairs: list[tuple[str, os.stat_result]]) -> tuple[tuple[str, int, int], ...]:
+def _signature_from_stats(
+    thread_pairs: list[tuple[str, os.stat_result]],
+    trigger_pairs: list[tuple[str, os.stat_result]]) -> tuple[tuple[str, int, int], ...]:
   """(path, mtime_ns, size) of every row-source file, in the memo's sorted-key order."""
   sig = [(path, st.st_mtime_ns, st.st_size) for path, st in thread_pairs]
   sig.extend((path, st.st_mtime_ns, st.st_size) for path, st in trigger_pairs)
@@ -237,8 +238,8 @@ _THREAD_ROW_MEMO_LIMIT = 8
 _thread_row_memo: BoundedMemo[str, dict[str, tuple[int, int, dict]]] = BoundedMemo(_THREAD_ROW_MEMO_LIMIT)
 
 
-def _thread_list_items(session_id: str, thread_pairs: list[tuple[str, os.stat_result]],
-                       metas: list[ThreadMetadata | None]) -> list[dict]:
+def _thread_list_items(
+    session_id: str, thread_pairs: list[tuple[str, os.stat_result]], metas: list[ThreadMetadata | None]) -> list[dict]:
   """List rows for the walked pairs, served from the row memo where the file stands.
 
   *metas* aligns position-for-position with *thread_pairs*; a ``None`` entry is
@@ -287,8 +288,8 @@ async def list_threads(
     _sig_gate[session_id] = (rev, gate[1] + 1)
     sig = hit[0]
   else:
-    thread_pairs, trigger_pairs = await asyncio.to_thread(_row_source_stats, str(session_dir / "threads"),
-                                                          str(session_dir / "triggers"))
+    thread_pairs, trigger_pairs = await asyncio.to_thread(
+        _row_source_stats, str(session_dir / "threads"), str(session_dir / "triggers"))
     sig = _signature_from_stats(thread_pairs, trigger_pairs)
     if hit is not None and hit[0] == sig:
       _sig_gate[session_id] = (rev, 0)

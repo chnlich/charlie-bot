@@ -74,8 +74,7 @@ def test_missing_worker_prompt_file_raises_with_path_and_cause(tmp_path: Path) -
 
 
 @pytest.mark.parametrize(
-    ("drop_start", "drop_end", "section"),
-    [
+    ("drop_start", "drop_end", "section"), [
         ("<!-- section: role -->", "<!-- section: memory -->", "role"),
         ("<!-- section: remote_scratch -->", "<!-- section: role -->", "remote_scratch"),
     ])

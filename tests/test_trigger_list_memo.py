@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from conftest import count_path_read_text, make_home_config
 
-import src.core.triggers as triggers_module
 from src.core.models import PendingTrigger, TriggerStatus
 from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager
@@ -78,8 +77,8 @@ async def test_list_triggers_missing_dir_returns_empty(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_list_triggers_memo_lru_evicts_oldest_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(triggers_module, "_TRIGGER_LIST_MEMO_SESSION_LIMIT", 2)
   mgr = _make_manager(tmp_path)
+  monkeypatch.setattr(mgr._list_memo, "_limit", 2)
   for sid in ("a", "b", "c"):
     await _save(mgr, sid, f"trigger for {sid}")
     await mgr.list_triggers(sid)

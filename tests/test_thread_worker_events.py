@@ -100,7 +100,7 @@ def test_missing_file_returns_empty_and_drops_stale_cache(tmp_path: Path) -> Non
   assert len(threads_api.read_thread_worker_events(path)) == 1
   path.unlink()
   assert threads_api.read_thread_worker_events(path) == []
-  assert threads_api._thread_events_cache == {}
+  assert len(threads_api._thread_events_cache) == 0
 
 
 def test_cache_evicts_beyond_cap(tmp_path: Path) -> None:

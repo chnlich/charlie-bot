@@ -847,3 +847,58 @@ def test_wal_move_with_new_row_still_counts(
   assert after.total == before.total + 102
   assert after.calls == before.calls + 1
   con.close()
+
+
+def test_opencode_incremental_merge_matches_full_replay(tmp_path: Path) -> None:
+  # A collect whose scan moved rows adjusts the persisted partial by the scan's deltas; the
+  # rows must equal a cold replay over the same memo. One round carries every move shape:
+  # an in-place update, an in-place model change, an insert, and two deletes — one the
+  # max-span row (span re-derivation), one a model's last record (bucket must vanish, not
+  # linger as a zero row the replay never builds).
+  db = tmp_path / "db.sqlite"
+  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 2, "write": 1}}, "oc-a", "prov")])
+  con = sqlite3.connect(db)
+  _insert_opencode_raw(con, [
+      ({"time": {"created": 1700000001000}}, ({"input": 10, "output": 2}, "oc-a", "prov")),
+      ({"time": {"created": 1700000002000}}, ({"input": 7, "output": 3}, "oc-b", "prov2")),
+      ({"time": {"created": 1700000003000}}, ({"input": 9, "output": 9}, "oc-c", "prov")),
+      ({"time": {"created": 1700000004000}}, ({"input": 4, "output": 4}, "oc-d", "prov")),
+  ])
+  con.commit()
+  con.close()
+  _collect(None, None, db)
+
+  con = sqlite3.connect(db)
+  mid_a = con.execute(
+      "select id from message where data like '%\"oc-a\"%' order by time_updated limit 1").fetchone()[0]
+  updated = {"role": "assistant", "modelID": "oc-a", "providerID": "prov",
+             "time": {"created": 1700000001000},
+             "tokens": {"input": 100, "output": 20, "cache": {"read": 4, "write": 2}}}
+  con.execute("update message set data = ?, time_updated = time_updated + 1 where id = ?",
+              (json.dumps(updated), mid_a))
+  moved = {"role": "assistant", "modelID": "oc-b2", "providerID": "prov2",
+           "time": {"created": 1700000002000}, "tokens": {"input": 8, "output": 8}}
+  con.execute("update message set data = ?, time_updated = time_updated + 1 "
+              "where data like '%\"oc-b\"%'", (json.dumps(moved),))
+  _insert_opencode_raw(con, [({"time": {"created": 1700000005000}}, ({"input": 1, "output": 1}, "oc-a", "prov"))])
+  con.execute("delete from message where data like '%\"oc-a\"%' and id != ?",
+              (mid_a,))  # oc-a's max-span row: the model survives, its span must re-derive
+  con.execute("delete from message where data like '%\"oc-d\"%'")  # oc-d's only row: bucket empties
+  con.commit()
+  con.close()
+  incremental = _collect(None, None, db)
+
+  tt._opencode_row_memos.clear()
+  tt._opencode_partials.clear()
+  tt._opencode_row_epochs.clear()
+  replay = _collect(None, None, db)
+
+  def opencode_rows(tally: tt.TokenTally) -> list:
+    return [(r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output, r.first, r.last,
+             [(a.name, a.calls, a.output, a.total) for a in r.accounts])
+            for r in tally.rows if r.source == "opencode"]
+
+  assert opencode_rows(incremental) == opencode_rows(replay)
+  assert [n for n in incremental.notes if n.startswith("opencode:")] == \
+      [n for n in replay.notes if n.startswith("opencode:")]
+  assert {r.model for r in incremental.rows if r.source == "opencode"} == {"oc-a", "oc-b2", "oc-c"}

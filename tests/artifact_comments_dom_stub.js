@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
-// Element/class-list stub for the artifact-comments vm tests (no jsdom): the
-// superset of every DOM member web/static/js/artifact-comments.js touches, so
-// a member the script reads but the stub lacks throws inside the vm and fails
-// the loading test.
+// Element/class-list stub and shared rig helpers for the artifact-comments vm
+// tests (no jsdom): the superset of every DOM member
+// web/static/js/artifact-comments.js touches, so a member the script reads but
+// the stub lacks throws inside the vm and fails the loading test.
 // ---------------------------------------------------------------------------
 
 const assert = require('node:assert/strict');
@@ -151,4 +151,17 @@ function dockOf(body) {
   return findChildByClass(body, '__cbc-dock');
 }
 
-module.exports = {makeElement, findChildByClass, dockOf};
+function clickElement(el) {
+  assert.ok(el && el._listeners.click && el._listeners.click.length > 0, 'click listener exists');
+  return el._listeners.click[0]({preventDefault() {}, stopPropagation() {}});
+}
+
+function waitForPromises() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+async function flushPromises(times) {
+  for (let i = 0; i < times; i++) await waitForPromises();
+}
+
+module.exports = {makeElement, findChildByClass, dockOf, clickElement, waitForPromises, flushPromises};

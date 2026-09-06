@@ -391,6 +391,52 @@ def test_dangling_config_symlink_fails_instead_of_disabling(tmp_path: Path) -> N
   assert "This session is the Project Manager for group proj" not in str(manager)
 
 
+def test_dangling_project_directory_symlink_fails_instead_of_disabling(tmp_path: Path) -> None:
+  """A broken projects/<group> symlink is a present-but-broken directory, never "not enabled"."""
+  cfg = _make_cfg(tmp_path)
+  (cfg.charliebot_home / "projects").mkdir(parents=True)
+  target = tmp_path / "gone-project"
+  dangling = cfg.charliebot_home / "projects" / "proj"
+  dangling.symlink_to(target)
+
+  with pytest.raises(ProjectInstructionError, match="broken symlink"):
+    load_project_bodies(cfg.charliebot_home, "proj", manager=False)
+
+  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  _assert_project_error(out, "broken symlink", str(dangling), str(target))
+  manager = master_cc._build_instructions_content(_meta(PROJECT_ROLE, "proj"), cfg, None)
+  _assert_project_error(manager, "broken symlink", str(dangling), str(target))
+  # Not silently disabled: the unenabled-manager pointer identity stays absent.
+  assert "This session is the Project Manager for group proj" not in str(manager)
+
+
+def test_project_directory_symlink_loop_fails_instead_of_disabling(tmp_path: Path) -> None:
+  """An unresolvable project directory symlink is a config error, not a silent skip."""
+  cfg = _make_cfg(tmp_path)
+  (cfg.charliebot_home / "projects").mkdir(parents=True)
+  loop = cfg.charliebot_home / "projects" / "proj"
+  loop.symlink_to(loop)
+  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  _assert_project_error(out, "broken symlink", str(loop))
+
+
+def test_absent_project_directory_still_unconfigured(tmp_path: Path) -> None:
+  """A truly absent project directory (projects/ present, group absent) keeps "not enabled"."""
+  cfg = _make_cfg(tmp_path)
+  (cfg.charliebot_home / "projects").mkdir(parents=True)
+  assert load_project_bodies(cfg.charliebot_home, "proj", manager=False) is None
+  assert load_project_bodies(cfg.charliebot_home, "proj", manager=True) is None
+
+  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  assert out is not None
+  assert getattr(out, "project_error") is None
+  assert COMMON_MARK not in out
+  manager = master_cc._build_instructions_content(_meta(PROJECT_ROLE, "proj"), cfg, None)
+  assert manager is not None
+  assert getattr(manager, "project_error") is None
+  assert "This session is the Project Manager for group proj." in manager
+
+
 def test_config_symlink_outside_project_dir_fails(tmp_path: Path) -> None:
   """A project.yaml symlink out of the project directory breaks the declared isolation."""
   cfg = _make_cfg(tmp_path)
@@ -571,6 +617,44 @@ async def test_run_cc_fails_turn_on_duplicate_destinations(tmp_path: Path, monke
   assert cc_session_id is None
   assert exit_code == 1
   assert error_msg is not None and "same file" in error_msg
+  error_events = [
+      c.args[1]
+      for c in callbacks.persist_and_broadcast.await_args_list  # type: ignore[attr-defined]
+      if c.args and isinstance(c.args[1], dict) and c.args[1].get("type") == "assistant_error"
+  ]
+  assert len(error_events) == 1
+  assert "project instruction loading failed" in error_events[0]["content"]
+  callbacks.mark_unread.assert_awaited_once_with("s1")
+
+
+@pytest.mark.asyncio
+async def test_run_cc_fails_turn_on_dangling_project_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A dangling projects/<group> directory symlink fails the turn before any backend spawn."""
+  cfg = _make_cfg(tmp_path)
+  (cfg.charliebot_home / "projects").mkdir(parents=True)
+  (cfg.charliebot_home / "projects" / "proj").symlink_to(tmp_path / "gone-project")
+  cfg = SimpleNamespace(**{**vars(cfg), "sessions_dir": tmp_path / "sessions", "subprocess_buffer_limit": 1024})
+  cfg.sessions_dir.mkdir()
+  session_meta = SessionMetadata(id="s1", name="Researcher", group="proj")
+  option = BackendOption(id="agy", label="Antigravity", type="antigravity", prompt_overlay="none")
+
+  built: dict[str, bool] = {"called": False}
+
+  def fake_build_backend(*args: object, **kwargs: object):
+    built["called"] = True
+    return FakeBackend()
+
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
+  callbacks = mock_session_callbacks()
+  item = make_work_item(cfg, session_meta, option, callbacks=callbacks)
+
+  cc_session_id, exit_code, error_msg, _extras = await master_cc._run_cc(item)
+
+  assert built["called"] is False
+  assert cc_session_id is None
+  assert exit_code == 1
+  assert error_msg is not None and "project instruction loading failed" in error_msg
+  assert "broken symlink" in error_msg
   error_events = [
       c.args[1]
       for c in callbacks.persist_and_broadcast.await_args_list  # type: ignore[attr-defined]

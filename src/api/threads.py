@@ -190,32 +190,76 @@ _LIST_PROOF_SWEEP_EVERY = 10
 _sig_gate: dict[str, tuple[int, int]] = {}
 
 
-def _list_body_signature(threads_dir: str, triggers_dir: str) -> tuple[tuple[str, int, int], ...]:
-  """(path, mtime_ns, size) of every row-source file of the list payload.
+def _row_source_stats(threads_dir: str, triggers_dir: str) -> tuple[list[tuple[str, os.stat_result]],
+                                                                    list[tuple[str, os.stat_result]]]:
+  """One scandir+stat walk of both row-source directories, split by directory.
 
-  The thread scan is ``iter_thread_meta_stats``; a directory that cannot be
-  scanned contributes nothing, and the signature keys exactly the files the
-  thread rows are built from.
+  The list body's freshness signature and its thread rows read the same files,
+  so a rebuild walks once and feeds both; two walks would stat every
+  metadata.json twice per rebuild. A directory that cannot be scanned
+  contributes an empty half, the same "no rows" verdict the signature's
+  OSError swallow gives it.
   """
-  sig: list[tuple[str, int, int]] = []
+  thread_pairs: list[tuple[str, os.stat_result]] = []
   try:
-    for meta_path, st in iter_thread_meta_stats(threads_dir):
-      sig.append((meta_path, st.st_mtime_ns, st.st_size))
+    thread_pairs.extend(iter_thread_meta_stats(threads_dir))
   except OSError:
     pass
+  trigger_pairs: list[tuple[str, os.stat_result]] = []
   try:
     for entry in os.scandir(triggers_dir):
       if not entry.is_file() or not entry.name.endswith(".json"):
         continue
       try:
-        st = entry.stat()
+        trigger_pairs.append((entry.path, entry.stat()))
       except OSError:
         continue
-      sig.append((entry.path, st.st_mtime_ns, st.st_size))
   except OSError:
     pass
+  return thread_pairs, trigger_pairs
+
+
+def _signature_from_stats(thread_pairs: list[tuple[str, os.stat_result]],
+                          trigger_pairs: list[tuple[str, os.stat_result]]) -> tuple[tuple[str, int, int], ...]:
+  """(path, mtime_ns, size) of every row-source file, in the memo's sorted-key order."""
+  sig = [(path, st.st_mtime_ns, st.st_size) for path, st in thread_pairs]
+  sig.extend((path, st.st_mtime_ns, st.st_size) for path, st in trigger_pairs)
   sig.sort()
   return tuple(sig)
+
+
+# Built list rows per session: metadata.json path -> (mtime_ns, size, row).
+# _thread_list_item is a pure function of the parsed metadata and the parse
+# memo keys the same (mtime_ns, size) identity every atomic rename moves, so
+# an unchanged stat proves the stored row current and a marked rebuild rebuilds
+# only the moved files' rows. Rows are shared read-only into the body payload.
+_THREAD_ROW_MEMO_LIMIT = 8
+_thread_row_memo: BoundedMemo[str, dict[str, tuple[int, int, dict]]] = BoundedMemo(_THREAD_ROW_MEMO_LIMIT)
+
+
+def _thread_list_items(session_id: str, thread_pairs: list[tuple[str, os.stat_result]],
+                       metas: list[ThreadMetadata | None]) -> list[dict]:
+  """List rows for the walked pairs, served from the row memo where the file stands.
+
+  *metas* aligns position-for-position with *thread_pairs*; a ``None`` entry is
+  the parse-miss verdict for a file that vanished between the walk and its
+  read, so it gets no row — exactly as if the walk's stat had failed.
+  """
+  refreshed: dict[str, tuple[int, int, dict]] = {}
+  items = []
+  for (meta_path, st), meta in zip(thread_pairs, metas):
+    if meta is None:
+      continue
+    hit = _thread_row_memo.get(session_id)
+    cached = hit.get(meta_path) if hit is not None else None
+    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+      item = cached[2]
+    else:
+      item = _thread_list_item(meta)
+    refreshed[meta_path] = (st.st_mtime_ns, st.st_size, item)
+    items.append(item)
+  _thread_row_memo.store(session_id, refreshed)
+  return items
 
 
 @router.get("/{session_id}/list")
@@ -238,11 +282,14 @@ async def list_threads(
   hit = _list_body_memo.get(session_id)
   rev = session_revision(session_id)
   gate = _sig_gate.get(session_id)
+  thread_pairs: list[tuple[str, os.stat_result]] | None = None
   if (hit is not None and gate is not None and gate[0] == rev and gate[1] + 1 < _LIST_PROOF_SWEEP_EVERY):
     _sig_gate[session_id] = (rev, gate[1] + 1)
     sig = hit[0]
   else:
-    sig = await asyncio.to_thread(_list_body_signature, str(session_dir / "threads"), str(session_dir / "triggers"))
+    thread_pairs, trigger_pairs = await asyncio.to_thread(_row_source_stats, str(session_dir / "threads"),
+                                                          str(session_dir / "triggers"))
+    sig = _signature_from_stats(thread_pairs, trigger_pairs)
     if hit is not None and hit[0] == sig:
       _sig_gate[session_id] = (rev, 0)
     else:
@@ -259,8 +306,12 @@ async def list_threads(
         },
     )
 
-  threads = await thread_mgr.list_threads(session_id)
-  thread_items = [_thread_list_item(t) for t in threads]
+  # The rebuild's rows parse from the same walked pairs the signature keys, so
+  # the memo's proof and the rows behind the body describe one instant. The
+  # gate-hit path always serves above, so a rebuild implies the walk ran.
+  assert thread_pairs is not None
+  metas = await asyncio.to_thread(thread_mgr.list_threads_from_stats, thread_pairs)
+  thread_items = _thread_list_items(session_id, thread_pairs, metas)
 
   triggers = await trigger_mgr.list_triggers(session_id)
   trigger_items = [

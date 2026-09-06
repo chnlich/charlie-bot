@@ -61,12 +61,23 @@ def _handler_result_msg(ev: dict) -> dict:
   }
 
 
+def _compacting_model_note(ev: dict) -> str:
+  """"by Sonnet" when the event names the model that compacted; empty for Claude Code's own compaction."""
+  model = ev.get('model')
+  if not isinstance(model, str) or not model:
+    return ''
+  parts = model.lower().split('-')
+  family = parts[1] if len(parts) > 1 and parts[0] == 'claude' else parts[0]
+  return f'by {family.capitalize()}'
+
+
 def _context_compacted_msg(ev: dict) -> dict:
   trigger = ev.get('trigger', 'auto')
   pre_tokens = ev.get('pre_tokens')
   msg = 'Context compacted'
-  if trigger:
-    msg += f' ({trigger})'
+  qualifiers = [part for part in (trigger, _compacting_model_note(ev)) if part]
+  if qualifiers:
+    msg += f' ({", ".join(qualifiers)})'
   if pre_tokens:
     msg += f' — was {round(pre_tokens / 1000)}k tokens'
   return {'role': 'system', 'content': msg, 'kind': 'context_compacted'}
@@ -74,7 +85,9 @@ def _context_compacted_msg(ev: dict) -> dict:
 
 def _context_compact_failed_msg(ev: dict) -> dict:
   error = ev.get('error')
-  content = 'Compaction failed' if not error else f'Compaction failed — {error}'
+  note = _compacting_model_note(ev)
+  head = f'Compaction {note} failed' if note else 'Compaction failed'
+  content = head if not error else f'{head} — {error}'
   return {'role': 'system', 'kind': 'context_compact_failed', 'content': content}
 
 

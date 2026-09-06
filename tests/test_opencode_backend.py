@@ -800,7 +800,16 @@ async def test_fetch_model_limit_accepts_bare_list_and_list_models(monkeypatch) 
   backend = _build_backend(monkeypatch, model="prov/model-id")
   # Alternative shapes: bare top-level list and list-shaped models.
   providers = [
-      {"id": "prov", "models": [{"id": "model-id", "limit": {"context": 8, "output": 4}}]},
+      {
+          "id": "prov",
+          "models": [{
+              "id": "model-id",
+              "limit": {
+                  "context": 8,
+                  "output": 4
+              }
+          }]
+      },
   ]
   client = _FakeConfigClient(response=_FakeConfigResponse(payload=providers))
 
@@ -883,23 +892,46 @@ async def test_consume_sse_events_emits_snapshot_with_last_step_tokens(monkeypat
 
   events = await _drain(
       backend._consume_sse_events(
-          _FakeEventStream([
-              {"type": SSE_EVENT_MESSAGE_UPDATED,
-               "properties": {"sessionID": "parent-session", "info": {"id": "m1", "role": "assistant"}}},
-              {"type": SSE_EVENT_MESSAGE_PART_UPDATED,
-               "properties": {"sessionID": "parent-session", "part": _step_finish_part(100, 10, 5, 20, 30, 0.1)}},
-              {"type": SSE_EVENT_MESSAGE_PART_UPDATED,
-               "properties": {"sessionID": "parent-session", "part": _step_finish_part(200, 20, 8, 40, 60, 0.2)}},
-              {"type": SSE_EVENT_SESSION_IDLE, "properties": {"sessionID": "parent-session"}},
-          ])))
+          _FakeEventStream(
+              [
+                  {
+                      "type": SSE_EVENT_MESSAGE_UPDATED,
+                      "properties": {
+                          "sessionID": "parent-session",
+                          "info": {
+                              "id": "m1",
+                              "role": "assistant"
+                          }
+                      }
+                  },
+                  {
+                      "type": SSE_EVENT_MESSAGE_PART_UPDATED,
+                      "properties": {
+                          "sessionID": "parent-session",
+                          "part": _step_finish_part(100, 10, 5, 20, 30, 0.1)
+                      }
+                  },
+                  {
+                      "type": SSE_EVENT_MESSAGE_PART_UPDATED,
+                      "properties": {
+                          "sessionID": "parent-session",
+                          "part": _step_finish_part(200, 20, 8, 40, 60, 0.2)
+                      }
+                  },
+                  {
+                      "type": SSE_EVENT_SESSION_IDLE,
+                      "properties": {
+                          "sessionID": "parent-session"
+                      }
+                  },
+              ])))
 
   assert backend._failed is False
   result = events[-1]
   assert result["type"] == ET.RESULT
   snapshot = result["context_snapshot"]
   # Last step's tokens, not the turn's sum.
-  assert snapshot["tokens"] == {
-      "input": 200, "output": 20, "reasoning": 8, "cache_read": 40, "cache_write": 60}
+  assert snapshot["tokens"] == {"input": 200, "output": 20, "reasoning": 8, "cache_read": 40, "cache_write": 60}
   # The usage block carries the turn's accumulated sum.
   assert result["usage"]["input_tokens"] == 300
   assert result["usage"]["output_tokens"] == 30
@@ -924,7 +956,10 @@ _COMPACTION_TOKENS = {
     "input": 140853,
     "output": 1613,
     "reasoning": 0,
-    "cache": {"write": 0, "read": 0},
+    "cache": {
+        "write": 0,
+        "read": 0
+    },
 }
 _COMPACTION_COST = 0.42
 
@@ -933,7 +968,15 @@ def _compaction_message_info(message_id: str, *, completed: bool) -> dict:
   """Recorded compaction message shape: first delivery is all-zero tokens with no
   time.completed; the later delivery carries the real tokens once the step finishes."""
   tokens = _COMPACTION_TOKENS if completed else {
-      "total": 0, "input": 0, "output": 0, "reasoning": 0, "cache": {"write": 0, "read": 0}}
+      "total": 0,
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+          "write": 0,
+          "read": 0
+      }
+  }
   time = {"created": 1, "completed": 2} if completed else {"created": 1}
   return {
       "id": message_id,
@@ -950,11 +993,23 @@ def _compaction_parts(message_id: str) -> list[dict]:
   """Recorded part sequence for a compaction message: step-start, reasoning, text,
   step-finish (step-finish carries the compaction call's own tokens/cost)."""
   return [
-      {"messageID": message_id, "id": f"{message_id}-step-start", "type": "step-start"},
-      {"messageID": message_id, "id": f"{message_id}-reasoning", "type": "reasoning",
-       "text": "[placeholder compaction reasoning]"},
-      {"messageID": message_id, "id": f"{message_id}-text", "type": "text",
-       "text": "[placeholder compaction summary]"},
+      {
+          "messageID": message_id,
+          "id": f"{message_id}-step-start",
+          "type": "step-start"
+      },
+      {
+          "messageID": message_id,
+          "id": f"{message_id}-reasoning",
+          "type": "reasoning",
+          "text": "[placeholder compaction reasoning]"
+      },
+      {
+          "messageID": message_id,
+          "id": f"{message_id}-text",
+          "type": "text",
+          "text": "[placeholder compaction summary]"
+      },
       {
           "messageID": message_id,
           "id": f"{message_id}-step-finish",
@@ -971,19 +1026,27 @@ def test_compaction_message_full_sequence_emits_no_chat_content(monkeypatch) -> 
   message_id = "msg_compaction_full"
 
   translated: list[dict] = []
-  translated += backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_UPDATED,
-      "properties": {"info": _compaction_message_info(message_id, completed=False)},
-  })
+  translated += backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": _compaction_message_info(message_id, completed=False)
+          },
+      })
   for part in _compaction_parts(message_id):
     translated += backend._translate_sse_event({
         "type": SSE_EVENT_MESSAGE_PART_UPDATED,
-        "properties": {"part": part},
+        "properties": {
+            "part": part
+        },
     })
-  translated += backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_UPDATED,
-      "properties": {"info": _compaction_message_info(message_id, completed=True)},
-  })
+  translated += backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": _compaction_message_info(message_id, completed=True)
+          },
+      })
 
   assert not any(event["type"] == ET.ASSISTANT for event in translated)
   assert not any(event["type"] == ET.THINKING for event in translated)
@@ -998,12 +1061,17 @@ def test_compaction_message_adversarial_buffered_order_emits_no_chat_content(mon
   for part in _compaction_parts(message_id):
     translated += backend._translate_sse_event({
         "type": SSE_EVENT_MESSAGE_PART_UPDATED,
-        "properties": {"part": part},
+        "properties": {
+            "part": part
+        },
     })
-  translated += backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_UPDATED,
-      "properties": {"info": _compaction_message_info(message_id, completed=True)},
-  })
+  translated += backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": _compaction_message_info(message_id, completed=True)
+          },
+      })
 
   assert not any(event["type"] == ET.ASSISTANT for event in translated)
   assert not any(event["type"] == ET.THINKING for event in translated)
@@ -1017,22 +1085,35 @@ def test_compaction_step_finish_usage_is_conserved(monkeypatch) -> None:
   normal_step_finish = _step_finish_part(500, 50, 10, 5, 7, 0.03)
   message_id = "msg_compaction_usage"
 
-  backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_UPDATED,
-      "properties": {"info": {"id": normal_step_finish["messageID"], "role": "assistant"}},
-  })
+  backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": {
+                  "id": normal_step_finish["messageID"],
+                  "role": "assistant"
+              }
+          },
+      })
   backend._translate_sse_event({
       "type": SSE_EVENT_MESSAGE_PART_UPDATED,
-      "properties": {"part": normal_step_finish},
+      "properties": {
+          "part": normal_step_finish
+      },
   })
-  backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_UPDATED,
-      "properties": {"info": _compaction_message_info(message_id, completed=False)},
-  })
+  backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": _compaction_message_info(message_id, completed=False)
+          },
+      })
   for part in _compaction_parts(message_id):
     backend._translate_sse_event({
         "type": SSE_EVENT_MESSAGE_PART_UPDATED,
-        "properties": {"part": part},
+        "properties": {
+            "part": part
+        },
     })
 
   assert backend._usage_input == normal_step_finish["tokens"]["input"] + _COMPACTION_TOKENS["input"]
@@ -1051,31 +1132,42 @@ def test_compaction_boundary_emitted_exactly_once_per_message(monkeypatch) -> No
   backend = _build_backend(monkeypatch)
 
   events: list[dict] = []
-  events += backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_UPDATED,
-      "properties": {"info": _compaction_message_info("msg_c1", completed=False)},
-  })
-  events += backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_UPDATED,
-      "properties": {"info": _compaction_message_info("msg_c1", completed=True)},
-  })
+  events += backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": _compaction_message_info("msg_c1", completed=False)
+          },
+      })
+  events += backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": _compaction_message_info("msg_c1", completed=True)
+          },
+      })
 
   backend._accumulate_step_finish(_step_finish_part(999, 88, 7, 3, 4, 0.02))
 
-  events += backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_UPDATED,
-      "properties": {"info": _compaction_message_info("msg_c2", completed=False)},
-  })
-  events += backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_UPDATED,
-      "properties": {"info": _compaction_message_info("msg_c2", completed=True)},
-  })
+  events += backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": _compaction_message_info("msg_c2", completed=False)
+          },
+      })
+  events += backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": _compaction_message_info("msg_c2", completed=True)
+          },
+      })
 
   boundary_events = [e for e in events if e.get("type") == "system" and e.get("subtype") == "compact_boundary"]
   assert len(boundary_events) == 2
   assert boundary_events[0]["compact_metadata"] == {"trigger": "auto", "pre_tokens": None}
-  assert boundary_events[1]["compact_metadata"] == {
-      "trigger": "auto", "pre_tokens": backend._last_step_tokens["input"]}
+  assert boundary_events[1]["compact_metadata"] == {"trigger": "auto", "pre_tokens": backend._last_step_tokens["input"]}
 
 
 @pytest.mark.asyncio
@@ -1084,10 +1176,13 @@ async def test_compaction_boundary_event_wires_into_handle_compaction_events(mon
   exactly one persisted ET.CONTEXT_COMPACTED event carrying the same trigger/pre_tokens."""
   backend = _build_backend(monkeypatch)
 
-  events = backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_UPDATED,
-      "properties": {"info": _compaction_message_info("msg_wire", completed=False)},
-  })
+  events = backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": _compaction_message_info("msg_wire", completed=False)
+          },
+      })
   assert len(events) == 1
   boundary_event = events[0]
 
@@ -1139,8 +1234,7 @@ async def test_sse_watchdog_heartbeat_is_not_progress(monkeypatch, capsys) -> No
 
   with pytest.raises(OpenCodeSseSilenceError) as excinfo:
     await _drain(
-        backend._with_sse_progress_watchdog(
-            _timed_event_stream(_heartbeat_schedule(count=50, interval=interval))))
+        backend._with_sse_progress_watchdog(_timed_event_stream(_heartbeat_schedule(count=50, interval=interval))))
 
   message = str(excinfo.value)
   assert "no session progress" in message
@@ -1163,14 +1257,10 @@ async def test_sse_watchdog_resets_per_event_not_total_duration(monkeypatch) -> 
   backend = _build_backend(monkeypatch)
   backend._session_id = "parent-session"
   interval = 0.1  # below the 0.2 s timeout; 6 events -> ~0.6 s total, far above it
-  events = [
-      {"type": "session.updated", "properties": {"sessionID": "parent-session"}}
-      for _ in range(6)
-  ]
+  events = [{"type": "session.updated", "properties": {"sessionID": "parent-session"}} for _ in range(6)]
 
   received = await _drain(
-      backend._with_sse_progress_watchdog(
-          _timed_event_stream([(interval, event) for event in events])))
+      backend._with_sse_progress_watchdog(_timed_event_stream([(interval, event) for event in events])))
 
   assert received == events
 
@@ -1185,17 +1275,42 @@ async def test_sse_watchdog_child_session_event_is_progress(monkeypatch) -> None
   backend._session_id = "parent-session"
   interval = 0.1  # below the 0.2 s timeout; sequence totals ~0.4 s, above it
   events = [
-      {"type": "session.updated", "properties": {"sessionID": "child-session"}},
-      {"type": SSE_EVENT_MESSAGE_UPDATED,
-       "properties": {"info": {"id": "m1", "role": "assistant", "sessionID": "child-session"}}},
-      {"type": "session.updated", "properties": {"sessionID": "child-session"}},
-      {"type": SSE_EVENT_MESSAGE_UPDATED,
-       "properties": {"info": {"id": "m1", "role": "assistant", "sessionID": "child-session"}}},
+      {
+          "type": "session.updated",
+          "properties": {
+              "sessionID": "child-session"
+          }
+      },
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": {
+                  "id": "m1",
+                  "role": "assistant",
+                  "sessionID": "child-session"
+              }
+          }
+      },
+      {
+          "type": "session.updated",
+          "properties": {
+              "sessionID": "child-session"
+          }
+      },
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": {
+                  "id": "m1",
+                  "role": "assistant",
+                  "sessionID": "child-session"
+              }
+          }
+      },
   ]
 
   received = await _drain(
-      backend._with_sse_progress_watchdog(
-          _timed_event_stream([(interval, event) for event in events])))
+      backend._with_sse_progress_watchdog(_timed_event_stream([(interval, event) for event in events])))
 
   assert received == events
 

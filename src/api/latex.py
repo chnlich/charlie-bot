@@ -1,6 +1,7 @@
 """LaTeX API routes — compile, serve PDF, read/write .tex source."""
 
 import asyncio
+from collections.abc import Callable
 
 import structlog
 from fastapi import APIRouter
@@ -79,7 +80,7 @@ async def get_diff():
   return JSONResponse(content={'old': proposal['old'], 'new': proposal['new']})
 
 
-async def _settle_proposal(settle, log_event: str) -> dict | JSONResponse:
+async def _settle_proposal(settle: Callable[[], bool], log_event: str) -> dict | JSONResponse:
   """Run one pending-proposal consumer off the event loop; 404 when none is pending."""
   if await asyncio.to_thread(settle):
     log.info(log_event)

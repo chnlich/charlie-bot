@@ -818,10 +818,45 @@ async def test_fetch_model_limit_accepts_bare_list_and_list_models(monkeypatch) 
   assert limit == {"context": 8, "output": 4}
 
 
+# The provider name rides every warn site's provider_id field, so the
+# assertion holds across all contained-failure paths.
 @pytest.mark.asyncio
-async def test_fetch_model_limit_returns_none_and_warns_on_request_error(monkeypatch, capsys) -> None:
+@pytest.mark.parametrize(
+    "client_kwargs",
+    [
+        {
+            "exc": httpx.ConnectError("connection refused")
+        },
+        {
+            "response": _FakeConfigResponse(payload={"providers": [{
+                "id": "other-provider",
+                "models": {}
+            }]})
+        },
+        {
+            "response":
+                _FakeConfigResponse(
+                    payload={
+                        "providers": [{
+                            "id": "synthetic-provider",
+                            "models": {
+                                "other-model": {
+                                    "id": "other-model"
+                                }
+                            },
+                        }],
+                    })
+        },
+        # Not a recognised shape (no "providers" key, not a list).
+        {
+            "response": _FakeConfigResponse(payload={"random": "shape"})
+        },
+    ],
+    ids=["request-error", "provider-absent", "model-absent", "malformed-payload"],
+)
+async def test_fetch_model_limit_returns_none_and_warns(monkeypatch, capsys, client_kwargs) -> None:
   backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
-  client = _FakeConfigClient(exc=httpx.ConnectError("connection refused"))
+  client = _FakeConfigClient(**client_kwargs)
 
   limit = await backend._fetch_model_limit(client)
 
@@ -829,45 +864,6 @@ async def test_fetch_model_limit_returns_none_and_warns_on_request_error(monkeyp
   out = capsys.readouterr().out
   assert "opencode_context_catalog_unavailable" in out
   assert "synthetic-provider" in out
-
-
-@pytest.mark.asyncio
-async def test_fetch_model_limit_returns_none_and_warns_when_provider_absent(monkeypatch, capsys) -> None:
-  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
-  providers = {"providers": [{"id": "other-provider", "models": {}}]}
-  client = _FakeConfigClient(response=_FakeConfigResponse(payload=providers))
-
-  limit = await backend._fetch_model_limit(client)
-
-  assert limit is None
-  out = capsys.readouterr().out
-  assert "opencode_context_catalog_unavailable" in out
-
-
-@pytest.mark.asyncio
-async def test_fetch_model_limit_returns_none_and_warns_when_model_absent(monkeypatch, capsys) -> None:
-  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
-  providers = {"providers": [{"id": "synthetic-provider", "models": {"other-model": {"id": "other-model"}}}]}
-  client = _FakeConfigClient(response=_FakeConfigResponse(payload=providers))
-
-  limit = await backend._fetch_model_limit(client)
-
-  assert limit is None
-  out = capsys.readouterr().out
-  assert "opencode_context_catalog_unavailable" in out
-
-
-@pytest.mark.asyncio
-async def test_fetch_model_limit_returns_none_and_warns_on_malformed_payload(monkeypatch, capsys) -> None:
-  backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
-  # Not a recognised shape (no "providers" key, not a list).
-  client = _FakeConfigClient(response=_FakeConfigResponse(payload={"random": "shape"}))
-
-  limit = await backend._fetch_model_limit(client)
-
-  assert limit is None
-  out = capsys.readouterr().out
-  assert "opencode_context_catalog_unavailable" in out
 
 
 @pytest.mark.asyncio

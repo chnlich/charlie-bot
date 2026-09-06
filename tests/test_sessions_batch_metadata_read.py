@@ -174,25 +174,25 @@ async def test_batch_migrates_legacy_round_ratings_on_cache_hit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    mgr = _make_session_mgr(tmp_path)
-    legacy = SessionMetadata(name="legacy cache hit", round_ratings={"7": "thumbs_up"})
-    await mgr.save_metadata(legacy)
-    real_save = mgr.save_metadata
-    save_calls = 0
+  mgr = _make_session_mgr(tmp_path)
+  legacy = SessionMetadata(name="legacy cache hit", round_ratings={"7": "thumbs_up"})
+  await mgr.save_metadata(legacy)
+  real_save = mgr.save_metadata
+  save_calls = 0
 
-    async def counting_save(meta: SessionMetadata) -> None:
-        nonlocal save_calls
-        save_calls += 1
-        await real_save(meta)
+  async def counting_save(meta: SessionMetadata) -> None:
+    nonlocal save_calls
+    save_calls += 1
+    await real_save(meta)
 
-    monkeypatch.setattr(mgr, "save_metadata", counting_save)
+  monkeypatch.setattr(mgr, "save_metadata", counting_save)
 
-    result = await mgr._load_session_metas()
+  result = await mgr._load_session_metas()
 
-    assert save_calls == 1
-    assert result[0].round_ratings == {"legacy:7": "thumbs_up"}
-    on_disk = json.loads(mgr._metadata_path(legacy.id).read_text(encoding="utf-8"))
-    assert on_disk["round_ratings"] == {"legacy:7": "thumbs_up"}
+  assert save_calls == 1
+  assert result[0].round_ratings == {"legacy:7": "thumbs_up"}
+  on_disk = json.loads(mgr._metadata_path(legacy.id).read_text(encoding="utf-8"))
+  assert on_disk["round_ratings"] == {"legacy:7": "thumbs_up"}
 
 
 @pytest.mark.asyncio
@@ -256,36 +256,36 @@ async def test_dir_names_memo_rescans_only_when_root_changes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    mgr = _make_session_mgr(tmp_path)
-    first = SessionMetadata(name="first")
-    _write_metadata(mgr, first)
-    await mgr._load_session_metas()
+  mgr = _make_session_mgr(tmp_path)
+  first = SessionMetadata(name="first")
+  _write_metadata(mgr, first)
+  await mgr._load_session_metas()
 
-    real_scandir = os.scandir
-    root_scans: list[str] = []
+  real_scandir = os.scandir
+  root_scans: list[str] = []
 
-    def counting_scandir(path):
-        # shutil.rmtree scans by fd; only the sessions-root path counts.
-        if isinstance(path, (str, os.PathLike)) and os.fspath(path) == os.fspath(mgr._cfg.sessions_dir):
-            root_scans.append(os.fspath(path))
-        return real_scandir(path)
+  def counting_scandir(path):
+    # shutil.rmtree scans by fd; only the sessions-root path counts.
+    if isinstance(path, (str, os.PathLike)) and os.fspath(path) == os.fspath(mgr._cfg.sessions_dir):
+      root_scans.append(os.fspath(path))
+    return real_scandir(path)
 
-    monkeypatch.setattr(os, "scandir", counting_scandir)
+  monkeypatch.setattr(os, "scandir", counting_scandir)
 
-    steady = await mgr._load_session_metas()
-    assert [meta.id for meta in steady] == [first.id]
-    assert not root_scans
+  steady = await mgr._load_session_metas()
+  assert [meta.id for meta in steady] == [first.id]
+  assert not root_scans
 
-    second = SessionMetadata(name="second")
-    _write_metadata(mgr, second)
-    grown = await mgr._load_session_metas()
-    assert {meta.id for meta in grown} == {first.id, second.id}
-    assert len(root_scans) == 1
+  second = SessionMetadata(name="second")
+  _write_metadata(mgr, second)
+  grown = await mgr._load_session_metas()
+  assert {meta.id for meta in grown} == {first.id, second.id}
+  assert len(root_scans) == 1
 
-    assert await mgr._load_session_metas()
-    assert len(root_scans) == 1
+  assert await mgr._load_session_metas()
+  assert len(root_scans) == 1
 
-    shutil.rmtree(mgr._session_dir(second.id))
-    shrunk = await mgr._load_session_metas()
-    assert [meta.id for meta in shrunk] == [first.id]
-    assert len(root_scans) == 2
+  shutil.rmtree(mgr._session_dir(second.id))
+  shrunk = await mgr._load_session_metas()
+  assert [meta.id for meta in shrunk] == [first.id]
+  assert len(root_scans) == 2

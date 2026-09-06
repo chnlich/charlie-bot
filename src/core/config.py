@@ -829,7 +829,7 @@ def _stat_prompt_files(paths: dict[Path, float]) -> dict[Path, float] | None:
   current: dict[Path, float] = {}
   for p in paths:
     try:
-      current[p] = p.stat().st_mtime
+      current[p] = os.stat(str(p)).st_mtime
     except OSError:
       return None
   return current
@@ -1136,19 +1136,31 @@ def _cron_fingerprint(prompt_mtimes: dict[Path, float]):
   stat fail, returning ``None`` and forcing a full re-read so the failure
   surfaces instead of a stale cached body), and whether the legacy
   ``config.d/cron.yaml`` exists.
+
+  This walk runs on every ``get_scheduled_tasks`` call (each /scheduled and
+  /api/cron/tasks request, every scheduler tick), so it is the M58 shape: one
+  ``os.scandir`` over the raw string dir with ``DirEntry`` answering
+  ``is_file`` from the directory record, no per-entry ``Path`` construction —
+  the pathlib form measured 174 us vs 53 us on the live 13-file corpus.
   """
-  cron_d = cron_dir()
-  legacy_file = _legacy_cron_file()
+  cron_d = str(cron_dir())
+  legacy_file = str(_legacy_cron_file())
   files: list[tuple[str, float]] = []
-  if cron_d.is_dir():
-    for p in sorted(cron_d.iterdir()):
-      if p.is_file() and p.name.endswith(".yaml") and not p.name.startswith("."):
+  if os.path.isdir(cron_d):
+    with os.scandir(cron_d) as entries:
+      for entry in sorted(entries, key=lambda e: e.name):
         try:
-          files.append((p.name, p.stat().st_mtime))
+          if not entry.is_file():
+            continue
         except OSError:
-          files.append((p.name, 0.0))
+          continue  # the pathlib is_file contract: unreadable entry reads as absent
+        if entry.name.endswith(".yaml") and not entry.name.startswith("."):
+          try:
+            files.append((entry.name, entry.stat().st_mtime))
+          except OSError:
+            files.append((entry.name, 0.0))
   current_prompt_mtimes = _stat_prompt_files(prompt_mtimes)
-  return (tuple(files), current_prompt_mtimes, legacy_file.exists())
+  return (tuple(files), current_prompt_mtimes, os.path.exists(legacy_file))
 
 
 def get_scheduled_tasks() -> list[ScheduledTaskConfig]:

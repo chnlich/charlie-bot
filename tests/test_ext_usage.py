@@ -1142,13 +1142,30 @@ def test_transform_scoped_limits_each_reading_bound_to_its_own_source() -> None:
   hardcoded label fails.
   """
   raw = {
-    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
-    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
-    "limits": [
-      {"kind": "weekly_scoped", "group": "weekly", "percent": 33.0,
-       "resets_at": "2026-08-04T19:00:00+00:00",
-       "scope": {"model": {"id": None, "display_name": "Nimbus"}, "surface": None}},
-    ],
+      "fiveHour": {
+          "utilization": 11.0,
+          "resetsAt": "2026-08-04T12:00:00+00:00"
+      },
+      "sevenDay": {
+          "utilization": 22.0,
+          "resetsAt": "2026-08-04T19:00:00+00:00"
+      },
+      "limits":
+          [
+              {
+                  "kind": "weekly_scoped",
+                  "group": "weekly",
+                  "percent": 33.0,
+                  "resets_at": "2026-08-04T19:00:00+00:00",
+                  "scope": {
+                      "model": {
+                          "id": None,
+                          "display_name": "Nimbus"
+                      },
+                      "surface": None
+                  }
+              },
+          ],
   }
 
   windows = _transform_response(raw, account="main")["windows"]
@@ -1166,13 +1183,30 @@ def test_transform_scoped_limits_each_reading_bound_to_its_own_source() -> None:
 def test_transform_scoped_windows_leaves_unscoped_untouched_when_limits_removed() -> None:
   """Removing ``limits`` must not change the plan-wide windows at all."""
   raw = {
-    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
-    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
-    "limits": [
-      {"kind": "weekly_scoped", "group": "weekly", "percent": 33.0,
-       "resets_at": "2026-08-04T19:00:00+00:00",
-       "scope": {"model": {"id": None, "display_name": "Nimbus"}, "surface": None}},
-    ],
+      "fiveHour": {
+          "utilization": 11.0,
+          "resetsAt": "2026-08-04T12:00:00+00:00"
+      },
+      "sevenDay": {
+          "utilization": 22.0,
+          "resetsAt": "2026-08-04T19:00:00+00:00"
+      },
+      "limits":
+          [
+              {
+                  "kind": "weekly_scoped",
+                  "group": "weekly",
+                  "percent": 33.0,
+                  "resets_at": "2026-08-04T19:00:00+00:00",
+                  "scope": {
+                      "model": {
+                          "id": None,
+                          "display_name": "Nimbus"
+                      },
+                      "surface": None
+                  }
+              },
+          ],
   }
 
   with_limits = _transform_response(raw, account="main")["windows"]
@@ -1188,14 +1222,37 @@ def test_transform_scoped_windows_leaves_unscoped_untouched_when_limits_removed(
 
 def test_transform_response_scopes_are_sorted_before_planwide() -> None:
   raw = {
-    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
-    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
-    "limits": [
-      {"group": "weekly", "percent": 33.0, "resets_at": "",
-       "scope": {"model": {"display_name": "Nimbus"}}},
-      {"group": "weekly", "percent": 44.0, "resets_at": "",
-       "scope": {"model": {"display_name": "Fable"}}},
-    ],
+      "fiveHour": {
+          "utilization": 11.0,
+          "resetsAt": "2026-08-04T12:00:00+00:00"
+      },
+      "sevenDay": {
+          "utilization": 22.0,
+          "resetsAt": "2026-08-04T19:00:00+00:00"
+      },
+      "limits":
+          [
+              {
+                  "group": "weekly",
+                  "percent": 33.0,
+                  "resets_at": "",
+                  "scope": {
+                      "model": {
+                          "display_name": "Nimbus"
+                      }
+                  }
+              },
+              {
+                  "group": "weekly",
+                  "percent": 44.0,
+                  "resets_at": "",
+                  "scope": {
+                      "model": {
+                          "display_name": "Fable"
+                      }
+                  }
+              },
+          ],
   }
 
   windows = _transform_response(raw, account="main")["windows"]
@@ -1213,14 +1270,37 @@ def test_transform_response_scoped_skip_and_warn_paths(monkeypatch) -> None:
   monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
 
   raw = {
-    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
-    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
-    "limits": [
-      {"kind": "weekly_scoped", "group": "bogus", "percent": 33.0, "resets_at": "",
-       "scope": {"model": {"display_name": "Nimbus"}}},
-      {"kind": "weekly_scoped", "group": "weekly", "percent": 44.0, "resets_at": "",
-       "scope": {"model": {}}},
-    ],
+      "fiveHour": {
+          "utilization": 11.0,
+          "resetsAt": "2026-08-04T12:00:00+00:00"
+      },
+      "sevenDay": {
+          "utilization": 22.0,
+          "resetsAt": "2026-08-04T19:00:00+00:00"
+      },
+      "limits":
+          [
+              {
+                  "kind": "weekly_scoped",
+                  "group": "bogus",
+                  "percent": 33.0,
+                  "resets_at": "",
+                  "scope": {
+                      "model": {
+                          "display_name": "Nimbus"
+                      }
+                  }
+              },
+              {
+                  "kind": "weekly_scoped",
+                  "group": "weekly",
+                  "percent": 44.0,
+                  "resets_at": "",
+                  "scope": {
+                      "model": {}
+                  }
+              },
+          ],
   }
 
   windows = _transform_response(raw, account="main")["windows"]
@@ -1236,20 +1316,39 @@ def test_transform_response_unknown_shape_warns_once_per_process(monkeypatch) ->
   monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
 
   raw = {
-    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
-    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
-    "nimbus_quill": {"utilization": 3.0, "resetsAt": "2026-08-04T20:00:00+00:00"},
-    "extra_usage": {"utilization": 5.0, "resets_at": "2026-08-05T00:00:00+00:00"},
-    "limits": [
-        {"kind": "weekly_scoped", "group": "weekly", "resets_at": "",
-         "scope": {"model": {"display_name": "Nimbus"}}},
-    ],
+      "fiveHour": {
+          "utilization": 11.0,
+          "resetsAt": "2026-08-04T12:00:00+00:00"
+      },
+      "sevenDay": {
+          "utilization": 22.0,
+          "resetsAt": "2026-08-04T19:00:00+00:00"
+      },
+      "nimbus_quill": {
+          "utilization": 3.0,
+          "resetsAt": "2026-08-04T20:00:00+00:00"
+      },
+      "extra_usage": {
+          "utilization": 5.0,
+          "resets_at": "2026-08-05T00:00:00+00:00"
+      },
+      "limits":
+          [
+              {
+                  "kind": "weekly_scoped",
+                  "group": "weekly",
+                  "resets_at": "",
+                  "scope": {
+                      "model": {
+                          "display_name": "Nimbus"
+                      }
+                  }
+              },
+          ],
   }
 
   first_windows = _transform_response(raw, account="main")["windows"]
-  first_events = [
-      (w["slot"], w["reason"]) for w in warns if w["event"] == "ext_usage_unknown_limit_shape"
-  ]
+  first_events = [(w["slot"], w["reason"]) for w in warns if w["event"] == "ext_usage_unknown_limit_shape"]
   warns.clear()
   for _ in range(60):
     repeat_windows = _transform_response(raw, account="main")["windows"]
@@ -1321,14 +1420,29 @@ def test_read_credentials_missing_and_tokenless_are_separate_alarms(monkeypatch,
 
 def test_transform_response_absent_limits_produces_exactly_today_windows() -> None:
   raw = {
-    "fiveHour": {"utilization": 11.0, "resetsAt": "2026-08-04T12:00:00+00:00"},
-    "sevenDay": {"utilization": 22.0, "resetsAt": "2026-08-04T19:00:00+00:00"},
+      "fiveHour": {
+          "utilization": 11.0,
+          "resetsAt": "2026-08-04T12:00:00+00:00"
+      },
+      "sevenDay": {
+          "utilization": 22.0,
+          "resetsAt": "2026-08-04T19:00:00+00:00"
+      },
   }
 
-  assert _transform_response(raw, account="main")["windows"] == [
-    {"window_minutes": 300, "utilization": 11.0, "resets_at": "2026-08-04T12:00:00+00:00"},
-    {"window_minutes": 10080, "utilization": 22.0, "resets_at": "2026-08-04T19:00:00+00:00"},
-  ]
+  assert _transform_response(
+      raw, account="main")["windows"] == [
+          {
+              "window_minutes": 300,
+              "utilization": 11.0,
+              "resets_at": "2026-08-04T12:00:00+00:00"
+          },
+          {
+              "window_minutes": 10080,
+              "utilization": 22.0,
+              "resets_at": "2026-08-04T19:00:00+00:00"
+          },
+      ]
 
 
 @pytest.mark.asyncio
@@ -1341,18 +1455,17 @@ async def test_codex_provider_fetch_reads_newest_rollout_beyond_three_days(tmp_p
   provider = CodexUsageProvider(label="personal", home_dir=str(tmp_path))
   now = datetime.now(UTC)
   old_day = now - timedelta(days=9)
-  rollout_dir = (tmp_path / "sessions" / f"{old_day.year:04d}" / f"{old_day.month:02d}" /
-                 f"{old_day.day:02d}")
+  rollout_dir = (tmp_path / "sessions" / f"{old_day.year:04d}" / f"{old_day.month:02d}" / f"{old_day.day:02d}")
   rollout_dir.mkdir(parents=True)
 
   rollout_path = rollout_dir / "rollout-old.jsonl"
   rollout_path.write_text(
-      json.dumps(_build_weekly_token_count_event(
-          timestamp=old_day.isoformat().replace("+00:00", "Z"),
-          used_percent=96.0,
-          resets_at=int(now.timestamp()) + 3600,
-      )) + "\n"
-  )
+      json.dumps(
+          _build_weekly_token_count_event(
+              timestamp=old_day.isoformat().replace("+00:00", "Z"),
+              used_percent=96.0,
+              resets_at=int(now.timestamp()) + 3600,
+          )) + "\n")
   os.utime(rollout_path, (old_day.timestamp(), old_day.timestamp()))
 
   usage = await provider.fetch()
@@ -1436,8 +1549,14 @@ def test_poll_pending_placeholder_is_replaced_by_the_real_error(monkeypatch) -> 
 # ---------------------------------------------------------------------------
 
 _CLAUDE_USAGE_PAYLOAD = {
-    "five_hour": {"utilization": 12.0, "resets_at": "2026-07-29T23:00:00+00:00"},
-    "seven_day": {"utilization": 34.0, "resets_at": "2026-08-03T19:00:00+00:00"},
+    "five_hour": {
+        "utilization": 12.0,
+        "resets_at": "2026-07-29T23:00:00+00:00"
+    },
+    "seven_day": {
+        "utilization": 34.0,
+        "resets_at": "2026-08-03T19:00:00+00:00"
+    },
 }
 
 # Long past in milliseconds, so any surviving clock check would fire on it.
@@ -1462,13 +1581,20 @@ class _FakeResponse:
 class _FakeUsageHTTP:
   """Scripted stand-in for the shared client that records every outbound call."""
 
-  def __init__(self, get_statuses: list[int], *, renewal: dict | None = None,
-               on_get: Callable[[int], None] | None = None,
-               renewal_status: int = 200, renewal_body: str = "") -> None:
+  def __init__(
+      self,
+      get_statuses: list[int],
+      *,
+      renewal: dict | None = None,
+      on_get: Callable[[int], None] | None = None,
+      renewal_status: int = 200,
+      renewal_body: str = "") -> None:
     self._get_statuses = list(get_statuses)
-    self._renewal = renewal if renewal is not None else {"access_token": "tok-new",
-                                                         "refresh_token": "ref-new",
-                                                         "expires_in": 28800}
+    self._renewal = renewal if renewal is not None else {
+        "access_token": "tok-new",
+        "refresh_token": "ref-new",
+        "expires_in": 28800
+    }
     self._on_get = on_get
     self._renewal_status = renewal_status
     self._renewal_body = renewal_body
@@ -1487,8 +1613,7 @@ class _FakeUsageHTTP:
     return _FakeResponse(self._renewal_status, self._renewal, text=self._renewal_body)
 
 
-def _write_credentials(path, *, access="tok-stored", refresh="ref-stored",
-                       expires_at=_STALE_EXPIRES_AT_MS) -> None:
+def _write_credentials(path, *, access="tok-stored", refresh="ref-stored", expires_at=_STALE_EXPIRES_AT_MS) -> None:
   payload = {"claudeAiOauth": {"accessToken": access, "refreshToken": refresh}}
   if expires_at is not None:
     payload["claudeAiOauth"]["expiresAt"] = expires_at
@@ -1538,8 +1663,7 @@ async def test_claude_fetch_yields_to_a_concurrent_renewal_without_rotating(monk
 
 
 @pytest.mark.asyncio
-async def test_claude_fetch_backs_off_after_a_second_401_and_then_issues_no_request(
-    monkeypatch, tmp_path) -> None:
+async def test_claude_fetch_backs_off_after_a_second_401_and_then_issues_no_request(monkeypatch, tmp_path) -> None:
   fake = _FakeUsageHTTP([401, 401])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -1614,8 +1738,7 @@ async def test_claude_renewal_posts_to_the_platform_token_endpoint(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_claude_renewal_failure_arms_backoff_and_reports_token_refresh_failed(
-    monkeypatch, tmp_path) -> None:
+async def test_claude_renewal_failure_arms_backoff_and_reports_token_refresh_failed(monkeypatch, tmp_path) -> None:
   fake = _FakeUsageHTTP([401], renewal_body="boom", renewal_status=400)
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -1631,8 +1754,7 @@ async def test_claude_renewal_failure_arms_backoff_and_reports_token_refresh_fai
 
 
 @pytest.mark.asyncio
-async def test_claude_rate_limited_arms_backoff_and_reports_rate_limited(
-    monkeypatch, tmp_path) -> None:
+async def test_claude_rate_limited_arms_backoff_and_reports_rate_limited(monkeypatch, tmp_path) -> None:
   fake = _FakeUsageHTTP([429])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -1645,8 +1767,7 @@ async def test_claude_rate_limited_arms_backoff_and_reports_rate_limited(
 
 
 @pytest.mark.asyncio
-async def test_claude_renewal_succeeds_but_retried_get_401_reports_auth_rejected(
-    monkeypatch, tmp_path) -> None:
+async def test_claude_renewal_succeeds_but_retried_get_401_reports_auth_rejected(monkeypatch, tmp_path) -> None:
   fake = _FakeUsageHTTP([401, 401])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 

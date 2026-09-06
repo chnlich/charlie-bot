@@ -1134,14 +1134,14 @@ def test_transform_response_marks_missing_claude_percentage_unknown() -> None:
   assert [w["utilization"] for w in usage["windows"]] == [None, 10.0]
 
 
-def test_transform_scoped_limits_each_reading_bound_to_its_own_source() -> None:
-  """Every reading renders as its own window, keyed by its own limit.
+def _plan_raw(**extra: Any) -> dict:
+  """The plan-wide usage payload the scoped-window tests start from.
 
-  Each window's percent is distinct so a swap between two bars becomes
-  observable, and the scoped model name appears nowhere in the source so a
-  hardcoded label fails.
+  The fiveHour/sevenDay readings are shared verbatim so a test's only
+  visible variation is what it passes as keyword arguments on top (scoped
+  ``limits``, unknown window keys, or nothing at all).
   """
-  raw = {
+  raw: dict[str, Any] = {
       "fiveHour": {
           "utilization": 11.0,
           "resetsAt": "2026-08-04T12:00:00+00:00"
@@ -1150,23 +1150,34 @@ def test_transform_scoped_limits_each_reading_bound_to_its_own_source() -> None:
           "utilization": 22.0,
           "resetsAt": "2026-08-04T19:00:00+00:00"
       },
-      "limits":
-          [
-              {
-                  "kind": "weekly_scoped",
-                  "group": "weekly",
-                  "percent": 33.0,
-                  "resets_at": "2026-08-04T19:00:00+00:00",
-                  "scope": {
-                      "model": {
-                          "id": None,
-                          "display_name": "Nimbus"
-                      },
-                      "surface": None
-                  }
-              },
-          ],
   }
+  raw.update(extra)
+  return raw
+
+
+def test_transform_scoped_limits_each_reading_bound_to_its_own_source() -> None:
+  """Every reading renders as its own window, keyed by its own limit.
+
+  Each window's percent is distinct so a swap between two bars becomes
+  observable, and the scoped model name appears nowhere in the source so a
+  hardcoded label fails.
+  """
+  raw = _plan_raw(
+      limits=[
+          {
+              "kind": "weekly_scoped",
+              "group": "weekly",
+              "percent": 33.0,
+              "resets_at": "2026-08-04T19:00:00+00:00",
+              "scope": {
+                  "model": {
+                      "id": None,
+                      "display_name": "Nimbus"
+                  },
+                  "surface": None
+              }
+          },
+      ],)
 
   windows = _transform_response(raw, account="main")["windows"]
 
@@ -1182,32 +1193,22 @@ def test_transform_scoped_limits_each_reading_bound_to_its_own_source() -> None:
 
 def test_transform_scoped_windows_leaves_unscoped_untouched_when_limits_removed() -> None:
   """Removing ``limits`` must not change the plan-wide windows at all."""
-  raw = {
-      "fiveHour": {
-          "utilization": 11.0,
-          "resetsAt": "2026-08-04T12:00:00+00:00"
-      },
-      "sevenDay": {
-          "utilization": 22.0,
-          "resetsAt": "2026-08-04T19:00:00+00:00"
-      },
-      "limits":
-          [
-              {
-                  "kind": "weekly_scoped",
-                  "group": "weekly",
-                  "percent": 33.0,
-                  "resets_at": "2026-08-04T19:00:00+00:00",
-                  "scope": {
-                      "model": {
-                          "id": None,
-                          "display_name": "Nimbus"
-                      },
-                      "surface": None
-                  }
-              },
-          ],
-  }
+  raw = _plan_raw(
+      limits=[
+          {
+              "kind": "weekly_scoped",
+              "group": "weekly",
+              "percent": 33.0,
+              "resets_at": "2026-08-04T19:00:00+00:00",
+              "scope": {
+                  "model": {
+                      "id": None,
+                      "display_name": "Nimbus"
+                  },
+                  "surface": None
+              }
+          },
+      ],)
 
   with_limits = _transform_response(raw, account="main")["windows"]
   without = dict(raw)
@@ -1221,39 +1222,29 @@ def test_transform_scoped_windows_leaves_unscoped_untouched_when_limits_removed(
 
 
 def test_transform_response_scopes_are_sorted_before_planwide() -> None:
-  raw = {
-      "fiveHour": {
-          "utilization": 11.0,
-          "resetsAt": "2026-08-04T12:00:00+00:00"
-      },
-      "sevenDay": {
-          "utilization": 22.0,
-          "resetsAt": "2026-08-04T19:00:00+00:00"
-      },
-      "limits":
-          [
-              {
-                  "group": "weekly",
-                  "percent": 33.0,
-                  "resets_at": "",
-                  "scope": {
-                      "model": {
-                          "display_name": "Nimbus"
-                      }
+  raw = _plan_raw(
+      limits=[
+          {
+              "group": "weekly",
+              "percent": 33.0,
+              "resets_at": "",
+              "scope": {
+                  "model": {
+                      "display_name": "Nimbus"
                   }
-              },
-              {
-                  "group": "weekly",
-                  "percent": 44.0,
-                  "resets_at": "",
-                  "scope": {
-                      "model": {
-                          "display_name": "Fable"
-                      }
+              }
+          },
+          {
+              "group": "weekly",
+              "percent": 44.0,
+              "resets_at": "",
+              "scope": {
+                  "model": {
+                      "display_name": "Fable"
                   }
-              },
-          ],
-  }
+              }
+          },
+      ],)
 
   windows = _transform_response(raw, account="main")["windows"]
 
@@ -1269,39 +1260,29 @@ def test_transform_response_scoped_skip_and_warn_paths(monkeypatch) -> None:
   warns: list[dict] = []
   monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
 
-  raw = {
-      "fiveHour": {
-          "utilization": 11.0,
-          "resetsAt": "2026-08-04T12:00:00+00:00"
-      },
-      "sevenDay": {
-          "utilization": 22.0,
-          "resetsAt": "2026-08-04T19:00:00+00:00"
-      },
-      "limits":
-          [
-              {
-                  "kind": "weekly_scoped",
-                  "group": "bogus",
-                  "percent": 33.0,
-                  "resets_at": "",
-                  "scope": {
-                      "model": {
-                          "display_name": "Nimbus"
-                      }
+  raw = _plan_raw(
+      limits=[
+          {
+              "kind": "weekly_scoped",
+              "group": "bogus",
+              "percent": 33.0,
+              "resets_at": "",
+              "scope": {
+                  "model": {
+                      "display_name": "Nimbus"
                   }
-              },
-              {
-                  "kind": "weekly_scoped",
-                  "group": "weekly",
-                  "percent": 44.0,
-                  "resets_at": "",
-                  "scope": {
-                      "model": {}
-                  }
-              },
-          ],
-  }
+              }
+          },
+          {
+              "kind": "weekly_scoped",
+              "group": "weekly",
+              "percent": 44.0,
+              "resets_at": "",
+              "scope": {
+                  "model": {}
+              }
+          },
+      ],)
 
   windows = _transform_response(raw, account="main")["windows"]
 
@@ -1315,37 +1296,28 @@ def test_transform_response_unknown_shape_warns_once_per_process(monkeypatch) ->
   warns: list[dict] = []
   monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
 
-  raw = {
-      "fiveHour": {
-          "utilization": 11.0,
-          "resetsAt": "2026-08-04T12:00:00+00:00"
-      },
-      "sevenDay": {
-          "utilization": 22.0,
-          "resetsAt": "2026-08-04T19:00:00+00:00"
-      },
-      "nimbus_quill": {
+  raw = _plan_raw(
+      nimbus_quill={
           "utilization": 3.0,
           "resetsAt": "2026-08-04T20:00:00+00:00"
       },
-      "extra_usage": {
+      extra_usage={
           "utilization": 5.0,
           "resets_at": "2026-08-05T00:00:00+00:00"
       },
-      "limits":
-          [
-              {
-                  "kind": "weekly_scoped",
-                  "group": "weekly",
-                  "resets_at": "",
-                  "scope": {
-                      "model": {
-                          "display_name": "Nimbus"
-                      }
+      limits=[
+          {
+              "kind": "weekly_scoped",
+              "group": "weekly",
+              "resets_at": "",
+              "scope": {
+                  "model": {
+                      "display_name": "Nimbus"
                   }
-              },
-          ],
-  }
+              }
+          },
+      ],
+  )
 
   first_windows = _transform_response(raw, account="main")["windows"]
   first_events = [(w["slot"], w["reason"]) for w in warns if w["event"] == "ext_usage_unknown_limit_shape"]
@@ -1419,16 +1391,7 @@ def test_read_credentials_missing_and_tokenless_are_separate_alarms(monkeypatch,
 
 
 def test_transform_response_absent_limits_produces_exactly_today_windows() -> None:
-  raw = {
-      "fiveHour": {
-          "utilization": 11.0,
-          "resetsAt": "2026-08-04T12:00:00+00:00"
-      },
-      "sevenDay": {
-          "utilization": 22.0,
-          "resetsAt": "2026-08-04T19:00:00+00:00"
-      },
-  }
+  raw = _plan_raw()
 
   assert _transform_response(
       raw, account="main")["windows"] == [

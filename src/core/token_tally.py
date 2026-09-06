@@ -197,6 +197,8 @@ def discover_homes(claude_default: Path, codex_default: Path) -> tuple[dict[str,
   cfg = get_config()
   claude: set[Path] = {claude_default}
   codex: set[Path] = {codex_default}
+  for account in cfg.claude_accounts:
+    claude.add(Path(account.config_dir).expanduser())
   for opt in cfg.backend_options:
     if opt.type == BackendType.CC_CLAUDE and opt.claude_config_dir:
       claude.add(Path(opt.claude_config_dir).expanduser())

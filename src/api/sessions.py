@@ -27,7 +27,7 @@ from src.api.message_utils import (
 )
 from src.api.responses import FastJsonResponse
 from src.api.threads import _thread_list_item
-from src.core import thinking_state
+from src.core import claude_accounts, thinking_state
 from src.core.chat_events import chat_events_path
 from src.core.config import (
     CharlieBotConfig,
@@ -103,15 +103,19 @@ def _bootstrap_payload(bootstrap: SessionBootstrapData, cfg: CharlieBotConfig) -
   return payload
 
 
-def _backend_domain(option: BackendOption) -> str | None:
+def _backend_domain(option: BackendOption, cfg: CharlieBotConfig) -> str | None:
   """The resume domain an option belongs to, or None for non-cc-claude backends.
 
-  cc-claude options share a resume domain exactly when they resolve to the same
-  ``claude_config_dir`` (each account has its own transcript store). Every other
-  backend family is its own, non-switchable domain.
+  Pooled cc-claude options (src/core/claude_accounts.py) share one domain: the
+  pool moves the transcript with the session, so any model in the pool can resume
+  it. Pinned cc-claude options share a domain exactly when they resolve to the
+  same ``claude_config_dir`` (each account has its own transcript store). Every
+  other backend family is its own, non-switchable domain.
   """
   if option.type != BackendType.CC_CLAUDE:
     return None
+  if claude_accounts.is_pooled(option, cfg):
+    return claude_accounts.POOL_DOMAIN
   return str(claude_config_dir(option))
 
 
@@ -125,8 +129,8 @@ def _same_backend_domain(cur_id: str, tgt_id: str, cfg: CharlieBotConfig) -> boo
   tgt = cfg.get_backend_option(tgt_id)
   if cur is None or tgt is None:
     return False
-  cur_domain = _backend_domain(cur)
-  tgt_domain = _backend_domain(tgt)
+  cur_domain = _backend_domain(cur, cfg)
+  tgt_domain = _backend_domain(tgt, cfg)
   return cur_domain is not None and cur_domain == tgt_domain
 
 
@@ -143,11 +147,7 @@ def _switchable_backend_ids(
   active_domain = _backend_domain_for(active_backend, cfg)
   if active_domain is None:
     return []
-  return [
-      opt.id
-      for opt in cfg.backend_options
-      if opt.type == BackendType.CC_CLAUDE and str(claude_config_dir(opt)) == active_domain
-  ]
+  return [opt.id for opt in cfg.backend_options if _backend_domain(opt, cfg) == active_domain]
 
 
 def _backend_domain_for(backend_id: str, cfg: CharlieBotConfig) -> str | None:
@@ -155,7 +155,7 @@ def _backend_domain_for(backend_id: str, cfg: CharlieBotConfig) -> str | None:
   opt = cfg.get_backend_option(backend_id)
   if opt is None:
     return None
-  return _backend_domain(opt)
+  return _backend_domain(opt, cfg)
 
 
 def _resolve_requested_backend(

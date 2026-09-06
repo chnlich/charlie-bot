@@ -1555,6 +1555,22 @@ class SessionManager:
       read_back = await self._get_session_bypassing_cache(session_id)
     return read_back.cc_session_id if read_back is not None else None
 
+  async def persist_claude_account(self, session_id: str, claude_account: str) -> str | None:
+    """Persist the pool account holding the session's transcript; returns the label on disk.
+
+    Same read-modify-write-under-lock pattern as ``persist_cc_session_id``: only
+    ``claude_account`` changes, so concurrent single-field writes survive.
+    """
+    async with self._lock_for(session_id):
+      fresh = await self._get_session_bypassing_cache(session_id)
+      if fresh is None:
+        return None
+      if fresh.claude_account != claude_account:
+        fresh.claude_account = claude_account
+        await self.save_metadata(fresh)
+      read_back = await self._get_session_bypassing_cache(session_id)
+    return read_back.claude_account if read_back is not None else None
+
   async def has_completed_round(self, session_id: str) -> bool:
     """True when the live event stream contains a master_done event.
 
@@ -1707,6 +1723,7 @@ class SessionManager:
         persist_cc_session_id=self.persist_cc_session_id,
         has_completed_round=self.has_completed_round,
         persist_master_run=self.persist_master_run,
+        persist_claude_account=self.persist_claude_account,
     )
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:

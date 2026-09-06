@@ -338,6 +338,8 @@ def claude_projects_roots(cfg: CharlieBotConfig) -> list[Path]:
   tree it sits in.
   """
   homes = {Path.home() / ".claude", claude_config_dir(BackendOption(id="-", label="-", type=BackendType.CC_CLAUDE))}
+  for account in cfg.claude_accounts:
+    homes.add(Path(account.config_dir).expanduser())
   for option in cfg.backend_options:
     if option.type == BackendType.CC_CLAUDE:
       homes.add(claude_config_dir(option))

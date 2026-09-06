@@ -57,6 +57,7 @@ def mock_session_callbacks() -> models.SessionCallbacks:
       persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
       has_completed_round=AsyncMock(return_value=False),
       persist_master_run=AsyncMock(),
+      persist_claude_account=AsyncMock(side_effect=lambda sid, label: label),
   )
 
 

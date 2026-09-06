@@ -12,6 +12,7 @@ from typing import Any
 import structlog
 from fastapi import APIRouter
 
+from src.core import claude_accounts
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import get_config
 from src.core.http import get_http_client
@@ -79,18 +80,32 @@ def _derive_provider_accounts(
     default_dir: str,
     options: list,
     get_dir: Any,
+    pool: list[tuple[str, str]] | None = None,
 ) -> list[tuple[str, str]]:
   """Return ordered [(label, expanded_abs_path)] for one provider.
 
-  Always includes the provider default dir first (label 'main'). Dedupes by
-  expanded absolute path, so an entry explicitly pointing at the default
-  collapses into the default. Later label collisions fall back to the full
-  basename, then fail loud (skip) — never silently overwriting an existing key.
+  Always includes the provider default dir first (label 'main'). Configured pool
+  accounts (``claude_accounts``: (label, dir) pairs) come next under their own
+  labels, then the backend entries that pin a directory. Dedupes by expanded
+  absolute path, so an entry explicitly pointing at the default collapses into
+  the default. Later label collisions fall back to the full basename, then fail
+  loud (skip) — never silently overwriting an existing key.
   """
   default_expanded = os.path.abspath(os.path.expanduser(default_dir))
   seen: set[str] = {default_expanded}
   labels: set[str] = {"main"}
   accounts: list[tuple[str, str]] = [("main", default_expanded)]
+
+  for label, raw in pool or []:
+    expanded = os.path.abspath(os.path.expanduser(raw))
+    if expanded in seen:
+      continue
+    if label in labels:
+      log.error("ext_usage_account_label_collision_skip", provider=provider, dir=expanded, label=label)
+      continue
+    seen.add(expanded)
+    labels.add(label)
+    accounts.append((label, expanded))
 
   for opt in options:
     raw = get_dir(opt)
@@ -117,9 +132,13 @@ def _derive_accounts() -> dict[str, list[tuple[str, str]]]:
   cfg = get_config()
   claude_opts = [o for o in cfg.backend_options if o.type == BackendType.CC_CLAUDE]
   codex_opts = [o for o in cfg.backend_options if o.type == BackendType.CODEX]
+  claude_pool = [(account.label, account.config_dir) for account in cfg.claude_accounts]
   return {
-      "claude": _derive_provider_accounts("claude", CLAUDE_DEFAULT_DIR, claude_opts, lambda o: o.claude_config_dir),
-      "codex": _derive_provider_accounts("codex", CODEX_DEFAULT_DIR, codex_opts, lambda o: o.codex_home),
+      "claude":
+          _derive_provider_accounts(
+              "claude", CLAUDE_DEFAULT_DIR, claude_opts, lambda o: o.claude_config_dir, pool=claude_pool),
+      "codex":
+          _derive_provider_accounts("codex", CODEX_DEFAULT_DIR, codex_opts, lambda o: o.codex_home),
   }
 
 
@@ -902,6 +921,10 @@ async def _poll_loop() -> None:
           result = None
         if result is not None:
           _cached_usage[cache_key] = {**result, "account": inst.label}
+          if inst.provider == "claude":
+            # The account pool ranks logins by their newest reading; the panel
+            # poll is the reading source between Claude Code runs.
+            claude_accounts.observe_usage_panel(inst.label, result)
         else:
           prev = _cached_usage.get(cache_key)
           # A pending marker is a not-yet-read placeholder, so it gives way to the

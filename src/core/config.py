@@ -20,7 +20,12 @@ from pydantic import (
     model_validator,
 )
 
-from src.core.models import BackendOption, BackendType
+from src.core.models import (
+    BackendOption,
+    BackendType,
+    ClaudeAccount,
+    ClaudeCompactionConfig,
+)
 from src.core.tasks import create_logged_task
 from src.core.yaml_utils import load_yaml
 
@@ -356,6 +361,14 @@ class CharlieBotConfig(BaseModel):
   # Empty list (default) skips the one-shot.
   model_preference: list[str] = []
 
+  # Claude account pool: the subscription logins (each a CLAUDE_CONFIG_DIR) a
+  # cc-claude entry without claude_config_dir draws from (src/core/claude_accounts.py).
+  # Empty = no pool: every cc-claude entry resolves its login exactly as it did
+  # before the pool existed.
+  claude_accounts: list[ClaudeAccount] = []
+  # Token floors for the Sonnet compaction the pool runs on Fable sessions.
+  claude_compaction: ClaudeCompactionConfig = ClaudeCompactionConfig()
+
   # Telegram notifications
   telegram_bot_token: str | None = None
   telegram_chat_id: str | None = None
@@ -530,8 +543,15 @@ class CharlieBotConfig(BaseModel):
     return self.charliebot_home / "config.d"
 
   def get_backend_option(self, backend_id: str) -> BackendOption | None:
-    """Look up a backend option by id."""
-    return next((opt for opt in self.backend_options if opt.id == backend_id), None)
+    """Look up a backend option by id, then by alias.
+
+    An exact id always wins; ``aliases`` answer for ids a config edit retired, so
+    sessions that recorded the old id keep resolving without a metadata rewrite.
+    """
+    exact = next((opt for opt in self.backend_options if opt.id == backend_id), None)
+    if exact is not None:
+      return exact
+    return next((opt for opt in self.backend_options if backend_id in opt.aliases), None)
 
   def discover_repos(self) -> list[dict[str, str]]:
     """Scan workspace_dirs for directories containing a .git folder."""

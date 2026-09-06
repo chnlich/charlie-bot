@@ -215,6 +215,10 @@ class BackendOption(BaseModel):
   fast_mode: bool = False  # cc-claude only: enable Claude Code fast mode via --settings '{"fastMode":true}'
   opencode_proxy_url: str | None = None  # opencode only: per-backend HTTP/HTTPS proxy URL
   print_timeout: str | None = None  # antigravity only: agy --print turn budget (Go duration, e.g. "1h")
+  # Backend ids this entry also answers for. An id retired by a config edit (an
+  # account-specific entry folded into the account pool) keeps resolving for the
+  # sessions that recorded it, so no metadata rewrite is needed.
+  aliases: list[str] = Field(default_factory=list)
 
 
 MODEL_OPTIONAL_ROUTING_BACKEND_TYPES: frozenset[BackendType] = frozenset({BackendType.ANTIGRAVITY})
@@ -222,6 +226,33 @@ MODEL_OPTIONAL_ROUTING_BACKEND_TYPES: frozenset[BackendType] = frozenset({Backen
 
 def backend_type_allows_missing_model(backend_type: str) -> bool:
   return backend_type in MODEL_OPTIONAL_ROUTING_BACKEND_TYPES
+
+
+class ClaudeAccount(BaseModel):
+  """One Claude subscription login in the account pool (src/core/claude_accounts.py).
+
+  ``label`` names the account in server logs and the usage panel (it follows the
+  label the panel derived from the directory name before the pool existed);
+  ``config_dir`` is the login's CLAUDE_CONFIG_DIR. Order carries no meaning.
+  """
+  model_config = ConfigDict(extra='forbid')
+
+  label: str
+  config_dir: str
+
+
+class ClaudeCompactionConfig(BaseModel):
+  """Context floors, in tokens, for the Sonnet compaction the pool runs on Fable sessions.
+
+  ``relay_tokens`` applies before an account relay (the cache is cold in the new
+  login anyway); ``expired_cache_tokens`` applies when a user message arrives after
+  the one-hour prompt cache has expired. Below the floor a cold read is cheaper
+  than a compaction, so nothing runs.
+  """
+  model_config = ConfigDict(extra='forbid')
+
+  relay_tokens: int = Field(default=100_000, gt=0)
+  expired_cache_tokens: int = Field(default=50_000, gt=0)
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +306,10 @@ class SessionMetadata(BaseModel):
   updated_at: UtcDatetime = Field(default_factory=utc_now)
   cc_session_id: str | None = None
   cc_session_started_at: UtcDatetime | None = None
+  # Label (claude_accounts[].label) of the pool account whose transcript store
+  # holds this session's Claude Code conversation. None until the pool assigns
+  # one, and always None for a pinned or non-cc-claude backend.
+  claude_account: str | None = None
   # In-flight master turn identity for restart reconcile; None when idle.
   master_run: MasterRunRecord | None = None
   backend: str = ""  # empty default; create_session always provides the real value
@@ -545,6 +580,10 @@ class SessionCallbacks:
   has_completed_round: Callable[[str], Awaitable[bool]]
   # Sets (or clears, on None) the session's in-flight master-turn record.
   persist_master_run: Callable[[str, MasterRunRecord | None], Awaitable[None]]
+  # Persists the pool account holding the session's transcript and returns the
+  # label read back from disk. Optional so callback bundles built before the
+  # account pool existed (tests) stay valid; the live bundle always sets it.
+  persist_claude_account: Callable[[str, str], Awaitable[str | None]] | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -20,8 +20,8 @@ from src.agents.backends.claude_code import (
     claude_supervisor_env,
     out_of_family_served_models,
 )
+from src.core import claude_accounts, runs
 from src.core import event_types as ET
-from src.core import runs
 from src.core.config import CharlieBotConfig, claude_config_dir
 from src.core.latex import check_tex_changed, clear_snapshot
 from src.core.memory import assemble_master
@@ -364,18 +364,28 @@ def _cc_transcript_exists(config_dir: Path, cc_session_id: str) -> bool:
   return any((config_dir / "projects").glob(f"*/{cc_session_id}.jsonl"))
 
 
-def _resolve_resume_id(option: BackendOption, session_meta: SessionMetadata) -> str | None:
+def _resolve_resume_id(
+    option: BackendOption,
+    session_meta: SessionMetadata,
+    cfg: CharlieBotConfig | None = None,
+) -> str | None:
   """Return the cc_session_id to resume, or None when it is not reachable.
 
   Each cc-claude account has its own CLAUDE_CONFIG_DIR and cannot see another's
   conversations, so resuming an id recorded under a different account always fails.
-  Backends with native resume ids carry no local transcript and pass through.
+  A pooled option (src/core/claude_accounts.py) looks in the session's own account
+  first and then in every pool login, writing a hit elsewhere back onto
+  ``session_meta.claude_account``; that is how sessions created before the pool
+  migrate without a metadata rewrite. Backends with native resume ids carry no
+  local transcript and pass through.
   """
   cc_session_id = session_meta.cc_session_id
   if not cc_session_id:
     return None
   if option.type not in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
     return cc_session_id
+  if cfg is not None and claude_accounts.is_pooled(option, cfg):
+    return _resolve_pooled_resume_id(cfg, session_meta, cc_session_id)
   config_dir = claude_config_dir(option)
   if _cc_transcript_exists(config_dir, cc_session_id):
     return cc_session_id
@@ -384,6 +394,32 @@ def _resolve_resume_id(option: BackendOption, session_meta: SessionMetadata) -> 
       session=session_meta.id,
       cc_session_id=cc_session_id,
       config_dir=str(config_dir),
+  )
+  return None
+
+
+def _resolve_pooled_resume_id(cfg: CharlieBotConfig, session_meta: SessionMetadata, cc_session_id: str) -> str | None:
+  """Pool half of _resolve_resume_id: own account first, then every pool login."""
+  current = claude_accounts.account_by_label(cfg, session_meta.claude_account)
+  if current is not None and _cc_transcript_exists(Path(current.config_dir), cc_session_id):
+    return cc_session_id
+  found = claude_accounts.find_transcript_account(cfg, cc_session_id)
+  if found is not None:
+    log.info(
+        "master_cc_resume_transcript_found_in_pool",
+        session=session_meta.id,
+        cc_session_id=cc_session_id,
+        account=found.label,
+        previous_account=session_meta.claude_account,
+    )
+    session_meta.claude_account = found.label
+    return cc_session_id
+  log.warning(
+      "master_cc_resume_transcript_missing",
+      session=session_meta.id,
+      cc_session_id=cc_session_id,
+      config_dir=current.config_dir if current is not None else None,
+      pool=[account.label for account in claude_accounts.pool(cfg)],
   )
   return None
 
@@ -565,7 +601,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
             "error": type(overlay_error).__name__,
         })
 
-  resume_id = _resolve_resume_id(option, session_meta)
+  resume_id = _resolve_resume_id(option, session_meta, cfg=cfg)
   # Pre-flight: a resume-capable backend about to run with no resolved resume
   # id, when the session already has an anchor on disk or a completed round, is
   # about to start a zero-context conversation. Fail loudly unless the caller

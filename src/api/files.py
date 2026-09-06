@@ -24,6 +24,11 @@ router = APIRouter()
 # across tabs, and one slot holds the ~1.5 MB worst annotated page.
 _DIFF_ANNOTATE_MEMO_LIMIT = 8
 
+# Bound on _clean_view_memo: one open artifact tab serves one page, so the cap
+# covers every clean view open across tabs, and one slot holds the ~1.5 MB
+# worst injected page.
+_CLEAN_VIEW_MEMO_LIMIT = 8
+
 # Memo key for one annotated diff page: both resolved paths plus each file's
 # (mtime_ns, size) taken before its read, and whether the artifact-comments
 # injection rode along. The marks are a pure function of the two files' bytes
@@ -34,6 +39,18 @@ _DIFF_ANNOTATE_MEMO_LIMIT = 8
 _AnnotateKey = tuple[str, int, int, str, int, int, bool]
 
 _annotate_memo: BoundedMemo[_AnnotateKey, str] = BoundedMemo(_DIFF_ANNOTATE_MEMO_LIMIT)
+
+# Memo key for one clean artifact view: the resolved path plus the page's
+# (mtime_ns, size) taken before its read. The injection is a pure function of
+# the page bytes — the session id derives from the path and the static asset
+# version is a per-process constant — and an artifact page is only ever written
+# whole, so an unchanged signature proves the stored body current; an entry
+# keyed from bytes read before a concurrent rewrite is unreachable for the
+# newer bytes. Served bodies are shared across responses, the no-defensive-copy
+# idiom of the sibling memos.
+_CleanViewKey = tuple[str, int, int]
+
+_clean_view_memo: BoundedMemo[_CleanViewKey, bytes] = BoundedMemo(_CLEAN_VIEW_MEMO_LIMIT)
 
 
 def _file_signature(path: Path) -> tuple[int, int]:
@@ -68,6 +85,24 @@ def _annotated_diff_page(base_path: Path, page_path: Path, inject_ui: bool, sess
     page = _inject_artifact_ui(page, session_id)
   _annotate_memo.store(key, page)
   return page
+
+
+def _injected_artifact_page(fs_path: Path, session_id: str) -> bytes:
+  """The credentialed artifact view's body: the page wrapped in the artifact UI, memoized on the file signature.
+
+  A repeat view of an unchanged page pays one stat and zero file bytes — the
+  read re-ran on every view before the memo (~4.8 ms on the 1 MB worst
+  artifact, measured, of an ~11.5 ms repeat view). The signature is taken
+  before the read, the same ground as _annotate_memo.
+  """
+  key: _CleanViewKey = (str(fs_path), *_file_signature(fs_path))
+  hit = _clean_view_memo.get(key)
+  if hit is not None:
+    return hit
+  page = _inject_artifact_ui(fs_path.read_text(encoding="utf-8"), session_id)
+  body = page.encode("utf-8")
+  _clean_view_memo.store(key, body)
+  return body
 
 
 def _artifact_session_id(fs_path: Path) -> str | None:
@@ -231,9 +266,9 @@ async def serve_file(path: str, request: Request):
     return HTMLResponse(html_text, media_type="text/html")
 
   if session_id is not None and request_has_access_key(request, get_config().charliebot_access_key):
-    html_text = await asyncio.to_thread(lambda: fs_path.read_text(encoding="utf-8"))
-    html_text = await asyncio.to_thread(_inject_artifact_ui, html_text, session_id)
-    return HTMLResponse(html_text, media_type="text/html")
+    # One executor hop: signature, memo hit, and on a miss the read+inject+store.
+    body = await asyncio.to_thread(_injected_artifact_page, fs_path, session_id)
+    return HTMLResponse(body, media_type="text/html")
 
   # Serve the file with auto-detected MIME type
   media_type, _ = mimetypes.guess_type(str(fs_path))

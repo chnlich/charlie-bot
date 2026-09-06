@@ -203,6 +203,45 @@ def test_serve_file_artifact_shape_outside_sessions_root_not_injected(
   assert "last-modified" in resp.headers
 
 
+# --- clean views: the injected-page memo serves repeat views without re-reading ---
+
+
+def test_serve_file_clean_repeat_view_reinjects_nothing(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The injection is a pure function of the page bytes, so a repeat view of an
+  unchanged page must serve the stored body with zero injection calls."""
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
+  client = _build_client("secret")
+  url = "/files" + str(page)
+  first = client.get(url)
+  assert first.status_code == 200
+
+  def explode(html_text: str, session_id: str) -> str:
+    raise AssertionError("repeat view re-ran the artifact injection")
+
+  monkeypatch.setattr(files_api, "_inject_artifact_ui", explode)
+  resp = client.get(url)
+  assert resp.status_code == 200
+  assert resp.text == first.text
+  assert SCRIPT in resp.text
+
+
+def test_serve_file_clean_reinjects_when_page_is_rewritten(sessions_root: Path) -> None:
+  """An artifact page is only ever written whole, so a rewrite always moves the
+  (mtime_ns, size) signature the memo keys on — the new bytes must be served."""
+  page = _write(sessions_root / "S" / "artifacts" / "x.html")
+  client = _build_client("secret")
+  url = "/files" + str(page)
+  before = client.get(url)
+  assert before.status_code == 200
+
+  page.write_text("<html><body><p>rewritten plan</p></body></html>", encoding="utf-8")
+  after = client.get(url)
+  assert after.status_code == 200
+  assert after.text != before.text
+  assert "<p>rewritten plan</p>" in after.text
+  assert SCRIPT in after.text
+
+
 # --- diff requests: ?diff=<base artifact path> serves the annotated page ---
 
 

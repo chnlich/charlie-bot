@@ -133,8 +133,7 @@ def test_list_poll_repeating_the_rendered_etag_gets_a_bodyless_204(tmp_path: Pat
 
 
 def test_list_poll_skips_the_signature_walk_until_a_mark_or_the_sweep(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   client, session_id, _ = _seeded_client(tmp_path)
   threads_api._list_body_memo.clear()
   threads_api._sig_gate.clear()

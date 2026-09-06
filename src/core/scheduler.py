@@ -75,6 +75,19 @@ def effective_scheduled_task_backend(task_cfg: ScheduledTaskConfig, cfg: Charlie
   return cfg.backend_options[0].id
 
 
+def scheduled_task_session_binding(task_cfg: ScheduledTaskConfig,
+                                   cfg: CharlieBotConfig) -> tuple[str, str | None, str | None]:
+  """Return the effective backend plus the role/group a task's dedicated session binds to.
+
+  A mode: master task binds its dedicated session to the task's project —
+  role=project and group=<project value>; every other mode binds neither.
+  """
+  backend = effective_scheduled_task_backend(task_cfg, cfg)
+  role = PROJECT_ROLE if task_cfg.mode == 'master' else None
+  group = task_cfg.project if task_cfg.mode == 'master' else None
+  return backend, role, group
+
+
 async def fire_scheduled_worker(
     session: SessionMetadata,
     task_cfg: ScheduledTaskConfig,
@@ -467,16 +480,9 @@ class Scheduler:
     """Return the active dedicated session for task/backend, rotating if needed.
 
     When session_cache is provided, uses it instead of scanning the sessions
-    directory. Newly created sessions are added to the cache. A mode: master
-    task binds its dedicated session to the task's project: role=project and
-    group=<project value> ride onto both creation paths downstream.
+    directory. Newly created sessions are added to the cache.
     """
-    effective_backend = effective_scheduled_task_backend(task_cfg, cfg)
-    role: str | None = None
-    group: str | None = None
-    if task_cfg.mode == 'master':
-      role = PROJECT_ROLE
-      group = task_cfg.project
+    effective_backend, role, group = scheduled_task_session_binding(task_cfg, cfg)
     return await session_mgr.ensure_scheduled_session_backend(
         task_cfg.name,
         effective_backend,

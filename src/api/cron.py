@@ -27,8 +27,8 @@ from src.core.config import (
     get_scheduled_tasks,
     master_task_project_error,
 )
-from src.core.models import PROJECT_ROLE, SessionMetadata
-from src.core.scheduler import effective_scheduled_task_backend
+from src.core.models import SessionMetadata
+from src.core.scheduler import scheduled_task_session_binding
 from src.core.sessions import ScheduledSessionBusyError, SessionManager
 from src.core.yaml_utils import load_yaml, save_yaml
 
@@ -101,12 +101,7 @@ async def _ensure_backend_update_session(
 ) -> SessionMetadata | None:
   if 'backend' not in req.model_fields_set:
     return None
-  backend = effective_scheduled_task_backend(cand_model, cfg)
-  role: str | None = None
-  group: str | None = None
-  if cand_model.mode == 'master':
-    role = PROJECT_ROLE
-    group = cand_model.project
+  backend, role, group = scheduled_task_session_binding(cand_model, cfg)
   try:
     return await session_mgr.ensure_scheduled_session_backend(name, backend, role=role, group=group)
   except ScheduledSessionBusyError as e:

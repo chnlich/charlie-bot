@@ -593,14 +593,22 @@ def test_declared_window_unparseable_warning_refires_for_a_new_bad_value(monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clean_ceiling_env")
-async def test_claude_tier_full_and_point_for_1m_window_model(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("window", "expected_full", "expected_compact_at"),
+    [
+        pytest.param(1_000_000, 433_000, 400_000, id="1m-window"),
+        pytest.param(200_000, 200_000, 167_000, id="200k-window"),
+    ],
+)
+async def test_claude_tier_full_and_point_for_window_model(
+    tmp_path: Path, window: int, expected_full: int, expected_compact_at: int) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-1m", name="1M Window", backend=OPUS_BACKEND_ID)
+  meta = SessionMetadata(id="session-window", name="Window Model", backend=OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
           _result_event(0.5, {"claude-opus-4-6": {
-              "contextWindow": 1_000_000
+              "contextWindow": window
           }}),
           _assistant_event("claude-opus-4-6", input_tokens=72_900),
       ])
@@ -608,31 +616,9 @@ async def test_claude_tier_full_and_point_for_1m_window_model(tmp_path: Path) ->
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage is not None
-  # min(1M model window, 433000 declared) = 433000; point = 433000 - 20000 - 13000.
-  assert usage["context_full"] == 433_000
-  assert usage["context_compact_at"] == 400_000
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_clean_ceiling_env")
-async def test_claude_tier_full_and_point_for_200k_window_model(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-200k", name="200k Window", backend=OPUS_BACKEND_ID)
-  _write_session(
-      session_mgr, meta, [
-          _result_event(0.5, {"claude-opus-4-6": {
-              "contextWindow": 200_000
-          }}),
-          _assistant_event("claude-opus-4-6", input_tokens=72_900),
-      ])
-
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
-  # min(200000 model window, 433000 declared) = 200000; point = 200000 - 20000 - 13000.
-  assert usage["context_full"] == 200_000
-  assert usage["context_compact_at"] == 167_000
+  # min(model window, 433000 declared); compact point = full - 20000 - 13000.
+  assert usage["context_full"] == expected_full
+  assert usage["context_compact_at"] == expected_compact_at
 
 
 @pytest.mark.asyncio

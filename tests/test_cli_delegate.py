@@ -371,36 +371,29 @@ def test_main_requires_task_spec_file(tmp_path: Path, capsys: pytest.CaptureFixt
   assert_cli_reject(exc_info, capsys, "--task-spec-file")
 
 
-def test_main_rejects_legacy_description_argparse(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize(
+    ("legacy_flag", "legacy_value"),
+    [
+        ("--description", "task"),
+        ("--context", "review hint"),
+    ],
+    ids=["legacy-description", "legacy-context"],
+)
+def test_main_rejects_removed_legacy_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], legacy_flag: str,
+    legacy_value: str) -> None:
   cfg = _mock_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
   with (
-      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, "--description", "task", session="s1")) as post_mock,
-      pytest.raises(SystemExit) as exc_info,
-  ):
-    main()
-
-  assert_cli_reject(exc_info, capsys, "--description")
-  post_mock.assert_not_called()
-
-
-def test_main_rejects_legacy_context_argparse(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _mock_config(tmp_path)
-  monkeypatch.chdir(tmp_path)
-  task_spec_file = _write_task_spec(tmp_path)
-
-  with (
-      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, "--context", "review hint", session="s1")) as
+      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, legacy_flag, legacy_value, session="s1")) as
       post_mock,
       pytest.raises(SystemExit) as exc_info,
   ):
     main()
 
-  assert_cli_reject(exc_info, capsys, "--context")
+  assert_cli_reject(exc_info, capsys, legacy_flag)
   post_mock.assert_not_called()
 
 
@@ -475,62 +468,54 @@ def test_main_requires_keep_worktree_flag(tmp_path: Path, capsys: pytest.Capture
   assert_cli_reject(exc_info, capsys, "--keep-worktree")
 
 
-def test_main_rejects_missing_task_spec_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize(
+    ("file_body", "err_fragment"),
+    [
+        (None, "not found"),
+        ("  \n", "empty"),
+    ],
+    ids=["missing", "empty"],
+)
+def test_main_rejects_unusable_task_spec_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], file_body: str | None,
+    err_fragment: str) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  missing = tmp_path / "missing.md"
+  spec_file = tmp_path / "task_spec.md"
+  if file_body is not None:
+    spec_file.write_text(file_body)
 
-  with _patched_main(cfg, _repo_argv(str(tmp_path), missing)) as post_mock, pytest.raises(SystemExit) as exc_info:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), spec_file)) as post_mock, pytest.raises(SystemExit) as exc_info:
     main()
 
-  assert_cli_reject_exit2(exc_info, capsys, "task-spec-file", "not found")
+  assert_cli_reject_exit2(exc_info, capsys, "task-spec-file", err_fragment)
   post_mock.assert_not_called()
 
 
-def test_main_rejects_empty_task_spec_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  empty = tmp_path / "empty.md"
-  empty.write_text("  \n")
-
-  with _patched_main(cfg, _repo_argv(str(tmp_path), empty)) as post_mock, pytest.raises(SystemExit) as exc_info:
-    main()
-
-  assert_cli_reject_exit2(exc_info, capsys, "task-spec-file", "empty")
-  post_mock.assert_not_called()
-
-
-def test_main_rejects_missing_reviewer_context_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize(
+    ("context_body", "err_fragment"),
+    [
+        (None, "not found"),
+        ("  \n", "empty"),
+    ],
+    ids=["missing", "empty"],
+)
+def test_main_rejects_unusable_reviewer_context_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], context_body: str | None,
+    err_fragment: str) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path)
-  missing = tmp_path / "missing_context.md"
+  context_file = tmp_path / "reviewer_context.md"
+  if context_body is not None:
+    context_file.write_text(context_body)
 
   with (
-      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file", str(missing))) as
+      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file", str(context_file))) as
       post_mock,
       pytest.raises(SystemExit) as exc_info,
   ):
     main()
 
-  assert_cli_reject_exit2(exc_info, capsys, "reviewer-context-file", "not found")
-  post_mock.assert_not_called()
-
-
-def test_main_rejects_empty_reviewer_context_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  task_spec_file = _write_task_spec(tmp_path)
-  empty = tmp_path / "empty_context.md"
-  empty.write_text("  \n")
-
-  with (
-      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file", str(empty))) as post_mock,
-      pytest.raises(SystemExit) as exc_info,
-  ):
-    main()
-
-  assert_cli_reject_exit2(exc_info, capsys, "reviewer-context-file", "empty")
+  assert_cli_reject_exit2(exc_info, capsys, "reviewer-context-file", err_fragment)
   post_mock.assert_not_called()
 
 

@@ -27,6 +27,7 @@ from src.api.message_utils import (
 )
 from src.api.responses import FastJsonResponse
 from src.api.threads import _thread_list_item
+from src.core import thinking_state
 from src.core.chat_events import chat_events_path
 from src.core.config import (
     CharlieBotConfig,
@@ -59,7 +60,6 @@ from src.core.sessions import (
     SessionManager,
     SuccessionRefused,
 )
-from src.core.thinking_state import busy_since
 from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
@@ -359,8 +359,9 @@ async def all_sessions_status(
   self-heal fallback).
   """
   # The 3 s poll reads the cached metadata references as they are (the
-  # manager's per-row model_copy measured ~0.3 ms of this route); the payload's
-  # derived fields come from resolve_sidebar_state so the cache stays untouched.
+  # manager's per-row get_session path — model_copy, stamp, and the gather —
+  # measured ~0.3 ms of this route); the payload's derived fields come from
+  # resolve_sidebar_state so the cache stays untouched.
   sessions = await session_mgr.get_sessions_readonly(_parse_session_ids(ids))
   if not sessions:
     return {}
@@ -373,7 +374,7 @@ async def all_sessions_status(
   )
   result: dict[str, dict] = {}
   for meta in sessions:
-    busy = busy_since(meta.id)
+    busy = thinking_state.busy_since(meta.id)
     entry = derived[meta.id]
     result[meta.id] = {
         "has_unread": bool(meta.has_unread),

@@ -341,9 +341,7 @@ def test_spend_aggregation_prices_recent_turns_by_model(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_fetch_keeps_quota_when_historical_spend_row_is_malformed(
-    tmp_path,
-) -> None:
+async def test_codex_provider_fetch_keeps_quota_when_historical_spend_row_is_malformed(tmp_path,) -> None:
   # The provider reads rollout logs from <home_dir>/sessions, so the test seeds
   # that subtree and constructs the instance with home_dir pointing at tmp_path.
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
@@ -405,9 +403,9 @@ async def test_codex_provider_spend_reparses_only_changed_files(tmp_path, monkey
   rollout_dir.mkdir(parents=True)
 
   def spend_event(input_tokens: int) -> str:
-    return json.dumps(_build_spend_token_count_event(
-        timestamp=now.isoformat(), input_tokens=input_tokens,
-        cached_input_tokens=0, output_tokens=0))
+    return json.dumps(
+        _build_spend_token_count_event(
+            timestamp=now.isoformat(), input_tokens=input_tokens, cached_input_tokens=0, output_tokens=0))
 
   model_line = json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.3-codex"}})
   first = rollout_dir / "rollout-first.jsonl"
@@ -540,24 +538,42 @@ def test_spend_aggregation_skips_bad_rows_without_poisoning_totals(tmp_path) -> 
   rollout_path = tmp_path / "rollout-mixed.jsonl"
 
   events = [
-    {"type": "turn_context", "payload": {"model": "gpt-5.5"}},
-    _build_spend_token_count_event(
-        timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
-        input_tokens=1_000_000, cached_input_tokens=100_000, output_tokens=10_000),
-    _build_spend_token_count_event(
-        timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
-        input_tokens="bad", cached_input_tokens=0, output_tokens=0),
-    _build_spend_token_count_event(
-        timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
-        input_tokens=500_000, cached_input_tokens=None, output_tokens=5_000),
-    _build_spend_token_count_event(timestamp=None, input_tokens=1_000_000,
-                                   cached_input_tokens=0, output_tokens=0),
-    _build_spend_token_count_event(timestamp=12345, input_tokens=1_000_000,
-                                   cached_input_tokens=0, output_tokens=0),
-    {"timestamp": (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"), "type": "event_msg", "payload": {"type": "token_count", "info": {}}},
-    _build_spend_token_count_event(
-        timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
-        input_tokens=500_000, cached_input_tokens=50_000, output_tokens=5_000),
+      {
+          "type": "turn_context",
+          "payload": {
+              "model": "gpt-5.5"
+          }
+      },
+      _build_spend_token_count_event(
+          timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+          input_tokens=1_000_000,
+          cached_input_tokens=100_000,
+          output_tokens=10_000),
+      _build_spend_token_count_event(
+          timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+          input_tokens="bad",
+          cached_input_tokens=0,
+          output_tokens=0),
+      _build_spend_token_count_event(
+          timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+          input_tokens=500_000,
+          cached_input_tokens=None,
+          output_tokens=5_000),
+      _build_spend_token_count_event(timestamp=None, input_tokens=1_000_000, cached_input_tokens=0, output_tokens=0),
+      _build_spend_token_count_event(timestamp=12345, input_tokens=1_000_000, cached_input_tokens=0, output_tokens=0),
+      {
+          "timestamp": (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+          "type": "event_msg",
+          "payload": {
+              "type": "token_count",
+              "info": {}
+          }
+      },
+      _build_spend_token_count_event(
+          timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+          input_tokens=500_000,
+          cached_input_tokens=50_000,
+          output_tokens=5_000),
   ]
   rollout_path.write_text("\n".join(json.dumps(event) if isinstance(event, dict) else event for event in events) + "\n")
 
@@ -578,10 +594,17 @@ def test_spend_aggregation_skips_unreadable_file(tmp_path) -> None:
 
   readable_path = tmp_path / "rollout-readable.jsonl"
   events = [
-    {"type": "turn_context", "payload": {"model": "gpt-5.5"}},
-    _build_spend_token_count_event(
-        timestamp=now.isoformat().replace("+00:00", "Z"),
-        input_tokens=1_000_000, cached_input_tokens=0, output_tokens=0),
+      {
+          "type": "turn_context",
+          "payload": {
+              "model": "gpt-5.5"
+          }
+      },
+      _build_spend_token_count_event(
+          timestamp=now.isoformat().replace("+00:00", "Z"),
+          input_tokens=1_000_000,
+          cached_input_tokens=0,
+          output_tokens=0),
   ]
   readable_path.write_text("\n".join(json.dumps(event) for event in events) + "\n")
 
@@ -607,12 +630,22 @@ def test_codex_provider_spend_prunes_files_untouched_for_a_week(tmp_path) -> Non
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   now = datetime.now(UTC)
   rollout_path = tmp_path / "rollout-stale.jsonl"
-  rollout_path.write_text("\n".join([
-      json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.5"}}),
-      json.dumps(_build_spend_token_count_event(
-          timestamp=now.isoformat().replace("+00:00", "Z"),
-          input_tokens=1_000_000, cached_input_tokens=0, output_tokens=0)),
-  ]) + "\n")
+  rollout_path.write_text(
+      "\n".join(
+          [
+              json.dumps({
+                  "type": "turn_context",
+                  "payload": {
+                      "model": "gpt-5.5"
+                  }
+              }),
+              json.dumps(
+                  _build_spend_token_count_event(
+                      timestamp=now.isoformat().replace("+00:00", "Z"),
+                      input_tokens=1_000_000,
+                      cached_input_tokens=0,
+                      output_tokens=0)),
+          ]) + "\n")
   stale_mtime = (now - timedelta(days=8)).timestamp()
   os.utime(rollout_path, (stale_mtime, stale_mtime))
 
@@ -622,28 +655,29 @@ def test_codex_provider_spend_prunes_files_untouched_for_a_week(tmp_path) -> Non
 
 
 def test_transform_response_preserves_claude_payload_shape() -> None:
-  usage = _transform_response({
-    "fiveHour": {
-      "utilization": 42.0,
-      "resetsAt": "2026-03-27T20:00:00+00:00",
-    },
-    "sevenDay": {
-      "utilization": 10.0,
-      "resetsAt": "2026-04-01T20:00:00+00:00",
-    },
-  })
+  usage = _transform_response(
+      {
+          "fiveHour": {
+              "utilization": 42.0,
+              "resetsAt": "2026-03-27T20:00:00+00:00",
+          },
+          "sevenDay": {
+              "utilization": 10.0,
+              "resetsAt": "2026-04-01T20:00:00+00:00",
+          },
+      })
 
   assert usage["windows"] == [
-    {
-      "window_minutes": 300,
-      "utilization": 42.0,
-      "resets_at": "2026-03-27T20:00:00+00:00",
-    },
-    {
-      "window_minutes": 10080,
-      "utilization": 10.0,
-      "resets_at": "2026-04-01T20:00:00+00:00",
-    },
+      {
+          "window_minutes": 300,
+          "utilization": 42.0,
+          "resets_at": "2026-03-27T20:00:00+00:00",
+      },
+      {
+          "window_minutes": 10080,
+          "utilization": 10.0,
+          "resets_at": "2026-04-01T20:00:00+00:00",
+      },
   ]
   assert usage["provider"] == "claude"
   assert "token_count_observed_at" not in usage
@@ -728,6 +762,7 @@ class _StopAfter(BaseException):
 
 
 class _FakeProvider:
+
   def __init__(self, get_value: Callable[[], Any], error: str = "no data") -> None:
     self._get_value = get_value
     self.last_error = error
@@ -773,7 +808,11 @@ def _claude_fetch_value(utilization: float) -> dict:
   """A claude poll fetch result: one 300-minute window at the given utilization plus
   fetched_at/provider metadata. Fresh dict per call, so no two tests share a windows list."""
   return {
-      "windows": [{"window_minutes": 300, "utilization": utilization, "resets_at": ""}],
+      "windows": [{
+          "window_minutes": 300,
+          "utilization": utilization,
+          "resets_at": ""
+      }],
       "fetched_at": "2026-01-01T00:00:00+00:00",
       "provider": "claude",
   }
@@ -810,9 +849,11 @@ def test_poll_stale_keep_on_fetch_failure(monkeypatch) -> None:
   original = _claude_fetch_value(42.0)
 
   def create_provider(provider, label, dir_path):
+
     def get_value():
       fetch_no["i"] += 1
       return original if fetch_no["i"] == 1 else None
+
     return _FakeProvider(get_value, error="rate limited")
 
   accounts = {"claude": [("main", "/fake/main")], "codex": []}
@@ -830,15 +871,23 @@ def test_poll_drops_removed_account_on_next_rebuild(monkeypatch) -> None:
   fetch_no = {"i": 0}
 
   def create_provider(provider, label, dir_path):
+
     def get_value():
       fetch_no["i"] += 1
       return _claude_fetch_value(float(fetch_no["i"]))
+
     return _FakeProvider(get_value)
 
   call = {"i": 0}
   accounts_by_cycle = {
-      1: {"claude": [("main", "/fake/main"), ("invite-1", "/fake/invite-1")], "codex": []},
-      2: {"claude": [("main", "/fake/main")], "codex": []},
+      1: {
+          "claude": [("main", "/fake/main"), ("invite-1", "/fake/invite-1")],
+          "codex": []
+      },
+      2: {
+          "claude": [("main", "/fake/main")],
+          "codex": []
+      },
   }
 
   def accounts_fn():
@@ -862,9 +911,11 @@ def test_poll_round_robin_fetches_accounts_in_derivation_order(monkeypatch) -> N
   fetch_order: list[str] = []
 
   def create_provider(provider, label, dir_path):
+
     def get_value():
       fetch_order.append(label)
       return _claude_fetch_value(1.0)
+
     return _FakeProvider(get_value)
 
   accounts = {
@@ -880,6 +931,7 @@ def test_poll_round_robin_fetches_accounts_in_derivation_order(monkeypatch) -> N
 
 
 def test_poll_broadcasts_once_per_fetch_not_per_round(monkeypatch) -> None:
+
   def create_provider(provider, label, dir_path):
     return _FakeProvider(lambda: _claude_fetch_value(1.0))
 
@@ -914,8 +966,14 @@ def test_poll_prunes_removed_account_cache_key_at_round_boundary(monkeypatch) ->
 
   call = {"i": 0}
   accounts_by_cycle = {
-      1: {"claude": [("main", "/fake/main"), ("a", "/fake/a")], "codex": []},
-      2: {"claude": [("main", "/fake/main")], "codex": []},
+      1: {
+          "claude": [("main", "/fake/main"), ("a", "/fake/a")],
+          "codex": []
+      },
+      2: {
+          "claude": [("main", "/fake/main")],
+          "codex": []
+      },
   }
 
   def accounts_fn():
@@ -935,6 +993,7 @@ def test_poll_prunes_removed_account_cache_key_at_round_boundary(monkeypatch) ->
 
 
 def test_poll_empty_round_guard_sleeps_once_before_rederiving(monkeypatch) -> None:
+
   def create_provider(provider, label, dir_path):
     return _FakeProvider(dict)
 
@@ -976,6 +1035,7 @@ def test_poll_outer_exception_still_backs_off_before_retrying(monkeypatch) -> No
   assert derive_count["i"] == 2
   assert state["sleeps"] == 2
 
+
 def test_codex_usage_transform_reports_weekly_only_shape() -> None:
   """Codex now reports a single weekly window in the primary slot.
 
@@ -983,37 +1043,49 @@ def test_codex_usage_transform_reports_weekly_only_shape() -> None:
   rather than inheriting the meaning of the slot it arrived in.
   """
   fetched_at = "2026-07-20T22:10:00+00:00"
-  lines = [json.dumps(_build_weekly_token_count_event(
-      timestamp="2026-07-20T22:08:57.925Z",
-      used_percent=96.0,
-      resets_at=1785016000,
-  ))]
+  lines = [
+      json.dumps(
+          _build_weekly_token_count_event(
+              timestamp="2026-07-20T22:08:57.925Z",
+              used_percent=96.0,
+              resets_at=1785016000,
+          ))
+  ]
 
   event = _latest_token_count_event(lines)
   assert event is not None
   usage = _transform_codex_response(event, fetched_at=fetched_at)
 
-  assert usage["windows"] == [{
-      "window_minutes": 10080,
-      "utilization": 96.0,
-      "resets_at": datetime.fromtimestamp(1785016000, tz=UTC).isoformat(),
-  }]
+  assert usage["windows"] == [
+      {
+          "window_minutes": 10080,
+          "utilization": 96.0,
+          "resets_at": datetime.fromtimestamp(1785016000, tz=UTC).isoformat(),
+      }
+  ]
   assert "rate_limits_state" not in usage
 
 
 def test_codex_usage_transform_drops_slot_without_window_minutes() -> None:
   """An unidentifiable window is dropped, never guessed at from slot order."""
-  lines = [json.dumps({
-    "timestamp": "2026-07-20T22:08:57.925Z",
-    "type": "event_msg",
-    "payload": {
-      "type": "token_count",
-      "rate_limits": {
-        "primary": {"used_percent": 96.0, "resets_at": 1785016000},
-        "secondary": None,
-      },
-    },
-  })]
+  lines = [
+      json.dumps(
+          {
+              "timestamp": "2026-07-20T22:08:57.925Z",
+              "type": "event_msg",
+              "payload":
+                  {
+                      "type": "token_count",
+                      "rate_limits": {
+                          "primary": {
+                              "used_percent": 96.0,
+                              "resets_at": 1785016000
+                          },
+                          "secondary": None,
+                      },
+                  },
+          })
+  ]
 
   event = _latest_token_count_event(lines)
   assert event is not None
@@ -1024,27 +1096,36 @@ def test_codex_usage_transform_drops_slot_without_window_minutes() -> None:
 
 def test_codex_usage_transform_marks_missing_percentage_unknown() -> None:
   """A window with no reported usage is unknown, not zero."""
-  lines = [json.dumps({
-    "timestamp": "2026-07-20T22:08:57.925Z",
-    "type": "event_msg",
-    "payload": {
-      "type": "token_count",
-      "rate_limits": {
-        "primary": {"window_minutes": 10080, "resets_at": 1785016000},
-        "secondary": None,
-      },
-    },
-  })]
+  lines = [
+      json.dumps(
+          {
+              "timestamp": "2026-07-20T22:08:57.925Z",
+              "type": "event_msg",
+              "payload":
+                  {
+                      "type": "token_count",
+                      "rate_limits": {
+                          "primary": {
+                              "window_minutes": 10080,
+                              "resets_at": 1785016000
+                          },
+                          "secondary": None,
+                      },
+                  },
+          })
+  ]
 
   event = _latest_token_count_event(lines)
   assert event is not None
   usage = _transform_codex_response(event, fetched_at="2026-07-20T22:10:00+00:00")
 
-  assert usage["windows"] == [{
-      "window_minutes": 10080,
-      "utilization": None,
-      "resets_at": datetime.fromtimestamp(1785016000, tz=UTC).isoformat(),
-  }]
+  assert usage["windows"] == [
+      {
+          "window_minutes": 10080,
+          "utilization": None,
+          "resets_at": datetime.fromtimestamp(1785016000, tz=UTC).isoformat(),
+      }
+  ]
 
 
 def test_transform_response_marks_missing_claude_percentage_unknown() -> None:

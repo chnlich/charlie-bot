@@ -4,7 +4,8 @@ const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
 
-const {dockOf, findChildByClass, makeElement} = require('./artifact_comments_dom_stub');
+const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
+  require('./artifact_comments_dom_stub');
 
 const ARTIFACT_COMMENTS_JS = readStatic('artifact-comments.js');
 
@@ -89,21 +90,6 @@ function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
   return {window, head, body, documentElement, listeners};
 }
 
-function clickElement(el) {
-  assert.ok(el._listeners.click && el._listeners.click.length > 0, 'click listener exists');
-  return el._listeners.click[0]({preventDefault() {}, stopPropagation() {}});
-}
-
-function waitForPromises() {
-  return new Promise((resolve) => setImmediate(resolve));
-}
-
-async function flushPromises(times = 3) {
-  for (let i = 0; i < times; i++) await waitForPromises();
-}
-
-// Records every fetch and answers that session's two endpoints: the name
-// lookup and the chat POST target the tray sends to.
 function sessionFetchStub(calls, sessionId, sessionName) {
   return async (url, options = {}) => {
     calls.push({url, method: options.method || 'GET'});
@@ -197,7 +183,7 @@ test('batch tray labels and POST target use the hash session when it resolves', 
   const shortcuts = findChildByClass(dockOf(body), '__cbc-shortcuts');
   const shortcutBtn = findChildByClass(shortcuts, '__cbc-shortcut');
   clickElement(shortcutBtn);
-  await flushPromises();
+  await flushPromises(3);
 
   const tray = findChildByClass(dockOf(body), '__cbc-tray');
   const header = findChildByClass(tray, '__cbc-tray-header');
@@ -1088,7 +1074,7 @@ test('gutter cards are positioned by the stackCards pure function (render glue)'
   const gap = window.__cbcGutterGap;
 
   for (const b of blocks) addBlockComment(body, listeners, b, 'cmt');
-  await flushPromises();
+  await flushPromises(3);
 
   const gutter = body.children.find((c) => c.className === '__cbc-gutter');
   assert.ok(gutter, 'gutter is installed in gutter mode');
@@ -1138,7 +1124,7 @@ test('gutter mode never writes the artifact\'s own layout', async () => {
   const documentStyleAttr = documentElement.attributes.style;
 
   addBlockComment(body, listeners, block, 'cmt');
-  await flushPromises();
+  await flushPromises(3);
   assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute identical after entry');
   assert.equal(documentElement.attributes.style, documentStyleAttr, 'documentElement style attribute identical after entry');
   assert.equal(body.style.paddingRight, undefined, 'paddingRight is never set');
@@ -1188,7 +1174,7 @@ test('gutter mode aligns the dock to the column and restores its prior inline va
   const tray = findChildByClass(dock, '__cbc-tray');
 
   addBlockComment(body, listeners, block, 'cmt');
-  await flushPromises();
+  await flushPromises(3);
 
   // Every expectation derives from the fake layout's own numbers: the bar's
   // left edge is the content's right edge plus the gap, its width is the width
@@ -1257,7 +1243,7 @@ test('gutter mode never relocates the action bar as window width changes', async
   );
 
   addBlockComment(body, listeners, block, 'cmt');
-  await flushPromises();
+  await flushPromises(3);
   assertBarAtHome(1400);
   assert.equal(dock.style.left, columnLeft, 'bar inline left tracks the column left edge at 1400px');
 
@@ -1523,7 +1509,7 @@ test('every injected body child carries the __cbc-ui marker even after trigger a
   const mouseover = listeners.find((l) => l.target === 'document' && l.type === 'mouseover');
   mouseover.handler({target: block});
   addBlockComment(body, listeners, block, 'cmt');
-  await flushPromises();
+  await flushPromises(3);
 
   // Styles go to head, never body, so any body child not seeded via
   // bodyChildren is an injected layer root and must carry the marker.

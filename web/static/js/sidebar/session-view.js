@@ -667,7 +667,9 @@ function renderNoActiveSessionView() {
 }
 
 
-Object.assign(Sidebar, {
+// One name list: Object.assign puts each export on Sidebar, and the same keys
+// become bare globals. Adding a function here is enough for both.
+const API = {
   getDefaultBackendId,
   getActiveBackendId,
   setActiveBackendId,
@@ -683,23 +685,8 @@ Object.assign(Sidebar, {
   renderUsageFromData,
   createSession,
   renderNoActiveSessionView,
-});
-Sidebar.expose([
-  'getDefaultBackendId',
-  'getActiveBackendId',
-  'setActiveBackendId',
-  'setSwitchableBackends',
-  'setBackendSwitchRotates',
-  'updateActiveBackendBadges',
-  'switchBackend',
-  'scheduleLazySessionDataLoad',
-  'switchSession',
-  'renderSessionView',
-  'initScrollPagination',
-  'loadOlderIfNeeded',
-  'renderUsageFromData',
-  'createSession',
-  'renderNoActiveSessionView',
-]);
+};
+Object.assign(Sidebar, API);
+Sidebar.expose(Object.keys(API));
 
 })();

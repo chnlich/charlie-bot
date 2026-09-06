@@ -522,7 +522,8 @@ async def get_session_usage(
       "usage": usage,
   }
   payload.update(_active_backend_payload(meta, cfg))
-  return payload
+  # FastJsonResponse for the message-page cost reason in get_session_events_page.
+  return FastJsonResponse(payload)
 
 
 @router.get('/{session_id}/events')

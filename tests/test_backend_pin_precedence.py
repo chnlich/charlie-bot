@@ -7,6 +7,7 @@ path, master_trigger.py's wake path) and the run_cc guard's precedence over
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,25 @@ def _assistant_errors(session_mgr: SessionManager, session_id: str) -> list[dict
   return [e for e in events if e["type"] == ET.ASSISTANT_ERROR]
 
 
+async def _expect_pin_hard_fail(
+    session_mgr: SessionManager,
+    session_id: str,
+    drive: Callable[[], Awaitable[object]],
+    monkeypatch: pytest.MonkeyPatch,
+    error_substring: str,
+) -> None:
+  """Run one path's driver under the no-spawn guard and assert the pin hard-failed:
+  no backend built, and an assistant error naming the pin written."""
+  spawned: list[object] = []
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
+  patch_instructions_content(monkeypatch)
+  await drive()
+  assert not spawned
+  errors = _assistant_errors(session_mgr, session_id)
+  assert errors
+  assert any(error_substring in e["content"] for e in errors)
+
+
 # --------------------------------------------------- unresolvable codex pin
 
 
@@ -45,17 +65,13 @@ async def test_message_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, mo
   )
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
-
-  spawned: list[object] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
-  patch_instructions_content(monkeypatch)
-
-  await run_and_finalize(cfg, session, "hello", session_mgr)
-
-  assert not spawned
-  errors = _assistant_errors(session_mgr, session.id)
-  assert errors
-  assert any("codex-ghost-9" in e["content"] for e in errors)
+  await _expect_pin_hard_fail(
+      session_mgr,
+      session.id,
+      lambda: run_and_finalize(cfg, session, "hello", session_mgr),
+      monkeypatch,
+      error_substring="codex-ghost-9",
+  )
 
 
 @pytest.mark.asyncio
@@ -69,17 +85,13 @@ async def test_wake_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monke
   )
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
-
-  spawned: list[object] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
-  patch_instructions_content(monkeypatch)
-
-  await trigger_master(session.id, "worker summary", cfg, session_mgr)
-
-  assert not spawned
-  errors = _assistant_errors(session_mgr, session.id)
-  assert errors
-  assert any("codex-ghost-9" in e["content"] for e in errors)
+  await _expect_pin_hard_fail(
+      session_mgr,
+      session.id,
+      lambda: trigger_master(session.id, "worker summary", cfg, session_mgr),
+      monkeypatch,
+      error_substring="codex-ghost-9",
+  )
 
 
 @pytest.mark.asyncio
@@ -143,17 +155,14 @@ async def test_replay_unresolvable_pin_hard_fails_not_substituted(tmp_path: Path
   cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
-
-  spawned: list[object] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
-  patch_instructions_content(monkeypatch)
-
   user_event = {"id": "u1", "type": "user", "content": "unanswered message"}
-  await master_cc.replay_user_message(cfg, session, user_event, session_mgr.callbacks())
-
-  assert not spawned
-  errors = _assistant_errors(session_mgr, session.id)
-  assert any("codex-ghost-9" in e["content"] for e in errors)
+  await _expect_pin_hard_fail(
+      session_mgr,
+      session.id,
+      lambda: master_cc.replay_user_message(cfg, session, user_event, session_mgr.callbacks()),
+      monkeypatch,
+      error_substring="codex-ghost-9",
+  )
 
 
 # ------------------------------------------------------- factory default
@@ -167,14 +176,10 @@ async def test_empty_pin_no_option_rejects_not_backend_options_zero(tmp_path: Pa
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"))
   session.backend = ""
-
-  spawned: list[object] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
-  patch_instructions_content(monkeypatch)
-
-  await run_and_finalize(cfg, session, "hello", session_mgr)
-
-  assert not spawned
-  errors = _assistant_errors(session_mgr, session.id)
-  assert errors
-  assert any("no backend option" in e["content"] for e in errors)
+  await _expect_pin_hard_fail(
+      session_mgr,
+      session.id,
+      lambda: run_and_finalize(cfg, session, "hello", session_mgr),
+      monkeypatch,
+      error_substring="no backend option",
+  )

@@ -285,37 +285,33 @@ def test_diff_repeat_view_uses_memo(
   assert [c[1] for c in calls] == ["rev-parse"]
 
 
-def test_diff_files_head_move_busts_memo(tmp_path: Path) -> None:
-  """A moved ref resolves to a new SHA key, so its manifest re-computes."""
+_HEAD_MOVE_CASES = [
+    pytest.param("files", {"mode": "three-dot"}, id="files"),
+    pytest.param("file", {"path": "added.txt"}, id="file"),
+]
+
+
+@pytest.mark.parametrize(("endpoint", "extra_params"), _HEAD_MOVE_CASES)
+def test_diff_head_move_busts_memo(tmp_path: Path, endpoint: str, extra_params: dict[str, str]) -> None:
+  """A moved ref resolves to a new SHA key, so its view re-computes."""
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
-  params = {"repo": str(repo), "base": "main", "head": "feature", "mode": "three-dot"}
-  first = client.get("/api/git/diff/files", params=params).json()
+  params = {"repo": str(repo), "base": "main", "head": "feature", **extra_params}
+  first = client.get(f"/api/git/diff/{endpoint}", params=params).json()
 
   (repo / "added.txt").write_text("brand new\nfile\nthird\n")
   _git(repo, "add", "-A")
   _git(repo, "commit", "-qm", "advance feature")
 
-  second = client.get("/api/git/diff/files", params=params).json()
-  assert second["head_sha"] != first["head_sha"]
-  by_path = {f["path"]: f for f in second["files"]}
-  assert by_path["added.txt"]["additions"] == 3
-
-
-def test_diff_file_head_move_busts_memo(tmp_path: Path) -> None:
-  """A moved ref resolves to a new SHA key, so its per-file diff re-computes."""
-  repo = _build_repo(tmp_path)
-  client = _build_client(tmp_path)
-  params = {"repo": str(repo), "base": "main", "head": "feature", "path": "added.txt"}
-  first = client.get("/api/git/diff/file", params=params).json()
-
-  (repo / "added.txt").write_text("brand new\nfile\nthird\n")
-  _git(repo, "add", "-A")
-  _git(repo, "commit", "-qm", "advance feature")
-
-  second = client.get("/api/git/diff/file", params=params).json()
-  assert "+third" in second["diff"]
-  assert second["diff"] != first["diff"]
+  second = client.get(f"/api/git/diff/{endpoint}", params=params).json()
+  # The files response carries the moved SHA; the file response carries only the
+  # body, so its re-computation shows as the new hunk line.
+  if endpoint == "files":
+    assert second["head_sha"] != first["head_sha"]
+    by_path = {f["path"]: f for f in second["files"]}
+    assert by_path["added.txt"]["additions"] == 3
+  else:
+    assert "+third" in second["diff"]
 
 
 def test_repo_outside_workspace_rejected(tmp_path: Path) -> None:

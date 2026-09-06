@@ -225,7 +225,7 @@ class SessionViewData:
   has_more: bool = False
 
 
-def _projection_page(
+async def _projection_page(
     session_mgr: 'SessionManager',
     session_id: str,
     message_limit: int,
@@ -234,9 +234,13 @@ def _projection_page(
 
   Returns (messages, pending_draft, event_count, oldest_ordinal, has_more), or
   None when no projection is available and the caller must take the legacy
-  tail-events path.
+  tail-events path. A warm projection hit is a dict read + len compare, so it
+  is answered on the event loop; the executor round-trip is paid only on a
+  miss, where the threaded getter reads or advances.
   """
-  projection = session_mgr.get_message_projection(session_id)
+  projection = session_mgr.projection_memo_hit(session_id)
+  if projection is None:
+    projection = await asyncio.to_thread(session_mgr.get_message_projection, session_id)
   if projection is None:
     return None
   messages, oldest_ordinal, has_more = projection.tail(message_limit)
@@ -296,7 +300,7 @@ async def build_session_bootstrap_data(
 
   page = None
   if session_meta.archive_offset == 0:
-    page = await asyncio.to_thread(_projection_page, session_mgr, session_id, message_limit)
+    page = await _projection_page(session_mgr, session_id, message_limit)
   if page is None:
     (_, messages, pending_draft, total_event_count, oldest_ordinal,
      has_more) = await _tail_events_page(session_mgr, session_id, session_meta.archive_offset, message_limit)
@@ -344,7 +348,7 @@ async def build_session_view_data(
     raise ValueError(f"session '{session_id}' metadata missing during view build")
 
   if message_limit is not None and session_meta.archive_offset == 0:
-    result = await asyncio.to_thread(_projection_page, session_mgr, session_id, message_limit)
+    result = await _projection_page(session_mgr, session_id, message_limit)
     if result is not None:
       messages, pending_draft, total_event_count, oldest_ordinal, has_more = result
       events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)

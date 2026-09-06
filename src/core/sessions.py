@@ -1725,6 +1725,24 @@ class SessionManager:
     self._projection_cache.store(session_id, cached)
     return cached
 
+  def projection_memo_hit(self, session_id: str) -> MessageProjection | None:
+    """Return the memoized projection when the getter's fast path provably applies, else None.
+
+    Pure memory — a dict read, a cache peek, one len compare — so callers can
+    answer a warm poll on the event loop and pay the executor round-trip only
+    on a miss (cold events cache, appended or shrunk corpus), where
+    ``get_message_projection`` reads or advances. A cache entry exists only
+    for unarchived sessions (the getter returns None before storing for
+    ``archive_offset != 0``), so a hit needs no archive-offset check.
+    """
+    cached = self._projection_cache.get(session_id)
+    if cached is None:
+      return None
+    live = self._chat_events.peek_cached_events(session_id)
+    if live is None or cached.event_count != len(live):
+      return None
+    return cached
+
   def _drop_session_runtime_state(self, session_id: str) -> None:
     """Drop a session's live runtime state: chat-event cache, aggregator, projection, recap memo."""
     self._chat_events.clear_cache(session_id)

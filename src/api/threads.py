@@ -382,6 +382,34 @@ def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
     return list(entry.events)
 
 
+def read_thread_worker_events_memo_hit(events_path: Path) -> list[WorkerEvent] | None:
+  """Serve the unchanged-log steady state on the caller's thread; None otherwise.
+
+  The 5 s workers-panel poll of an unchanged log needs one exists+stat to
+  prove the memo current, and the executor round-trip around it measures
+  ~95 us against a ~12 us hit. Returns None — the caller re-runs
+  ``read_thread_worker_events`` on a thread — for a cold memo, a grown or
+  shrunk log, or a lock held by a concurrent reader's incremental read: the
+  holder may be mid-file-read, so this path never waits on the lock.
+  """
+  key = str(events_path)
+  if not _thread_events_lock.acquire(blocking=False):
+    return None
+  try:
+    entry = _thread_events_cache.get(key)
+    if entry is None:
+      return None
+    try:
+      size = events_path.stat().st_size
+    except OSError:
+      return None
+    if size != entry.offset:
+      return None
+    return list(entry.events)
+  finally:
+    _thread_events_lock.release()
+
+
 def _append_worker_events(
     raw_events: Iterable[dict], events: list[WorkerEvent], tool_id_to_name: dict[str, str]) -> None:
   for data in raw_events:
@@ -440,7 +468,11 @@ async def get_thread_events(
   it is a sound prefix cut.
   """
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  events = await asyncio.to_thread(read_thread_worker_events, events_path)
+  # The unchanged-log poll is one stat + a lookup; only a miss pays the
+  # executor round-trip the incremental read needs.
+  events = read_thread_worker_events_memo_hit(events_path)
+  if events is None:
+    events = await asyncio.to_thread(read_thread_worker_events, events_path)
   if after is None:
     return events
   reset = after > len(events)

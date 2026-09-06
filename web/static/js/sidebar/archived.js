@@ -224,19 +224,16 @@ function applyArchivedGroupChange(sessionId, group) {
   renderArchivedPills();
 }
 
-Object.assign(Sidebar, {
+// One name list: Object.assign puts each export on Sidebar, and the same keys
+// become bare globals. Adding a function here is enough for both.
+const API = {
   loadArchivedView,
   setArchivedGroupFilter,
   loadArchivedNextPage,
   archivedForgetSession,
   applyArchivedGroupChange,
-});
-Sidebar.expose([
-  'loadArchivedView',
-  'setArchivedGroupFilter',
-  'loadArchivedNextPage',
-  'archivedForgetSession',
-  'applyArchivedGroupChange',
-]);
+};
+Object.assign(Sidebar, API);
+Sidebar.expose(Object.keys(API));
 
 })();

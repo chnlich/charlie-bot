@@ -378,7 +378,9 @@ function cancelTrigger(triggerId, sessionId) {
 }
 
 
-Object.assign(Sidebar, {
+// One name list: Object.assign puts each export on Sidebar, and the same keys
+// become bare globals. Adding a function here is enough for both.
+const API = {
   fetchWorkerDescription,
   renderWorkersTab,
   renderWorkersTabUnknown,
@@ -390,19 +392,8 @@ Object.assign(Sidebar, {
   addWorkerCard,
   updateTriggerStatus,
   cancelTrigger,
-});
-Sidebar.expose([
-  'fetchWorkerDescription',
-  'renderWorkersTab',
-  'renderWorkersTabUnknown',
-  'restartWorkersPolling',
-  'ensureWorkersLoadedForActiveSession',
-  'pollWorkers',
-  'updateWorkersTabBadge',
-  'updateWorkerStatus',
-  'addWorkerCard',
-  'updateTriggerStatus',
-  'cancelTrigger',
-]);
+};
+Object.assign(Sidebar, API);
+Sidebar.expose(Object.keys(API));
 
 })();

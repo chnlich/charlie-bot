@@ -219,3 +219,51 @@ def test_serializer_emits_unchanged_event_sequence(tmp_path: Path) -> None:
   second = tmp_path / "merged2.json.gz"
   merge_traces([rank0, rank1], second, slim=False)
   assert _read_merged(second) == events
+
+
+def _batch_events(count: int) -> list[dict]:
+  return [{
+      "ph": "X",
+      "pid": 7,
+      "tid": index % 3,
+      "name": f"evt-{index}",
+      "ts": index,
+      "args": {
+          "value": index,
+          "text": f"payload-{index}",
+      },
+  } for index in range(count)]
+
+
+def _merged_payload(path: Path) -> str:
+  with gzip.open(path, "rt", encoding="utf-8") as merged_file:
+    return merged_file.read()
+
+
+def test_batched_serializer_matches_per_event_rendering(tmp_path: Path) -> None:
+  # Batch boundaries must be invisible in the payload: the bracket-stripped batch
+  # renderings concatenate into exactly the per-event form the pre-batch writer
+  # produced, comma placement and thread_name interleaving included.
+  trace = tmp_path / "trace.json"
+  _write_trace(trace, _batch_events(2 * 512 + 3))
+  output = tmp_path / "merged.json.gz"
+
+  merge_traces([trace], output, slim=False)
+
+  payload = _merged_payload(output)
+  events = json.loads(payload)["traceEvents"]
+  expected = ",".join(json.dumps(event, ensure_ascii=False, separators=(",", ":")) for event in events)
+  assert payload == '{"traceEvents":[' + expected + "]}"
+
+
+def test_single_event_and_batch_flush_produce_valid_payload(tmp_path: Path) -> None:
+  # One event total exercises the first-batch flush (no leading comma) and the
+  # trailing flush in one pass.
+  trace = tmp_path / "trace.json"
+  _write_trace(trace, _batch_events(1))
+  output = tmp_path / "merged.json.gz"
+
+  merge_traces([trace], output, slim=False)
+
+  events = _read_merged(output)
+  assert [event["name"] for event in events if event.get("name", "").startswith("evt-")] == ["evt-0"]

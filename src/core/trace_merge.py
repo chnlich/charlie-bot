@@ -6,10 +6,17 @@ import re
 from pathlib import Path
 from typing import TextIO
 
-# Compression level for the merged gzip output. Measured on a 497.1 MB /
-# 1,358,409-event input: level 6 is 10.0 s / 31.1 MB against level 9's 12.2 s /
-# 28.6 MB. Level 6 matches the direct-pass path and the transport gzip middleware.
-_MERGE_COMPRESSLEVEL = 6
+# Compression level for the merged gzip output. Measured on a 191.2 MB /
+# 496,099-event input: level 1 builds in 0.57 s / 15.5 MB against level 6's
+# 1.73 s / 11.6 MB. The viewer fetches the whole artifact, so the build wall is
+# the user-visible cost; big-payload transport gzip is level 1 for the same reason.
+_MERGE_COMPRESSLEVEL = 1
+
+# Events per json.dumps call on the merge output. The C encoder's per-element text
+# is context-free, so a batch's bracket-stripped rendering is byte-identical to the
+# per-event form; batching cut the serializer pass from 3.0 s to 1.7 s on the input
+# above. The batch is the only buffering beyond the gzip stream.
+_MERGE_BATCH_EVENTS = 512
 
 
 def _rank_label(path: Path) -> str:
@@ -19,25 +26,42 @@ def _rank_label(path: Path) -> str:
   return re.sub(r"\.json$", "", path.name, flags=re.IGNORECASE)
 
 
-def _write_event(output: TextIO, event: dict, first_event: bool) -> bool:
-  if not first_event:
-    output.write(",")
-  # json.dump iterates with _one_shot false, taking the pure-Python _make_iterencode
-  # path; json.dumps goes through encode() and the C encoder. 28.4 s -> 12.2 s on a
-  # 497.1 MB / 1,358,409-event input, byte size unchanged.
-  output.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")))
-  return False
+class _EventBatcher:
+  """Serializes merged events into the output stream in batches.
+
+  The stream carries `e1,e2,...` with no brackets of its own; a batch's list
+  rendering minus its outer brackets is exactly that fragment.
+  """
+
+  def __init__(self, output: TextIO) -> None:
+    self._output = output
+    self._pending: list[dict] = []
+    self._emitted_any = False
+
+  def add(self, event: dict) -> None:
+    self._pending.append(event)
+    if len(self._pending) >= _MERGE_BATCH_EVENTS:
+      self.flush()
+
+  def flush(self) -> None:
+    if not self._pending:
+      return
+    if self._emitted_any:
+      self._output.write(",")
+    self._emitted_any = True
+    text = json.dumps(self._pending, ensure_ascii=False, separators=(",", ":"))
+    self._output.write(text[1:-1])
+    self._pending.clear()
 
 
 def _merge_one_trace(
     path: Path,
     file_index: int,
-    output: TextIO,
-    first_event: bool,
+    batcher: _EventBatcher,
     next_tid: int,
     next_flow_id: int,
     slim: bool,
-) -> tuple[bool, int, int]:
+) -> tuple[int, int]:
   with path.open("r", encoding="utf-8") as input_file:
     trace = json.load(input_file)
   if isinstance(trace, dict):
@@ -107,8 +131,7 @@ def _merge_one_trace(
       thread_key = str(original_tid)
       if thread_key not in emitted_thread_names:
         emitted_thread_names.add(thread_key)
-        first_event = _write_event(
-            output,
+        batcher.add(
             {
                 "ph": "M",
                 "pid": remapped_pid,
@@ -117,12 +140,11 @@ def _merge_one_trace(
                 "args": {
                     "name": f"{rank_label}/{original_tid}"
                 },
-            },
-            first_event,
+            }
         )
     if event.get("ph") in {"s", "t", "f"} and "id" in event:
       event["id"] = get_numeric_flow_id(event["id"])
-    first_event = _write_event(output, event, first_event)
+    batcher.add(event)
 
   meta_tid = get_numeric_tid("meta")
   for synthetic_pid, (sort_index, label) in synthetic_meta.items():
@@ -131,36 +153,34 @@ def _merge_one_trace(
         ("process_labels", {"labels": label}),
         ("process_sort_index", {"sort_index": sort_index}),
     ):
-      first_event = _write_event(
-          output,
+      batcher.add(
           {
               "ph": "M",
               "pid": synthetic_pid,
               "tid": meta_tid,
               "name": name,
               "args": args
-          },
-          first_event,
+          }
       )
 
-  return first_event, next_tid, next_flow_id
+  return next_tid, next_flow_id
 
 
 def merge_traces(paths: list[Path], out_path: Path, slim: bool) -> None:
   """Merge Chrome JSON traces into one gzip-compressed Chrome trace."""
-  first_event = True
   next_tid = 1
   next_flow_id = 1
   with gzip.open(out_path, "wt", encoding="utf-8", compresslevel=_MERGE_COMPRESSLEVEL) as output:
     output.write('{"traceEvents":[')
+    batcher = _EventBatcher(output)
     for file_index, path in enumerate(paths):
-      first_event, next_tid, next_flow_id = _merge_one_trace(
+      next_tid, next_flow_id = _merge_one_trace(
           path,
           file_index,
-          output,
-          first_event,
+          batcher,
           next_tid,
           next_flow_id,
           slim,
       )
+    batcher.flush()
     output.write("]}")

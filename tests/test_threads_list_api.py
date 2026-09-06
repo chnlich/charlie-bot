@@ -140,13 +140,13 @@ def test_list_poll_skips_the_signature_walk_until_a_mark_or_the_sweep(
   url = f"/api/threads/{session_id}/list"
 
   walks = {"n": 0}
-  real = threads_api._list_body_signature
+  real = threads_api._row_source_stats
 
   def counting(threads_dir: str, triggers_dir: str):
     walks["n"] += 1
     return real(threads_dir, triggers_dir)
 
-  monkeypatch.setattr(threads_api, "_list_body_signature", counting)
+  monkeypatch.setattr(threads_api, "_row_source_stats", counting)
 
   client.get(url)
   assert walks["n"] == 1
@@ -164,3 +164,77 @@ def test_list_poll_skips_the_signature_walk_until_a_mark_or_the_sweep(
   updated = client.get(url)
   assert next(row for row in updated.json() if row["id"] == any_id)["status"] == "running"
   assert walks["n"] == 3
+
+
+def test_marked_rebuild_reuses_rows_and_parses_from_one_walk(tmp_path: Path) -> None:
+  """A marked rebuild rebuilds only the moved file's row, and the rows parse from
+  the walked pairs (the signature and the rows describe one file instant)."""
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._list_body_memo.clear()
+  threads_api._sig_gate.clear()
+  threads_api._thread_row_memo.clear()
+  url = f"/api/threads/{session_id}/list"
+
+  first = client.get(url)
+  rows_first = {row["id"]: row for row in first.json()}
+  any_id = next(iter(rows_first))
+
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  thread_mgr = ThreadManager(cfg)
+  asyncio.run(thread_mgr.update_status(session_id, any_id, ThreadStatus.RUNNING))
+
+  second = client.get(url)
+  rows_second = {row["id"]: row for row in second.json()}
+  assert rows_second[any_id]["status"] == "running"
+  assert second.content != first.content
+  # Every row is byte-identical to the whole-parse rows (the memo's identity is
+  # the parse memo's), and the moved row is the only one rebuilt.
+  assert rows_second.keys() == rows_first.keys()
+  for tid, row in rows_second.items():
+    if tid == any_id:
+      assert row != rows_first[tid]
+    else:
+      assert row == rows_first[tid]
+
+  # The stored row dicts are the ones the next rebuild serves: after another
+  # mark, the unmoved files' rows are the same objects in the memo, the moved
+  # file's row is a fresh dict.
+  rows_objects = threads_api._thread_row_memo.get(session_id)
+  assert rows_objects is not None
+  stored = {v[2]["id"]: v[2] for v in rows_objects.values()}
+  asyncio.run(thread_mgr.update_status(session_id, any_id, ThreadStatus.COMPLETED))
+  third = client.get(url)
+  assert next(row for row in third.json() if row["id"] == any_id)["status"] == "completed"
+  rows_objects_third = threads_api._thread_row_memo.get(session_id)
+  assert rows_objects_third is not None
+  stored_third = {v[2]["id"]: v[2] for v in rows_objects_third.values()}
+  for tid, row in stored_third.items():
+    if tid == any_id:
+      assert row is not stored[tid]
+    else:
+      assert row is stored[tid]
+
+
+def test_list_threads_from_stats_matches_list_threads(tmp_path: Path) -> None:
+  """The shared parse-merge serves the same metas from pre-walked pairs as from its own scan."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  sessions = SessionManager(cfg)
+
+  async def seed() -> str:
+    session = await sessions.create_session(CreateSessionRequest(name="from-stats"))
+    threads = ThreadManager(cfg)
+    await threads.create_thread(session, "one")
+    await threads.create_thread(session, "two")
+    return session.id
+
+  session_id = asyncio.run(seed())
+  threads_dir = cfg.sessions_dir / session_id / "threads"
+  mgr = ThreadManager(cfg)
+  scanned = asyncio.run(mgr.list_threads(session_id))
+
+  from src.core.threads import iter_thread_meta_stats
+  pairs = list(iter_thread_meta_stats(str(threads_dir)))
+  from_stats = mgr.list_threads_from_stats(pairs)
+
+  assert {t.id for t in from_stats} == {t.id for t in scanned}
+  assert {t.description for t in from_stats} == {"one", "two"}

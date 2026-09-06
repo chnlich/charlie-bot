@@ -77,6 +77,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M65 big-page gzip event-loop stall, whole-body JSON response | M65 collector below | seconds of loop lag + wall per 200-message events-page fetch through the real app stack (gzip + auth middleware), worst on-disk live chat corpus (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.012 s | — (introduced with its first history row) |
 | M66 perfetto merged-trace build wall, worst on-disk trace corpus | M66 collector below | seconds per `merge_traces` build, largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 12 s | — (introduced with its first history row) |
 | M67 sidebar deep-probe trigger scan, steady state | M67 collector below | seconds per `pending_trigger_state_sync` call, worst on-disk trigger corpus | median < 0.0005 s | — (introduced with its first history row) |
+| M68 worker-list marked changed-poll rebuild | M68 collector below | seconds per body rebuild after one writer mark, worst on-disk thread-metadata corpus; the unchanged poll and its conditional are M36's shapes | median < 0.007 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3756,6 +3757,86 @@ print(f"session {SID}, {best_n} trigger files (pending {result[0]}); steady-stat
 EOF
 ```
 
+M68 — worker-list marked changed-poll rebuild. During an active turn the running
+worker's metadata.json rewrites continuously, so nearly every 3 s poll of that
+session's workers panel takes the list body's rebuild path instead of the M36
+memo hit. The rebuild's shape is one writer mark plus one poll; the collector
+copies the session whose threads directory carries the most metadata bytes into
+a scratch `CHARLIEBOT_HOME` under /tmp (live home read once for the copy, never
+written), wires the copy through the `get_config` dependency the way the
+server's dependency singletons are, and drives the marked shape: one cold
+build, one memo-hit poll, then eight rounds of (one atomic metadata rewrite +
+`mark_sidebar_dirty`, one timed request) — every timed request a genuine
+rebuild. The unchanged-poll steady state has no row here; M36 owns it.
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from src.api.deps import get_config, get_thread_manager, get_trigger_manager
+from src.api.threads import router as threads_router
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
+from src.core.triggers import TriggerManager
+from src.core.sidebar_state import mark_sidebar_dirty
+
+# Worst worker-list corpus: the session whose threads carry the most metadata
+# bytes; live home read once for the copy, never written.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    t = d / "threads"
+    if t.is_dir():
+        n = sum((p / "metadata.json").stat().st_size for p in t.iterdir() if (p / "metadata.json").is_file())
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+home = Path(tempfile.mkdtemp(prefix="m68-rebuild-", dir="/tmp"))
+shutil.copytree(best, home / "sessions" / SID)
+cfg = CharlieBotConfig(charliebot_home=home)
+thread_mgr = ThreadManager(cfg)
+trigger_mgr = TriggerManager(cfg, SessionManager(cfg))
+app = FastAPI()
+app.include_router(threads_router, prefix="/api/threads")
+app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
+app.dependency_overrides[get_trigger_manager] = lambda: trigger_mgr
+app.dependency_overrides[get_config] = lambda: cfg
+client = TestClient(app)
+url = f"/api/threads/{SID}/list"
+
+client.get(url)  # cold build, as at first panel paint after a server start; not timed
+client.get(url)  # memo hit; not timed
+
+metas = sorted((home / "sessions" / SID / "threads").glob("*/metadata.json"), key=lambda p: p.stat().st_mtime_ns)
+
+def dirty(i):
+    victim = metas[i % len(metas)]
+    tmp = victim.with_name("metadata.json.m68probe")
+    tmp.write_text(victim.read_text(encoding="utf-8"), encoding="utf-8")
+    os.replace(tmp, victim)
+    mark_sidebar_dirty(SID)  # the writer funnel's mark: every real writer calls this
+
+dirty(0)
+times = []
+bodies = []
+for i in range(8):
+    t0 = time.perf_counter()
+    r = client.get(url)
+    times.append(time.perf_counter() - t0)
+    bodies.append(len(r.content))
+    dirty(i + 1)
+times.sort()
+assert len(set(bodies)) == 1, "rebuild bodies differed across rounds"
+print(f"{best_n / 1e3:.0f} KB thread metadata; marked changed-poll rebuild median "
+      f"{times[4] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms over 8, body {bodies[0]} B")
+shutil.rmtree(home)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3862,3 +3943,4 @@ EOF
 | 2026-09-06 | this PR | M56 /status request median 2.47/2.57/2.60 ms → 1.93/2.34/2.31 ms, maxima 8.63/8.40/8.91 ms → 8.34/8.22/8.41 ms (three interleaved rounds of the verbatim collector, 43 sidebar ids, live corpus read-only, main checkout before vs branch worktree after back-to-back at load 3.08-3.51, every paired round faster; body 9569 B and parsed-body digest ae02688caf42 identical across all six arms; component attribution: 43x get_session 0.31 ms (model_copy 0.09), populate_sidebar_state 0.14 ms, render 0.04 ms; no-regression re-measures: M21 sweep 0.0033/0.0037 s → 0.0031/0.0030 s, M40 starred 0.69/0.66/0.75/0.77 ms → 1.06/0.70/0.71/0.78 ms and groups 0.63/0.64/0.64/0.67 → 0.96/0.65/0.65/0.72 ms (round-1 after spike is the documented enrich-probe noise, parity in the other three rounds), M61 within noise both directions; 4573-passed suite) | the polled sidebar read left the per-row copy: resolve_sidebar_state holds the probe-or-serve machinery and returns the derived fields without mutating its inputs (has_running_tasks reads busy_since so cache references may arrive unstamped), populate_sidebar_state stays as the wrapper for the copy-owning callers, and the /status handler reads the cached metadata references through get_sessions_readonly (warm hits serve the cached objects themselves, misses keep the get_session read, order and unknown-id dropping preserved) |
 | 2026-09-06 | this PR | M41 repeat-view median 0.0060/0.0061/0.0065 s → 0.0017/0.0018/0.0017 s, maxima 0.0067/0.0064/0.0066 s → 0.0021/0.0022/0.0021 s (post-review re-pair 0.0069 s → 0.0017 s at load 2.2); M43 repeat-expand median 0.0063/0.0064/0.0062 s → 0.0021/0.0020/0.0019 s, maxima 0.0067/0.0066/0.0068 s → 0.0024/0.0024/0.0021 s (three interleaved verbatim-collector rounds, 533-file charlie-bot root..HEAD manifest, main checkout before vs branch worktree after back-to-back at load 1.2-1.8; manifest body sha256-identical d38f3e7f84d4ccc9 and file body 982d39e617a32e42 across all arms; first views unchanged within subprocess noise — M41 0.067 s → 0.068-0.073 s paying the new signature walk once per ref move, M43 0.020 s → 0.016 s; M14 loop-lag re-measured unchanged, 0.0056-0.0058 s → 0.0058 s at the 5 ms ticker floor; 4578-passed suite) | the rev-parse left the repeat path: ref resolution memoized on a stat-only ref-state signature over the full rev-parse read set (git-dir top-level pseudo-refs, packed-refs, shallow/grafts, the shared loose refs tree, and — in a linked worktree — the worktree's own per-worktree refs tree, the review's soundness finding with the bisect-ref move pinned by test), the signature walked with os.scandir so d_type from readdir halves the syscalls (233-entry walk 3.1 → 1.2 ms, the pathlib is_file+stat double-stat pattern the M44 cron-fingerprint fix removed), and the walk + memo hit + miss resolve sharing one thread hop; a ref that moves rewrites its file and moves the signature, so soundness rests on the same rename-atomic-write ground as the sibling memos; M41/M43 definitions and healthy ranges unchanged |
 | 2026-09-06 | this PR | M67 steady-state probe trigger scan median 3351/3339/3283 µs → 407/402/421 µs, maxima 3599/3602/3393 → 437/502/524 µs (three interleaved rounds of the collector, 101-file worst trigger corpus of session a481fbde, live state read-only, main checkout before vs branch worktree after back-to-back at load 0.89-1.06, every paired round faster; warm full deep probe of 44 active sessions 10.35 ms → 3.03 ms; no-regression re-measures: M21 sweep 3.85 → 3.03 ms, M51 post-write deep probe 3.44 → 3.43 ms, M56 /status 2.13 → 2.07 ms with parsed-body digest 4d1f75803e9b identical; 2796-passed session/trigger/sidebar test slice) | the sidebar deep probe's trigger scan (`pending_trigger_state_sync`) re-read and re-parsed every trigger `*.json` on every call while its two sibling probe reads (thread metadata, plans) were already per-file memoized; parsed dicts now memoize per file on (mtime_ns, size) behind the scandir str-path walk, mirroring the M51 thread-metadata memo — trigger files change only through _save_trigger's atomic rename so an unchanged signature proves the content current, and the signature is taken before the read so a mid-rewrite entry keys the older signature; M67 definition and healthy range introduced with this PR |
+| 2026-09-06 | this PR | M68 marked changed-poll rebuild median 8.65/8.53/9.12 ms → 6.33/6.51/6.41 ms, maxima 10.16/10.27/10.03 ms → 7.16/6.97/7.18 ms (three interleaved rounds of the collector, 2551 KB / 339-row worst thread-metadata corpus of session 3b91d606, scratch CHARLIEBOT_HOME wired through get_config, main checkout vs branch worktree back-to-back at load 0.9-1.2, every paired round faster; body 168209 B byte-identical across arms; no-regression re-measures: M36 unchanged-poll 2.15 ms full / 2.16 ms conditional (204, 0 B) and M63 /view handler 4.24 ms / 277184 B, both at their standing readings; 4612-passed suite) | the marked rebuild paid two full scans of every thread metadata.json — the body signature's walk plus list_threads' own per-call scan (the deletion contract) — and rebuilt all 339 rows though _thread_list_item is a pure function of the per-file-parsed metadata; the rebuild now walks once (the walked pairs feed both the signature and a list_threads_from_stats parse-merge sharing list_threads' memo, so the proof and the rows behind the body describe one instant) and serves unmoved files' rows from a per-session row memo keyed on the same (mtime_ns, size) identity every atomic rename moves; M68 definition and healthy range introduced with this PR |

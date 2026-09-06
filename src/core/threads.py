@@ -109,26 +109,40 @@ class ThreadManager:
       # workers-panel poll scale linearly with thread count.
       if not threads_dir.is_dir():
         return []
-      memo = self._list_memo
-      refreshed: dict[str, tuple[int, int, ThreadMetadata]] = {}
-      metas = []
-      for meta_path, st in iter_thread_meta_stats(threads_dir):
-        hit = memo.get(meta_path)
-        if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
-          meta = hit[2]
-        else:
-          with open(meta_path, encoding="utf-8") as f:
-            meta = ThreadMetadata.model_validate_json(f.read())
-        refreshed[meta_path] = (st.st_mtime_ns, st.st_size, meta)
-        metas.append(meta)
-      # Swap whole dicts: concurrent load_all calls in the executor never mutate
-      # the live map, and the swap keeps the memo down to threads still on disk.
-      self._list_memo = refreshed
-      return metas
+      return self._metas_from_stats(iter_thread_meta_stats(threads_dir))
 
     threads = await asyncio.to_thread(load_all)
     threads.sort(key=lambda t: t.created_at, reverse=True)
     return threads
+
+  def list_threads_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]]) -> list[ThreadMetadata]:
+    """Parse-merge the pre-walked ``(metadata.json path, stat)`` pairs of one session.
+
+    *pairs* must be a fresh walk of exactly the files the caller's freshness
+    signature derives from (``iter_thread_meta_stats`` shape), so the returned
+    metas and that signature describe the same instant. The parse memo and its
+    swap are ``list_threads``'s: a hit costs no read, a miss reads the file,
+    and files absent from *pairs* drop out of the memo.
+    """
+    return self._metas_from_stats(pairs)
+
+  def _metas_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]]) -> list[ThreadMetadata]:
+    memo = self._list_memo
+    refreshed: dict[str, tuple[int, int, ThreadMetadata]] = {}
+    metas = []
+    for meta_path, st in pairs:
+      hit = memo.get(meta_path)
+      if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+        meta = hit[2]
+      else:
+        with open(meta_path, encoding="utf-8") as f:
+          meta = ThreadMetadata.model_validate_json(f.read())
+      refreshed[meta_path] = (st.st_mtime_ns, st.st_size, meta)
+      metas.append(meta)
+    # Swap whole dicts: concurrent load_all calls in the executor never mutate
+    # the live map, and the swap keeps the memo down to threads still on disk.
+    self._list_memo = refreshed
+    return metas
 
   async def update_status(
       self,

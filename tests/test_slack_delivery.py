@@ -17,17 +17,13 @@ from conftest import (
     SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
     SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
     build_slack_cfg,
+    make_internal_router_client,
     make_task_spawner,
     write_artifact,
 )
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from structlog.testing import capture_logs
 
 from src.agents import master_cc_state
-from src.api import internal
-from src.api.deps import get_session_manager
-from src.api.internal import router as internal_router
 from src.core import event_types as ET
 from src.core import tasks as tasks_module
 from src.core.config import CharlieBotConfig
@@ -738,14 +734,6 @@ class _RouteSessions:
     self.persisted.append((session_id, event))
 
 
-def _route_client(session_mgr: _RouteSessions) -> TestClient:
-  app = FastAPI()
-  app.include_router(internal_router, prefix="/api/internal")
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[internal.get_config] = lambda: build_slack_cfg(Path("/nonexistent"))
-  return TestClient(app)
-
-
 def _slack_meta() -> SessionMetadata:
   return SessionMetadata(
       id="s1", name="slack", slack_origin=SlackOrigin(team_id=_TEAM, channel_id=_CHANNEL, thread_ts=_THREAD))
@@ -754,7 +742,7 @@ def _slack_meta() -> SessionMetadata:
 def test_route_returns_the_readback_json() -> None:
   session_mgr = _RouteSessions(_slack_meta())
   client = _FakeSlackClient()
-  with _listener_seam(client), _route_client(session_mgr) as http:
+  with _listener_seam(client), make_internal_router_client(build_slack_cfg(Path("/nonexistent")), session_mgr) as http:
     resp = http.post("/api/internal/slack/reply", json={"session_id": "s1", "text": "hi"})
 
   assert resp.status_code == 200
@@ -783,7 +771,7 @@ def test_route_maps_refusals_to_status_codes_and_persists_nothing(
     meta: SessionMetadata | None, session_id: str, text: str, status: int, detail_fragment: str) -> None:
   session_mgr = _RouteSessions(meta)
   client = _FakeSlackClient()
-  with _listener_seam(client), _route_client(session_mgr) as http:
+  with _listener_seam(client), make_internal_router_client(build_slack_cfg(Path("/nonexistent")), session_mgr) as http:
     resp = http.post("/api/internal/slack/reply", json={"session_id": session_id, "text": text})
 
   assert resp.status_code == status
@@ -798,7 +786,7 @@ def test_route_maps_a_rejected_post_to_502() -> None:
   with (
       _listener_seam(client),
       patch(_RETRY_DELAYS_PATCH_TARGET, (0.0, 0.0)),
-      _route_client(session_mgr) as http,
+      make_internal_router_client(build_slack_cfg(Path("/nonexistent")), session_mgr) as http,
   ):
     resp = http.post("/api/internal/slack/reply", json={"session_id": "s1", "text": "hi"})
 
@@ -808,7 +796,7 @@ def test_route_maps_a_rejected_post_to_502() -> None:
 
 def test_route_rejects_extra_fields() -> None:
   session_mgr = _RouteSessions(_slack_meta())
-  with _route_client(session_mgr) as http:
+  with make_internal_router_client(build_slack_cfg(Path("/nonexistent")), session_mgr) as http:
     resp = http.post("/api/internal/slack/reply", json={"session_id": "s1", "text": "hi", "channel": "C_X"})
   assert resp.status_code == 422
   assert not session_mgr.persisted

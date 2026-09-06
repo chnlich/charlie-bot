@@ -57,23 +57,27 @@ def _build_token_count_event(
 ) -> dict:
   """A legacy two-window Codex payload: a 5h primary plus a 7d secondary."""
   return {
-    "timestamp": timestamp,
-    "type": "event_msg",
-    "payload": {
-      "type": "token_count",
-      "rate_limits": {
-        "primary": {
-          "used_percent": primary_used_percent,
-          "window_minutes": 300,
-          "resets_at": primary_resets_at,
-        },
-        "secondary": {
-          "used_percent": secondary_used_percent,
-          "window_minutes": 10080,
-          "resets_at": secondary_resets_at,
-        },
-      },
-    },
+      "timestamp": timestamp,
+      "type": "event_msg",
+      "payload":
+          {
+              "type": "token_count",
+              "rate_limits":
+                  {
+                      "primary":
+                          {
+                              "used_percent": primary_used_percent,
+                              "window_minutes": 300,
+                              "resets_at": primary_resets_at,
+                          },
+                      "secondary":
+                          {
+                              "used_percent": secondary_used_percent,
+                              "window_minutes": 10080,
+                              "resets_at": secondary_resets_at,
+                          },
+                  },
+          },
   }
 
 
@@ -85,19 +89,21 @@ def _build_weekly_token_count_event(
 ) -> dict:
   """The shape Codex reports today: one weekly window in the primary slot."""
   return {
-    "timestamp": timestamp,
-    "type": "event_msg",
-    "payload": {
-      "type": "token_count",
-      "rate_limits": {
-        "primary": {
-          "used_percent": used_percent,
-          "window_minutes": 10080,
-          "resets_at": resets_at,
-        },
-        "secondary": None,
-      },
-    },
+      "timestamp": timestamp,
+      "type": "event_msg",
+      "payload":
+          {
+              "type": "token_count",
+              "rate_limits":
+                  {
+                      "primary": {
+                          "used_percent": used_percent,
+                          "window_minutes": 10080,
+                          "resets_at": resets_at,
+                      },
+                      "secondary": None,
+                  },
+          },
   }
 
 
@@ -115,18 +121,21 @@ def _build_spend_token_count_event(
   through verbatim.
   """
   return {
-    "timestamp": timestamp,
-    "type": "event_msg",
-    "payload": {
-      "type": "token_count",
-      "info": {
-        "last_token_usage": {
-          "input_tokens": input_tokens,
-          "cached_input_tokens": cached_input_tokens,
-          "output_tokens": output_tokens,
-        },
-      },
-    },
+      "timestamp": timestamp,
+      "type": "event_msg",
+      "payload":
+          {
+              "type": "token_count",
+              "info":
+                  {
+                      "last_token_usage":
+                          {
+                              "input_tokens": input_tokens,
+                              "cached_input_tokens": cached_input_tokens,
+                              "output_tokens": output_tokens,
+                          },
+                  },
+          },
   }
 
 
@@ -154,60 +163,70 @@ def _write_live_quota_rollout(rollout_dir: Path, now: datetime) -> None:
 
 def test_codex_usage_transform_adds_token_count_observed_at() -> None:
   fetched_at = "2026-03-27T18:30:00+00:00"
-  lines = [json.dumps(_build_token_count_event(
-      timestamp="2026-03-27T18:29:35.694Z",
-      primary_used_percent=8.0,
-      primary_resets_at=1774653423,
-      secondary_used_percent=2.0,
-      secondary_resets_at=1775240223,
-  ))]
+  lines = [
+      json.dumps(
+          _build_token_count_event(
+              timestamp="2026-03-27T18:29:35.694Z",
+              primary_used_percent=8.0,
+              primary_resets_at=1774653423,
+              secondary_used_percent=2.0,
+              secondary_resets_at=1775240223,
+          ))
+  ]
 
   event = _latest_token_count_event(lines)
   assert event is not None
   usage = _transform_codex_response(event, fetched_at=fetched_at)
 
   assert usage == {
-    "windows": [
-      {
-        "window_minutes": 300,
-        "utilization": 8.0,
-        "resets_at": datetime.fromtimestamp(1774653423, tz=UTC).isoformat(),
-      },
-      {
-        "window_minutes": 10080,
-        "utilization": 2.0,
-        "resets_at": datetime.fromtimestamp(1775240223, tz=UTC).isoformat(),
-      },
-    ],
-    "fetched_at": fetched_at,
-    "provider": "codex",
-    "token_count_observed_at": "2026-03-27T18:29:35.694Z",
+      "windows":
+          [
+              {
+                  "window_minutes": 300,
+                  "utilization": 8.0,
+                  "resets_at": datetime.fromtimestamp(1774653423, tz=UTC).isoformat(),
+              },
+              {
+                  "window_minutes": 10080,
+                  "utilization": 2.0,
+                  "resets_at": datetime.fromtimestamp(1775240223, tz=UTC).isoformat(),
+              },
+          ],
+      "fetched_at": fetched_at,
+      "provider": "codex",
+      "token_count_observed_at": "2026-03-27T18:29:35.694Z",
   }
   assert "rate_limits_state" not in usage
 
 
 def test_codex_usage_transform_uses_the_latest_token_count_event() -> None:
   lines = [
-    json.dumps(_build_token_count_event(
-        timestamp="2026-03-27T17:00:00Z",
-        primary_used_percent=12.0,
-        primary_resets_at=1774650000,
-        secondary_used_percent=4.0,
-        secondary_resets_at=1775240000,
-    )),
-    json.dumps(_build_token_count_event(
-        timestamp="2026-03-27T18:00:00Z",
-        primary_used_percent=18.0,
-        primary_resets_at=1774653600,
-        secondary_used_percent=6.0,
-        secondary_resets_at=1775243600,
-    )),
-    "{not valid json",
-    json.dumps({
-      "timestamp": "2026-03-27T18:05:00Z",
-      "type": "event_msg",
-      "payload": {"type": "agent_message", "message": "still not usage"},
-    }),
+      json.dumps(
+          _build_token_count_event(
+              timestamp="2026-03-27T17:00:00Z",
+              primary_used_percent=12.0,
+              primary_resets_at=1774650000,
+              secondary_used_percent=4.0,
+              secondary_resets_at=1775240000,
+          )),
+      json.dumps(
+          _build_token_count_event(
+              timestamp="2026-03-27T18:00:00Z",
+              primary_used_percent=18.0,
+              primary_resets_at=1774653600,
+              secondary_used_percent=6.0,
+              secondary_resets_at=1775243600,
+          )),
+      "{not valid json",
+      json.dumps(
+          {
+              "timestamp": "2026-03-27T18:05:00Z",
+              "type": "event_msg",
+              "payload": {
+                  "type": "agent_message",
+                  "message": "still not usage"
+              },
+          }),
   ]
 
   event = _latest_token_count_event(lines)
@@ -221,58 +240,66 @@ def test_codex_usage_transform_uses_the_latest_token_count_event() -> None:
 
 def test_codex_usage_transform_handles_null_rate_limit_buckets() -> None:
   fetched_at = "2026-03-27T18:40:00+00:00"
-  lines = [json.dumps({
-    "timestamp": "2026-03-27T18:39:35.694Z",
-    "type": "event_msg",
-    "payload": {
-      "type": "token_count",
-      "rate_limits": {
-        "primary": None,
-        "secondary": None,
-        "credits": {
-          "unlimited": True,
-        },
-        "plan_type": "business",
-      },
-    },
-  })]
+  lines = [
+      json.dumps(
+          {
+              "timestamp": "2026-03-27T18:39:35.694Z",
+              "type": "event_msg",
+              "payload":
+                  {
+                      "type": "token_count",
+                      "rate_limits":
+                          {
+                              "primary": None,
+                              "secondary": None,
+                              "credits": {
+                                  "unlimited": True,
+                              },
+                              "plan_type": "business",
+                          },
+                  },
+          })
+  ]
 
   event = _latest_token_count_event(lines)
   assert event is not None
   usage = _transform_codex_response(event, fetched_at=fetched_at)
 
   assert usage == {
-    "windows": [],
-    "fetched_at": fetched_at,
-    "provider": "codex",
-    "rate_limits_state": "business-unlimited",
-    "token_count_observed_at": "2026-03-27T18:39:35.694Z",
+      "windows": [],
+      "fetched_at": fetched_at,
+      "provider": "codex",
+      "rate_limits_state": "business-unlimited",
+      "token_count_observed_at": "2026-03-27T18:39:35.694Z",
   }
 
 
 def test_codex_usage_transform_does_not_assume_business_state_without_metadata() -> None:
   fetched_at = "2026-03-27T18:40:00+00:00"
-  lines = [json.dumps({
-    "timestamp": "2026-03-27T18:39:35.694Z",
-    "type": "event_msg",
-    "payload": {
-      "type": "token_count",
-      "rate_limits": {
-        "primary": None,
-        "secondary": None,
-      },
-    },
-  })]
+  lines = [
+      json.dumps(
+          {
+              "timestamp": "2026-03-27T18:39:35.694Z",
+              "type": "event_msg",
+              "payload": {
+                  "type": "token_count",
+                  "rate_limits": {
+                      "primary": None,
+                      "secondary": None,
+                  },
+              },
+          })
+  ]
 
   event = _latest_token_count_event(lines)
   assert event is not None
   usage = _transform_codex_response(event, fetched_at=fetched_at)
 
   assert usage == {
-    "windows": [],
-    "fetched_at": fetched_at,
-    "provider": "codex",
-    "token_count_observed_at": "2026-03-27T18:39:35.694Z",
+      "windows": [],
+      "fetched_at": fetched_at,
+      "provider": "codex",
+      "token_count_observed_at": "2026-03-27T18:39:35.694Z",
   }
 
 
@@ -281,19 +308,27 @@ def test_spend_aggregation_prices_recent_turns_by_model(tmp_path) -> None:
   rollout_path = tmp_path / "rollout-recent.jsonl"
 
   events = [
-    {
-      "type": "turn_context",
-      "payload": {"model": "gpt-5.5"},
-    },
-    _build_spend_token_count_event(
-        timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
-        input_tokens=1_000_000, cached_input_tokens=100_000, output_tokens=10_000),
-    _build_spend_token_count_event(
-        timestamp=(now - timedelta(days=2)).isoformat().replace("+00:00", "Z"),
-        input_tokens=2_000_000, cached_input_tokens=500_000, output_tokens=20_000),
-    _build_spend_token_count_event(
-        timestamp=(now - timedelta(days=8)).isoformat().replace("+00:00", "Z"),
-        input_tokens=5_000_000, cached_input_tokens=0, output_tokens=100_000),
+      {
+          "type": "turn_context",
+          "payload": {
+              "model": "gpt-5.5"
+          },
+      },
+      _build_spend_token_count_event(
+          timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+          input_tokens=1_000_000,
+          cached_input_tokens=100_000,
+          output_tokens=10_000),
+      _build_spend_token_count_event(
+          timestamp=(now - timedelta(days=2)).isoformat().replace("+00:00", "Z"),
+          input_tokens=2_000_000,
+          cached_input_tokens=500_000,
+          output_tokens=20_000),
+      _build_spend_token_count_event(
+          timestamp=(now - timedelta(days=8)).isoformat().replace("+00:00", "Z"),
+          input_tokens=5_000_000,
+          cached_input_tokens=0,
+          output_tokens=100_000),
   ]
   rollout_path.write_text("\n".join(json.dumps(event) for event in events) + "\n")
 

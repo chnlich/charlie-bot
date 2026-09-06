@@ -1,6 +1,7 @@
 """Git-related API routes."""
 
 import asyncio
+import os
 import subprocess
 from pathlib import Path
 from typing import Literal
@@ -49,6 +50,22 @@ _DIFF_FILE_MEMO_LIMIT = 64
 _FileDiffKey = tuple[str, str, str, str, tuple[int, int] | None, tuple[str, ...]]
 
 _diff_file_memo: BoundedMemo[_FileDiffKey, str] = BoundedMemo(_DIFF_FILE_MEMO_LIMIT)
+
+# Signature of every file that feeds `git rev-parse` ref resolution: the git
+# dir's top-level files (HEAD, ORIG_HEAD, FETCH_HEAD, ...), packed-refs, and the
+# loose refs tree. Host git config is static on this host (the same constraint
+# the manifest key states). An unchanged signature proves the resolution
+# current; a ref that moves rewrites its file and moves the signature.
+_RefSignature = tuple[tuple[str, int, int], ...]
+
+# Bound on _ref_resolution_memo: one entry per (repo, ref pair) the /diff page
+# has open, and an evicted entry re-runs one rev-parse. Keyed by repo, the refs
+# as the request names them, and the ref-state signature.
+_RefResolveKey = tuple[str, tuple[str, ...], _RefSignature]
+
+_REF_RESOLVE_MEMO_LIMIT = 64
+
+_ref_resolution_memo: BoundedMemo[_RefResolveKey, tuple[str, ...]] = BoundedMemo(_REF_RESOLVE_MEMO_LIMIT)
 
 
 def _attributes_signature(repo_path: Path) -> tuple[int, int] | None:
@@ -110,9 +127,112 @@ def _resolve_commits_sync(repo_path: Path, refs: list[str]) -> list[str]:
   return stdout.split()
 
 
-async def _resolve_commits(repo_path: Path, refs: list[str]) -> list[str]:
-  """Async front for the blocking rev-parse; keeps the lookup off the event loop."""
-  return await asyncio.to_thread(_resolve_commits_sync, repo_path, refs)
+def _git_dirs(repo_path: Path) -> tuple[Path, Path]:
+  """Return (git_dir, common_dir), following worktree .git files and commondir links.
+
+  A linked worktree's .git is a file pointing at its per-worktree git dir; the
+  shared refs and packed-refs live in the common dir named by its `commondir`
+  file, while HEAD stays in the worktree git dir.
+  """
+  dot_git = repo_path / ".git"
+  if dot_git.is_file():
+    line = dot_git.read_text(encoding="utf-8").strip()
+    if not line.startswith("gitdir:"):
+      raise ValueError(f"unreadable .git file: {dot_git}")
+    git_dir = Path(line[len("gitdir:"):].strip())
+    if not git_dir.is_absolute():
+      git_dir = (repo_path / git_dir).resolve()
+  else:
+    git_dir = dot_git
+  common_dir = git_dir
+  try:
+    rel = (git_dir / "commondir").read_text(encoding="utf-8").strip()
+  except OSError:
+    return git_dir, common_dir
+  common_dir = Path(rel)
+  if not common_dir.is_absolute():
+    common_dir = (git_dir / rel).resolve()
+  return git_dir, common_dir
+
+
+def _stat_or_skip(path: Path, sig: list[tuple[str, int, int]]) -> None:
+  """Append (path, mtime_ns, size) to sig when path exists."""
+  try:
+    st = path.stat()
+  except OSError:
+    return
+  sig.append((str(path), st.st_mtime_ns, st.st_size))
+
+
+def _walk_refs_tree(root: Path, sig: list[tuple[str, int, int]]) -> None:
+  """Append (path, mtime_ns, size) for every file under root's refs tree."""
+  stack = [root]
+  while stack:
+    current = stack.pop()
+    try:
+      entries = list(os.scandir(current))
+    except OSError:
+      continue
+    for entry in entries:
+      if entry.is_dir(follow_symlinks=False):
+        stack.append(Path(entry.path))
+      else:
+        try:
+          st = entry.stat(follow_symlinks=False)
+        except OSError:
+          continue
+        sig.append((entry.path, st.st_mtime_ns, st.st_size))
+
+
+def _refs_signature(repo_path: Path) -> _RefSignature:
+  """Stat-only signature of every file that feeds rev-parse ref resolution.
+
+  Covers the git dir's top-level pseudo-refs (HEAD, ORIG_HEAD, FETCH_HEAD, ...),
+  packed-refs, the shallow/grafts files, the shared loose refs tree, and — in a
+  linked worktree, whose refs/bisect, refs/worktree, and refs/rewritten trees
+  are per-worktree — the worktree's own refs tree. `git rev-parse` reads
+  nothing else for ref-shaped inputs, so an equal signature across two requests
+  proves an equal resolution. Scandir serves d_type from readdir, so each
+  entry costs one stat, not two.
+  """
+  git_dir, common_dir = _git_dirs(repo_path)
+  sig: list[tuple[str, int, int]] = []
+  with os.scandir(git_dir) as entries:
+    for entry in entries:
+      if entry.is_file(follow_symlinks=False):
+        # A ref deleted between the listing and the stat (concurrent pack-refs,
+        # branch -D, auto-gc) drops from the signature; it cannot poison the
+        # memo because the next walk sees the same absence.
+        try:
+          st = entry.stat(follow_symlinks=False)
+        except OSError:
+          continue
+        sig.append((entry.path, st.st_mtime_ns, st.st_size))
+  for name in ("packed-refs", "shallow"):
+    _stat_or_skip(common_dir / name, sig)
+  _stat_or_skip(common_dir / "info" / "grafts", sig)
+  _walk_refs_tree(common_dir / "refs", sig)
+  if git_dir != common_dir:
+    _walk_refs_tree(git_dir / "refs", sig)
+  return tuple(sorted(sig))
+
+
+def _resolve_commits_memoized_sync(repo_path: Path, refs: list[str]) -> list[str]:
+  """Return the refs' SHAs, re-running the rev-parse subprocess only when the
+  repo's ref state has moved since the last resolution of the same pair."""
+  signature = _refs_signature(repo_path)
+  key = (str(repo_path), tuple(refs), signature)
+  memoized = _ref_resolution_memo.get(key)
+  if memoized is None:
+    memoized = tuple(_resolve_commits_sync(repo_path, refs))
+    _ref_resolution_memo.store(key, memoized)
+  return list(memoized)
+
+
+async def _resolve_commits_memoized(repo_path: Path, refs: list[str]) -> list[str]:
+  """Async front for the memoized blocking resolution; the signature walk and
+  any rev-parse subprocess stay off the event loop in one thread hop."""
+  return await asyncio.to_thread(_resolve_commits_memoized_sync, repo_path, refs)
 
 
 def _parse_numstat_z(output: str) -> list[tuple[int, int, str, str | None]]:
@@ -236,7 +356,7 @@ async def diff_files(
   """
   repo_path = _resolve_repo_under_workspace(repo, cfg)
   range_spec = _range_spec(base, head, mode)
-  base_sha, head_sha = await _resolve_commits(repo_path, [base, head])
+  base_sha, head_sha = await _resolve_commits_memoized(repo_path, [base, head])
   key = (str(repo_path), base_sha, head_sha, mode, _attributes_signature(repo_path))
   memoized = _diff_files_memo.get(key)
   if memoized is None:
@@ -305,7 +425,7 @@ async def diff_file(
   # Restricting to a single side of a rename makes git drop the pairing and emit a
   # wholesale add/delete; passing both endpoints keeps it a rename diff.
   pathspec = tuple([old_path, path] if old_path else [path])
-  base_sha, head_sha = await _resolve_commits(repo_path, [base, head])
+  base_sha, head_sha = await _resolve_commits_memoized(repo_path, [base, head])
   key = (str(repo_path), base_sha, head_sha, mode, _attributes_signature(repo_path), pathspec)
   diff_text = _diff_file_memo.get(key)
   if diff_text is None:

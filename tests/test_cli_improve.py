@@ -120,73 +120,47 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert exc_info.value.code == 1
 
 
-def test_main_rejects_missing_goal_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """A nonexistent --goal-file exits non-zero before any request is made."""
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  missing = tmp_path / "nope.md"
+# One row per bad --goal-file/--plan-file shape: which files to seed (name -> content,
+# absent = leave nonexistent), which file --goal-file names, which --plan-file to append
+# (None = no --plan-file), and the stderr fragments main() must print.
+_REJECT_BAD_FILE_ROWS = [
+    pytest.param({}, "nope.md", None, ("goal-file", "not found"), id="goal-file-missing"),
+    pytest.param({"empty.md": "   \n"}, "empty.md", None, ("empty",), id="goal-file-empty"),
+    pytest.param({"goal.md": "fix"}, "goal.md", "nope-plan.md", ("plan-file", "not found"), id="plan-file-missing"),
+    pytest.param(
+        {
+            "goal.md": "fix",
+            "empty-plan.md": "   \n"
+        },
+        "goal.md",
+        "empty-plan.md", ("plan-file", "empty"),
+        id="plan-file-empty"),
+]
 
-  with patch("sys.argv", _improve_argv(None, str(tmp_path), missing)), \
+
+@pytest.mark.parametrize(("write_files", "goal_name", "plan_name", "err_fragments"), _REJECT_BAD_FILE_ROWS)
+def test_main_rejects_bad_file_before_any_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    write_files: dict[str, str],
+    goal_name: str,
+    plan_name: str | None,
+    err_fragments: tuple[str, ...],
+) -> None:
+  """A missing or whitespace-only --goal-file/--plan-file exits non-zero before any request is made."""
+  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  for name, content in write_files.items():
+    (tmp_path / name).write_text(content)
+  extra = ["--plan-file", str(tmp_path / plan_name)] if plan_name is not None else []
+
+  with patch("sys.argv", _improve_argv(None, str(tmp_path), tmp_path / goal_name, *extra)), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
        pytest.raises(SystemExit) as exc_info:
     main()
 
-  assert_cli_reject(exc_info, capsys, "goal-file", "not found")
-  post_mock.assert_not_called()
-
-
-def test_main_rejects_empty_goal_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """A whitespace-only --goal-file exits non-zero before any request is made."""
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  empty = tmp_path / "empty.md"
-  empty.write_text("   \n")
-
-  with patch("sys.argv", _improve_argv(None, str(tmp_path), empty)), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
-       pytest.raises(SystemExit) as exc_info:
-    main()
-
-  assert_cli_reject(exc_info, capsys, "empty")
-  post_mock.assert_not_called()
-
-
-def test_main_rejects_missing_plan_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """A nonexistent --plan-file exits non-zero before any request is made."""
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  goal_file = tmp_path / "goal.md"
-  goal_file.write_text("fix")
-  missing = tmp_path / "nope-plan.md"
-
-  with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file, "--plan-file", str(missing))), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
-       pytest.raises(SystemExit) as exc_info:
-    main()
-
-  assert_cli_reject(exc_info, capsys, "plan-file", "not found")
-  post_mock.assert_not_called()
-
-
-def test_main_rejects_empty_plan_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """A whitespace-only --plan-file exits non-zero before any request is made."""
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  goal_file = tmp_path / "goal.md"
-  goal_file.write_text("fix")
-  empty = tmp_path / "empty-plan.md"
-  empty.write_text("   \n")
-
-  with patch("sys.argv", _improve_argv(None, str(tmp_path), goal_file, "--plan-file", str(empty))), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
-       pytest.raises(SystemExit) as exc_info:
-    main()
-
-  assert_cli_reject(exc_info, capsys, "plan-file", "empty")
+  assert_cli_reject(exc_info, capsys, *err_fragments)
   post_mock.assert_not_called()
 
 

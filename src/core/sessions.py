@@ -182,9 +182,10 @@ def has_running_tasks_sync(threads_dir: Path) -> bool:
 # that follows any write to the session, and re-reading every trigger file
 # dominated the probe (~3.6 ms per probe on the 101-file worst corpus); a repeat
 # scan pays one scandir + stat per file and reads only files whose signature
-# moved. Trigger files change only through _save_trigger's atomic tmp-file
-# rename, so any content change moves mtime_ns and an unchanged (mtime_ns, size)
-# proves the content current. The signature is taken before the read, so an
+# moved. Every trigger-file write (_save_trigger, recover_pending's schema
+# migration) publishes through the atomic tmp-file rename, so any content change
+# moves mtime_ns and an unchanged (mtime_ns, size) proves the content current.
+# The signature is taken before the read, so an
 # entry recorded while a write raced the scan keys the older signature and can
 # never be served for the newer bytes. Stored dicts are shared across calls —
 # consumers must treat them as read-only.

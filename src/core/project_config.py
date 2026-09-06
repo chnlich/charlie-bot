@@ -18,10 +18,10 @@ omission of the key means "no supplement".
 
 Discovery is by file presence only: a missing ``project.yaml`` means the
 project is not enabled and every session in that group keeps the pre-project
-behavior. A present-but-broken state — a dangling config symlink, an
-unreadable or invalid config, or an unreadable applicable body — raises
-:class:`ProjectInstructionError`; the caller turns that into a clear per-turn
-failure; the next new turn re-reads the files.
+behavior. A present-but-broken state — a dangling project directory symlink
+or config symlink, an unreadable or invalid config, or an unreadable
+applicable body — raises :class:`ProjectInstructionError`; the caller turns
+that into a clear per-turn failure; the next new turn re-reads the files.
 """
 
 import hashlib
@@ -163,7 +163,8 @@ def load_project_bodies(home: Path, group: str, *, manager: bool) -> ProjectBodi
 
   ``None`` means the project is not enabled (no ``project.yaml``): the caller
   keeps the pre-project behavior. A dangling ``project.yaml`` symlink is a
-  present-but-broken config and fails loudly instead of silently disabling the
+  present-but-broken config, and so is a dangling ``projects/<group>``
+  directory symlink — both fail loudly instead of silently disabling the
   project. Every session validates both configured destinations (relative,
   confined, not the same file by any alias); only a manager reads the
   supplement, so an ordinary session neither reads nor requires its existence.
@@ -173,6 +174,13 @@ def load_project_bodies(home: Path, group: str, *, manager: bool) -> ProjectBodi
   dir_ = project_dir(home, group)
   config_path = dir_ / PROJECT_CONFIG_FILENAME
   if not config_path.exists() and not config_path.is_symlink():
+    # Absent project.yaml. A dangling (or otherwise unresolvable) project
+    # directory symlink reads identically here — stat on the config path
+    # fails either way — but it is a present-but-broken directory, never "not
+    # enabled". This is the directory-level twin of the dangling config
+    # symlink check below.
+    if dir_.is_symlink() and not dir_.exists():
+      raise ProjectInstructionError(f"project directory is a broken symlink: {dir_} -> {dir_.readlink()}")
     return None
   # Present from here on. A dangling config symlink must not read as "not
   # enabled": discovery by file presence counts a present-but-broken file as

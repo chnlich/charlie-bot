@@ -194,6 +194,22 @@ def count_path_read_text(monkeypatch: pytest.MonkeyPatch, include: Callable[[Pat
   return reads
 
 
+def user_event(content: str, timestamp: str | None = None) -> dict:
+  """A USER chat event; a test needing extra fields builds its own or merges them in."""
+  event: dict[str, Any] = {"type": ET.USER, "content": content}
+  if timestamp is not None:
+    event["timestamp"] = timestamp
+  return event
+
+
+def scheduled_trigger_event(content: str, timestamp: str | None = None) -> dict:
+  """A SCHEDULED_TRIGGER chat event; a test needing extra fields builds its own or merges them in."""
+  event: dict[str, Any] = {"type": ET.SCHEDULED_TRIGGER, "content": content}
+  if timestamp is not None:
+    event["timestamp"] = timestamp
+  return event
+
+
 def assistant_event(content: str, event_id: str = "assistant") -> dict:
   """An ASSISTANT event whose message is a single text block; projection and aggregator tests build on this
   shape, and a test needing extra fields (timestamp, token usage) builds its own or merges them in."""

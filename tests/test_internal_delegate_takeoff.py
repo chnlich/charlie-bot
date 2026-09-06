@@ -11,6 +11,8 @@ from conftest import (
     OPUS_BACKEND_OPTION,
     FakeSessionManager,
     capture_create_logged_task,
+    scheduled_trigger_event,
+    user_event,
 )
 from conftest import THREE_BACKEND_OPTIONS as VERIFY_BACKEND_OPTIONS
 from fastapi import HTTPException
@@ -42,20 +44,6 @@ def _build_request(
       repo_path=repo_path,
       task_type=task_type,
   )
-
-
-def _user_event(content: str, timestamp: str | None = None) -> dict[str, Any]:
-  event: dict[str, Any] = {"type": ET.USER, "content": content}
-  if timestamp is not None:
-    event["timestamp"] = timestamp
-  return event
-
-
-def _scheduled_trigger_event(content: str, timestamp: str | None = None) -> dict[str, Any]:
-  event: dict[str, Any] = {"type": ET.SCHEDULED_TRIGGER, "content": content}
-  if timestamp is not None:
-    event["timestamp"] = timestamp
-  return event
 
 
 def _patch_delegate_spawn_rig(
@@ -101,8 +89,8 @@ def _patch_delegate_spawn_rig(
 
 def test_takeoff_gate_blocks_takeoff_followed_by_ordinary_user_message() -> None:
   session_mgr = FakeSessionManager([
-      _user_event("Take Off"),
-      _user_event("One more ordinary message"),
+      user_event("Take Off"),
+      user_event("One more ordinary message"),
   ])
 
   with pytest.raises(DelegationBlockedError):
@@ -112,15 +100,15 @@ def test_takeoff_gate_blocks_takeoff_followed_by_ordinary_user_message() -> None
 def test_takeoff_gate_allows_takeoff_followed_by_trigger_user_message() -> None:
   session_mgr = FakeSessionManager(
       [
-          _user_event("take off"),
-          _scheduled_trigger_event("[Scheduled trigger fired] training completed"),
+          user_event("take off"),
+          scheduled_trigger_event("[Scheduled trigger fired] training completed"),
       ])
 
   check_takeoff_gate("session-id", session_mgr)
 
 
 def test_takeoff_gate_scheduled_trigger_does_not_mint_takeoff() -> None:
-  session_mgr = FakeSessionManager([_scheduled_trigger_event("[Scheduled trigger fired] take off")])
+  session_mgr = FakeSessionManager([scheduled_trigger_event("[Scheduled trigger fired] take off")])
 
   with pytest.raises(DelegationBlockedError):
     check_takeoff_gate("session-id", session_mgr)
@@ -128,7 +116,7 @@ def test_takeoff_gate_scheduled_trigger_does_not_mint_takeoff() -> None:
 
 def test_takeoff_gate_scheduled_trigger_excluded_by_type_regardless_of_content() -> None:
   """An ET.SCHEDULED_TRIGGER event is excluded by event type, not by content prefix."""
-  session_mgr = FakeSessionManager([_scheduled_trigger_event("take off")])
+  session_mgr = FakeSessionManager([scheduled_trigger_event("take off")])
 
   with pytest.raises(DelegationBlockedError):
     check_takeoff_gate("session-id", session_mgr)
@@ -140,7 +128,7 @@ def test_takeoff_gate_real_user_literal_banner_now_mints_takeoff() -> None:
   Previously the prefix check silently ignored a real ET.USER message whose content
   started with the scheduled-trigger banner; the type-based gate no longer does.
   """
-  session_mgr = FakeSessionManager([_user_event("[Scheduled trigger fired] take off")])
+  session_mgr = FakeSessionManager([user_event("[Scheduled trigger fired] take off")])
 
   check_takeoff_gate("session-id", session_mgr)
 
@@ -165,7 +153,7 @@ def test_takeoff_gate_nested_tool_result_does_not_mint_takeoff() -> None:
 def test_takeoff_gate_nested_tool_result_does_not_cancel_ordinary_takeoff() -> None:
   session_mgr = FakeSessionManager(
       [
-          _user_event("take off"),
+          user_event("take off"),
           {
               "type": ET.USER,
               "message": {
@@ -198,7 +186,7 @@ def test_takeoff_gate_ignores_task_delegated_metadata() -> None:
 def test_takeoff_gate_allows_repeated_ordinary_takeoff_after_task_delegated_event() -> None:
   session_mgr = FakeSessionManager(
       [
-          _user_event("take off"),
+          user_event("take off"),
           {
               "type": ET.TASK_DELEGATED,
               "thread_id": "thread-id",
@@ -227,8 +215,8 @@ def test_pre_takeoff_window_survives_real_user_messages_and_expires_at_12_hours(
   issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
   session_mgr = FakeSessionManager(
       [
-          _user_event("PRE\n\t TAKE   OFF", issued_at.isoformat()),
-          _user_event("A later real user message"),
+          user_event("PRE\n\t TAKE   OFF", issued_at.isoformat()),
+          user_event("A later real user message"),
       ])
 
   check_takeoff_gate(
@@ -245,23 +233,23 @@ def test_new_pre_takeoff_starts_a_new_window() -> None:
   second_issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
   session_mgr = FakeSessionManager(
       [
-          _user_event("pre take off", first_issued_at.isoformat()),
-          _user_event("normal follow-up"),
-          _user_event("pre take off", second_issued_at.isoformat()),
-          _user_event("another normal follow-up"),
+          user_event("pre take off", first_issued_at.isoformat()),
+          user_event("normal follow-up"),
+          user_event("pre take off", second_issued_at.isoformat()),
+          user_event("another normal follow-up"),
       ])
 
   check_takeoff_gate("session-id", session_mgr, now=second_issued_at + timedelta(hours=11))
 
 
 def test_ordinary_takeoff_matching_is_independent_from_pre_matching() -> None:
-  session_mgr = FakeSessionManager([_user_event("pre\n take\t off")])
+  session_mgr = FakeSessionManager([user_event("pre\n take\t off")])
 
   check_takeoff_gate("session-id", session_mgr)
 
 
 def test_ordinary_takeoff_needs_no_timestamp_and_is_not_expiring() -> None:
-  session_mgr = FakeSessionManager([_user_event("take\n off")])
+  session_mgr = FakeSessionManager([user_event("take\n off")])
 
   check_takeoff_gate("session-id", session_mgr, now=datetime(2099, 1, 1, tzinfo=UTC))
 
@@ -269,8 +257,8 @@ def test_ordinary_takeoff_needs_no_timestamp_and_is_not_expiring() -> None:
 @pytest.mark.parametrize("timestamp", [None, "not-a-timestamp"])
 def test_pre_takeoff_with_missing_or_unparseable_timestamp_fails_closed(timestamp: str | None) -> None:
   session_mgr = FakeSessionManager([
-      _user_event("pre take off", timestamp),
-      _user_event("a later real user message"),
+      user_event("pre take off", timestamp),
+      user_event("a later real user message"),
   ])
 
   with pytest.raises(DelegationBlockedError):
@@ -378,7 +366,7 @@ async def test_all_nonverify_delegate_types_can_reuse_ordinary_takeoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   req = _build_request(task_type=task_type)
-  session_mgr = FakeSessionManager([_user_event("take off")])
+  session_mgr = FakeSessionManager([user_event("take off")])
   cfg = object()
 
   async def fake_resolve(*args: Any, **kwargs: Any) -> tuple[str, str]:
@@ -406,8 +394,8 @@ async def test_improve_uses_the_same_pre_takeoff_gate(monkeypatch: pytest.Monkey
   )
   session_mgr = FakeSessionManager(
       [
-          _user_event("pre take off", issued_at.isoformat()),
-          _user_event("continue with the approved work"),
+          user_event("pre take off", issued_at.isoformat()),
+          user_event("continue with the approved work"),
       ])
   cfg = object()
 

@@ -426,7 +426,12 @@ def _instructions_cfg(tmp_path: Path) -> SimpleNamespace:
   memory_dir = home / "memory"
   write_memory_topics(memory_dir, ["profile resident"])
   write_memory_entry(memory_dir, "profile", "note", title="Note", body="MEMORY BODY\n")
-  return SimpleNamespace(charlie_bot_repo=repo, claude_md_file=home / "MASTER_AGENT_PROMPT.md", memory_dir=memory_dir)
+  return SimpleNamespace(
+      charlie_bot_repo=repo,
+      claude_md_file=home / "MASTER_AGENT_PROMPT.md",
+      memory_dir=memory_dir,
+      charliebot_home=home,
+  )
 
 
 def test_pm_identity_part_appended_for_project_session_with_group(tmp_path: Path) -> None:

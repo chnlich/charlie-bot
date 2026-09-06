@@ -102,7 +102,7 @@ def test_missing_file_stays_uncached(tmp_path: Path) -> None:
 
 
 def test_memo_lru_evicts_oldest_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(plans_module, "_TOLERANT_READ_MEMO_LIMIT", 2)
+  monkeypatch.setattr(plans_module._tolerant_read_memo, "_limit", 2)
   paths = []
   for name in ("a", "b", "c"):
     p = tmp_path / f"{name}.json"

@@ -115,7 +115,7 @@ def test_out_of_window_files_stay_unread(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_memo_lru_evicts_oldest_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(worker_recovery_module, "_THREAD_META_MEMO_LIMIT", 2)
+  monkeypatch.setattr(worker_recovery_module._thread_meta_memo, "_limit", 2)
   cfg = make_home_config(tmp_path)
   for sid in ("a", "b", "c"):
     write_thread_meta(cfg, sid, {"id": "t1", "status": "completed"})
@@ -151,8 +151,8 @@ def test_memo_lock_is_released_across_yield(tmp_path: Path) -> None:
   acquired = threading.Event()
 
   def grab() -> None:
-    with worker_recovery_module._thread_meta_memo_lock:
-      acquired.set()
+    worker_recovery_module._thread_meta_memo.get("metadata.json/not-in-the-memo")
+    acquired.set()
 
   grabber = threading.Thread(target=grab)
   grabber.start()

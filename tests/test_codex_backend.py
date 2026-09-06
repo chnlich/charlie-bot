@@ -64,8 +64,7 @@ def test_build_command_resume_uses_double_dash_separator_for_prompt(monkeypatch)
 
 
 @pytest.mark.parametrize(
-    ("option_kwargs", "expected_effort"),
-    [
+    ("option_kwargs", "expected_effort"), [
         pytest.param({}, "xhigh", id="defaults_to_xhigh"),
         pytest.param({"model_reasoning_effort": "ultra"}, "ultra", id="custom_effort"),
     ])
@@ -252,8 +251,7 @@ def test_file_change_regular_file_emits_file_write_without_filename_field(monkey
 
 
 @pytest.mark.parametrize(
-    ("event_type", "items", "expected_text"),
-    [
+    ("event_type", "items", "expected_text"), [
         pytest.param(
             "item.started",
             [
@@ -338,21 +336,15 @@ def test_translate_todo_list_renders_one_text_delta(
 
   translated = backend.translate_event({"type": event_type, "item": {"type": "todo_list", "items": items}})
 
-  assert translated == [
-      {
-          "type": "assistant",
-          "message":
-              {
-                  "content":
-                      [
-                          {
-                              "type": "text",
-                              "text": expected_text,
-                          }
-                      ],
-              },
-      }
-  ]
+  assert translated == [{
+      "type": "assistant",
+      "message": {
+          "content": [{
+              "type": "text",
+              "text": expected_text,
+          }],
+      },
+  }]
 
 
 def test_translate_todo_list_suppresses_duplicate_snapshots(monkeypatch) -> None:
@@ -491,12 +483,10 @@ def test_reasoning_item_emits_thinking_deltas(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "resume_session_id",
-    [
-        pytest.param(None, id="fresh"),
-        pytest.param("sess-1", id="resume"),
-    ])
+@pytest.mark.parametrize("resume_session_id", [
+    pytest.param(None, id="fresh"),
+    pytest.param("sess-1", id="resume"),
+])
 def test_build_command_omits_auto_compact_when_absent(monkeypatch, resume_session_id: str | None) -> None:
   backend = _build_backend(monkeypatch, model="codex-test-model", resume_session_id=resume_session_id)
 

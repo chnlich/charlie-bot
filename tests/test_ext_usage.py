@@ -238,44 +238,79 @@ def test_codex_usage_transform_uses_the_latest_token_count_event() -> None:
   assert usage["token_count_observed_at"] == "2026-03-27T18:00:00Z"
 
 
-def test_codex_usage_transform_handles_null_rate_limit_buckets() -> None:
-  fetched_at = "2026-03-27T18:40:00+00:00"
-  lines = [
-      json.dumps(
-          {
-              "timestamp": "2026-03-27T18:39:35.694Z",
-              "type": "event_msg",
-              "payload":
-                  {
-                      "type": "token_count",
-                      "rate_limits":
-                          {
-                              "primary": None,
-                              "secondary": None,
-                              "credits": {
-                                  "unlimited": True,
-                              },
-                              "plan_type": "business",
-                          },
-                  },
-          })
-  ]
+# One row per raw rate_limits payload shape a Codex token_count event can
+# carry, and the usage dict the transform must report for it: business
+# metadata states the unlimited state, metadata-less null buckets stay
+# unstated, an unidentifiable slot is dropped rather than guessed at from
+# slot order, and a window with no reported usage is unknown, not zero.
+_CODEX_RATE_LIMIT_SHAPE_ROWS = [
+    pytest.param(
+        {
+            "primary": None,
+            "secondary": None,
+            "credits": {
+                "unlimited": True,
+            },
+            "plan_type": "business",
+        }, {
+            "windows": [],
+            "fetched_at": "2026-03-27T18:40:00+00:00",
+            "provider": "codex",
+            "rate_limits_state": "business-unlimited",
+            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
+        },
+        id="null-buckets-business-unlimited"),
+    pytest.param(
+        {
+            "primary": None,
+            "secondary": None,
+        }, {
+            "windows": [],
+            "fetched_at": "2026-03-27T18:40:00+00:00",
+            "provider": "codex",
+            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
+        },
+        id="null-buckets-without-metadata-no-state"),
+    pytest.param(
+        {
+            "primary": {
+                "used_percent": 96.0,
+                "resets_at": 1785016000,
+            },
+            "secondary": None,
+        }, {
+            "windows": [],
+            "fetched_at": "2026-03-27T18:40:00+00:00",
+            "provider": "codex",
+            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
+        },
+        id="slot-without-window-minutes-dropped"),
+    pytest.param(
+        {
+            "primary": {
+                "window_minutes": 10080,
+                "resets_at": 1785016000,
+            },
+            "secondary": None,
+        }, {
+            "windows":
+                [
+                    {
+                        "window_minutes": 10080,
+                        "utilization": None,
+                        "resets_at": datetime.fromtimestamp(1785016000, tz=UTC).isoformat(),
+                    }
+                ],
+            "fetched_at": "2026-03-27T18:40:00+00:00",
+            "provider": "codex",
+            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
+        },
+        id="window-without-used-percent-unknown"),
+]
 
-  event = _latest_token_count_event(lines)
-  assert event is not None
-  usage = _transform_codex_response(event, fetched_at=fetched_at)
 
-  assert usage == {
-      "windows": [],
-      "fetched_at": fetched_at,
-      "provider": "codex",
-      "rate_limits_state": "business-unlimited",
-      "token_count_observed_at": "2026-03-27T18:39:35.694Z",
-  }
-
-
-def test_codex_usage_transform_does_not_assume_business_state_without_metadata() -> None:
-  fetched_at = "2026-03-27T18:40:00+00:00"
+@pytest.mark.parametrize(("rate_limits", "expected_usage"), _CODEX_RATE_LIMIT_SHAPE_ROWS)
+def test_codex_usage_transform_raw_rate_limit_shapes(rate_limits: dict, expected_usage: dict) -> None:
   lines = [
       json.dumps(
           {
@@ -283,24 +318,16 @@ def test_codex_usage_transform_does_not_assume_business_state_without_metadata()
               "type": "event_msg",
               "payload": {
                   "type": "token_count",
-                  "rate_limits": {
-                      "primary": None,
-                      "secondary": None,
-                  },
+                  "rate_limits": rate_limits,
               },
           })
   ]
 
   event = _latest_token_count_event(lines)
   assert event is not None
-  usage = _transform_codex_response(event, fetched_at=fetched_at)
+  usage = _transform_codex_response(event, fetched_at="2026-03-27T18:40:00+00:00")
 
-  assert usage == {
-      "windows": [],
-      "fetched_at": fetched_at,
-      "provider": "codex",
-      "token_count_observed_at": "2026-03-27T18:39:35.694Z",
-  }
+  assert usage == expected_usage
 
 
 def test_spend_aggregation_prices_recent_turns_by_model(tmp_path) -> None:
@@ -1064,68 +1091,6 @@ def test_codex_usage_transform_reports_weekly_only_shape() -> None:
       }
   ]
   assert "rate_limits_state" not in usage
-
-
-def test_codex_usage_transform_drops_slot_without_window_minutes() -> None:
-  """An unidentifiable window is dropped, never guessed at from slot order."""
-  lines = [
-      json.dumps(
-          {
-              "timestamp": "2026-07-20T22:08:57.925Z",
-              "type": "event_msg",
-              "payload":
-                  {
-                      "type": "token_count",
-                      "rate_limits": {
-                          "primary": {
-                              "used_percent": 96.0,
-                              "resets_at": 1785016000
-                          },
-                          "secondary": None,
-                      },
-                  },
-          })
-  ]
-
-  event = _latest_token_count_event(lines)
-  assert event is not None
-  usage = _transform_codex_response(event, fetched_at="2026-07-20T22:10:00+00:00")
-
-  assert usage["windows"] == []
-
-
-def test_codex_usage_transform_marks_missing_percentage_unknown() -> None:
-  """A window with no reported usage is unknown, not zero."""
-  lines = [
-      json.dumps(
-          {
-              "timestamp": "2026-07-20T22:08:57.925Z",
-              "type": "event_msg",
-              "payload":
-                  {
-                      "type": "token_count",
-                      "rate_limits": {
-                          "primary": {
-                              "window_minutes": 10080,
-                              "resets_at": 1785016000
-                          },
-                          "secondary": None,
-                      },
-                  },
-          })
-  ]
-
-  event = _latest_token_count_event(lines)
-  assert event is not None
-  usage = _transform_codex_response(event, fetched_at="2026-07-20T22:10:00+00:00")
-
-  assert usage["windows"] == [
-      {
-          "window_minutes": 10080,
-          "utilization": None,
-          "resets_at": datetime.fromtimestamp(1785016000, tz=UTC).isoformat(),
-      }
-  ]
 
 
 def test_transform_response_marks_missing_claude_percentage_unknown() -> None:

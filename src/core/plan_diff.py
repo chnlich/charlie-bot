@@ -685,13 +685,19 @@ def _render_start_tag_additions(
 
 
 def _splice(source: str, insertions: dict[int, list[str]]) -> str:
-  result: list[str] = []
-  for offset in range(len(source) + 1):
-    if offset in insertions:
-      result.extend(insertions[offset])
-    if offset < len(source):
-      result.append(source[offset])
-  return "".join(result)
+  # Ascending offsets with per-offset list order preserved — the contract the
+  # render passes rely on — so the slice merge below emits exactly the byte
+  # sequence the per-character walk produced.
+  if not insertions:
+    return source
+  pieces: list[str] = []
+  cursor = 0
+  for offset in sorted(insertions):
+    pieces.append(source[cursor:offset])
+    pieces.extend(insertions[offset])
+    cursor = offset
+  pieces.append(source[cursor:])
+  return "".join(pieces)
 
 
 def _parse(source: str) -> _Parser:
@@ -702,6 +708,10 @@ def _parse(source: str) -> _Parser:
 
 
 def _append_style_and_header(source: str) -> str:
+  # The anchors are read off a re-parse of the spliced page on purpose: the
+  # render passes can rewrite the body start tag itself (class and data-del
+  # attributes) and insert synthetic start tags, so a spliced page's DOM can
+  # disagree with the pre-splice parse about where head and body sit.
   parser = _parse(source)
   insertions: dict[int, list[str]] = {}
   style_tag = f'<style data-cbd-style>{_CBD_STYLE}</style>'

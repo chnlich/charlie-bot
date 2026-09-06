@@ -310,3 +310,20 @@ def test_replaced_direct_text_with_a_nested_block_stays_commentable() -> None:
   annotated = _assert_invariants(base, new)
   assert '<div class="cbd-new">new fresh <p>unchanged child</p></div>' in annotated
   assert '<ins class="cbd-ins">new fresh</ins>' not in annotated
+
+
+def test_style_and_header_splice_positions() -> None:
+  base = '<html><head><title>t</title></head><body><p>alpha</p></body></html>'
+  new = '<html><head><title>t</title></head><body><p>alpha beta</p></body></html>'
+  annotated = annotate(base, new)
+  assert annotated.index("<style data-cbd-style>") == annotated.rindex("</title>") + len("</title>")
+  assert annotated.index('<div class="cbd-header"') == annotated.index("<body>") + len("<body>")
+
+  headless_new = '<html><body><p>alpha beta</p></body></html>'
+  annotated = annotate('<html><body><p>alpha</p></body></html>', headless_new)
+  assert annotated.index("<style data-cbd-style>") == annotated.index("<html>") + len("<html>")
+
+  fragment_new = '<div>alpha beta</div>'
+  annotated = annotate('<div>alpha</div>', fragment_new)
+  assert annotated.startswith("<style data-cbd-style>")
+  assert '<div class="cbd-header"' in annotated

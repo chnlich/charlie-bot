@@ -55,7 +55,6 @@ def _make_state(loop_id: int, **overrides: object) -> ImproveState:
       "backend": "codex-o3",
       "model": "o3",
       "created_at": "2026-04-15T00:00:00+00:00",
-      "iterations_completed": 0,
   }
   payload.update(overrides)
   return ImproveState(**payload)
@@ -101,7 +100,7 @@ async def test_loop_state_serialization_includes_all_fields(tmp_path: Path):
   """ImproveState persists the expanded per-loop fields."""
   cfg = _make_cfg(tmp_path)
   session_id = "serialization-session"
-  state = _make_state(7, iterations_completed=2, merge_back=True)
+  state = _make_state(7, merge_back=True)
   await save_loop_state(session_id, state, cfg)
 
   loaded = await load_loop_state(session_id, 7, cfg)
@@ -117,7 +116,6 @@ async def test_loop_state_serialization_includes_all_fields(tmp_path: Path):
       "backend",
       "model",
       "created_at",
-      "iterations_completed",
   }
 
 
@@ -189,7 +187,6 @@ async def test_second_loop_starts_after_first_completes(tmp_path: Path):
 
   # Simulate loop 1 completing: mark completed + clear lock
   first.status = "completed"
-  first.iterations_completed = 3
   await save_loop_state(session_id, first, cfg)
   await clear_active_loop_lock(session_id, cfg)
 
@@ -502,7 +499,6 @@ async def test_run_improve_loop_stops_on_quota_blocker_without_incrementing_iter
   state = await load_loop_state("quota-session", 1, cfg)
   assert state is not None
   assert state.status == "failed"
-  assert state.iterations_completed == 0
   assert not (cfg.sessions_dir / "quota-session" / "loops" / "1" / "iter_0001.md").exists()
   assert not (cfg.sessions_dir / "quota-session" / "loops" / "active.lock").exists()
 
@@ -521,7 +517,7 @@ async def test_run_improve_loop_fails_when_session_missing(tmp_path: Path, monke
   """A missing session on iteration k ends the loop as a failure, not a completion.
 
   ``_run_single_iteration`` raises when ``get_session`` returns None, so the loop
-  exits with ``status == 'failed'``, ``iterations_completed == k-1``, broadcasts
+  exits with ``status == 'failed'``, broadcasts
   an ``IMPROVE_FAILED`` payload with ``failed_iteration == k``, and runs no
   merge-back landing/push on that path.
   """
@@ -564,7 +560,6 @@ async def test_run_improve_loop_fails_when_session_missing(tmp_path: Path, monke
   state = await load_loop_state(session_id, 1, cfg)
   assert state is not None
   assert state.status == "failed"
-  assert state.iterations_completed == 1  # k-1 == 1
 
   failed_payloads = [event for event in session_mgr.persisted_events if event.get("type") == "improve_failed"]
   assert len(failed_payloads) == 1
@@ -613,7 +608,6 @@ async def test_run_improve_loop_keeps_non_quota_worker_failures_unchanged(
   state = await load_loop_state("ordinary-failure-session", 1, cfg)
   assert state is not None
   assert state.status == "completed"
-  assert state.iterations_completed == 2
   iteration_statuses = [
       event["status"] for event in session_mgr.persisted_events if event.get("type") == "improve_iteration_completed"
   ]
@@ -697,7 +691,6 @@ async def test_run_improve_loop_pins_resolved_backend_model(tmp_path: Path, monk
   state = await load_loop_state(session_id, 1, cfg)
   assert state is not None
   assert state.status == "completed"
-  assert state.iterations_completed == 2
   assert state.work_branch == "improve/test"
   assert state.backend == "codex-o3"
   assert state.model == "o3"
@@ -792,7 +785,6 @@ async def test_run_improve_loop_rereads_edited_goal_file(tmp_path: Path, monkeyp
   state = await load_loop_state("edit-session", 1, cfg)
   assert state is not None
   assert state.goal == "original goal"
-  assert state.iterations_completed == 2
 
 
 @pytest.mark.asyncio
@@ -934,7 +926,6 @@ async def test_run_improve_loop_fails_when_goal_file_missing_mid_loop(
   state = await load_loop_state("missing-goal-session", 1, cfg)
   assert state is not None
   assert state.status == "failed"
-  assert state.iterations_completed == 1
   assert not (cfg.sessions_dir / "missing-goal-session" / "loops" / "active.lock").exists()
 
 

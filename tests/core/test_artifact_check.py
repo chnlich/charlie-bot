@@ -8,6 +8,7 @@ subprocess, no HTTP.
 
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -653,42 +654,34 @@ def test_cli_plan_template_assertions_only_passes_and_prints_ok_lines(
   ]
 
 
-def test_cli_two_open_forks_without_explainer_report_two_locations_and_skip_the_probe(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """Section 1 with two open forks lacking details.details-layer: two FAIL lines, exit 1, no model call."""
-  doc = _genre_doc(
+def _open_fork_sitrep_doc() -> str:
+  return _genre_doc(
       "sitrep", f'<section><h2><span class="n">1</span> What waits on you?</h2>{_OPEN_FORK}{_OPEN_FORK}</section>'
       '<section><h2><span class="n">2</span> What is this and why?</h2><p><span class="req">r1</span></p></section>'
       '<section><h2><span class="n">3</span> What was verified?</h2></section>'
       '<section><h2><span class="n">4</span> Risks</h2></section>'
       '<section><h2><span class="n">5</span> What happens next?</h2></section>')
-  artifact = _write(tmp_path, doc)
-  factory_called: list = []
-
-  def factory(option, cfg):
-    factory_called.append(option.id)
-    raise AssertionError("the probe must never run when an assertion failed")
-
-  monkeypatch.setattr(artifact_check, "build_backend", factory)
-  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
-  assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 1
-  out = capsys.readouterr().out
-  fail_lines = [line for line in out.splitlines() if line.startswith("FAIL fork-explainer")]
-  assert fail_lines == [
-      "FAIL fork-explainer: fork #1 (section '1 What waits on you?') has no details.details-layer",
-      "FAIL fork-explainer: fork #2 (section '1 What waits on you?') has no details.details-layer",
-  ]
-  assert "--- cold read ---" not in out
-  assert not factory_called
 
 
-def test_cli_plan_two_open_forks_without_explainer_report_two_locations_and_skip_the_probe(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  """Plan page with two open forks lacking details.details-layer: two FAIL lines, exit 1, no model call."""
-  doc = plan_page_html().replace(
+def _open_fork_plan_doc() -> str:
+  return plan_page_html().replace(
       '<h2><span class="n">5</span> Trade-offs</h2>',
       f'<h2><span class="n">5</span> Trade-offs</h2>{_OPEN_FORK}{_OPEN_FORK}')
-  artifact = _write(tmp_path, doc)
+
+
+@pytest.mark.parametrize(
+    ("genre", "make_doc", "section"),
+    [
+        ("sitrep", _open_fork_sitrep_doc, "1 What waits on you?"),
+        ("plan", _open_fork_plan_doc, "5 Trade-offs"),
+    ],
+    ids=["sitrep", "plan"],
+)
+def test_cli_two_open_forks_without_explainer_report_two_locations_and_skip_the_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], genre: str,
+    make_doc: Callable[[], str], section: str) -> None:
+  """Two open forks lacking details.details-layer: two FAIL lines, exit 1, no model call."""
+  artifact = _write(tmp_path, make_doc())
   factory_called: list = []
 
   def factory(option, cfg):
@@ -697,12 +690,12 @@ def test_cli_plan_two_open_forks_without_explainer_report_two_locations_and_skip
 
   monkeypatch.setattr(artifact_check, "build_backend", factory)
   monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
-  assert _run_cli([str(artifact), "--genre", "plan", "--trigger", "where are we?"]) == 1
+  assert _run_cli([str(artifact), "--genre", genre, "--trigger", "where are we?"]) == 1
   out = capsys.readouterr().out
   fail_lines = [line for line in out.splitlines() if line.startswith("FAIL fork-explainer")]
   assert fail_lines == [
-      "FAIL fork-explainer: fork #1 (section '5 Trade-offs') has no details.details-layer",
-      "FAIL fork-explainer: fork #2 (section '5 Trade-offs') has no details.details-layer",
+      f"FAIL fork-explainer: fork #1 (section '{section}') has no details.details-layer",
+      f"FAIL fork-explainer: fork #2 (section '{section}') has no details.details-layer",
   ]
   assert "--- cold read ---" not in out
   assert not factory_called
@@ -801,31 +794,27 @@ def test_cli_probe_exit_1_when_every_backend_fails(
   assert "probe could not run" in out
 
 
-def test_cli_assertions_only_skips_probe_on_probe_genre(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  artifact = _write(tmp_path, _sitrep_ok_doc())
+@pytest.mark.parametrize(
+    ("genre", "make_doc"),
+    [
+        ("sitrep", _sitrep_ok_doc),
+        ("plan", plan_page_html),
+    ],
+    ids=["sitrep", "plan"],
+)
+def test_cli_assertions_only_skips_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], genre: str,
+    make_doc: Callable[[], str]) -> None:
+  artifact = _write(tmp_path, make_doc())
   monkeypatch.setattr(artifact_check, "build_backend", lambda option, cfg: pytest.fail("probe must not run"))
   monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
-  assert _run_cli([str(artifact), "--genre", "sitrep", "--assertions-only"]) == 0
+  assert _run_cli([str(artifact), "--genre", genre, "--assertions-only"]) == 0
   assert "--- cold read ---" not in capsys.readouterr().out
 
 
-def test_cli_assertions_only_skips_probe_on_plan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  artifact = _write(tmp_path, plan_page_html())
-  monkeypatch.setattr(artifact_check, "build_backend", lambda option, cfg: pytest.fail("probe must not run"))
-  monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
-  assert _run_cli([str(artifact), "--genre", "plan", "--assertions-only"]) == 0
-  assert "--- cold read ---" not in capsys.readouterr().out
-
-
-def test_cli_trigger_missing_on_probe_genre_is_usage_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-  assert _run_cli(["page.html", "--genre", "sitrep"]) == 2
-  assert "--trigger" in capsys.readouterr().err
-
-
-def test_cli_plan_without_trigger_or_assertions_only_is_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
-  assert _run_cli(["page.html", "--genre", "plan"]) == 2
+@pytest.mark.parametrize("genre", ["sitrep", "plan"], ids=["sitrep", "plan"])
+def test_cli_missing_trigger_is_usage_error(genre: str, capsys: pytest.CaptureFixture[str]) -> None:
+  assert _run_cli(["page.html", "--genre", genre]) == 2
   assert "--trigger" in capsys.readouterr().err
 
 

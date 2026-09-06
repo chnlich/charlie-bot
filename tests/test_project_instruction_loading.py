@@ -26,7 +26,11 @@ from structlog.testing import capture_logs
 
 from src.agents import master_cc
 from src.core.models import PROJECT_ROLE, BackendOption, SessionMetadata
-from src.core.project_config import ProjectConfig
+from src.core.project_config import (
+    ProjectConfig,
+    ProjectInstructionError,
+    load_project_bodies,
+)
 
 CONTRACT_MARK = "MANAGER CONTRACT BODY"
 COMMON_MARK = "COMMON RULES BODY"
@@ -94,6 +98,20 @@ def test_manager_prompt_file_optional_but_nonempty_when_present() -> None:
     ProjectConfig(prompt_file="project.md", manager_prompt_file="")
   with pytest.raises(Exception, match="nonempty"):
     ProjectConfig(prompt_file="project.md", manager_prompt_file=" \n")
+
+
+def test_manager_prompt_file_explicit_null_rejected() -> None:
+  """An explicit null is invalid; only true omission of the key means "no supplement"."""
+  with pytest.raises(Exception, match="not null"):
+    ProjectConfig(prompt_file="project.md", manager_prompt_file=None)
+
+
+def test_yaml_explicit_null_manager_prompt_file_fails_every_session(tmp_path: Path) -> None:
+  """`manager_prompt_file: null` in the yaml is invalid for managers and ordinary sessions alike."""
+  cfg = _make_project(tmp_path, yaml_body="prompt_file: common.md\nmanager_prompt_file: null\n")
+  for meta in (_meta(None, "proj"), _meta(PROJECT_ROLE, "proj")):
+    out = master_cc._build_instructions_content(meta, cfg, None)
+    _assert_project_error(out, "not null")
 
 
 def test_unknown_keys_and_wrong_types_are_invalid() -> None:
@@ -256,6 +274,42 @@ def test_duplicate_body_destinations_fail(tmp_path: Path) -> None:
   _assert_project_error(out, "same file")
 
 
+def test_duplicate_body_destinations_fail_ordinary_session(tmp_path: Path) -> None:
+  """Destination validity applies to ordinary sessions, which never read the supplement."""
+  cfg = _make_project(
+      tmp_path, yaml_body="prompt_file: common.md\nmanager_prompt_file: common.md\n",
+      files={"common.md": COMMON_MARK})  # manager.md absent: must fail without ever needing it
+  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  _assert_project_error(out, "same file")
+
+
+def test_duplicate_body_destinations_via_symlink_alias_fail(tmp_path: Path) -> None:
+  """Two fields pointing at one file through a symlink alias are the same destination."""
+  cfg = _make_cfg(tmp_path)
+  project_dir = cfg.charliebot_home / "projects" / "proj"
+  project_dir.mkdir(parents=True)
+  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  (project_dir / "alias.md").symlink_to(project_dir / "common.md")
+  (project_dir / "project.yaml").write_text("prompt_file: common.md\nmanager_prompt_file: alias.md\n", encoding="utf-8")
+  for meta in (_meta(None, "proj"), _meta(PROJECT_ROLE, "proj")):
+    out = master_cc._build_instructions_content(meta, cfg, None)
+    _assert_project_error(out, "same file")
+
+
+def test_ordinary_session_does_not_read_supplement_content(tmp_path: Path) -> None:
+  """An ordinary session neither reads nor requires the manager-only body."""
+  cfg = _make_project(tmp_path)
+  (cfg.charliebot_home / "projects" / "proj" / "manager.md").chmod(0o000)
+  ordinary = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  assert ordinary is not None
+  assert getattr(ordinary, "project_error") is None
+  assert COMMON_MARK in ordinary
+  assert SUPPLEMENT_MARK not in ordinary
+
+  manager = master_cc._build_instructions_content(_meta(PROJECT_ROLE, "proj"), cfg, None)
+  _assert_project_error(manager, "manager.md", "unreadable")
+
+
 def test_body_path_outside_project_dir_fails(tmp_path: Path) -> None:
   cfg = _make_project(tmp_path, yaml_body="prompt_file: ../outside.md\n", files={"common.md": COMMON_MARK})
   outside = cfg.charliebot_home / "outside.md"
@@ -265,10 +319,22 @@ def test_body_path_outside_project_dir_fails(tmp_path: Path) -> None:
   assert "OUTSIDE" not in str(out)
 
 
-def test_absolute_body_path_fails(tmp_path: Path) -> None:
+def test_absolute_body_path_inside_project_dir_fails(tmp_path: Path) -> None:
+  """An absolute path is invalid schema even when it points inside the project directory."""
+  cfg = _make_cfg(tmp_path)
+  project_dir = cfg.charliebot_home / "projects" / "proj"
+  project_dir.mkdir(parents=True)
+  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  (project_dir / "project.yaml").write_text(f"prompt_file: {project_dir / 'common.md'}\n", encoding="utf-8")
+  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  _assert_project_error(out, "relative path")
+  assert COMMON_MARK not in str(out)
+
+
+def test_absolute_body_path_outside_project_dir_fails(tmp_path: Path) -> None:
   cfg = _make_project(tmp_path, yaml_body=f"prompt_file: {tmp_path / 'abs.md'}\n", files={"common.md": COMMON_MARK})
   out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
-  _assert_project_error(out, "outside the project directory")
+  _assert_project_error(out, "relative path")
 
 
 def test_symlink_escaping_project_dir_fails(tmp_path: Path) -> None:
@@ -299,6 +365,118 @@ def test_group_traversal_fails(tmp_path: Path) -> None:
   out = master_cc._build_instructions_content(_meta(None, "../evil"), cfg, None)
   _assert_project_error(out, "not a safe project directory name")
   assert "EVIL RULES" not in str(out)
+
+
+# ---------------------------------------------------------------------------
+# Config file present-but-broken states: never a silent disable
+# ---------------------------------------------------------------------------
+
+
+def test_dangling_config_symlink_fails_instead_of_disabling(tmp_path: Path) -> None:
+  """A broken project.yaml symlink is a present-but-broken config, never "not enabled"."""
+  cfg = _make_cfg(tmp_path)
+  project_dir = cfg.charliebot_home / "projects" / "proj"
+  project_dir.mkdir(parents=True)
+  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  (project_dir / "project.yaml").symlink_to(project_dir / "missing.yaml")
+
+  with pytest.raises(ProjectInstructionError, match="broken symlink"):
+    load_project_bodies(cfg.charliebot_home, "proj", manager=False)
+
+  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  _assert_project_error(out, "broken symlink")
+  manager = master_cc._build_instructions_content(_meta(PROJECT_ROLE, "proj"), cfg, None)
+  _assert_project_error(manager, "broken symlink")
+  # Not silently disabled: the unenabled-manager pointer identity stays absent.
+  assert "This session is the Project Manager for group proj" not in str(manager)
+
+
+def test_config_symlink_outside_project_dir_fails(tmp_path: Path) -> None:
+  """A project.yaml symlink out of the project directory breaks the declared isolation."""
+  cfg = _make_cfg(tmp_path)
+  project_dir = cfg.charliebot_home / "projects" / "proj"
+  project_dir.mkdir(parents=True)
+  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  outside = tmp_path / "elsewhere" / "project.yaml"
+  outside.parent.mkdir()
+  outside.write_text("prompt_file: common.md\n", encoding="utf-8")
+  (project_dir / "project.yaml").symlink_to(outside)
+  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  _assert_project_error(out, "outside the project directory")
+
+
+def test_config_symlink_inside_project_dir_loads(tmp_path: Path) -> None:
+  """An in-directory alias for project.yaml is a valid config location."""
+  cfg = _make_cfg(tmp_path)
+  project_dir = cfg.charliebot_home / "projects" / "proj"
+  project_dir.mkdir(parents=True)
+  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  (project_dir / "real-config.yaml").write_text("prompt_file: common.md\n", encoding="utf-8")
+  (project_dir / "project.yaml").symlink_to(project_dir / "real-config.yaml")
+  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  assert out is not None
+  assert getattr(out, "project_error") is None
+  assert COMMON_MARK in out
+
+
+def test_bad_utf8_config_fails(tmp_path: Path) -> None:
+  """A non-UTF-8 config is a per-turn project error, not a raw UnicodeDecodeError escape."""
+  cfg = _make_cfg(tmp_path)
+  project_dir = cfg.charliebot_home / "projects" / "proj"
+  project_dir.mkdir(parents=True)
+  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  (project_dir / "project.yaml").write_bytes(b"prompt_file: \xff\xfe.md\n")
+  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  _assert_project_error(out, "unreadable")
+
+
+def test_config_directory_fails(tmp_path: Path) -> None:
+  """project.yaml as a directory is an unreadable config, never a silent skip."""
+  cfg = _make_cfg(tmp_path)
+  project_dir = cfg.charliebot_home / "projects" / "proj"
+  project_dir.mkdir(parents=True)
+  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  (project_dir / "project.yaml").mkdir()
+  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  _assert_project_error(out, "unreadable")
+
+
+def test_symlink_loop_body_resolution_fails(tmp_path: Path) -> None:
+  """A symlink-loop body destination is a config error, not a raw resolve crash."""
+  cfg = _make_cfg(tmp_path)
+  project_dir = cfg.charliebot_home / "projects" / "proj"
+  project_dir.mkdir(parents=True)
+  loop = project_dir / "common.md"
+  loop.symlink_to(loop)
+  (project_dir / "project.yaml").write_text("prompt_file: common.md\n", encoding="utf-8")
+  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  _assert_project_error(out, "cannot be resolved")
+
+
+def test_symlinked_project_directory_stays_confined(tmp_path: Path) -> None:
+  """The project directory may itself be a symlink: bodies stay confined to its real target."""
+  cfg = _make_cfg(tmp_path)
+  real = tmp_path / "real-project"
+  real.mkdir()
+  (real / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  (real / "manager.md").write_text(SUPPLEMENT_MARK, encoding="utf-8")
+  (real / "project.yaml").write_text("prompt_file: common.md\nmanager_prompt_file: manager.md\n", encoding="utf-8")
+  link = cfg.charliebot_home / "projects" / "proj"
+  link.parent.mkdir(parents=True)
+  link.symlink_to(real)
+  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  assert out is not None
+  assert getattr(out, "project_error") is None
+  assert COMMON_MARK in out
+
+  # A body symlink escaping the real directory still fails confinement.
+  outside = tmp_path / "outside.md"
+  outside.write_text("OUTSIDE", encoding="utf-8")
+  (real / "common.md").unlink()
+  (real / "common.md").symlink_to(outside)
+  out2 = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
+  _assert_project_error(out2, "outside the project directory")
+  assert "OUTSIDE" not in str(out2)
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +535,42 @@ async def test_run_cc_fails_turn_on_project_error(tmp_path: Path, monkeypatch: p
   assert cc_session_id is None
   assert exit_code == 1
   assert error_msg is not None and "project instruction loading failed" in error_msg
+  error_events = [
+      c.args[1]
+      for c in callbacks.persist_and_broadcast.await_args_list  # type: ignore[attr-defined]
+      if c.args and isinstance(c.args[1], dict) and c.args[1].get("type") == "assistant_error"
+  ]
+  assert len(error_events) == 1
+  assert "project instruction loading failed" in error_events[0]["content"]
+  callbacks.mark_unread.assert_awaited_once_with("s1")
+
+
+@pytest.mark.asyncio
+async def test_run_cc_fails_turn_on_duplicate_destinations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An ordinary session fails the turn on duplicated body destinations — no backend spawn."""
+  cfg = _make_project(
+      tmp_path, yaml_body="prompt_file: common.md\nmanager_prompt_file: common.md\n", files={"common.md": COMMON_MARK})
+  cfg = SimpleNamespace(**{**vars(cfg), "sessions_dir": tmp_path / "sessions", "subprocess_buffer_limit": 1024})
+  cfg.sessions_dir.mkdir()
+  session_meta = SessionMetadata(id="s1", name="Researcher", group="proj")
+  option = BackendOption(id="agy", label="Antigravity", type="antigravity", prompt_overlay="none")
+
+  built: dict[str, bool] = {"called": False}
+
+  def fake_build_backend(*args: object, **kwargs: object):
+    built["called"] = True
+    return FakeBackend()
+
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
+  callbacks = mock_session_callbacks()
+  item = make_work_item(cfg, session_meta, option, callbacks=callbacks)
+
+  cc_session_id, exit_code, error_msg, _extras = await master_cc._run_cc(item)
+
+  assert built["called"] is False
+  assert cc_session_id is None
+  assert exit_code == 1
+  assert error_msg is not None and "same file" in error_msg
   error_events = [
       c.args[1]
       for c in callbacks.persist_and_broadcast.await_args_list  # type: ignore[attr-defined]

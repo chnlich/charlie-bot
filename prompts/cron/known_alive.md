@@ -52,6 +52,11 @@ Known-alive symbols:
   `pidfd_open_available` (`tests/conftest.py`, shared skip gate for the pid/slurm watch
   tests), but it is named in the parameter lists of the tests that use it, so the Step 3
   grep already finds its references; no list entry needed.
+- `reset_bundle_cache` (`tests/test_voice_engine.py` and `tests/test_voice_qwen3_hf.py`, one
+  `@pytest.fixture(autouse=True)` definition in each file) — reached by fixture-name discovery
+  like the autouse block above: zero whole-repo matches outside the two definitions, so vulture
+  flags each as an unused function. Each clears the transcriber module-level bundle cache
+  around its file's tests.
 - `_reset_declared_window_warnings` (`tests/test_session_usage.py`) — pytest `autouse=True`
   fixture, reached by fixture-name discovery like the block above. A substring grep for the
   name finds matches, but all of them are `_reset_declared_window_warnings_for_tests`, the

@@ -180,10 +180,10 @@ async def _seed_via_raw_file(mgr: SessionManager, meta: SessionMetadata) -> None
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "seed,ratings",
+    "seed,key,rating",
     [
-        (_seed_via_save, {"7": "thumbs_up"}),
-        (_seed_via_raw_file, {"8": "thumbs_down"}),
+        (_seed_via_save, "7", "thumbs_up"),
+        (_seed_via_raw_file, "8", "thumbs_down"),
     ],
     ids=["cache-hit", "missing-path"],
 )
@@ -191,11 +191,12 @@ async def test_batch_migrates_legacy_round_ratings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     seed: Callable[[SessionManager, SessionMetadata], Awaitable[None]],
-    ratings: dict[str, str],
+    key: str,
+    rating: str,
 ) -> None:
   """Legacy ``"<n>": <rating>`` maps migrate on the cache-hit and the disk-read path alike."""
   mgr = _make_session_mgr(tmp_path)
-  legacy = SessionMetadata(name="legacy", round_ratings=ratings)
+  legacy = SessionMetadata(name="legacy", round_ratings={key: rating})
   await seed(mgr, legacy)
   real_save = mgr.save_metadata
   save_calls = 0
@@ -209,7 +210,7 @@ async def test_batch_migrates_legacy_round_ratings(
 
   result = await mgr._load_session_metas()
 
-  migrated = {f"legacy:{key}": value for key, value in ratings.items()}
+  migrated = {f"legacy:{key}": rating}
   assert save_calls == 1
   assert result[0].round_ratings == migrated
   on_disk = json.loads(mgr._metadata_path(legacy.id).read_text(encoding="utf-8"))

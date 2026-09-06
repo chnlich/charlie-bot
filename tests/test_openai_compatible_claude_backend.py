@@ -232,8 +232,7 @@ def test_route_rejects_wrong_backend_type() -> None:
 
 
 @pytest.mark.parametrize(
-    ("override", "detail"),
-    [
+    ("override", "detail"), [
         pytest.param({"api_base": None}, "missing api_base", id="api_base"),
         pytest.param({"model": None}, "missing model", id="model"),
     ])

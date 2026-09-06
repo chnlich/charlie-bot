@@ -154,8 +154,7 @@ def test_prepare_env_skips_absent_forwarded_var(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.parametrize(
-    ("host_var", "value"),
-    [
+    ("host_var", "value"), [
         ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "forwarded-test-value"),
         ("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "400000"),
         ("CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT", "1"),

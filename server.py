@@ -204,8 +204,7 @@ async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identi
   """
   started = utc_now()
   try:
-    recovered = await run_crash_recovery(
-        cfg, boot_time, session_manager(), thread_manager(), master_identity=identity)
+    recovered = await run_crash_recovery(cfg, boot_time, session_manager(), thread_manager(), master_identity=identity)
     elapsed_ms = round((utc_now() - started).total_seconds() * 1000)
     log.info("crash_recovery_done", count=recovered, elapsed_ms=elapsed_ms)
   except Exception:

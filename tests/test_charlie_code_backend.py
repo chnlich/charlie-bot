@@ -446,8 +446,7 @@ def test_prepare_env_without_api_key_leaves_env_untouched(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "attr"),
-    [
+    ("field", "value", "attr"), [
         ("context_window", 262144, "_context_window"),
         ("api_key", "test-api-key-placeholder", "_api_key"),
     ])

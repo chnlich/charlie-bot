@@ -28,8 +28,11 @@ All instance-specific data (configs, sessions, memory) is stored here.
 `CHARLIEBOT_HOME` selects which one: unset gives `~/.charliebot`, and a set value (absolute
 or `~`-prefixed; relative is rejected) gives a separate profile, seeded on first use. Several
 profiles run side by side on one host, each with its own port in its own `config.yaml`. The
-variable is read in exactly one place, `charliebot_home_dir()` in `src/core/config.py`; every
-other path derives from `CharlieBotConfig.charliebot_home`.
+home path is resolved in exactly one place, `charliebot_home_dir()` in `src/core/config.py`;
+every other path derives from `CharlieBotConfig.charliebot_home`. One raw read of the variable
+sits outside it: the web terminal's profile check (`src/agents/backends/terminal.py`). A tmux
+pane inherits the tmux server's environment rather than the server process's, so the terminal
+checks whether a profile is set and passes the resolved home to new panes explicitly.
 
 ```text
 ~/.charliebot/

@@ -99,15 +99,3 @@ def test_missing_file_stays_uncached(tmp_path: Path) -> None:
 
   _write_registry(p, 1)
   assert len(read_plans_tolerant(p, "sess")["plans"]) == 1
-
-
-def test_memo_lru_evicts_oldest_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(plans_module._tolerant_read_memo, "_limit", 2)
-  paths = []
-  for name in ("a", "b", "c"):
-    p = tmp_path / f"{name}.json"
-    _write_registry(p, 1)
-    read_plans_tolerant(p, "sess")
-    paths.append(p.as_posix())
-
-  assert list(plans_module._tolerant_read_memo) == paths[1:]

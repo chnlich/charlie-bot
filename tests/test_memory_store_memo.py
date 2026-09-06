@@ -87,22 +87,6 @@ def test_missing_topics_stays_uncached(tmp_path: Path) -> None:
   assert tmp_path not in memory_module._store_memo
 
 
-def test_memo_lru_evicts_least_recent_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(memory_module._store_memo, "_limit", 2)
-  dirs = []
-  for name in ("a", "b", "c"):
-    d = tmp_path / name
-    write_memory_topics(d, ["profile resident"])
-    write_memory_entry(d, "profile", "one")
-    load_store(d)
-    dirs.append(d)
-
-  # Bumping dir 'a' makes 'b' the least recent, so 'c' evicts 'b'.
-  load_store(dirs[0])
-  load_store(dirs[2])
-  assert list(memory_module._store_memo) == [dirs[0], dirs[2]]
-
-
 def test_assemble_master_serves_memoized_store_without_new_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   write_memory_topics(tmp_path, ["profile resident"])

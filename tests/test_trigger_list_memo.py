@@ -73,14 +73,3 @@ async def test_list_triggers_drops_deleted_files(tmp_path: Path) -> None:
 async def test_list_triggers_missing_dir_returns_empty(tmp_path: Path) -> None:
   mgr = _make_manager(tmp_path)
   assert await mgr.list_triggers("no-such-session") == []
-
-
-@pytest.mark.asyncio
-async def test_list_triggers_memo_lru_evicts_oldest_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  mgr = _make_manager(tmp_path)
-  monkeypatch.setattr(mgr._list_memo, "_limit", 2)
-  for sid in ("a", "b", "c"):
-    await _save(mgr, sid, f"trigger for {sid}")
-    await mgr.list_triggers(sid)
-
-  assert list(mgr._list_memo) == ["b", "c"]

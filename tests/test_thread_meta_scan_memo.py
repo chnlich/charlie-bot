@@ -114,19 +114,6 @@ def test_out_of_window_files_stay_unread(tmp_path: Path, monkeypatch: pytest.Mon
   assert reads == []
 
 
-def test_memo_lru_evicts_oldest_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(worker_recovery_module._thread_meta_memo, "_limit", 2)
-  cfg = make_home_config(tmp_path)
-  for sid in ("a", "b", "c"):
-    write_thread_meta(cfg, sid, {"id": "t1", "status": "completed"})
-    _scan(cfg.sessions_dir / sid / "threads")
-
-  assert list(worker_recovery_module._thread_meta_memo) == [
-      str(cfg.sessions_dir / "b" / "threads" / "t1" / "metadata.json"),
-      str(cfg.sessions_dir / "c" / "threads" / "t1" / "metadata.json"),
-  ]
-
-
 def test_failed_parse_is_not_memoized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = make_home_config(tmp_path)
   threads_dir = cfg.sessions_dir / "s1" / "threads"

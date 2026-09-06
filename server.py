@@ -1,7 +1,6 @@
 """CharlieBot server entry point."""
 
 import asyncio
-import hmac
 import json
 import time
 from contextlib import asynccontextmanager, suppress
@@ -34,7 +33,7 @@ from src.api import (
     threads,
     voice,
 )
-from src.api.auth import AuthMiddleware
+from src.api.auth import AuthMiddleware, _credential_matches
 from src.api.deps import get_session_manager, get_thread_manager, set_trigger_manager
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
@@ -175,7 +174,7 @@ async def _check_ws_auth(websocket: WebSocket) -> bool:
   if not access_key:
     return True
   token = websocket.query_params.get("token", "")
-  if hmac.compare_digest(token, access_key):
+  if _credential_matches(token, access_key):
     return True
   await websocket.close(code=4401)
   return False

@@ -3,6 +3,7 @@
 import asyncio
 import hmac
 import json
+import time
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +13,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware.gzip import GZipMiddleware, GZipResponder
-from starlette.types import Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from src.agents import transcriber
 from src.api import (
@@ -108,6 +109,59 @@ class _CharlieBotGZipMiddleware(GZipMiddleware):
       await responder(scope, receive, send)
       return
     await super().__call__(scope, receive, send)
+
+
+class _RequestLogMiddleware:
+  """Emit exactly one structlog http_request event per HTTP response.
+
+  Pure ASGI like the GZip middleware above: send is wrapped only to capture the
+  status off http.response.start (nothing is buffered, so streaming and
+  StaticFiles bodies still log exactly once), and the event fires when the
+  inner app returns. The query string is deliberately excluded from `path` —
+  the terminal WS carries its access credential in ?token= — so credentials
+  never reach the log. Mounted last, hence outermost, so AuthMiddleware's 401s
+  are logged too. An inner-app exception logs status=500 with the exception's
+  class name and re-raises unchanged (uvicorn's WARNING+ channel renders the
+  traceback); with log_level="warning" in __main__ this middleware is the
+  single producer of request logs.
+  """
+
+  def __init__(self, app: ASGIApp) -> None:
+    self.app = app
+
+  async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    if scope["type"] != "http":
+      await self.app(scope, receive, send)
+      return
+    started = time.monotonic()
+    status: int | None = None
+
+    async def send_capturing_status(message: Message) -> None:
+      nonlocal status
+      if message["type"] == "http.response.start":
+        status = message["status"]
+      await send(message)
+
+    try:
+      await self.app(scope, receive, send_capturing_status)
+    except Exception as e:
+      self._log_http_request(scope, 500, started, error=type(e).__name__)
+      raise
+    self._log_http_request(scope, status, started)
+
+  def _log_http_request(self, scope: Scope, status: int | None, started: float, *, error: str | None = None) -> None:
+    """The one http_request log site: five fields, plus `error` on the exception path only."""
+    client = scope.get("client")
+    fields: dict[str, object] = {
+        "method": scope["method"],
+        "path": scope["path"],
+        "status": status,
+        "duration_ms": round((time.monotonic() - started) * 1000),
+        "client": client[0] if client else "-",
+    }
+    if error is not None:
+      fields["error"] = error
+    log.info("http_request", **fields)
 
 
 async def _check_ws_auth(websocket: WebSocket) -> bool:
@@ -270,6 +324,9 @@ app = FastAPI(
 # measures 15.0 ms at level 6 vs 5.5 ms at level 1 (wire 165.7 KB vs 201.1 KB).
 app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
 app.add_middleware(AuthMiddleware)
+# Added last, so starlette's insert(0)/reversed build order makes it the
+# outermost user middleware: AuthMiddleware's 401 responses are logged too.
+app.add_middleware(_RequestLogMiddleware)
 
 # Page router (GET / — Jinja2 rendered)
 app.include_router(pages.router, tags=["pages"])
@@ -546,6 +603,10 @@ if __name__ == "__main__":
       host=cfg.server_host,
       port=cfg.server_port,
       reload=False,
-      log_level="info",
+      # uvicorn 0.42 applies this to uvicorn.error, uvicorn.access, and
+      # uvicorn.asgi, silencing every uvicorn INFO line (access lines,
+      # connection open/closed, startup banner); WARNING+ keeps its own format.
+      # _RequestLogMiddleware above covers the silenced request lines.
+      log_level="warning",
       timeout_graceful_shutdown=timeouts.SERVER_GRACEFUL_SHUTDOWN_TIMEOUT,
   )

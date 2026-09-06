@@ -313,9 +313,8 @@ def _iter_jsonl(root: Path, t: _Tally, source: str, label: str) -> Iterator[Path
         yield Path(dirpath) / name
 
 
-def _iter_jsonl_stats(
-    root: Path, t: _Tally, source: str, label: str
-) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
+def _iter_jsonl_stats(root: Path, t: _Tally, source: str,
+                      label: str) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
   """Yield ``(path, stat, error)`` for every ``*.jsonl`` under *root* — the ``_iter_jsonl``
   walk contract with each file's stat attached, so the signature walk pays one syscall per
   file instead of one per file plus a re-stat. Like ``os.walk``: symlinked directories are
@@ -756,9 +755,15 @@ def _merge_opencode(
     cache.store("opencode", db, {"sig": sig, "records": records})
   # The stored partial must never alias a served tally's containers, so it copies out.
   _opencode_partials[key] = _OpencodePartial(
-      by_model={k: dict(v) for k, v in t.by_model.items() if k[0] == "opencode"},
-      by_account={k: dict(v) for k, v in t.by_account.items() if k[0] == "opencode"},
-      span={k: tuple(v) for k, v in t.span.items() if k[0] == "opencode"},
+      by_model={
+          k: dict(v) for k, v in t.by_model.items() if k[0] == "opencode"
+      },
+      by_account={
+          k: dict(v) for k, v in t.by_account.items() if k[0] == "opencode"
+      },
+      span={
+          k: tuple(v) for k, v in t.span.items() if k[0] == "opencode"
+      },
       count=count)
   t.notes.append(f"opencode: {count:,} assistant messages with token counts")
   return sig, epoch, from_scan

@@ -1,7 +1,7 @@
 """Bounded LRU memo shared by the request-path caches.
 
-The one definition of the sibling-memo rule the per-route caches cite
-(git diff, annotate): callers reach the memo from executor threads, so
+The one definition of the sibling-memo rule the per-route caches cite:
+callers reach the memo from executor threads, so
 get+touch and store+evict each hold the lock — a concurrent insert's cap
 eviction must not pop a key between a hit's dict lookup and its
 move_to_end.

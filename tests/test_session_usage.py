@@ -607,7 +607,9 @@ async def test_claude_tier_full_and_point_for_window_model(
   meta = SessionMetadata(id="session-window", name="Window Model", backend=OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
-          _result_event(0.5, {"claude-opus-4-6": {"contextWindow": window}}),
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": window
+          }}),
           _assistant_event("claude-opus-4-6", input_tokens=72_900),
       ])
 

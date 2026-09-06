@@ -484,19 +484,28 @@ def test_corrupt_cache_is_rebuilt_with_note(tmp_path: Path) -> None:
 
 def test_codex_cache_serves_unchanged_files(tmp_path: Path) -> None:
   codex = Codex(tmp_path)
-  codex.write("rollout", [
-      _codex_meta(),
-      _codex_turn("gpt-c"),
-      _codex_count({"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7},
-                   {"total_tokens": 47}, "2024-01-03T00:00:00Z"),
-  ])
+  codex.write(
+      "rollout", [
+          _codex_meta(),
+          _codex_turn("gpt-c"),
+          _codex_count(
+              {
+                  "input_tokens": 60,
+                  "cached_input_tokens": 20,
+                  "output_tokens": 7
+              }, {"total_tokens": 47}, "2024-01-03T00:00:00Z"),
+      ])
   # A subagent file rides the same cache (its self-check pair is None).
-  codex.write("sub", [
-      _codex_meta(parent_thread_id="rollout"),
-      _codex_turn("gpt-c"),
-      _codex_count({"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 1},
-                   {"total_tokens": 47}),
-  ])
+  codex.write(
+      "sub", [
+          _codex_meta(parent_thread_id="rollout"),
+          _codex_turn("gpt-c"),
+          _codex_count({
+              "input_tokens": 10,
+              "cached_input_tokens": 0,
+              "output_tokens": 1
+          }, {"total_tokens": 47}),
+      ])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   first = _collect(None, codex, db, cache)
   assert first.scanned_bytes > 0
@@ -505,26 +514,33 @@ def test_codex_cache_serves_unchanged_files(tmp_path: Path) -> None:
   # Every rollout came from the cache: nothing re-read, same tally and self-check note.
   assert second.scanned_bytes == 0
   assert _row(second, "Codex", "gpt-c").total == _row(first, "Codex", "gpt-c").total
-  assert ([n for n in second.notes if n.startswith("Codex")] ==
-          [n for n in first.notes if n.startswith("Codex")])
+  assert ([n for n in second.notes if n.startswith("Codex")] == [n for n in first.notes if n.startswith("Codex")])
 
 
 def test_codex_cache_invalidates_on_append(tmp_path: Path) -> None:
   codex = Codex(tmp_path)
-  codex.write("rollout", [
-      _codex_meta(),
-      _codex_turn("gpt-a"),
-      _codex_count({"input_tokens": 40, "cached_input_tokens": 0, "output_tokens": 3},
-                   {"total_tokens": 43}),
-  ])
+  codex.write(
+      "rollout", [
+          _codex_meta(),
+          _codex_turn("gpt-a"),
+          _codex_count({
+              "input_tokens": 40,
+              "cached_input_tokens": 0,
+              "output_tokens": 3
+          }, {"total_tokens": 43}),
+      ])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   before = _row(_collect(None, codex, db, cache), "Codex", "gpt-a")
 
   rollout = codex.home / "sessions" / "rollout" / "rollout.jsonl"
   with rollout.open("a") as fh:
-    fh.write(json.dumps(_codex_count(
-        {"input_tokens": 100, "cached_input_tokens": 10, "output_tokens": 2},
-        {"total_tokens": 155})) + "\n")
+    fh.write(
+        json.dumps(
+            _codex_count({
+                "input_tokens": 100,
+                "cached_input_tokens": 10,
+                "output_tokens": 2
+            }, {"total_tokens": 155})) + "\n")
 
   after = _row(_collect(None, codex, db, cache), "Codex", "gpt-a")
   assert after.total == before.total + 102  # appended event: (100 - 10) fresh + 10 read + 2 out
@@ -533,8 +549,7 @@ def test_codex_cache_invalidates_on_append(tmp_path: Path) -> None:
 
 def test_aggregate_memo_serves_unchanged_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [
-      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   first = _collect(claude, None, db, cache)
 
@@ -551,8 +566,7 @@ def test_aggregate_memo_serves_unchanged_walk(tmp_path: Path, monkeypatch: pytes
 
 def test_aggregate_memo_invalidates_on_append(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [
-      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
   db = tmp_path / "db.sqlite"
   before = _row(_collect(claude, None, db), "Claude Code", NAME)
 
@@ -578,8 +592,7 @@ def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, m
   # The host pattern behind the memo: the opencode db's WAL moves under plain serve traffic
   # while the Claude/Codex logs sit unchanged, so the expensive partial must survive.
   claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [
-      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
   first = _collect(claude, None, db, cache)
@@ -588,10 +601,18 @@ def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, m
     raise AssertionError("claude log re-parsed when only the opencode db moved")
 
   monkeypatch.setattr(tt, "_claude_file_contribution", boom)
-  _append_opencode(db, [
-      ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * 5000},
-       "oc-m", "prov"),
-  ])
+  _append_opencode(
+      db, [
+          ({
+              "input": 100,
+              "output": 2,
+              "cache": {
+                  "read": 0,
+                  "write": 0
+              },
+              "pad": "x" * 5000
+          }, "oc-m", "prov"),
+      ])
 
   second = _collect(claude, None, db, cache)
   assert _row(second, "Claude Code", NAME).total == _row(first, "Claude Code", NAME).total
@@ -600,18 +621,25 @@ def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, m
 
 def test_opencode_only_change_is_not_persisted(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [
-      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
   _collect(claude, None, db, cache)
   first_doc = json.loads(cache.read_text())
   assert set(first_doc["sources"]) == {"claude", "opencode"}
 
-  _append_opencode(db, [
-      ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * 5000},
-       "oc-m", "prov"),
-  ])
+  _append_opencode(
+      db, [
+          ({
+              "input": 100,
+              "output": 2,
+              "cache": {
+                  "read": 0,
+                  "write": 0
+              },
+              "pad": "x" * 5000
+          }, "oc-m", "prov"),
+      ])
   tally = _collect(claude, None, db, cache)
   assert _row(tally, "opencode", "oc-m").total == 6 + 102
 
@@ -622,14 +650,12 @@ def test_opencode_only_change_is_not_persisted(tmp_path: Path) -> None:
 
 def test_non_opencode_change_still_persists(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [
-      _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
   _collect(claude, None, db, cache)
 
-  claude.write(claude.work, "sess2", [
-      _claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))])
+  claude.write(claude.work, "sess2", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))])
   _collect(claude, None, db, cache)
 
   doc = json.loads(cache.read_text())
@@ -677,8 +703,7 @@ def test_opencode_cache_serves_unchanged_db(tmp_path: Path) -> None:
   # The db contribution came from the cache: nothing re-read, same tally and note.
   assert second.scanned_bytes == 0
   assert _row(second, "opencode", "oc-m").total == _row(first, "opencode", "oc-m").total
-  assert ([n for n in second.notes if n.startswith("opencode")] ==
-          [n for n in first.notes if n.startswith("opencode")])
+  assert ([n for n in second.notes if n.startswith("opencode")] == [n for n in first.notes if n.startswith("opencode")])
 
 
 def test_opencode_scan_row_filters(tmp_path: Path) -> None:
@@ -688,20 +713,70 @@ def test_opencode_scan_row_filters(tmp_path: Path) -> None:
   con = sqlite3.connect(db)
   _create_message_table(con)
   rows = [
-      ({"role": "assistant", "modelID": "oc-full", "providerID": "prov",
-        "time": {"created": 1700000000000},
-        "tokens": {"input": 10, "output": 2, "cache": {"read": 4, "write": 1}}}, (None, "", "")),
-      ({"role": "assistant", "modelID": "/models/oc-local", "providerID": "lmstudio",
-        "tokens": {"input": 0, "output": 3, "total": 3}}, (None, "", "")),
-      ({"role": "assistant", "modelID": "oc-nocache", "providerID": "prov",
-        "tokens": {"input": 5, "output": 1, "total": 6}}, (None, "", "")),
+      (
+          {
+              "role": "assistant",
+              "modelID": "oc-full",
+              "providerID": "prov",
+              "time": {
+                  "created": 1700000000000
+              },
+              "tokens": {
+                  "input": 10,
+                  "output": 2,
+                  "cache": {
+                      "read": 4,
+                      "write": 1
+                  }
+              }
+          }, (None, "", "")),
+      (
+          {
+              "role": "assistant",
+              "modelID": "/models/oc-local",
+              "providerID": "lmstudio",
+              "tokens": {
+                  "input": 0,
+                  "output": 3,
+                  "total": 3
+              }
+          }, (None, "", "")),
+      (
+          {
+              "role": "assistant",
+              "modelID": "oc-nocache",
+              "providerID": "prov",
+              "tokens": {
+                  "input": 5,
+                  "output": 1,
+                  "total": 6
+              }
+          }, (None, "", "")),
       # skipped rows below: non-assistant role; all counters zero; tokens not an object;
       # malformed JSON that still matches the LIKE prefilter
-      ({"role": "user", "modelID": "oc-user",
-        "tokens": {"input": 99, "output": 99, "total": 99}}, (None, "", "")),
-      ({"role": "assistant", "modelID": "oc-zero",
-        "tokens": {"input": 0, "output": 0, "total": 0}}, (None, "", "")),
-      ({"role": "assistant", "modelID": "oc-lit", "tokens": "final"}, (None, "", "")),
+      ({
+          "role": "user",
+          "modelID": "oc-user",
+          "tokens": {
+              "input": 99,
+              "output": 99,
+              "total": 99
+          }
+      }, (None, "", "")),
+      ({
+          "role": "assistant",
+          "modelID": "oc-zero",
+          "tokens": {
+              "input": 0,
+              "output": 0,
+              "total": 0
+          }
+      }, (None, "", "")),
+      ({
+          "role": "assistant",
+          "modelID": "oc-lit",
+          "tokens": "final"
+      }, (None, "", "")),
       ('{"role":"assistant","tokens":{"input": 5,', (None, "", "")),
   ]
   _insert_opencode_raw(con, rows)

@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -169,14 +170,33 @@ async def test_batch_install_uses_setdefault_for_cache_entry_added_during_read(
   assert result[0].name == "from disk"
 
 
+async def _seed_via_save(mgr: SessionManager, meta: SessionMetadata) -> None:
+  await mgr.save_metadata(meta)
+
+
+async def _seed_via_raw_file(mgr: SessionManager, meta: SessionMetadata) -> None:
+  _write_metadata(mgr, meta)
+
+
 @pytest.mark.asyncio
-async def test_batch_migrates_legacy_round_ratings_on_cache_hit(
+@pytest.mark.parametrize(
+    "seed,ratings",
+    [
+        (_seed_via_save, {"7": "thumbs_up"}),
+        (_seed_via_raw_file, {"8": "thumbs_down"}),
+    ],
+    ids=["cache-hit", "missing-path"],
+)
+async def test_batch_migrates_legacy_round_ratings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    seed: Callable[[SessionManager, SessionMetadata], Awaitable[None]],
+    ratings: dict[str, str],
 ) -> None:
+  """Legacy ``"<n>": <rating>`` maps migrate on the cache-hit and the disk-read path alike."""
   mgr = _make_session_mgr(tmp_path)
-  legacy = SessionMetadata(name="legacy cache hit", round_ratings={"7": "thumbs_up"})
-  await mgr.save_metadata(legacy)
+  legacy = SessionMetadata(name="legacy", round_ratings=ratings)
+  await seed(mgr, legacy)
   real_save = mgr.save_metadata
   save_calls = 0
 
@@ -189,36 +209,11 @@ async def test_batch_migrates_legacy_round_ratings_on_cache_hit(
 
   result = await mgr._load_session_metas()
 
+  migrated = {f"legacy:{key}": value for key, value in ratings.items()}
   assert save_calls == 1
-  assert result[0].round_ratings == {"legacy:7": "thumbs_up"}
+  assert result[0].round_ratings == migrated
   on_disk = json.loads(mgr._metadata_path(legacy.id).read_text(encoding="utf-8"))
-  assert on_disk["round_ratings"] == {"legacy:7": "thumbs_up"}
-
-
-@pytest.mark.asyncio
-async def test_batch_migrates_legacy_round_ratings_on_missing_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  mgr = _make_session_mgr(tmp_path)
-  legacy = SessionMetadata(name="legacy missing", round_ratings={"8": "thumbs_down"})
-  _write_metadata(mgr, legacy)
-  real_save = mgr.save_metadata
-  save_calls = 0
-
-  async def counting_save(meta: SessionMetadata) -> None:
-    nonlocal save_calls
-    save_calls += 1
-    await real_save(meta)
-
-  monkeypatch.setattr(mgr, "save_metadata", counting_save)
-
-  result = await mgr._load_session_metas()
-
-  assert save_calls == 1
-  assert result[0].round_ratings == {"legacy:8": "thumbs_down"}
-  on_disk = json.loads(mgr._metadata_path(legacy.id).read_text(encoding="utf-8"))
-  assert on_disk["round_ratings"] == {"legacy:8": "thumbs_down"}
+  assert on_disk["round_ratings"] == migrated
 
 
 @pytest.mark.asyncio

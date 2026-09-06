@@ -571,101 +571,74 @@ def test_cli_add_cjk_title_uses_capture_segment(tmp_path: Path, monkeypatch: pyt
   assert files[0].read_text(encoding="utf-8") == body
 
 
-def test_cli_add_rejects_missing_title_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("stdin_text", "extra_argv", "exit_code"),
+    [
+        pytest.param("no title here\n", [], 1, id="missing-title-line"),
+        pytest.param("# \n\nbody\n", [], 1, id="empty-title"),
+        pytest.param("# T\n\nbody\n", ["--topic", "x"], 2, id="removed-flag-argparse"),
+    ],
+)
+def test_cli_add_rejects_bad_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stdin_text: str, extra_argv: list[str], exit_code: int) -> None:
+  """A title-less capture, an empty title, or a removed flag exits nonzero and leaves staging untouched.
+
+  The removed-flag case exits 2 from argparse before the capture is read; the title cases exit 1 from the
+  capture grammar.
+  """
   cfg = _fake_cfg(tmp_path)
   monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr("sys.stdin", io.StringIO("no title here\n"))
+  monkeypatch.setattr("sys.stdin", io.StringIO(stdin_text))
   import src.cli.memory as cli
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "add"])
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "add", *extra_argv])
   with pytest.raises(SystemExit) as exc:
     cli.main()
-  assert exc.value.code == 1
+  assert exc.value.code == exit_code
   assert not (cfg.memory_dir / "staging").exists() or not list((cfg.memory_dir / "staging").glob("*.md"))
 
 
-def test_cli_add_rejects_empty_title(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _fake_cfg(tmp_path)
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr("sys.stdin", io.StringIO("# \n\nbody\n"))
-  import src.cli.memory as cli
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "add"])
-  with pytest.raises(SystemExit) as exc:
-    cli.main()
-  assert exc.value.code == 1
-  assert not (cfg.memory_dir / "staging").exists() or not list((cfg.memory_dir / "staging").glob("*.md"))
+@pytest.mark.parametrize(
+    ("topic_values", "expected_err"),
+    [
+        pytest.param(["nope"], "error: unknown topic: nope\n", id="plain"),
+        pytest.param(
+            ["charliebot/some-slug"],
+            "error: unknown topic: charliebot/some-slug (index lines are topic/slug; try --topic charliebot)\n",
+            id="known-pre-slash-hinted",
+        ),
+        pytest.param(["nope/some-slug"], "error: unknown topic: nope/some-slug\n", id="unknown-pre-slash-plain"),
+        pytest.param(
+            ["nope", "charliebot/some-slug"],
+            "error: unknown topic: nope\n"
+            "error: unknown topic: charliebot/some-slug (index lines are topic/slug; try --topic charliebot)\n",
+            id="mixed-only-latter-hinted",
+        ),
+    ],
+)
+def test_cli_query_unknown_topic_lines_and_hints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    topic_values: list[str],
+    expected_err: str,
+) -> None:
+  """Each unknown --topic value prints one stderr line and exits 1.
 
-
-def test_cli_add_removed_flag_fails_via_argparse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Removed flags (--topic/--scope/--audience/--revises) hit the argparse unrecognized-argument error."""
-  cfg = _fake_cfg(tmp_path)
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr("sys.stdin", io.StringIO("# T\n\nbody\n"))
-  import src.cli.memory as cli
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "add", "--topic", "x"])
-  with pytest.raises(SystemExit) as exc:
-    cli.main()
-  assert exc.value.code == 2  # argparse: unrecognized arguments
-  assert not (cfg.memory_dir / "staging").exists() or not list((cfg.memory_dir / "staging").glob("*.md"))
-
-
-def test_cli_query_unknown_topic_exits_nonzero(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-  cfg = _fake_cfg(tmp_path)
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  import src.cli.memory as cli
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "nope"])
-  with pytest.raises(SystemExit) as exc:
-    cli.main()
-  assert exc.value.code != 0
-  err = capsys.readouterr().err
-  assert err == "error: unknown topic: nope\n"
-
-
-def test_cli_query_unknown_topic_slash_value_known_pre_slash_hints(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-  """A ``topic/slug`` value whose pre-slash segment is a real topic gets a corrective hint."""
+  A value whose pre-slash segment is a real topic gains the corrective hint; the others print the plain line.
+  """
   cfg = _fake_cfg(tmp_path)
   monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   import src.cli.memory as cli
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "charliebot/some-slug"])
+  argv = ["charliebot memory", "query"]
+  for value in topic_values:
+    argv += ["--topic", value]
+  monkeypatch.setattr("sys.argv", argv)
   with pytest.raises(SystemExit) as exc:
     cli.main()
   assert exc.value.code == 1
   out, err = capsys.readouterr()
   assert out == ""
-  assert err == ("error: unknown topic: charliebot/some-slug (index lines are topic/slug; try --topic charliebot)\n")
-
-
-def test_cli_query_unknown_topic_slash_value_unknown_pre_slash_is_plain(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-  """A ``topic/slug`` value whose pre-slash segment is not a real topic gets no hint."""
-  cfg = _fake_cfg(tmp_path)
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  import src.cli.memory as cli
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "nope/some-slug"])
-  with pytest.raises(SystemExit) as exc:
-    cli.main()
-  assert exc.value.code == 1
-  out, err = capsys.readouterr()
-  assert out == ""
-  assert err == "error: unknown topic: nope/some-slug\n"
-
-
-def test_cli_query_unknown_topic_mixed_invocation_hints_only_slash_value(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-  """One plain typo plus one hint-eligible value: two lines, in argument order, only the latter hinted."""
-  cfg = _fake_cfg(tmp_path)
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  import src.cli.memory as cli
-  monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "nope", "--topic", "charliebot/some-slug"])
-  with pytest.raises(SystemExit) as exc:
-    cli.main()
-  assert exc.value.code == 1
-  out, err = capsys.readouterr()
-  assert out == ""
-  assert err == (
-      "error: unknown topic: nope\n"
-      "error: unknown topic: charliebot/some-slug (index lines are topic/slug; try --topic charliebot)\n")
+  assert err == expected_err
 
 
 def test_cli_query_index_prints_lines_full_prints_body(

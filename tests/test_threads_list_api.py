@@ -4,6 +4,7 @@
 import asyncio
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -129,3 +130,38 @@ def test_list_poll_repeating_the_rendered_etag_gets_a_bodyless_204(tmp_path: Pat
   assert stale.content != first.content
   assert stale.headers["ETag"] != etag
   assert client.get(url, params={"etag": stale.headers["ETag"]}).status_code == 204
+
+
+def test_list_poll_skips_the_signature_walk_until_a_mark_or_the_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._list_body_memo.clear()
+  threads_api._sig_gate.clear()
+  url = f"/api/threads/{session_id}/list"
+
+  walks = {"n": 0}
+  real = threads_api._list_body_signature
+
+  def counting(threads_dir: str, triggers_dir: str):
+    walks["n"] += 1
+    return real(threads_dir, triggers_dir)
+
+  monkeypatch.setattr(threads_api, "_list_body_signature", counting)
+
+  client.get(url)
+  assert walks["n"] == 1
+  for _ in range(9):
+    assert client.get(url).status_code == 200
+  assert walks["n"] == 1
+
+  client.get(url)
+  assert walks["n"] == 2
+
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  rows = {row["id"]: row for row in client.get(url).json()}
+  any_id = next(iter(rows))
+  asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
+  updated = client.get(url)
+  assert next(row for row in updated.json() if row["id"] == any_id)["status"] == "running"
+  assert walks["n"] == 3

@@ -83,6 +83,8 @@ async def _session_consumer(session_id: str) -> None:
   # Relay cc_session_id across items: queued _WorkItems may carry distinct
   # SessionMetadata instances (e.g. fork bootstrap vs. user message loaded later).
   last_cc_session_id: str | None = None
+  # Same relay for the pool account holding that transcript.
+  last_claude_account: str | None = None
   # Teardown context for the idle RUNNING_CHANGED broadcast, captured per item
   # so the finally never reads the loop variable — `item` is unbound when the
   # consumer exits (e.g. via cancellation) before the first queue.get() returns.
@@ -99,6 +101,8 @@ async def _session_consumer(session_id: str) -> None:
         # so --resume picks up the in-progress CC transcript.
         if last_cc_session_id and not item.session_meta.cc_session_id:
           item.session_meta.cc_session_id = last_cc_session_id
+        if last_claude_account and not item.session_meta.claude_account:
+          item.session_meta.claude_account = last_claude_account
         result = await (
             master_cc_run._resume_cc(item) if item.resume_record is not None else master_cc_run._run_cc(item))
         cc_session_id, exit_code, _error_msg, finish_extras = result
@@ -150,6 +154,32 @@ async def _session_consumer(session_id: str) -> None:
                         (
                             f"Resume anchor persist mismatch: wrote {cc_session_id!r}, "
                             f"read back {read_back!r} from disk"),
+                })
+
+        # The pool account holding the transcript is persisted the same way,
+        # every round with a read-back: a relay or a pool-wide transcript search
+        # that moved the anchor must survive the next whole-object save.
+        claude_account = item.session_meta.claude_account
+        if claude_account and item.callbacks.persist_claude_account is not None:
+          last_claude_account = claude_account
+          account_read_back = await item.callbacks.persist_claude_account(session_id, claude_account)
+          if account_read_back != claude_account:
+            log.error(
+                "claude_account_persist_mismatch",
+                session=session_id,
+                written=claude_account,
+                read_back=account_read_back,
+            )
+            await item.callbacks.persist_and_broadcast(
+                session_id, {
+                    "type":
+                        ET.ERROR,
+                    "source":
+                        "claude_account",
+                    "message":
+                        (
+                            f"Claude account persist mismatch: wrote {claude_account!r}, "
+                            f"read back {account_read_back!r} from disk"),
                 })
 
         # Computed once, with no re-check: a queued item keeps this round's

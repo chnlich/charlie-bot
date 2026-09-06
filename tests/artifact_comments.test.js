@@ -8,6 +8,7 @@ const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
   require('./artifact_comments_dom_stub');
 
 const ARTIFACT_COMMENTS_JS = readStatic('artifact-comments.js');
+const COMMENT_POST_JS = readStatic('comment_post.js');
 
 const SESSION_270_PLAN_PATH = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
 const PATH_SESSION_PLAN_PATH = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
@@ -85,6 +86,7 @@ function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
     context.sessionStorage = opts.sessionStorage;
   }
   vm.createContext(context);
+  vm.runInContext(COMMENT_POST_JS, context, {filename: 'comment_post.js'});
   vm.runInContext(ARTIFACT_COMMENTS_JS, context, {filename: 'artifact-comments.js'});
   // documentElement rides along so tests can assert the layer never writes it.
   return {window, head, body, documentElement, listeners};

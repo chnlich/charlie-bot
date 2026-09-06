@@ -617,6 +617,27 @@ def _reference_instructions(reference_path: Path) -> str:
       "need to be read in full; read what is needed to reconstruct the current state.\n\n")
 
 
+def _start_successor_run(
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    meta: SessionMetadata,
+    prompt_head: str,
+    directive: str,
+) -> None:
+  """Start a fork/elone successor's run on a bootstrap prompt built around the parent reference.
+
+  *prompt_head* carries the opener plus whatever successor-specific context precedes the
+  reference instructions; *directive* tells the successor what to do with them.
+  """
+  reference_path = session_mgr.parent_reference_path(meta.id)
+  bootstrap_prompt = f"{prompt_head}{_reference_instructions(reference_path)}{directive}"
+  # Call-time import is the test-patching contract: tests patch src.api.chat.run_and_finalize
+  # on the module attribute, and this import is what routes the call to the patched binding.
+  from src.api.chat import run_and_finalize
+  from src.core.tasks import create_logged_task
+  create_logged_task(run_and_finalize(cfg, meta, bootstrap_prompt, session_mgr, skip_user_event=False))
+
+
 @router.post('/{session_id}/fork', response_model=SessionMetadata)
 async def fork_session(
     session_id: str,
@@ -642,15 +663,13 @@ async def fork_session(
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
 
-  reference_path = session_mgr.parent_reference_path(meta.id)
-  bootstrap_prompt = (
-      f"{FORK_BOOTSTRAP_OPENER}\n\n"
-      f"{_reference_instructions(reference_path)}"
+  _start_successor_run(
+      cfg,
+      session_mgr,
+      meta,
+      prompt_head=f"{FORK_BOOTSTRAP_OPENER}\n\n",
+      directive=
       "Get oriented from that reference, summarize where things stand, and wait for the user's next instruction.")
-
-  from src.api.chat import run_and_finalize
-  from src.core.tasks import create_logged_task
-  create_logged_task(run_and_finalize(cfg, meta, bootstrap_prompt, session_mgr, skip_user_event=False))
 
   return meta
 
@@ -676,18 +695,16 @@ async def elone_session(
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
 
-  reference_path = session_mgr.parent_reference_path(meta.id)
-  bootstrap_prompt = (
-      f"{ELONE_BOOTSTRAP_OPENER} "
-      "The dissatisfaction is usually with the most recent exchange before the takeover point.\n\n"
-      f"{_reference_instructions(reference_path)}"
-      "Understand what the user wanted and where it went wrong, then give your read and a better approach. "
-      "Confirm with the user before acting.")
-
-  # Write synthetic user event and auto-start the assistant
-  from src.api.chat import run_and_finalize
-  from src.core.tasks import create_logged_task
-  create_logged_task(run_and_finalize(cfg, meta, bootstrap_prompt, session_mgr, skip_user_event=False))
+  _start_successor_run(
+      cfg,
+      session_mgr,
+      meta,
+      prompt_head=(
+          f"{ELONE_BOOTSTRAP_OPENER} "
+          "The dissatisfaction is usually with the most recent exchange before the takeover point.\n\n"),
+      directive=(
+          "Understand what the user wanted and where it went wrong, then give your read and a better approach. "
+          "Confirm with the user before acting."))
 
   return meta
 

@@ -164,6 +164,31 @@ def make_tool_result_event(tool_name: str, content: str) -> dict:
   return {"type": ET.TOOL_RESULT, "tool_name": tool_name, "content": content}
 
 
+def make_context_reading_event(
+    model: str,
+    context_tokens: int | None,
+    context_full: int | None,
+    context_compact_at: int | None,
+) -> dict:
+  """Build a CC-compatible system event carrying an already-resolved context reading.
+
+  The payload key equals the subtype (``context_reading``) and its keys equal
+  the usage response's field names; the persisted event is re-read from
+  chat_events.jsonl by the usage resolver (src/core/session_usage.py).
+  """
+  return {
+      "type": ET.SYSTEM,
+      "subtype": ET.CONTEXT_READING,
+      ET.CONTEXT_READING:
+          {
+              "model": model,
+              "context_tokens": context_tokens,
+              "context_full": context_full,
+              "context_compact_at": context_compact_at,
+          },
+  }
+
+
 async def iter_ndjson_events(stdout: asyncio.StreamReader) -> AsyncIterator[dict]:
   """Yield the JSON objects of an NDJSON stream.
 

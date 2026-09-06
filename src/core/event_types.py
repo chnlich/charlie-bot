@@ -53,6 +53,12 @@ RESUME_CONTEXT_DROPPED = "resume_context_dropped"
 # (src/core/session_usage.py), so producer and consumers share one definition.
 COMPACT_BOUNDARY = "compact_boundary"
 COMPACT_METADATA = "compact_metadata"
+# A backend emits this ``subtype`` on a ``system`` event carrying an
+# already-resolved context reading; the event carries the reading's model and
+# token counts under the same-named ``context_reading`` payload key.  Both are
+# persisted wire values re-read from chat_events.jsonl by
+# src/core/session_usage.py, so producer and consumers share one definition.
+CONTEXT_READING = "context_reading"
 
 # -- Clone / fork ------------------------------------------------------------
 CLONE_START = "clone_start"

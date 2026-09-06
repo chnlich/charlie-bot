@@ -200,7 +200,9 @@ async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp
 
 
 # ---------------------------------------------------------------------------
-# Acceptance test 1b: context_tokens reads a post-boundary compact_boundary
+# Acceptance test 1b: context_tokens across a compact_boundary — the boundary
+# adjusts the reading only when it follows the selected assistant event and
+# carries post_tokens; otherwise the reading stays the assistant sum.
 # ---------------------------------------------------------------------------
 
 
@@ -213,74 +215,64 @@ def _compact_boundary_event(trigger: str = "manual", pre_tokens=None, post_token
   return {"type": "system", "subtype": "compact_boundary", "compact_metadata": meta}
 
 
+# One row per boundary position/shape around the selected assistant event: the
+# events between the shared result event and the reading, and the
+# context_tokens the claude tier must report.
+_COMPACT_BOUNDARY_ROWS = [
+    pytest.param(
+        "postboundary",
+        "Post Boundary",
+        [
+            _assistant_event("claude-opus-4-6", input_tokens=239_708),
+            _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
+        ],
+        4_670,
+        id="post-boundary-reads-post-tokens"),
+    pytest.param(
+        "preboundary",
+        "Pre Boundary",
+        [
+            _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
+            _assistant_event("claude-opus-4-6", input_tokens=100_000),
+        ],
+        100_000,
+        id="pre-boundary-keeps-assistant-sum"),
+    pytest.param(
+        "noboundarytokens",
+        "No Post Tokens",
+        [
+            _assistant_event("claude-opus-4-6", input_tokens=100_000),
+            # opencode's synthesized shape: trigger + pre_tokens only, no post_tokens.
+            _compact_boundary_event(trigger="auto", pre_tokens=50_000),
+        ],
+        100_000,
+        id="no-post-tokens-keeps-assistant-sum"),
+]
+
+
 @pytest.mark.asyncio
-async def test_claude_tier_context_tokens_reads_post_tokens_after_selected_assistant(tmp_path: Path,) -> None:
+@pytest.mark.parametrize(("session_tag", "session_name", "boundary_events", "expected_context_tokens"),
+                         _COMPACT_BOUNDARY_ROWS)
+async def test_claude_tier_context_tokens_across_a_compact_boundary(
+    tmp_path: Path,
+    session_tag: str,
+    session_name: str,
+    boundary_events: list[dict],
+    expected_context_tokens: int,
+) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-postboundary", name="Post Boundary", backend=OPUS_BACKEND_ID)
+  meta = SessionMetadata(id=f"session-{session_tag}", name=session_name, backend=OPUS_BACKEND_ID)
   _write_session(
-      session_mgr, meta, [
-          _result_event(0.5, {"claude-opus-4-6": {
-              "contextWindow": 200_000
-          }}),
-          _assistant_event("claude-opus-4-6", input_tokens=239_708),
-          _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
-      ])
+      session_mgr, meta,
+      [_result_event(0.5, {"claude-opus-4-6": {
+          "contextWindow": 200_000
+      }}), *boundary_events])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage is not None
-  assert usage["context_tokens"] == 4_670
-  assert usage["context_full"] == 200_000
-  assert usage["model"] == "claude-opus-4-6"
-  assert usage["total_cost_usd"] == pytest.approx(0.5)
-
-
-@pytest.mark.asyncio
-async def test_claude_tier_ignores_compact_boundary_before_selected_assistant(tmp_path: Path,) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-preboundary", name="Pre Boundary", backend=OPUS_BACKEND_ID)
-  _write_session(
-      session_mgr, meta, [
-          _result_event(0.5, {"claude-opus-4-6": {
-              "contextWindow": 200_000
-          }}),
-          _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
-          _assistant_event("claude-opus-4-6", input_tokens=100_000),
-      ])
-
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
-  # Boundary precedes the chosen assistant event -- reading stays the assistant sum.
-  assert usage["context_tokens"] == 100_000
-  assert usage["context_full"] == 200_000
-  assert usage["model"] == "claude-opus-4-6"
-  assert usage["total_cost_usd"] == pytest.approx(0.5)
-
-
-@pytest.mark.asyncio
-async def test_claude_tier_boundary_without_post_tokens_leaves_reading_alone(tmp_path: Path,) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-noboundarytokens", name="No Post Tokens", backend=OPUS_BACKEND_ID)
-  _write_session(
-      session_mgr,
-      meta,
-      [
-          _result_event(0.5, {"claude-opus-4-6": {
-              "contextWindow": 200_000
-          }}),
-          _assistant_event("claude-opus-4-6", input_tokens=100_000),
-          # opencode's synthesized shape: trigger + pre_tokens only, no post_tokens.
-          _compact_boundary_event(trigger="auto", pre_tokens=50_000),
-      ])
-
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
-  assert usage["context_tokens"] == 100_000
+  assert usage["context_tokens"] == expected_context_tokens
   assert usage["context_full"] == 200_000
   assert usage["model"] == "claude-opus-4-6"
   assert usage["total_cost_usd"] == pytest.approx(0.5)

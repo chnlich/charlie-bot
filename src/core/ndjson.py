@@ -16,7 +16,9 @@ from src.core.memo import BoundedMemo
 log = structlog.get_logger()
 
 _COUNT_CHUNK_SIZE = 1024 * 1024
-_TAIL_PARSEABLE_WINDOW = 512 * 1024
+
+# Both tail readers bound their trailing reads to this one window.
+_TAIL_WINDOW_SIZE = 512 * 1024
 
 # Bound on _count_memo in files, not bytes: the chat tail page (archived
 # sessions) and the event-count callers cycle one live file per view, so a
@@ -146,15 +148,14 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
   if take == 0:
     return [], total, has_more
 
-  tail_window_size = 512 * 1024
   with open(path, "rb") as f:
     f.seek(0, 2)
     file_size = f.tell()
-    if file_size <= tail_window_size:
+    if file_size <= _TAIL_WINDOW_SIZE:
       f.seek(0)
       tail_lines = [line for line in f.read().split(b"\n") if line.strip()][-take:]
     else:
-      window_start = file_size - tail_window_size
+      window_start = file_size - _TAIL_WINDOW_SIZE
       f.seek(window_start)
       window = f.read()
       split_lines = window.split(b"\n")
@@ -197,7 +198,7 @@ def parse_ndjson_tail_parseable(path: Path, limit: int) -> list[dict]:
     pos = f.tell()
     carry = b""  # the current segment's left-truncated first line, completed by the next older segment
     while pos > 0 and len(collected) < limit:
-      start = max(0, pos - _TAIL_PARSEABLE_WINDOW)
+      start = max(0, pos - _TAIL_WINDOW_SIZE)
       f.seek(start)
       lines = (f.read(pos - start) + carry).split(b"\n")
       carry = b""

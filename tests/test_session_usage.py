@@ -13,6 +13,7 @@ from src.agents.backends.claude_code import (
   _reset_declared_window_warnings_for_tests,
   headless_claude_declared_window,
 )
+from src.core import event_types as ET
 from src.core import session_usage
 from src.core.codex_usage import _extract_codex_rollout_usage_event
 from src.core.config import CharlieBotConfig
@@ -133,6 +134,22 @@ def _result_event(total_cost_usd, model_usage: dict | None = None, input_tokens:
 def _snapshot(model: str, tokens: dict, limit: dict | None) -> dict:
   """Build a context_snapshot block for a result event."""
   return {"model": model, "tokens": tokens, "limit": limit}
+
+
+def _context_reading_event(
+    model: str, context_tokens: int | None, context_full: int | None,
+    context_compact_at: int | None) -> dict:
+  """Build a persisted system/context_reading event (charlie-code backend's reading)."""
+  return {
+      "type": ET.SYSTEM,
+      "subtype": ET.CONTEXT_READING,
+      ET.CONTEXT_READING: {
+          "model": model,
+          "context_tokens": context_tokens,
+          "context_full": context_full,
+          "context_compact_at": context_compact_at,
+      },
+  }
 
 
 # ---------------------------------------------------------------------------
@@ -778,6 +795,273 @@ async def test_snapshot_tier_with_non_int_output_degrades_to_none(tmp_path: Path
 
 
 # ---------------------------------------------------------------------------
+# Latest-reading slot: the newest reading-bearing event decides the readout
+# regardless of which backend produced it (system/context_reading tier).
+# ---------------------------------------------------------------------------
+
+
+_K3_MODEL = "openai/moonshotai/Kimi-K3"
+
+
+def _k3_reading() -> dict:
+  return _context_reading_event(_K3_MODEL, 118_234, 262_144, 170_393)
+
+
+@pytest.mark.asyncio
+async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-reading", name="Reading", backend=OPUS_BACKEND_ID)
+  # Several result events with turn-cumulative usage and no context_snapshot
+  # (charlie-code today), plus context_reading events: the newest reading
+  # decides all four fields, the cumulative usage never reaches the readout.
+  _write_session(session_mgr, meta, [
+      _result_event(0.10, input_tokens=1_000_000),
+      _result_event(0.20, input_tokens=2_000_000),
+      _context_reading_event("old/model", 10_000, 100_000, 90_000),
+      _k3_reading(),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  assert usage["context_tokens"] == 118_234
+  assert usage["context_full"] == 262_144
+  assert usage["context_compact_at"] == 170_393
+  assert usage["model"] == _K3_MODEL
+  # Cost still comes from the shared fold over result events.
+  assert usage["total_cost_usd"] == pytest.approx(0.30)
+
+
+@pytest.mark.asyncio
+async def test_reading_overrides_older_claude_reading(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(
+      id="session-reading-after-claude", name="Reading After Claude", backend=OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, [
+      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
+      _assistant_event("claude-opus-4-6", input_tokens=100_000),
+      _k3_reading(),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  assert usage["context_tokens"] == 118_234
+  assert usage["context_full"] == 262_144
+  assert usage["context_compact_at"] == 170_393
+  assert usage["model"] == _K3_MODEL
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_clean_ceiling_env")
+async def test_claude_reading_overrides_older_context_reading(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(
+      id="session-claude-after-reading", name="Claude After Reading", backend=OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, [
+      _k3_reading(),
+      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
+      _assistant_event("claude-opus-4-6", input_tokens=100_000),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  # Today's claude arithmetic, unchanged: assistant prompt sum, min(modelUsage
+  # window, declared window), compact point minus the two Claude reserves.
+  assert usage["context_tokens"] == 100_000
+  assert usage["context_full"] == 200_000
+  assert usage["context_compact_at"] == 167_000
+  assert usage["model"] == "claude-opus-4-6"
+
+
+@pytest.mark.asyncio
+async def test_reading_overrides_older_snapshot(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(
+      id="session-reading-after-snap", name="Reading After Snapshot", backend="opencode-glm52")
+  _write_session(session_mgr, meta, [
+      _result_event(
+          0.5,
+          context_snapshot=_snapshot(
+              SYNTHETIC_MODEL,
+              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
+               "cache_read": 30_000, "cache_write": 10_000},
+              {"context": 409_600, "input": 270_000, "output": 131_072})),
+      _k3_reading(),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  assert usage["context_tokens"] == 118_234
+  assert usage["context_full"] == 262_144
+  assert usage["context_compact_at"] == 170_393
+  assert usage["model"] == _K3_MODEL
+
+
+@pytest.mark.asyncio
+async def test_snapshot_overrides_older_context_reading(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(
+      id="session-snap-after-reading", name="Snapshot After Reading", backend="opencode-glm52")
+  _write_session(session_mgr, meta, [
+      _k3_reading(),
+      _result_event(
+          0.5,
+          context_snapshot=_snapshot(
+              SYNTHETIC_MODEL,
+              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
+               "cache_read": 30_000, "cache_write": 10_000},
+              {"context": 409_600, "input": 270_000, "output": 131_072})),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  # Today's snapshot derivation, unchanged.
+  assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
+  assert usage["context_full"] == 270_000
+  assert usage["context_compact_at"] == 250_000
+  assert usage["model"] == SYNTHETIC_MODEL
+
+
+@pytest.mark.asyncio
+async def test_reading_after_compact_boundary_still_wins(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(
+      id="session-reading-after-boundary", name="Reading After Boundary", backend=OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, [
+      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
+      _assistant_event("claude-opus-4-6", input_tokens=239_708),
+      _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
+      _k3_reading(),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  # The boundary refined the claude slot, but the later context_reading moved
+  # the slot to resolved: the reading decides, not post_tokens.
+  assert usage["context_tokens"] == 118_234
+  assert usage["context_full"] == 262_144
+  assert usage["context_compact_at"] == 170_393
+  assert usage["model"] == _K3_MODEL
+
+
+@pytest.mark.asyncio
+async def test_boundary_while_snapshot_or_reading_slot_changes_nothing(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+
+  # Boundary after a snapshot: the snapshot slot keeps deciding.
+  snap_meta = SessionMetadata(
+      id="session-boundary-snap", name="Boundary While Snapshot", backend="opencode-glm52")
+  _write_session(session_mgr, snap_meta, [
+      _result_event(
+          0.5,
+          context_snapshot=_snapshot(
+              SYNTHETIC_MODEL,
+              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
+               "cache_read": 30_000, "cache_write": 10_000},
+              {"context": 409_600, "input": 270_000, "output": 131_072})),
+      _compact_boundary_event(pre_tokens=250_000, post_tokens=4_670),
+  ])
+  snap_usage = await session_mgr.resolve_session_usage(snap_meta.id, snap_meta)
+
+  assert snap_usage is not None
+  assert snap_usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000  # not 4_670
+  assert snap_usage["context_full"] == 270_000
+  assert snap_usage["context_compact_at"] == 250_000
+
+  # Boundary after a reading: the resolved slot keeps deciding.
+  reading_meta = SessionMetadata(
+      id="session-boundary-reading", name="Boundary While Reading", backend=OPUS_BACKEND_ID)
+  _write_session(session_mgr, reading_meta, [
+      _k3_reading(),
+      _compact_boundary_event(pre_tokens=118_234, post_tokens=4_670),
+  ])
+  reading_usage = await session_mgr.resolve_session_usage(reading_meta.id, reading_meta)
+
+  assert reading_usage is not None
+  assert reading_usage["context_tokens"] == 118_234  # not 4_670
+  assert reading_usage["context_full"] == 262_144
+  assert reading_usage["context_compact_at"] == 170_393
+
+
+@pytest.mark.asyncio
+async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-emptyslot", name="Empty Slot", backend=OPUS_BACKEND_ID)
+  # Only text assistant events (no usage -> no claude slot) and cumulative
+  # result events: the slot stays empty and the context fields stay unknown.
+  _write_session(session_mgr, meta, [
+      {
+          "type": "assistant",
+          "message": {
+              "model": "claude-opus-4-6",
+              "content": [{"type": "text", "text": "hello"}],
+          },
+      },
+      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=999_999),
+  ])
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  assert usage is not None
+  assert usage["context_tokens"] is None
+  assert usage["context_full"] is None
+  assert usage["context_compact_at"] is None
+  assert usage["model"] == ""
+
+  empty_meta = SessionMetadata(
+      id="session-emptyslot-none", name="Empty Slot None", backend=OPUS_BACKEND_ID)
+  _write_session(session_mgr, empty_meta, [])
+  assert await session_mgr.resolve_session_usage(empty_meta.id, empty_meta) is None
+
+
+@pytest.mark.asyncio
+async def test_codex_tier_not_consulted_for_non_codex_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(
+      id="session-noncodex-gate", name="Non Codex Gate", backend=OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, [
+      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
+      _assistant_event("claude-opus-4-6", input_tokens=100_000),
+  ])
+  resolver = session_mgr._session_usage._codex_resolver
+  seen_backends: list[str] = []
+
+  def _record_is_codex(backend_id: str) -> bool:
+    seen_backends.append(backend_id)
+    return False
+
+  async def _fail_resolve(*args, **kwargs):
+    raise AssertionError("codex resolver must not run for a non-codex backend")
+
+  monkeypatch.setattr(resolver, "is_codex_backend", _record_is_codex)
+  monkeypatch.setattr(resolver, "resolve", _fail_resolve)
+
+  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  # The codex gate runs once (first) and returns False; the slot resolves the
+  # claude reading exactly as before.
+  assert usage is not None
+  assert usage["context_tokens"] == 100_000
+  assert usage["context_full"] == 200_000
+  assert seen_backends == [OPUS_BACKEND_ID]
+
+
+# ---------------------------------------------------------------------------
 # Acceptance test 9: codex candidate directories + model_auto_compact_token_limit
 # ---------------------------------------------------------------------------
 
@@ -1080,3 +1364,28 @@ def test_usage_fold_of_appended_suffixes_matches_full_scan() -> None:
   fold.feed(events[6:])
   fold.feed([])
   assert fold.facts() == session_usage._scan_usage_facts(events)
+
+
+def test_usage_fold_reading_slot_of_appended_suffixes_matches_full_scan() -> None:
+  """Feeding a table as prefix + suffix (through copy()) lands on the same facts
+  as one full pass, including a suffix context_reading overriding an earlier
+  claude reading."""
+  events = [
+      _result_event(0.10, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
+      _assistant_event("claude-opus-4-6", input_tokens=50_000),
+      _k3_reading(),
+      _result_event(0.05, {"claude-opus-4-6": {"contextWindow": 180_000}}, input_tokens=2000),
+      _assistant_event("claude-opus-4-6", input_tokens=51_000, parent_tool_use_id="toolu_1"),
+  ]
+  prefix_fold = session_usage._UsageFold()
+  prefix_fold.feed(events[:2])
+  assert prefix_fold.facts() == session_usage._scan_usage_facts(events[:2])
+
+  # The suffix carries the context_reading that overrides the earlier claude slot.
+  full_fold = prefix_fold.copy()
+  full_fold.feed(events[2:])
+  full_fold.feed([])
+  assert full_fold.facts() == session_usage._scan_usage_facts(events)
+  # The slot kind flipped from claude to resolved, and the reading payload won.
+  assert full_fold.facts().reading_kind == session_usage._READING_RESOLVED
+  assert full_fold.facts().reading == _k3_reading()[ET.CONTEXT_READING]

@@ -120,14 +120,15 @@ Known-alive symbols:
   backend's `run()` an async generator (the consumer's `async for` would TypeError a plain
   coroutine), as each site's inline comment states. The condition is the point; nothing to
   delete.
-- `model_config` (twelve pydantic `BaseModel` classes: `ScheduledTaskConfig` and
-  `CharlieBotConfig` in `src/core/config.py`, and `DelegateInvocationMetadata`, `ImproveRequest`,
+- `model_config` (sixteen pydantic `BaseModel` classes: `StepConfig`, `ScheduledTaskConfig`, and
+  `CharlieBotConfig` in `src/core/config.py`; `ClaudeAccount`, `ClaudeCompactionConfig`,
+  `DelegateInvocationMetadata`, `ImproveRequest`,
   `ScheduleTriggerRequest`, `SessionMessageRequest`, `SlackReplyRequest`, `SlackAckRequest`,
   `PlanPresentRequest`, `PlanAmendRequest`, `PlanApproveRequest`, `PlanCloseRequest` in
-  `src/core/models.py`) — the pydantic v2
+  `src/core/models.py`; `SwitchEventRequest` in `src/api/diag.py`) — the pydantic v2
   `ConfigDict` class attribute, which `ModelMetaclass` consumes by attribute name at
   class-definition time; `extra='forbid'` is what turns an unknown config or request key into a
-  validation error. Nothing in the repo reads the name (whole-repo grep finds only the twelve
+  validation error. Nothing in the repo reads the name (whole-repo grep finds only the sixteen
   assignments — the `model_config` substring in `src/agents/backends/codex.py` is the unrelated
   `_model_config_args` method), so vulture flags each assignment as an unused variable.
 - `backlog_label` (`src/core/config.py`, `CharlieBotConfig`) — deprecated migration field,

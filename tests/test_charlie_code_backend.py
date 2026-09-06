@@ -445,7 +445,14 @@ def test_prepare_env_without_api_key_leaves_env_untouched(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_registry_propagates_context_window_into_charlie_code_backend(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("field", "value", "attr"),
+    [
+        ("context_window", 262144, "_context_window"),
+        ("api_key", "test-api-key-placeholder", "_api_key"),
+    ])
+def test_registry_propagates_option_fields_into_charlie_code_backend(
+    monkeypatch, field: str, value: object, attr: str) -> None:
   monkeypatch.setattr(
       CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/charlie-code",
@@ -456,33 +463,13 @@ def test_registry_propagates_context_window_into_charlie_code_backend(monkeypatc
       type="charlie-code",
       model="openai/test-model",
       api_base="http://test.invalid/v1",
-      context_window=262144,
+      **{field: value},
   )
 
   backend = build_backend(option, CharlieBotConfig())
 
   assert isinstance(backend, CharlieCodeBackend)
-  assert backend._context_window == 262144
-
-
-def test_registry_propagates_api_key_into_charlie_code_backend(monkeypatch) -> None:
-  monkeypatch.setattr(
-      CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
-      lambda name, fallback: "/usr/bin/charlie-code",
-  )
-  option = BackendOption(
-      id="cc-gemini-test",
-      label="t",
-      type="charlie-code",
-      model="openai/test-model",
-      api_base="http://test.invalid/v1",
-      api_key="test-api-key-placeholder",
-  )
-
-  backend = build_backend(option, CharlieBotConfig())
-
-  assert isinstance(backend, CharlieCodeBackend)
-  assert backend._api_key == "test-api-key-placeholder"
+  assert getattr(backend, attr) == value
 
 
 def test_api_base_required(monkeypatch) -> None:

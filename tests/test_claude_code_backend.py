@@ -153,33 +153,20 @@ def test_prepare_env_skips_absent_forwarded_var(monkeypatch: pytest.MonkeyPatch)
   assert "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT" not in env
 
 
-def test_prepare_env_forwards_allowlisted_host_var(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "forwarded-test-value")
+@pytest.mark.parametrize(
+    ("host_var", "value"),
+    [
+        ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "forwarded-test-value"),
+        ("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "400000"),
+        ("CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT", "1"),
+    ])
+def test_prepare_env_forwards_allowlisted_host_var(monkeypatch: pytest.MonkeyPatch, host_var: str, value: str) -> None:
+  monkeypatch.setenv(host_var, value)
   backend = ClaudeCodeBackend()
 
   env = backend._prepare_env({})
 
-  assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
-  assert env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] == "forwarded-test-value"
-
-
-def test_prepare_env_forwards_max_context_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setenv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "400000")
-  backend = ClaudeCodeBackend()
-
-  env = backend._prepare_env({})
-
-  assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "400000"
-  assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
-
-
-def test_prepare_env_forwards_simple_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setenv("CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT", "1")
-  backend = ClaudeCodeBackend()
-
-  env = backend._prepare_env({})
-
-  assert env["CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT"] == "1"
+  assert env[host_var] == value
   assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
 
 

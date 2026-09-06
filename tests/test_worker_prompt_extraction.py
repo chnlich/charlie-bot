@@ -73,31 +73,23 @@ def test_missing_worker_prompt_file_raises_with_path_and_cause(tmp_path: Path) -
   assert str(missing_path) in str(exc_info.value)
 
 
-def test_missing_required_section_raises(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("drop_start", "drop_end", "section"),
+    [
+        ("<!-- section: role -->", "<!-- section: memory -->", "role"),
+        ("<!-- section: remote_scratch -->", "<!-- section: role -->", "remote_scratch"),
+    ])
+def test_missing_required_section_raises(tmp_path: Path, drop_start: str, drop_end: str, section: str) -> None:
   text = _real_worker_prompt_text()
-  start = text.index("<!-- section: role -->")
-  end = text.index("<!-- section: memory -->")
-  mutated = text[:start] + text[end:]  # drop the entire "role" section
+  start = text.index(drop_start)
+  end = text.index(drop_end)
+  mutated = text[:start] + text[end:]  # drop the entire section
 
   prompts_dir = tmp_path / "prompts"
   prompts_dir.mkdir()
   (prompts_dir / "worker.md").write_text(mutated, encoding="utf-8")
 
-  with pytest.raises(ValueError, match="role"):
-    spawner.load_worker_prompt_sections(_cfg_with_repo(tmp_path))
-
-
-def test_missing_remote_scratch_section_raises(tmp_path: Path) -> None:
-  text = _real_worker_prompt_text()
-  start = text.index("<!-- section: remote_scratch -->")
-  end = text.index("<!-- section: role -->")
-  mutated = text[:start] + text[end:]  # drop the entire "remote_scratch" section
-
-  prompts_dir = tmp_path / "prompts"
-  prompts_dir.mkdir()
-  (prompts_dir / "worker.md").write_text(mutated, encoding="utf-8")
-
-  with pytest.raises(ValueError, match="remote_scratch"):
+  with pytest.raises(ValueError, match=section):
     spawner.load_worker_prompt_sections(_cfg_with_repo(tmp_path))
 
 

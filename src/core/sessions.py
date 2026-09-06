@@ -584,9 +584,11 @@ class SessionManager:
     self._aggregators: dict[str, MessageAggregator] = {}
     # Per-session MessageProjection cache (LRU, cap _PROJECTION_LRU_LIMIT). A
     # hit requires the cached event_count to equal the live event count
-    # (get_message_projection), so a stale projection is never served. The
-    # route reads it off asyncio.to_thread, so the memo mechanics are
-    # BoundedMemo's locked ones, not a bare OrderedDict's.
+    # (get_message_projection, projection_memo_hit), so a stale projection is
+    # never served. Route access spans both the event loop (the memo-hit
+    # fast path) and asyncio.to_thread (the threaded build/advance), and the
+    # to_thread side must not observe a half-updated map, so the memo
+    # mechanics are BoundedMemo's locked ones, not a bare OrderedDict's.
     self._projection_cache: BoundedMemo[str, MessageProjection] = BoundedMemo(_PROJECTION_LRU_LIMIT)
     self._search_miss_memo: OrderedDict[str, OrderedDict[str, tuple[int, int, int]]] = OrderedDict()
 

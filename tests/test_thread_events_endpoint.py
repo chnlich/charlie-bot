@@ -73,45 +73,39 @@ async def test_after_envelope_slice_reset_and_rejection(tmp_path: Path) -> None:
 def test_worker_events_memo_hit_contract(tmp_path: Path) -> None:
   """The hit path serves exactly the unchanged-log steady state: cold miss,
   warm hit equal to the threaded reader, grown/missing log back to a miss."""
-  from src.api.threads import (
-      read_thread_worker_events,
-      read_thread_worker_events_memo_hit,
-  )
+  import src.api.threads as threads_api
 
   log = tmp_path / "events.jsonl"
   log.write_text("".join(json.dumps(e) + "\n" for e in EVENTS), encoding="utf-8")
 
-  assert read_thread_worker_events_memo_hit(log) is None
-  read_thread_worker_events(log)  # warm, as the first panel open does
+  assert threads_api.read_thread_worker_events_memo_hit(log) is None
+  threads_api.read_thread_worker_events(log)  # warm, as the first panel open does
 
-  hit = read_thread_worker_events_memo_hit(log)
+  hit = threads_api.read_thread_worker_events_memo_hit(log)
   assert hit is not None
-  assert [e.model_dump(mode="json") for e in hit] == [e.model_dump(mode="json") for e in read_thread_worker_events(log)]
+  assert [e.model_dump(mode="json") for e in hit
+         ] == [e.model_dump(mode="json") for e in threads_api.read_thread_worker_events(log)]
 
   with log.open("a", encoding="utf-8") as f:
     f.write(json.dumps(EVENTS[0]) + "\n")
-  assert read_thread_worker_events_memo_hit(log) is None
-  assert len(read_thread_worker_events(log)) == len(EVENTS) + 1
-  assert read_thread_worker_events_memo_hit(log) is not None
+  assert threads_api.read_thread_worker_events_memo_hit(log) is None
+  assert len(threads_api.read_thread_worker_events(log)) == len(EVENTS) + 1
+  assert threads_api.read_thread_worker_events_memo_hit(log) is not None
 
   log.unlink()
-  assert read_thread_worker_events_memo_hit(log) is None
-  assert read_thread_worker_events(log) == []
+  assert threads_api.read_thread_worker_events_memo_hit(log) is None
+  assert threads_api.read_thread_worker_events(log) == []
 
 
 def test_worker_events_memo_hit_never_waits_on_a_contended_lock(tmp_path: Path) -> None:
   """A concurrent reader holding the lock mid-read sends the poll to the
   threaded path instead of blocking the caller's thread on the file read."""
 
-  from src.api.threads import (
-      _thread_events_lock,
-      read_thread_worker_events,
-      read_thread_worker_events_memo_hit,
-  )
+  import src.api.threads as threads_api
 
   log = tmp_path / "events.jsonl"
   log.write_text("".join(json.dumps(e) + "\n" for e in EVENTS), encoding="utf-8")
-  read_thread_worker_events(log)  # warm
+  threads_api.read_thread_worker_events(log)  # warm
 
-  with _thread_events_lock:
-    assert read_thread_worker_events_memo_hit(log) is None
+  with threads_api._thread_events_lock:
+    assert threads_api.read_thread_worker_events_memo_hit(log) is None

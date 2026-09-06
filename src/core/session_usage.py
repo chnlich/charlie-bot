@@ -14,6 +14,15 @@ fresh fold. Load and scan run in one ``asyncio.to_thread`` so the fold never
 stalls the event loop. See the plan ``panel-usage-readout-fix`` for the tier
 contract.
 
+The readout is decided by the fold's latest-reading slot: the newest
+reading-bearing main-chain event in the table — an ``assistant`` event with a
+positive prompt-token sum (kind ``claude``), a result event carrying a dict
+``context_snapshot`` (kind ``snapshot``), or a persisted ``system`` /
+``context_reading`` event (kind ``resolved``) — wins regardless of which
+backend produced it, later events overriding earlier ones in event order. The
+codex rollout tier runs before the slot and only for codex backends; an empty
+slot keeps the context fields unknown.
+
 The usage dict carries four context fields plus cost and model:
 
     {
@@ -53,6 +62,20 @@ def _prompt_token_sum(usage: dict) -> int:
       usage.get("cache_read_input_tokens", 0))
 
 
+# Kinds of the latest-reading slot: which tier resolves the readout. Set by the
+# newest reading-bearing main-chain event, later events overriding earlier ones.
+_READING_CLAUDE = "claude"
+_READING_SNAPSHOT = "snapshot"
+_READING_RESOLVED = "resolved"
+
+
+def _int_field(value: object) -> int | None:
+  """Keep an int as-is; any other value (a JSON bool included) becomes None."""
+  if isinstance(value, bool) or not isinstance(value, int):
+    return None
+  return value
+
+
 @dataclass(frozen=True)
 class _UsageFacts:
   """One scan's harvest of everything the usage tiers read from the event list.
@@ -60,11 +83,19 @@ class _UsageFacts:
   ``chosen_prompt_tokens`` > 0 selects the claude tier: the value is the chosen
   assistant event's usage prompt-token sum, and ``chosen_model`` is its
   ``message.model``. ``post_compact_tokens`` is the latest ``compact_boundary``
-  int ``post_tokens`` strictly after that assistant event, or None.
-  ``model_windows`` merges ``modelUsage[model].contextWindow`` across result
-  events (last wins). ``snapshot`` is the newest result event's dict
-  ``context_snapshot``, or None. ``cost`` is the rounded ``total_cost_usd`` sum
-  over result events: None when any of them is None or the sum is not positive.
+  int ``post_tokens`` seen while the slot kind was ``claude`` (each qualifying
+  assistant event resets it), or None. ``model_windows`` merges
+  ``modelUsage[model].contextWindow`` across result events (last wins).
+  ``snapshot`` is the newest result event's dict ``context_snapshot``, or None.
+  ``cost`` is the rounded ``total_cost_usd`` sum over result events: None when
+  any of them is None or the sum is not positive.
+
+  ``reading_kind``/``reading`` carry the latest-reading slot deciding which
+  tier resolves: ``claude`` (payload = ``chosen_prompt_tokens`` /
+  ``chosen_model`` / ``post_compact_tokens``), ``snapshot`` (payload = the
+  ``snapshot`` dict), or ``resolved`` (payload = the system/
+  ``context_reading`` dict in ``reading``). Empty string / None when the table
+  holds no reading-bearing event.
   """
 
   chosen_prompt_tokens: int
@@ -72,6 +103,8 @@ class _UsageFacts:
   post_compact_tokens: int | None
   model_windows: dict[str, int]
   snapshot: dict | None
+  reading_kind: str
+  reading: dict | None
   cost: float | None
 
 
@@ -81,18 +114,21 @@ class _UsageFold:
   Every field the scan reports is carried forward event by event, so feeding
   a suffix into the carried state lands on the same state as a fresh fold
   over the whole list: a qualifying ``assistant`` event overwrites the chosen
-  reading and resets its boundary, a later ``compact_boundary`` overwrites
-  the boundary, ``model_windows`` merges last-wins, and the cost sum adds in
-  event order either way (the additions run in the same sequence, so the
-  result is bit-identical to the single pass). ``facts()`` snapshots the
-  carried state into the frozen :class:`_UsageFacts`; ``model_windows`` is
-  copied per snapshot so a facts object already handed out never observes a
-  later ``feed``.
+  claude reading and resets its boundary, a later ``compact_boundary``
+  refines the boundary only while the latest-reading slot is still claude, a
+  result event's dict ``context_snapshot`` and a ``system`` /
+  ``context_reading`` payload each overwrite the slot with their own kind,
+  ``model_windows`` merges last-wins, and the cost sum adds in event order
+  either way (the additions run in the same sequence, so the result is
+  bit-identical to the single pass). ``facts()`` snapshots the carried state
+  into the frozen :class:`_UsageFacts`; ``model_windows`` is copied per
+  snapshot so a facts object already handed out never observes a later
+  ``feed``.
   """
 
   __slots__ = (
-      "chosen_prompt_tokens", "chosen_model", "post_compact_tokens", "model_windows", "snapshot", "total_cost",
-      "unknown_cost")
+      "chosen_prompt_tokens", "chosen_model", "post_compact_tokens", "model_windows", "snapshot", "reading_kind",
+      "reading", "total_cost", "unknown_cost")
 
   def __init__(self) -> None:
     self.chosen_prompt_tokens = 0
@@ -100,6 +136,8 @@ class _UsageFold:
     self.post_compact_tokens: int | None = None
     self.model_windows: dict[str, int] = {}
     self.snapshot: dict | None = None
+    self.reading_kind = ""
+    self.reading: dict | None = None
     self.total_cost = 0.0
     self.unknown_cost = False
 
@@ -116,11 +154,19 @@ class _UsageFold:
           self.chosen_prompt_tokens = prompt_tokens
           self.chosen_model = message.get("model") or ""
           self.post_compact_tokens = None
+          self.reading_kind = _READING_CLAUDE
       elif kind == ET.SYSTEM:
-        if self.chosen_prompt_tokens > 0 and ev.get("subtype") == ET.COMPACT_BOUNDARY:
-          candidate = (ev.get(ET.COMPACT_METADATA) or {}).get("post_tokens")
-          if isinstance(candidate, int):
-            self.post_compact_tokens = candidate
+        subtype = ev.get("subtype")
+        if subtype == ET.COMPACT_BOUNDARY:
+          if self.reading_kind == _READING_CLAUDE:
+            candidate = (ev.get(ET.COMPACT_METADATA) or {}).get("post_tokens")
+            if isinstance(candidate, int):
+              self.post_compact_tokens = candidate
+        elif subtype == ET.CONTEXT_READING:
+          payload = ev.get(ET.CONTEXT_READING)
+          if isinstance(payload, dict):
+            self.reading_kind = _READING_RESOLVED
+            self.reading = payload
       elif kind == ET.RESULT:
         for model_name, info in (ev.get("modelUsage") or {}).items():
           window = info.get("contextWindow")
@@ -129,6 +175,7 @@ class _UsageFold:
         candidate_snapshot = ev.get("context_snapshot")
         if isinstance(candidate_snapshot, dict):
           self.snapshot = candidate_snapshot
+          self.reading_kind = _READING_SNAPSHOT
         event_cost = ev.get("total_cost_usd", 0.0)
         if event_cost is None:
           self.unknown_cost = True
@@ -146,6 +193,8 @@ class _UsageFold:
         post_compact_tokens=self.post_compact_tokens,
         model_windows=dict(self.model_windows),
         snapshot=self.snapshot,
+        reading_kind=self.reading_kind,
+        reading=self.reading,
         cost=cost,
     )
 
@@ -157,6 +206,8 @@ class _UsageFold:
     out.post_compact_tokens = self.post_compact_tokens
     out.model_windows = dict(self.model_windows)
     out.snapshot = self.snapshot
+    out.reading_kind = self.reading_kind
+    out.reading = self.reading
     out.total_cost = self.total_cost
     out.unknown_cost = self.unknown_cost
     return out
@@ -165,10 +216,10 @@ class _UsageFold:
 def _scan_usage_facts(events: list[dict]) -> _UsageFacts:
   """Collect every tier's inputs in one pass over *events*.
 
-  A ``compact_boundary`` counts only after the assistant event the claude tier
-  will choose: a newer qualifying assistant resets the boundary seen so far,
-  so the final value is the latest ``post_tokens`` strictly after the chosen
-  assistant — the same set a suffix scan from the chosen index would consider.
+  The latest-reading slot rides the same order rule: a qualifying ``assistant``
+  event resets the boundary seen so far, a ``compact_boundary`` refines it only
+  while the slot kind is ``claude``, and any later snapshot or
+  ``context_reading`` moves the slot away from claude.
   """
   fold = _UsageFold()
   fold.feed(events)
@@ -277,6 +328,24 @@ def _resolve_snapshot_tier(facts: _UsageFacts) -> dict | None:
   return _usage_dict(context_tokens, context_full, context_compact_at, model, facts.cost)
 
 
+def _resolve_reading_tier(facts: _UsageFacts) -> dict:
+  """Resolve usage from the newest persisted system/``context_reading`` payload.
+
+  The payload's fields pass through as the panel's readout: each numeric field
+  is kept when it is an int and becomes ``None`` otherwise, ``model`` is given
+  as-is, and cost is the shared fold's sum over result events.
+  """
+  assert facts.reading is not None
+  reading = facts.reading
+  return _usage_dict(
+      context_tokens=_int_field(reading.get("context_tokens")),
+      context_full=_int_field(reading.get("context_full")),
+      context_compact_at=_int_field(reading.get("context_compact_at")),
+      model=reading.get("model") or "",
+      cost=facts.cost,
+  )
+
+
 def _resolve_no_source_tier(facts: _UsageFacts) -> dict:
   """Usage object when no tier applies.
 
@@ -319,30 +388,33 @@ class SessionUsageResolver:
 
     Loads the full event list itself (memoised by the chat-events cache, so no
     extra disk I/O) and rescans only when the list changed since the last
-    resolution (see the module docstring for the memo key); the tiers then
-    read the scan's facts, selected by data availability, not backend name:
+    resolution (see the module docstring for the memo key); tier selection:
 
-    - claude: a main-chain ``assistant`` event with positive prompt tokens exists.
-    - codex: the backend is codex and the native rollout resolves.
-    - snapshot: a result event carries a ``context_snapshot`` (opencode backend).
-    - no-source: none of the above — context fields are ``None``.
+    - codex: first, when the backend is codex and the native rollout resolves
+      (unchanged logic).
+    - the fold's latest-reading slot, the newest reading-bearing main-chain
+      event regardless of which backend produced it: ``claude`` -> the
+      assistant reading (``_resolve_claude_tier``), ``snapshot`` -> the result
+      event's ``context_snapshot`` (``_resolve_snapshot_tier``), ``resolved``
+      -> the persisted system/``context_reading`` payload
+      (``_resolve_reading_tier``).
+    - no-source: an empty slot — context fields are ``None``.
 
     Returns ``None`` only when the event list is empty.
     """
     events, facts = await asyncio.to_thread(self._load_and_scan, session_id)
-
-    usage = _resolve_claude_tier(facts)
-    if usage is not None:
-      return usage
 
     if self._codex_resolver.is_codex_backend(session_meta.backend):
       merged = await asyncio.to_thread(self._codex_resolver.resolve, session_id, session_meta, events)
       if merged is not None:
         return merged
 
-    usage = _resolve_snapshot_tier(facts)
-    if usage is not None:
-      return usage
+    if facts.reading_kind == _READING_CLAUDE:
+      return _resolve_claude_tier(facts)
+    if facts.reading_kind == _READING_SNAPSHOT:
+      return _resolve_snapshot_tier(facts)
+    if facts.reading_kind == _READING_RESOLVED:
+      return _resolve_reading_tier(facts)
 
     if not events:
       return None

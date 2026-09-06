@@ -4,7 +4,8 @@ const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
 
-const {dockOf, findChildByClass, makeElement} = require('./artifact_comments_dom_stub');
+const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
+  require('./artifact_comments_dom_stub');
 
 const {SESSIONS_ROOT} = require('./sessions_root_stub');
 
@@ -88,19 +89,6 @@ function loadScript(opts = {}) {
   vm.createContext(context);
   vm.runInContext(ARTIFACT_COMMENTS_JS, context, {filename: 'artifact-comments.js'});
   return {context, window, head, body, storage};
-}
-
-function clickElement(el) {
-  assert.ok(el && el._listeners.click && el._listeners.click.length > 0, 'click listener exists');
-  return el._listeners.click[0]({preventDefault() {}, stopPropagation() {}});
-}
-
-function flush() {
-  return new Promise((resolve) => setImmediate(resolve));
-}
-
-async function flushPromises(times = 6) {
-  for (let i = 0; i < times; i++) await flush();
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +232,7 @@ async function addShortcutAndSend(fetch, storage) {
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   const sendBtn = findChildByClass(actions, '__cbc-tray-send');
   await clickElement(sendBtn);
-  await flushPromises();
+  await flushPromises(6);
   return res;
 }
 
@@ -414,7 +402,7 @@ test('send puts shortcut entries ahead of block comments and keeps their order',
   const tray = findChildByClass(dockOf(res.body), '__cbc-tray');
   const actions = findChildByClass(tray, '__cbc-tray-actions');
   await clickElement(findChildByClass(actions, '__cbc-tray-send'));
-  await flushPromises();
+  await flushPromises(6);
 
   assert.ok(posted, 'the batch was posted');
   const numbered = posted.split('\n').filter((line) => /^\d+\. /.test(line));

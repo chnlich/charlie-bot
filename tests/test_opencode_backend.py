@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from conftest import (
-  OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-  SYNTHETIC_MODEL,
-  FakeChunkedResponse,
-  build_cli_backend,
+    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+    SYNTHETIC_MODEL,
+    FakeChunkedResponse,
+    build_cli_backend,
 )
 
 import src.agents.backends.opencode as opencode_mod
@@ -21,10 +21,10 @@ from src.agents.backends.opencode import (
     SSE_EVENT_MESSAGE_UPDATED,
     SSE_EVENT_PERMISSION_ASKED,
     SSE_EVENT_SERVER_CONNECTED,
-  SSE_EVENT_SESSION_ERROR,
-  SSE_EVENT_SESSION_IDLE,
-  OpenCodeBackend,
-  OpenCodeSseSilenceError,
+    SSE_EVENT_SESSION_ERROR,
+    SSE_EVENT_SESSION_IDLE,
+    OpenCodeBackend,
+    OpenCodeSseSilenceError,
 )
 from src.core import event_types as ET
 from src.core.streaming import handle_compaction_events
@@ -44,8 +44,7 @@ def _rig_end_to_end_run(monkeypatch, backend: OpenCodeBackend, response) -> Magi
   process.pid = 4321
   process.returncode = 0
   process.wait = AsyncMock(return_value=0)
-  monkeypatch.setattr(
-      _CREATE_SUBPROCESS_EXEC_PATCH_TARGET, AsyncMock(return_value=process))
+  monkeypatch.setattr(_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, AsyncMock(return_value=process))
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
   monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())
@@ -53,9 +52,7 @@ def _rig_end_to_end_run(monkeypatch, backend: OpenCodeBackend, response) -> Magi
   monkeypatch.setattr(backend, "_fetch_model_limit", AsyncMock(return_value=None))
   monkeypatch.setattr(backend, "_create_session", AsyncMock(return_value="session-1"))
   monkeypatch.setattr(backend, "_send_prompt", AsyncMock())
-  monkeypatch.setattr(
-      "src.agents.backends.opencode.httpx.AsyncClient",
-      lambda **kwargs: _FakeRunHttpClient(response))
+  monkeypatch.setattr("src.agents.backends.opencode.httpx.AsyncClient", lambda **kwargs: _FakeRunHttpClient(response))
   return process
 
 
@@ -138,15 +135,16 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
   payload = json.dumps(
       {
           "type": SSE_EVENT_MESSAGE_PART_UPDATED,
-          "properties": {
-              "sessionID": "session-1",
-              "part": {
-                  "messageID": "m1",
-                  "id": "part-1",
-                  "type": "text",
-                  "text": part_text,
+          "properties":
+              {
+                  "sessionID": "session-1",
+                  "part": {
+                      "messageID": "m1",
+                      "id": "part-1",
+                      "type": "text",
+                      "text": part_text,
+                  },
               },
-          },
       },
       ensure_ascii=False,
   )
@@ -165,9 +163,7 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
       b"\n",
   ]
 
-  parsed = [
-      event async for event in backend._iter_sse_events(FakeChunkedResponse(frame_chunks))
-  ]
+  parsed = [event async for event in backend._iter_sse_events(FakeChunkedResponse(frame_chunks))]
   assert parsed == [json.loads(payload)]
   assert parsed[0]["properties"]["part"]["text"] == part_text
 
@@ -420,29 +416,42 @@ async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatc
 def test_translate_tool_error_emits_tool_result(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  translated = backend.translate_event({
-      "type": "tool",
-      "part": {
-          "callID": "call-1",
-          "tool": "glob",
-          "state": {
-              "input": {"pattern": "AGENTS.md", "path": "/tmp"},
-              "error": "The user rejected permission to use this specific tool call.",
-          },
-      },
-  })
+  translated = backend.translate_event(
+      {
+          "type": "tool",
+          "part":
+              {
+                  "callID": "call-1",
+                  "tool": "glob",
+                  "state":
+                      {
+                          "input": {
+                              "pattern": "AGENTS.md",
+                              "path": "/tmp"
+                          },
+                          "error": "The user rejected permission to use this specific tool call.",
+                      },
+              },
+      })
 
   assert translated == [
       {
           "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "tool_use",
-                  "name": "glob",
-                  "id": "call-1",
-                  "input": {"pattern": "AGENTS.md", "path": "/tmp"},
-              }]
-          },
+          "message":
+              {
+                  "content":
+                      [
+                          {
+                              "type": "tool_use",
+                              "name": "glob",
+                              "id": "call-1",
+                              "input": {
+                                  "pattern": "AGENTS.md",
+                                  "path": "/tmp"
+                              },
+                          }
+                      ]
+              },
       },
       {
           "type": "tool_result",
@@ -464,21 +473,25 @@ async def test_consume_sse_events_parent_permission_ask_fails_fast(monkeypatch) 
 
   events = await _drain(
       backend._consume_sse_events(
-          _FakeEventStream([
-              {
-                  "type": SSE_EVENT_PERMISSION_ASKED,
-                  "properties": {
-                      "id": "perm-1",
-                      "sessionID": "parent-session",
-                      "permission": "external_directory",
-                      "patterns": ["/etc"],
+          _FakeEventStream(
+              [
+                  {
+                      "type": SSE_EVENT_PERMISSION_ASKED,
+                      "properties":
+                          {
+                              "id": "perm-1",
+                              "sessionID": "parent-session",
+                              "permission": "external_directory",
+                              "patterns": ["/etc"],
+                          },
                   },
-              },
-              {
-                  "type": SSE_EVENT_SESSION_IDLE,
-                  "properties": {"sessionID": "parent-session"},
-              },
-          ])))
+                  {
+                      "type": SSE_EVENT_SESSION_IDLE,
+                      "properties": {
+                          "sessionID": "parent-session"
+                      },
+                  },
+              ])))
 
   assert len(events) == 1
   assert events[0]["type"] == ET.ERROR
@@ -496,15 +509,19 @@ async def test_consume_sse_events_child_permission_ask_fails_before_filtering(mo
 
   events = await _drain(
       backend._consume_sse_events(
-          _FakeEventStream([{
-              "type": SSE_EVENT_PERMISSION_ASKED,
-              "properties": {
-                  "id": "perm-2",
-                  "sessionID": "child-session",
-                  "permission": "doom_loop",
-                  "patterns": ["task"],
-              },
-          }])))
+          _FakeEventStream(
+              [
+                  {
+                      "type": SSE_EVENT_PERMISSION_ASKED,
+                      "properties":
+                          {
+                              "id": "perm-2",
+                              "sessionID": "child-session",
+                              "permission": "doom_loop",
+                              "patterns": ["task"],
+                          },
+                  }
+              ])))
 
   assert len(events) == 1
   assert events[0]["type"] == ET.ERROR
@@ -543,7 +560,15 @@ async def test_consume_sse_events_normal_parent_turn(monkeypatch) -> None:
           ])))
 
   assert events == [
-      {"type": "assistant", "message": {"content": [{"type": "text", "text": "Hello"}]}},
+      {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "Hello"
+              }]
+          }
+      },
       backend._make_accumulated_result(),
   ]
   assert backend._failed is False
@@ -566,38 +591,42 @@ def test_is_cancellation_disconnect_false_without_terminate(monkeypatch) -> None
 def test_translate_sse_event_reasoning_part_emits_thinking_delta(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  assert not backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_PART_UPDATED,
-      "properties": {
-          "part": {
-              "messageID": "message-1",
-              "id": "part-r",
-              "type": "reasoning",
-              "text": "I need",
-          }
-      },
-  })
-  assert not backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_PART_UPDATED,
-      "properties": {
-          "part": {
-              "messageID": "message-1",
-              "id": "part-r",
-              "type": "reasoning",
-              "text": "I need to think",
-          }
-      },
-  })
+  assert not backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_PART_UPDATED,
+          "properties": {
+              "part": {
+                  "messageID": "message-1",
+                  "id": "part-r",
+                  "type": "reasoning",
+                  "text": "I need",
+              }
+          },
+      })
+  assert not backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_PART_UPDATED,
+          "properties":
+              {
+                  "part": {
+                      "messageID": "message-1",
+                      "id": "part-r",
+                      "type": "reasoning",
+                      "text": "I need to think",
+                  }
+              },
+      })
 
-  translated = backend._translate_sse_event({
-      "type": SSE_EVENT_MESSAGE_UPDATED,
-      "properties": {
-          "info": {
-              "id": "message-1",
-              "role": "assistant",
-          }
-      },
-  })
+  translated = backend._translate_sse_event(
+      {
+          "type": SSE_EVENT_MESSAGE_UPDATED,
+          "properties": {
+              "info": {
+                  "id": "message-1",
+                  "role": "assistant",
+              }
+          },
+      })
 
   assert translated == [
       {
@@ -621,12 +650,16 @@ def _step_finish_part(input_t, output_t, reasoning_t, cache_read_t, cache_write_
       "messageID": "m1",
       "id": "p1",
       "type": "step-finish",
-      "tokens": {
-          "input": input_t,
-          "output": output_t,
-          "reasoning": reasoning_t,
-          "cache": {"read": cache_read_t, "write": cache_write_t},
-      },
+      "tokens":
+          {
+              "input": input_t,
+              "output": output_t,
+              "reasoning": reasoning_t,
+              "cache": {
+                  "read": cache_read_t,
+                  "write": cache_write_t
+              },
+          },
       "cost": cost,
   }
 
@@ -634,18 +667,15 @@ def _step_finish_part(input_t, output_t, reasoning_t, cache_read_t, cache_write_
 def test_make_accumulated_result_snapshot_carries_last_step_tokens_not_sum(monkeypatch) -> None:
   backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   backend._model_limit = {"context": 409600, "input": 270000, "output": 131072}
-  backend._accumulate_step_finish(
-      _step_finish_part(100, 10, 5, 20, 30, 0.1))
-  backend._accumulate_step_finish(
-      _step_finish_part(200, 20, 8, 40, 60, 0.2))
+  backend._accumulate_step_finish(_step_finish_part(100, 10, 5, 20, 30, 0.1))
+  backend._accumulate_step_finish(_step_finish_part(200, 20, 8, 40, 60, 0.2))
 
   result = backend._make_accumulated_result()
 
   assert result["type"] == ET.RESULT
   snapshot = result["context_snapshot"]
   # The snapshot carries the *last* step's tokens, not the turn's sum.
-  assert snapshot["tokens"] == {
-      "input": 200, "output": 20, "reasoning": 8, "cache_read": 40, "cache_write": 60}
+  assert snapshot["tokens"] == {"input": 200, "output": 20, "reasoning": 8, "cache_read": 40, "cache_write": 60}
   # The usage block still carries the turn's accumulated sum.
   assert result["usage"]["input_tokens"] == 300
   assert result["usage"]["output_tokens"] == 30
@@ -677,8 +707,7 @@ def test_make_accumulated_result_snapshot_limit_none_when_catalog_unavailable(mo
 
   snapshot = result["context_snapshot"]
   assert snapshot["limit"] is None
-  assert snapshot["tokens"] == {
-      "input": 100, "output": 10, "reasoning": 0, "cache_read": 0, "cache_write": 0}
+  assert snapshot["tokens"] == {"input": 100, "output": 10, "reasoning": 0, "cache_read": 0, "cache_write": 0}
 
 
 def test_reset_run_state_clears_model_limit_and_last_step_tokens(monkeypatch) -> None:
@@ -711,8 +740,7 @@ class _FakeConfigResponse:
 class _FakeConfigClient:
   """Minimal httpx-like client for ``_fetch_model_limit`` tests."""
 
-  def __init__(self, response: _FakeConfigResponse | None = None,
-               exc: Exception | None = None) -> None:
+  def __init__(self, response: _FakeConfigResponse | None = None, exc: Exception | None = None) -> None:
     self._response = response
     self._exc = exc
 
@@ -729,18 +757,35 @@ async def test_fetch_model_limit_returns_limit_from_recorded_providers(monkeypat
   # Recorded /config/providers payload: top-level {"providers": [...]}, each
   # provider's models is a dict keyed by model id.
   providers = {
-      "providers": [
-          {"id": "other-provider", "models": {"x": {"id": "x", "limit": {"context": 100}}}},
-          {
-              "id": "synthetic-provider",
-              "models": {
-                  "nvidia/Synthetic-Model": {
-                      "id": "nvidia/Synthetic-Model",
-                      "limit": {"context": 409600, "input": 270000, "output": 131072},
-                  },
+      "providers":
+          [
+              {
+                  "id": "other-provider",
+                  "models": {
+                      "x": {
+                          "id": "x",
+                          "limit": {
+                              "context": 100
+                          }
+                      }
+                  }
               },
-          },
-      ],
+              {
+                  "id": "synthetic-provider",
+                  "models":
+                      {
+                          "nvidia/Synthetic-Model":
+                              {
+                                  "id": "nvidia/Synthetic-Model",
+                                  "limit": {
+                                      "context": 409600,
+                                      "input": 270000,
+                                      "output": 131072
+                                  },
+                              },
+                      },
+              },
+          ],
       "default": "synthetic-provider",
   }
   client = _FakeConfigClient(response=_FakeConfigResponse(payload=providers))
@@ -1069,8 +1114,7 @@ _WATCHDOG_TEST_TIMEOUT = 0.2  # seconds
 
 
 def _patch_watchdog_timeout(monkeypatch) -> None:
-  monkeypatch.setattr(
-      "src.agents.backends.opencode.OPENCODE_SSE_PROGRESS_TIMEOUT", _WATCHDOG_TEST_TIMEOUT)
+  monkeypatch.setattr("src.agents.backends.opencode.OPENCODE_SSE_PROGRESS_TIMEOUT", _WATCHDOG_TEST_TIMEOUT)
 
 
 async def _timed_event_stream(schedule: list[tuple[float, dict]]):

@@ -7,11 +7,11 @@ import pytest
 from conftest import OPUS_BACKEND_ID, SYNTHETIC_MODEL
 
 from src.agents.backends.claude_code import (
-  CLAUDE_COMPACT_CONTEXT_RESERVE,
-  CLAUDE_COMPACT_OUTPUT_RESERVE,
-  HEADLESS_CLAUDE_DEFAULT_ENV,
-  _reset_declared_window_warnings_for_tests,
-  headless_claude_declared_window,
+    CLAUDE_COMPACT_CONTEXT_RESERVE,
+    CLAUDE_COMPACT_OUTPUT_RESERVE,
+    HEADLESS_CLAUDE_DEFAULT_ENV,
+    _reset_declared_window_warnings_for_tests,
+    headless_claude_declared_window,
 )
 from src.core import event_types as ET
 from src.core import session_usage
@@ -22,8 +22,7 @@ from src.core.sessions import SessionManager
 
 
 def _build_cfg(tmp_path: Path, **codex_kwargs) -> CharlieBotConfig:
-  codex_opt = BackendOption(
-      id="codex-test", label="Codex", type="codex", model="codex-test-model", **codex_kwargs)
+  codex_opt = BackendOption(id="codex-test", label="Codex", type="codex", model="codex-test-model", **codex_kwargs)
   return CharlieBotConfig(
       charliebot_home=tmp_path,
       backend_options=[
@@ -53,44 +52,54 @@ def _codex_turn_context(model: str) -> dict:
   return {
       "timestamp": "2026-03-31T20:42:51.000Z",
       "type": "turn_context",
-      "payload": {"model": model},
-  }
-
-
-def _codex_token_count_event(
-    *, timestamp: str, total_input: int, total_cached: int, total_output: int,
-    last_input: int, last_cached: int, last_output: int, last_total: int) -> dict:
-  """Build one codex token_count event_msg; every fixture sets window 258400."""
-  return {
-      "timestamp": timestamp,
-      "type": "event_msg",
       "payload": {
-          "type": "token_count",
-          "info": {
-              "total_token_usage": {
-                  "input_tokens": total_input,
-                  "cached_input_tokens": total_cached,
-                  "output_tokens": total_output,
-              },
-              "last_token_usage": {
-                  "input_tokens": last_input,
-                  "cached_input_tokens": last_cached,
-                  "output_tokens": last_output,
-                  "total_tokens": last_total,
-              },
-              "model_context_window": 258400,
-          },
+          "model": model
       },
   }
 
 
+def _codex_token_count_event(
+    *, timestamp: str, total_input: int, total_cached: int, total_output: int, last_input: int, last_cached: int,
+    last_output: int, last_total: int) -> dict:
+  """Build one codex token_count event_msg; every fixture sets window 258400."""
+  return {
+      "timestamp": timestamp,
+      "type": "event_msg",
+      "payload":
+          {
+              "type": "token_count",
+              "info":
+                  {
+                      "total_token_usage":
+                          {
+                              "input_tokens": total_input,
+                              "cached_input_tokens": total_cached,
+                              "output_tokens": total_output,
+                          },
+                      "last_token_usage":
+                          {
+                              "input_tokens": last_input,
+                              "cached_input_tokens": last_cached,
+                              "output_tokens": last_output,
+                              "total_tokens": last_total,
+                          },
+                      "model_context_window": 258400,
+                  },
+          },
+  }
+
+
 def _seed_codex_session(
-    session_mgr: SessionManager, *, session_id: str, name: str, backend: str,
-    native_thread_id: str, codex_home: Path, turn_model: str, token_event: dict) -> SessionMetadata:
+    session_mgr: SessionManager, *, session_id: str, name: str, backend: str, native_thread_id: str, codex_home: Path,
+    turn_model: str, token_event: dict) -> SessionMetadata:
   """Write the session metadata, a filler user event, and a one-turn codex rollout."""
   meta = SessionMetadata(id=session_id, name=name, backend=backend, cc_session_id=native_thread_id)
   _write_session(session_mgr, meta, [
-      {"type": "user", "content": "hello", "timestamp": "2026-03-31T20:42:52Z"},
+      {
+          "type": "user",
+          "content": "hello",
+          "timestamp": "2026-03-31T20:42:52Z"
+      },
   ])
   _write_codex_rollout(codex_home, native_thread_id, [
       _codex_turn_context(turn_model),
@@ -99,35 +108,48 @@ def _seed_codex_session(
   return meta
 
 
-def _assistant_event(model: str, input_tokens: int, cache_creation: int = 0, cache_read: int = 0,
-                     parent_tool_use_id: str | None = None) -> dict:
+def _assistant_event(
+    model: str,
+    input_tokens: int,
+    cache_creation: int = 0,
+    cache_read: int = 0,
+    parent_tool_use_id: str | None = None) -> dict:
   return {
       "type": "assistant",
       "parent_tool_use_id": parent_tool_use_id,
-      "message": {
-          "model": model,
-          "usage": {
+      "message":
+          {
+              "model": model,
+              "usage":
+                  {
+                      "input_tokens": input_tokens,
+                      "cache_creation_input_tokens": cache_creation,
+                      "cache_read_input_tokens": cache_read,
+                  },
+          },
+  }
+
+
+def _result_event(
+    total_cost_usd,
+    model_usage: dict | None = None,
+    input_tokens: int = 0,
+    cache_creation: int = 0,
+    cache_read: int = 0,
+    context_snapshot: dict | None = None) -> dict:
+  return {
+      "type": "result",
+      "usage":
+          {
               "input_tokens": input_tokens,
               "cache_creation_input_tokens": cache_creation,
               "cache_read_input_tokens": cache_read,
           },
-      },
-  }
-
-
-def _result_event(total_cost_usd, model_usage: dict | None = None, input_tokens: int = 0,
-                   cache_creation: int = 0, cache_read: int = 0,
-                   context_snapshot: dict | None = None) -> dict:
-  return {
-      "type": "result",
-      "usage": {
-          "input_tokens": input_tokens,
-          "cache_creation_input_tokens": cache_creation,
-          "cache_read_input_tokens": cache_read,
-      },
       "modelUsage": model_usage or {},
       "total_cost_usd": total_cost_usd,
-      **({"context_snapshot": context_snapshot} if context_snapshot is not None else {}),
+      **({
+          "context_snapshot": context_snapshot
+      } if context_snapshot is not None else {}),
   }
 
 
@@ -149,18 +171,18 @@ _SNAPSHOT_LIMIT = {"context": 409_600, "input": 270_000, "output": 131_072}
 
 
 def _context_reading_event(
-    model: str, context_tokens: int | None, context_full: int | None,
-    context_compact_at: int | None) -> dict:
+    model: str, context_tokens: int | None, context_full: int | None, context_compact_at: int | None) -> dict:
   """Build a persisted system/context_reading event (charlie-code backend's reading)."""
   return {
       "type": ET.SYSTEM,
       "subtype": ET.CONTEXT_READING,
-      ET.CONTEXT_READING: {
-          "model": model,
-          "context_tokens": context_tokens,
-          "context_full": context_full,
-          "context_compact_at": context_compact_at,
-      },
+      ET.CONTEXT_READING:
+          {
+              "model": model,
+              "context_tokens": context_tokens,
+              "context_full": context_full,
+              "context_compact_at": context_compact_at,
+          },
   }
 
 
@@ -176,12 +198,13 @@ async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp
   meta = SessionMetadata(id="session-assistant", name="Assistant", backend=OPUS_BACKEND_ID)
   # Result carries a turn-cumulative 1.5M sum; a later main-chain assistant event
   # reports a realistic per-request size.
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}},
-                   input_tokens=1_500_000),
-      _assistant_event("claude-opus-4-6", input_tokens=100_000,
-                       cache_creation=20_000, cache_read=30_000),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}, input_tokens=1_500_000),
+          _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -207,17 +230,18 @@ def _compact_boundary_event(trigger: str = "manual", pre_tokens=None, post_token
 
 
 @pytest.mark.asyncio
-async def test_claude_tier_context_tokens_reads_post_tokens_after_selected_assistant(
-    tmp_path: Path,
-) -> None:
+async def test_claude_tier_context_tokens_reads_post_tokens_after_selected_assistant(tmp_path: Path,) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-postboundary", name="Post Boundary", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
-      _assistant_event("claude-opus-4-6", input_tokens=239_708),
-      _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}),
+          _assistant_event("claude-opus-4-6", input_tokens=239_708),
+          _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -229,17 +253,18 @@ async def test_claude_tier_context_tokens_reads_post_tokens_after_selected_assis
 
 
 @pytest.mark.asyncio
-async def test_claude_tier_ignores_compact_boundary_before_selected_assistant(
-    tmp_path: Path,
-) -> None:
+async def test_claude_tier_ignores_compact_boundary_before_selected_assistant(tmp_path: Path,) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-preboundary", name="Pre Boundary", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
-      _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
-      _assistant_event("claude-opus-4-6", input_tokens=100_000),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}),
+          _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
+          _assistant_event("claude-opus-4-6", input_tokens=100_000),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -252,18 +277,21 @@ async def test_claude_tier_ignores_compact_boundary_before_selected_assistant(
 
 
 @pytest.mark.asyncio
-async def test_claude_tier_boundary_without_post_tokens_leaves_reading_alone(
-    tmp_path: Path,
-) -> None:
+async def test_claude_tier_boundary_without_post_tokens_leaves_reading_alone(tmp_path: Path,) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-noboundarytokens", name="No Post Tokens", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
-      _assistant_event("claude-opus-4-6", input_tokens=100_000),
-      # opencode's synthesized shape: trigger + pre_tokens only, no post_tokens.
-      _compact_boundary_event(trigger="auto", pre_tokens=50_000),
-  ])
+  _write_session(
+      session_mgr,
+      meta,
+      [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}),
+          _assistant_event("claude-opus-4-6", input_tokens=100_000),
+          # opencode's synthesized shape: trigger + pre_tokens only, no post_tokens.
+          _compact_boundary_event(trigger="auto", pre_tokens=50_000),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -279,10 +307,15 @@ async def test_claude_tier_admission_unaffected_by_boundary_only_events(tmp_path
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-boundaryonly", name="Boundary Only", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
-      {"type": "user", "content": "hello", "timestamp": "2026-03-31T20:42:52Z"},
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
+          {
+              "type": "user",
+              "content": "hello",
+              "timestamp": "2026-03-31T20:42:52Z"
+          },
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -301,21 +334,25 @@ async def test_claude_tier_admission_unaffected_by_boundary_only_events(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_claude_tier_resolves_context_full_from_assistant_model_not_dict_order(
-    tmp_path: Path,
-) -> None:
+async def test_claude_tier_resolves_context_full_from_assistant_model_not_dict_order(tmp_path: Path,) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-modelorder", name="Model Order", backend=OPUS_BACKEND_ID)
   # modelUsage lists a small-window sub-model FIRST; the assistant event's model
   # is the real (second) model.
-  _write_session(session_mgr, meta, [
-      _result_event(0.4, {
-          "small-sub-model": {"contextWindow": 50_000},
-          "claude-opus-4-6": {"contextWindow": 200_000},
-      }),
-      _assistant_event("claude-opus-4-6", input_tokens=80_000),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(
+              0.4, {
+                  "small-sub-model": {
+                      "contextWindow": 50_000
+                  },
+                  "claude-opus-4-6": {
+                      "contextWindow": 200_000
+                  },
+              }),
+          _assistant_event("claude-opus-4-6", input_tokens=80_000),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -329,16 +366,17 @@ async def test_claude_tier_resolves_context_full_from_assistant_model_not_dict_o
 
 
 @pytest.mark.asyncio
-async def test_claude_tier_context_full_is_declared_window_when_model_usage_absent(
-    tmp_path: Path,
-) -> None:
+async def test_claude_tier_context_full_is_declared_window_when_model_usage_absent(tmp_path: Path,) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-nomodel", name="No Model Usage", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.3),  # no modelUsage
-      _assistant_event("claude-opus-4-6", input_tokens=70_000),
-  ])
+  _write_session(
+      session_mgr,
+      meta,
+      [
+          _result_event(0.3),  # no modelUsage
+          _assistant_event("claude-opus-4-6", input_tokens=70_000),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -358,14 +396,17 @@ async def test_claude_tier_ignores_subagent_and_synthetic_assistant_events(tmp_p
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-ignore", name="Ignore", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      # sub-agent event with large usage — must be ignored (parent_tool_use_id set)
-      _assistant_event("claude-opus-4-6", input_tokens=400_000, parent_tool_use_id="tool_1"),
-      # synthetic zero-usage event — must be ignored (prompt-token sum is 0)
-      _assistant_event("claude-opus-4-6", input_tokens=0),
-      # the real main-chain event — must be picked
-      _assistant_event("claude-opus-4-6", input_tokens=90_000, cache_read=10_000),
-  ])
+  _write_session(
+      session_mgr,
+      meta,
+      [
+          # sub-agent event with large usage — must be ignored (parent_tool_use_id set)
+          _assistant_event("claude-opus-4-6", input_tokens=400_000, parent_tool_use_id="tool_1"),
+          # synthetic zero-usage event — must be ignored (prompt-token sum is 0)
+          _assistant_event("claude-opus-4-6", input_tokens=0),
+          # the real main-chain event — must be picked
+          _assistant_event("claude-opus-4-6", input_tokens=90_000, cache_read=10_000),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -383,12 +424,17 @@ async def test_no_source_tier_when_results_but_no_assistant_usage(tmp_path: Path
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-nosource", name="No Source", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
-      # only sub-agent / zero-usage assistant events — not usable
-      _assistant_event("claude-opus-4-6", input_tokens=0),
-      _assistant_event("claude-opus-4-6", input_tokens=5000, parent_tool_use_id="tool_1"),
-  ])
+  _write_session(
+      session_mgr,
+      meta,
+      [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}, input_tokens=1000),
+          # only sub-agent / zero-usage assistant events — not usable
+          _assistant_event("claude-opus-4-6", input_tokens=0),
+          _assistant_event("claude-opus-4-6", input_tokens=5000, parent_tool_use_id="tool_1"),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 

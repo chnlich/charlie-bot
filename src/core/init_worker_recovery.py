@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-import threading
-from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -25,6 +23,7 @@ from src.core import event_types as ET
 from src.core import finalize_effects, runs
 from src.core.git import git_quarantine_worktree, git_worktree_dir_name
 from src.core.json_utils import load_json_meta
+from src.core.memo import BoundedMemo
 from src.core.models import (
     TERMINAL_THREAD_STATUSES,
     SessionStatus,
@@ -69,14 +68,12 @@ RUNNING_SCAN_WINDOW = timedelta(days=30)
 # scan keys the older signature and can never be served for the newer bytes. Yielded
 # dicts are shared across calls and scans — consumers must treat them as read-only.
 _THREAD_META_MEMO_LIMIT = 1024
-_thread_meta_memo: OrderedDict[str, tuple[int, int, dict]] = OrderedDict()
-_thread_meta_memo_lock = threading.Lock()
+_thread_meta_memo: BoundedMemo[str, tuple[int, int, dict]] = BoundedMemo(_THREAD_META_MEMO_LIMIT)
 
 
 def _reset_thread_meta_memo_for_tests() -> None:
   """Clear the thread-metadata scan memo, restoring the process-start state."""
-  with _thread_meta_memo_lock:
-    _thread_meta_memo.clear()
+  _thread_meta_memo.clear()
 
 
 # Boot-scoped once-key for "alive but silent" reports: at most one recovery
@@ -127,24 +124,18 @@ def iter_recent_thread_metas(
         continue
       if st.st_mtime < cutoff:
         continue
-      with _thread_meta_memo_lock:
-        cached = _thread_meta_memo.get(meta_path)
-        if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-          _thread_meta_memo.move_to_end(meta_path)
-          cached_meta: dict | None = cached[2]
-        else:
-          cached_meta = None
+      cached = _thread_meta_memo.get(meta_path)
+      if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+        cached_meta: dict | None = cached[2]
+      else:
+        cached_meta = None
       if cached_meta is not None:
         yield entry.path, meta_path, cached_meta
         continue
       meta = load_json_meta(Path(meta_path), log_event)
       if meta is None:
         continue
-      with _thread_meta_memo_lock:
-        _thread_meta_memo[meta_path] = (st.st_mtime_ns, st.st_size, meta)
-        _thread_meta_memo.move_to_end(meta_path)
-        while len(_thread_meta_memo) > _THREAD_META_MEMO_LIMIT:
-          _thread_meta_memo.popitem(last=False)
+      _thread_meta_memo.store(meta_path, (st.st_mtime_ns, st.st_size, meta))
       yield entry.path, meta_path, meta
 
 

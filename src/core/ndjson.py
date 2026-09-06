@@ -3,8 +3,6 @@
 import asyncio
 import json
 import os
-import threading
-from collections import OrderedDict
 from collections.abc import Iterable, Iterator
 from itertools import islice
 from pathlib import Path
@@ -12,6 +10,8 @@ from typing import Any, BinaryIO
 
 import numpy as np
 import structlog
+
+from src.core.memo import BoundedMemo
 
 log = structlog.get_logger()
 
@@ -24,23 +24,17 @@ _TAIL_PARSEABLE_WINDOW = 512 * 1024
 _COUNT_MEMO_LIMIT = 64
 
 # path -> (mtime_ns, size, line_count) and (path, limit) -> (mtime_ns, size,
-# events, total, has_more). Readers run in asyncio executor threads, so
-# get+move_to_end and insert+cap-eviction each hold the lock, matching the
-# sibling memo rule in chat_events.py. Tail entries share their event dicts
-# with every caller, the no-defensive-copy idiom of the chat_events memos.
-_count_memo: OrderedDict[Path, tuple[int, int, int]] = OrderedDict()
-_count_memo_lock = threading.Lock()
-_tail_memo: OrderedDict[tuple[Path, int], tuple[int, int, list[dict], int, bool]] = OrderedDict()
-_tail_memo_lock = threading.Lock()
+# events, total, has_more). Tail entries share their event dicts with every
+# caller; consumers must treat them as read-only.
+_count_memo: BoundedMemo[Path, tuple[int, int, int]] = BoundedMemo(_COUNT_MEMO_LIMIT)
+_tail_memo: BoundedMemo[tuple[Path, int], tuple[int, int, list[dict], int, bool]] = BoundedMemo(_COUNT_MEMO_LIMIT)
 
 
 def _count_memo_get(path: Path, mtime_ns: int, size: int) -> int | None:
   """Return the memoized line count when the file's signature is unchanged."""
-  with _count_memo_lock:
-    memo = _count_memo.get(path)
-    if memo is not None and memo[0] == mtime_ns and memo[1] == size:
-      _count_memo.move_to_end(path)
-      return memo[2]
+  hit = _count_memo.get(path)
+  if hit is not None and hit[0] == mtime_ns and hit[1] == size:
+    return hit[2]
   return None
 
 
@@ -55,21 +49,14 @@ def _count_memo_store(path: Path, mtime_ns: int, size: int, total: int) -> None:
   until the file changed again. Chat event files only append; their atomic
   archive rewrites replace the whole file.
   """
-  with _count_memo_lock:
-    _count_memo[path] = (mtime_ns, size, total)
-    _count_memo.move_to_end(path)
-    while len(_count_memo) > _COUNT_MEMO_LIMIT:
-      _count_memo.popitem(last=False)
+  _count_memo.store(path, (mtime_ns, size, total))
 
 
 def _tail_memo_get(path: Path, limit: int, mtime_ns: int, size: int) -> tuple[list[dict], int, bool] | None:
   """Return the memoized tail page when the file's signature is unchanged."""
-  key = (path, limit)
-  with _tail_memo_lock:
-    memo = _tail_memo.get(key)
-    if memo is not None and memo[0] == mtime_ns and memo[1] == size:
-      _tail_memo.move_to_end(key)
-      return memo[2], memo[3], memo[4]
+  hit = _tail_memo.get((path, limit))
+  if hit is not None and hit[0] == mtime_ns and hit[1] == size:
+    return hit[2], hit[3], hit[4]
   return None
 
 
@@ -185,12 +172,7 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
 
   events = list(iter_ndjson_events(tail_lines, log_event="ndjson_tail_parse_skip", log_fields={}))
 
-  key = (path, limit)
-  with _tail_memo_lock:
-    _tail_memo[key] = (st.st_mtime_ns, st.st_size, events, total, has_more)
-    _tail_memo.move_to_end(key)
-    while len(_tail_memo) > _COUNT_MEMO_LIMIT:
-      _tail_memo.popitem(last=False)
+  _tail_memo.store((path, limit), (st.st_mtime_ns, st.st_size, events, total, has_more))
   return events, total, has_more
 
 

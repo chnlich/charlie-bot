@@ -9,6 +9,7 @@ move_to_end.
 
 import threading
 from collections import OrderedDict
+from collections.abc import Callable, Iterator
 from typing import Generic, Hashable, TypeVar
 
 K = TypeVar("K", bound=Hashable)
@@ -47,6 +48,16 @@ class BoundedMemo(Generic[K, V]):
       while len(self._entries) > self._limit:
         self._entries.popitem(last=False)
 
+  def drop_where(self, predicate: Callable[[K], bool]) -> None:
+    """Evict every entry whose key satisfies *predicate*, in one lock hold.
+
+    The scan and the deletions share one hold, so a concurrent store cannot
+    re-add a matching key between the snapshot and the drops.
+    """
+    with self._lock:
+      for key in [key for key in self._entries if predicate(key)]:
+        del self._entries[key]
+
   def drop(self, key: K) -> None:
     """Remove *key*'s entry when present; a no-op otherwise."""
     with self._lock:
@@ -56,3 +67,18 @@ class BoundedMemo(Generic[K, V]):
     """Remove every entry (the tests' cross-test pollution reset)."""
     with self._lock:
       self._entries.clear()
+
+  def __contains__(self, key: object) -> bool:
+    """Return whether *key* has a resident entry (the tests' structural assertions)."""
+    with self._lock:
+      return key in self._entries
+
+  def __iter__(self) -> Iterator[K]:
+    """Yield the keys, least-recently-used first, from one consistent snapshot."""
+    with self._lock:
+      return iter(list(self._entries))
+
+  def __len__(self) -> int:
+    """Return the number of resident entries."""
+    with self._lock:
+      return len(self._entries)

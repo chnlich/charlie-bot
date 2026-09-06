@@ -88,7 +88,7 @@ def test_missing_topics_stays_uncached(tmp_path: Path) -> None:
 
 
 def test_memo_lru_evicts_least_recent_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(memory_module, "_STORE_MEMO_LIMIT", 2)
+  monkeypatch.setattr(memory_module._store_memo, "_limit", 2)
   dirs = []
   for name in ("a", "b", "c"):
     d = tmp_path / name

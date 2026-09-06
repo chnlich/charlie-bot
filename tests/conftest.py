@@ -879,6 +879,24 @@ def build_recovery_cfg(home: Path) -> CharlieBotConfig:
   )
 
 
+def build_light_cc_cfg() -> CharlieBotConfig:
+  """CharlieBotConfig whose only backend is a light cc-claude option, also the sole model preference."""
+  return CharlieBotConfig(
+      backend_options=[models.BackendOption(id="light-cc", label="Light CC", type="cc-claude", model="haiku")],
+      model_preference=["light-cc"],
+  )
+
+
+def build_chain_cfg(*options: models.BackendOption) -> CharlieBotConfig:
+  """CharlieBotConfig whose model_preference chains the given options in the order given.
+
+  One-shot fallback tests read the chain off backend_options and model_preference
+  together, so the pair must not drift; deriving the preference list here is what
+  keeps the order stated once per test.
+  """
+  return CharlieBotConfig(backend_options=list(options), model_preference=[option.id for option in options])
+
+
 def write_artifact(tmp_path: Path, name: str = "page.html", body: str = "<p>hello</p>") -> Path:
   """Write one fake artifact source file under tmp_path/artifacts and return its path; publish and
   slack publish-lane tests stage here the file a published URL points at."""
@@ -1609,6 +1627,16 @@ def make_one_shot_backend(one_shot: AsyncMock) -> MagicMock:
   backend = MagicMock()
   backend.one_shot_text = one_shot
   return backend
+
+
+def make_one_shot_chain(*one_shots: AsyncMock) -> list[MagicMock]:
+  """One-shot backends for a full preference-chain walk: one per candidate, in preference order.
+
+  Chain tests hand this list to patch(build_backend, side_effect=...) so each
+  build_backend call serves the next candidate, and a chain that stops early
+  leaves the surplus backends unbuilt.
+  """
+  return [make_one_shot_backend(one_shot) for one_shot in one_shots]
 
 
 class JudgmentShim:

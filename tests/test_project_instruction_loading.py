@@ -17,10 +17,10 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import (
-  BUILD_BACKEND_PATCH_TARGET,
-  FakeBackend,
-  make_work_item,
-  mock_session_callbacks,
+    BUILD_BACKEND_PATCH_TARGET,
+    FakeBackend,
+    make_work_item,
+    mock_session_callbacks,
 )
 from structlog.testing import capture_logs
 
@@ -358,7 +358,8 @@ async def test_run_cc_fails_turn_on_project_error(tmp_path: Path, monkeypatch: p
   assert exit_code == 1
   assert error_msg is not None and "project instruction loading failed" in error_msg
   error_events = [
-      c.args[1] for c in callbacks.persist_and_broadcast.await_args_list  # type: ignore[attr-defined]
+      c.args[1]
+      for c in callbacks.persist_and_broadcast.await_args_list  # type: ignore[attr-defined]
       if c.args and isinstance(c.args[1], dict) and c.args[1].get("type") == "assistant_error"
   ]
   assert len(error_events) == 1

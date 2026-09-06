@@ -12,8 +12,6 @@ consume the tolerant read in ``read_plans_tolerant`` — the single authority fo
 import asyncio
 import json
 import posixpath
-import threading
-from collections import OrderedDict
 from enum import IntEnum
 from pathlib import Path
 
@@ -21,6 +19,7 @@ from src.core import plan_paths
 from src.core.artifact_check import run_assertions
 from src.core.config import CharlieBotConfig
 from src.core.json_utils import write_json_atomically
+from src.core.memo import BoundedMemo
 from src.core.models import utc_now
 from src.core.sessions import SessionManager
 from src.core.sidebar_state import mark_sidebar_dirty
@@ -129,8 +128,7 @@ def _project_registry(data: dict) -> dict:
 # returned structure. ~0.3 ms read+derive per call on the heaviest on-disk
 # corpus; the list endpoint serves it on every plan-panel poll.
 _TOLERANT_READ_MEMO_LIMIT = 32
-_tolerant_read_memo: OrderedDict[str, tuple[tuple[int, int], dict]] = OrderedDict()
-_tolerant_read_memo_lock = threading.Lock()
+_tolerant_read_memo: BoundedMemo[str, tuple[tuple[int, int], dict]] = BoundedMemo(_TOLERANT_READ_MEMO_LIMIT)
 
 
 def read_plans_tolerant(plans_path: Path, session_id: str) -> dict:
@@ -159,17 +157,12 @@ def read_plans_tolerant(plans_path: Path, session_id: str) -> dict:
     return {"plans": [], "errors": errors}
   memo_key = str(plans_path)
   sig = (st.st_mtime_ns, st.st_size)
-  with _tolerant_read_memo_lock:
-    hit = _tolerant_read_memo.get(memo_key)
-    if hit is not None and hit[0] == sig:
-      _tolerant_read_memo.move_to_end(memo_key)
-      return hit[1]
+  hit = _tolerant_read_memo.get(memo_key)
+  if hit is not None and hit[0] == sig:
+    return hit[1]
   result, cacheable = _read_plans_uncached(plans_path, session_id)
   if cacheable:
-    with _tolerant_read_memo_lock:
-      _tolerant_read_memo[memo_key] = (sig, result)
-      while len(_tolerant_read_memo) > _TOLERANT_READ_MEMO_LIMIT:
-        _tolerant_read_memo.popitem(last=False)
+    _tolerant_read_memo.store(memo_key, (sig, result))
   return result
 
 

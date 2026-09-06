@@ -31,13 +31,13 @@ spawn paths (``master_cc``, ``spawner``) call the assemble functions directly.
 
 import os
 import re
-import threading
-from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import structlog
+
+from src.core.memo import BoundedMemo
 
 log = structlog.get_logger()
 
@@ -47,12 +47,9 @@ _STAGING_DIRNAME = "staging"
 
 # Bound on _store_memo in memory dirs, not entries: a host serves one memory
 # dir in steady state (tests hold several), so a small cap bounds memoized
-# Store payloads. An entry holds the stat-only signature alongside the Store
-# because get+move_to_end is not one op, and a concurrent insert's cap
-# eviction must not pop the key mid-hit — the chat_events memo's lock rule.
+# Store payloads. An entry holds the stat-only signature alongside the Store.
 _STORE_MEMO_LIMIT = 8
-_store_memo: OrderedDict[Path, tuple[tuple[tuple[str, int, int], ...], "Store"]] = OrderedDict()
-_store_memo_lock = threading.Lock()
+_store_memo: BoundedMemo[Path, tuple[tuple[tuple[str, int, int], ...], "Store"]] = BoundedMemo(_STORE_MEMO_LIMIT)
 
 # Header line: ``field: value`` where field is lower_snake. Value charset is
 # validated per field below (slug-charset for most, free text for ``title``).
@@ -372,24 +369,17 @@ def load_store(memory_dir: Path) -> Store:
   """
   sig = _store_signature(memory_dir)
   if sig is not None:
-    with _store_memo_lock:
-      hit = _store_memo.get(memory_dir)
-      if hit is not None and hit[0] == sig:
-        _store_memo.move_to_end(memory_dir)
-        return hit[1]
+    hit = _store_memo.get(memory_dir)
+    if hit is not None and hit[0] == sig:
+      return hit[1]
   try:
     store = _load_store_uncached(memory_dir)
   except BaseException:
     if sig is not None:
-      with _store_memo_lock:
-        _store_memo.pop(memory_dir, None)
+      _store_memo.drop(memory_dir)
     raise
   if sig is not None:
-    with _store_memo_lock:
-      _store_memo[memory_dir] = (sig, store)
-      _store_memo.move_to_end(memory_dir)
-      while len(_store_memo) > _STORE_MEMO_LIMIT:
-        _store_memo.popitem(last=False)
+    _store_memo.store(memory_dir, (sig, store))
   return store
 
 

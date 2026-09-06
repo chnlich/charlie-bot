@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+import pytest
 from conftest import assistant_event as _assistant_event
 from conftest import assistant_text_tool_use_event as _assistant_text_tool_use_event
 from conftest import queued_user_reorder_events as _reorder_events
@@ -392,11 +393,18 @@ def test_context_compacted_projection_carries_kind() -> None:
   ]
 
 
-def test_context_compact_failed_projection_with_error() -> None:
+@pytest.mark.parametrize(
+    ("error", "expected_content"),
+    [
+        pytest.param("context too large", "Compaction failed — context too large", id="with_error"),
+        pytest.param(None, "Compaction failed", id="without_error"),
+    ],
+)
+def test_context_compact_failed_projection(error: str | None, expected_content: str) -> None:
   agg = MessageAggregator()
   deltas = list(agg.feed({
       "type": "context_compact_failed",
-      "error": "context too large",
+      "error": error,
       "timestamp": "t",
   }))
 
@@ -406,31 +414,7 @@ def test_context_compact_failed_projection_with_error() -> None:
           "message":
               {
                   "role": "system",
-                  "content": "Compaction failed — context too large",
-                  "kind": "context_compact_failed",
-                  "event_index": 0,
-                  "id": "legacy:0",
-                  "timestamp": "t",
-              },
-      }
-  ]
-
-
-def test_context_compact_failed_projection_without_error() -> None:
-  agg = MessageAggregator()
-  deltas = list(agg.feed({
-      "type": "context_compact_failed",
-      "error": None,
-      "timestamp": "t",
-  }))
-
-  assert deltas == [
-      {
-          "type": "message",
-          "message":
-              {
-                  "role": "system",
-                  "content": "Compaction failed",
+                  "content": expected_content,
                   "kind": "context_compact_failed",
                   "event_index": 0,
                   "id": "legacy:0",

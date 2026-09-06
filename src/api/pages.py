@@ -32,7 +32,7 @@ from src.core.ncu_parsing import NcuParseError, parse_ncu_report
 from src.core.sessions import SessionManager
 from src.core.timeouts import SUBPROCESS_GIT_VERSION_TIMEOUT
 from src.core.token_tally import TokenTally, collect_token_usage
-from src.core.trace_merge import merge_traces
+from src.core.trace_merge import _MERGE_COMPRESSLEVEL, merge_traces
 
 log = structlog.get_logger()
 
@@ -368,11 +368,13 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
 
   Peaks around 2.25 GB RSS for a 525.8 MB file (same order as the merge path's per-input
   json.load) and reads the source file a second time, after validation, to compress it.
+  Compression level is the merge path's: one build per cache key, viewer-fetched whole.
   """
   with path.open("rb") as validate_file:
     json.load(validate_file)
   with (path.open("rb") as source_file, open(out_path, "wb") as
-        raw_output, gzip.GzipFile(fileobj=raw_output, mode="wb", compresslevel=6) as gzip_output):
+        raw_output, gzip.GzipFile(fileobj=raw_output, mode="wb",
+                                  compresslevel=_MERGE_COMPRESSLEVEL) as gzip_output):
     shutil.copyfileobj(source_file, gzip_output, length=65536)
 
 

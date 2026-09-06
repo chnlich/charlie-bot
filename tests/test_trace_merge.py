@@ -222,17 +222,19 @@ def test_serializer_emits_unchanged_event_sequence(tmp_path: Path) -> None:
 
 
 def _batch_events(count: int) -> list[dict]:
-  return [{
-      "ph": "X",
-      "pid": 7,
-      "tid": index % 3,
-      "name": f"evt-{index}",
-      "ts": index,
-      "args": {
-          "value": index,
-          "text": f"payload-{index}",
-      },
-  } for index in range(count)]
+  return [
+      {
+          "ph": "X",
+          "pid": 7,
+          "tid": index % 3,
+          "name": f"evt-{index}",
+          "ts": index,
+          "args": {
+              "value": index,
+              "text": f"payload-{index}",
+          },
+      } for index in range(count)
+  ]
 
 
 def _merged_payload(path: Path) -> str:

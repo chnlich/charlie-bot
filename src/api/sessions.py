@@ -12,12 +12,13 @@ from starlette.responses import Response
 
 from src.api.cron import TaskUpdate, apply_task_yaml_update, next_run_iso
 from src.api.deps import (
+    get_config_on_loop,
     get_plan_manager,
     get_session_manager,
     get_thread_manager,
-    get_trigger_manager,
     require_found,
     require_session,
+    trigger_manager,
 )
 from src.api.message_utils import (
     SessionBootstrapData,
@@ -395,7 +396,7 @@ async def all_sessions_status(
 async def tui_status_all(
     ids: str = Query(..., description="Comma-separated ids of the sessions the sidebar is rendering"),
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ):
   """Return tmux liveness and recent Claude jsonl activity for the requested tui-cli sessions."""
   sessions = await _load_requested_sessions(session_mgr, ids)
@@ -462,7 +463,7 @@ async def get_session_view(
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ):
   """Return data needed to render a session chat panel (SPA switch).
 
@@ -476,7 +477,7 @@ async def get_session_view(
       include_pending_trigger_status=True,
   )
   view = await build_session_view_data(session_id, session_mgr, thread_mgr)
-  trigger_mgr = get_trigger_manager()
+  trigger_mgr = trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
   active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude")
   active_backend_opt = cfg.get_backend_option(active_backend)
@@ -507,7 +508,7 @@ async def get_session_bootstrap(
     session_id: str,
     _meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ):
   """Return the minimal data needed to make one chat session usable."""
   bootstrap = await build_session_bootstrap_data(session_id, session_mgr)
@@ -520,7 +521,7 @@ async def get_session_usage(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ):
   """Return lazy session status and usage data for the active header."""
   usage = await session_mgr.resolve_session_usage(session_id, meta)

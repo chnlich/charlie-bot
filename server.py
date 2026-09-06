@@ -10,8 +10,9 @@ from pathlib import Path
 import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.gzip import GZipMiddleware
-from starlette.types import Receive, Scope, Send
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.middleware.gzip import GZipMiddleware, GZipResponder
+from starlette.types import Message, Receive, Scope, Send
 
 from src.agents import transcriber
 from src.api import (
@@ -62,6 +63,39 @@ _WS_KEEPALIVE_TIMEOUT = 30.0
 _CATCHUP_SLICE_EVENTS = 400
 _CATCHUP_RENDER_SLICE = 4
 
+# A whole-body deflate below this size costs less inline than one executor
+# round-trip (~104 µs measured on this host); above it the thread hop wins.
+_OFFLOOP_GZIP_MIN_BODY = 8192
+
+
+class _OffLoopWholeBodyGZipResponder(GZipResponder):
+  """Whole-body responses deflate in a worker thread; streaming chunks stay inline.
+
+  Starlette's GZipResponder runs the whole-body deflate inside the send path, so a
+  large JSON page freezes the event loop for the whole compression (17 ms measured
+  on the 559 KB events page). Every JSON route ships its body as one message, so
+  one to_thread hop takes that deflate off the loop; a streaming body keeps the
+  inline per-chunk path, whose chunks are small and whose gzip file state must
+  not cross threads between writes.
+  """
+
+  async def send_with_compression(self, message: Message) -> None:
+    if (message["type"] == "http.response.body" and not self.started
+        and not self.content_encoding_set and not self.content_type_is_excluded
+        and not message.get("more_body", False)
+        and len(message.get("body", b"")) >= _OFFLOOP_GZIP_MIN_BODY):
+      body = await asyncio.to_thread(self.apply_compression, message["body"], more_body=False)
+      headers = MutableHeaders(raw=self.initial_message["headers"])
+      headers.add_vary_header("Accept-Encoding")
+      if body != message["body"]:
+        headers["Content-Encoding"] = self.content_encoding
+        headers["Content-Length"] = str(len(body))
+        message["body"] = body
+      await self.send(self.initial_message)
+      await self.send(message)
+      return
+    await super().send_with_compression(message)
+
 
 class _CharlieBotGZipMiddleware(GZipMiddleware):
   """Skip HTTP transport compression for already-compressed trace files."""
@@ -69,6 +103,10 @@ class _CharlieBotGZipMiddleware(GZipMiddleware):
   async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
     if scope["type"] == "http" and scope["path"] == "/perfetto/merged":
       await self.app(scope, receive, send)
+      return
+    if scope["type"] == "http" and "gzip" in Headers(scope=scope).get("Accept-Encoding", ""):
+      responder = _OffLoopWholeBodyGZipResponder(self.app, self.minimum_size, compresslevel=self.compresslevel)
+      await responder(scope, receive, send)
       return
     await super().__call__(scope, receive, send)
 

@@ -707,20 +707,13 @@ def _parse(source: str) -> _Parser:
   return parser
 
 
-def _style_and_header_insertions(parser: _Parser, source: str,
-                                 insertions: dict[int, list[str]]) -> tuple[int, str, bool]:
-  """Add the style splice and return the header splice's offset, tag, and eof-anchor flag.
-
-  Anchors come from the page's own parse. The leaf and class renders insert
-  only inside <body>, so the style and tag-anchored header positions cannot
-  shift between the parse and the single splice that follows, and the header
-  lands ahead of any render insertion at its offset (right after the anchor
-  tag) — the order the re-parse form produced. Only the end-of-source fallback
-  (no body, no root close tag) re-derives its position from the fully spliced
-  length, so there the header lands behind the render insertions and the
-  caller adds it after the render passes.
-  """
-  header = f'<div class="cbd-header" data-cbd-header="{_html.escape(_HEADER_TEXT, quote=True)}"></div>'
+def _append_style_and_header(source: str) -> str:
+  # The anchors are read off a re-parse of the spliced page on purpose: the
+  # render passes can rewrite the body start tag itself (class and data-del
+  # attributes) and insert synthetic start tags, so a spliced page's DOM can
+  # disagree with the pre-splice parse about where head and body sit.
+  parser = _parse(source)
+  insertions: dict[int, list[str]] = {}
   style_tag = f'<style data-cbd-style>{_CBD_STYLE}</style>'
   head = _first_descendant(parser.root, "head")
   body = _first_descendant(parser.root, "body")
@@ -730,10 +723,14 @@ def _style_and_header_insertions(parser: _Parser, source: str,
     offset = body.start if body is not None and body.start is not None else 0
     _add_insertion(insertions, offset, style_tag)
   if body is not None and body.start_end is not None:
-    return body.start_end, header, False
-  if parser.root.end is not None:
-    return parser.root.end, header, False
-  return len(source), header, True
+    offset = body.start_end
+  elif parser.root.end is not None:
+    offset = parser.root.end
+  else:
+    offset = len(source)
+  header = f'<div class="cbd-header" data-cbd-header="{_html.escape(_HEADER_TEXT, quote=True)}"></div>'
+  _add_insertion(insertions, offset, header)
+  return _splice(source, insertions)
 
 
 def _analyse(base_html: str, new_html: str) -> tuple[_Parser, _Parser, list[_LeafChange], list[_Leaf], list[_Leaf]]:
@@ -750,14 +747,9 @@ def annotate(base_html: str, new_html: str) -> str:
   insertions: dict[int, list[str]] = {}
   classes: dict[_Node, set[str]] = {}
   details: set[_Node] = set()
-  header_at, header, header_last = _style_and_header_insertions(new_parser, new_html, insertions)
-  if not header_last:
-    _add_insertion(insertions, header_at, header)
   _render_leaf_changes(new_html, _document_root(new_parser), changes, new_leaves, insertions, classes, details)
   _render_start_tag_additions(new_html, classes, details, insertions)
-  if header_last:
-    _add_insertion(insertions, header_at, header)
-  return _splice(new_html, insertions)
+  return _append_style_and_header(_splice(new_html, insertions))
 
 
 def diff_text(base_html: str, new_html: str) -> str:

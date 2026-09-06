@@ -9,6 +9,7 @@ from conftest import (
 )
 from pydantic import ValidationError
 
+import src.agents.backends.charlie_code as charlie_code_mod
 from src.agents.backends.base import USER_LOCAL_BIN, AgentBackend
 from src.agents.backends.charlie_code import CharlieCodeBackend
 from src.agents.backends.registry import build_backend
@@ -153,6 +154,63 @@ def test_translate_compact_event_and_unknown_still_dropped(monkeypatch) -> None:
       }
   ]
   assert backend.translate_event({"type": "future-event"}) == []
+
+
+def test_translate_context_event_yields_persisted_reading_shape(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+
+  translated = backend.translate_event(
+      {
+          "type": "context",
+          "step": 12,
+          "prompt_tokens": 118234,
+          "context_window": 262144,
+          "compact_threshold": 170393,
+          "model": "openai/moonshotai/Kimi-K3",
+      })
+
+  assert translated == [
+      {
+          "type": ET.SYSTEM,
+          "subtype": ET.CONTEXT_READING,
+          ET.CONTEXT_READING:
+              {
+                  "model": "openai/moonshotai/Kimi-K3",
+                  "context_tokens": 118234,
+                  "context_full": 262144,
+                  "context_compact_at": 170393,
+              },
+      }
+  ]
+
+
+def test_translate_context_null_tokens_silent_and_string_window_warns(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch)
+  warnings: list[dict] = []
+  monkeypatch.setattr(charlie_code_mod.log, "warning", lambda event, **kw: warnings.append({"event": event, **kw}))
+
+  translated = backend.translate_event(
+      {
+          "type": "context",
+          "step": 12,
+          "prompt_tokens": None,
+          "context_window": "262144",
+          "compact_threshold": 170393,
+          "model": "openai/moonshotai/Kimi-K3",
+      })
+
+  payload = translated[0][ET.CONTEXT_READING]
+  # JSON null is a declared unknown: context_tokens is None with no warning.
+  assert payload["context_tokens"] is None
+  # A non-int value degrades to None with exactly one warning naming it.
+  assert payload["context_full"] is None
+  assert payload["context_compact_at"] == 170393
+  assert payload["model"] == "openai/moonshotai/Kimi-K3"
+  assert warnings == [{
+      "event": "charlie_code_context_reading_bad_field",
+      "field": "context_full",
+      "value": "262144",
+  }]
 
 
 def test_translate_session_event(monkeypatch) -> None:

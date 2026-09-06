@@ -11,6 +11,7 @@ import structlog
 from src.agents.backends.base import (
     USER_LOCAL_BIN,
     AgentBackend,
+    make_context_reading_event,
     make_error_event,
     make_result_event,
     make_text_event,
@@ -22,6 +23,21 @@ from src.agents.backends.base import (
 from src.core import event_types as ET
 
 log = structlog.get_logger()
+
+
+def _context_reading_int(field: str, value: object) -> int | None:
+  """Sanitize one numeric ``context_reading`` field.
+
+  An int passes through and JSON ``null`` is a declared unknown that becomes
+  None silently; any other non-int value logs one warning naming the field and
+  the value, and degrades to None so a wrong number never reaches the panel.
+  """
+  if value is None:
+    return None
+  if isinstance(value, bool) or not isinstance(value, int):
+    log.warning("charlie_code_context_reading_bad_field", field=field, value=value)
+    return None
+  return value
 
 
 class CharlieCodeBackend(AgentBackend):
@@ -128,6 +144,16 @@ class CharlieCodeBackend(AgentBackend):
                   "pre_tokens": event["pre_tokens"],
               },
           }
+      ]
+
+    if event_type == "context":
+      return [
+          make_context_reading_event(
+              model=event.get("model") or "",
+              context_tokens=_context_reading_int("context_tokens", event.get("prompt_tokens")),
+              context_full=_context_reading_int("context_full", event.get("context_window")),
+              context_compact_at=_context_reading_int("context_compact_at", event.get("compact_threshold")),
+          )
       ]
 
     log.debug("charlie_code_unknown_event", event_type=event_type)

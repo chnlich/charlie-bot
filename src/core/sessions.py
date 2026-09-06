@@ -26,6 +26,7 @@ from src.core.json_utils import (
     load_json_meta,
     write_json_atomically,
 )
+from src.core.memo import BoundedMemo
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection
 from src.core.models import (
@@ -566,8 +567,10 @@ class SessionManager:
     self._aggregators: dict[str, MessageAggregator] = {}
     # Per-session MessageProjection cache (LRU, cap _PROJECTION_LRU_LIMIT). A
     # hit requires the cached event_count to equal the live event count
-    # (get_message_projection), so a stale projection is never served.
-    self._projection_cache: OrderedDict[str, MessageProjection] = OrderedDict()
+    # (get_message_projection), so a stale projection is never served. The
+    # route reads it off asyncio.to_thread, so the memo mechanics are
+    # BoundedMemo's locked ones, not a bare OrderedDict's.
+    self._projection_cache: BoundedMemo[str, MessageProjection] = BoundedMemo(_PROJECTION_LRU_LIMIT)
     self._search_miss_memo: OrderedDict[str, OrderedDict[str, tuple[int, int, int]]] = OrderedDict()
 
   # ---------------------------------------------------------------------------
@@ -1692,7 +1695,6 @@ class SessionManager:
     live = self.load_chat_events_sync(session_id)
     cached = self._projection_cache.get(session_id)
     if cached is not None and cached.event_count == len(live):
-      self._projection_cache.move_to_end(session_id)
       return cached
     if cached is None or len(live) < cached.event_count:
       # A shrink means the live file was rewritten; the append-incremental
@@ -1703,17 +1705,14 @@ class SessionManager:
       # projections are immutable: concurrent advances race on copies and a
       # loser wastes work instead of corrupting shared state.
       cached = cached.advanced(live[cached.event_count:])
-    self._projection_cache[session_id] = cached
-    self._projection_cache.move_to_end(session_id)
-    while len(self._projection_cache) > _PROJECTION_LRU_LIMIT:
-      self._projection_cache.popitem(last=False)
+    self._projection_cache.store(session_id, cached)
     return cached
 
   def _drop_session_runtime_state(self, session_id: str) -> None:
     """Drop a session's live runtime state: chat-event cache, aggregator, projection, recap memo."""
     self._chat_events.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
-    self._projection_cache.pop(session_id, None)
+    self._projection_cache.drop(session_id)
     from src.core import recap  # lazy: recap imports SessionManager from this module
 
     recap.drop_extract_memo(session_id)

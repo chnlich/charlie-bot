@@ -33,8 +33,9 @@ Known-alive symbols:
   their definitions, so vulture flags each one as an unused function; they must never be deleted on
   that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
   because its URL is built inside the Python registry rather than `web/`.
-- `_fresh_credential_read_warning_registry`, `_fresh_unknown_limit_shape_registry` (`tests/test_ext_usage.py`),
-  `_reset_config_caches` (`tests/test_charliebot_home.py`), `_clear_once_keys`
+ - `_fresh_credential_read_warning_registry`, `_fresh_unknown_limit_shape_registry` (`tests/test_ext_usage.py`),
+   `_fresh_pool_state` (`tests/test_claude_accounts.py`),
+   `_reset_config_caches` (`tests/test_charliebot_home.py`), `_clear_once_keys`
   (`tests/test_follow_silence_recheck.py`), `_reset_token_usage_single_flight` (`tests/test_pages.py`),
   `_worktree_paths` (`tests/test_reviewer_model_preference.py`),
   `_fresh_search_read_failure_registry` (`tests/test_session_search_content.py`),
@@ -357,3 +358,25 @@ Known-alive symbols:
   variables (a combined src+tests scan does not: the production `annotate` parameters carry
   the same names, so the names are not zero-match repo-wide — the flags only appear in a
   tests-only scan). Same class as the `check`/`format` signature-mirror entry above.
+- `account_for_dir`, `record_auth_failure`, `observe_rate_limit`, `credentials_present`,
+  `auth_failed_recently`, `healthy`, `headroom`, `latest_reading`, `select`, `earliest_reset`,
+  `move_transcript`, `TranscriptMoveError` (`src/core/claude_accounts.py`) — the account pool's
+  selection/relay half, zero production callers today: every whole-repo reference outside the
+  module is `tests/test_claude_accounts.py`, so vulture flags each as an unused function. The
+  pool's other halves are wired (the usage-panel reading write in `src/api/ext_usage.py`; the
+  resume lookup in `src/agents/master_cc_run.py` and the resume domain in `src/api/sessions.py`),
+  and the module docstring assigns the unwired `_event_readings` writes to the master and worker
+  event loops of a run on that account. A staged feature foundation, kept deliberately: the
+  live tests reference every name, so no Step 3 deletion bar can clear while the trigger wiring
+  is pending. Same kept-deliberately class as the deprecated-field entries above.
+- `is_fable`, `cache_expired`, `expired_cache_compaction_wanted`, `relay_compaction_wanted`,
+  `count_compact_boundaries`, `compaction_command`, `compaction_env`, `compact_with_sonnet`,
+  `CompactionOutcome` (`src/core/claude_compaction.py`) — the Sonnet-compaction engine, whose
+  whole public surface has zero production callers: every whole-repo reference outside the
+  module is `tests/test_claude_compaction.py`, so vulture flags the trigger and run entry
+  points as unused functions. The module docstring pins the intended trigger moments (an
+  account relay, a cache gone cold past the hour) and the same `context_compacted` /
+  `context_compact_failed` events the auto-compaction path already renders; the rendering half
+  is wired (`src/core/message_aggregator.py`), and `CharlieBotConfig.claude_compaction` ships
+  the config plumbed for the trigger sites. A staged feature foundation, kept deliberately;
+  never delete on static-tool evidence while the trigger wiring is pending.

@@ -1,10 +1,7 @@
 """Chat event persistence for CharlieBot sessions."""
 
 import json
-import os
-import threading
 import uuid
-from collections import OrderedDict
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +9,7 @@ from pathlib import Path
 import structlog
 
 from src.core.json_utils import atomic_write_text
+from src.core.memo import BoundedMemo
 from src.core.models import SessionMetadata, parse_utc_datetime, utc_now
 from src.core.ndjson import (
     append_ndjson,
@@ -89,20 +87,15 @@ class ChatEventStore:
     # Parsed-archive memo: path -> (mtime_ns, size, events). Archive files are
     # append-only within their week and frozen after, so an unchanged
     # (mtime_ns, size) means unchanged bytes; an append re-parses one file.
-    # All access holds the lock (the read_thread_worker_events / recap rule):
-    # get+move_to_end is not one op, and a concurrent insert's cap eviction
-    # must not pop the key mid-hit.
-    self._archive_events_memo: OrderedDict[Path, tuple[int, int, list[dict]]] = OrderedDict()
-    self._archive_memo_lock = threading.Lock()
+    self._archive_events_memo: BoundedMemo[Path, tuple[int, int, list[dict]]] = BoundedMemo(_ARCHIVE_MEMO_LIMIT)
     # Live-file range memo: path -> (mtime_ns, size, inode, per-physical-line
     # events with None holes for blank/malformed lines, covered byte size,
     # ends on a line boundary). Gated to archive_offset > 0 sessions:
     # unarchived sessions paginate through the message projection, so their
     # range callers (recap extract, bulk reads) would pay a whole-file parse to
-    # retain a list a moving divider never reuses. Same lock rule as the
-    # archive memo.
-    self._live_range_memo: OrderedDict[Path, tuple[int, int, int, list[dict | None], int, bool]] = OrderedDict()
-    self._live_range_memo_lock = threading.Lock()
+    # retain a list a moving divider never reuses.
+    self._live_range_memo: BoundedMemo[Path, tuple[int, int, int, list[dict | None], int,
+                                                   bool]] = BoundedMemo(_LIVE_RANGE_MEMO_LIMIT)
 
   @property
   def events_cache(self) -> dict[str, list[dict]]:
@@ -233,11 +226,9 @@ class ChatEventStore:
     except OSError as e:
       log.debug("archive_read_failed", path=str(path), error=str(e))
       return []
-    with self._archive_memo_lock:
-      memo = self._archive_events_memo.get(path)
-      if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
-        self._archive_events_memo.move_to_end(path)
-        return memo[2]
+    memo = self._archive_events_memo.get(path)
+    if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
+      return memo[2]
     events: list[dict] = []
     try:
       with open(path, encoding="utf-8") as f:
@@ -251,10 +242,7 @@ class ChatEventStore:
     except OSError as e:
       log.debug("archive_read_failed", path=str(path), error=str(e))
       return []
-    with self._archive_memo_lock:
-      self._archive_events_memo[path] = (st.st_mtime_ns, st.st_size, events)
-      while len(self._archive_events_memo) > _ARCHIVE_MEMO_LIMIT:
-        self._archive_events_memo.popitem(last=False)
+    self._archive_events_memo.store(path, (st.st_mtime_ns, st.st_size, events))
     return events
 
   def _live_range_lines(self, path: Path, session_id: str) -> list[dict | None]:
@@ -278,13 +266,11 @@ class ChatEventStore:
     except OSError as e:
       log.debug("live_range_read_failed", path=str(path), error=str(e))
       return []
-    with self._live_range_memo_lock:
-      memo = self._live_range_memo.get(path)
-      if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
-        self._live_range_memo.move_to_end(path)
-        return memo[3]
-      extend_from = (memo[3], memo[4]) if (
-          memo is not None and memo[2] == st.st_ino and st.st_size >= memo[4] and memo[5]) else None
+    memo = self._live_range_memo.get(path)
+    if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
+      return memo[3]
+    extend_from = (memo[3], memo[4]) if (
+        memo is not None and memo[2] == st.st_ino and st.st_size >= memo[4] and memo[5]) else None
     if extend_from is not None:
       base_lines, covered = extend_from
       buf = None
@@ -297,7 +283,7 @@ class ChatEventStore:
       if buf is not None:
         segments, ends = _universal_newline_segments(buf)
         lines = base_lines + [_live_range_event(segment, session_id) for segment in segments]
-        self._store_live_range_lines(path, st, lines, covered + len(buf), ends)
+        self._live_range_memo.store(path, (st.st_mtime_ns, st.st_size, st.st_ino, lines, covered + len(buf), ends))
         return lines
     try:
       with open(path, "rb") as f:
@@ -307,22 +293,8 @@ class ChatEventStore:
       return []
     segments, ends = _universal_newline_segments(buf)
     lines = [_live_range_event(segment, session_id) for segment in segments]
-    self._store_live_range_lines(path, st, lines, len(buf), ends)
+    self._live_range_memo.store(path, (st.st_mtime_ns, st.st_size, st.st_ino, lines, len(buf), ends))
     return lines
-
-  def _store_live_range_lines(
-      self,
-      path: Path,
-      st: os.stat_result,
-      lines: list[dict | None],
-      covered: int,
-      ends_with_newline: bool,
-  ) -> None:
-    """Publish one parsed-live-file entry under the memo lock, capping the LRU."""
-    with self._live_range_memo_lock:
-      self._live_range_memo[path] = (st.st_mtime_ns, st.st_size, st.st_ino, lines, covered, ends_with_newline)
-      while len(self._live_range_memo) > _LIVE_RANGE_MEMO_LIMIT:
-        self._live_range_memo.popitem(last=False)
 
   def _chat_events_path(self, session_id: str) -> Path:
     return chat_events_path(self._session_dir(session_id))

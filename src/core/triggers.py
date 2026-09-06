@@ -6,7 +6,6 @@ import json
 import os
 import random
 import shutil
-from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,6 +17,7 @@ from src.api.message_utils import build_scheduled_trigger_event
 from src.core.config import CharlieBotConfig, get_config
 from src.core.json_utils import write_model_json_atomically
 from src.core.master_trigger import trigger_master
+from src.core.memo import BoundedMemo
 from src.core.models import (
     LocalPid,
     PendingTrigger,
@@ -421,7 +421,8 @@ class TriggerManager:
     self._session_mgr = session_mgr
     self._tasks: dict[str, asyncio.Task] = {}
     # list_triggers memo: session id -> {file name: (mtime_ns, size, parsed record)}.
-    self._list_memo: OrderedDict[str, dict[str, tuple[int, int, PendingTrigger]]] = OrderedDict()
+    self._list_memo: BoundedMemo[str, dict[str, tuple[int, int,
+                                                      PendingTrigger]]] = BoundedMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
 
   async def create_trigger(
       self,
@@ -553,16 +554,14 @@ class TriggerManager:
     """
     triggers_dir = self._triggers_dir(session_id)
     if not triggers_dir.exists():
-      self._list_memo.pop(session_id, None)
+      self._list_memo.drop(session_id)
       return []
     stats = await asyncio.to_thread(self._stat_trigger_files, triggers_dir)
 
     memo = self._list_memo.get(session_id)
     if memo is None:
       memo = {}
-      self._list_memo[session_id] = memo
-    else:
-      self._list_memo.move_to_end(session_id)
+      self._list_memo.store(session_id, memo)
 
     triggers: list[PendingTrigger] = []
     stale = []
@@ -594,8 +593,6 @@ class TriggerManager:
         memo[name] = (*stats[name], trigger)
         triggers.append(trigger)
 
-    while len(self._list_memo) > _TRIGGER_LIST_MEMO_SESSION_LIMIT:
-      self._list_memo.popitem(last=False)
     triggers.sort(key=lambda t: t.created_at, reverse=True)
     return triggers
 

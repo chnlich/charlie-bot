@@ -6,7 +6,6 @@ import json
 import os
 import shlex
 import threading
-from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -345,7 +344,10 @@ class _ThreadEventsCacheEntry:
     self.tool_id_to_name: dict[str, str] = {}
 
 
-_thread_events_cache: OrderedDict[str, _ThreadEventsCacheEntry] = OrderedDict()
+_thread_events_cache: BoundedMemo[str, _ThreadEventsCacheEntry] = BoundedMemo(_THREAD_EVENTS_CACHE_CAP)
+# Serializes the entry's incremental read (stat, tail bytes, append) so two
+# polls of one log cannot interleave offset bookkeeping; the cache map's own
+# LRU and eviction live in BoundedMemo.
 _thread_events_lock = threading.Lock()
 
 
@@ -360,11 +362,9 @@ def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
   key = str(events_path)
   with _thread_events_lock:
     if not events_path.exists():
-      _thread_events_cache.pop(key, None)
+      _thread_events_cache.drop(key)
       return []
     entry = _thread_events_cache.get(key)
-    if entry is not None:
-      _thread_events_cache.move_to_end(key)
     size = events_path.stat().st_size
     if entry is None or size < entry.offset:
       entry = _ThreadEventsCacheEntry()
@@ -378,9 +378,7 @@ def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
             iter_ndjson_events(window[:complete_end].split(b"\n"), log_event="ndjson_parse_skip", log_fields={}))
         _append_worker_events(raw_events, entry.events, entry.tool_id_to_name)
         entry.offset += complete_end
-    _thread_events_cache[key] = entry
-    while len(_thread_events_cache) > _THREAD_EVENTS_CACHE_CAP:
-      _thread_events_cache.popitem(last=False)
+    _thread_events_cache.store(key, entry)
     return list(entry.events)
 
 

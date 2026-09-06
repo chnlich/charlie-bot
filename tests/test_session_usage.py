@@ -456,11 +456,16 @@ async def test_cost_is_none_when_all_results_report_zero(tmp_path: Path) -> None
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-zerocost", name="Zero Cost", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.0, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
-      _result_event(0.0, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=2000),
-      _assistant_event("claude-opus-4-6", input_tokens=50_000),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.0, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}, input_tokens=1000),
+          _result_event(0.0, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}, input_tokens=2000),
+          _assistant_event("claude-opus-4-6", input_tokens=50_000),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -473,11 +478,16 @@ async def test_cost_sums_positive_results_across_full_list(tmp_path: Path) -> No
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-poscost", name="Positive Cost", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.10, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
-      _result_event(0.20, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=2000),
-      _assistant_event("claude-opus-4-6", input_tokens=50_000),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.10, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}, input_tokens=1000),
+          _result_event(0.20, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}, input_tokens=2000),
+          _assistant_event("claude-opus-4-6", input_tokens=50_000),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -496,8 +506,7 @@ async def test_public_entry_point_has_no_events_parameter(tmp_path: Path) -> Non
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-wholelist", name="Whole List", backend=OPUS_BACKEND_ID)
   # More than 40 result events with cost, so a tail would under-count.
-  events = [_result_event(0.01, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=i)
-            for i in range(50)]
+  events = [_result_event(0.01, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=i) for i in range(50)]
   events.append(_assistant_event("claude-opus-4-6", input_tokens=10_000))
   _write_session(session_mgr, meta, events)
 
@@ -525,8 +534,7 @@ def _reset_declared_window_warnings() -> None:
 @pytest.fixture
 def _clean_ceiling_env(monkeypatch: pytest.MonkeyPatch) -> None:
   """Remove env vars that would change the declared window so each test starts clean."""
-  for name in ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
-               "CLAUDE_CODE_MAX_CONTEXT_TOKENS"):
+  for name in ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_MAX_CONTEXT_TOKENS"):
     monkeypatch.delenv(name, raising=False)
 
 
@@ -562,8 +570,7 @@ def test_declared_window_returns_none_compact_point_when_override_present_and_wa
 
 
 @pytest.mark.usefixtures("_clean_ceiling_env")
-def test_declared_window_returns_default_when_window_unparseable_and_warns(
-    monkeypatch, capsys) -> None:
+def test_declared_window_returns_default_when_window_unparseable_and_warns(monkeypatch, capsys) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "not-a-number")
   default_window = int(HEADLESS_CLAUDE_DEFAULT_ENV["CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
   expected_point = default_window - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
@@ -606,10 +613,13 @@ async def test_claude_tier_full_and_point_for_1m_window_model(tmp_path: Path) ->
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-1m", name="1M Window", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 1_000_000}}),
-      _assistant_event("claude-opus-4-6", input_tokens=72_900),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 1_000_000
+          }}),
+          _assistant_event("claude-opus-4-6", input_tokens=72_900),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -625,10 +635,13 @@ async def test_claude_tier_full_and_point_for_200k_window_model(tmp_path: Path) 
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-200k", name="200k Window", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
-      _assistant_event("claude-opus-4-6", input_tokens=72_900),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}),
+          _assistant_event("claude-opus-4-6", input_tokens=72_900),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -640,17 +653,19 @@ async def test_claude_tier_full_and_point_for_200k_window_model(tmp_path: Path) 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clean_ceiling_env")
-async def test_claude_tier_point_none_under_forwarded_unmodelled_override(
-    tmp_path: Path, monkeypatch) -> None:
+async def test_claude_tier_point_none_under_forwarded_unmodelled_override(tmp_path: Path, monkeypatch) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "433000")
   monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "1")
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-override", name="Override", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 1_000_000}}),
-      _assistant_event("claude-opus-4-6", input_tokens=72_900),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 1_000_000
+          }}),
+          _assistant_event("claude-opus-4-6", input_tokens=72_900),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -669,9 +684,10 @@ async def test_snapshot_tier_full_and_point_for_limit_with_input(tmp_path: Path)
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-snap-input", name="Snapshot Input", backend="opencode-glm52")
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -688,14 +704,17 @@ async def test_snapshot_tier_full_for_limit_without_input(tmp_path: Path) -> Non
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-snap-noinput", name="Snapshot No Input", backend="opencode-glm52")
-  _write_session(session_mgr, meta, [
-      _result_event(
-          0.5,
-          context_snapshot=_snapshot(
-              SYNTHETIC_MODEL,
-              _SNAPSHOT_TOKENS,
-              {"context": 409_600, "input": None, "output": 131_072})),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(
+              0.5,
+              context_snapshot=_snapshot(
+                  SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, {
+                      "context": 409_600,
+                      "input": None,
+                      "output": 131_072
+                  })),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -711,14 +730,10 @@ async def test_snapshot_tier_with_none_limit_yields_all_none_context(tmp_path: P
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-snap-nolimit", name="Snapshot No Limit", backend="opencode-glm52")
-  _write_session(session_mgr, meta, [
-      _result_event(
-          0.5,
-          context_snapshot=_snapshot(
-              SYNTHETIC_MODEL,
-              _SNAPSHOT_TOKENS,
-              None)),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, None)),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -735,22 +750,33 @@ async def test_snapshot_tier_uses_newest_result_event_carrying_snapshot(tmp_path
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-snap-newest", name="Snapshot Newest", backend="opencode-glm52")
-  _write_session(session_mgr, meta, [
-      _result_event(
-          0.1,
-          context_snapshot=_snapshot(
-              "old/model",
-              {"input": 10_000, "output": 1_000, "reasoning": 0,
-               "cache_read": 0, "cache_write": 0},
-              {"context": 200_000, "input": 150_000, "output": 40_000})),
-      _result_event(
-          0.2,
-          context_snapshot=_snapshot(
-              "new/model",
-              {"input": 20_000, "output": 2_000, "reasoning": 3_000,
-               "cache_read": 4_000, "cache_write": 5_000},
-              _SNAPSHOT_LIMIT)),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(
+              0.1,
+              context_snapshot=_snapshot(
+                  "old/model", {
+                      "input": 10_000,
+                      "output": 1_000,
+                      "reasoning": 0,
+                      "cache_read": 0,
+                      "cache_write": 0
+                  }, {
+                      "context": 200_000,
+                      "input": 150_000,
+                      "output": 40_000
+                  })),
+          _result_event(
+              0.2,
+              context_snapshot=_snapshot(
+                  "new/model", {
+                      "input": 20_000,
+                      "output": 2_000,
+                      "reasoning": 3_000,
+                      "cache_read": 4_000,
+                      "cache_write": 5_000
+                  }, _SNAPSHOT_LIMIT)),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -780,9 +806,10 @@ async def test_snapshot_tier_compact_at_ignores_claude_constants_but_claude_tier
 
   # Snapshot (opencode) tier — same limit as the existing 270000 / 250000 case.
   snap_meta = SessionMetadata(id="session-decouple-snap", name="Snap Decouple", backend="opencode-glm52")
-  _write_session(session_mgr, snap_meta, [
-      _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
-  ])
+  _write_session(
+      session_mgr, snap_meta, [
+          _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
+      ])
   snap_usage = await session_mgr.resolve_session_usage(snap_meta.id, snap_meta)
 
   assert snap_usage is not None
@@ -793,10 +820,13 @@ async def test_snapshot_tier_compact_at_ignores_claude_constants_but_claude_tier
 
   # Claude tier — its point follows the monkeypatched Claude constants.
   claude_meta = SessionMetadata(id="session-decouple-claude", name="Claude Decouple", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, claude_meta, [
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 600_000}}),
-      _assistant_event("claude-opus-4-6", input_tokens=72_900),
-  ])
+  _write_session(
+      session_mgr, claude_meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 600_000
+          }}),
+          _assistant_event("claude-opus-4-6", input_tokens=72_900),
+      ])
   claude_usage = await session_mgr.resolve_session_usage(claude_meta.id, claude_meta)
 
   assert claude_usage is not None
@@ -817,14 +847,17 @@ async def test_snapshot_tier_with_non_int_output_degrades_to_none(tmp_path: Path
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-snap-null-output", name="Snapshot Null Output", backend="opencode-glm52")
-  _write_session(session_mgr, meta, [
-      _result_event(
-          0.5,
-          context_snapshot=_snapshot(
-              SYNTHETIC_MODEL,
-              _SNAPSHOT_TOKENS,
-              {"context": 409_600, "input": 270_000, "output": None})),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(
+              0.5,
+              context_snapshot=_snapshot(
+                  SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, {
+                      "context": 409_600,
+                      "input": 270_000,
+                      "output": None
+                  })),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -841,7 +874,6 @@ async def test_snapshot_tier_with_non_int_output_degrades_to_none(tmp_path: Path
 # Latest-reading slot: the newest reading-bearing event decides the readout
 # regardless of which backend produced it (system/context_reading tier).
 # ---------------------------------------------------------------------------
-
 
 _K3_MODEL = "openai/moonshotai/Kimi-K3"
 
@@ -866,12 +898,13 @@ async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path
   # Several result events with turn-cumulative usage and no context_snapshot
   # (charlie-code today), plus context_reading events: the newest reading
   # decides all four fields, the cumulative usage never reaches the readout.
-  _write_session(session_mgr, meta, [
-      _result_event(0.10, input_tokens=1_000_000),
-      _result_event(0.20, input_tokens=2_000_000),
-      _context_reading_event("old/model", 10_000, 100_000, 90_000),
-      _k3_reading(),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.10, input_tokens=1_000_000),
+          _result_event(0.20, input_tokens=2_000_000),
+          _context_reading_event("old/model", 10_000, 100_000, 90_000),
+          _k3_reading(),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -885,13 +918,15 @@ async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path
 async def test_reading_overrides_older_claude_reading(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(
-      id="session-reading-after-claude", name="Reading After Claude", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
-      _assistant_event("claude-opus-4-6", input_tokens=100_000),
-      _k3_reading(),
-  ])
+  meta = SessionMetadata(id="session-reading-after-claude", name="Reading After Claude", backend=OPUS_BACKEND_ID)
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}),
+          _assistant_event("claude-opus-4-6", input_tokens=100_000),
+          _k3_reading(),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -904,13 +939,15 @@ async def test_reading_overrides_older_claude_reading(tmp_path: Path) -> None:
 async def test_claude_reading_overrides_older_context_reading(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(
-      id="session-claude-after-reading", name="Claude After Reading", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _k3_reading(),
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
-      _assistant_event("claude-opus-4-6", input_tokens=100_000),
-  ])
+  meta = SessionMetadata(id="session-claude-after-reading", name="Claude After Reading", backend=OPUS_BACKEND_ID)
+  _write_session(
+      session_mgr, meta, [
+          _k3_reading(),
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}),
+          _assistant_event("claude-opus-4-6", input_tokens=100_000),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -927,12 +964,12 @@ async def test_claude_reading_overrides_older_context_reading(tmp_path: Path) ->
 async def test_reading_overrides_older_snapshot(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(
-      id="session-reading-after-snap", name="Reading After Snapshot", backend="opencode-glm52")
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
-      _k3_reading(),
-  ])
+  meta = SessionMetadata(id="session-reading-after-snap", name="Reading After Snapshot", backend="opencode-glm52")
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
+          _k3_reading(),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -944,12 +981,12 @@ async def test_reading_overrides_older_snapshot(tmp_path: Path) -> None:
 async def test_snapshot_overrides_older_context_reading(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(
-      id="session-snap-after-reading", name="Snapshot After Reading", backend="opencode-glm52")
-  _write_session(session_mgr, meta, [
-      _k3_reading(),
-      _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
-  ])
+  meta = SessionMetadata(id="session-snap-after-reading", name="Snapshot After Reading", backend="opencode-glm52")
+  _write_session(
+      session_mgr, meta, [
+          _k3_reading(),
+          _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -965,14 +1002,16 @@ async def test_snapshot_overrides_older_context_reading(tmp_path: Path) -> None:
 async def test_reading_after_compact_boundary_still_wins(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(
-      id="session-reading-after-boundary", name="Reading After Boundary", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
-      _assistant_event("claude-opus-4-6", input_tokens=239_708),
-      _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
-      _k3_reading(),
-  ])
+  meta = SessionMetadata(id="session-reading-after-boundary", name="Reading After Boundary", backend=OPUS_BACKEND_ID)
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}),
+          _assistant_event("claude-opus-4-6", input_tokens=239_708),
+          _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
+          _k3_reading(),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -988,12 +1027,12 @@ async def test_boundary_while_snapshot_or_reading_slot_changes_nothing(tmp_path:
   session_mgr = SessionManager(cfg)
 
   # Boundary after a snapshot: the snapshot slot keeps deciding.
-  snap_meta = SessionMetadata(
-      id="session-boundary-snap", name="Boundary While Snapshot", backend="opencode-glm52")
-  _write_session(session_mgr, snap_meta, [
-      _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
-      _compact_boundary_event(pre_tokens=250_000, post_tokens=4_670),
-  ])
+  snap_meta = SessionMetadata(id="session-boundary-snap", name="Boundary While Snapshot", backend="opencode-glm52")
+  _write_session(
+      session_mgr, snap_meta, [
+          _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
+          _compact_boundary_event(pre_tokens=250_000, post_tokens=4_670),
+      ])
   snap_usage = await session_mgr.resolve_session_usage(snap_meta.id, snap_meta)
 
   assert snap_usage is not None

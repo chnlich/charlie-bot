@@ -1041,12 +1041,12 @@ async def test_boundary_while_snapshot_or_reading_slot_changes_nothing(tmp_path:
   assert snap_usage["context_compact_at"] == 250_000
 
   # Boundary after a reading: the resolved slot keeps deciding.
-  reading_meta = SessionMetadata(
-      id="session-boundary-reading", name="Boundary While Reading", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, reading_meta, [
-      _k3_reading(),
-      _compact_boundary_event(pre_tokens=118_234, post_tokens=4_670),
-  ])
+  reading_meta = SessionMetadata(id="session-boundary-reading", name="Boundary While Reading", backend=OPUS_BACKEND_ID)
+  _write_session(
+      session_mgr, reading_meta, [
+          _k3_reading(),
+          _compact_boundary_event(pre_tokens=118_234, post_tokens=4_670),
+      ])
   reading_usage = await session_mgr.resolve_session_usage(reading_meta.id, reading_meta)
 
   assert reading_usage is not None
@@ -1062,16 +1062,22 @@ async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
   meta = SessionMetadata(id="session-emptyslot", name="Empty Slot", backend=OPUS_BACKEND_ID)
   # Only text assistant events (no usage -> no claude slot) and cumulative
   # result events: the slot stays empty and the context fields stay unknown.
-  _write_session(session_mgr, meta, [
-      {
-          "type": "assistant",
-          "message": {
-              "model": "claude-opus-4-6",
-              "content": [{"type": "text", "text": "hello"}],
+  _write_session(
+      session_mgr, meta, [
+          {
+              "type": "assistant",
+              "message": {
+                  "model": "claude-opus-4-6",
+                  "content": [{
+                      "type": "text",
+                      "text": "hello"
+                  }],
+              },
           },
-      },
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=999_999),
-  ])
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}, input_tokens=999_999),
+      ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -1081,23 +1087,23 @@ async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
   assert usage["context_compact_at"] is None
   assert usage["model"] == ""
 
-  empty_meta = SessionMetadata(
-      id="session-emptyslot-none", name="Empty Slot None", backend=OPUS_BACKEND_ID)
+  empty_meta = SessionMetadata(id="session-emptyslot-none", name="Empty Slot None", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, empty_meta, [])
   assert await session_mgr.resolve_session_usage(empty_meta.id, empty_meta) is None
 
 
 @pytest.mark.asyncio
-async def test_codex_tier_not_consulted_for_non_codex_backend(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_codex_tier_not_consulted_for_non_codex_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(
-      id="session-noncodex-gate", name="Non Codex Gate", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {"contextWindow": 200_000}}),
-      _assistant_event("claude-opus-4-6", input_tokens=100_000),
-  ])
+  meta = SessionMetadata(id="session-noncodex-gate", name="Non Codex Gate", backend=OPUS_BACKEND_ID)
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}),
+          _assistant_event("claude-opus-4-6", input_tokens=100_000),
+      ])
   resolver = session_mgr._session_usage._codex_resolver
   seen_backends: list[str] = []
 
@@ -1127,18 +1133,16 @@ async def test_codex_tier_not_consulted_for_non_codex_backend(
 
 
 @pytest.mark.asyncio
-async def test_codex_rollout_resolves_via_other_backend_when_session_backend_absent(
-    tmp_path: Path,
-) -> None:
+async def test_codex_rollout_resolves_via_other_backend_when_session_backend_absent(tmp_path: Path,) -> None:
   # The session's own backend ("codex-old") is absent from config; another
   # configured codex backend points at the tree holding the rollout.
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path,
       backend_options=[
-          BackendOption(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude",
-                        model="claude-opus-4-6"),
-          BackendOption(id="codex-new", label="Codex New", type="codex", model="gpt-5.5",
-                        codex_home=str(tmp_path / "codex-tree")),
+          BackendOption(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude", model="claude-opus-4-6"),
+          BackendOption(
+              id="codex-new", label="Codex New", type="codex", model="gpt-5.5",
+              codex_home=str(tmp_path / "codex-tree")),
       ],
   )
   session_mgr = SessionManager(cfg)
@@ -1154,8 +1158,13 @@ async def test_codex_rollout_resolves_via_other_backend_when_session_backend_abs
       turn_model="gpt-5.5",
       token_event=_codex_token_count_event(
           timestamp="2026-03-31T20:43:12.454Z",
-          total_input=1_431_555, total_cached=1_126_656, total_output=16_521,
-          last_input=179_319, last_cached=176_640, last_output=1_732, last_total=181_051),
+          total_input=1_431_555,
+          total_cached=1_126_656,
+          total_output=16_521,
+          last_input=179_319,
+          last_cached=176_640,
+          last_output=1_732,
+          last_total=181_051),
   )
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
@@ -1187,8 +1196,13 @@ async def test_codex_unconfigured_compaction_logs_no_warning(tmp_path: Path, cap
       turn_model="gpt-5.5",
       token_event=_codex_token_count_event(
           timestamp="2026-03-31T20:43:12.454Z",
-          total_input=1_431_555, total_cached=1_126_656, total_output=16_521,
-          last_input=179_319, last_cached=176_640, last_output=1_732, last_total=181_051),
+          total_input=1_431_555,
+          total_cached=1_126_656,
+          total_output=16_521,
+          last_input=179_319,
+          last_cached=176_640,
+          last_output=1_732,
+          last_total=181_051),
   )
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
@@ -1208,8 +1222,7 @@ async def test_codex_unconfigured_compaction_logs_no_warning(tmp_path: Path, cap
 
 @pytest.mark.asyncio
 async def test_codex_context_compact_at_uses_auto_compact_limit_when_configured(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"),
-                  model_auto_compact_token_limit=180_000)
+  cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"), model_auto_compact_token_limit=180_000)
   session_mgr = SessionManager(cfg)
   meta = _seed_codex_session(
       session_mgr,
@@ -1221,8 +1234,13 @@ async def test_codex_context_compact_at_uses_auto_compact_limit_when_configured(
       turn_model="gpt-5.5",
       token_event=_codex_token_count_event(
           timestamp="2026-03-25T21:32:09.989Z",
-          total_input=1_099_429, total_cached=1_001_472, total_output=15_186,
-          last_input=176_028, last_cached=168_832, last_output=782, last_total=176_810),
+          total_input=1_099_429,
+          total_cached=1_001_472,
+          total_output=15_186,
+          last_input=176_028,
+          last_cached=168_832,
+          last_output=782,
+          last_total=176_810),
   )
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
@@ -1243,9 +1261,13 @@ def test_extract_codex_rollout_usage_event_uses_last_input_tokens() -> None:
   usage = _extract_codex_rollout_usage_event(
       _codex_token_count_event(
           timestamp="2026-03-25T17:50:36.349Z",
-          total_input=1_252_236, total_cached=950_016, total_output=14_789,
-          last_input=176_028, last_cached=168_832, last_output=782, last_total=176_810)
-  )
+          total_input=1_252_236,
+          total_cached=950_016,
+          total_output=14_789,
+          last_input=176_028,
+          last_cached=168_832,
+          last_output=782,
+          last_total=176_810))
 
   assert usage == {
       "context_tokens": 176028,
@@ -1272,8 +1294,13 @@ async def test_codex_native_cost_sums_cumulative_tokens(tmp_path: Path) -> None:
       turn_model="gpt-5.5",
       token_event=_codex_token_count_event(
           timestamp="2026-03-31T20:43:12.454Z",
-          total_input=1_951_892, total_cached=1_858_304, total_output=15_209,
-          last_input=179_319, last_cached=176_640, last_output=1_732, last_total=181_051),
+          total_input=1_951_892,
+          total_cached=1_858_304,
+          total_output=15_209,
+          last_input=179_319,
+          last_cached=176_640,
+          last_output=1_732,
+          last_total=181_051),
   )
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
@@ -1297,8 +1324,13 @@ async def test_codex_native_cost_is_none_for_unknown_model(tmp_path: Path) -> No
       turn_model="gpt-unknown",
       token_event=_codex_token_count_event(
           timestamp="2026-03-31T20:43:12.454Z",
-          total_input=1_951_892, total_cached=1_858_304, total_output=15_209,
-          last_input=179_319, last_cached=176_640, last_output=1_732, last_total=181_051),
+          total_input=1_951_892,
+          total_cached=1_858_304,
+          total_output=15_209,
+          last_input=179_319,
+          last_cached=176_640,
+          last_output=1_732,
+          last_total=181_051),
   )
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
@@ -1335,10 +1367,13 @@ async def test_facts_memo_rescans_only_after_new_events(tmp_path: Path, monkeypa
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-memo", name="Memo", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _assistant_event("claude-opus-4-6", input_tokens=10_000),
-      _result_event(0.10, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _assistant_event("claude-opus-4-6", input_tokens=10_000),
+          _result_event(0.10, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}, input_tokens=1000),
+      ])
 
   fed = 0
   real_feed = session_usage._UsageFold.feed
@@ -1358,7 +1393,9 @@ async def test_facts_memo_rescans_only_after_new_events(tmp_path: Path, monkeypa
   # An appended event folds the suffix into the carried state: only the new
   # events are fed, and the resolved usage matches a fresh full-scan reference.
   await session_mgr.save_chat_event(
-      meta.id, _result_event(0.20, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=2000))
+      meta.id, _result_event(0.20, {"claude-opus-4-6": {
+          "contextWindow": 200_000
+      }}, input_tokens=2000))
   third = await session_mgr.resolve_session_usage(meta.id, meta)
   assert fed == 3
   assert third is not None
@@ -1381,17 +1418,22 @@ async def test_facts_memo_extension_feeds_a_private_copy(tmp_path: Path) -> None
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-copy", name="Copy", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _assistant_event("claude-opus-4-6", input_tokens=10_000),
-      _result_event(0.10, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _assistant_event("claude-opus-4-6", input_tokens=10_000),
+          _result_event(0.10, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}, input_tokens=1000),
+      ])
   await session_mgr.resolve_session_usage(meta.id, meta)
   memo = session_mgr._session_usage._facts_memo
   stored_fold = memo.get(meta.id)[2]
   stored_facts = stored_fold.facts()
 
   await session_mgr.save_chat_event(
-      meta.id, _result_event(0.20, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=2000))
+      meta.id, _result_event(0.20, {"claude-opus-4-6": {
+          "contextWindow": 200_000
+      }}, input_tokens=2000))
   await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert memo.get(meta.id)[2] is not stored_fold
@@ -1402,19 +1444,28 @@ async def test_facts_memo_extension_feeds_a_private_copy(tmp_path: Path) -> None
 def test_usage_fold_of_appended_suffixes_matches_full_scan() -> None:
   """Feeding a list in suffixes lands on the same facts as one full pass."""
   events = [
-      _result_event(0.10, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
+      _result_event(0.10, {"claude-opus-4-6": {
+          "contextWindow": 200_000
+      }}, input_tokens=1000),
       _assistant_event("claude-opus-4-6", input_tokens=10_000),
       {
           "type": "system",
           "subtype": "compact_boundary",
-          "compact_metadata": {"post_tokens": 4_000},
+          "compact_metadata": {
+              "post_tokens": 4_000
+          },
       },
       _result_event(None, input_tokens=100),
-      _result_event(0.05, {"claude-opus-4-6": {"contextWindow": 180_000}}, input_tokens=2000),
+      _result_event(0.05, {"claude-opus-4-6": {
+          "contextWindow": 180_000
+      }}, input_tokens=2000),
       _assistant_event("claude-opus-4-6", input_tokens=12_000, parent_tool_use_id="toolu_1"),
       _assistant_event("claude-opus-4-6", input_tokens=11_000),
-      _result_event(0.02, {"other-model": {"contextWindow": 100_000}},
-                    context_snapshot=_snapshot("claude-opus-4-6", {"input": 500}, None)),
+      _result_event(
+          0.02, {"other-model": {
+              "contextWindow": 100_000
+          }},
+          context_snapshot=_snapshot("claude-opus-4-6", {"input": 500}, None)),
   ]
   fold = session_usage._UsageFold()
   fold.feed(events[:3])
@@ -1431,10 +1482,14 @@ def test_usage_fold_reading_slot_of_appended_suffixes_matches_full_scan() -> Non
   as one full pass, including a suffix context_reading overriding an earlier
   claude reading."""
   events = [
-      _result_event(0.10, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=1000),
+      _result_event(0.10, {"claude-opus-4-6": {
+          "contextWindow": 200_000
+      }}, input_tokens=1000),
       _assistant_event("claude-opus-4-6", input_tokens=50_000),
       _k3_reading(),
-      _result_event(0.05, {"claude-opus-4-6": {"contextWindow": 180_000}}, input_tokens=2000),
+      _result_event(0.05, {"claude-opus-4-6": {
+          "contextWindow": 180_000
+      }}, input_tokens=2000),
       _assistant_event("claude-opus-4-6", input_tokens=51_000, parent_tool_use_id="toolu_1"),
   ]
   prefix_fold = session_usage._UsageFold()

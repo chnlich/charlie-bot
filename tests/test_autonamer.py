@@ -11,6 +11,7 @@ from conftest import (
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
     SYNTHETIC_MODEL,
     FakeStdout,
+    build_light_cc_cfg,
     make_one_shot_backend,
 )
 
@@ -36,14 +37,6 @@ def _write_claude_jsonl(home_dir: Path, session_id: str, rows: list[dict | str])
   return jsonl_path
 
 
-def _cc_cfg() -> CharlieBotConfig:
-  """Config whose only backend is a light cc-claude option, also in model_preference."""
-  return CharlieBotConfig(
-      backend_options=[BackendOption(id="light-cc", label="Light CC", type="cc-claude", model="haiku")],
-      model_preference=["light-cc"],
-  )
-
-
 def _fallback_chain_cfg() -> CharlieBotConfig:
   """Config whose model_preference chains a cc-claude first backend onto a codex second backend."""
   return CharlieBotConfig(
@@ -62,7 +55,7 @@ def _fallback_chain_cfg() -> CharlieBotConfig:
 
 @pytest.mark.asyncio
 async def test_maybe_auto_name_passes_existing_groups_to_backend() -> None:
-  cfg = _cc_cfg()
+  cfg = build_light_cc_cfg()
   session_meta = SessionMetadata(id="session-1", name="Session 7", backend="light-cc")
   session_mgr = AsyncMock()
   session_mgr.get_session.side_effect = [
@@ -92,7 +85,7 @@ async def test_maybe_auto_name_passes_existing_groups_to_backend() -> None:
 
 @pytest.mark.asyncio
 async def test_maybe_auto_name_does_not_overwrite_existing_manual_group() -> None:
-  cfg = _cc_cfg()
+  cfg = build_light_cc_cfg()
   session_meta = SessionMetadata(id="session-2", name="Session 8", backend="light-cc")
   session_mgr = AsyncMock()
   session_mgr.get_session.side_effect = [
@@ -121,7 +114,7 @@ async def test_maybe_auto_name_does_not_overwrite_existing_manual_group() -> Non
 
 @pytest.mark.asyncio
 async def test_maybe_auto_name_preserves_default_session_number() -> None:
-  cfg = _cc_cfg()
+  cfg = build_light_cc_cfg()
   session_meta = SessionMetadata(id="session-prefix", name="Session 42", backend="light-cc")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-prefix", name="Session 42")
@@ -146,7 +139,7 @@ async def test_maybe_auto_name_preserves_default_session_number() -> None:
 
 @pytest.mark.asyncio
 async def test_maybe_auto_name_rechecks_current_name_before_renaming() -> None:
-  cfg = _cc_cfg()
+  cfg = build_light_cc_cfg()
   session_meta = SessionMetadata(id="session-renamed", name="Session 9", backend="light-cc")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-renamed", name="Manual Name")
@@ -172,7 +165,7 @@ async def test_maybe_auto_name_rechecks_current_name_before_renaming() -> None:
 
 @pytest.mark.asyncio
 async def test_maybe_auto_name_keeps_snake_case_identifier_verbatim() -> None:
-  cfg = _cc_cfg()
+  cfg = build_light_cc_cfg()
   session_meta = SessionMetadata(id="session-snake", name="Session 7", backend="light-cc")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-snake", name="Session 7")
@@ -191,7 +184,7 @@ async def test_maybe_auto_name_keeps_snake_case_identifier_verbatim() -> None:
 
 @pytest.mark.asyncio
 async def test_maybe_auto_name_keeps_chinese_title_verbatim() -> None:
-  cfg = _cc_cfg()
+  cfg = build_light_cc_cfg()
   session_meta = SessionMetadata(id="session-cjk", name="Session 8", backend="light-cc")
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="session-cjk", name="Session 8")

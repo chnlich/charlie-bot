@@ -584,9 +584,11 @@ class SessionManager:
     self._aggregators: dict[str, MessageAggregator] = {}
     # Per-session MessageProjection cache (LRU, cap _PROJECTION_LRU_LIMIT). A
     # hit requires the cached event_count to equal the live event count
-    # (get_message_projection), so a stale projection is never served. The
-    # route reads it off asyncio.to_thread, so the memo mechanics are
-    # BoundedMemo's locked ones, not a bare OrderedDict's.
+    # (get_message_projection, projection_memo_hit), so a stale projection is
+    # never served. Route access spans both the event loop (the memo-hit
+    # fast path) and asyncio.to_thread (the threaded build/advance), and the
+    # to_thread side must not observe a half-updated map, so the memo
+    # mechanics are BoundedMemo's locked ones, not a bare OrderedDict's.
     self._projection_cache: BoundedMemo[str, MessageProjection] = BoundedMemo(_PROJECTION_LRU_LIMIT)
     self._search_miss_memo: OrderedDict[str, OrderedDict[str, tuple[int, int, int]]] = OrderedDict()
 
@@ -1723,6 +1725,24 @@ class SessionManager:
       # loser wastes work instead of corrupting shared state.
       cached = cached.advanced(live[cached.event_count:])
     self._projection_cache.store(session_id, cached)
+    return cached
+
+  def projection_memo_hit(self, session_id: str) -> MessageProjection | None:
+    """Return the memoized projection when the getter's fast path provably applies, else None.
+
+    Pure memory — a dict read, a cache peek, one len compare — so callers can
+    answer a warm poll on the event loop and pay the executor round-trip only
+    on a miss (cold events cache, appended or shrunk corpus), where
+    ``get_message_projection`` reads or advances. A cache entry exists only
+    for unarchived sessions (the getter returns None before storing for
+    ``archive_offset != 0``), so a hit needs no archive-offset check.
+    """
+    cached = self._projection_cache.get(session_id)
+    if cached is None:
+      return None
+    live = self._chat_events.peek_cached_events(session_id)
+    if live is None or cached.event_count != len(live):
+      return None
     return cached
 
   def _drop_session_runtime_state(self, session_id: str) -> None:

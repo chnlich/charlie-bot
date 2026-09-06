@@ -39,7 +39,6 @@ bar). ``None`` for any context field means "unknown" — the bar is hidden.
 """
 
 import asyncio
-from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -52,6 +51,7 @@ from src.agents.backends.opencode import OPENCODE_COMPACT_OUTPUT_RESERVE
 from src.core import event_types as ET
 from src.core.codex_usage import CodexUsageResolver
 from src.core.config import CharlieBotConfig
+from src.core.memo import BoundedMemo
 from src.core.models import SessionMetadata
 
 
@@ -374,10 +374,10 @@ class SessionUsageResolver:
     # list keeps id() stable, so an identity match can never be an id-reuse
     # collision with a different list; the chat-events cache mutates the list
     # only by in-place append (save_chat_event) or wholesale replacement, and
-    # a replacement is a new object. Runs under asyncio.to_thread, so mutating
-    # the memo there matches the load path's thread context; dict ops stay
-    # GIL-atomic.
-    self._facts_memo: OrderedDict[str, tuple[list[dict], int, _UsageFold]] = OrderedDict()
+    # a replacement is a new object. _load_and_scan runs off the event loop
+    # (asyncio.to_thread), so the memo mechanics are BoundedMemo's locked
+    # ones, not a bare OrderedDict's.
+    self._facts_memo: BoundedMemo[str, tuple[list[dict], int, _UsageFold]] = BoundedMemo(_FACTS_MEMO_CAP)
 
   async def resolve_session_usage(
       self,
@@ -448,16 +448,11 @@ class SessionUsageResolver:
         suffix = events[covered:]
         fold.feed(suffix)
         covered += len(suffix)
-        self._facts_memo[session_id] = (events, covered, fold)
-        self._facts_memo.move_to_end(session_id)
+        self._facts_memo.store(session_id, (events, covered, fold))
         return events, fold.facts()
-      self._facts_memo.move_to_end(session_id)
       return events, prev.facts()
     count = len(events)
     fold = _UsageFold()
     fold.feed(events[:count])
-    self._facts_memo[session_id] = (events, count, fold)
-    self._facts_memo.move_to_end(session_id)
-    while len(self._facts_memo) > _FACTS_MEMO_CAP:
-      self._facts_memo.popitem(last=False)
+    self._facts_memo.store(session_id, (events, count, fold))
     return events, fold.facts()

@@ -1302,16 +1302,16 @@ async def test_facts_memo_extension_feeds_a_private_copy(tmp_path: Path) -> None
   ])
   await session_mgr.resolve_session_usage(meta.id, meta)
   memo = session_mgr._session_usage._facts_memo
-  stored_fold = memo[meta.id][2]
+  stored_fold = memo.get(meta.id)[2]
   stored_facts = stored_fold.facts()
 
   await session_mgr.save_chat_event(
       meta.id, _result_event(0.20, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=2000))
   await session_mgr.resolve_session_usage(meta.id, meta)
 
-  assert memo[meta.id][2] is not stored_fold
+  assert memo.get(meta.id)[2] is not stored_fold
   assert stored_fold.facts() == stored_facts
-  assert memo[meta.id][2].facts().cost == pytest.approx(0.30)
+  assert memo.get(meta.id)[2].facts().cost == pytest.approx(0.30)
 
 
 def test_usage_fold_of_appended_suffixes_matches_full_scan() -> None:

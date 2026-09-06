@@ -11,14 +11,14 @@ import structlog
 
 from src.agents import master_cc_state
 from src.agents.backends.base import (
-  AgentBackend,
-  _read_stderr_tail,
-  make_text_event,
-  tail_follow_events,
+    AgentBackend,
+    _read_stderr_tail,
+    make_text_event,
+    tail_follow_events,
 )
 from src.agents.backends.claude_code import (
-  claude_supervisor_env,
-  out_of_family_served_models,
+    claude_supervisor_env,
+    out_of_family_served_models,
 )
 from src.core import event_types as ET
 from src.core import runs
@@ -26,19 +26,19 @@ from src.core.config import CharlieBotConfig, claude_config_dir
 from src.core.latex import check_tex_changed, clear_snapshot
 from src.core.memory import assemble_master
 from src.core.models import (
-  PROJECT_ROLE,
-  BackendOption,
-  BackendType,
-  MasterRunRecord,
-  SessionCallbacks,
-  SessionMetadata,
-  backend_type_allows_missing_model,
+    PROJECT_ROLE,
+    BackendOption,
+    BackendType,
+    MasterRunRecord,
+    SessionCallbacks,
+    SessionMetadata,
+    backend_type_allows_missing_model,
 )
 from src.core.process import kill_group_escalating
 from src.core.project_config import (
-  ProjectInstructionError,
-  content_sha256,
-  load_project_bodies,
+    ProjectInstructionError,
+    content_sha256,
+    load_project_bodies,
 )
 from src.core.streaming import handle_compaction_events
 
@@ -372,8 +372,7 @@ def _build_instructions_content(
           try:
             repo_contract_text = repo_contract_file.read_text(encoding="utf-8")
           except (OSError, UnicodeDecodeError) as exc:
-            raise ProjectInstructionError(
-                f"repo manager contract unreadable: {repo_contract_file} ({exc})") from exc
+            raise ProjectInstructionError(f"repo manager contract unreadable: {repo_contract_file} ({exc})") from exc
           _log_project_body(session_meta.id, "repo_manager_contract", repo_contract_file, repo_contract_text)
           parts.append(repo_contract_text)
         _log_project_body(session_meta.id, "project_common", bodies.common.path, bodies.common.text)

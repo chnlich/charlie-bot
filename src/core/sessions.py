@@ -2007,18 +2007,26 @@ class SessionManager:
     sessions.sort(key=lambda s: s.updated_at, reverse=True)
     return sessions
 
-  async def populate_sidebar_state(
+  async def resolve_sidebar_state(
       self,
       sessions: list[SessionMetadata],
       include_running_status: bool = False,
       include_pending_trigger_status: bool = False,
       include_pending_plan_approval: bool = False,
       force: bool = False,
-  ) -> None:
-    """Populate derived sidebar-only state on session metadata objects.
+  ) -> dict[str, dict]:
+    """Probe-or-serve the derived sidebar state for *sessions* without mutating them.
 
-    Serves active sessions from the in-process sidebar snapshot
-    (:mod:`src.core.sidebar_state`) with zero disk access, and re-probes — in
+    Returns session id -> derived fields: ``has_running_tasks`` when
+    *include_running_status*, ``has_pending_trigger`` / ``pending_trigger_count``
+    / ``next_trigger_at`` when *include_pending_trigger_status*, and
+    ``has_pending_plan_approval`` when *include_pending_plan_approval* — only
+    the requested keys are present. ``has_running_tasks`` reads
+    ``busy_since``, not the passed objects' ``thinking_since``, so callers may
+    hand out cache references whose transient field was never stamped.
+
+    Active sessions are served from the in-process sidebar snapshot
+    (:mod:`src.core.sidebar_state`) with zero disk access, and re-probed — in
     ONE ``asyncio.to_thread`` task, serial over sessions, via the pure probe
     cores above — only the dirty sessions, or every active session on every
     10th call and whenever *force* is set (the ``/status?force=1`` escape
@@ -2029,27 +2037,30 @@ class SessionManager:
     is a full probe. Archived sessions keep the constant-False shortcut.
     """
     if not sessions:
-      return
+      return {}
     if not (include_running_status or include_pending_trigger_status or include_pending_plan_approval):
-      return
+      return {meta.id: {} for meta in sessions}
 
     # Archived sessions cannot have running tasks or pending triggers, so skip
     # the per-session filesystem work for them.
     active_sessions = [m for m in sessions if m.status != SessionStatus.ARCHIVED]
     archived_sessions = [m for m in sessions if m.status == SessionStatus.ARCHIVED]
 
+    derived: dict[str, dict] = {}
     for meta in archived_sessions:
+      entry: dict = {}
       if include_running_status:
-        meta.has_running_tasks = False
+        entry["has_running_tasks"] = False
       if include_pending_trigger_status:
-        meta.has_pending_trigger = False
-        meta.pending_trigger_count = 0
-        meta.next_trigger_at = None
+        entry["has_pending_trigger"] = False
+        entry["pending_trigger_count"] = 0
+        entry["next_trigger_at"] = None
       if include_pending_plan_approval:
-        meta.has_pending_plan_approval = False
+        entry["has_pending_plan_approval"] = False
+      derived[meta.id] = entry
 
     if not active_sessions:
-      return
+      return derived
 
     force_full = sidebar_state.register_poll(force)
     if force_full:
@@ -2087,15 +2098,66 @@ class SessionManager:
         sidebar_state.store_probe_signature(session_id, sig)
 
     for meta in active_sessions:
-      entry = sidebar_state.required_snapshot_entry(meta.id)
+      probed = sidebar_state.required_snapshot_entry(meta.id)
+      entry = {}
       if include_running_status:
-        meta.has_running_tasks = bool(meta.thinking_since) or bool(entry["thread_running"])
+        entry["has_running_tasks"] = bool(busy_since(meta.id)) or bool(probed["thread_running"])
       if include_pending_trigger_status:
-        meta.has_pending_trigger = entry["pending_trigger_count"] > 0
+        entry["has_pending_trigger"] = probed["pending_trigger_count"] > 0
+        entry["pending_trigger_count"] = probed["pending_trigger_count"]
+        entry["next_trigger_at"] = probed["next_trigger_at"]
+      if include_pending_plan_approval:
+        entry["has_pending_plan_approval"] = bool(probed["has_pending_plan_approval"])
+      derived[meta.id] = entry
+    return derived
+
+  async def populate_sidebar_state(
+      self,
+      sessions: list[SessionMetadata],
+      include_running_status: bool = False,
+      include_pending_trigger_status: bool = False,
+      include_pending_plan_approval: bool = False,
+      force: bool = False,
+  ) -> None:
+    """Apply :meth:`resolve_sidebar_state`'s derived fields onto *sessions*.
+
+    The callers hand copies they own, so the write may mutate them; a
+    read-only consumer holding cache references must call
+    :meth:`resolve_sidebar_state` directly instead.
+    """
+    derived = await self.resolve_sidebar_state(
+        sessions,
+        include_running_status=include_running_status,
+        include_pending_trigger_status=include_pending_trigger_status,
+        include_pending_plan_approval=include_pending_plan_approval,
+        force=force,
+    )
+    for meta in sessions:
+      entry = derived[meta.id]
+      if include_running_status:
+        meta.has_running_tasks = entry["has_running_tasks"]
+      if include_pending_trigger_status:
+        meta.has_pending_trigger = entry["has_pending_trigger"]
         meta.pending_trigger_count = entry["pending_trigger_count"]
         meta.next_trigger_at = entry["next_trigger_at"]
       if include_pending_plan_approval:
-        meta.has_pending_plan_approval = bool(entry["has_pending_plan_approval"])
+        meta.has_pending_plan_approval = entry["has_pending_plan_approval"]
+
+  async def get_sessions_readonly(self, session_ids: list[str]) -> list[SessionMetadata]:
+    """Resolve *session_ids* to metadata for consumers that only read it.
+
+    Warm entries serve the cached objects themselves — the caller must not
+    mutate them, the way :meth:`get_session`'s per-row copy would let it — and
+    only a cache miss pays a ``get_session`` read, which returns its own copy.
+    Ids that no longer resolve are dropped, and request order is preserved.
+    """
+    resolved: dict[str, SessionMetadata | None] = {}
+    for session_id in dict.fromkeys(session_ids):
+      resolved[session_id] = self._fresh_cached_meta(session_id)
+    for session_id, meta in resolved.items():
+      if meta is None:
+        resolved[session_id] = await self.get_session(session_id)
+    return [meta for meta in resolved.values() if meta is not None]
 
   async def _next_session_name(self) -> str:
     """Generate 'Session 0', 'Session 1', etc. using a persistent counter file.

@@ -381,3 +381,69 @@ async def test_scan_window_rollover_reprobes_without_file_change(
 
   tenth = await _status_json(ids=session.id, session_mgr=mgr)
   assert tenth[session.id]["has_running_tasks"] is False
+
+
+# ---------------------------------------------------------------------------
+# (d) the read-only poll path — cache references stay untouched
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_poll_leaves_cached_metadata_unmutated(tmp_path: Path) -> None:
+  cfg, mgr, session = await make_home_session(tmp_path, name="Busy")
+  mark_busy(session.id)
+  cached = mgr._metadata_cache[session.id][0]
+  assert cached.has_running_tasks is False
+  assert cached.thinking_since is None
+
+  polled = await _status_json(ids=session.id, session_mgr=mgr)
+
+  assert polled[session.id]["has_running_tasks"] is True
+  assert polled[session.id]["thinking_since"] is not None
+  # The poll serves the cached object's fields; a write onto it would leak the
+  # derived state into every other reader of the cache.
+  assert cached.has_running_tasks is False
+  assert cached.thinking_since is None
+  clear_busy(session.id)
+
+
+@pytest.mark.asyncio
+async def test_populate_applies_resolve_onto_owned_copies(tmp_path: Path) -> None:
+  cfg, mgr, busy = await make_home_session(tmp_path, name="Busy")
+  clean = await mgr.create_session(CreateSessionRequest(name="Clean"))
+  archived = await mgr.create_session(CreateSessionRequest(name="Archived"))
+  write_thread_meta(cfg, busy.id, {"id": "t1", "status": "running"})
+  write_trigger(
+      cfg.sessions_dir / busy.id / "triggers" / "pending.json",
+      PendingTrigger(
+          id="pending", session_id=busy.id, fire_at=datetime.now(UTC) + timedelta(minutes=3), message="wake"),
+  )
+  write_plans(cfg, busy.id, {"plans": [plan_doc()]})
+  archived_meta = await mgr.get_session(archived.id)
+  assert archived_meta is not None
+  archived_meta.status = SessionStatus.ARCHIVED
+  await mgr.save_metadata(archived_meta)
+  ids = [busy.id, clean.id, archived.id]
+  metas = [await mgr.get_session(sid) for sid in ids]
+
+  derived = await mgr.resolve_sidebar_state(
+      [m for m in metas if m is not None],
+      include_running_status=True,
+      include_pending_trigger_status=True,
+      include_pending_plan_approval=True,
+  )
+  copies = [m.model_copy() for m in metas if m is not None]
+  await mgr.populate_sidebar_state(
+      copies,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+      include_pending_plan_approval=True,
+  )
+
+  for meta in copies:
+    entry = derived[meta.id]
+    assert meta.has_running_tasks == entry["has_running_tasks"]
+    assert meta.has_pending_trigger == entry["has_pending_trigger"]
+    assert meta.pending_trigger_count == entry["pending_trigger_count"]
+    assert meta.next_trigger_at == entry["next_trigger_at"]
+    assert meta.has_pending_plan_approval == entry["has_pending_plan_approval"]

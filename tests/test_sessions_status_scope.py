@@ -87,6 +87,23 @@ async def test_status_ids_is_required(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_sessions_readonly_serves_cache_refs_and_resolves_misses(tmp_path: Path) -> None:
+  cfg = build_tui_sessions_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  warm = await session_mgr.create_session(CreateSessionRequest(name="Warm"))
+  cold = await session_mgr.create_session(CreateSessionRequest(name="Cold"))
+  session_mgr._invalidate_cache(cold.id)
+
+  metas = await session_mgr.get_sessions_readonly([warm.id, "gone-id", cold.id, warm.id])
+
+  assert [meta.id for meta in metas] == [warm.id, cold.id]
+  # Warm ids serve the cached objects themselves — the caller's contract is
+  # read-only — while the miss resolves through the disk read and its copy.
+  assert metas[0] is session_mgr._metadata_cache[warm.id][0]
+  assert metas[1] is not session_mgr._metadata_cache[cold.id][0]
+
+
+@pytest.mark.asyncio
 async def test_tui_status_returns_only_requested_tui_sessions(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

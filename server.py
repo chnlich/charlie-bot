@@ -22,6 +22,7 @@ from src.api import (
     chat,
     code_server,
     cron,
+    diag,
     ext_usage,
     files,
     git,
@@ -340,6 +341,7 @@ app.include_router(backlog.router, prefix="/api/backlog", tags=["backlog"])
 app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
 app.include_router(slash.router, prefix="/api/slash", tags=["slash"])
 app.include_router(cron.router, prefix="/api/cron", tags=["cron"])
+app.include_router(diag.router, prefix="/api/diag", tags=["diag"])
 app.include_router(git.router, prefix="/api/git", tags=["git"])
 app.include_router(code_server.router, prefix="/api/code-server", tags=["code-server"])
 app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])

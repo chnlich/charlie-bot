@@ -130,6 +130,15 @@ class ChatEventStore:
     self._events_cache[session_id] = events
     return events
 
+  def peek_cached_events(self, session_id: str) -> list[dict] | None:
+    """Return the cached events list without reading disk; None when the cache is cold.
+
+    The projection hit check calls this instead of load_chat_events_sync so a
+    cold cache stays cold: a miss here sends the caller to the threaded read
+    path rather than parsing the whole file on the event loop.
+    """
+    return self._events_cache.get(session_id)
+
   def load_chat_events_tail(self, session_id: str, limit: int = 200) -> tuple[list[dict], int, bool]:
     """Load only the last *limit* events from disk. Does NOT populate _events_cache.
 

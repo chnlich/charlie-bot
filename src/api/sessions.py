@@ -553,7 +553,11 @@ async def get_session_events_page(
   # plain json.dumps, and every field is already a plain parsed-JSON type so
   # the dumped body is unchanged.
   if meta.archive_offset == 0:
-    projection = await asyncio.to_thread(session_mgr.get_message_projection, session_id)
+    # A warm projection hit is a dict read + len compare; only a miss pays the
+    # executor round-trip the threaded getter needs for its disk reads.
+    projection = session_mgr.projection_memo_hit(session_id)
+    if projection is None:
+      projection = await asyncio.to_thread(session_mgr.get_message_projection, session_id)
     if projection is not None:
       messages, next_before, has_more = projection.slice_before(before, limit)
       return FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": next_before})

@@ -6,6 +6,7 @@ correctness, no-file-reads on the paging path, and archive fallback.
 
 from __future__ import annotations
 
+import asyncio
 import bisect
 import json
 import time
@@ -844,3 +845,36 @@ async def test_worker_summary_delivered_to_successor_projects_origin_and_thread(
   summary = next(m for m in projection.committed if m["role"] == "worker_summary")
   assert summary["origin_session_id"] == parent.id
   assert summary["thread_id"] == "th-e2e"
+
+
+@pytest.mark.asyncio
+async def test_projection_memo_hit_tracks_cache_validity(tmp_path: Path) -> None:
+  """The hit helper serves exactly the getter's fast path: cold miss, warm hit,
+  appended-corpus miss until the getter advances, then a hit on the advance."""
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+
+  assert mgr.projection_memo_hit(session.id) is None
+  first = await asyncio.to_thread(mgr.get_message_projection, session.id)
+  assert first is not None
+  assert mgr.projection_memo_hit(session.id) is first
+
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
+    await mgr.persist_and_broadcast(session.id, _assistant_event("tail", "t1"))
+  assert mgr.projection_memo_hit(session.id) is None
+  advanced = await asyncio.to_thread(mgr.get_message_projection, session.id)
+  assert advanced is not None and advanced.event_count == first.event_count + 1
+  assert mgr.projection_memo_hit(session.id) is advanced
+
+
+@pytest.mark.asyncio
+async def test_projection_memo_hit_archived_session_is_always_miss(tmp_path: Path) -> None:
+  """The projection cache never holds an archived session's entry, so the hit
+  helper needs no archive check of its own — the miss sends the caller to the
+  threaded getter, whose None routes to the legacy cursor path."""
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+
+  await recycle_archive_cutoff_events(mgr, session.id)
+  meta = await mgr.get_session(session.id)
+  assert meta is not None and meta.archive_offset > 0
+  assert mgr.get_message_projection(session.id) is None
+  assert mgr.projection_memo_hit(session.id) is None

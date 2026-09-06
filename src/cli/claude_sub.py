@@ -105,6 +105,21 @@ class ClaudeSubArgs:
   settings: list[str] = field(default_factory=list)
 
 
+# Flags whose value can ride in the next argv slot or an "=" suffix. The
+# space form also accepts -r as a bare-token alias of --resume; the "=" form
+# has no -r alias because _split_value_flag matches name= prefixes.
+_VALUE_FLAGS = (
+    "--output-format",
+    "--model",
+    "--effort",
+    "--session-id",
+    "--resume",
+    "--disallowed-tools",
+    "--disallowedTools",
+    "--settings",
+)
+
+
 @dataclass(frozen=True)
 class PaneInfo:
   pid: int
@@ -149,17 +164,7 @@ def parse_argv(argv: list[str]) -> ClaudeSubArgs:
       continue
     if token == "--input-file" or token.startswith("--input-file="):
       raise ValueError("claude-sub does not support --input-file")
-    if token in (
-        "--output-format",
-        "--model",
-        "--effort",
-        "--session-id",
-        "--resume",
-        "-r",
-        "--disallowed-tools",
-        "--disallowedTools",
-        "--settings",
-    ):
+    if token in _VALUE_FLAGS or token == "-r":
       if i + 1 >= len(option_tokens):
         raise ValueError(f"{token} requires a value")
       value = option_tokens[i + 1]
@@ -202,16 +207,7 @@ def parse_argv(argv: list[str]) -> ClaudeSubArgs:
 
 
 def _split_value_flag(token: str) -> tuple[str, str] | None:
-  for name in (
-      "--output-format",
-      "--model",
-      "--effort",
-      "--session-id",
-      "--resume",
-      "--disallowed-tools",
-      "--disallowedTools",
-      "--settings",
-  ):
+  for name in _VALUE_FLAGS:
     prefix = f"{name}="
     if token.startswith(prefix):
       return name, token[len(prefix):]

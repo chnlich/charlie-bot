@@ -21,15 +21,12 @@ from conftest import (
     FakeSessionManager,
     _noop,
     make_home_config,
+    make_internal_router_client,
     make_json_response,
     make_task_spawner,
 )
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from src.api import internal
-from src.api.deps import get_session_manager
-from src.api.internal import router as internal_router
 from src.api.message_utils import build_agent_message_event
 from src.cli.session import main as session_cli_main
 from src.core import event_types as ET
@@ -120,21 +117,13 @@ class RouteSessionManager:
     self.persisted.append((session_id, event))
 
 
-def _build_route_client(session_mgr: RouteSessionManager) -> TestClient:
-  app = FastAPI()
-  app.include_router(internal_router, prefix="/api/internal")
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[internal.get_config] = lambda: MagicMock()
-  return TestClient(app)
-
-
 def _payload(session_id: str = "caller", target: str = "target") -> dict[str, str]:
   return {"session_id": session_id, "target_session_id": target, "content": "status please"}
 
 
 def test_session_message_404_when_caller_missing() -> None:
   session_mgr = RouteSessionManager({})
-  with _build_route_client(session_mgr) as client:
+  with make_internal_router_client(MagicMock(), session_mgr) as client:
     resp = client.post("/api/internal/session-message", json=_payload())
   assert resp.status_code == 404
   assert resp.json()["detail"] == "Session not found"
@@ -143,7 +132,7 @@ def test_session_message_404_when_caller_missing() -> None:
 
 def test_session_message_404_when_target_missing() -> None:
   session_mgr = RouteSessionManager({"caller": SessionMetadata(id="caller", name="Caller")})
-  with _build_route_client(session_mgr) as client:
+  with make_internal_router_client(MagicMock(), session_mgr) as client:
     resp = client.post("/api/internal/session-message", json=_payload())
   assert resp.status_code == 404
   assert resp.json()["detail"] == "Target session not found"
@@ -205,7 +194,7 @@ def test_session_message_relay_persists_event_and_wakes_master(monkeypatch: pyte
   monkeypatch.setattr(internal, "trigger_master", fake_trigger_master)
   monkeypatch.setattr(internal, "create_logged_task", fake_create_logged_task)
 
-  with _build_route_client(session_mgr) as client:
+  with make_internal_router_client(MagicMock(), session_mgr) as client:
     resp = client.post("/api/internal/session-message", json=_payload())
 
   assert resp.status_code == 200
@@ -223,7 +212,7 @@ def test_session_message_relay_persists_event_and_wakes_master(monkeypatch: pyte
 
 def test_session_message_request_rejects_extra_fields() -> None:
   session_mgr = RouteSessionManager({})
-  with _build_route_client(session_mgr) as client:
+  with make_internal_router_client(MagicMock(), session_mgr) as client:
     resp = client.post(
         "/api/internal/session-message",
         json={

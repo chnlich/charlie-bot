@@ -15,7 +15,7 @@ from conftest import (
 )
 
 import src.agents.backends.opencode as opencode_mod
-from src.agents.backends.base import make_error_event
+from src.agents.backends.base import make_error_event, make_text_event
 from src.agents.backends.opencode import (
     SSE_EVENT_MESSAGE_PART_UPDATED,
     SSE_EVENT_MESSAGE_UPDATED,
@@ -1609,10 +1609,6 @@ def _sse_assistant_text(session_id: str, message_id: str, part_id: str, text: st
   ]
 
 
-def _assistant_text_event(text: str) -> dict:
-  return {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}}
-
-
 def _prompt_bodies(script: _StubServeScript) -> list[str]:
   return [json.dumps(body, sort_keys=True) for _, body in script.prompt_posts]
 
@@ -1657,11 +1653,11 @@ async def test_run_lock_failure_retries_same_session_mid_stream(monkeypatch, tmp
       {
           "session_id": sid
       },
-      _assistant_text_event("hello "),
+      make_text_event("hello "),
       {
           "session_id": sid
       },
-      _assistant_text_event("world"),
+      make_text_event("world"),
       backend._make_accumulated_result(),
   ]
   assert backend.exit_code == 0
@@ -1741,7 +1737,7 @@ async def test_run_lock_failure_retries_after_prompt_async_500(monkeypatch, tmp_
       {
           "session_id": sid
       },
-      _assistant_text_event("recovered"),
+      make_text_event("recovered"),
       backend._make_accumulated_result(),
   ]
   assert backend.exit_code == 0

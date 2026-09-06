@@ -239,8 +239,7 @@ async def list_threads(
   hit = _list_body_memo.get(session_id)
   rev = session_revision(session_id)
   gate = _sig_gate.get(session_id)
-  if (hit is not None and gate is not None and gate[0] == rev
-      and gate[1] + 1 < _LIST_PROOF_SWEEP_EVERY):
+  if (hit is not None and gate is not None and gate[0] == rev and gate[1] + 1 < _LIST_PROOF_SWEEP_EVERY):
     _sig_gate[session_id] = (rev, gate[1] + 1)
     sig = hit[0]
   else:

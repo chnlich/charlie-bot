@@ -80,10 +80,9 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
   """
 
   async def send_with_compression(self, message: Message) -> None:
-    if (message["type"] == "http.response.body" and not self.started
-        and not self.content_encoding_set and not self.content_type_is_excluded
-        and not message.get("more_body", False)
-        and len(message.get("body", b"")) >= _OFFLOOP_GZIP_MIN_BODY):
+    if (message["type"] == "http.response.body" and not self.started and not self.content_encoding_set and
+        not self.content_type_is_excluded and not message.get("more_body", False) and
+        len(message.get("body", b"")) >= _OFFLOOP_GZIP_MIN_BODY):
       body = await asyncio.to_thread(self.apply_compression, message["body"], more_body=False)
       headers = MutableHeaders(raw=self.initial_message["headers"])
       headers.add_vary_header("Accept-Encoding")

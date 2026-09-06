@@ -13,11 +13,21 @@ import server
 
 BODY = ("{\"text\": \"" + "内容" * 60_000 + "\"}").encode("utf-8")
 SCOPE: Scope = {
-    "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
-    "http_version": "1.1", "method": "GET", "scheme": "http",
-    "path": "/big", "raw_path": b"/big", "query_string": b"",
-    "root_path": "", "headers": [(b"host", b"t"), (b"accept-encoding", b"gzip")],
-    "client": ("t", 1), "server": ("t", 80),
+    "type": "http",
+    "asgi": {
+        "version": "3.0",
+        "spec_version": "2.3"
+    },
+    "http_version": "1.1",
+    "method": "GET",
+    "scheme": "http",
+    "path": "/big",
+    "raw_path": b"/big",
+    "query_string": b"",
+    "root_path": "",
+    "headers": [(b"host", b"t"), (b"accept-encoding", b"gzip")],
+    "client": ("t", 1),
+    "server": ("t", 80),
 }
 
 
@@ -69,6 +79,7 @@ def _drive(app: FastAPI) -> tuple[dict[str, str], bytes]:
 
 
 def test_whole_body_gzip_bytes_match_starlette_inline() -> None:
+
   def handler() -> Response:
     return Response(content=BODY, media_type="application/json")
 
@@ -81,6 +92,7 @@ def test_whole_body_gzip_bytes_match_starlette_inline() -> None:
 
 
 def test_small_body_and_preset_encoding_stay_identity() -> None:
+
   def small() -> Response:
     return Response(content=b"{}", media_type="application/json")
 
@@ -97,7 +109,9 @@ def test_small_body_and_preset_encoding_stay_identity() -> None:
 
 
 def test_streaming_body_compresses_per_chunk() -> None:
+
   def stream() -> StreamingResponse:
+
     async def chunks() -> AsyncIterator[bytes]:
       for i in range(0, len(BODY), 100_000):
         yield BODY[i:i + 100_000]

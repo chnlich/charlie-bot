@@ -83,8 +83,12 @@ def charliebot_home_dir() -> Path:
 
   ``CHARLIEBOT_HOME`` selects the profile: unset or empty gives the default
   ``~/.charliebot``, so an untouched host behaves exactly as before. This is the
-  only place in the tree that reads the variable; every other path is derived
-  from :attr:`CharlieBotConfig.charliebot_home`.
+  only place that resolves the home path; every other path is derived
+  from :attr:`CharlieBotConfig.charliebot_home`. The one raw read of the variable
+  outside this function is the web terminal's profile check
+  (``src/agents/backends/terminal.py``): a tmux pane inherits the tmux server's
+  environment rather than this process's, so the terminal checks whether a
+  profile is set and passes the resolved home to new panes explicitly.
 
   A set value must be absolute or start with ``~``. A relative value would be
   resolved against each process's own working directory, silently handing the

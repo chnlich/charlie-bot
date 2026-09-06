@@ -18,6 +18,7 @@ from src.api.deps import (
 from src.api.sessions import router as sessions_router
 from src.api.threads import _LIST_DESCRIPTION_CAP
 from src.api.threads import router as threads_router
+from src.core import threads as core_threads
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, ThreadStatus
 from src.core.sessions import SessionManager
@@ -215,6 +216,32 @@ def test_marked_rebuild_reuses_rows_and_parses_from_one_walk(tmp_path: Path) -> 
       assert row is stored[tid]
 
 
+def test_rebuild_tolerates_file_vanished_between_walk_and_read(tmp_path: Path) -> None:
+  """A pair the walk statted but whose file vanished before its read parses as no row, not a crash."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  sessions = SessionManager(cfg)
+
+  async def seed() -> str:
+    session = await sessions.create_session(CreateSessionRequest(name="vanished"))
+    threads = ThreadManager(cfg)
+    await threads.create_thread(session, "survivor")
+    return session.id
+
+  session_id = asyncio.run(seed())
+  threads_dir = cfg.sessions_dir / session_id / "threads"
+  mgr = ThreadManager(cfg)
+  pairs = list(core_threads.iter_thread_meta_stats(str(threads_dir)))
+  # A pair from the signature's walk whose file the session GC removed before
+  # the rebuild's parse-merge read it.
+  stale = pairs + [(str(threads_dir / "vanished" / "metadata.json"), pairs[0][1])]
+
+  metas = mgr.list_threads_from_stats(stale)
+  assert metas[1] is None
+  items = threads_api._thread_list_items(session_id, stale, metas)
+  assert len(items) == 1
+  assert {t.id for t in mgr._metas_from_stats(iter(pairs))} == {t.id for t in metas[:1]}
+
+
 def test_list_threads_from_stats_matches_list_threads(tmp_path: Path) -> None:
   """The shared parse-merge serves the same metas from pre-walked pairs as from its own scan."""
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
@@ -232,8 +259,7 @@ def test_list_threads_from_stats_matches_list_threads(tmp_path: Path) -> None:
   mgr = ThreadManager(cfg)
   scanned = asyncio.run(mgr.list_threads(session_id))
 
-  from src.core.threads import iter_thread_meta_stats
-  pairs = list(iter_thread_meta_stats(str(threads_dir)))
+  pairs = list(core_threads.iter_thread_meta_stats(str(threads_dir)))
   from_stats = mgr.list_threads_from_stats(pairs)
 
   assert {t.id for t in from_stats} == {t.id for t in scanned}

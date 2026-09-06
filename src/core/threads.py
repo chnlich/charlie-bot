@@ -103,7 +103,7 @@ class ThreadManager:
   async def list_threads(self, session_id: str) -> list[ThreadMetadata]:
     threads_dir = self._cfg.sessions_dir / session_id / "threads"
 
-    def load_all() -> list[ThreadMetadata]:
+    def load_all() -> list[ThreadMetadata | None]:
       # One executor hop for the whole scan: a per-file aiofiles read costs
       # ~0.5 ms in thread-pool hand-off, so per-file reads make the 3s
       # workers-panel poll scale linearly with thread count.
@@ -111,33 +111,45 @@ class ThreadManager:
         return []
       return self._metas_from_stats(iter_thread_meta_stats(threads_dir))
 
-    threads = await asyncio.to_thread(load_all)
+    threads = [t for t in await asyncio.to_thread(load_all) if t is not None]
     threads.sort(key=lambda t: t.created_at, reverse=True)
     return threads
 
-  def list_threads_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]]) -> list[ThreadMetadata]:
+  def list_threads_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]]) -> list[ThreadMetadata | None]:
     """Parse-merge the pre-walked ``(metadata.json path, stat)`` pairs of one session.
 
     *pairs* must be a fresh walk of exactly the files the caller's freshness
     signature derives from (``iter_thread_meta_stats`` shape), so the returned
-    metas and that signature describe the same instant. The parse memo and its
-    swap are ``list_threads``'s: a hit costs no read, a miss reads the file,
-    and files absent from *pairs* drop out of the memo.
+    metas and that signature describe the same instant. The returned list
+    aligns position-for-position with *pairs*: a file the walk statted but
+    that vanished before its read yields ``None`` at its position (the same
+    no-thread-row verdict the walk's stat failure gives), so callers pairing
+    metas back with pairs stay aligned. The parse memo and its swap are
+    ``list_threads``'s: a hit costs no read, a miss reads the file, and files
+    absent from *pairs* drop out of the memo.
     """
     return self._metas_from_stats(pairs)
 
-  def _metas_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]]) -> list[ThreadMetadata]:
+  def _metas_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]]) -> list[ThreadMetadata | None]:
     memo = self._list_memo
     refreshed: dict[str, tuple[int, int, ThreadMetadata]] = {}
-    metas = []
+    metas: list[ThreadMetadata | None] = []
     for meta_path, st in pairs:
       hit = memo.get(meta_path)
       if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
-        meta = hit[2]
+        meta: ThreadMetadata | None = hit[2]
       else:
-        with open(meta_path, encoding="utf-8") as f:
-          meta = ThreadMetadata.model_validate_json(f.read())
-      refreshed[meta_path] = (st.st_mtime_ns, st.st_size, meta)
+        try:
+          with open(meta_path, encoding="utf-8") as f:
+            meta = ThreadMetadata.model_validate_json(f.read())
+        except OSError as e:
+          # The walk statted this file, so a read failure here means the file
+          # vanished (session GC) between the walk and this read; the walk's
+          # stat failure gets the same no-thread-row verdict.
+          log.debug("thread_metadata_read_failed", path=meta_path, error=str(e))
+          meta = None
+      if meta is not None:
+        refreshed[meta_path] = (st.st_mtime_ns, st.st_size, meta)
       metas.append(meta)
     # Swap whole dicts: concurrent load_all calls in the executor never mutate
     # the live map, and the swap keeps the memo down to threads still on disk.

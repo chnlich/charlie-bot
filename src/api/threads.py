@@ -233,16 +233,23 @@ def _signature_from_stats(thread_pairs: list[tuple[str, os.stat_result]],
 # memo keys the same (mtime_ns, size) identity every atomic rename moves, so
 # an unchanged stat proves the stored row current and a marked rebuild rebuilds
 # only the moved files' rows. Rows are shared read-only into the body payload.
-_thread_row_memo_cap = 8
-_thread_row_memo: BoundedMemo[str, dict[str, tuple[int, int, dict]]] = BoundedMemo(_thread_row_memo_cap)
+_THREAD_ROW_MEMO_LIMIT = 8
+_thread_row_memo: BoundedMemo[str, dict[str, tuple[int, int, dict]]] = BoundedMemo(_THREAD_ROW_MEMO_LIMIT)
 
 
 def _thread_list_items(session_id: str, thread_pairs: list[tuple[str, os.stat_result]],
-                       metas: list[ThreadMetadata]) -> list[dict]:
-  """List rows for the walked pairs, served from the row memo where the file stands."""
+                       metas: list[ThreadMetadata | None]) -> list[dict]:
+  """List rows for the walked pairs, served from the row memo where the file stands.
+
+  *metas* aligns position-for-position with *thread_pairs*; a ``None`` entry is
+  the parse-miss verdict for a file that vanished between the walk and its
+  read, so it gets no row — exactly as if the walk's stat had failed.
+  """
   refreshed: dict[str, tuple[int, int, dict]] = {}
   items = []
   for (meta_path, st), meta in zip(thread_pairs, metas):
+    if meta is None:
+      continue
     hit = _thread_row_memo.get(session_id)
     cached = hit.get(meta_path) if hit is not None else None
     if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:

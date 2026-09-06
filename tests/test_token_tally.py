@@ -791,6 +791,8 @@ def test_opencode_scan_row_filters(tmp_path: Path) -> None:
   assert (full.cache_read, full.cache_write) == (4, 1)
   assert full.last == "2023-11-14"
   assert by_model["oc-local (lmstudio)"].output == 3
+
+
 def test_opencode_row_data_matches_the_scan_projection() -> None:
   # The incremental path projects fetched blobs through _opencode_row_data; that projection
   # must agree with the scan SQL on every shape the prefilter admits, including the skips.

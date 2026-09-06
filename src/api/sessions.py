@@ -27,6 +27,7 @@ from src.api.message_utils import (
 )
 from src.api.responses import FastJsonResponse
 from src.api.threads import _thread_list_item
+from src.core import thinking_state
 from src.core.chat_events import chat_events_path
 from src.core.config import (
     CharlieBotConfig,
@@ -357,10 +358,14 @@ async def all_sessions_status(
   every requested session (a full probe also runs on every 10th poll as a
   self-heal fallback).
   """
-  sessions = await _load_requested_sessions(session_mgr, ids)
+  # The 3 s poll reads the cached metadata references as they are (the
+  # manager's per-row get_session path — model_copy, stamp, and the gather —
+  # measured ~0.3 ms of this route); the payload's derived fields come from
+  # resolve_sidebar_state so the cache stays untouched.
+  sessions = await session_mgr.get_sessions_readonly(_parse_session_ids(ids))
   if not sessions:
     return {}
-  await session_mgr.populate_sidebar_state(
+  derived = await session_mgr.resolve_sidebar_state(
       sessions,
       include_running_status=True,
       include_pending_trigger_status=True,
@@ -369,14 +374,16 @@ async def all_sessions_status(
   )
   result: dict[str, dict] = {}
   for meta in sessions:
+    busy = thinking_state.busy_since(meta.id)
+    entry = derived[meta.id]
     result[meta.id] = {
         "has_unread": bool(meta.has_unread),
-        "has_running_tasks": meta.has_running_tasks,
-        "thinking_since": meta.thinking_since.isoformat() if meta.thinking_since else None,
-        "has_pending_trigger": meta.has_pending_trigger,
-        "pending_trigger_count": meta.pending_trigger_count,
-        "next_trigger_at": meta.next_trigger_at.isoformat() if meta.next_trigger_at else None,
-        "has_pending_plan_approval": meta.has_pending_plan_approval,
+        "has_running_tasks": entry["has_running_tasks"],
+        "thinking_since": busy.isoformat() if busy else None,
+        "has_pending_trigger": entry["has_pending_trigger"],
+        "pending_trigger_count": entry["pending_trigger_count"],
+        "next_trigger_at": entry["next_trigger_at"].isoformat() if entry["next_trigger_at"] else None,
+        "has_pending_plan_approval": entry["has_pending_plan_approval"],
     }
   # The sidebar's 3 s poll is this host's second-busiest route; FastJsonResponse
   # skips the jsonable_encoder pass FastAPI runs on mapped returns (the

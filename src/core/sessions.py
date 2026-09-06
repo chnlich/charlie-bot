@@ -177,6 +177,27 @@ def has_running_tasks_sync(threads_dir: Path) -> bool:
   return False
 
 
+# Parsed trigger files keyed by path, mirroring the thread-metadata memo in
+# init_worker_recovery: the sidebar deep probe re-enters this scan on every poll
+# that follows any write to the session, and re-reading every trigger file
+# dominated the probe (~3.6 ms per probe on the 101-file worst corpus); a repeat
+# scan pays one scandir + stat per file and reads only files whose signature
+# moved. Every trigger-file write (_save_trigger, recover_pending's schema
+# migration) publishes through the atomic tmp-file rename, so any content change
+# moves mtime_ns and an unchanged (mtime_ns, size) proves the content current.
+# The signature is taken before the read, so an
+# entry recorded while a write raced the scan keys the older signature and can
+# never be served for the newer bytes. Stored dicts are shared across calls —
+# consumers must treat them as read-only.
+_TRIGGER_META_MEMO_LIMIT = 1024
+_trigger_meta_memo: BoundedMemo[str, tuple[int, int, dict]] = BoundedMemo(_TRIGGER_META_MEMO_LIMIT)
+
+
+def _reset_trigger_meta_memo_for_tests() -> None:
+  """Clear the trigger-file scan memo, restoring the process-start state."""
+  _trigger_meta_memo.clear()
+
+
 def pending_trigger_state_sync(triggers_dir: Path) -> tuple[int, datetime | None]:
   """(pending trigger count, earliest fire time) from the *.json files under *triggers_dir*."""
   if not triggers_dir.exists():
@@ -184,24 +205,38 @@ def pending_trigger_state_sync(triggers_dir: Path) -> tuple[int, datetime | None
 
   pending_count = 0
   next_trigger_at: datetime | None = None
-  for trigger_path in triggers_dir.glob("*.json"):
-    trigger = load_json_meta(
-        trigger_path,
-        "trigger_meta_read_failed",
-        catch=(OSError, ValueError),
-    )
-    if trigger is None:
-      continue
-    if trigger.get("status") != "pending":
-      continue
+  with os.scandir(triggers_dir) as entries:
+    for entry in entries:
+      if not entry.name.endswith(".json") or not entry.is_file():
+        continue
+      try:
+        st = os.stat(entry.path)
+      except OSError:
+        continue  # vanished between scandir and stat — nothing to read
+      # entry.path is the str join scandir already built; the memo keys on it
+      # directly, the same string-path pattern the thread-metadata memo uses.
+      cached = _trigger_meta_memo.get(entry.path)
+      if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+        trigger: dict | None = cached[2]
+      else:
+        trigger = load_json_meta(
+            Path(entry.path),
+            "trigger_meta_read_failed",
+            catch=(OSError, ValueError),
+        )
+        if trigger is None:
+          continue
+        _trigger_meta_memo.store(entry.path, (st.st_mtime_ns, st.st_size, trigger))
+      if trigger.get("status") != "pending":
+        continue
 
-    pending_count += 1
-    fire_at = SessionManager._parse_optional_utc(
-        trigger.get("fire_at"), "trigger_fire_at_parse_failed", trigger_path=str(trigger_path))
-    if fire_at is None:
-      continue
-    if next_trigger_at is None or fire_at < next_trigger_at:
-      next_trigger_at = fire_at
+      pending_count += 1
+      fire_at = SessionManager._parse_optional_utc(
+          trigger.get("fire_at"), "trigger_fire_at_parse_failed", trigger_path=entry.path)
+      if fire_at is None:
+        continue
+      if next_trigger_at is None or fire_at < next_trigger_at:
+        next_trigger_at = fire_at
 
   return pending_count, next_trigger_at
 

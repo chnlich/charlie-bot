@@ -38,10 +38,23 @@ _probe_signatures: dict[str, tuple] = {}
 # populate_sidebar_state invocation counter (process lifetime).
 _poll_count = 0
 
+# session id -> monotone change revision, bumped by every mark_sidebar_dirty
+# call. Consumers outside the poll (the workers-panel list proof) snapshot it
+# when they prove a derived value against disk and skip the proof while it
+# matches; the every-Nth-poll sweep each consumer runs bounds a mark its
+# writer path forgot.
+_revisions: dict[str, int] = {}
+
 
 def mark_sidebar_dirty(session_id: str) -> None:
   """Flag *session_id*'s probed sidebar state for re-probe on the next poll."""
   _dirty.add(session_id)
+  _revisions[session_id] = _revisions.get(session_id, 0) + 1
+
+
+def session_revision(session_id: str) -> int:
+  """Current change revision of *session_id*'s probed state sources."""
+  return _revisions.get(session_id, 0)
 
 
 def is_dirty(session_id: str) -> bool:

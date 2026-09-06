@@ -66,41 +66,28 @@ async def test_status_failed_without_error_emits_error_none() -> None:
   }]
 
 
-@pytest.mark.asyncio
-async def test_status_success_emits_nothing() -> None:
-  persisted: list[dict] = []
-  event = {
-      "type": "system",
-      "subtype": "status",
-      "compact_result": "success",
-  }
-
-  await handle_compaction_events(event, lambda ev: _record(persisted, ev), {"session": "s1"})
-
-  assert not persisted
-
-
-@pytest.mark.asyncio
-async def test_status_event_with_no_compact_result_emits_nothing() -> None:
-  persisted: list[dict] = []
-  event = {
-      "type": "system",
-      "subtype": "status",
-  }
-
-  await handle_compaction_events(event, lambda ev: _record(persisted, ev), {"session": "s1"})
-
-  assert not persisted
+_EMITS_NOTHING_ROWS = [
+    pytest.param({
+        "type": "system",
+        "subtype": "status",
+        "compact_result": "success"
+    }, id="status-success"),
+    pytest.param({
+        "type": "system",
+        "subtype": "status"
+    }, id="status-without-compact-result"),
+    pytest.param({
+        "type": "assistant",
+        "subtype": "status",
+        "compact_result": "failed"
+    }, id="non-system-type"),
+]
 
 
 @pytest.mark.asyncio
-async def test_non_system_event_emits_nothing() -> None:
+@pytest.mark.parametrize("event", _EMITS_NOTHING_ROWS)
+async def test_event_outside_the_emit_gate_emits_nothing(event: dict) -> None:
   persisted: list[dict] = []
-  event = {
-      "type": "assistant",
-      "subtype": "status",
-      "compact_result": "failed",
-  }
 
   await handle_compaction_events(event, lambda ev: _record(persisted, ev), {"session": "s1"})
 

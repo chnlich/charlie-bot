@@ -108,45 +108,46 @@ async def test_stale_in_progress_reset(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# test_implement_highest_priority
+# test_implement_picks_highest_priority_approved_item
 # ---------------------------------------------------------------------------
+
+_IMPLEMENT_PICK_ROWS = [
+    pytest.param(
+        [("001", "low", "Low prio"), ("002", "high", "High prio"), ("003", "medium", "Med prio")],
+        "002",
+        "High prio",
+        id="high-beats-medium-and-low"),
+    pytest.param(
+        [("001", "medium", "Med"), ("002", "low", "Low"), ("003", "high", "High")],
+        "003",
+        "High",
+        id="high-wins-from-any-file-position"),
+]
 
 
 @pytest.mark.asyncio
-async def test_implement_highest_priority(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("items", "expected_id", "expected_title"), _IMPLEMENT_PICK_ROWS)
+async def test_implement_picks_highest_priority_approved_item(
+    tmp_path: Path, items: list[tuple[str, str, str]], expected_id: str, expected_title: str) -> None:
   """Multiple approved items — picks highest priority."""
   backlog = tmp_path / 'backlog.yaml'
-  items = [
-      {
-          'id': '001',
-          'status': 'approved',
-          'title': 'Low prio',
-          'priority': 'low',
-          'description': 'desc1'
-      },
-      {
-          'id': '002',
-          'status': 'approved',
-          'title': 'High prio',
-          'priority': 'high',
-          'description': 'desc2'
-      },
-      {
-          'id': '003',
-          'status': 'approved',
-          'title': 'Med prio',
-          'priority': 'medium',
-          'description': 'desc3'
-      },
-  ]
-  _write_backlog(backlog, items)
+  _write_backlog(
+      backlog, [
+          {
+              'id': item_id,
+              'status': 'approved',
+              'title': title,
+              'priority': priority,
+              'description': f'desc-{item_id}'
+          } for item_id, priority, title in items
+      ])
   cfg = _make_cfg()
 
   action, prompt = await determine_action(backlog, cfg, tmp_path)
 
   assert action == 'implement'
-  assert '002' in prompt
-  assert 'High prio' in prompt
+  assert expected_id in prompt
+  assert expected_title in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -217,48 +218,6 @@ async def test_scan_fallback(tmp_path: Path) -> None:
   assert action == 'scan'
   assert 'test agent' in prompt
   _assert_concise_description_constraint(prompt)
-
-
-# ---------------------------------------------------------------------------
-# test_priority_ordering
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_priority_ordering(tmp_path: Path) -> None:
-  """Priority: high > medium > low."""
-  backlog = tmp_path / 'backlog.yaml'
-  items = [
-      {
-          'id': '001',
-          'status': 'approved',
-          'title': 'Med',
-          'priority': 'medium',
-          'description': 'x'
-      },
-      {
-          'id': '002',
-          'status': 'approved',
-          'title': 'Low',
-          'priority': 'low',
-          'description': 'y'
-      },
-      {
-          'id': '003',
-          'status': 'approved',
-          'title': 'High',
-          'priority': 'high',
-          'description': 'z'
-      },
-  ]
-  _write_backlog(backlog, items)
-  cfg = _make_cfg()
-
-  action, prompt = await determine_action(backlog, cfg, tmp_path)
-
-  assert action == 'implement'
-  assert '003' in prompt
-  assert 'High' in prompt
 
 
 # ---------------------------------------------------------------------------

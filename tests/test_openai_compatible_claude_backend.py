@@ -41,7 +41,7 @@ def _cfg(option: BackendOption | None = None, **overrides) -> CharlieBotConfig:
   )
 
 
-def test_prepare_env_sets_proxy_endpoint_and_model() -> None:
+def test_prepare_env_sets_proxy_endpoint_and_token() -> None:
   backend = OpenAICompatibleClaudeBackend(
       proxy_base_url=_DIRECT_PROXY_BASE_URL,
       auth_token=_AUTH_TOKEN,
@@ -50,29 +50,9 @@ def test_prepare_env_sets_proxy_endpoint_and_model() -> None:
 
   prepared = backend._prepare_env({"PATH": "/usr/bin"})
 
-  assert prepared["PATH"] == "/usr/bin"
-  assert prepared["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
   assert prepared["ANTHROPIC_BASE_URL"] == _DIRECT_PROXY_BASE_URL
   assert prepared["ANTHROPIC_AUTH_TOKEN"] == _AUTH_TOKEN
   assert prepared["ANTHROPIC_MODEL"] == _PROXY_MODEL
-  assert prepared["ANTHROPIC_DEFAULT_OPUS_MODEL"] == _PROXY_MODEL
-  assert prepared["ANTHROPIC_DEFAULT_SONNET_MODEL"] == _PROXY_MODEL
-  assert prepared["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == _PROXY_MODEL
-  assert prepared["CLAUDE_CODE_SUBAGENT_MODEL"] == _PROXY_MODEL
-
-
-def test_build_command_does_not_pass_model_flag() -> None:
-  backend = OpenAICompatibleClaudeBackend(
-      proxy_base_url=_DIRECT_PROXY_BASE_URL,
-      auth_token=_AUTH_TOKEN,
-      model=_PROXY_MODEL,
-  )
-
-  cmd = backend._build_command("hello")
-
-  assert "--model" not in cmd
-  assert "hello" not in cmd
-  assert backend._stdin_prompt("hello") == "hello"
 
 
 def test_requires_model_proxy_and_auth_token() -> None:

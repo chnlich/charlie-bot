@@ -6,9 +6,19 @@ from conftest import FLAG_LIKE_PROMPT
 
 from src.agents.backends.claude_code import (
     BASE_COMMAND,
+    AnthropicEndpointBackend,
     ClaudeCodeBackend,
     claude_supervisor_env,
 )
+
+_ENDPOINT_BASE_URL = "https://contract.invalid"
+_ENDPOINT_TOKEN = "contract-token"
+_ENDPOINT_MODEL = "contract-model"
+
+
+def _endpoint_backend() -> AnthropicEndpointBackend:
+  return AnthropicEndpointBackend(
+      base_url=_ENDPOINT_BASE_URL, auth_token=_ENDPOINT_TOKEN, model=_ENDPOINT_MODEL)
 
 
 def test_build_command_does_not_include_flag_like_prompt() -> None:
@@ -236,6 +246,35 @@ def test_claude_config_dir_absent_when_unset(monkeypatch: pytest.MonkeyPatch) ->
   env = backend._prepare_env({})
 
   assert "CLAUDE_CONFIG_DIR" not in env
+
+
+def test_endpoint_backend_prepare_env_carries_endpoint_token_and_model() -> None:
+  prepared = _endpoint_backend()._prepare_env({"PATH": "/usr/bin"})
+
+  assert prepared["ANTHROPIC_BASE_URL"] == _ENDPOINT_BASE_URL
+  assert prepared["ANTHROPIC_AUTH_TOKEN"] == _ENDPOINT_TOKEN
+  assert prepared["ANTHROPIC_MODEL"] == _ENDPOINT_MODEL
+  assert prepared["ANTHROPIC_DEFAULT_OPUS_MODEL"] == _ENDPOINT_MODEL
+  assert prepared["ANTHROPIC_DEFAULT_SONNET_MODEL"] == _ENDPOINT_MODEL
+  assert prepared["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == _ENDPOINT_MODEL
+  assert prepared["CLAUDE_CODE_SUBAGENT_MODEL"] == _ENDPOINT_MODEL
+
+
+def test_endpoint_backend_prepare_env_values_are_subprocess_safe() -> None:
+  prepared = _endpoint_backend()._prepare_env({"PATH": "/usr/bin"})
+
+  assert all(isinstance(value, (str, bytes)) for value in prepared.values())
+
+
+def test_endpoint_backend_build_command_does_not_pass_model_flag() -> None:
+  """The model rides the env spread, so a --model flag would override it."""
+  backend = _endpoint_backend()
+
+  cmd = backend._build_command("hello")
+
+  assert "--model" not in cmd
+  assert "hello" not in cmd
+  assert backend._stdin_prompt("hello") == "hello"
 
 
 @pytest.mark.asyncio

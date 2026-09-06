@@ -334,24 +334,15 @@ _GUARD_CASES = [
         "does not match anchor anchor-id",
         "anchor-id",
         id="resume-envelope-id-mismatch"),
-    pytest.param(
-        "plain text, not json",
-        "non-json stdout",
-        None,
-        id="non-envelope-stdout"),
-    pytest.param(
-        '{"response":"not an envelope"}',
-        "non-json stdout",
-        None,
-        id="json-object-without-status"),
+    pytest.param("plain text, not json", "non-json stdout", None, id="non-envelope-stdout"),
+    pytest.param('{"response":"not an envelope"}', "non-json stdout", None, id="json-object-without-status"),
 ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stdout_payload, expected_match, resume_session_id", _GUARD_CASES)
 async def test_envelope_guard_violation_raises_and_yields_only_an_error(
-    monkeypatch, tmp_path: Path, stdout_payload: str, expected_match: str,
-    resume_session_id: str | None) -> None:
+    monkeypatch, tmp_path: Path, stdout_payload: str, expected_match: str, resume_session_id: str | None) -> None:
   _install_fake_agy(monkeypatch, tmp_path, f"printf '%s' '{stdout_payload}'\n")
   backend = AntigravityCliBackend(resume_session_id=resume_session_id)
 

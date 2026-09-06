@@ -76,6 +76,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M63 session view thread payload, worst on-disk threads corpus | M63 collector below | ms per `get_session_view` handler call + response body bytes, worst thread-metadata corpus | handler median < 0.005 s; body < 300 KB | — (introduced with its first history row) |
 | M65 big-page gzip event-loop stall, whole-body JSON response | M65 collector below | seconds of loop lag + wall per 200-message events-page fetch through the real app stack (gzip + auth middleware), worst on-disk live chat corpus (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.012 s | — (introduced with its first history row) |
 | M66 perfetto merged-trace build wall, worst on-disk trace corpus | M66 collector below | seconds per `merge_traces` build, largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 12 s | — (introduced with its first history row) |
+| M67 sidebar deep-probe trigger scan, steady state | M67 collector below | seconds per `pending_trigger_state_sync` call, worst on-disk trigger corpus | median < 0.0005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3711,6 +3712,50 @@ print(f"merged build median {times[1]:.2f} s, max {times[-1]:.2f} s over 3; arti
 EOF
 ```
 
+M67 — sidebar deep-probe trigger scan, steady state. The status poll's dirty-session deep probe
+(the M51 shape: every poll that follows any write to the session) runs `pending_trigger_state_sync`,
+whose pre-fix form read and parsed every trigger `*.json` of the session on every call while its two
+sibling probe reads (thread metadata via the M51 memo, plans via the M27 memo) were already
+memoized. The cost is background probe work invisible to the standing HTTP probes, so the collector
+times the function over the session whose triggers directory carries the most files (read-only over
+the live state), from the checkout under test: one cold pass, as at a server start with an empty
+memo, then nine timed calls. The fixed reader memoizes each trigger file's parsed dict on
+(mtime_ns, size): the steady state is one scandir and one stat per file and zero corpus bytes, and a
+`_save_trigger` rewrite (schedule/cancel/fire) re-reads only that file. Trigger files change only
+through that atomic rewrite, so the key is sound. Evidence while the live server runs older code
+points the same collector at the branch checkout (`sys.path.insert` at the worktree root), the same
+shape as the M7 protocol:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import sys, time
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from pathlib import Path
+from src.core.sessions import pending_trigger_state_sync
+
+# Worst trigger corpus: the session whose triggers directory carries the most
+# files; the deep probe re-reads every one per poll that follows a write.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.glob("*/triggers"):
+    n = sum(1 for p in d.glob("*.json") if p.is_file())
+    if n > best_n:
+        best, best_n = d, n
+SID = best.parent.name
+
+pending_trigger_state_sync(best)  # cold pass, as at a server start with an empty memo; not timed
+times = []
+result = None
+for _ in range(9):
+    t0 = time.perf_counter()
+    result = pending_trigger_state_sync(best)
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"session {SID}, {best_n} trigger files (pending {result[0]}); steady-state probe trigger scan "
+      f"median {times[4] * 1e6:.0f} us, max {times[-1] * 1e6:.0f} us")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3816,3 +3861,4 @@ EOF
 | 2026-09-06 | this PR | M34 after=total steady poll 2.27/2.23/2.24 ms → 1.83/1.84/1.95 ms; M35 events page 5.99/6.01/5.48 → 5.12/5.14/5.17 ms, view 7.35/6.24/6.38 → 5.81/6.00/6.09 ms, bootstrap 3.16/3.30/3.20 → 2.79/2.80/2.93 ms (interleaved verbatim-collector rounds, main checkout vs branch worktree back-to-back at load 1.6-1.8, every paired round faster; M35 body digests identical across arms — events 46d1d509a0d6, view 7992a1894ddf, bootstrap 4168f50ed5ff; M34 envelope 40 B / reset False / total 2177 unchanged; component corroboration: projection warm hit 86.0 µs threaded getter → 1.70 µs memo hit on the 20534-event corpus, worker-events steady 91.9 µs threaded → 14.4 µs hit on the 6.7 MB log, to_thread no-op round-trip 67 µs; M26 advance re-measured 0.13 ms, parity True, digest e94c56635194 and M13 0.0000 s — no regression) | the polled memo hits left the executor: get_message_projection's fast path (dict read + cache peek + len compare) exposed as projection_memo_hit so the events page, bootstrap, and view answer a warm corpus on the event loop and pay the threaded read/advance only on a miss, and the worker-events poll's unchanged-log proof (exists+stat under a non-blocking lock — a held lock means a concurrent reader may be mid-file-read, so it is never waited on here) answers inline with the incremental read still on a thread; the #865 hit-on-loop shape applied to the two remaining polled reads |
 | 2026-09-06 | this PR | M56 /status request median 2.47/2.57/2.60 ms → 1.93/2.34/2.31 ms, maxima 8.63/8.40/8.91 ms → 8.34/8.22/8.41 ms (three interleaved rounds of the verbatim collector, 43 sidebar ids, live corpus read-only, main checkout before vs branch worktree after back-to-back at load 3.08-3.51, every paired round faster; body 9569 B and parsed-body digest ae02688caf42 identical across all six arms; component attribution: 43x get_session 0.31 ms (model_copy 0.09), populate_sidebar_state 0.14 ms, render 0.04 ms; no-regression re-measures: M21 sweep 0.0033/0.0037 s → 0.0031/0.0030 s, M40 starred 0.69/0.66/0.75/0.77 ms → 1.06/0.70/0.71/0.78 ms and groups 0.63/0.64/0.64/0.67 → 0.96/0.65/0.65/0.72 ms (round-1 after spike is the documented enrich-probe noise, parity in the other three rounds), M61 within noise both directions; 4573-passed suite) | the polled sidebar read left the per-row copy: resolve_sidebar_state holds the probe-or-serve machinery and returns the derived fields without mutating its inputs (has_running_tasks reads busy_since so cache references may arrive unstamped), populate_sidebar_state stays as the wrapper for the copy-owning callers, and the /status handler reads the cached metadata references through get_sessions_readonly (warm hits serve the cached objects themselves, misses keep the get_session read, order and unknown-id dropping preserved) |
 | 2026-09-06 | this PR | M41 repeat-view median 0.0060/0.0061/0.0065 s → 0.0017/0.0018/0.0017 s, maxima 0.0067/0.0064/0.0066 s → 0.0021/0.0022/0.0021 s (post-review re-pair 0.0069 s → 0.0017 s at load 2.2); M43 repeat-expand median 0.0063/0.0064/0.0062 s → 0.0021/0.0020/0.0019 s, maxima 0.0067/0.0066/0.0068 s → 0.0024/0.0024/0.0021 s (three interleaved verbatim-collector rounds, 533-file charlie-bot root..HEAD manifest, main checkout before vs branch worktree after back-to-back at load 1.2-1.8; manifest body sha256-identical d38f3e7f84d4ccc9 and file body 982d39e617a32e42 across all arms; first views unchanged within subprocess noise — M41 0.067 s → 0.068-0.073 s paying the new signature walk once per ref move, M43 0.020 s → 0.016 s; M14 loop-lag re-measured unchanged, 0.0056-0.0058 s → 0.0058 s at the 5 ms ticker floor; 4578-passed suite) | the rev-parse left the repeat path: ref resolution memoized on a stat-only ref-state signature over the full rev-parse read set (git-dir top-level pseudo-refs, packed-refs, shallow/grafts, the shared loose refs tree, and — in a linked worktree — the worktree's own per-worktree refs tree, the review's soundness finding with the bisect-ref move pinned by test), the signature walked with os.scandir so d_type from readdir halves the syscalls (233-entry walk 3.1 → 1.2 ms, the pathlib is_file+stat double-stat pattern the M44 cron-fingerprint fix removed), and the walk + memo hit + miss resolve sharing one thread hop; a ref that moves rewrites its file and moves the signature, so soundness rests on the same rename-atomic-write ground as the sibling memos; M41/M43 definitions and healthy ranges unchanged |
+| 2026-09-06 | this PR | M67 steady-state probe trigger scan median 3351/3339/3283 µs → 407/402/421 µs, maxima 3599/3602/3393 → 437/502/524 µs (three interleaved rounds of the collector, 101-file worst trigger corpus of session a481fbde, live state read-only, main checkout before vs branch worktree after back-to-back at load 0.89-1.06, every paired round faster; warm full deep probe of 44 active sessions 10.35 ms → 3.03 ms; no-regression re-measures: M21 sweep 3.85 → 3.03 ms, M51 post-write deep probe 3.44 → 3.43 ms, M56 /status 2.13 → 2.07 ms with parsed-body digest 4d1f75803e9b identical; 2796-passed session/trigger/sidebar test slice) | the sidebar deep probe's trigger scan (`pending_trigger_state_sync`) re-read and re-parsed every trigger `*.json` on every call while its two sibling probe reads (thread metadata, plans) were already per-file memoized; parsed dicts now memoize per file on (mtime_ns, size) behind the scandir str-path walk, mirroring the M51 thread-metadata memo — trigger files change only through _save_trigger's atomic rename so an unchanged signature proves the content current, and the signature is taken before the read so a mid-rewrite entry keys the older signature; M67 definition and healthy range introduced with this PR |

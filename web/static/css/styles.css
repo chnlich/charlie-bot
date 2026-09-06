@@ -499,7 +499,6 @@ body { overscroll-behavior: none; }
 /* Z Fold cover screen (~280px) */
 @media (max-width: 320px) {
   .tab-btn { font-size: 0.7rem; padding: 0.375rem 0.5rem; }
-  .input-buttons button { min-width: 44px; min-height: 44px; }
   #session-list a { min-height: 44px; }
   .filter-pill { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
   /* ext-usage-strip: hide 7d bars, shrink further */

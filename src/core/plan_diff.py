@@ -758,8 +758,8 @@ def annotate(base_html: str, new_html: str) -> str:
   insertions: dict[int, list[str]] = {}
   classes: dict[_Node, set[str]] = {}
   details: set[_Node] = set()
-  _render_leaf_changes(new_html, _document_root(new_parser), changes, new_leaves, insertions, classes, details,
-                       base_parser.source)
+  _render_leaf_changes(
+      new_html, _document_root(new_parser), changes, new_leaves, insertions, classes, details, base_parser.source)
   _render_start_tag_additions(new_html, classes, details, insertions)
   return _append_style_and_header(_splice(new_html, insertions))
 

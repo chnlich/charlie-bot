@@ -306,8 +306,9 @@ def test_ghost_follows_a_heading_that_carries_its_own_inline_mark() -> None:
   control = '<html><body><h2>Head</h2><div class="revnote">NOTE</div><p>tail</p></body></html>'
   for base, badge in ((control, False), (repro, True)):
     annotated = _assert_invariants(base, new)
-    order = [(child.tag, child.attrs.get("data-del")) for child in _parse(annotated).children
-             if isinstance(child, _Element)]
+    order = [
+        (child.tag, child.attrs.get("data-del")) for child in _parse(annotated).children if isinstance(child, _Element)
+    ]
     assert order == [("div", None), ("h2", None), ("div", "NOTE"), ("p", None)]
     assert ('data-del="X"' in annotated) == badge
 

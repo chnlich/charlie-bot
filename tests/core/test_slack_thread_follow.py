@@ -19,16 +19,12 @@ from conftest import (
     TRIGGER_MASTER_PATCH_TARGET,
     TRIGGERS_GET_CONFIG_PATCH_TARGET,
     build_slack_cfg,
+    make_internal_router_client,
     make_json_response,
     make_task_spawner,
     setup_session_cwd,
 )
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from src.api import internal
-from src.api.deps import get_session_manager
-from src.api.internal import router as internal_router
 from src.cli.slack import main as cli_main
 from src.core import event_types as ET
 from src.core.models import (
@@ -458,21 +454,16 @@ async def test_ack_completeness_advance_and_idempotence(tmp_path: Path) -> None:
     await assert_thread_fresh(meta.id, cfg, session_mgr)
 
 
-def _route_client(cfg, session_mgr: SessionManager) -> TestClient:
-  app = FastAPI()
-  app.include_router(internal_router, prefix="/api/internal")
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[internal.get_config] = lambda: cfg
-  return TestClient(app)
-
-
 @pytest.mark.asyncio
 async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: Path) -> None:
   cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
   meta = await _make_session(session_mgr)
   _seed_gate_thread(client)
 
-  with patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client), _route_client(cfg, session_mgr) as http:
+  with (
+      patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
+      make_internal_router_client(cfg, session_mgr) as http,
+  ):
     resp = http.post("/api/internal/slack/reply", json={"session_id": meta.id, "text": "the answer"})
     assert resp.status_code == 412
     body = resp.json()["detail"]
@@ -499,7 +490,10 @@ async def test_ack_route_maps_refusals(tmp_path: Path) -> None:
   plain = await session_mgr.create_session(CreateSessionRequest(name="browser session"))
   _seed_gate_thread(client)
 
-  with patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client), _route_client(cfg, session_mgr) as http:
+  with (
+      patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
+      make_internal_router_client(cfg, session_mgr) as http,
+  ):
     resp = http.post("/api/internal/slack/ack", json={"session_id": "no-such", "message_ids": [_ts(110)]})
     assert resp.status_code == 404
     resp = http.post("/api/internal/slack/ack", json={"session_id": plain.id, "message_ids": [_ts(110)]})

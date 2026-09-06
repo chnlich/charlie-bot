@@ -29,6 +29,7 @@ from src.agents import master_cc_queue, master_cc_run, master_cc_state  # noqa: 
 from src.agents.backends import base as backend_base  # noqa: E402
 from src.api.cron import router as cron_router  # noqa: E402
 from src.api.deps import get_session_manager  # noqa: E402
+from src.api.internal import router as internal_router  # noqa: E402
 from src.api.sessions import router as sessions_router  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
 from src.core import improve_command  # noqa: E402
@@ -442,6 +443,13 @@ def make_router_client(
 def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
   """make_router_client over the sessions router, mounted at /api/sessions."""
   return make_router_client(cfg, session_mgr, sessions_router, "/api/sessions")
+
+
+def make_internal_router_client(cfg: Any, session_mgr: Any) -> TestClient:
+  """make_router_client over the internal router, mounted at /api/internal; the internal routes
+  take cfg through their own get_config import (same function object), so the override key in
+  make_router_client covers them. cfg may be a MagicMock when the tested route never reads it."""
+  return make_router_client(cfg, session_mgr, internal_router, "/api/internal")
 
 
 def make_cron_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:

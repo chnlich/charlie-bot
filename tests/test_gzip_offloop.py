@@ -84,7 +84,7 @@ def test_whole_body_gzip_bytes_match_starlette_inline() -> None:
     return Response(content=BODY, media_type="application/json")
 
   headers, body = _drive(_build(handler, server._CharlieBotGZipMiddleware))
-  baseline_headers, baseline_body = _drive(_build(handler, GZipMiddleware))
+  _, baseline_body = _drive(_build(handler, GZipMiddleware))
 
   assert headers["content-encoding"] == "gzip"
   assert _strip_mtime(body) == _strip_mtime(baseline_body)
@@ -119,7 +119,7 @@ def test_streaming_body_compresses_per_chunk() -> None:
     return StreamingResponse(chunks(), media_type="application/json")
 
   headers, body = _drive(_build(stream, server._CharlieBotGZipMiddleware))
-  baseline_headers, baseline_body = _drive(_build(stream, GZipMiddleware))
+  _, baseline_body = _drive(_build(stream, GZipMiddleware))
 
   assert headers["content-encoding"] == "gzip"
   assert _strip_mtime(body) == _strip_mtime(baseline_body)

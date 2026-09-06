@@ -1386,8 +1386,10 @@ async def test_sse_watchdog_timeout_fails_run_end_to_end(monkeypatch, tmp_path: 
 def _fresh_unhandled_part_type_registry():
   """Keep the process-wide warn-once registry from leaking across tests."""
   opencode_mod._reset_unhandled_part_types_for_tests()
+  opencode_mod._reset_unhandled_sse_event_types_for_tests()
   yield
   opencode_mod._reset_unhandled_part_types_for_tests()
+  opencode_mod._reset_unhandled_sse_event_types_for_tests()
 
 
 def test_unhandled_part_type_logs_once_per_process(monkeypatch) -> None:
@@ -1403,6 +1405,21 @@ def test_unhandled_part_type_logs_once_per_process(monkeypatch) -> None:
 
   lines = [line for line in logged if line["event"] == "opencode_part_unhandled"]
   assert [(line["type"]) for line in lines] == ["patch", "snapshot"]
+
+
+def test_unhandled_sse_event_type_logs_once_per_process(monkeypatch) -> None:
+  """60 unhandled SSE frames of one type log one line; a second type earns one more."""
+  backend = _build_backend(monkeypatch)
+  logged = []
+  monkeypatch.setattr(opencode_mod.log, "debug", lambda event, **kw: logged.append({"event": event, **kw}))
+
+  for _ in range(60):
+    assert backend._translate_sse_event({"type": "todo.updated", "properties": {}}) == []
+  for _ in range(60):
+    assert backend._translate_sse_event({"type": "session.compacted", "properties": {}}) == []
+
+  lines = [line for line in logged if line["event"] == "opencode_sse_event_unhandled"]
+  assert [(line["type"]) for line in lines] == ["todo.updated", "session.compacted"]
 
 
 # --- SQLite lock-retry harness: a stub `opencode serve` (fake process + fake

@@ -403,7 +403,9 @@ async function cancelMaster() {
 }
 
 
-Object.assign(Sidebar, {
+// One name list: Object.assign puts each export on Sidebar, and the same keys
+// become bare globals. Adding a function here is enough for both.
+const API = {
   recordRenderedSessionStatus,
   sidebarSessionIds,
   tuiSidebarSessionIds,
@@ -431,35 +433,8 @@ Object.assign(Sidebar, {
   stopThinking,
   updateThinkingTime,
   cancelMaster,
-});
-Sidebar.expose([
-  'recordRenderedSessionStatus',
-  'sidebarSessionIds',
-  'tuiSidebarSessionIds',
-  'renderTuiStatusDot',
-  'fetchTuiStatus',
-  'refreshTuiDots',
-  'startTuiStatusPolling',
-  'updateBackendHeaderControls',
-  'updateSidebarSessionName',
-  'getSessionIndicatorState',
-  'renderSessionIndicators',
-  'renderPendingTriggerIndicator',
-  'renderPendingPlanApprovalIndicator',
-  'updateSidebarHighlight',
-  'setSessionIndicator',
-  'setSessionPendingTriggerIndicator',
-  'setSessionPendingPlanApprovalIndicator',
-  'updateSpinner',
-  'stopActiveSessionViewPolling',
-  'ensureActiveSessionViewPolling',
-  'pollActiveSessionView',
-  'refreshSessionStatusNow',
-  'pollSessionStatus',
-  'startThinking',
-  'stopThinking',
-  'updateThinkingTime',
-  'cancelMaster',
-]);
+};
+Object.assign(Sidebar, API);
+Sidebar.expose(Object.keys(API));
 
 })();

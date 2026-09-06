@@ -797,26 +797,76 @@ def test_opencode_row_data_matches_the_scan_projection() -> None:
   # The incremental path projects fetched blobs through _opencode_row_data; that projection
   # must agree with the scan SQL on every shape the prefilter admits, including the skips.
   shapes = [
-      ({"role": "assistant", "modelID": "oc-full", "providerID": "prov",
-        "time": {"created": 1700000000000},
-        "tokens": {"input": 10, "output": 2, "cache": {"read": 4, "write": 1}}},
-       (["oc-full", "prov", "2023-11-14T22:13:20+00:00", 10, 1, 4, 2], True)),
-      ({"role": "assistant", "modelID": "/models/oc-local", "providerID": "lmstudio",
-        "tokens": {"input": 0, "output": 3, "total": 3}},
-       (["oc-local (lmstudio)", "lmstudio", None, 0, 0, 0, 3], True)),
-      ({"role": "assistant", "modelID": "oc-nocache", "providerID": "prov",
-        "tokens": {"input": 5, "output": 1, "total": 6}},
-       (["oc-nocache", "prov", None, 5, 0, 0, 1], True)),
+      (
+          {
+              "role": "assistant",
+              "modelID": "oc-full",
+              "providerID": "prov",
+              "time": {
+                  "created": 1700000000000
+              },
+              "tokens": {
+                  "input": 10,
+                  "output": 2,
+                  "cache": {
+                      "read": 4,
+                      "write": 1
+                  }
+              }
+          }, (["oc-full", "prov", "2023-11-14T22:13:20+00:00", 10, 1, 4, 2], True)),
+      (
+          {
+              "role": "assistant",
+              "modelID": "/models/oc-local",
+              "providerID": "lmstudio",
+              "tokens": {
+                  "input": 0,
+                  "output": 3,
+                  "total": 3
+              }
+          }, (["oc-local (lmstudio)", "lmstudio", None, 0, 0, 0, 3], True)),
+      (
+          {
+              "role": "assistant",
+              "modelID": "oc-nocache",
+              "providerID": "prov",
+              "tokens": {
+                  "input": 5,
+                  "output": 1,
+                  "total": 6
+              }
+          }, (["oc-nocache", "prov", None, 5, 0, 0, 1], True)),
       # skipped rows below: non-assistant role counted 0 bytes; zero counters and
       # string tokens pass the filters but project to None with bytes counted
-      ({"role": "user", "modelID": "oc-user", "tokens": {"input": 9, "output": 9}},
-       (None, False)),
-      ({"role": "assistant", "modelID": "oc-zero", "tokens": {"input": 0, "output": 0}},
-       (None, True)),
-      ({"role": "assistant", "modelID": "oc-lit", "tokens": "final"}, (None, True)),
+      ({
+          "role": "user",
+          "modelID": "oc-user",
+          "tokens": {
+              "input": 9,
+              "output": 9
+          }
+      }, (None, False)),
+      ({
+          "role": "assistant",
+          "modelID": "oc-zero",
+          "tokens": {
+              "input": 0,
+              "output": 0
+          }
+      }, (None, True)),
+      ({
+          "role": "assistant",
+          "modelID": "oc-lit",
+          "tokens": "final"
+      }, (None, True)),
       ('{"role":"assistant","tokens":{"input": 5,', (None, False)),
-      ({"role": "assistant", "modelID": "oc-nano", "tokens": {"input": float("nan")}},
-       (None, False)),
+      ({
+          "role": "assistant",
+          "modelID": "oc-nano",
+          "tokens": {
+              "input": float("nan")
+          }
+      }, (None, False)),
   ]
   for data, (rec, counted) in shapes:
     blob = json.dumps(data) if isinstance(data, dict) else data
@@ -831,10 +881,18 @@ def test_opencode_cache_invalidates_on_insert(tmp_path: Path) -> None:
   before = _row(_collect(None, None, db, cache), "opencode", "oc-m")
 
   # The pad forces a new db page, so the signature moves on size even if mtime_ns repeats.
-  _append_opencode(db, [
-      ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * 5000},
-       "oc-m", "prov"),
-  ])
+  _append_opencode(
+      db, [
+          ({
+              "input": 100,
+              "output": 2,
+              "cache": {
+                  "read": 0,
+                  "write": 0
+              },
+              "pad": "x" * 5000
+          }, "oc-m", "prov"),
+      ])
 
   after = _row(_collect(None, None, db, cache), "opencode", "oc-m")
   assert after.total == before.total + 102
@@ -849,9 +907,18 @@ def test_opencode_row_memo_rereads_only_moved_rows(tmp_path: Path, monkeypatch: 
   first = _collect(None, None, db, cache)
   assert first.scanned_bytes > 0
 
-  _append_opencode(db, [
-      ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * 500}, "oc-m", "prov"),
-  ])
+  _append_opencode(
+      db, [
+          ({
+              "input": 100,
+              "output": 2,
+              "cache": {
+                  "read": 0,
+                  "write": 0
+              },
+              "pad": "x" * 500
+          }, "oc-m", "prov"),
+      ])
   projected: list[str] = []
   orig = tt._opencode_row_data
 
@@ -877,10 +944,20 @@ def test_opencode_row_memo_tracks_in_place_update(tmp_path: Path) -> None:
 
   con = sqlite3.connect(db)
   mid, = con.execute("select id from message").fetchone()
-  data = {"role": "assistant", "modelID": "oc-m", "providerID": "prov",
-          "tokens": {"input": 100, "output": 2, "cache": {"read": 0, "write": 0}}}
-  con.execute("update message set data = ?, time_updated = time_updated + 1 where id = ?",
-              (json.dumps(data), mid))
+  data = {
+      "role": "assistant",
+      "modelID": "oc-m",
+      "providerID": "prov",
+      "tokens": {
+          "input": 100,
+          "output": 2,
+          "cache": {
+              "read": 0,
+              "write": 0
+          }
+      }
+  }
+  con.execute("update message set data = ?, time_updated = time_updated + 1 where id = ?", (json.dumps(data), mid))
   con.commit()
   con.close()
 
@@ -897,8 +974,19 @@ def test_opencode_cache_invalidates_on_wal_write(tmp_path: Path) -> None:
   con = sqlite3.connect(db)
   con.execute("pragma journal_mode=WAL")
   _create_message_table(con)
-  msg = {"role": "assistant", "modelID": "oc-m", "providerID": "prov",
-         "tokens": {"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}}
+  msg = {
+      "role": "assistant",
+      "modelID": "oc-m",
+      "providerID": "prov",
+      "tokens": {
+          "input": 5,
+          "output": 1,
+          "cache": {
+              "read": 0,
+              "write": 0
+          }
+      }
+  }
   _insert_opencode_raw(con, [(msg, (None, "", ""))])
   con.commit()
   assert (db.parent / "db.sqlite-wal").exists()
@@ -924,15 +1012,25 @@ def _wal_db_with_noise_table(tmp_path: Path) -> tuple[Path, Path, sqlite3.Connec
   con.execute("pragma journal_mode=WAL")
   _create_message_table(con)
   con.execute("create table other (id text primary key, data text not null)")
-  msg = {"role": "assistant", "modelID": "oc-m", "providerID": "prov",
-         "tokens": {"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}}
+  msg = {
+      "role": "assistant",
+      "modelID": "oc-m",
+      "providerID": "prov",
+      "tokens": {
+          "input": 5,
+          "output": 1,
+          "cache": {
+              "read": 0,
+              "write": 0
+          }
+      }
+  }
   _insert_opencode_raw(con, [(msg, (None, "", ""))])
   con.commit()
   return db, cache, con
 
 
-def test_tally_memo_survives_wal_noise_without_row_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tally_memo_survives_wal_noise_without_row_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # opencode writes other tables under plain serve traffic, so the WAL sidecar moves while
   # the message table sits unchanged. The row memo's key diff proves that and re-serves the
   # memo instead of replaying the db's rows or loading the persisted document.
@@ -958,8 +1056,7 @@ def test_tally_memo_survives_wal_noise_without_row_change(
   con.close()
 
 
-def test_wal_noise_hit_reproves_until_the_next_write(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wal_noise_hit_reproves_until_the_next_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The epoch-proof hit re-signs the memo at the scan's own signature, so the next collect
   # with a quiet db takes the stat-only fast hit and never opens the db at all.
   db, cache, con = _wal_db_with_noise_table(tmp_path)
@@ -979,18 +1076,25 @@ def test_wal_noise_hit_reproves_until_the_next_write(
   con.close()
 
 
-def test_wal_move_with_new_row_still_counts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wal_move_with_new_row_still_counts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # A real message row under a moved WAL bumps the epoch, so the proof misses and the
   # collect replays — re-reading only the new row's blob.
   db, cache, con = _wal_db_with_noise_table(tmp_path)
   first = _collect(None, None, db, cache)
   before = _row(first, "opencode", "oc-m")
 
-  _insert_opencode_raw(con, [
-      ({}, ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * 500},
-            "oc-m", "prov")),
-  ])
+  _insert_opencode_raw(
+      con, [
+          ({}, ({
+              "input": 100,
+              "output": 2,
+              "cache": {
+                  "read": 0,
+                  "write": 0
+              },
+              "pad": "x" * 500
+          }, "oc-m", "prov")),
+      ])
   con.commit()
 
   projected: list[str] = []
@@ -1019,31 +1123,83 @@ def test_opencode_incremental_merge_matches_full_replay(tmp_path: Path) -> None:
   db = tmp_path / "db.sqlite"
   _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 2, "write": 1}}, "oc-a", "prov")])
   con = sqlite3.connect(db)
-  _insert_opencode_raw(con, [
-      ({"time": {"created": 1700000001000}}, ({"input": 10, "output": 2}, "oc-a", "prov")),
-      ({"time": {"created": 1700000002000}}, ({"input": 7, "output": 3}, "oc-b", "prov2")),
-      ({"time": {"created": 1700000003000}}, ({"input": 9, "output": 9}, "oc-c", "prov")),
-      ({"time": {"created": 1700000004000}}, ({"input": 4, "output": 4}, "oc-d", "prov")),
-  ])
+  _insert_opencode_raw(
+      con, [
+          ({
+              "time": {
+                  "created": 1700000001000
+              }
+          }, ({
+              "input": 10,
+              "output": 2
+          }, "oc-a", "prov")),
+          ({
+              "time": {
+                  "created": 1700000002000
+              }
+          }, ({
+              "input": 7,
+              "output": 3
+          }, "oc-b", "prov2")),
+          ({
+              "time": {
+                  "created": 1700000003000
+              }
+          }, ({
+              "input": 9,
+              "output": 9
+          }, "oc-c", "prov")),
+          ({
+              "time": {
+                  "created": 1700000004000
+              }
+          }, ({
+              "input": 4,
+              "output": 4
+          }, "oc-d", "prov")),
+      ])
   con.commit()
   con.close()
   _collect(None, None, db)
 
   con = sqlite3.connect(db)
-  mid_a = con.execute(
-      "select id from message where data like '%\"oc-a\"%' order by time_updated limit 1").fetchone()[0]
-  updated = {"role": "assistant", "modelID": "oc-a", "providerID": "prov",
-             "time": {"created": 1700000001000},
-             "tokens": {"input": 100, "output": 20, "cache": {"read": 4, "write": 2}}}
-  con.execute("update message set data = ?, time_updated = time_updated + 1 where id = ?",
-              (json.dumps(updated), mid_a))
-  moved = {"role": "assistant", "modelID": "oc-b2", "providerID": "prov2",
-           "time": {"created": 1700000002000}, "tokens": {"input": 8, "output": 8}}
-  con.execute("update message set data = ?, time_updated = time_updated + 1 "
-              "where data like '%\"oc-b\"%'", (json.dumps(moved),))
+  mid_a = con.execute("select id from message where data like '%\"oc-a\"%' order by time_updated limit 1").fetchone()[0]
+  updated = {
+      "role": "assistant",
+      "modelID": "oc-a",
+      "providerID": "prov",
+      "time": {
+          "created": 1700000001000
+      },
+      "tokens": {
+          "input": 100,
+          "output": 20,
+          "cache": {
+              "read": 4,
+              "write": 2
+          }
+      }
+  }
+  con.execute("update message set data = ?, time_updated = time_updated + 1 where id = ?", (json.dumps(updated), mid_a))
+  moved = {
+      "role": "assistant",
+      "modelID": "oc-b2",
+      "providerID": "prov2",
+      "time": {
+          "created": 1700000002000
+      },
+      "tokens": {
+          "input": 8,
+          "output": 8
+      }
+  }
+  con.execute(
+      "update message set data = ?, time_updated = time_updated + 1 "
+      "where data like '%\"oc-b\"%'", (json.dumps(moved),))
   _insert_opencode_raw(con, [({"time": {"created": 1700000005000}}, ({"input": 1, "output": 1}, "oc-a", "prov"))])
-  con.execute("delete from message where data like '%\"oc-a\"%' and id != ?",
-              (mid_a,))  # oc-a's max-span row: the model survives, its span must re-derive
+  con.execute(
+      "delete from message where data like '%\"oc-a\"%' and id != ?",
+      (mid_a,))  # oc-a's max-span row: the model survives, its span must re-derive
   con.execute("delete from message where data like '%\"oc-d\"%'")  # oc-d's only row: bucket empties
   con.commit()
   con.close()
@@ -1055,9 +1211,12 @@ def test_opencode_incremental_merge_matches_full_replay(tmp_path: Path) -> None:
   replay = _collect(None, None, db)
 
   def opencode_rows(tally: tt.TokenTally) -> list:
-    return [(r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output, r.first, r.last,
-             [(a.name, a.calls, a.output, a.total) for a in r.accounts])
-            for r in tally.rows if r.source == "opencode"]
+    return [
+        (
+            r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output, r.first, r.last, [
+                (a.name, a.calls, a.output, a.total) for a in r.accounts
+            ]) for r in tally.rows if r.source == "opencode"
+    ]
 
   assert opencode_rows(incremental) == opencode_rows(replay)
   assert [n for n in incremental.notes if n.startswith("opencode:")] == \

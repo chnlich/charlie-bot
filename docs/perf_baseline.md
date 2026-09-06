@@ -78,6 +78,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M66 perfetto merged-trace build wall, worst on-disk trace corpus | M66 collector below | seconds per `merge_traces` build, largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 12 s | — (introduced with its first history row) |
 | M67 sidebar deep-probe trigger scan, steady state | M67 collector below | seconds per `pending_trigger_state_sync` call, worst on-disk trigger corpus | median < 0.0005 s | — (introduced with its first history row) |
 | M68 worker-list marked changed-poll rebuild | M68 collector below | seconds per body rebuild after one writer mark, worst on-disk thread-metadata corpus; the unchanged poll and its conditional are M36's shapes | median < 0.007 s | — (introduced with its first history row) |
+| M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3837,6 +3838,45 @@ shutil.rmtree(home)
 EOF
 ```
 
+M69 — opencode SSE unhandled-event debug stream, steady state. Every `opencode serve`
+SSE frame routes through `_translate_sse_event`, and an event type the translator
+neither maps nor ignores logs `opencode_sse_event_unhandled` per frame — 306 lines
+in the 68.85 h live server log sampled 2026-09-06, 295 of them `type=todo.updated`
+(one per todo write) and 11 `type=session.compacted` — so a stream of unhandled
+frames re-fires the same line forever while one sighting per event type carries
+the whole signal: the set of handled types is code, fixed for the process. The
+cost is background log volume invisible to HTTP probes, so the collector drives
+`_translate_sse_event` on a synthetic unhandled frame: one first-sighting call,
+as at a process start, then 60 steady-state repeat calls, counting the event. A
+line in the repeat window is a re-fired alarm; the count is the metric. Evidence
+while the live server runs older code points the same collector at the branch
+checkout (`sys.path.insert` at the worktree root), the same shape as the M22
+protocol:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import sys
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.agents.backends import opencode as opencode_mod
+
+backend = opencode_mod.OpenCodeBackend()
+event = {"type": "todo.updated", "properties": {"sessionID": "m69-probe"}}
+
+events = []
+orig = opencode_mod.log.debug
+opencode_mod.log.debug = lambda event, **kw: events.append(event)
+try:
+    backend._translate_sse_event(event)  # first sighting, as at a process start; not counted
+    events.clear()
+    for _ in range(60):  # steady-state repeat frames of the same unhandled type
+        backend._translate_sse_event(event)
+finally:
+    opencode_mod.log.debug = orig
+n = sum(1 for event in events if event == "opencode_sse_event_unhandled")
+print(f"60 steady-state unhandled todo.updated frames; opencode_sse_event_unhandled debug lines: {n}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3945,3 +3985,4 @@ EOF
 | 2026-09-06 | this PR | M67 steady-state probe trigger scan median 3351/3339/3283 µs → 407/402/421 µs, maxima 3599/3602/3393 → 437/502/524 µs (three interleaved rounds of the collector, 101-file worst trigger corpus of session a481fbde, live state read-only, main checkout before vs branch worktree after back-to-back at load 0.89-1.06, every paired round faster; warm full deep probe of 44 active sessions 10.35 ms → 3.03 ms; no-regression re-measures: M21 sweep 3.85 → 3.03 ms, M51 post-write deep probe 3.44 → 3.43 ms, M56 /status 2.13 → 2.07 ms with parsed-body digest 4d1f75803e9b identical; 2796-passed session/trigger/sidebar test slice) | the sidebar deep probe's trigger scan (`pending_trigger_state_sync`) re-read and re-parsed every trigger `*.json` on every call while its two sibling probe reads (thread metadata, plans) were already per-file memoized; parsed dicts now memoize per file on (mtime_ns, size) behind the scandir str-path walk, mirroring the M51 thread-metadata memo — trigger files change only through _save_trigger's atomic rename so an unchanged signature proves the content current, and the signature is taken before the read so a mid-rewrite entry keys the older signature; M67 definition and healthy range introduced with this PR |
 | 2026-09-06 | this PR | M68 marked changed-poll rebuild median 8.65/8.53/9.12 ms → 6.33/6.51/6.41 ms, maxima 10.16/10.27/10.03 ms → 7.16/6.97/7.18 ms (three interleaved rounds of the collector, 2551 KB / 339-row worst thread-metadata corpus of session 3b91d606, scratch CHARLIEBOT_HOME wired through get_config, main checkout vs branch worktree back-to-back at load 0.9-1.2, every paired round faster; body 168209 B byte-identical across arms; no-regression re-measures: M36 unchanged-poll 2.15 ms full / 2.16 ms conditional (204, 0 B) and M63 /view handler 4.24 ms / 277184 B, both at their standing readings; 4612-passed suite) | the marked rebuild paid two full scans of every thread metadata.json — the body signature's walk plus list_threads' own per-call scan (the deletion contract) — and rebuilt all 339 rows though _thread_list_item is a pure function of the per-file-parsed metadata; the rebuild now walks once (the walked pairs feed both the signature and a list_threads_from_stats parse-merge sharing list_threads' memo, so the proof and the rows behind the body describe one instant) and serves unmoved files' rows from a per-session row memo keyed on the same (mtime_ns, size) identity every atomic rename moves; M68 definition and healthy range introduced with this PR |
 | 2026-09-06 | this PR | raw-ASGI component A/B, identical drive harness, 100 timed calls each: workers-list 204 median 694 µs → 248 µs, list full 655 µs → 266 µs, /status 1-id 341 µs → 190 µs (main checkout before vs branch worktree after back-to-back at load 1.2-2.1); M36 TestClient interleaved ×2: full 2.21/2.11 ms → 2.08/2.07 ms, conditional 2.12/2.31 ms → 2.00/1.96 ms, body sha1 d97c45b013d6 identical across all four arms; M56 2.18 → 2.05 ms, digest e34b8b212e0b identical; M59 full row 2.09 → 2.05 ms, attach 1.85 → 1.80 ms; M44 3.20 → 2.94 ms; M57 2.55 → 2.30 ms, digest f0098c1aae15 identical; M35 view 6.45 → 5.98 ms, events/bootstrap within noise, digests 46d1d509a0d6 / ea2d0c6b27c3 / 8e4653af40df identical across arms; M68 5.66 → 6.27 ms (load noise; body 168209 B byte-identical); the M3 401 floor and the live instance are untouched by this diff | the four manager getters and the polled routes' config dependency were sync callables, so FastAPI resolved every Depends on them through an anyio threadpool handoff per request — cProfile attributes ~250 µs of the 694 µs memo-hit list poll to the three hops (thread round-trip + event-loop self-pipe wake each); the getters are now async (the loop awaits a dict check) with plain-name sync forms for the direct callers (startup, websocket, tui autoname), and the polled routes (workers list, thread detail, tui/status, view, bootstrap, usage) resolve cfg through get_config_on_loop, so all 62 manager-dep annotation sites shed their hops with no annotation edits; 4674-passed suite |
+| 2026-09-06 | this PR | M69 60 → 0 opencode_sse_event_unhandled debug lines per 60 steady-state `_translate_sse_event` frames of one unhandled type (collector verbatim, main checkout before at load 1.62/1.05/0.72 vs branch worktree after at load 2.73/1.84/1.11, back-to-back; live-log corroboration 306 lines in the 68.85 h server log, 295 type=todo.updated + 11 type=session.compacted; unhandled frames still translate to []; M49's part-type stream re-measured 0 lines per 60 rounds, no regression; 4675-passed suite) | the SSE event-type fallthrough routed through an event-type warn-once registry — one line per unmapped type per process, the M49 part-type registry's mechanism applied to the sibling SSE fallthrough; M69 definition and healthy range introduced with this PR |

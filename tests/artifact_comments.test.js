@@ -90,6 +90,8 @@ function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
   return {window, head, body, documentElement, listeners};
 }
 
+// Records every fetch and answers that session's two endpoints: the name
+// lookup and the chat POST target the tray sends to.
 function sessionFetchStub(calls, sessionId, sessionName) {
   return async (url, options = {}) => {
     calls.push({url, method: options.method || 'GET'});

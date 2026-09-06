@@ -145,42 +145,31 @@ async def test_verify_on_create_rejects_failed_probe(tmp_path: Path) -> None:
   assert not list(triggers_dir.glob("*.json"))
 
 
+_VERIFY_ON_CREATE_PROBE_ROWS = [
+    pytest.param(["122111|RUNNING|0:0\n"], "observed", "RUNNING", id="reports-observed-state"),
+    pytest.param([""], "not yet registered", "not-yet-registered", id="reports-not-yet-registered"),
+]
+
+
 @pytest.mark.asyncio
-async def test_verify_on_create_reports_observed_state(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("sacct_rows", "message", "expected_probe"), _VERIFY_ON_CREATE_PROBE_ROWS)
+async def test_verify_on_create_reports_probe_state(
+    tmp_path: Path, sacct_rows: list[str], message: str, expected_probe: str) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  sacct = _mk_sacct_mock({("host2", 122111): ["122111|RUNNING|0:0\n"]})
+  sacct = _mk_sacct_mock({("host2", 122111): sacct_rows})
   probe_out: dict[str, str] = {}
 
   with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=_no_sleep):
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=0,
-        message="observed",
+        message=message,
         watch_targets=[SlurmJob(host="host2", job_id=122111)],
         probe_out=probe_out,
     )
     await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
 
-  assert probe_out == {"host2:slurm:122111": "RUNNING"}
-
-
-@pytest.mark.asyncio
-async def test_verify_on_create_reports_not_yet_registered(tmp_path: Path) -> None:
-  _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
-  sacct = _mk_sacct_mock({("host2", 122111): [""]})
-  probe_out: dict[str, str] = {}
-
-  with patch_trigger_fire(sacct, sacct_available=False, sleep_mock=_no_sleep):
-    trigger = await trigger_mgr.create_trigger(
-        session_id,
-        delay_seconds=0,
-        message="not yet registered",
-        watch_targets=[SlurmJob(host="host2", job_id=122111)],
-        probe_out=probe_out,
-    )
-    await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
-
-  assert probe_out == {"host2:slurm:122111": "not-yet-registered"}
+  assert probe_out == {"host2:slurm:122111": expected_probe}
 
 
 # ---------------------------------------------------------------------------

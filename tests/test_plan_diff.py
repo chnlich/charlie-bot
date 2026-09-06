@@ -269,6 +269,11 @@ _BOUNDARY_BASE = """\
 <p>alpha beta<b>gamma</b></p>
 <p>old words here</p>
 <p>unchanged</p>
+<section id="risks">
+<h2><span class="n">3</span> Risks<span class="revbadge">changed · r4</span></h2>
+<div class="revnote">NOTE</div>
+<p>section body kept</p>
+</section>
 </body></html>
 """
 _BOUNDARY_NEW = """\
@@ -277,6 +282,10 @@ _BOUNDARY_NEW = """\
 <p>alpha beta</p>
 <p>fresh text now</p>
 <p>unchanged</p>
+<section id="risks">
+<h2><span class="n">3</span> Risks</h2>
+<p>section body kept</p>
+</section>
 </body></html>
 """
 
@@ -289,6 +298,29 @@ def test_four_invariants_hold_for_boundary_pair() -> None:
   assert '<ins class="cbd-ins">beta</ins>' not in annotated
   assert '<ins class="cbd-ins">Context</ins>' not in annotated
   assert len(_commentable_blocks(annotated)) == len(_commentable_blocks(_BOUNDARY_NEW))
+
+
+def test_ghost_follows_a_heading_that_carries_its_own_inline_mark() -> None:
+  new = '<html><body><h2>Head</h2><p>tail</p></body></html>'
+  repro = '<html><body><h2>Head<span class="revbadge">X</span></h2><div class="revnote">NOTE</div><p>tail</p></body></html>'
+  control = '<html><body><h2>Head</h2><div class="revnote">NOTE</div><p>tail</p></body></html>'
+  for base, badge in ((control, False), (repro, True)):
+    annotated = _assert_invariants(base, new)
+    order = [(child.tag, child.attrs.get("data-del")) for child in _parse(annotated).children
+             if isinstance(child, _Element)]
+    assert order == [("div", None), ("h2", None), ("div", "NOTE"), ("p", None)]
+    assert ('data-del="X"' in annotated) == badge
+
+
+def test_ghost_follows_the_heading_when_a_section_drops_badge_and_block_together() -> None:
+  annotated = _assert_invariants(_BOUNDARY_BASE, _BOUNDARY_NEW)
+  section = next(node for node in _descendants(_parse(annotated)) if node.attrs.get("id") == "risks")
+  order = [(child.tag, child.attrs.get("class")) for child in section.children if isinstance(child, _Element)]
+  assert order == [("h2", None), ("div", "cbd-del"), ("p", None)]
+  # The ghost carries the whitespace that separated the note from the body
+  # paragraph, so restoring it separates the returned text again.
+  assert 'data-del="NOTE\n"' in annotated
+  assert '<h2><span class="n">3</span> Risks<span class="cbd-del" data-del="changed · r4"></span></h2>' in annotated
 
 
 def test_same_document_has_no_marks_and_diff_text_names_real_changes() -> None:

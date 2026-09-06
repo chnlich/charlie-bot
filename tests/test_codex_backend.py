@@ -438,88 +438,128 @@ def test_translate_todo_list_suppresses_blank_items(monkeypatch) -> None:
 def test_translate_todo_list_suppresses_duplicate_snapshots(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  started = backend.translate_event({
-      "type": "item.started",
-      "item": {
-          "id": "todo-1",
-          "type": "todo_list",
-          "items": [
-              {"text": "Inspect the code", "completed": False},
-              {"text": "Patch the bug", "completed": False},
-          ],
-      },
-  })
-  completed_without_changes = backend.translate_event({
-      "type": "item.completed",
-      "item": {
-          "id": "todo-1",
-          "type": "todo_list",
-          "items": [
-              {"text": "Inspect the code", "completed": False},
-              {"text": "Patch the bug", "completed": False},
-          ],
-      },
-  })
-  updated = backend.translate_event({
-      "type": "item.updated",
-      "item": {
-          "id": "todo-1",
-          "type": "todo_list",
-          "items": [
-              {"text": "Inspect the code", "completed": True},
-              {"text": "Patch the bug", "completed": False},
-          ],
-      },
-  })
+  started = backend.translate_event(
+      {
+          "type": "item.started",
+          "item":
+              {
+                  "id":
+                      "todo-1",
+                  "type":
+                      "todo_list",
+                  "items":
+                      [
+                          {
+                              "text": "Inspect the code",
+                              "completed": False
+                          },
+                          {
+                              "text": "Patch the bug",
+                              "completed": False
+                          },
+                      ],
+              },
+      })
+  completed_without_changes = backend.translate_event(
+      {
+          "type": "item.completed",
+          "item":
+              {
+                  "id":
+                      "todo-1",
+                  "type":
+                      "todo_list",
+                  "items":
+                      [
+                          {
+                              "text": "Inspect the code",
+                              "completed": False
+                          },
+                          {
+                              "text": "Patch the bug",
+                              "completed": False
+                          },
+                      ],
+              },
+      })
+  updated = backend.translate_event(
+      {
+          "type": "item.updated",
+          "item":
+              {
+                  "id":
+                      "todo-1",
+                  "type":
+                      "todo_list",
+                  "items":
+                      [
+                          {
+                              "text": "Inspect the code",
+                              "completed": True
+                          },
+                          {
+                              "text": "Patch the bug",
+                              "completed": False
+                          },
+                      ],
+              },
+      })
 
-  assert started == [{
-      "type": "assistant",
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": "- [ ] Inspect the code\n- [ ] Patch the bug",
-          }],
-      },
-  }]
+  assert started == [
+      {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "- [ ] Inspect the code\n- [ ] Patch the bug",
+              }],
+          },
+      }
+  ]
   assert not completed_without_changes
-  assert updated == [{
-      "type": "assistant",
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": "- [x] Inspect the code\n- [ ] Patch the bug",
-          }],
-      },
-  }]
+  assert updated == [
+      {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "- [x] Inspect the code\n- [ ] Patch the bug",
+              }],
+          },
+      }
+  ]
 
 
 def test_reasoning_item_emits_thinking_deltas(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  first = backend.translate_event({
-      "type": "item.updated",
-      "item": {
-          "id": "reason-1",
-          "type": "reasoning",
-          "text": "Plan",
-      },
-  })
-  second = backend.translate_event({
-      "type": "item.updated",
-      "item": {
-          "id": "reason-1",
-          "type": "reasoning",
-          "text": "Plan in action",
-      },
-  })
-  duplicate = backend.translate_event({
-      "type": "item.updated",
-      "item": {
-          "id": "reason-1",
-          "type": "reasoning",
-          "text": "Plan in action",
-      },
-  })
+  first = backend.translate_event(
+      {
+          "type": "item.updated",
+          "item": {
+              "id": "reason-1",
+              "type": "reasoning",
+              "text": "Plan",
+          },
+      })
+  second = backend.translate_event(
+      {
+          "type": "item.updated",
+          "item": {
+              "id": "reason-1",
+              "type": "reasoning",
+              "text": "Plan in action",
+          },
+      })
+  duplicate = backend.translate_event(
+      {
+          "type": "item.updated",
+          "item": {
+              "id": "reason-1",
+              "type": "reasoning",
+              "text": "Plan in action",
+          },
+      })
 
   assert first == [{"type": ET.THINKING, "content": "Plan"}]
   assert second == [{"type": ET.THINKING, "content": " in action"}]
@@ -628,9 +668,10 @@ def test_registry_propagates_auto_compact_limit_into_codex_backend(monkeypatch) 
 
 @pytest.mark.asyncio
 async def test_one_shot_text_raises_structured_error(monkeypatch) -> None:
-  proc = _fake_one_shot_proc([
-      b'{"type":"error","error":{"message":"unsupported reasoning effort: ultra"}}\n',
-  ], stderr=b"generic stderr")
+  proc = _fake_one_shot_proc(
+      [
+          b'{"type":"error","error":{"message":"unsupported reasoning effort: ultra"}}\n',
+      ], stderr=b"generic stderr")
 
   with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = _build_backend(monkeypatch, model_reasoning_effort="ultra")
@@ -642,9 +683,10 @@ async def test_one_shot_text_raises_structured_error(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_one_shot_text_raises_turn_failed_diagnostic(monkeypatch) -> None:
-  proc = _fake_one_shot_proc([
-      b'{"type":"turn.failed","error":{"message":"context window exceeded"}}\n',
-  ], stderr=b"generic stderr")
+  proc = _fake_one_shot_proc(
+      [
+          b'{"type":"turn.failed","error":{"message":"context window exceeded"}}\n',
+      ], stderr=b"generic stderr")
 
   with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = _build_backend(monkeypatch)
@@ -671,10 +713,11 @@ async def test_one_shot_text_raises_nonzero_exit_with_bounded_stderr(monkeypatch
 
 @pytest.mark.asyncio
 async def test_one_shot_text_ignores_non_agent_assistant_events(monkeypatch) -> None:
-  proc = _fake_one_shot_proc([
-      b'{"type":"item.completed","item":{"type":"todo_list","id":"todo-1",'
-      b'"items":[{"text":"not an assistant response","status":"completed"}]}}\n',
-  ])
+  proc = _fake_one_shot_proc(
+      [
+          b'{"type":"item.completed","item":{"type":"todo_list","id":"todo-1",'
+          b'"items":[{"text":"not an assistant response","status":"completed"}]}}\n',
+      ])
 
   with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = _build_backend(monkeypatch)
@@ -684,6 +727,7 @@ async def test_one_shot_text_ignores_non_agent_assistant_events(monkeypatch) -> 
 
 @pytest.mark.asyncio
 async def test_one_shot_text_kills_process_group_on_timeout(monkeypatch) -> None:
+
   class _BlockingStdout:
 
     def __aiter__(self) -> "_BlockingStdout":

@@ -107,7 +107,8 @@ async def test_amend_absolute_in_session_path_stores_relative_path(tmp_path: Pat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first_absolute", [False, True])
-async def test_present_rejects_cross_format_duplicate(tmp_path: Path, first_absolute: bool) -> None:
+@pytest.mark.parametrize("amend", [False, True], ids=["present", "amend"])
+async def test_registry_rejects_cross_format_duplicate(tmp_path: Path, first_absolute: bool, amend: bool) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
   file_abs = str((cfg.sessions_dir / meta.id / file_rel).resolve())
@@ -116,21 +117,10 @@ async def test_present_rejects_cross_format_duplicate(tmp_path: Path, first_abso
 
   await plan_mgr.present(meta.id, file=first_file, title="P1")
   with pytest.raises(ValueError, match=r"already bound to plan 1 v1"):
-    await plan_mgr.present(meta.id, file=second_file, title="P2")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("first_absolute", [False, True])
-async def test_amend_rejects_cross_format_duplicate(tmp_path: Path, first_absolute: bool) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
-  file_abs = str((cfg.sessions_dir / meta.id / file_rel).resolve())
-  first_file = file_abs if first_absolute else file_rel
-  second_file = file_rel if first_absolute else file_abs
-
-  await plan_mgr.present(meta.id, file=first_file, title="P1")
-  with pytest.raises(ValueError, match=r"already bound to plan 1 v1"):
-    await plan_mgr.amend(meta.id, file=second_file, plan_id=1, note="why changed")
+    if amend:
+      await plan_mgr.amend(meta.id, file=second_file, plan_id=1, note="why changed")
+    else:
+      await plan_mgr.present(meta.id, file=second_file, title="P2")
 
 
 @pytest.mark.asyncio
@@ -253,17 +243,17 @@ async def test_closing_already_closed_rejected(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_present_rejects_missing_file(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("file", "match"),
+    [
+        pytest.param("artifacts/missing.html", "not found inside the session directory", id="missing"),
+        pytest.param("../escape.html", "resolves outside the session directory", id="outside"),
+    ],
+)
+async def test_present_rejects_unresolvable_file(tmp_path: Path, file: str, match: str) -> None:
   _cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  with pytest.raises(ValueError, match="not found inside the session directory"):
-    await plan_mgr.present(meta.id, file="artifacts/missing.html", title="P1")
-
-
-@pytest.mark.asyncio
-async def test_present_rejects_file_outside_session_dir(tmp_path: Path) -> None:
-  _cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  with pytest.raises(ValueError, match="resolves outside the session directory"):
-    await plan_mgr.present(meta.id, file="../escape.html", title="P1")
+  with pytest.raises(ValueError, match=match):
+    await plan_mgr.present(meta.id, file=file, title="P1")
 
 
 @pytest.mark.asyncio
@@ -288,14 +278,22 @@ async def test_approve_ambiguity_requires_plan(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_amend_rejects_closed(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("plan_id", "match"),
+    [
+        pytest.param(1, "is closed", id="closed"),
+        pytest.param(None, "no open lineage to amend", id="no-open-lineage"),
+    ],
+)
+async def test_amend_after_close_rejected(tmp_path: Path, plan_id: int | None, match: str) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   f1 = _write_artifact(cfg, meta.id, "plan_01.html")
   await plan_mgr.present(meta.id, file=f1, title="P1")
   await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
+
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
-  with pytest.raises(ValueError, match="is closed"):
-    await plan_mgr.amend(meta.id, file=f2, plan_id=1, note="why changed")
+  with pytest.raises(ValueError, match=match):
+    await plan_mgr.amend(meta.id, file=f2, plan_id=plan_id, note="why changed")
 
 
 @pytest.mark.asyncio
@@ -309,18 +307,6 @@ async def test_amend_ambiguity_requires_plan(tmp_path: Path) -> None:
   f3 = _write_artifact(cfg, meta.id, "plan_03.html")
   with pytest.raises(ValueError, match="amend requires --plan"):
     await plan_mgr.amend(meta.id, file=f3, note="why changed")
-
-
-@pytest.mark.asyncio
-async def test_amend_no_open_lineage_requires_plan(tmp_path: Path) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
-  await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
-
-  f2 = _write_artifact(cfg, meta.id, "plan_02.html")
-  with pytest.raises(ValueError, match="no open lineage to amend"):
-    await plan_mgr.amend(meta.id, file=f2, note="why changed")
 
 
 @pytest.mark.asyncio
@@ -619,25 +605,18 @@ async def test_present_normalizes_dot_slash_path_and_stores_canonical(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_present_rejects_canonical_duplicate_after_dot_slash_present(tmp_path: Path) -> None:
+@pytest.mark.parametrize("amend", [False, True], ids=["present", "amend"])
+async def test_registry_rejects_canonical_duplicate_after_dot_slash_present(tmp_path: Path, amend: bool) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_rel = _write_artifact(cfg, meta.id, "x.html")
   dot_slash = "./" + file_rel
   await plan_mgr.present(meta.id, file=dot_slash, title="P1")
 
   with pytest.raises(ValueError, match=r"already bound to plan 1 v1"):
-    await plan_mgr.present(meta.id, file=file_rel, title="P2")
-
-
-@pytest.mark.asyncio
-async def test_amend_rejects_canonical_duplicate_after_dot_slash_present(tmp_path: Path) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "x.html")
-  dot_slash = "./" + file_rel
-  await plan_mgr.present(meta.id, file=dot_slash, title="P1")
-
-  with pytest.raises(ValueError, match=r"already bound to plan 1 v1"):
-    await plan_mgr.amend(meta.id, file=file_rel, plan_id=1, note="why changed")
+    if amend:
+      await plan_mgr.amend(meta.id, file=file_rel, plan_id=1, note="why changed")
+    else:
+      await plan_mgr.present(meta.id, file=file_rel, title="P2")
 
 
 # ---------------------------------------------------------------------------

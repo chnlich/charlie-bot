@@ -36,9 +36,8 @@ since the read (a stat-only check); a moved signature whose row memo the scan ju
 unchanged means the WAL wrote rows the tally never reads — the epoch counts row-memo changes,
 so an unchanged epoch re-serves the rows and re-signs them at the scan's own signature. Only
 memos built from a scan carry that epoch proof; rows served from the persisted document sign
-into the key by signature alone. The walk signature itself walks with string paths and raw
-os.stat: Path construction per file measures over twice the stat syscall's cost on this
-corpus, and the signature pays it on every collect, hit or miss.
+into the key by signature alone. The walk signature itself recurses scandir entries carrying
+their own stat — one syscall per jsonl — and pays it on every collect, hit or miss.
 Vocabulary (opencode row memo):
   key         ``(message id, time_updated)`` of one row in the db's message table. opencode
               (drizzle ORM, ``$onUpdate(() => Date.now())`` on the column) bumps time_updated
@@ -51,6 +50,9 @@ Vocabulary (opencode row memo):
               paths — token fields change exactly once, at the step-finish write that starts
               the pair — so the three projected token buckets the tally sums cannot go stale,
               and any later write to the row re-reads it.
+  partial     the opencode source's accumulated buckets plus its contributing-record count,
+              kept in lockstep with the row memo: every merge ends with the partial matching
+              the memo, and a merge that moves it adjusts the partial by the scan's deltas.
 Vocabulary:
   signature   ``[mtime_ns, size]`` for a log file; a file re-scans whole whenever either value
               moves. The opencode db signs as ``[mtime_ns, size, wal_sig]`` with ``wal_sig`` the
@@ -311,14 +313,32 @@ def _iter_jsonl(root: Path, t: _Tally, source: str, label: str) -> Iterator[Path
         yield Path(dirpath) / name
 
 
-def _iter_jsonl_paths(root: Path, t: _Tally, source: str, label: str) -> Iterator[str]:
-  """String-path sibling of ``_iter_jsonl`` (same walk, same notes) for callers that never
-  open the file, like the signature walk below: Path construction per file measures over
-  twice the stat syscall's cost on this corpus."""
-  for dirpath, _, filenames in os.walk(root, onerror=_walk_error_hook(t, source, label, root.name)):
-    for name in filenames:
-      if name.endswith(".jsonl"):
-        yield os.path.join(dirpath, name)
+def _iter_jsonl_stats(
+    root: Path, t: _Tally, source: str, label: str
+) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
+  """Yield ``(path, stat, error)`` for every ``*.jsonl`` under *root* — the ``_iter_jsonl``
+  walk contract with each file's stat attached, so the signature walk pays one syscall per
+  file instead of one per file plus a re-stat. Like ``os.walk``: symlinked directories are
+  neither descended nor listed; a stat failure yields ``(path, None, repr(exc))``."""
+  hook = _walk_error_hook(t, source, label, root.name)
+  stack = [str(root)]
+  while stack:
+    dirpath = stack.pop()
+    try:
+      scandir = os.scandir(dirpath)
+    except OSError as exc:
+      hook(exc)
+      continue
+    with scandir:
+      for entry in scandir:
+        if entry.is_dir():
+          if not entry.is_symlink():
+            stack.append(entry.path)
+        elif entry.name.endswith(".jsonl"):
+          try:
+            yield entry.path, entry.stat(follow_symlinks=True), None
+          except OSError as exc:
+            yield entry.path, None, repr(exc)
 
 
 def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path]) -> tuple:
@@ -330,12 +350,8 @@ def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path
     entries = []
     for label, home in homes.items():
       per_home = []
-      for path in _iter_jsonl_paths(home / sub, probe, source, label):
-        try:
-          st = os.stat(path)
-          per_home.append((path, st.st_mtime_ns, st.st_size))
-        except OSError as exc:
-          per_home.append((path, None, repr(exc)))
+      for path, st, error in _iter_jsonl_stats(home / sub, probe, source, label):
+        per_home.append((path, st.st_mtime_ns, st.st_size) if st is not None else (path, None, error))
       entries.append((label, tuple(sorted(per_home))))
     home_pairs = tuple(sorted((label, str(path)) for label, path in homes.items()))
     sig.append((source, home_pairs, tuple(entries), tuple(probe.notes)))
@@ -362,17 +378,35 @@ _opencode_row_memos: dict[str, dict[str, tuple[int, list | None]]] = {}
 # an equal epoch proves the memo's records — and the rows built from them — still current.
 _opencode_row_epochs: dict[str, int] = {}
 
+# Per-db opencode partial of the last merge, corresponding to the row memo's current state
+# (buckets by model and account, per-model spans, contributing-record count). A scan that
+# moves the memo reports the per-row deltas; the next merge adjusts these buckets by them
+# instead of replaying every record. Absent means the next merge must replay.
+_opencode_partials: dict[str, _OpencodePartial | None] = {}
+
+
+class _OpencodePartial(NamedTuple):
+  """The opencode source's accumulated buckets, kept adjacent to the row memo it sums."""
+
+  by_model: dict
+  by_account: dict
+  span: dict
+  count: int
+
 
 class _OpencodeScan(NamedTuple):
   """One row-memo advance. ``ok`` is False when the db is absent or sqlite-unreadable
-  (``error`` carries the message the collect note needs); the remaining fields are then
-  informational only."""
+  (``error`` carries the message the collect note needs). ``deltas`` carries the scan's
+  per-row record moves as (old, new) record pairs — (None, new) for a row that landed,
+  (old, None) for one that vanished; None means the memo was cold and the caller replays
+  whole."""
 
   sig: list | None
   epoch: int
   nbytes: int
   ok: bool
   error: str | None
+  deltas: list | None = None
 
 
 def _reset_aggregate_memo() -> None:
@@ -382,6 +416,7 @@ def _reset_aggregate_memo() -> None:
   _tally_memo = None
   _opencode_row_memos.clear()
   _opencode_row_epochs.clear()
+  _opencode_partials.clear()
 
 
 def _claude_file_contribution(path: Path) -> tuple[dict, int]:
@@ -641,16 +676,33 @@ def _advance_opencode_rows(db: Path) -> _OpencodeScan:
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
       memo = _opencode_row_memos.setdefault(key, {})
-      nbytes, changed = _scan_opencode_rows(con, memo)
+      nbytes, deltas = _scan_opencode_rows(con, memo)
     finally:
       con.close()
   except sqlite3.Error as exc:
+    # A failed scan leaves its memo partially advanced at worst; dropping the partial forces
+    # the next merge down the full replay, which rebuilds both from whatever the memo holds.
+    _opencode_partials[key] = None
     return _OpencodeScan(sig, 0, 0, False, str(exc))
   epoch = _opencode_row_epochs.get(key, 0)
-  if changed:
+  if deltas:
     epoch += 1
     _opencode_row_epochs[key] = epoch
-  return _OpencodeScan(sig, epoch, nbytes, True, None)
+  return _OpencodeScan(sig, epoch, nbytes, True, None, deltas)
+
+
+def _replay_opencode_records(t: _Tally, records: list) -> None:
+  """Fold a record list into the accumulator (the cold and cache-document paths)."""
+  for model, account, ts, in_fresh, cache_write, cache_read, output in records:
+    t.add(
+        "opencode",
+        model,
+        account,
+        ts,
+        in_fresh=in_fresh,
+        cache_write=cache_write,
+        cache_read=cache_read,
+        output=output)
 
 
 def _merge_opencode(
@@ -663,75 +715,146 @@ def _merge_opencode(
   row memo this collect, or the cache document's entry still matches the file. Returns
   (the signature the rows were read at, the row epoch, scan-sourced); the signature is None
   when no signature applies (absent, unstatable, or unreadable db), so the whole-tally memo
-  never signs rows it cannot key."""
+  never signs rows it cannot key. A scan-reported delta set with a current partial adjusts
+  the source's buckets instead of replaying every record; the partial always ends the merge
+  matching the row memo it sums."""
   if not db.exists():
     t.notes.append("opencode: db absent")
     return None, 0, False
   sig = _opencode_db_signature(db)
-  entry = cache.lookup_sig("opencode", str(db), sig) if cache is not None and sig is not None else None
+  key = str(db)
+  entry = cache.lookup_sig("opencode", key, sig) if cache is not None and sig is not None else None
   epoch = 0
   from_scan = False
   if entry is not None:
     # The signature is taken before the read and stored with the rows, so an entry can only
-    # be served while the file still matches it.
+    # be served while the file still matches it. The row memo and its partial track the db
+    # through scans, not through the document, so neither is touched here.
     records = entry["records"]
-    epoch = _opencode_row_epochs.get(str(db), 0)
+    epoch = _opencode_row_epochs.get(key, 0)
+    _replay_opencode_records(t, records)
+    t.notes.append(f"opencode: {len(records):,} assistant messages with token counts")
+    return sig, epoch, from_scan
+  if scan is None:
+    scan = _advance_opencode_rows(db)
+  if not scan.ok:
+    t.notes.append(f"opencode: unreadable db: {scan.error}")
+    return None, scan.epoch, False
+  memo = _opencode_row_memos[key]
+  t.scanned_bytes += scan.nbytes
+  epoch = scan.epoch
+  from_scan = True
+  partial = _opencode_partials.get(key)
+  if scan.deltas is None or partial is None:
+    records = [rec for _, rec in memo.values() if rec is not None]
+    _replay_opencode_records(t, records)
+    count = len(records)
   else:
-    if scan is None:
-      scan = _advance_opencode_rows(db)
-    if not scan.ok:
-      t.notes.append(f"opencode: unreadable db: {scan.error}")
-      return None, scan.epoch, False
-    records = [rec for _, rec in _opencode_row_memos[str(db)].values() if rec is not None]
-    if cache is not None and sig is not None:
-      cache.store("opencode", db, {"sig": sig, "records": records})
-    t.scanned_bytes += scan.nbytes
-    epoch = scan.epoch
-    from_scan = True
-  for model, account, ts, in_fresh, cache_write, cache_read, output in records:
-    t.add(
-        "opencode",
-        model,
-        account,
-        ts,
-        in_fresh=in_fresh,
-        cache_write=cache_write,
-        cache_read=cache_read,
-        output=output)
-  t.notes.append(f"opencode: {len(records):,} assistant messages with token counts")
+    count = _adjust_opencode_partial(t, memo, partial, scan.deltas)
+  if cache is not None and sig is not None:
+    records = [rec for _, rec in memo.values() if rec is not None]
+    cache.store("opencode", db, {"sig": sig, "records": records})
+  # The stored partial must never alias a served tally's containers, so it copies out.
+  _opencode_partials[key] = _OpencodePartial(
+      by_model={k: dict(v) for k, v in t.by_model.items() if k[0] == "opencode"},
+      by_account={k: dict(v) for k, v in t.by_account.items() if k[0] == "opencode"},
+      span={k: tuple(v) for k, v in t.span.items() if k[0] == "opencode"},
+      count=count)
+  t.notes.append(f"opencode: {count:,} assistant messages with token counts")
   return sig, epoch, from_scan
 
 
-def _scan_opencode_rows(con: sqlite3.Connection, memo: dict[str, tuple[int, list | None]]) -> tuple[int, bool]:
-  """Advance *memo* to the message table's current rows; return the bytes this pass read and
-  whether any row changed (landed, moved, or vanished) — the whole-tally memo's epoch bump.
+def _adjust_opencode_partial(
+    t: _Tally,
+    memo: dict[str, tuple[int, list | None]],
+    partial: _OpencodePartial,
+    deltas: list[tuple[list | None, list | None]],
+) -> int:
+  """Carry the partial across one scan's row moves: fold every delta out of and into a copy
+  of the buckets, re-derive spans a removal invalidated, drop buckets whose last record went
+  away, and feed the result into *t*. Returns the contributing-record count."""
+  by_model = {k: dict(v) for k, v in partial.by_model.items()}
+  by_account = {k: dict(v) for k, v in partial.by_account.items()}
+  span = {k: tuple(v) for k, v in partial.span.items()}
+  rederive: set = set()
+  for old, new in deltas:
+    for rec, sign in ((old, -1), (new, 1)):
+      if rec is None:
+        continue
+      # Fold one record out (−1) or in (+1); a subtraction touching a span boundary marks
+      # the bucket for re-derivation from the row memo.
+      model, account, ts, in_fresh, cache_write, cache_read, output = rec
+      vals = {"in_fresh": in_fresh, "cache_write": cache_write, "cache_read": cache_read, "output": output}
+      for key, bucket in ((("opencode", model), by_model), (("opencode", model, account), by_account)):
+        tgt = bucket.setdefault(key, dict.fromkeys(FIELDS, 0)) if sign > 0 else bucket[key]
+        for name, value in vals.items():
+          tgt[name] += sign * value
+        tgt["calls"] += sign
+      if ts:
+        lo, hi = span.get(("opencode", model), (None, None))
+        if sign > 0:
+          span[("opencode", model)] = (ts if lo is None or ts < lo else lo, ts if hi is None or ts > hi else hi)
+        elif ts == lo or ts == hi:
+          rederive.add(("opencode", model))
+  for span_key in rederive:
+    lo = hi = None
+    for _, rec in memo.values():
+      if rec is not None and rec[0] == span_key[1] and rec[2]:
+        lo = rec[2] if lo is None or rec[2] < lo else lo
+        hi = rec[2] if hi is None or rec[2] > hi else hi
+    span[span_key] = (lo, hi)
+  for key in [k for k, v in by_model.items() if v["calls"] == 0]:
+    del by_model[key]
+    span.pop(key, None)
+  for key in [k for k, v in by_account.items() if v["calls"] == 0]:
+    del by_account[key]
+  count = partial.count + sum(1 for _, new in deltas if new is not None) \
+      - sum(1 for old, _ in deltas if old is not None)
+  t.by_model.update({k: dict(v) for k, v in by_model.items()})
+  t.by_account.update({k: dict(v) for k, v in by_account.items()})
+  t.span.update({k: [lo, hi] for k, (lo, hi) in span.items()})
+  return count
 
-  With an empty memo the SQL scan projects every contributing row (the cold pass, as at a
-  process start) and rows it filters out memoize as None — both without a re-read per row.
-  Afterwards only rows whose ``(id, time_updated)`` key moved go through the per-id fetch:
-  steady state re-reads a handful of blobs per collect instead of the whole table, which the
-  WAL-invalidated file signature would otherwise re-scan on every page load.
+
+def _scan_opencode_rows(
+    con: sqlite3.Connection,
+    memo: dict[str, tuple[int, list | None]],
+) -> tuple[int, list[tuple[list | None, list | None]] | None]:
+  """Advance *memo* to the message table's current rows; return the bytes this pass read and
+  the per-row record deltas ``(old, new)`` — rows whose ``(id, time_updated)`` key moved, and
+  ``(old, None)`` for ids that vanished. With an empty memo the SQL scan projects every
+  contributing row (the cold pass, as at a process start), rows it filters out memoize as
+  None, and deltas come back None — the caller replays whole. All reads happen before any
+  memo write, so a failure mid-scan leaves the memo — and the partial keyed to it —
+  untouched.
   """
   live = {mid: tu for mid, tu in con.execute(_OPENCODE_KEYS_SQL)}
   nbytes = 0
   if not memo:
+    fresh: dict[str, tuple[int, list | None]] = {}
     for row in con.execute(_OPENCODE_SCAN_SQL):
       nbytes += row[8]
-      memo[row[9]] = (row[10], _opencode_row(row[:8]))
+      fresh[row[9]] = (row[10], _opencode_row(row[:8]))
     for mid, tu in live.items():
-      if mid not in memo:
-        memo[mid] = (tu, None)
-    return nbytes, bool(live)
-  removed = [mid for mid in memo if mid not in live]
-  for mid in removed:
-    del memo[mid]
-  changed = [mid for mid, tu in live.items() if memo.get(mid, (None,))[0] != tu]
-  for mid in changed:
+      if mid not in fresh:
+        fresh[mid] = (tu, None)
+    memo.update(fresh)
+    return nbytes, None
+  removed_ids = [mid for mid in memo if mid not in live]
+  changed_ids = [mid for mid, tu in live.items() if memo.get(mid, (None,))[0] != tu]
+  fetched: list[tuple[str, int, list | None]] = []
+  for mid in changed_ids:
     row = con.execute("select data from message where id = ?", (mid,)).fetchone()
     rec, n = (None, 0) if row is None else _opencode_row_data(row[0])
     nbytes += n
-    memo[mid] = (live[mid], rec)
-  return nbytes, bool(removed or changed)
+    fetched.append((mid, live[mid], rec))
+  deltas = [(memo[mid][1] if mid in memo else None, rec) for mid, _, rec in fetched]
+  deltas += [(memo[mid][1], None) for mid in removed_ids]
+  for mid in removed_ids:
+    del memo[mid]
+  for mid, tu, rec in fetched:
+    memo[mid] = (tu, rec)
+  return nbytes, deltas
 
 
 def _build(t: _Tally) -> list[dict]:

@@ -164,27 +164,9 @@ def _stat_or_skip(path: Path, sig: list[tuple[str, int, int]]) -> None:
   sig.append((str(path), st.st_mtime_ns, st.st_size))
 
 
-def _refs_signature(repo_path: Path) -> _RefSignature:
-  """Stat-only signature of every file that feeds rev-parse ref resolution.
-
-  Covers the git dir's top-level pseudo-refs (HEAD, ORIG_HEAD, FETCH_HEAD, ...),
-  packed-refs, the shallow/grafts files, and every file under the loose refs
-  tree. `git rev-parse` reads nothing else for ref-shaped inputs, so an equal
-  signature across two requests proves an equal resolution. Scandir serves
-  d_type from readdir, so each entry costs one stat, not two.
-  """
-  git_dir, common_dir = _git_dirs(repo_path)
-  sig: list[tuple[str, int, int]] = []
-  with os.scandir(git_dir) as entries:
-    for entry in entries:
-      if entry.is_file(follow_symlinks=False):
-        st = entry.stat(follow_symlinks=False)
-        sig.append((entry.path, st.st_mtime_ns, st.st_size))
-  for name in ("packed-refs", "shallow"):
-    _stat_or_skip(common_dir / name, sig)
-  _stat_or_skip(common_dir / "info" / "grafts", sig)
-  refs_root = common_dir / "refs"
-  stack = [refs_root]
+def _walk_refs_tree(root: Path, sig: list[tuple[str, int, int]]) -> None:
+  """Append (path, mtime_ns, size) for every file under root's refs tree."""
+  stack = [root]
   while stack:
     current = stack.pop()
     try:
@@ -197,6 +179,32 @@ def _refs_signature(repo_path: Path) -> _RefSignature:
       else:
         st = entry.stat(follow_symlinks=False)
         sig.append((entry.path, st.st_mtime_ns, st.st_size))
+
+
+def _refs_signature(repo_path: Path) -> _RefSignature:
+  """Stat-only signature of every file that feeds rev-parse ref resolution.
+
+  Covers the git dir's top-level pseudo-refs (HEAD, ORIG_HEAD, FETCH_HEAD, ...),
+  packed-refs, the shallow/grafts files, the shared loose refs tree, and — in a
+  linked worktree, whose refs/bisect, refs/worktree, and refs/rewritten trees
+  are per-worktree — the worktree's own refs tree. `git rev-parse` reads
+  nothing else for ref-shaped inputs, so an equal signature across two requests
+  proves an equal resolution. Scandir serves d_type from readdir, so each
+  entry costs one stat, not two.
+  """
+  git_dir, common_dir = _git_dirs(repo_path)
+  sig: list[tuple[str, int, int]] = []
+  with os.scandir(git_dir) as entries:
+    for entry in entries:
+      if entry.is_file(follow_symlinks=False):
+        st = entry.stat(follow_symlinks=False)
+        sig.append((entry.path, st.st_mtime_ns, st.st_size))
+  for name in ("packed-refs", "shallow"):
+    _stat_or_skip(common_dir / name, sig)
+  _stat_or_skip(common_dir / "info" / "grafts", sig)
+  _walk_refs_tree(common_dir / "refs", sig)
+  if git_dir != common_dir:
+    _walk_refs_tree(git_dir / "refs", sig)
   return tuple(sorted(sig))
 
 

@@ -402,3 +402,14 @@ def test_ref_resolution_follows_linked_worktree(tmp_path: Path) -> None:
 
   resolved = git_api._resolve_commits_memoized_sync(worktree, ["wt-branch", "main"])
   assert len(resolved) == 2 and all(len(sha) == 40 for sha in resolved)
+
+  # Per-worktree refs (bisect, worktree, rewritten) live under the linked
+  # worktree's own git dir; moving one must move the signature.
+  head_sha = resolved[1]
+  _git(worktree, "update-ref", "refs/bisect/bad", head_sha)
+  with_bisect = git_api._refs_signature(worktree)
+  assert git_api._refs_signature(worktree) == with_bisect
+  _git(worktree, "update-ref", "refs/bisect/bad", resolved[0])
+  assert git_api._refs_signature(worktree) != with_bisect
+  moved = git_api._resolve_commits_memoized_sync(worktree, ["refs/bisect/bad"])
+  assert moved == [resolved[0]]

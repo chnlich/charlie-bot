@@ -427,6 +427,23 @@ def selective_probe_sidebar_state(
 
 
 _REFERENCE_LINE_WS = b" \t\r\n\x0b\x0c"
+# Newline detection is position-local, so the frame scan can sweep in chunks
+# without changing its result; the 1 MiB chunks keep the compare's bool scratch
+# in cache where a whole-file mask allocates one bool per source byte.
+_REFERENCE_SCAN_CHUNK = 1 << 20
+
+
+def _reference_newlines(arr: np.ndarray) -> np.ndarray:
+  """Return the positions of 0x0A bytes in ``arr`` (uint8 view of the corpus)."""
+  parts: list[np.ndarray] = []
+  for offset in range(0, arr.size, _REFERENCE_SCAN_CHUNK):
+    window = arr[offset:min(offset + _REFERENCE_SCAN_CHUNK, arr.size)]
+    found = np.flatnonzero(window == 0x0A)
+    if found.size:
+      parts.append(found + offset)
+  if not parts:
+    return np.empty(0, dtype=np.intp)
+  return parts[0] if len(parts) == 1 else np.concatenate(parts)
 
 
 def _fast_reference_frames(data: bytes, take: int) -> tuple[int, int, int, bool] | None:
@@ -440,7 +457,7 @@ def _fast_reference_frames(data: bytes, take: int) -> tuple[int, int, int, bool]
   caller's per-frame pass reports or folds those one by one.
   """
   arr = np.frombuffer(data, dtype=np.uint8)
-  nls = np.flatnonzero(arr == 0x0A)
+  nls = _reference_newlines(arr)
   if take <= 0:
     return (0, 0, 0, False)
   terminated = nls[:take]

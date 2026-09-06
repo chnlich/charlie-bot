@@ -782,8 +782,8 @@ def _adjust_opencode_partial(
       vals = {"in_fresh": in_fresh, "cache_write": cache_write, "cache_read": cache_read, "output": output}
       for key, bucket in ((("opencode", model), by_model), (("opencode", model, account), by_account)):
         tgt = bucket.setdefault(key, dict.fromkeys(FIELDS, 0)) if sign > 0 else bucket[key]
-        for field, value in vals.items():
-          tgt[field] += sign * value
+        for name, value in vals.items():
+          tgt[name] += sign * value
         tgt["calls"] += sign
       if ts:
         lo, hi = span.get(("opencode", model), (None, None))

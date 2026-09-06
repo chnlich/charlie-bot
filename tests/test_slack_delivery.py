@@ -24,6 +24,7 @@ from conftest import (
 from structlog.testing import capture_logs
 
 from src.agents import master_cc_state
+from src.agents.backends.base import make_text_event
 from src.core import event_types as ET
 from src.core import tasks as tasks_module
 from src.core.config import CharlieBotConfig
@@ -214,10 +215,6 @@ def _reply(answers: str | None, text: str = "the answer") -> dict:
           "chunks": 1
       },
   }
-
-
-def _assistant(text: str) -> dict:
-  return {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}}
 
 
 def _done(input_event_id: str | None, exit_code: int = 0) -> dict:
@@ -527,7 +524,7 @@ async def test_reply_binding_tracks_the_running_round_under_metadata_churn(tmp_p
   async def persist_churn() -> None:
     """The event stream's concurrent persists."""
     while not stop.is_set():
-      await session_mgr.persist_and_broadcast(sid, _assistant(f"churn {rng.randrange(1 << 30)}"))
+      await session_mgr.persist_and_broadcast(sid, make_text_event(f"churn {rng.randrange(1 << 30)}"))
       for _ in range(rng.randrange(1, 3)):
         await asyncio.sleep(0)
 
@@ -852,7 +849,7 @@ async def test_summon_round_without_a_reply_wakes_the_master_once_with_a_nudge(t
   client.reactions[_THREAD] = {"eyes"}
   sid = await _slack_session(session_mgr)
   summon = await _append(session_mgr, sid, _summon())
-  await _append(session_mgr, sid, _assistant("wrote the reply into a shell variable and stopped"))
+  await _append(session_mgr, sid, make_text_event("wrote the reply into a shell variable and stopped"))
   done = await _append(session_mgr, sid, _done(summon["id"]))
   tasks: list[asyncio.Task] = []
   trigger = AsyncMock()
@@ -903,7 +900,7 @@ async def test_nudge_round_without_a_reply_posts_the_notice_once_and_clears_the_
   """Asked twice and silent twice: the thread hears the notice, the eye goes out, no third generation."""
   cfg, session_mgr, client = _rig(tmp_path)
   sid, summon, nudge = await _unanswered_nudge_round(session_mgr, client)
-  await _append(session_mgr, sid, _assistant("nothing to add"))
+  await _append(session_mgr, sid, make_text_event("nothing to add"))
   done = await _append(session_mgr, sid, _done(nudge["id"]))
   replay = await _append(session_mgr, sid, _done(nudge["id"]))
   tasks: list[asyncio.Task] = []
@@ -1007,7 +1004,7 @@ async def test_summon_issued_under_the_marker_contract_is_outside_the_audit(tmp_
   cfg, session_mgr, client = _rig(tmp_path)
   sid = await _slack_session(session_mgr)
   summon = await _append(session_mgr, sid, _summon(content=_MARKER_ERA_CONTENT))
-  await _append(session_mgr, sid, _assistant("SLACK REPLY:\nthe old-style answer"))
+  await _append(session_mgr, sid, make_text_event("SLACK REPLY:\nthe old-style answer"))
   done = await _append(session_mgr, sid, _done(summon["id"]))
   trigger = AsyncMock()
 

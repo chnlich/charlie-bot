@@ -196,6 +196,87 @@ function buildEmptySessionBootstrap(session) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Switch diagnostics + bootstrap cache: five one-line telemetry points per
+// switch (started/completed/superseded/failed/render_error), plus a short-lived
+// cache so a superseded generation's fetched bootstrap serves an immediate
+// re-click of the same session.
+// ---------------------------------------------------------------------------
+const BOOTSTRAP_CACHE_TTL_MS = 60000;
+const BOOTSTRAP_CACHE_MAX_ENTRIES = 20;
+const bootstrapCache = new Map();
+
+function cacheBootstrap(sessionId, data) {
+  const now = Date.now();
+  for (const [key, entry] of bootstrapCache) {
+    if (now - entry.timestamp > BOOTSTRAP_CACHE_TTL_MS) bootstrapCache.delete(key);
+  }
+  while (bootstrapCache.size >= BOOTSTRAP_CACHE_MAX_ENTRIES) {
+    bootstrapCache.delete(bootstrapCache.keys().next().value);
+  }
+  bootstrapCache.set(sessionId, {data, timestamp: now});
+}
+
+function freshCachedBootstrap(sessionId) {
+  const entry = bootstrapCache.get(sessionId);
+  if (!entry || Date.now() - entry.timestamp > BOOTSTRAP_CACHE_TTL_MS) return null;
+  return entry.data;
+}
+
+function reportSwitchEvent(phase, fromSessionId, sessionId, generation, extra = {}) {
+  // Fire-and-forget by design: never awaited, failures dropped — the
+  // diagnostics channel must never delay or break a switch.
+  const record = {
+    phase,
+    from_session: fromSessionId,
+    to_session: sessionId,
+    generation,
+    winner_generation: null,
+    elapsed_ms: 0,
+    error: null,
+    client_ts: new Date().toISOString(),
+    ...extra,
+  };
+  try {
+    fetch('/api/diag/switch-events', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(record),
+    }).catch(() => {});
+  } catch (_err) {}
+}
+
+function switchTargetName(sessionId) {
+  const row = document.getElementById('session-' + sessionId);
+  const nameEl = row ? row.querySelector('.session-name') : null;
+  return (nameEl && nameEl.textContent) || sessionId;
+}
+
+// Click-time immediate feedback: the placeholder row (thinking pulse-dot style)
+// replaces the stale session DOM and the header name moves before any network
+// wait; renderSessionView repaints both with authoritative data later. The
+// streaming element survives the wipe — hideStreaming/showStreaming resolve it
+// by id after the render.
+function showSwitchPlaceholder(sessionId) {
+  const container = document.getElementById('messages');
+  if (!container) return;
+  const streamEl = document.getElementById('streaming-msg');
+  container.innerHTML = '';
+  if (streamEl) container.appendChild(streamEl);
+  const row = document.createElement('div');
+  row.id = 'switch-placeholder';
+  row.className = 'px-4 py-2 flex items-center gap-2 text-sm text-slate-400';
+  const dot = document.createElement('span');
+  dot.className = 'w-2 h-2 rounded-full bg-blue-400 animate-pulse-dot';
+  const label = document.createElement('span');
+  label.textContent = '正在打开 ' + switchTargetName(sessionId) + '…';
+  row.appendChild(dot);
+  row.appendChild(label);
+  container.appendChild(row);
+  const headerName = document.getElementById('header-session-name');
+  if (headerName) headerName.textContent = switchTargetName(sessionId);
+}
+
 async function switchSession(sessionId) {
   // Welcome screen — no SPA state to swap, fall back to full load
   if (!SESSION_ID) { location.href = '/?session=' + sessionId; return; }
@@ -213,6 +294,8 @@ async function switchSession(sessionId) {
 
   switching = true;
   const gen = ++switchGeneration;
+  const fromSessionId = SESSION_ID;
+  const switchStartedAt = Date.now();
 
   // Save draft for current session
   if (DRAFT_KEY) {
@@ -233,21 +316,43 @@ async function switchSession(sessionId) {
   pendingUserMsg = false;
   hideStreaming();
 
-  // Fetch critical session bootstrap data
-  let data;
-  try {
-    const res = await fetch('/api/sessions/' + sessionId + '/bootstrap');
-    if (!res.ok) throw new Error(res.status);
-    data = await res.json();
-  } catch (err) {
-    console.error('switchSession bootstrap fetch failed:', err);
-    switching = false;
-    location.href = '/?session=' + sessionId;
-    return;
+  // Click-time feedback: placeholder over the stale DOM, header name and
+  // sidebar highlight move now — every click gets them, even one later
+  // superseded; only the latest generation renders session content.
+  showSwitchPlaceholder(sessionId);
+  updateSidebarHighlight(sessionId);
+  reportSwitchEvent('started', fromSessionId, sessionId, gen);
+
+  // A fresh cache hit skips the round-trip; staleness self-heals because
+  // event_count below seeds the WebSocket replay cursor.
+  let data = freshCachedBootstrap(sessionId);
+  if (!data) {
+    try {
+      const res = await fetch('/api/sessions/' + sessionId + '/bootstrap');
+      if (!res.ok) throw new Error(res.status);
+      data = await res.json();
+    } catch (err) {
+      console.error('switchSession bootstrap fetch failed:', err);
+      reportSwitchEvent('failed', fromSessionId, sessionId, gen, {
+        error: String(err?.message || err),
+        elapsed_ms: Date.now() - switchStartedAt,
+      });
+      switching = false;
+      location.href = '/?session=' + sessionId;
+      return;
+    }
   }
 
   // Discard stale response from rapid clicks
-  if (gen !== switchGeneration) return;  // newer switch owns the flag
+  if (gen !== switchGeneration) {
+    // Keep the fetched bootstrap so an immediate re-click skips the fetch.
+    cacheBootstrap(sessionId, data);
+    reportSwitchEvent('superseded', fromSessionId, sessionId, gen, {
+      winner_generation: switchGeneration,
+      elapsed_ms: Date.now() - switchStartedAt,
+    });
+    return;  // newer switch owns the flag
+  }
 
   // Update globals
   SESSION_ID = sessionId;
@@ -260,7 +365,15 @@ async function switchSession(sessionId) {
   history.pushState({session: sessionId}, '', '/?session=' + sessionId);
 
   // Render content
-  globalThis.renderSessionView(data);
+  try {
+    globalThis.renderSessionView(data);
+  } catch (err) {
+    reportSwitchEvent('render_error', fromSessionId, sessionId, gen, {
+      error: String(err?.message || err),
+      elapsed_ms: Date.now() - switchStartedAt,
+    });
+    throw err;
+  }
 
   // Mark switched-to session as read (WS was closed so broadcast is lost)
   sessionUnread[sessionId] = false;
@@ -271,6 +384,9 @@ async function switchSession(sessionId) {
   reconnectDelay = 1000;
   connectWS();
   switching = false;
+  reportSwitchEvent('completed', fromSessionId, sessionId, gen, {
+    elapsed_ms: Date.now() - switchStartedAt,
+  });
 
   // Restore draft for new session
   const draft = localStorage.getItem(DRAFT_KEY);
@@ -284,7 +400,6 @@ async function switchSession(sessionId) {
     startThinking({keepSendEnabled: true});
   }
 
-  updateSidebarHighlight(sessionId);
   pollSessionStatus();
   ensureActiveSessionViewPolling();
 

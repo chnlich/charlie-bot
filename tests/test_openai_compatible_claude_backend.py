@@ -231,8 +231,14 @@ def test_route_rejects_wrong_backend_type() -> None:
   assert "not type 'cc-openai-compatible'" in response.json()["detail"]
 
 
-def test_route_requires_api_base() -> None:
-  cfg = _cfg(_option(api_base=None))
+@pytest.mark.parametrize(
+    ("override", "detail"),
+    [
+        pytest.param({"api_base": None}, "missing api_base", id="api_base"),
+        pytest.param({"model": None}, "missing model", id="model"),
+    ])
+def test_route_requires_option_fields(override: dict[str, Any], detail: str) -> None:
+  cfg = _cfg(_option(**override))
 
   with _build_client(cfg) as client:
     response = client.post(
@@ -241,17 +247,4 @@ def test_route_requires_api_base() -> None:
     )
 
   assert response.status_code == 400
-  assert "missing api_base" in response.json()["detail"]
-
-
-def test_route_requires_model() -> None:
-  cfg = _cfg(_option(model=None))
-
-  with _build_client(cfg) as client:
-    response = client.post(
-        _MESSAGES_PATH,
-        json=_anthropic_payload(),
-    )
-
-  assert response.status_code == 400
-  assert "missing model" in response.json()["detail"]
+  assert detail in response.json()["detail"]

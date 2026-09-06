@@ -75,6 +75,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M62 spawn base-resolution chain, base-less launch | M62 collector below | seconds per base-less base resolution (default branch + start point) against the real origin, quiet-remote steady state | median < 0.5 s | — (introduced with its first history row) |
 | M63 session view thread payload, worst on-disk threads corpus | M63 collector below | ms per `get_session_view` handler call + response body bytes, worst thread-metadata corpus | handler median < 0.005 s; body < 300 KB | — (introduced with its first history row) |
 | M65 big-page gzip event-loop stall, whole-body JSON response | M65 collector below | seconds of loop lag + wall per 200-message events-page fetch through the real app stack (gzip + auth middleware), worst on-disk live chat corpus (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.012 s | — (introduced with its first history row) |
+| M66 perfetto merged-trace build wall, worst on-disk trace corpus | M66 collector below | seconds per `merge_traces` build, largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 12 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3656,6 +3657,57 @@ asyncio.run(main())
 EOF
 ```
 
+M66 — perfetto merged-trace build wall, steady state. The first view of a merged trace awaits
+`merge_traces` in the server's process pool — a full `json.load` of every input plus a per-event
+re-serialize into the gzip stream — so the build wall is user-visible first-view latency (the
+cache answers repeat views). The cost is background pool work invisible to HTTP probes, so the
+collector times the build over the largest Chrome-JSON trace on disk (read-only; scratch output
+under /tmp), from the checkout under test: one cold pass, as at the first view of a corpus, then
+three timed builds. The trace roots are the host's documented trace homes (~/data, ~/scripts);
+no qualifying file prints nothing and the round treats the metric as unmeasured. Evidence while
+the live server runs older code points the same collector at the branch checkout (`CHECKOUT` at
+the worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.trace_merge import merge_traces
+
+# Worst build corpus: the largest Chrome-JSON *.json trace under the documented
+# trace roots (~/data, ~/scripts); no qualifying file prints nothing.
+best, best_n = None, -1
+for root in (Path.home() / "data", Path.home() / "scripts"):
+    if not root.is_dir():
+        continue
+    for p in root.rglob("*.json"):
+        try:
+            n = p.stat().st_size
+        except OSError:
+            continue
+        if n <= best_n:
+            continue
+        with p.open("rb") as f:
+            prefix = f.read(64).lstrip(b" \t\n\r")
+        if prefix[:1] in (b"{", b"["):
+            best, best_n = p, n
+if best is None:
+    raise SystemExit(0)
+print(f"worst build corpus: {best}, {best_n / 1e6:.1f} MB")
+
+out = Path(tempfile.mkdtemp(prefix="m66-merge-")) / "merged.json.gz"
+merge_traces([best], out, slim=False)  # cold pass, as at the first view of a corpus; not timed
+times = []
+for _ in range(3):
+    t0 = time.perf_counter()
+    merge_traces([best], out, slim=False)
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"merged build median {times[1]:.2f} s, max {times[-1]:.2f} s over 3; artifact {out.stat().st_size / 1e6:.1f} MB.gz")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -3754,3 +3806,4 @@ EOF
 | 2026-09-05 | this PR | M65 wall median 17.76 ms → 8.40/8.42/8.44 ms, maxima 19.05 ms → 8.66-9.02 ms; loop-lag unchanged 5.96 ms → 5.70/5.72/5.70 ms at the 5 ms ticker floor (collector verbatim ×3 rounds on the 20534-event worst live corpus of session d321b9ad, scratch CHARLIEBOT_HOME, worktree at the origin/main tree before vs branch after back-to-back at load 0.88-0.89; wire 165729 B → 201149 B, +21 %); component table on the same body: deflate 15.0 ms at level 6 vs 8.9 ms at level 4 (wire 174321 B) vs 5.5 ms at level 1 | the whole-body deflate rides the response's send path (the off-loop hop moved it off the event loop but send still awaits it), so the compression level is client-visible wall latency and serve CPU on every big-page fetch — the mount drops level 6 → 1; M65's healthy range gains the wall pin (wall median < 0.012 s) in this PR |
 | 2026-09-06 | this PR | M57 /plans request median 2.93/2.76/2.82 ms → 2.27/2.38/2.55 ms, maxima 3.29/2.92/3.42 ms → 2.61/2.73/3.14 ms (three interleaved rounds of the verbatim collector, 15.4 KB worst plans corpus of session a9bb2346, live state read-only, main checkout before vs branch after back-to-back at load 1.6-2.5, every paired round faster; parsed-body digest identical f0098c1aae15 across all arms; component corroboration: list_plans memo-hit await 181.3 µs → 28.9 µs per call; M27 steady-state tolerant read re-measured 9.0 µs vs the 8.8 µs standing row, no regression; 4561-passed suite) | the plans poll's list_plans awaited an executor round-trip (~170 µs) to serve an ~9 µs memo hit on every 3 s panel poll — the M57 reading had drifted to its < 3.0 ms line (2.81-3.02 ms measured this round); the memo-hit half of read_plans_tolerant (one stat plus a lookup) is exposed as tolerant_memo_hit so the async list_plans answers a hit on the event loop and pays the thread only on a miss (cold, changed, or missing file), the same hit-on-loop shape the M58 config walk took |
 | 2026-09-06 | this PR | M17 fork median 0.0888/0.0892/0.0884 s → 0.0731/0.0689/0.0680 s, maxima 0.0891/0.0938/0.0991 s → 0.0744/0.0748/0.0687 s (three interleaved rounds of the verbatim collector, 5519 parent events over the 36.3 MB chat-event corpus of session aa196b47, scratch CHARLIEBOT_HOME, main checkout before vs branch after back-to-back, every paired round faster; 5519-event count identical across all rounds; standalone component: `_fast_reference_frames` 26.2 ms → 7.2 ms on the 36.3 MB corpus with identical frame output, chunked 1 MiB sweep; 104 session-scoped tests passed) | the fork's frame check swept the whole corpus through one `arr == 0x0A` bool mask — one scratch bool per source byte, ~1.4 GB/s measured on the 36.3 MB live file — while the same numpy compare in 1 MiB chunks keeps the mask in cache at ~5 GB/s (the M28 count scan's chunked shape); newline detection is position-local, so chunking cannot change the result, and the decode-validity pass, per-frame fallback, CR folding, and corrupt-line rejection are untouched |
+| 2026-09-06 | this PR | M66 merged build median 8.19/7.96 s → 5.43/5.42 s, maxima 8.29/8.01 s → 5.44/5.45 s (two interleaved rounds of the collector, 191.2 MB / 496,099-event worst on-disk trace /home/chaoli/data/stage3_current_traces/221054_trace_rank000_step000110.json, scratch output under /tmp, main checkout 2d5fca48 before vs branch worktree after back-to-back at load 2.11/1.30/0.86, every paired round faster; decompressed payload byte-identical across arms — 146329651 B, sha256 5fbdd34f0317; artifact 11.6 → 15.6 MB.gz, the level-1 trade) | the merge serializer's per-event json.dumps writes became 512-event batched C-encoder calls — a batch's bracket-stripped rendering is byte-identical to the per-event form, and the serializer pass measured 3.0 s → 1.7 s on the same corpus — and the merged artifact's deflate dropped 6 → 1 (1.73 s → 0.57 s, +34 % wire), the big-payload level the transport gzip middleware already runs; the direct-pass build shares the constant; M66 definition and healthy range introduced with this PR |

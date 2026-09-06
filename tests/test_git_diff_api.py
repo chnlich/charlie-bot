@@ -281,8 +281,10 @@ def test_diff_repeat_view_uses_memo(
   second = client.get(f"/api/git/diff/{endpoint}", params=params)
   assert second.status_code == 200
   assert second.json() == first.json()
-  # The repeat view pays only the ref resolution.
-  assert [c[1] for c in calls] == ["rev-parse"]
+  # The repeat view pays zero subprocesses: the ref-state signature is unchanged,
+  # so the memoized resolution serves the SHAs and the manifest/body memo serves
+  # the rest.
+  assert [c[1] for c in calls] == []
 
 
 _HEAD_MOVE_CASES = [
@@ -335,3 +337,68 @@ def test_repo_outside_workspace_rejected(tmp_path: Path) -> None:
       },
   )
   assert resp.status_code == 400
+
+
+def test_refs_signature_tracks_ref_state(tmp_path: Path) -> None:
+  """The signature moves exactly when ref state moves, and holds still otherwise."""
+  repo = _build_repo(tmp_path)
+  before = git_api._refs_signature(repo)
+
+  # Idle repo: unchanged.
+  assert git_api._refs_signature(repo) == before
+
+  # A commit rewrites the branch ref.
+  _git(repo, "commit", "-q", "--allow-empty", "-m", "advance")
+  after_commit = git_api._refs_signature(repo)
+  assert after_commit != before
+
+  # A checkout rewrites HEAD.
+  _git(repo, "checkout", "-q", "main")
+  assert git_api._refs_signature(repo) != after_commit
+
+  # Packing rewrites packed-refs and removes the loose ref files, then holds still.
+  before_pack = git_api._refs_signature(repo)
+  _git(repo, "pack-refs", "--all")
+  after_pack = git_api._refs_signature(repo)
+  assert after_pack != before_pack
+  assert git_api._refs_signature(repo) == after_pack
+
+
+def test_ref_resolution_memo_skips_rev_parse_until_refs_move(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The memoized resolver re-runs rev-parse only when the ref state has moved."""
+  repo = _build_repo(tmp_path)
+  calls: list[list[str]] = []
+  real_run = subprocess.run
+
+  def counting_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+    calls.append(args[0])
+    return real_run(*args, **kwargs)
+
+  monkeypatch.setattr(git_api.subprocess, "run", counting_run)
+
+  first = git_api._resolve_commits_memoized_sync(repo, ["main", "feature"])
+  second = git_api._resolve_commits_memoized_sync(repo, ["main", "feature"])
+  assert first == second
+  assert [c[1] for c in calls if c[1] == "rev-parse"] == ["rev-parse"]
+
+  calls.clear()
+  _git(repo, "commit", "-q", "--allow-empty", "-m", "move feature")
+  third = git_api._resolve_commits_memoized_sync(repo, ["main", "feature"])
+  assert third != first
+  assert [c[1] for c in calls if c[1] == "rev-parse"] == ["rev-parse"]
+
+
+def test_ref_resolution_follows_linked_worktree(tmp_path: Path) -> None:
+  """A linked worktree's git dir and common dir are found through the .git file."""
+  repo = _build_repo(tmp_path)
+  worktree = tmp_path / "wt"
+  _git(repo, "worktree", "add", "-q", str(worktree), "-b", "wt-branch")
+
+  git_dir, common_dir = git_api._git_dirs(worktree)
+  assert git_dir != repo / ".git"
+  assert (common_dir / "refs" / "heads" / "main").exists()
+  # The worktree's HEAD is its own file inside the per-worktree git dir.
+  assert (git_dir / "HEAD").exists()
+
+  resolved = git_api._resolve_commits_memoized_sync(worktree, ["wt-branch", "main"])
+  assert len(resolved) == 2 and all(len(sha) == 40 for sha in resolved)

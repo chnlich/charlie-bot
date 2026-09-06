@@ -69,6 +69,12 @@ _LOCK_RETRY_BACKOFF_SECONDS = 10.0
 # mapped types is code, fixed for the process.
 _UNHANDLED_PART_TYPES_SEEN: set[str] = set()
 
+# An SSE event type the translator does not map re-fires once per unhandled
+# frame (opencode emits todo.updated on every todo write), while one sighting
+# of a type carries the whole signal: the set of handled types is code, fixed
+# for the process.
+_UNHANDLED_SSE_EVENT_TYPES_SEEN: set[str] = set()
+
 
 def _log_unhandled_part_once(part_type: str) -> None:
   """Log one opencode_part_unhandled per part type per process.
@@ -86,6 +92,24 @@ def _log_unhandled_part_once(part_type: str) -> None:
 def _reset_unhandled_part_types_for_tests() -> None:
   """Clear the warn-once registry, restoring the process-start state."""
   _UNHANDLED_PART_TYPES_SEEN.clear()
+
+
+def _log_unhandled_sse_event_once(ev_type: str) -> None:
+  """Log one opencode_sse_event_unhandled per event type per process.
+
+  A caller relies on at most one line per event type: a later unhandled frame
+  of the same type re-fires a fired alarm, and a type the translator grows a
+  branch or an ignore entry for stops reaching this helper at all.
+  """
+  if ev_type in _UNHANDLED_SSE_EVENT_TYPES_SEEN:
+    return
+  _UNHANDLED_SSE_EVENT_TYPES_SEEN.add(ev_type)
+  log.debug("opencode_sse_event_unhandled", type=ev_type)
+
+
+def _reset_unhandled_sse_event_types_for_tests() -> None:
+  """Clear the warn-once registry, restoring the process-start state."""
+  _UNHANDLED_SSE_EVENT_TYPES_SEEN.clear()
 
 
 class OpenCodeSseSilenceError(RuntimeError):
@@ -596,7 +620,7 @@ class OpenCodeBackend(AgentBackend):
     if ev_type in _IGNORED_SSE_EVENT_TYPES:
       return []
 
-    log.debug("opencode_sse_event_unhandled", type=ev_type)
+    _log_unhandled_sse_event_once(ev_type)
     return []
 
   def _translate_part(self, part: dict) -> list[dict]:

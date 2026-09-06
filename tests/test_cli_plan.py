@@ -126,36 +126,21 @@ def test_plan_approve_posts_plan_id(
   assert "reminder" not in json.loads(out)
 
 
-def test_plan_close_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("close_as", ["superseded", "completed"])
+def test_plan_close_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close_as: str) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = make_json_response({"plan": 1, "state": "superseded"})
+  resp = make_json_response({"plan": 1, "state": close_as})
   with patch("sys.argv", [
       "plan", "close",
       "--plan", "1",
-      "--as", "superseded",
+      "--as", close_as,
   ]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
-  assert payload == {"session_id": "abc", "plan_id": 1, "close_as": "superseded"}
-
-
-def test_plan_close_posts_completed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = make_json_response({"plan": 1, "state": "completed"})
-  with patch("sys.argv", [
-      "plan", "close",
-      "--plan", "1",
-      "--as", "completed",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
-    main()
-
-  payload = post_mock.call_args.kwargs["json"]
-  assert payload == {"session_id": "abc", "plan_id": 1, "close_as": "completed"}
+  assert payload == {"session_id": "abc", "plan_id": 1, "close_as": close_as}
 
 
 def test_plan_list_uses_get_endpoint(

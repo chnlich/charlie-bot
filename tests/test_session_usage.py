@@ -136,6 +136,18 @@ def _snapshot(model: str, tokens: dict, limit: dict | None) -> dict:
   return {"model": model, "tokens": tokens, "limit": limit}
 
 
+# The snapshot fixture shared by the snapshot-tier tests; the token fields sum
+# to 147_000, which the tier's asserts re-add field by field.
+_SNAPSHOT_TOKENS = {
+    "input": 100_000,
+    "output": 5_000,
+    "reasoning": 2_000,
+    "cache_read": 30_000,
+    "cache_write": 10_000,
+}
+_SNAPSHOT_LIMIT = {"context": 409_600, "input": 270_000, "output": 131_072}
+
+
 def _context_reading_event(
     model: str, context_tokens: int | None, context_full: int | None,
     context_compact_at: int | None) -> dict:
@@ -612,13 +624,7 @@ async def test_snapshot_tier_full_and_point_for_limit_with_input(tmp_path: Path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-snap-input", name="Snapshot Input", backend="opencode-glm52")
   _write_session(session_mgr, meta, [
-      _result_event(
-          0.5,
-          context_snapshot=_snapshot(
-              SYNTHETIC_MODEL,
-              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
-               "cache_read": 30_000, "cache_write": 10_000},
-              {"context": 409_600, "input": 270_000, "output": 131_072})),
+      _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
   ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
@@ -641,8 +647,7 @@ async def test_snapshot_tier_full_for_limit_without_input(tmp_path: Path) -> Non
           0.5,
           context_snapshot=_snapshot(
               SYNTHETIC_MODEL,
-              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
-               "cache_read": 30_000, "cache_write": 10_000},
+              _SNAPSHOT_TOKENS,
               {"context": 409_600, "input": None, "output": 131_072})),
   ])
 
@@ -665,8 +670,7 @@ async def test_snapshot_tier_with_none_limit_yields_all_none_context(tmp_path: P
           0.5,
           context_snapshot=_snapshot(
               SYNTHETIC_MODEL,
-              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
-               "cache_read": 30_000, "cache_write": 10_000},
+              _SNAPSHOT_TOKENS,
               None)),
   ])
 
@@ -699,7 +703,7 @@ async def test_snapshot_tier_uses_newest_result_event_carrying_snapshot(tmp_path
               "new/model",
               {"input": 20_000, "output": 2_000, "reasoning": 3_000,
                "cache_read": 4_000, "cache_write": 5_000},
-              {"context": 409_600, "input": 270_000, "output": 131_072})),
+              _SNAPSHOT_LIMIT)),
   ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
@@ -731,13 +735,7 @@ async def test_snapshot_tier_compact_at_ignores_claude_constants_but_claude_tier
   # Snapshot (opencode) tier — same limit as the existing 270000 / 250000 case.
   snap_meta = SessionMetadata(id="session-decouple-snap", name="Snap Decouple", backend="opencode-glm52")
   _write_session(session_mgr, snap_meta, [
-      _result_event(
-          0.5,
-          context_snapshot=_snapshot(
-              SYNTHETIC_MODEL,
-              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
-               "cache_read": 30_000, "cache_write": 10_000},
-              {"context": 409_600, "input": 270_000, "output": 131_072})),
+      _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
   ])
   snap_usage = await session_mgr.resolve_session_usage(snap_meta.id, snap_meta)
 
@@ -778,8 +776,7 @@ async def test_snapshot_tier_with_non_int_output_degrades_to_none(tmp_path: Path
           0.5,
           context_snapshot=_snapshot(
               SYNTHETIC_MODEL,
-              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
-               "cache_read": 30_000, "cache_write": 10_000},
+              _SNAPSHOT_TOKENS,
               {"context": 409_600, "input": 270_000, "output": None})),
   ])
 
@@ -807,6 +804,14 @@ def _k3_reading() -> dict:
   return _context_reading_event(_K3_MODEL, 118_234, 262_144, 170_393)
 
 
+def _assert_k3_reading(usage: dict) -> None:
+  """The resolved slot carries the reading payload unchanged in all four fields."""
+  assert usage["context_tokens"] == 118_234
+  assert usage["context_full"] == 262_144
+  assert usage["context_compact_at"] == 170_393
+  assert usage["model"] == _K3_MODEL
+
+
 @pytest.mark.asyncio
 async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path) -> None:
   cfg = _build_cfg(tmp_path)
@@ -825,10 +830,7 @@ async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage is not None
-  assert usage["context_tokens"] == 118_234
-  assert usage["context_full"] == 262_144
-  assert usage["context_compact_at"] == 170_393
-  assert usage["model"] == _K3_MODEL
+  _assert_k3_reading(usage)
   # Cost still comes from the shared fold over result events.
   assert usage["total_cost_usd"] == pytest.approx(0.30)
 
@@ -848,10 +850,7 @@ async def test_reading_overrides_older_claude_reading(tmp_path: Path) -> None:
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage is not None
-  assert usage["context_tokens"] == 118_234
-  assert usage["context_full"] == 262_144
-  assert usage["context_compact_at"] == 170_393
-  assert usage["model"] == _K3_MODEL
+  _assert_k3_reading(usage)
 
 
 @pytest.mark.asyncio
@@ -885,23 +884,14 @@ async def test_reading_overrides_older_snapshot(tmp_path: Path) -> None:
   meta = SessionMetadata(
       id="session-reading-after-snap", name="Reading After Snapshot", backend="opencode-glm52")
   _write_session(session_mgr, meta, [
-      _result_event(
-          0.5,
-          context_snapshot=_snapshot(
-              SYNTHETIC_MODEL,
-              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
-               "cache_read": 30_000, "cache_write": 10_000},
-              {"context": 409_600, "input": 270_000, "output": 131_072})),
+      _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
       _k3_reading(),
   ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage is not None
-  assert usage["context_tokens"] == 118_234
-  assert usage["context_full"] == 262_144
-  assert usage["context_compact_at"] == 170_393
-  assert usage["model"] == _K3_MODEL
+  _assert_k3_reading(usage)
 
 
 @pytest.mark.asyncio
@@ -912,13 +902,7 @@ async def test_snapshot_overrides_older_context_reading(tmp_path: Path) -> None:
       id="session-snap-after-reading", name="Snapshot After Reading", backend="opencode-glm52")
   _write_session(session_mgr, meta, [
       _k3_reading(),
-      _result_event(
-          0.5,
-          context_snapshot=_snapshot(
-              SYNTHETIC_MODEL,
-              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
-               "cache_read": 30_000, "cache_write": 10_000},
-              {"context": 409_600, "input": 270_000, "output": 131_072})),
+      _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
   ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
@@ -949,10 +933,7 @@ async def test_reading_after_compact_boundary_still_wins(tmp_path: Path) -> None
   assert usage is not None
   # The boundary refined the claude slot, but the later context_reading moved
   # the slot to resolved: the reading decides, not post_tokens.
-  assert usage["context_tokens"] == 118_234
-  assert usage["context_full"] == 262_144
-  assert usage["context_compact_at"] == 170_393
-  assert usage["model"] == _K3_MODEL
+  _assert_k3_reading(usage)
 
 
 @pytest.mark.asyncio
@@ -964,13 +945,7 @@ async def test_boundary_while_snapshot_or_reading_slot_changes_nothing(tmp_path:
   snap_meta = SessionMetadata(
       id="session-boundary-snap", name="Boundary While Snapshot", backend="opencode-glm52")
   _write_session(session_mgr, snap_meta, [
-      _result_event(
-          0.5,
-          context_snapshot=_snapshot(
-              SYNTHETIC_MODEL,
-              {"input": 100_000, "output": 5_000, "reasoning": 2_000,
-               "cache_read": 30_000, "cache_write": 10_000},
-              {"context": 409_600, "input": 270_000, "output": 131_072})),
+      _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
       _compact_boundary_event(pre_tokens=250_000, post_tokens=4_670),
   ])
   snap_usage = await session_mgr.resolve_session_usage(snap_meta.id, snap_meta)

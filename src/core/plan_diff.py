@@ -349,8 +349,11 @@ def _align(old: list[_Leaf], new: list[_Leaf]) -> list[_LeafChange]:
       paired = min(old_end - old_start, new_end - new_start)
       result.extend(
           _LeafChange(old[old_start + index], new[new_start + index], new_start + index) for index in range(paired))
+      # An unpaired old leaf sits after the paired ones in the old document, so
+      # its ghost anchors after the paired new leaves too; anchoring at
+      # new_start would drop it above the changed leaf it follows.
       result.extend(
-          _LeafChange(old[old_start + index], None, new_start) for index in range(paired, old_end - old_start))
+          _LeafChange(old[old_start + index], None, new_start + paired) for index in range(paired, old_end - old_start))
       result.extend(
           _LeafChange(None, new[new_start + index], new_start + index) for index in range(paired, new_end - new_start))
       continue
@@ -557,10 +560,16 @@ def _ghost_parent(root: _Node, leaves: list[_Leaf], index: int, old: _Leaf) -> _
   return None
 
 
-def _ghost_markup(old: _Leaf) -> str:
+def _ghost_markup(old: _Leaf, base_source: str) -> str:
   tag = old.element.tag
   text = old.text if old.whole else "".join(part.text for part in _visible_parts(old.element))
-  data = _html.escape(text, quote=True)
+  end = old.element.end_end
+  # The new document lost the whitespace that separated the deleted block from
+  # the next one, so the ghost carries it inside data-del — mirroring the
+  # inline-deletion convention — and restoring the mark separates the returned
+  # text again.
+  trailing = re.match(r"\s*", base_source[end:]).group(0) if end is not None else ""
+  data = _html.escape(text + trailing, quote=True)
   if tag == "tr":
     cells = [child for child in old.element.children if isinstance(child, _Node) and child.tag in {"td", "th"}]
     colspan = max(1, len(cells))
@@ -576,6 +585,7 @@ def _insert_ghost(
     new_index: int,
     insertions: dict[int, list[str]],
     details: set[_Node],
+    base_source: str,
 ) -> None:
   parent = _ghost_parent(root, new_leaves, new_index, old)
   if new_index < len(new_leaves):
@@ -600,7 +610,7 @@ def _insert_ghost(
   else:
     offset = len(source)
     context = None
-  _add_insertion(insertions, offset, _ghost_markup(old))
+  _add_insertion(insertions, offset, _ghost_markup(old, base_source))
   if context is not None:
     details.update(_ancestor_details(context))
 
@@ -613,6 +623,7 @@ def _render_leaf_changes(
     insertions: dict[int, list[str]],
     classes: dict[_Node, set[str]],
     details: set[_Node],
+    base_source: str,
 ) -> None:
   new_positions = {id(leaf): index for index, leaf in enumerate(new_leaves)}
   # A class-marked parent replaces its full visible subtree; do not add nested
@@ -634,7 +645,7 @@ def _render_leaf_changes(
       # block structure (notably for rows and list items).
       position = change.new_index if change.new_index is not None else len(new_leaves)
       if change.old.whole:
-        _insert_ghost(source, root, change.old, new_leaves, position, insertions, details)
+        _insert_ghost(source, root, change.old, new_leaves, position, insertions, details, base_source)
       elif new_leaves:
         target = new_leaves[position].element if position < len(new_leaves) else new_leaves[-1].element
         offset = target.start if position < len(new_leaves) else target.end_end
@@ -662,7 +673,7 @@ def _render_leaf_changes(
       classes.setdefault(change.new.element, set()).add("cbd-new")
       replaced_old.add(change.old.element)
       replaced_new.add(change.new.element)
-      _insert_ghost(source, root, change.old, new_leaves, new_position, insertions, details)
+      _insert_ghost(source, root, change.old, new_leaves, new_position, insertions, details, base_source)
       continue
     details.update(_ancestor_details(change.new.element))
     for _, old_start, old_end, new_start, new_end in changed_opcodes:
@@ -743,11 +754,12 @@ def _analyse(base_html: str, new_html: str) -> tuple[_Parser, _Parser, list[_Lea
 
 def annotate(base_html: str, new_html: str) -> str:
   """Return ``new_html`` with the word-level comparison against ``base_html`` embedded."""
-  _, new_parser, changes, _, new_leaves = _analyse(base_html, new_html)
+  base_parser, new_parser, changes, _, new_leaves = _analyse(base_html, new_html)
   insertions: dict[int, list[str]] = {}
   classes: dict[_Node, set[str]] = {}
   details: set[_Node] = set()
-  _render_leaf_changes(new_html, _document_root(new_parser), changes, new_leaves, insertions, classes, details)
+  _render_leaf_changes(new_html, _document_root(new_parser), changes, new_leaves, insertions, classes, details,
+                       base_parser.source)
   _render_start_tag_additions(new_html, classes, details, insertions)
   return _append_style_and_header(_splice(new_html, insertions))
 

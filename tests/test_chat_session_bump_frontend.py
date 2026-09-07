@@ -9,5 +9,5 @@ NODE_TEST = ROOT / 'tests' / 'chat_session_bump.test.js'
 
 
 def test_chat_session_bump_frontend() -> None:
-  """Run focused frontend sidebar bump tests against chat.js."""
+  """Run the sidebar session-bump and turn-outline tests against the chat modules."""
   run_node_js_test(NODE_TEST, 'node is required for chat session bump frontend tests')

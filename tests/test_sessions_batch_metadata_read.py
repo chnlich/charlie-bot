@@ -33,6 +33,55 @@ def _failed_events(logs: list[dict], session_id: str) -> list[dict]:
   ]
 
 
+def _count_root_scans(mgr: SessionManager, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+  """Count the scandir calls whose path is the sessions root itself."""
+  real_scandir = os.scandir
+  root_scans: list[str] = []
+
+  def counting_scandir(path):
+    # shutil.rmtree scans by fd; only the sessions-root path counts.
+    if isinstance(path, (str, os.PathLike)) and os.fspath(path) == os.fspath(mgr._cfg.sessions_dir):
+      root_scans.append(os.fspath(path))
+    return real_scandir(path)
+
+  monkeypatch.setattr(os, "scandir", counting_scandir)
+  return root_scans
+
+
+def _isolate_read_failure(mgr: SessionManager, monkeypatch: pytest.MonkeyPatch) -> SessionMetadata:
+  bad = SessionMetadata(name="bad")
+  bad_path = _write_metadata(mgr, bad)
+  real_read_text = Path.read_text
+
+  def fail_bad_read(path: Path, *args: object, **kwargs: object) -> str:
+    if path == bad_path:
+      raise OSError("read failed")
+    return real_read_text(path, *args, **kwargs)
+
+  monkeypatch.setattr(Path, "read_text", fail_bad_read)
+  return bad
+
+
+def _isolate_validate_failure(mgr: SessionManager, monkeypatch: pytest.MonkeyPatch) -> SessionMetadata:
+  bad = SessionMetadata(name="bad")
+  _write_metadata(mgr, bad, "{not valid json")
+  return bad
+
+
+def _isolate_migration_save_failure(mgr: SessionManager, monkeypatch: pytest.MonkeyPatch) -> SessionMetadata:
+  bad = SessionMetadata(name="bad", round_ratings={"5": "thumbs_up"})
+  _write_metadata(mgr, bad)
+  real_save = mgr.save_metadata
+
+  async def fail_bad_save(meta: SessionMetadata) -> None:
+    if meta.id == bad.id:
+      raise OSError("save failed")
+    await real_save(meta)
+
+  monkeypatch.setattr(mgr, "save_metadata", fail_bad_save)
+  return bad
+
+
 @pytest.mark.asyncio
 async def test_batch_fills_missing_active_and_archived_metadata(tmp_path: Path) -> None:
   mgr = _make_session_mgr(tmp_path)
@@ -65,23 +114,29 @@ async def test_batch_skips_metadata_reads_when_cache_is_fresh(
 
 
 @pytest.mark.asyncio
-async def test_batch_isolates_file_read_failures_per_session(
+@pytest.mark.parametrize(
+    "isolate,expected_error",
+    [
+        (_isolate_read_failure, "read failed"),
+        (_isolate_validate_failure, None),
+        (_isolate_migration_save_failure, "save failed"),
+    ],
+    ids=["file-read", "model-validate", "migration-save"],
+)
+async def test_batch_isolates_failure_per_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    isolate: Callable[[SessionManager, pytest.MonkeyPatch], SessionMetadata],
+    expected_error: str | None,
 ) -> None:
+  """One bad session fails alone: the batch still returns the good one and
+  exactly one session_load_failed event names it. ``expected_error`` pins the
+  surfaced text; None asserts only presence, because the model-validate error
+  is the parser's own message rather than a stable string."""
   mgr = _make_session_mgr(tmp_path)
   good = SessionMetadata(name="good")
-  bad = SessionMetadata(name="bad")
   _write_metadata(mgr, good)
-  bad_path = _write_metadata(mgr, bad)
-  real_read_text = Path.read_text
-
-  def fail_bad_read(path: Path, *args: object, **kwargs: object) -> str:
-    if path == bad_path:
-      raise OSError("read failed")
-    return real_read_text(path, *args, **kwargs)
-
-  monkeypatch.setattr(Path, "read_text", fail_bad_read)
+  bad = isolate(mgr, monkeypatch)
 
   with capture_logs() as logs:
     result = await mgr._load_session_metas()
@@ -89,52 +144,10 @@ async def test_batch_isolates_file_read_failures_per_session(
   assert {meta.id for meta in result} == {good.id}
   failures = _failed_events(logs, bad.id)
   assert len(failures) == 1
-  assert failures[0]["error"] == "read failed"
-
-
-@pytest.mark.asyncio
-async def test_batch_isolates_model_validate_json_failures_per_session(tmp_path: Path,) -> None:
-  mgr = _make_session_mgr(tmp_path)
-  good = SessionMetadata(name="good")
-  bad = SessionMetadata(name="bad")
-  _write_metadata(mgr, good)
-  _write_metadata(mgr, bad, "{not valid json")
-
-  with capture_logs() as logs:
-    result = await mgr._load_session_metas()
-
-  assert {meta.id for meta in result} == {good.id}
-  failures = _failed_events(logs, bad.id)
-  assert len(failures) == 1
-  assert failures[0]["error"]
-
-
-@pytest.mark.asyncio
-async def test_batch_isolates_migration_save_failures_per_session(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  mgr = _make_session_mgr(tmp_path)
-  good = SessionMetadata(name="good")
-  bad = SessionMetadata(name="bad", round_ratings={"5": "thumbs_up"})
-  _write_metadata(mgr, good)
-  _write_metadata(mgr, bad)
-  real_save = mgr.save_metadata
-
-  async def fail_bad_save(meta: SessionMetadata) -> None:
-    if meta.id == bad.id:
-      raise OSError("save failed")
-    await real_save(meta)
-
-  monkeypatch.setattr(mgr, "save_metadata", fail_bad_save)
-
-  with capture_logs() as logs:
-    result = await mgr._load_session_metas()
-
-  assert {meta.id for meta in result} == {good.id}
-  failures = _failed_events(logs, bad.id)
-  assert len(failures) == 1
-  assert failures[0]["error"] == "save failed"
+  if expected_error is None:
+    assert failures[0]["error"]
+  else:
+    assert failures[0]["error"] == expected_error
 
 
 @pytest.mark.asyncio
@@ -257,16 +270,7 @@ async def test_dir_names_memo_rescans_only_when_root_changes(
   _write_metadata(mgr, first)
   await mgr._load_session_metas()
 
-  real_scandir = os.scandir
-  root_scans: list[str] = []
-
-  def counting_scandir(path):
-    # shutil.rmtree scans by fd; only the sessions-root path counts.
-    if isinstance(path, (str, os.PathLike)) and os.fspath(path) == os.fspath(mgr._cfg.sessions_dir):
-      root_scans.append(os.fspath(path))
-    return real_scandir(path)
-
-  monkeypatch.setattr(os, "scandir", counting_scandir)
+  root_scans = _count_root_scans(mgr, monkeypatch)
 
   steady = await mgr._load_session_metas()
   assert [meta.id for meta in steady] == [first.id]
@@ -297,15 +301,7 @@ async def test_listings_memo_serves_repeat_without_walking(
   _write_metadata(mgr, meta)
   await mgr._load_session_metas()
 
-  real_scandir = os.scandir
-  root_scans: list[str] = []
-
-  def counting_scandir(path):
-    if isinstance(path, (str, os.PathLike)) and os.fspath(path) == os.fspath(mgr._cfg.sessions_dir):
-      root_scans.append(os.fspath(path))
-    return real_scandir(path)
-
-  monkeypatch.setattr(os, "scandir", counting_scandir)
+  root_scans = _count_root_scans(mgr, monkeypatch)
   metadata_reads = count_path_read_text(monkeypatch, lambda path: path.name == "metadata.json")
 
   steady = await mgr._load_session_metas()

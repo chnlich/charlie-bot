@@ -984,11 +984,8 @@ test('formatPlanStateLabel: plain state, takeoff-qualified approved, and selecto
     getElementById: (id) => elements[id] || null,
     createElement: () => ({addEventListener() {}, appendChild() {}}),
   };
-  const fetch = async (url) => {
-    if (String(url).indexOf('/api/sessions/') !== -1)
-      return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1)], {state: 'approved', takeoff: {v: 1, at: 'x'}})]})};
-    return {ok: true, text: async () => ''};
-  };
+  const fetch =
+      makeRegistryFetch({plans: [makePlan(1, [makeVersion(1)], {state: 'approved', takeoff: {v: 1, at: 'x'}})]});
   const {planPanel: pp} = loadPlanPanelScript({document, fetch});
   await pp.refresh();
   assert.ok(sel.innerHTML.indexOf('approved \u00B7 v1') !== -1, 'selector label is takeoff-qualified');

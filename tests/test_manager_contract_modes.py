@@ -18,6 +18,8 @@ project trees under ``tmp_path``; no live ``~/.charliebot`` state is touched.
 from pathlib import Path
 from types import SimpleNamespace
 
+from conftest import make_instruction_cfg
+
 from src.agents import master_cc, master_cc_run
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -34,30 +36,13 @@ CONTRACT_SHARED_LINE = "You coordinate. Sessions execute. The user decides."
 CONTRACT_LEDGER_LINE = "The ledger is the sole authority for project-layer facts"
 CONTRACT_MODE_HEADING = "## 1. Your project's mode"
 
-BASE_PROMPT = "BASE PROMPT"
 COMMON_TEXT = "COMMON RULES: scoring standards and resources"
 SUPPLEMENT_TEXT = "MANAGER SUPPLEMENT"
 
 
-def _make_cfg(tmp_path: Path, *, with_contract: bool = True) -> SimpleNamespace:
-  """Fake instruction inputs: repo base prompt + the real repo manager contract, no host override."""
-  home = tmp_path / "home"
-  repo = tmp_path / "repo"
-  (repo / "prompts").mkdir(parents=True)
-  (repo / "prompts" / "master.md").write_text(BASE_PROMPT, encoding="utf-8")
-  if with_contract:
-    (repo / "prompts" / "project_manager.md").write_text(CONTRACT_TEXT, encoding="utf-8")
-  return SimpleNamespace(
-      charlie_bot_repo=repo,
-      claude_md_file=home / "MASTER_AGENT_PROMPT.md",
-      memory_dir=home / "memory",
-      charliebot_home=home,
-  )
-
-
 def _enabled_project(tmp_path: Path, group: str = "group-alpha") -> SimpleNamespace:
   """An enabled fake project: project.yaml naming a common body and a manager supplement."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_TEXT)
   project_dir = cfg.charliebot_home / "projects" / group
   project_dir.mkdir(parents=True)
   (project_dir / "project.yaml").write_text(
@@ -69,7 +54,7 @@ def _enabled_project(tmp_path: Path, group: str = "group-alpha") -> SimpleNamesp
 
 def _unconfigured_project(tmp_path: Path, group: str = "group-beta") -> SimpleNamespace:
   """An unconfigured fake project: a project directory without project.yaml."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_TEXT)
   (cfg.charliebot_home / "projects" / group).mkdir(parents=True)
   (cfg.charliebot_home / "projects" / group / "notes.md").write_text("UNCONFIGURED NOTES", encoding="utf-8")
   return cfg
@@ -170,7 +155,8 @@ def test_unconfigured_manager_gets_pointer_with_not_enabled_marker_and_no_contra
 
 def test_both_managers_share_one_contract_with_nonconflicting_respective_duties(tmp_path: Path) -> None:
   """The same repo contract file serves both managers; each binds its own mode."""
-  cfg = _make_cfg(tmp_path)  # one repo, one contract file, both groups read it
+  # One repo, one contract file: both groups read it.
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_TEXT)
   enabled_dir = cfg.charliebot_home / "projects" / "group-alpha"
   enabled_dir.mkdir(parents=True)
   (enabled_dir / "project.yaml").write_text("prompt_file: project.md\n", encoding="utf-8")
@@ -197,7 +183,7 @@ def test_both_managers_share_one_contract_with_nonconflicting_respective_duties(
 
 def test_missing_repo_contract_fails_only_enabled_manager(tmp_path: Path) -> None:
   """An unconfigured manager never needs the repo file at build time; an enabled one does."""
-  cfg = _make_cfg(tmp_path, with_contract=False)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=None)
   enabled_dir = cfg.charliebot_home / "projects" / "group-alpha"
   enabled_dir.mkdir(parents=True)
   (enabled_dir / "project.yaml").write_text("prompt_file: project.md\n", encoding="utf-8")

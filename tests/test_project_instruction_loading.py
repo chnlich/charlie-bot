@@ -20,6 +20,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     FakeBackend,
+    make_instruction_cfg,
     make_work_item,
     mock_session_callbacks,
 )
@@ -38,21 +39,6 @@ COMMON_MARK = "COMMON RULES BODY"
 SUPPLEMENT_MARK = "MANAGER SUPPLEMENT BODY"
 
 
-def _make_cfg(tmp_path: Path) -> SimpleNamespace:
-  """Fake instruction inputs: repo base prompt + repo manager contract, no host override."""
-  home = tmp_path / "home"
-  repo = tmp_path / "repo"
-  (repo / "prompts").mkdir(parents=True)
-  (repo / "prompts" / "master.md").write_text("BASE PROMPT", encoding="utf-8")
-  (repo / "prompts" / "project_manager.md").write_text(CONTRACT_MARK, encoding="utf-8")
-  return SimpleNamespace(
-      charlie_bot_repo=repo,
-      claude_md_file=home / "MASTER_AGENT_PROMPT.md",
-      memory_dir=home / "memory",
-      charliebot_home=home,
-  )
-
-
 def _make_project(
     tmp_path: Path,
     *,
@@ -62,7 +48,7 @@ def _make_project(
     write_contract: bool = True,
 ) -> SimpleNamespace:
   """An enabled fake project: project.yaml plus the body files it names."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   if not write_contract:
     (cfg.charlie_bot_repo / "prompts" / "project_manager.md").unlink()
   project_dir = cfg.charliebot_home / "projects" / group
@@ -130,7 +116,7 @@ def test_unknown_keys_and_wrong_types_are_invalid() -> None:
 
 
 def test_missing_project_config_keeps_prior_behavior(tmp_path: Path) -> None:
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
 
   ordinary = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
   assert ordinary is not None
@@ -278,7 +264,7 @@ def test_duplicate_body_destinations_fail_ordinary_session(tmp_path: Path) -> No
 
 def test_duplicate_body_destinations_via_symlink_alias_fail(tmp_path: Path) -> None:
   """Two fields pointing at one file through a symlink alias are the same destination."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   project_dir = cfg.charliebot_home / "projects" / "proj"
   project_dir.mkdir(parents=True)
   (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
@@ -314,7 +300,7 @@ def test_body_path_outside_project_dir_fails(tmp_path: Path) -> None:
 
 def test_absolute_body_path_inside_project_dir_fails(tmp_path: Path) -> None:
   """An absolute path is invalid schema even when it points inside the project directory."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   project_dir = cfg.charliebot_home / "projects" / "proj"
   project_dir.mkdir(parents=True)
   (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
@@ -350,7 +336,7 @@ def test_unreadable_body_fails(tmp_path: Path) -> None:
 
 
 def test_group_traversal_fails(tmp_path: Path) -> None:
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   escaped = cfg.charliebot_home / "evil"
   escaped.mkdir(parents=True)
   (escaped / "project.yaml").write_text("prompt_file: common.md\n", encoding="utf-8")
@@ -367,7 +353,7 @@ def test_group_traversal_fails(tmp_path: Path) -> None:
 
 def test_dangling_config_symlink_fails_instead_of_disabling(tmp_path: Path) -> None:
   """A broken project.yaml symlink is a present-but-broken config, never "not enabled"."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   project_dir = cfg.charliebot_home / "projects" / "proj"
   project_dir.mkdir(parents=True)
   (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
@@ -386,7 +372,7 @@ def test_dangling_config_symlink_fails_instead_of_disabling(tmp_path: Path) -> N
 
 def test_dangling_project_directory_symlink_fails_instead_of_disabling(tmp_path: Path) -> None:
   """A broken projects/<group> symlink is a present-but-broken directory, never "not enabled"."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   (cfg.charliebot_home / "projects").mkdir(parents=True)
   target = tmp_path / "gone-project"
   dangling = cfg.charliebot_home / "projects" / "proj"
@@ -405,7 +391,7 @@ def test_dangling_project_directory_symlink_fails_instead_of_disabling(tmp_path:
 
 def test_project_directory_symlink_loop_fails_instead_of_disabling(tmp_path: Path) -> None:
   """An unresolvable project directory symlink is a config error, not a silent skip."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   (cfg.charliebot_home / "projects").mkdir(parents=True)
   loop = cfg.charliebot_home / "projects" / "proj"
   loop.symlink_to(loop)
@@ -415,7 +401,7 @@ def test_project_directory_symlink_loop_fails_instead_of_disabling(tmp_path: Pat
 
 def test_absent_project_directory_still_unconfigured(tmp_path: Path) -> None:
   """A truly absent project directory (projects/ present, group absent) keeps "not enabled"."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   (cfg.charliebot_home / "projects").mkdir(parents=True)
   assert load_project_bodies(cfg.charliebot_home, "proj", manager=False) is None
   assert load_project_bodies(cfg.charliebot_home, "proj", manager=True) is None
@@ -432,7 +418,7 @@ def test_absent_project_directory_still_unconfigured(tmp_path: Path) -> None:
 
 def test_config_symlink_outside_project_dir_fails(tmp_path: Path) -> None:
   """A project.yaml symlink out of the project directory breaks the declared isolation."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   project_dir = cfg.charliebot_home / "projects" / "proj"
   project_dir.mkdir(parents=True)
   (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
@@ -446,7 +432,7 @@ def test_config_symlink_outside_project_dir_fails(tmp_path: Path) -> None:
 
 def test_config_symlink_inside_project_dir_loads(tmp_path: Path) -> None:
   """An in-directory alias for project.yaml is a valid config location."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   project_dir = cfg.charliebot_home / "projects" / "proj"
   project_dir.mkdir(parents=True)
   (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
@@ -460,7 +446,7 @@ def test_config_symlink_inside_project_dir_loads(tmp_path: Path) -> None:
 
 def test_bad_utf8_config_fails(tmp_path: Path) -> None:
   """A non-UTF-8 config is a per-turn project error, not a raw UnicodeDecodeError escape."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   project_dir = cfg.charliebot_home / "projects" / "proj"
   project_dir.mkdir(parents=True)
   (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
@@ -471,7 +457,7 @@ def test_bad_utf8_config_fails(tmp_path: Path) -> None:
 
 def test_config_directory_fails(tmp_path: Path) -> None:
   """project.yaml as a directory is an unreadable config, never a silent skip."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   project_dir = cfg.charliebot_home / "projects" / "proj"
   project_dir.mkdir(parents=True)
   (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
@@ -482,7 +468,7 @@ def test_config_directory_fails(tmp_path: Path) -> None:
 
 def test_symlink_loop_body_resolution_fails(tmp_path: Path) -> None:
   """A symlink-loop body destination is a config error, not a raw resolve crash."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   project_dir = cfg.charliebot_home / "projects" / "proj"
   project_dir.mkdir(parents=True)
   loop = project_dir / "common.md"
@@ -494,7 +480,7 @@ def test_symlink_loop_body_resolution_fails(tmp_path: Path) -> None:
 
 def test_symlinked_project_directory_stays_confined(tmp_path: Path) -> None:
   """The project directory may itself be a symlink: bodies stay confined to its real target."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   real = tmp_path / "real-project"
   real.mkdir()
   (real / "common.md").write_text(COMMON_MARK, encoding="utf-8")
@@ -551,7 +537,7 @@ def test_configured_supplement_missing_fails_manager_only(tmp_path: Path) -> Non
 
 def _dangling_project_dir(tmp_path: Path) -> SimpleNamespace:
   """A projects/<group> directory that is a symlink to a missing target."""
-  cfg = _make_cfg(tmp_path)
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   (cfg.charliebot_home / "projects").mkdir(parents=True)
   (cfg.charliebot_home / "projects" / "proj").symlink_to(tmp_path / "gone-project")
   return cfg

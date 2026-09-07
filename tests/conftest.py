@@ -829,6 +829,25 @@ def build_slack_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
+def make_instruction_cfg(tmp_path: Path, *, manager_contract: str | None) -> SimpleNamespace:
+  """Fake instruction inputs for the master-instruction builder: a repo whose prompts/master.md
+  reads "BASE PROMPT", plus prompts/project_manager.md carrying the manager_contract text when
+  given. claude_md_file and memory_dir name paths that do not exist, so the built instructions
+  carry neither host override nor memory block."""
+  home = tmp_path / "home"
+  repo = tmp_path / "repo"
+  (repo / "prompts").mkdir(parents=True)
+  (repo / "prompts" / "master.md").write_text("BASE PROMPT", encoding="utf-8")
+  if manager_contract is not None:
+    (repo / "prompts" / "project_manager.md").write_text(manager_contract, encoding="utf-8")
+  return SimpleNamespace(
+      charlie_bot_repo=repo,
+      claude_md_file=home / "MASTER_AGENT_PROMPT.md",
+      memory_dir=home / "memory",
+      charliebot_home=home,
+  )
+
+
 def cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
   """A cfg-like object whose charlie_bot_repo points at *repo_root* (real CharlieBotConfig's
   charlie_bot_repo is a derived property tied to the installed package location, so a plain

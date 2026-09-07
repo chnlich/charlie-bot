@@ -33,7 +33,6 @@ NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
 FABLE = "claude-fable-5-1"
 SONNET = "claude-sonnet-5"
 
-
 _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 

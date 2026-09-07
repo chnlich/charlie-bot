@@ -42,6 +42,13 @@ def _write_session(session_mgr: SessionManager, meta: SessionMetadata, events: l
   session_mgr.get_chat_events_path(meta.id).write_text(lines + "\n", encoding="utf-8")
 
 
+def _session_rig(tmp_path: Path, session_id: str, name: str, backend: str) -> tuple[SessionManager, SessionMetadata]:
+  """SessionManager over a fresh _build_cfg config plus one session's metadata: the pair a resolve test starts from."""
+  session_mgr = SessionManager(_build_cfg(tmp_path))
+  meta = SessionMetadata(id=session_id, name=name, backend=backend)
+  return session_mgr, meta
+
+
 def _write_codex_rollout(codex_home: Path, native_thread_id: str, lines: list[dict]) -> None:
   rollout_dir = codex_home / "sessions" / "2026" / "03" / "31"
   rollout_dir.mkdir(parents=True, exist_ok=True)
@@ -159,6 +166,17 @@ def _snapshot(model: str, tokens: dict, limit: dict | None) -> dict:
   return {"model": model, "tokens": tokens, "limit": limit}
 
 
+def _cumulative_result_with_assistant_reading() -> list[dict]:
+  """A result event carrying the turn-cumulative 1.5M sum plus the per-request 150k assistant reading
+  the claude tier must prefer."""
+  return [
+      _result_event(0.5, {"claude-opus-4-6": {
+          "contextWindow": 200_000
+      }}, input_tokens=1_500_000),
+      _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
+  ]
+
+
 # The snapshot fixture shared by the snapshot-tier tests; the token fields sum
 # to 147_000, which the tier's asserts re-add field by field.
 _SNAPSHOT_TOKENS = {
@@ -177,18 +195,8 @@ _SNAPSHOT_LIMIT = {"context": 409_600, "input": 270_000, "output": 131_072}
 
 @pytest.mark.asyncio
 async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-assistant", name="Assistant", backend=OPUS_BACKEND_ID)
-  # Result carries a turn-cumulative 1.5M sum; a later main-chain assistant event
-  # reports a realistic per-request size.
-  _write_session(
-      session_mgr, meta, [
-          _result_event(0.5, {"claude-opus-4-6": {
-              "contextWindow": 200_000
-          }}, input_tokens=1_500_000),
-          _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
-      ])
+  session_mgr, meta = _session_rig(tmp_path, "session-assistant", "Assistant", OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, _cumulative_result_with_assistant_reading())
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -258,9 +266,7 @@ async def test_claude_tier_context_tokens_across_a_compact_boundary(
     boundary_events: list[dict],
     expected_context_tokens: int,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id=f"session-{session_tag}", name=session_name, backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, f"session-{session_tag}", session_name, OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [_result_event(0.5, {"claude-opus-4-6": {
           "contextWindow": 200_000
@@ -277,9 +283,7 @@ async def test_claude_tier_context_tokens_across_a_compact_boundary(
 
 @pytest.mark.asyncio
 async def test_claude_tier_admission_unaffected_by_boundary_only_events(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-boundaryonly", name="Boundary Only", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-boundaryonly", "Boundary Only", OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
           _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
@@ -308,9 +312,7 @@ async def test_claude_tier_admission_unaffected_by_boundary_only_events(tmp_path
 
 @pytest.mark.asyncio
 async def test_claude_tier_resolves_context_full_from_assistant_model_not_dict_order(tmp_path: Path,) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-modelorder", name="Model Order", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-modelorder", "Model Order", OPUS_BACKEND_ID)
   # modelUsage lists a small-window sub-model FIRST; the assistant event's model
   # is the real (second) model.
   _write_session(
@@ -340,9 +342,7 @@ async def test_claude_tier_resolves_context_full_from_assistant_model_not_dict_o
 
 @pytest.mark.asyncio
 async def test_claude_tier_context_full_is_declared_window_when_model_usage_absent(tmp_path: Path,) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-nomodel", name="No Model Usage", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-nomodel", "No Model Usage", OPUS_BACKEND_ID)
   _write_session(
       session_mgr,
       meta,
@@ -366,9 +366,7 @@ async def test_claude_tier_context_full_is_declared_window_when_model_usage_abse
 
 @pytest.mark.asyncio
 async def test_claude_tier_ignores_subagent_and_synthetic_assistant_events(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-ignore", name="Ignore", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-ignore", "Ignore", OPUS_BACKEND_ID)
   _write_session(
       session_mgr,
       meta,
@@ -394,9 +392,7 @@ async def test_claude_tier_ignores_subagent_and_synthetic_assistant_events(tmp_p
 
 @pytest.mark.asyncio
 async def test_no_source_tier_when_results_but_no_assistant_usage(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-nosource", name="No Source", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-nosource", "No Source", OPUS_BACKEND_ID)
   _write_session(
       session_mgr,
       meta,
@@ -437,9 +433,7 @@ _COST_ROWS = [
 @pytest.mark.parametrize("result_costs, expected_cost", _COST_ROWS)
 async def test_total_cost_across_results(
     tmp_path: Path, result_costs: tuple[float, float], expected_cost: object) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-cost", name="Cost", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-cost", "Cost", OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
           _result_event(result_costs[0], {"claude-opus-4-6": {
@@ -464,9 +458,7 @@ async def test_total_cost_across_results(
 
 @pytest.mark.asyncio
 async def test_public_entry_point_has_no_events_parameter(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-wholelist", name="Whole List", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-wholelist", "Whole List", OPUS_BACKEND_ID)
   # More than 40 result events with cost, so a tail would under-count.
   events = [_result_event(0.01, {"claude-opus-4-6": {"contextWindow": 200_000}}, input_tokens=i) for i in range(50)]
   events.append(_assistant_event("claude-opus-4-6", input_tokens=10_000))
@@ -580,9 +572,7 @@ def test_declared_window_unparseable_warning_refires_for_a_new_bad_value(monkeyp
 )
 async def test_claude_tier_full_and_point_for_window_model(
     tmp_path: Path, window: int, expected_full: int, expected_compact_at: int) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-window", name="Window Model", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-window", "Window Model", OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
           _result_event(0.5, {"claude-opus-4-6": {
@@ -604,9 +594,7 @@ async def test_claude_tier_full_and_point_for_window_model(
 async def test_claude_tier_point_none_under_forwarded_unmodelled_override(tmp_path: Path, monkeypatch) -> None:
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "433000")
   monkeypatch.setenv("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "1")
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-override", name="Override", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-override", "Override", OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
           _result_event(0.5, {"claude-opus-4-6": {
@@ -652,9 +640,7 @@ _SNAPSHOT_LIMIT_SHAPES = [
 @pytest.mark.parametrize(("limit", "expected_full", "expected_compact_at"), _SNAPSHOT_LIMIT_SHAPES)
 async def test_snapshot_tier_full_and_point_for_limit_shape(
     tmp_path: Path, limit: dict | None, expected_full: int | None, expected_compact_at: int | None) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-snap-shape", name="Snapshot Limit Shape", backend="opencode-glm52")
+  session_mgr, meta = _session_rig(tmp_path, "session-snap-shape", "Snapshot Limit Shape", "opencode-glm52")
   _write_session(
       session_mgr, meta, [
           _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, limit)),
@@ -671,9 +657,7 @@ async def test_snapshot_tier_full_and_point_for_limit_shape(
 
 @pytest.mark.asyncio
 async def test_snapshot_tier_uses_newest_result_event_carrying_snapshot(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-snap-newest", name="Snapshot Newest", backend="opencode-glm52")
+  session_mgr, meta = _session_rig(tmp_path, "session-snap-newest", "Snapshot Newest", "opencode-glm52")
   _write_session(
       session_mgr, meta, [
           _result_event(
@@ -725,11 +709,8 @@ async def test_snapshot_tier_compact_at_ignores_claude_constants_but_claude_tier
   monkeypatch.setattr("src.core.session_usage.CLAUDE_COMPACT_CONTEXT_RESERVE", 50_000)
   monkeypatch.setenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "600000")
 
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-
   # Snapshot (opencode) tier — same limit as the existing 270000 / 250000 case.
-  snap_meta = SessionMetadata(id="session-decouple-snap", name="Snap Decouple", backend="opencode-glm52")
+  session_mgr, snap_meta = _session_rig(tmp_path, "session-decouple-snap", "Snap Decouple", "opencode-glm52")
   _write_session(
       session_mgr, snap_meta, [
           _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
@@ -783,9 +764,7 @@ def _assert_k3_reading(usage: dict) -> None:
 
 @pytest.mark.asyncio
 async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-reading", name="Reading", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-reading", "Reading", OPUS_BACKEND_ID)
   # Several result events with turn-cumulative usage and no context_snapshot
   # (charlie-code today), plus context_reading events: the newest reading
   # decides all four fields, the cumulative usage never reaches the readout.
@@ -807,9 +786,7 @@ async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_reading_overrides_older_claude_reading(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-reading-after-claude", name="Reading After Claude", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-reading-after-claude", "Reading After Claude", OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
           _result_event(0.5, {"claude-opus-4-6": {
@@ -828,9 +805,7 @@ async def test_reading_overrides_older_claude_reading(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_clean_ceiling_env")
 async def test_claude_reading_overrides_older_context_reading(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-claude-after-reading", name="Claude After Reading", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-claude-after-reading", "Claude After Reading", OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
           _k3_reading(),
@@ -853,9 +828,7 @@ async def test_claude_reading_overrides_older_context_reading(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_reading_overrides_older_snapshot(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-reading-after-snap", name="Reading After Snapshot", backend="opencode-glm52")
+  session_mgr, meta = _session_rig(tmp_path, "session-reading-after-snap", "Reading After Snapshot", "opencode-glm52")
   _write_session(
       session_mgr, meta, [
           _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
@@ -870,9 +843,7 @@ async def test_reading_overrides_older_snapshot(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_snapshot_overrides_older_context_reading(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-snap-after-reading", name="Snapshot After Reading", backend="opencode-glm52")
+  session_mgr, meta = _session_rig(tmp_path, "session-snap-after-reading", "Snapshot After Reading", "opencode-glm52")
   _write_session(
       session_mgr, meta, [
           _k3_reading(),
@@ -891,9 +862,8 @@ async def test_snapshot_overrides_older_context_reading(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_reading_after_compact_boundary_still_wins(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-reading-after-boundary", name="Reading After Boundary", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(
+      tmp_path, "session-reading-after-boundary", "Reading After Boundary", OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
           _result_event(0.5, {"claude-opus-4-6": {
@@ -914,11 +884,8 @@ async def test_reading_after_compact_boundary_still_wins(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_boundary_while_snapshot_or_reading_slot_changes_nothing(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-
   # Boundary after a snapshot: the snapshot slot keeps deciding.
-  snap_meta = SessionMetadata(id="session-boundary-snap", name="Boundary While Snapshot", backend="opencode-glm52")
+  session_mgr, snap_meta = _session_rig(tmp_path, "session-boundary-snap", "Boundary While Snapshot", "opencode-glm52")
   _write_session(
       session_mgr, snap_meta, [
           _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
@@ -948,9 +915,7 @@ async def test_boundary_while_snapshot_or_reading_slot_changes_nothing(tmp_path:
 
 @pytest.mark.asyncio
 async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-emptyslot", name="Empty Slot", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-emptyslot", "Empty Slot", OPUS_BACKEND_ID)
   # Only text assistant events (no usage -> no claude slot) and cumulative
   # result events: the slot stays empty and the context fields stay unknown.
   _write_session(
@@ -985,9 +950,7 @@ async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_codex_tier_not_consulted_for_non_codex_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-noncodex-gate", name="Non Codex Gate", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-noncodex-gate", "Non Codex Gate", OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
           _result_event(0.5, {"claude-opus-4-6": {
@@ -1074,9 +1037,8 @@ async def test_codex_rollout_resolves_via_other_backend_when_session_backend_abs
 
 @pytest.mark.asyncio
 async def test_codex_unconfigured_compaction_logs_no_warning(tmp_path: Path, capsys) -> None:
-  cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"))
   # _build_cfg creates the codex backend WITHOUT model_auto_compact_token_limit.
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(_build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree")))
   meta = _seed_codex_session(
       session_mgr,
       session_id="session-codex-unconfigured",
@@ -1113,8 +1075,8 @@ async def test_codex_unconfigured_compaction_logs_no_warning(tmp_path: Path, cap
 
 @pytest.mark.asyncio
 async def test_codex_context_compact_at_uses_auto_compact_limit_when_configured(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"), model_auto_compact_token_limit=180_000)
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(
+      _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"), model_auto_compact_token_limit=180_000))
   meta = _seed_codex_session(
       session_mgr,
       session_id="session-autocompact",
@@ -1184,8 +1146,7 @@ _CODEX_NATIVE_COST_ROWS = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("turn_model, expected_cost", _CODEX_NATIVE_COST_ROWS)
 async def test_codex_native_cost_by_turn_model(tmp_path: Path, turn_model: str, expected_cost: object) -> None:
-  cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"))
-  session_mgr = SessionManager(cfg)
+  session_mgr = SessionManager(_build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree")))
   meta = _seed_codex_session(
       session_mgr,
       session_id="session-codex-cost",
@@ -1219,9 +1180,7 @@ async def test_codex_native_cost_by_turn_model(tmp_path: Path, turn_model: str, 
 
 @pytest.mark.asyncio
 async def test_empty_event_list_returns_none(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-empty", name="Empty", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-empty", "Empty", OPUS_BACKEND_ID)
   _write_session(session_mgr, meta, [])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
@@ -1236,9 +1195,7 @@ async def test_empty_event_list_returns_none(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_facts_memo_rescans_only_after_new_events(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-memo", name="Memo", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-memo", "Memo", OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
           _assistant_event("claude-opus-4-6", input_tokens=10_000),
@@ -1287,9 +1244,7 @@ async def test_facts_memo_extension_feeds_a_private_copy(tmp_path: Path) -> None
   """An extension never feeds the stored fold: two concurrent resolutions of
   the same session read the same stale entry, and total_cost folds by +=, so
   a shared fold would double-count the suffix."""
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-copy", name="Copy", backend=OPUS_BACKEND_ID)
+  session_mgr, meta = _session_rig(tmp_path, "session-copy", "Copy", OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
           _assistant_event("claude-opus-4-6", input_tokens=10_000),
@@ -1394,18 +1349,23 @@ def _usage_reference(session_mgr: SessionManager, meta: SessionMetadata) -> dict
       (None if not events else session_usage._resolve_no_source_tier(facts)))
 
 
+def _record_scan_calls(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+  """Record each threaded _load_and_scan call's session id; returns the live call list."""
+  calls: list[str] = []
+  real_scan = session_usage.SessionUsageResolver._load_and_scan
+
+  def recording_scan(self, session_id: str):
+    calls.append(session_id)
+    return real_scan(self, session_id)
+
+  monkeypatch.setattr(session_usage.SessionUsageResolver, "_load_and_scan", recording_scan)
+  return calls
+
+
 @pytest.mark.asyncio
 async def test_usage_hit_and_suffix_advance_answer_on_event_loop(tmp_path: Path, monkeypatch) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-hit-on-loop", name="Hit On Loop", backend=OPUS_BACKEND_ID)
-  _write_session(
-      session_mgr, meta, [
-          _result_event(0.5, {"claude-opus-4-6": {
-              "contextWindow": 200_000
-          }}, input_tokens=1_500_000),
-          _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
-      ])
+  session_mgr, meta = _session_rig(tmp_path, "session-hit-on-loop", "Hit On Loop", OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, _cumulative_result_with_assistant_reading())
 
   warm = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -1424,25 +1384,10 @@ async def test_usage_hit_and_suffix_advance_answer_on_event_loop(tmp_path: Path,
 
 @pytest.mark.asyncio
 async def test_usage_cold_cache_and_replaced_list_take_threaded_scan(tmp_path: Path, monkeypatch) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-hit-miss", name="Hit Miss", backend=OPUS_BACKEND_ID)
-  _write_session(
-      session_mgr, meta, [
-          _result_event(0.5, {"claude-opus-4-6": {
-              "contextWindow": 200_000
-          }}, input_tokens=1_500_000),
-          _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
-      ])
+  session_mgr, meta = _session_rig(tmp_path, "session-hit-miss", "Hit Miss", OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, _cumulative_result_with_assistant_reading())
 
-  calls = []
-  real_scan = session_usage.SessionUsageResolver._load_and_scan
-
-  def recording_scan(self, session_id: str):
-    calls.append(session_id)
-    return real_scan(self, session_id)
-
-  monkeypatch.setattr(session_usage.SessionUsageResolver, "_load_and_scan", recording_scan)
+  calls = _record_scan_calls(monkeypatch)
   cold = await session_mgr.resolve_session_usage(meta.id, meta)
   assert calls == [meta.id]
 
@@ -1460,29 +1405,14 @@ async def test_usage_cold_cache_and_replaced_list_take_threaded_scan(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_usage_suffix_past_cap_takes_threaded_scan(tmp_path: Path, monkeypatch) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-hit-cap", name="Hit Cap", backend=OPUS_BACKEND_ID)
-  _write_session(
-      session_mgr, meta, [
-          _result_event(0.5, {"claude-opus-4-6": {
-              "contextWindow": 200_000
-          }}, input_tokens=1_500_000),
-          _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
-      ])
+  session_mgr, meta = _session_rig(tmp_path, "session-hit-cap", "Hit Cap", OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, _cumulative_result_with_assistant_reading())
   await session_mgr.resolve_session_usage(meta.id, meta)
 
   for i in range(session_usage._ON_LOOP_SUFFIX_CAP + 1):
     await session_mgr.save_chat_event(meta.id, _assistant_event("claude-opus-4-6", input_tokens=100_001 + i))
 
-  calls = []
-  real_scan = session_usage.SessionUsageResolver._load_and_scan
-
-  def recording_scan(self, session_id: str):
-    calls.append(session_id)
-    return real_scan(self, session_id)
-
-  monkeypatch.setattr(session_usage.SessionUsageResolver, "_load_and_scan", recording_scan)
+  calls = _record_scan_calls(monkeypatch)
   resolved = await session_mgr.resolve_session_usage(meta.id, meta)
   assert calls == [meta.id]
   assert resolved == _usage_reference(session_mgr, meta)

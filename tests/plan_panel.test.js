@@ -1043,6 +1043,21 @@ function makePlanDocument(elements) {
   };
 }
 
+// Loads the panel with a recording viewer installed as #plan-viewer. Every
+// switch/blank test needs the same three pieces — the element stubs, the
+// recorded src writes, and the live context whose SESSION_ID it mutates —
+// and each needs them captured before the panel's constructor reads the DOM.
+function loadPanelWithViewer({fetch, sessionId = 'A', elements = makePanelElements()}) {
+  const {viewer, writes} = makeRecordingViewer();
+  elements['plan-viewer'] = viewer;
+  const {context, planPanel} = loadPlanPanelScript({
+    document: makePlanDocument(elements),
+    fetch,
+    sessionId,
+  });
+  return {elements, viewer, writes, context, planPanel};
+}
+
 function makeSessionFetchWithFiles(registries) {
   const plansFetch = makeSessionFetch(registries);
   return async (url) => {
@@ -1056,14 +1071,8 @@ test('viewer reloads on a session change even when (planId, version) is unchange
     A: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]},
     B: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]},
   };
-  const elements = makePanelElements();
-  const {viewer, writes} = makeRecordingViewer();
-  elements['plan-viewer'] = viewer;
-  const {context, planPanel} = loadPlanPanelScript({
-    document: makePlanDocument(elements),
-    fetch: makeSessionFetchWithFiles(registries),
-    sessionId: 'A',
-  });
+  const {elements, viewer, writes, context, planPanel} =
+    loadPanelWithViewer({fetch: makeSessionFetchWithFiles(registries)});
 
   await planPanel.refresh();
   const writesAfterA = writes.length;
@@ -1086,14 +1095,7 @@ test('onActiveSessionChanged blanks iframe.src synchronously before the new regi
     }
     return {ok: true, text: async () => ''};
   };
-  const elements = makePanelElements();
-  const {viewer, writes} = makeRecordingViewer();
-  elements['plan-viewer'] = viewer;
-  const {context, planPanel} = loadPlanPanelScript({
-    document: makePlanDocument(elements),
-    fetch,
-    sessionId: 'A',
-  });
+  const {viewer, writes, context, planPanel} = loadPanelWithViewer({fetch});
 
   // Load session A with a plan so the viewer has content to blank.
   const refreshA = planPanel.refresh();
@@ -1127,14 +1129,7 @@ test('onReconnect only marks stale and does not refresh or reset selection on a 
     }
     return {ok: true, text: async () => ''};
   };
-  const elements = makePanelElements();
-  const {viewer} = makeRecordingViewer();
-  elements['plan-viewer'] = viewer;
-  const {planPanel} = loadPlanPanelScript({
-    document: makePlanDocument(elements),
-    fetch,
-    sessionId: 'A',
-  });
+  const {elements, viewer, planPanel} = loadPanelWithViewer({fetch});
 
   await planPanel.refresh();
   const callsBeforeReconnect = fetchCalls.length;
@@ -1163,14 +1158,8 @@ test('onActiveSessionChanged renders the empty state and clears the iframe when 
     A: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')])]},
     B: {plans: []},
   };
-  const elements = makePanelElements();
-  const {viewer} = makeRecordingViewer();
-  elements['plan-viewer'] = viewer;
-  const {context, planPanel} = loadPlanPanelScript({
-    document: makePlanDocument(elements),
-    fetch: makeSessionFetchWithFiles(registries),
-    sessionId: 'A',
-  });
+  const {elements, viewer, context, planPanel} =
+    loadPanelWithViewer({fetch: makeSessionFetchWithFiles(registries)});
 
   await planPanel.refresh();
   assert.ok(viewer.src.indexOf('sessions/A/') !== -1, 'viewer loaded for session A');
@@ -1198,14 +1187,7 @@ test('P1: hook refresh fails on switch, then onTabShown shows empty state before
     }
     return {ok: true, text: async () => ''};
   };
-  const elements = makePanelElements();
-  const {viewer} = makeRecordingViewer();
-  elements['plan-viewer'] = viewer;
-  const {context, planPanel} = loadPlanPanelScript({
-    document: makePlanDocument(elements),
-    fetch,
-    sessionId: 'A',
-  });
+  const {elements, viewer, context, planPanel} = loadPanelWithViewer({fetch});
 
   // Load session A with a plan so the registry has content to clear.
   const refreshA = planPanel.refresh();
@@ -1249,14 +1231,7 @@ test('P2: SESSION_ID = null then onTabShown clears plan-selector and issues no f
     }
     return {ok: true, text: async () => ''};
   };
-  const elements = makePanelElements();
-  const {viewer} = makeRecordingViewer();
-  elements['plan-viewer'] = viewer;
-  const {context, planPanel} = loadPlanPanelScript({
-    document: makePlanDocument(elements),
-    fetch,
-    sessionId: 'A',
-  });
+  const {elements, viewer, context, planPanel} = loadPanelWithViewer({fetch});
 
   await planPanel.refresh();
   assert.ok(elements['plan-selector'].innerHTML.indexOf('Plan A') !== -1, 'plan-selector populated for A');
@@ -1277,14 +1252,8 @@ test('P3: switch to a session with no plans clears #plan-selector', async () => 
     A: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan A'})]},
     B: {plans: []},
   };
-  const elements = makePanelElements();
-  const {viewer} = makeRecordingViewer();
-  elements['plan-viewer'] = viewer;
-  const {context, planPanel} = loadPlanPanelScript({
-    document: makePlanDocument(elements),
-    fetch: makeSessionFetchWithFiles(registries),
-    sessionId: 'A',
-  });
+  const {elements, viewer, context, planPanel} =
+    loadPanelWithViewer({fetch: makeSessionFetchWithFiles(registries)});
 
   await planPanel.refresh();
   assert.ok(elements['plan-selector'].innerHTML.indexOf('Plan A') !== -1, 'plan-selector populated for A');
@@ -1303,8 +1272,6 @@ test('P4: tab dot cleared on a session change (hook-success via Edit 2 and hook-
     querySelector: () => dot,
     appendChild() {},
   };
-  const {viewer} = makeRecordingViewer();
-  elements['plan-viewer'] = viewer;
 
   const registries = {
     A: {plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01.html')], {title: 'Plan A'})]},
@@ -1313,11 +1280,8 @@ test('P4: tab dot cleared on a session change (hook-success via Edit 2 and hook-
 
   // --- Part A: hook succeeds — Edit 2 clears the dot ---
   dot.style.display = '';
-  const {context, planPanel} = loadPlanPanelScript({
-    document: makePlanDocument(elements),
-    fetch: makeSessionFetchWithFiles(registries),
-    sessionId: 'A',
-  });
+  const {context, planPanel} =
+    loadPanelWithViewer({fetch: makeSessionFetchWithFiles(registries), elements});
   await planPanel.refresh();
   context.SESSION_ID = 'B';
   await planPanel.onActiveSessionChanged();
@@ -1332,11 +1296,7 @@ test('P4: tab dot cleared on a session change (hook-success via Edit 2 and hook-
     }
     return {ok: true, text: async () => ''};
   };
-  const {context: ctxB, planPanel: ppB} = loadPlanPanelScript({
-    document: makePlanDocument(elements),
-    fetch: fetchB,
-    sessionId: 'A',
-  });
+  const {context: ctxB, planPanel: ppB} = loadPanelWithViewer({fetch: fetchB, elements});
   // The session changes but onActiveSessionChanged is NOT called (a path that
   // skips the hook). onTabShown detects the mismatch and resets.
   ctxB.SESSION_ID = 'B';
@@ -1356,14 +1316,7 @@ test('P5: same session, onTabShown twice — the second call issues no fetch', a
     }
     return {ok: true, text: async () => ''};
   };
-  const elements = makePanelElements();
-  const {viewer} = makeRecordingViewer();
-  elements['plan-viewer'] = viewer;
-  const {planPanel} = loadPlanPanelScript({
-    document: makePlanDocument(elements),
-    fetch,
-    sessionId: 'A',
-  });
+  const {elements, viewer, planPanel} = loadPanelWithViewer({fetch});
 
   // Load A so _loadedSessionId === 'A' (no session mismatch on later tab shows).
   await planPanel.refresh();

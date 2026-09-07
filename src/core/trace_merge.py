@@ -63,7 +63,7 @@ class _IdSequencer:
   """
 
   def __init__(self) -> None:
-    self.next_id = 1
+    self._next_id = 1
     self._seen: dict[str, int] = {}
 
   def start_trace(self) -> None:
@@ -73,8 +73,8 @@ class _IdSequencer:
   def __call__(self, original: object) -> int:
     key = str(original)
     if key not in self._seen:
-      self._seen[key] = self.next_id
-      self.next_id += 1
+      self._seen[key] = self._next_id
+      self._next_id += 1
     return self._seen[key]
 
 

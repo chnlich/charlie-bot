@@ -36,10 +36,12 @@ from src.core.yaml_utils import load_yaml
 PROJECTS_DIR_NAME = "projects"
 PROJECT_CONFIG_FILENAME = "project.yaml"
 
-# pathlib raises a plain RuntimeError (not OSError) when resolve() hits a
-# symlink loop, and a ValueError for an embedded NUL; all of these mean "this
-# path cannot be resolved" and all of them are config errors, never raw
-# escapes past ProjectInstructionError.
+# Which exceptions resolve() raises is interpreter-dependent (see
+# _resolve_confined's docstring): a symlink loop is RuntimeError there on
+# Python 3.12 and nothing there on 3.13 — the loop then fails the read —
+# while an embedded NUL is ValueError on every version. All of these mean
+# "this path cannot be resolved" and all of them are config errors, never
+# raw escapes past ProjectInstructionError.
 _RESOLVE_ERRORS = (OSError, RuntimeError, ValueError)
 
 
@@ -121,11 +123,17 @@ def project_dir(home: Path, group: str) -> Path:
 def _resolve_confined(project_dir: Path, candidate: Path, what: str) -> Path:
   """Resolve *candidate* and require its real path to stay inside *project_dir*.
 
-  Resolution follows symlinks to their real target; a ``..`` climb, a symlink
-  out of the project directory, or an unresolvable path (missing intermediate,
-  symlink loop, embedded NUL) fails here. The project directory itself may be
-  a symlink: confinement is checked against its resolved target, so a body can
-  still only come from inside the (possibly redirected) project directory.
+  Resolution follows symlinks to their real target and must stay inside
+  *project_dir*: a ``..`` climb or a symlink out of the project directory
+  fails here. Where an unusable candidate fails is interpreter-dependent, and
+  both failure points raise ProjectInstructionError. Embedded NUL raises
+  ValueError inside resolve() on every Python. A symlink loop raises
+  RuntimeError inside resolve() on Python 3.12, while on 3.13 resolve() folds
+  the loop into itself and it surfaces as OSError at the body read. A missing
+  intermediate passes resolve() on both and surfaces at the body read. The
+  project directory itself may be a symlink: confinement is checked against
+  its resolved target, so a body can still only come from inside the
+  (possibly redirected) project directory.
   """
   try:
     resolved = candidate.resolve()

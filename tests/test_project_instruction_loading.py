@@ -63,8 +63,9 @@ def _make_project(
 
 
 def _seed_project_dir(tmp_path: Path) -> tuple[SimpleNamespace, Path]:
-  """A fake home whose ``projects/proj`` directory exists and holds a valid common body; tests
-  break one aspect of the config on top of it (a symlinked, malformed, or absent project.yaml)."""
+  """A fake home whose ``projects/proj`` directory exists and holds a valid common body.
+  Tests break one thing on top of it: ``project.yaml`` is replaced, malformed, or points
+  at a body file made into a symlink loop."""
   cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
   project_dir = cfg.charliebot_home / "projects" / "proj"
   project_dir.mkdir(parents=True)

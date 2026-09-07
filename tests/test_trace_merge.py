@@ -254,7 +254,7 @@ def test_batched_serializer_matches_per_event_rendering(tmp_path: Path) -> None:
 
   payload = _merged_payload(output)
   events = json.loads(payload)["traceEvents"]
-  expected = ",".join(json.dumps(event, ensure_ascii=False, separators=(",", ":")) for event in events)
+  expected = ",".join(json.dumps(event, ensure_ascii=True, separators=(",", ":")) for event in events)
   assert payload == '{"traceEvents":[' + expected + "]}"
 
 
@@ -269,3 +269,20 @@ def test_single_event_and_batch_flush_produce_valid_payload(tmp_path: Path) -> N
 
   events = _read_merged(output)
   assert [event["name"] for event in events if event.get("name", "").startswith("evt-")] == ["evt-0"]
+
+
+def test_cjk_payload_renders_escaped_and_parses_identically(tmp_path: Path) -> None:
+  # The serializer renders non-ASCII text as \uXXXX escapes; the parsed payload
+  # must equal the source event regardless.
+  trace = tmp_path / "trace.json"
+  event = {"ph": "X", "pid": 7, "tid": 1, "name": "标注", "args": {"text": "中文负载"}}
+  _write_trace(trace, [event])
+  output = tmp_path / "merged.json.gz"
+
+  merge_traces([trace], output, slim=False)
+
+  payload = _merged_payload(output)
+  assert "\\u6807\\u6ce8" in payload
+  merged = json.loads(payload)["traceEvents"]
+  by_name = {event.get("name"): event for event in merged if event.get("name")}
+  assert by_name["标注"] == {"ph": "X", "pid": "trace", "tid": 1, "name": "标注", "args": {"text": "中文负载"}}

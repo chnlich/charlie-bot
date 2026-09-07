@@ -293,75 +293,27 @@ def test_translate_todo_list_renders_one_text_delta(
   }]
 
 
+def _todo_list_event(event_type: str, inspect_completed: bool) -> dict[str, object]:
+  items = [
+      {
+          "text": "Inspect the code",
+          "completed": inspect_completed
+      },
+      {
+          "text": "Patch the bug",
+          "completed": False
+      },
+  ]
+  item = {"id": "todo-1", "type": "todo_list", "items": items}
+  return {"type": event_type, "item": item}
+
+
 def test_translate_todo_list_suppresses_duplicate_snapshots(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  started = backend.translate_event(
-      {
-          "type": "item.started",
-          "item":
-              {
-                  "id":
-                      "todo-1",
-                  "type":
-                      "todo_list",
-                  "items":
-                      [
-                          {
-                              "text": "Inspect the code",
-                              "completed": False
-                          },
-                          {
-                              "text": "Patch the bug",
-                              "completed": False
-                          },
-                      ],
-              },
-      })
-  completed_without_changes = backend.translate_event(
-      {
-          "type": "item.completed",
-          "item":
-              {
-                  "id":
-                      "todo-1",
-                  "type":
-                      "todo_list",
-                  "items":
-                      [
-                          {
-                              "text": "Inspect the code",
-                              "completed": False
-                          },
-                          {
-                              "text": "Patch the bug",
-                              "completed": False
-                          },
-                      ],
-              },
-      })
-  updated = backend.translate_event(
-      {
-          "type": "item.updated",
-          "item":
-              {
-                  "id":
-                      "todo-1",
-                  "type":
-                      "todo_list",
-                  "items":
-                      [
-                          {
-                              "text": "Inspect the code",
-                              "completed": True
-                          },
-                          {
-                              "text": "Patch the bug",
-                              "completed": False
-                          },
-                      ],
-              },
-      })
+  started = backend.translate_event(_todo_list_event("item.started", inspect_completed=False))
+  completed_without_changes = backend.translate_event(_todo_list_event("item.completed", inspect_completed=False))
+  updated = backend.translate_event(_todo_list_event("item.updated", inspect_completed=True))
 
   assert started == [
       {

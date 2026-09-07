@@ -5,12 +5,17 @@ const vm = require('node:vm');
 const { readStatic } = require('./read_static');
 const { escapeHtml, escapeHtmlText } = require('./escape_html_stub');
 
+const NAMESPACE_JS = readStatic('sidebar/namespace.js');
 const GROUPS_JS = readStatic('sidebar/groups.js');
 
 const BACKEND_OPTIONS = {
   'claude-opus-5': 'CC · Opus 5',
   'opencode-glm52': 'OC · GLM-5.2',
   'codex-gpt-5.3-codex-spark': 'Codex · GPT-5.3 Codex Spark xHigh (personal)',
+};
+// Retired ids the config's `aliases` still answer for (the account-pool fold).
+const BACKEND_ALIASES = {
+  'claude-opus-5-invite1': 'claude-opus-5',
 };
 
 // groups.js is an IIFE over globals defined by the other sidebar modules; the
@@ -21,6 +26,7 @@ function loadGroups() {
     Sidebar,
     globalThis: null,
     BACKEND_OPTIONS,
+    BACKEND_ALIASES,
     SESSION_ID: 'other-session',
     console: {error: () => {}},
     localStorage: {getItem: () => null, setItem: () => {}},
@@ -37,6 +43,8 @@ function loadGroups() {
   };
   context.globalThis = context;
   vm.createContext(context);
+  // namespace.js first, as on the page: it supplies canonicalBackendId.
+  vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
   vm.runInContext(GROUPS_JS, context, {filename: 'groups.js'});
   return context;
 }
@@ -85,6 +93,12 @@ test('a backend id retired from config renders the raw id', () => {
   const model = modelSpan(row({backend: 'claude-fable-sub'}));
   assert.equal(model[3], 'claude-fable-sub');
   assert.equal(model[2], 'claude-fable-sub');
+});
+
+test('a retired id a config alias answers for renders the live option label', () => {
+  const model = modelSpan(row({backend: 'claude-opus-5-invite1'}));
+  assert.equal(model[3], 'Opus 5');
+  assert.equal(model[2], 'CC · Opus 5');
 });
 
 test('a session without a backend renders no model element', () => {

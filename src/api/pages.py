@@ -697,6 +697,10 @@ async def index(
   active_backend = active_session.backend if active_session else (
       cfg.backend_options[0].id if cfg.backend_options else "claude")
   active_backend_opt = cfg.get_backend_option(active_backend)
+  if active_backend_opt is not None:
+    # A retired id (config aliases) renders as the option answering for it, so the
+    # new-session select and the client's ACTIVE_BACKEND_ID name a live option.
+    active_backend = active_backend_opt.id
   active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
   active_backend_type = active_backend_opt.type if active_backend_opt else ""
 

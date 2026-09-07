@@ -48,12 +48,13 @@ function makeDocument(elements) {
   return { getElementById: (id) => elements.get(id) || null };
 }
 
-function loadSessionContext({elements, BACKEND_OPTIONS, SESSION_ID, fetchImpl}) {
+function loadSessionContext({elements, BACKEND_OPTIONS, BACKEND_ALIASES, SESSION_ID, fetchImpl}) {
   const context = {
     document: makeDocument(elements),
     console: { error: () => {}, log: () => {} },
     showToast: () => {},
     BACKEND_OPTIONS: BACKEND_OPTIONS || {},
+    BACKEND_ALIASES: BACKEND_ALIASES || {},
     SESSION_ID: SESSION_ID || 'session-a',
     // config.js's shared literal pair; this harness skips config.js.
     JSON_HEADERS: {'Content-Type': 'application/json'},
@@ -162,4 +163,27 @@ test('switchBackend surfaces the server detail and reverts the active id on fail
   await context.switchBackend('claude-fable-5');
   assert.equal(context.getActiveBackendId(), 'claude-opus-5', 'active id reverts on failure');
   assert.ok(toasts.some((t) => t.msg.includes('clone/fork')), 'server detail is surfaced');
+});
+
+// ---------------------------------------------------------------------------
+// 5. A session that recorded a retired id (config `aliases`) renders under the
+//    live option: the badge shows its label and the dropdown selects it, so the
+//    old per-account id never reaches the header.
+// ---------------------------------------------------------------------------
+test('an aliased active id renders as the live option in badge and dropdown', () => {
+  const elements = headerFixtures();
+  const context = loadSessionContext({
+    elements,
+    SESSION_ID: 'session-a',
+    BACKEND_OPTIONS: { 'claude-fable-5': 'CC · Fable 5', 'claude-sonnet-5': 'CC · Sonnet 5' },
+    BACKEND_ALIASES: { 'claude-fable-5-invite1': 'claude-fable-5' },
+  });
+  context.setSwitchableBackends(['claude-fable-5', 'claude-sonnet-5']);
+  context.setActiveBackendId('claude-fable-5-invite1');
+  assert.equal(context.getActiveBackendId(), 'claude-fable-5');
+  context.updateActiveBackendBadges();
+  const badge = elements.get('backend-badge');
+  assert.ok(badge.innerHTML.includes('claude-fable-5" selected'), badge.innerHTML);
+  assert.ok(!badge.innerHTML.includes('invite1'), badge.innerHTML);
+  assert.equal(elements.get('input-model-badge').textContent, 'CC · Fable 5');
 });

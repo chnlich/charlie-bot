@@ -105,7 +105,7 @@ function workerCardBodyHtml(t, sessionId) {
     + '<span id="thread-dot-' + t.id + '" class="w-2 h-2 rounded-full flex-shrink-0 ' + dotColor + pulse + '"></span>'
     + '<div class="flex-1 min-w-0">'
     + '<p class="text-sm truncate cursor-pointer hover:text-blue-400 transition-colors" title="Click to view full description" onclick="event.stopPropagation(); ' + descClick + '"' + descFullAttr + '>' + escapeHtml(t.description || '') + '</p>'
-    + '<p id="thread-status-' + t.id + '" class="text-xs text-slate-500">' + (t.status || 'idle') + ' &middot; ' + formatCardTimestamp(created) + duration + (t.backend ? ' &middot; ' + (BACKEND_OPTIONS[t.backend] || t.backend) : '') + '</p>'
+    + '<p id="thread-status-' + t.id + '" class="text-xs text-slate-500">' + (t.status || 'idle') + ' &middot; ' + formatCardTimestamp(created) + duration + (t.backend ? ' &middot; ' + (BACKEND_OPTIONS[canonicalBackendId(t.backend)] || t.backend) : '') + '</p>'
     + workerUuidRow(t.id)
     + '</div>'
     + cancelBtn

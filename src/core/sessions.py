@@ -67,6 +67,12 @@ FORK_BOOTSTRAP_OPENER = "This session continues a prior conversation."
 ELONE_BOOTSTRAP_OPENER = "You're taking over because the user wasn't satisfied with the previous session."
 
 _METADATA_CACHE_TTL = 30.0  # seconds
+# Sweep bound for the listings memo. In-process writes bump the revision and
+# surface immediately; an out-of-band metadata edit moves neither, and is
+# caught by the entry's TTL revalidation on the first sweep walk after expiry —
+# at worst _METADATA_CACHE_TTL plus one interval, against the TTL-plus-one-call
+# bound the per-call walk gave it.
+_LISTINGS_SWEEP_INTERVAL = 10.0  # seconds
 
 
 def _stat_metadata_signature(path: Path) -> tuple[int, int] | None:
@@ -603,6 +609,15 @@ class SessionManager:
     # The root's own mtime moves exactly when a session entry is created or removed (metadata
     # writes land one level below), so an unchanged signature proves the name set current.
     self._dir_names_memo: tuple[tuple[int, int], list[str]] | None = None
+    # Listings-memo revision: every session-metadata write, cache invalidation, or cache
+    # eviction bumps it, so a stored listing serves only while no write landed. Out-of-band
+    # edits (which bump nothing) are bounded by the sweep walk plus the entries' own TTL
+    # revalidation, per the _LISTINGS_SWEEP_INTERVAL note.
+    self._listings_revision = 0
+    # status -> (revision at walk time, monotonic at store time, root signature, metas).
+    # The stored list holds the cache's own meta objects: every consumer copies or
+    # stamps on the way out and mutates neither the list nor its rows.
+    self._listings_memo: dict[SessionStatus | None, tuple[int, float, tuple[int, int], list[SessionMetadata]]] = {}
     self._chat_events = ChatEventStore(self._session_dir, self._metadata_path, self._metadata_cache)
     self._session_usage = SessionUsageResolver(
         cfg,
@@ -1637,6 +1652,9 @@ class SessionManager:
           results.append(_stamp_thinking_since(meta.model_copy()))
       except (OSError, ValueError) as e:
         log.debug("list_active_ids_skip", dir=d.name, error=str(e))
+    # The repopulate can replace cached metas with what the files now hold, so
+    # listings stored before this scan must not serve.
+    self._listings_revision += 1
     return results
 
   # ---------------------------------------------------------------------------
@@ -1826,6 +1844,7 @@ class SessionManager:
   def _invalidate_cache(self, session_id: str) -> None:
     """Remove a session from the metadata cache."""
     self._metadata_cache.pop(session_id, None)
+    self._listings_revision += 1
 
   def _fresh_cached_meta(self, session_id: str) -> SessionMetadata | None:
     """Return the cached metadata for *session_id* when the entry is authoritative.
@@ -1865,6 +1884,11 @@ class SessionManager:
       except OSError:
         pass
     del self._metadata_cache[session_id]
+    # The entry's file moved or became unprovable without a write funnel bump
+    # (an out-of-band edit, or a write-funnel entry past its TTL): raise the
+    # listings revision so the next listing re-reads instead of serving the
+    # memoized rows this eviction just proved stale.
+    self._listings_revision += 1
     return None
 
   @staticmethod
@@ -1915,11 +1939,20 @@ class SessionManager:
     metadata out of the manager copy and stamp on the way out. The sync
     active-only scan ``list_active_session_metas`` keeps its own per-file sync
     reads and does not route through here.
+
+    The per-filter result memoizes on (``_listings_revision``, the sessions
+    root's signature, a ``_LISTINGS_SWEEP_INTERVAL`` clock): an in-process
+    write bumps the revision (``save_metadata`` is the single funnel) and a
+    create/delete moves the root signature, so both re-walk on the next call;
+    the sweep re-walks at least every interval, which is what bounds an
+    out-of-band metadata edit to the entry's ``_METADATA_CACHE_TTL`` expiry
+    plus one interval. A hit serves the cached meta objects read-only; the
+    walk itself never mutates the stored list.
     """
     if not self._cfg.sessions_dir.exists():
       return []
 
-    def _session_dir_names() -> list[str]:
+    def _session_dir_names() -> tuple[tuple[int, int], list[str]]:
       # DirEntry.is_dir() answers from the directory record itself on
       # d_type-aware filesystems, while Path.iterdir() rebuilds a Path per
       # entry and pays one stat() each: ~1 ms vs ~6 ms measured at ~1000
@@ -1931,13 +1964,29 @@ class SessionManager:
       root = os.stat(self._cfg.sessions_dir)
       sig = (root.st_mtime_ns, root.st_size)
       if self._dir_names_memo is not None and self._dir_names_memo[0] == sig:
-        return self._dir_names_memo[1]
+        return sig, self._dir_names_memo[1]
       with os.scandir(self._cfg.sessions_dir) as entries:
         names = [entry.name for entry in entries if entry.is_dir()]
       self._dir_names_memo = (sig, names)
-      return names
+      return sig, names
 
-    dir_names = await asyncio.to_thread(_session_dir_names)
+    # The hit check reads the revision directly: no await sits between the
+    # read and the comparison, so a bump cannot land inside the decision. The
+    # store tags the revision read after the miss decision, before the walk —
+    # a write landing mid-walk bumps past the tag and the next call re-walks
+    # (the M36 gate's rule: a mark landing mid-walk only raises the revision).
+    hit = self._listings_memo.get(status)
+    if (hit is not None and hit[0] == self._listings_revision
+            and time.monotonic() - hit[1] < _LISTINGS_SWEEP_INTERVAL):
+      try:
+        root = os.stat(self._cfg.sessions_dir)
+      except OSError:
+        root = None
+      if root is not None and (root.st_mtime_ns, root.st_size) == hit[2]:
+        return hit[3]
+
+    revision = self._listings_revision
+    root_sig, dir_names = await asyncio.to_thread(_session_dir_names)
 
     cached_metas: dict[str, SessionMetadata] = {}
     missing_ids: list[str] = []
@@ -2007,6 +2056,7 @@ class SessionManager:
         self._metadata_cache.setdefault(session_id, (meta, time.monotonic(), parsed_sigs.get(session_id)))
       if status is None or meta.status == status:
         result.append(meta)
+    self._listings_memo[status] = (revision, time.monotonic(), root_sig, result)
     return result
 
   def _lock_for(self, session_id: str) -> asyncio.Lock:
@@ -2265,6 +2315,7 @@ class SessionManager:
     # the ScheduledSessionStore delegate): status transitions (archive/unarchive)
     # land here, so the sidebar snapshot must re-probe this session.
     sidebar_state.mark_sidebar_dirty(meta.id)
+    self._listings_revision += 1
 
   def _session_dir(self, session_id: str) -> Path:
     return self._cfg.sessions_dir / session_id

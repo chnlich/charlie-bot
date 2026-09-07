@@ -1,7 +1,7 @@
-"""The text surfaces the model reads offer one form for a file link, and one way to source its path.
+"""The text surfaces the model reads offer one form for a file link, and one way to certify its path.
 
 The assertions are about the surface as a whole rather than about one skill's wording: a second
-documented prefix, or a second existence-check instruction, is a choice the writer should not have.
+documented prefix, or a second certification instruction, is a choice the writer should not have.
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ SURFACE_DIRS = ("skills", "prompts")
 SURFACE_GLOBS = ("*.md", "*.html")
 FILE_SERVER_SKILL = ROOT / "skills" / "file-server" / "SKILL.md"
 
-# The rule that a link's path comes from this turn's command output: an ls, scoped to the exact
-# path, taken right before it is pasted.
-SOURCING_RE = re.compile(r"`ls`[^.]*exact[^.]*about to be pasted")
+# The rule that a link is certified before it is pasted: a curl probe of the exact prefix and
+# path on the local server, read to a 200.
+SOURCING_RE = re.compile(r"certified before it is pasted[^.]*exact prefix and path")
 
 
 def _surface_files() -> list[Path]:
@@ -51,13 +51,13 @@ def test_the_legacy_prefix_appears_only_where_the_alias_is_documented() -> None:
   assert "alias" in line.lower(), line
 
 
-def test_the_sourcing_rule_requires_ls_on_the_exact_path() -> None:
+def test_the_sourcing_rule_probes_the_exact_path_before_pasting() -> None:
   carrying = [path for path in _surface_files() if SOURCING_RE.search(_flattened(path))]
   assert carrying == [FILE_SERVER_SKILL], f"the sourcing rule is missing or restated: {carrying}"
 
 
 def test_every_existence_check_in_the_file_link_surface_names_the_exact_path() -> None:
-  sentences = [part for part in re.split(r"(?<=[.:])\s", _flattened(FILE_SERVER_SKILL)) if "`ls`" in part]
-  assert sentences, "the file-server skill says nothing about checking the path"
+  sentences = [part for part in re.split(r"(?<=[.:])\s", _flattened(FILE_SERVER_SKILL)) if "curl" in part]
+  assert sentences, "the file-server skill says nothing about certifying the path"
   for sentence in sentences:
     assert "exact" in sentence, f"a looser existence check survives: {sentence}"

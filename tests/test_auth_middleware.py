@@ -48,28 +48,28 @@ def _response(sent: list[dict]) -> tuple[int, str, str]:
   return start["status"], headers.get(b"content-type", b"").decode(), body.decode()
 
 
-@pytest.mark.asyncio
-async def test_empty_key_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
-  mw = _middleware(monkeypatch, key="")
-  sent = await run_through_asgi_middleware(mw, _scope(headers={"accept": "application/json"}))
-  status, _, _ = _response(sent)
-  assert status == 200
-  assert asgi_downstream_called()
+# Rows are the request shapes that must reach the downstream app: the gate is a
+# no-op while no key is configured, a valid cookie or Bearer credential passes
+# it, and /api/auth/status plus the viewer shells are public paths. The fields
+# mirror _scope's parameters in order.
+_PASS_THROUGH_ROWS = [
+    pytest.param("", "GET", "/api/chat", {"accept": "application/json"}, None, id="empty-key-is-noop"),
+    pytest.param("secret", "GET", "/api/chat", None, {"charliebot_access_key": "secret"}, id="cookie-accepted"),
+    pytest.param("secret", "GET", "/api/chat", {"authorization": "Bearer secret"}, None, id="bearer-header-accepted"),
+    pytest.param("secret", "GET", "/api/auth/status", {"accept": "text/html"}, None, id="public-path-no-credential"),
+    pytest.param("secret", "GET", "/perfetto", {"accept": "text/html"}, None, id="viewer-page-perfetto"),
+    pytest.param("secret", "GET", "/perfetto/merged", {"accept": "text/html"}, None, id="viewer-page-perfetto-merged"),
+    pytest.param("secret", "GET", "/ncu", {"accept": "text/html"}, None, id="viewer-page-ncu"),
+]
 
 
 @pytest.mark.asyncio
-async def test_cookie_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
-  mw = _middleware(monkeypatch, key="secret")
-  sent = await run_through_asgi_middleware(mw, _scope(cookies={"charliebot_access_key": "secret"}))
-  status, _, _ = _response(sent)
-  assert status == 200
-  assert asgi_downstream_called()
-
-
-@pytest.mark.asyncio
-async def test_bearer_header_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
-  mw = _middleware(monkeypatch, key="secret")
-  sent = await run_through_asgi_middleware(mw, _scope(headers={"authorization": "Bearer secret"}))
+@pytest.mark.parametrize("key, method, path, headers, cookies", _PASS_THROUGH_ROWS)
+async def test_request_reaches_downstream(
+    monkeypatch: pytest.MonkeyPatch, key: str, method: str, path: str, headers: dict[str, str] | None,
+    cookies: dict[str, str] | None) -> None:
+  mw = _middleware(monkeypatch, key=key)
+  sent = await run_through_asgi_middleware(mw, _scope(method=method, path=path, headers=headers, cookies=cookies))
   status, _, _ = _response(sent)
   assert status == 200
   assert asgi_downstream_called()
@@ -114,26 +114,6 @@ async def test_non_get_html_accept_still_json_401(monkeypatch: pytest.MonkeyPatc
   status, content_type, _ = _response(sent)
   assert status == 401
   assert content_type == "application/json"
-
-
-@pytest.mark.asyncio
-async def test_public_path_passes_without_credential(monkeypatch: pytest.MonkeyPatch) -> None:
-  mw = _middleware(monkeypatch, key="secret")
-  sent = await run_through_asgi_middleware(mw, _scope(path="/api/auth/status", headers={"accept": "text/html"}))
-  status, _, _ = _response(sent)
-  assert status == 200
-  assert asgi_downstream_called()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["/perfetto", "/perfetto/merged", "/ncu"])
-async def test_viewer_pages_public_without_credential(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
-  # The read-only viewer shells are reachable without any Bearer or cookie.
-  mw = _middleware(monkeypatch, key="secret")
-  sent = await run_through_asgi_middleware(mw, _scope(path=path, headers={"accept": "text/html"}))
-  status, _, _ = _response(sent)
-  assert status == 200
-  assert asgi_downstream_called()
 
 
 @pytest.mark.asyncio

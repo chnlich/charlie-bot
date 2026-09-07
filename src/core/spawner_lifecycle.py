@@ -9,7 +9,13 @@ from pathlib import Path
 import structlog
 
 from src.agents.worker import QuotaExhaustedException, Worker
-from src.core import runs, spawner_backends, spawner_finalize, spawner_launch
+from src.core import (
+    claude_relay,
+    runs,
+    spawner_backends,
+    spawner_finalize,
+    spawner_launch,
+)
 from src.core.config import CharlieBotConfig
 from src.core.models import SpawnRequest, TaskType
 from src.core.process import kill_process_group
@@ -39,14 +45,20 @@ async def spawn_worker(
       log.error("spawn_worker_thread_missing", session=session_id, thread_id=thread_id)
       return
 
-    if request.repo_path is None:
-      worker = await spawner_launch._create_repoless_process(session_id, thread, description, cfg, thread_mgr, request)
+    try:
+      if request.repo_path is None:
+        worker = await spawner_launch._create_repoless_process(
+            session_id, thread, description, cfg, thread_mgr, request)
+      else:
+        resolved_repo = Path(request.repo_path).resolve()
+        worker = await spawner_launch._create_worktree_and_process(
+            session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, request)
+    except claude_relay.PoolExhaustedError as exc:
+      # No Claude login can take the run: the same disposition as a mid-run
+      # rejection, so a VERIFY still moves on to the next preference backend.
+      outcome = spawner_finalize._pool_exhausted_outcome(exc)
     else:
-      resolved_repo = Path(request.repo_path).resolve()
-      worker = await spawner_launch._create_worktree_and_process(
-          session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, request)
-
-    outcome = await spawner_finalize._stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
+      outcome = await spawner_finalize._stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
 
     # Re-run an exhausted VERIFY once on the next untried checking-role backend;
     # with none remaining (selection empty, or looped back to the exhausted
@@ -74,9 +86,13 @@ async def spawn_worker(
         request.resolved_backend = resolved_backend
         request.resolved_model = resolved_model
         thread.tried_backends = tried_backends
-        worker = await spawner_launch._create_repoless_process(
-            session_id, thread, description, cfg, thread_mgr, request)
-        outcome = await spawner_finalize._stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
+        try:
+          worker = await spawner_launch._create_repoless_process(
+              session_id, thread, description, cfg, thread_mgr, request)
+        except claude_relay.PoolExhaustedError as exc:
+          outcome = spawner_finalize._pool_exhausted_outcome(exc)
+        else:
+          outcome = await spawner_finalize._stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
 
     if outcome.failed and not outcome.error:
       outcome = outcome._replace(

@@ -1,5 +1,6 @@
 """Run outcome and the finalize chain — status write, worktree cleanup, completion notify."""
 
+import functools
 import traceback
 from datetime import UTC, datetime
 from pathlib import Path
@@ -8,8 +9,15 @@ from typing import NamedTuple
 import structlog
 
 from src.agents.worker import QuotaExhaustedException, Worker
+from src.core import (
+    claude_relay,
+    finalize_effects,
+    review,
+    runs,
+    spawner_events,
+    task_chain,
+)
 from src.core import event_types as ET
-from src.core import finalize_effects, review, runs, spawner_events, task_chain
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
 from src.core.git import git_worktree_remove_reporting
 from src.core.models import TaskType, ThreadMetadata, ThreadStatus
@@ -41,6 +49,11 @@ class _WorkerRunOutcome(NamedTuple):
 
 # The quota flag, not the error text, drives the finalize chain's quota branch.
 _QUOTA_EXHAUSTED_OUTCOME = _WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error="")
+
+
+def _pool_exhausted_outcome(exc: claude_relay.PoolExhaustedError) -> _WorkerRunOutcome:
+  """The quota disposition carrying the pool's message (earliest reset) for the completion notice."""
+  return _QUOTA_EXHAUSTED_OUTCOME._replace(error=str(exc))
 
 
 class _FinalizeCtx(NamedTuple):
@@ -77,8 +90,15 @@ async def _stream_worker_events(
   await session_mgr.deliver_to_successor(
       session_id, spawner_events._thread_worker_event(thread, 'running', '', content=None))
 
+  # Session-level notices from the run (a pool login that needs re-login) land in
+  # the session's chat through the successor chain.
+  worker.on_session_event = functools.partial(session_mgr.deliver_to_successor, session_id)
   try:
     return _WorkerRunOutcome(exit_code=await worker.run(), quota_exhausted=False, error="")
+  except claude_relay.PoolExhaustedError as e:
+    await worker.terminate()
+    log.warning("worker_pool_exhausted", thread_id=thread.id, error=str(e))
+    return _pool_exhausted_outcome(e)
   except QuotaExhaustedException:
     await worker.terminate()
     log.warning("worker_quota_exhausted", thread_id=thread.id)
@@ -363,6 +383,8 @@ async def _broadcast_completion(
     suffix = "\n\n*Cancelled by user.*"
   elif outcome.quota_exhausted:
     suffix = "\n\n*Worker stopped: API quota exhausted.*"
+    if outcome.error:
+      suffix += f" {outcome.error}"
   elif outcome.error:
     if verify_report is not None:
       suffix = f"\n\n*Verifier completion failed: {outcome.error}*"

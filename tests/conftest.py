@@ -1666,10 +1666,12 @@ def capturing_worker(captures: dict[str, Any]) -> type:
         worker_cfg: CharlieBotConfig,
         backend_option: models.BackendOption | None = None,
         on_spawned: Callable | None = None,
+        claude_account: models.ClaudeAccount | None = None,
     ) -> None:
       captures["worker_dir"] = working_dir
       captures["worker_backend"] = backend_option
       captures["task_description"] = task_description
+      captures["worker_account"] = claude_account
 
     async def run(self) -> int:
       return 0

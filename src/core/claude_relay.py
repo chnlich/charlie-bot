@@ -28,7 +28,7 @@ from datetime import UTC, datetime, timedelta
 from src.core import claude_accounts
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import ClaudeAccount
+from src.core.models import BackendOption, ClaudeAccount
 
 # One run relays at most this many times: four accounts rejecting in turn must
 # end in a loud error, never a loop.
@@ -167,3 +167,17 @@ def move_to_next_account(
   except claude_accounts.TranscriptMoveError as exc:
     return None, f"Claude account relay failed: {exc}"
   return nxt, None
+
+
+class PoolExhaustedError(Exception):
+  """No pool account can take the run; callers report it as quota exhaustion with the reset time."""
+
+
+def pin_pool_account(cfg: CharlieBotConfig, option: BackendOption) -> tuple[BackendOption, ClaudeAccount | None]:
+  """Pin a pooled entry to the account with the most headroom; any other option passes through unchanged."""
+  if not claude_accounts.is_pooled(option, cfg):
+    return option, None
+  account = claude_accounts.select(cfg, option.model, current=None)
+  if account is None:
+    raise PoolExhaustedError(pool_exhausted_message(cfg))
+  return option.model_copy(update={"claude_config_dir": account.config_dir}), account

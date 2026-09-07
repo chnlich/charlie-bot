@@ -420,46 +420,57 @@ def _reset_aggregate_memo() -> None:
   _opencode_partials.clear()
 
 
+def _prefiltered_jsonl(path: Path, markers: tuple[str, ...]) -> tuple[list, list[dict], int]:
+  """Parse one jsonl into the objects whose raw line carries any *markers* substring.
+
+  Returns (signature, objects, bytes read), objects in file order. The signature is taken
+  before the read: a concurrent append mid-read then necessarily outdates the stored sig and
+  the next lookup re-scans, so a partial or extended read can never be served later as if
+  complete. Every line counts toward the bytes; an unparseable line is dropped.
+  """
+  objects: list[dict] = []
+  nbytes = 0
+  st = path.stat()
+  with path.open(errors="replace") as fh:
+    for line in fh:
+      nbytes += len(line)
+      if not any(m in line for m in markers):
+        continue
+      try:
+        objects.append(json.loads(line))
+      except ValueError:
+        continue
+  return [st.st_mtime_ns, st.st_size], objects, nbytes
+
+
 def _claude_file_contribution(path: Path) -> tuple[dict, int]:
   """Parse one Claude Code jsonl into its cache entry; return (entry, bytes read)."""
   seen: set[str] = set()
   dupes = 0
   records: list[list] = []
-  nbytes = 0
-  # The signature is taken before the read: a concurrent append mid-read then necessarily
-  # outdates the stored sig and the next lookup re-scans, so a partial or extended read can
-  # never be served later as if complete.
-  st = path.stat()
-  with path.open(errors="replace") as fh:
-    for line in fh:
-      nbytes += len(line)
-      if '"usage"' not in line:
-        continue
-      try:
-        rec = json.loads(line)
-      except ValueError:
-        continue
-      msg = rec.get("message")
-      if not isinstance(msg, dict):
-        continue
-      usage, model = msg.get("usage"), msg.get("model")
-      if not isinstance(usage, dict) or not model or model == "<synthetic>":
-        continue
-      key = msg.get("id") or rec.get("requestId") or rec.get("uuid")
-      if key in seen:
-        dupes += 1
-        continue
-      seen.add(key)
-      records.append(
-          [
-              key, model,
-              rec.get("timestamp"),
-              usage.get("input_tokens", 0) or 0,
-              usage.get("cache_creation_input_tokens", 0) or 0,
-              usage.get("cache_read_input_tokens", 0) or 0,
-              usage.get("output_tokens", 0) or 0
-          ])
-  return {"sig": [st.st_mtime_ns, st.st_size], "records": records, "dupes": dupes}, nbytes
+  sig, recs, nbytes = _prefiltered_jsonl(path, ('"usage"',))
+  for rec in recs:
+    msg = rec.get("message")
+    if not isinstance(msg, dict):
+      continue
+    usage, model = msg.get("usage"), msg.get("model")
+    if not isinstance(usage, dict) or not model or model == "<synthetic>":
+      continue
+    key = msg.get("id") or rec.get("requestId") or rec.get("uuid")
+    if key in seen:
+      dupes += 1
+      continue
+    seen.add(key)
+    records.append(
+        [
+            key, model,
+            rec.get("timestamp"),
+            usage.get("input_tokens", 0) or 0,
+            usage.get("cache_creation_input_tokens", 0) or 0,
+            usage.get("cache_read_input_tokens", 0) or 0,
+            usage.get("output_tokens", 0) or 0
+        ])
+  return {"sig": sig, "records": records, "dupes": dupes}, nbytes
 
 
 def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
@@ -502,21 +513,7 @@ def _codex_file_contribution(path: Path) -> tuple[dict, int]:
   # Every record the tally reads (session_meta, turn_context, token_count) serializes
   # its type as a quoted literal in the raw line, so the substring filter cannot skip a
   # record the full parse would see; it only skips parsing irrelevant lines.
-  recs: list[dict] = []
-  nbytes = 0
-  # The signature is taken before the read: a concurrent append mid-read then necessarily
-  # outdates the stored sig and the next lookup re-scans, so a partial or extended read can
-  # never be served later as if complete.
-  st = path.stat()
-  with path.open(errors="replace") as fh:
-    for line in fh:
-      nbytes += len(line)
-      if not any(m in line for m in ('"session_meta"', '"turn_context"', '"token_count"')):
-        continue
-      try:
-        recs.append(json.loads(line))
-      except ValueError:
-        continue
+  sig, recs, nbytes = _prefiltered_jsonl(path, ('"session_meta"', '"turn_context"', '"token_count"'))
   meta = next((rec for rec in recs if rec.get("type") == "session_meta"), None)
   mp = (meta or {}).get("payload") or {}
   source = json.dumps(mp.get("source") or {})
@@ -546,7 +543,7 @@ def _codex_file_contribution(path: Path) -> tuple[dict, int]:
     walked += cached + fresh + out
     records.append([model or "unknown", rec.get("timestamp"), fresh, cached, out])
   check = [walked, final_total] if final_total and is_root else None
-  return {"sig": [st.st_mtime_ns, st.st_size], "records": records, "check": check}, nbytes
+  return {"sig": sig, "records": records, "check": check}, nbytes
 
 
 def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:

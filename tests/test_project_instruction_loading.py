@@ -239,28 +239,20 @@ def _assert_project_error(out: object, *fragments: str) -> None:
     assert fragment in str(error)
 
 
-def test_invalid_yaml_config_fails(tmp_path: Path) -> None:
-  cfg = _make_project(tmp_path, yaml_body="prompt_file: [unclosed\n")
+_BROKEN_YAML_CASES = [
+    pytest.param("prompt_file: [unclosed\n", ("project.yaml",), id="invalid-yaml"),
+    pytest.param("- a\n- b\n", ("mapping",), id="non-mapping-config"),
+    pytest.param("prompt_file: common.md\nworker_prompt_file: w.md\n", ("worker_prompt_file",), id="unknown-key"),
+    pytest.param("prompt_file: 123\n", ("123",), id="wrong-type"),
+]
+
+
+@pytest.mark.parametrize(("yaml_body", "error_fragments"), _BROKEN_YAML_CASES)
+def test_broken_project_yaml_fails(tmp_path: Path, yaml_body: str, error_fragments: tuple[str, ...]) -> None:
+  """A malformed project.yaml fails the turn with an error naming the cause."""
+  cfg = _make_project(tmp_path, yaml_body=yaml_body)
   out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
-  _assert_project_error(out, "project.yaml")
-
-
-def test_non_mapping_config_fails(tmp_path: Path) -> None:
-  cfg = _make_project(tmp_path, yaml_body="- a\n- b\n")
-  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
-  _assert_project_error(out, "mapping")
-
-
-def test_unknown_key_in_config_fails(tmp_path: Path) -> None:
-  cfg = _make_project(tmp_path, yaml_body="prompt_file: common.md\nworker_prompt_file: w.md\n")
-  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
-  _assert_project_error(out, "worker_prompt_file")
-
-
-def test_wrong_type_in_config_fails(tmp_path: Path) -> None:
-  cfg = _make_project(tmp_path, yaml_body="prompt_file: 123\n")
-  out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
-  _assert_project_error(out, "123")
+  _assert_project_error(out, *error_fragments)
 
 
 def test_missing_common_body_fails(tmp_path: Path) -> None:

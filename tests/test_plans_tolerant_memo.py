@@ -5,17 +5,12 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import count_path_read_text, plan_doc, plan_version_v1
+from conftest import count_path_read_text, fresh_state_fixture, plan_doc, plan_version_v1
 
 import src.core.plans as plans_module
 from src.core.plans import read_plans_tolerant
 
-
-@pytest.fixture(autouse=True)
-def _clear_tolerant_read_memo():
-  plans_module._tolerant_read_memo.clear()
-  yield
-  plans_module._tolerant_read_memo.clear()
+_clear_tolerant_read_memo = fresh_state_fixture(plans_module._tolerant_read_memo.clear)
 
 
 def _write_registry(path: Path, count: int) -> None:

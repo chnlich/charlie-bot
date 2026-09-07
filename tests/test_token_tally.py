@@ -12,18 +12,14 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from conftest import fresh_state_fixture
 
 from src.core import token_tally as tt
 from src.core.token_tally import collect_token_usage
 
 NAME = "claude-model"
 
-
-@pytest.fixture(autouse=True)
-def _clear_aggregate_memo() -> None:
-  tt._reset_aggregate_memo()
-  yield
-  tt._reset_aggregate_memo()
+_clear_aggregate_memo = fresh_state_fixture(tt._reset_aggregate_memo)
 
 
 def _claude_record(record_id: str, model: str, ts: str, usage: dict) -> dict:

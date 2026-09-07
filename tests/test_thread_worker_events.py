@@ -3,18 +3,13 @@
 import json
 from pathlib import Path
 
-import pytest
+from conftest import fresh_state_fixture
 
 from src.api import threads as threads_api
 
 TS = "2026-08-31T00:00:00+00:00"
 
-
-@pytest.fixture(autouse=True)
-def _clear_events_cache():
-  threads_api._thread_events_cache.clear()
-  yield
-  threads_api._thread_events_cache.clear()
+_clear_events_cache = fresh_state_fixture(threads_api._thread_events_cache.clear)
 
 
 def _write_events(path: Path, blocks: list[str]) -> None:

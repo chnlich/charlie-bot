@@ -11,22 +11,13 @@ import asyncio
 import pathlib
 
 import pytest
-from conftest import reset_config_caches
+from conftest import fresh_state_fixture, reset_config_caches
 
 from src.core import config as core_config
 
-
-@pytest.fixture(autouse=True)
-def _reset_config_caches():
-  """Clear the process-wide config and cron caches around every test.
-
-  Both are keyed on nothing but their own mtimes, so a cached instance from an
-  earlier test would answer with the wrong profile.
-  """
-  reset_config_caches()
-  yield
-  reset_config_caches()
-
+# Both caches are keyed on nothing but their own mtimes, so a cached instance
+# from an earlier test would answer with the wrong profile.
+_reset_config_caches = fresh_state_fixture(reset_config_caches)
 
 # (env value to set — None deletes the variable, "{home}" interpolates tmp_path —
 # and the directory the resolver must answer with, relative to tmp_path).

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    fresh_state_fixture,
     make_work_item,
     mock_session_callbacks,
     run_session_consumer,
@@ -33,11 +34,7 @@ FABLE = "claude-fable-5-1"
 SONNET = "claude-sonnet-5"
 
 
-@pytest.fixture(autouse=True)
-def _fresh_pool_state():
-  claude_accounts.reset_for_tests()
-  yield
-  claude_accounts.reset_for_tests()
+_fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
 def _write_credentials(config_dir: Path, access_token: str = "token") -> None:

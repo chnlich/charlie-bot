@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 import pytest
+from conftest import fresh_state_fixture
 
 from src.agents.backends.base import tail_follow_events
 from src.core import init as init_module
@@ -44,11 +45,7 @@ class _FakeSessionMgr:
     pass
 
 
-@pytest.fixture(autouse=True)
-def _clear_once_keys():
-  init_module._silence_reported_thread_ids.clear()
-  yield
-  init_module._silence_reported_thread_ids.clear()
+_clear_once_keys = fresh_state_fixture(init_module._silence_reported_thread_ids.clear)
 
 
 async def _consume(raw: Path, sink: list[dict], on_silence) -> None:

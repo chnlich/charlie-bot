@@ -196,6 +196,23 @@ def count_path_read_text(monkeypatch: pytest.MonkeyPatch, include: Callable[[Pat
   return reads
 
 
+def fresh_state_fixture(reset: Callable[[], None]) -> Callable[[], Iterator[None]]:
+  """Build an autouse fixture that runs *reset* before and after every test of the module
+  assigning it, so process-wide memos and warn-once registries cannot leak between tests.
+
+  Pytest registers the returned fixture under the module attribute it is assigned to,
+  so the assigning module keeps its historical fixture name.
+  """
+
+  @pytest.fixture(autouse=True)
+  def _fresh_state() -> Iterator[None]:
+    reset()
+    yield
+    reset()
+
+  return _fresh_state
+
+
 def user_event(content: str, timestamp: str | None = None) -> dict:
   """A USER chat event; a test needing extra fields builds its own or merges them in."""
   event: dict[str, Any] = {"type": ET.USER, "content": content}

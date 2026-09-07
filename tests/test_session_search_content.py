@@ -5,19 +5,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config
+from conftest import fresh_state_fixture, make_home_config
 
 import src.core.sessions as sessions_mod
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 
-
-@pytest.fixture(autouse=True)
-def _fresh_search_read_failure_registry():
-  """Keep the process-wide warn-once registry from leaking across tests."""
-  sessions_mod._reset_search_read_failures_for_tests()
-  yield
-  sessions_mod._reset_search_read_failures_for_tests()
+_fresh_search_read_failure_registry = fresh_state_fixture(sessions_mod._reset_search_read_failures_for_tests)
 
 
 async def _session_with_chat_content(session_mgr: SessionManager, body: str, name: str) -> SessionMetadata:

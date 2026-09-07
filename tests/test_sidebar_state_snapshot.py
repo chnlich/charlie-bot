@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from conftest import (
     append_events,
+    fresh_state_fixture,
     make_home_session,
     plan_doc,
     write_plans,
@@ -38,13 +39,7 @@ from src.core.thinking_state import clear_busy, mark_busy
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
 
-
-@pytest.fixture(autouse=True)
-def _clean_sidebar_state():
-  """Isolate the module-level dirty set / snapshot / poll counter per test."""
-  sidebar_state.reset_for_tests()
-  yield
-  sidebar_state.reset_for_tests()
+_clean_sidebar_state = fresh_state_fixture(sidebar_state.reset_for_tests)
 
 
 async def _status_json(**kwargs) -> dict:

@@ -423,18 +423,29 @@ async def test_no_source_tier_when_results_but_no_assistant_usage(tmp_path: Path
 # Acceptance test 6: cost 0 -> None; positive cost sums
 # ---------------------------------------------------------------------------
 
+# Rows are the two result-cost shapes the resolver must distinguish: every
+# result reporting 0.0 costs nothing (None, not 0.0) and positive costs sum
+# across the full event list. The columns are the per-result total_cost_usd
+# values in order, then the expected resolved cost.
+_COST_ROWS = [
+    pytest.param((0.0, 0.0), None, id="all-zero-reports-none"),
+    pytest.param((0.10, 0.20), pytest.approx(0.30), id="positive-costs-sum"),
+]
+
 
 @pytest.mark.asyncio
-async def test_cost_is_none_when_all_results_report_zero(tmp_path: Path) -> None:
+@pytest.mark.parametrize("result_costs, expected_cost", _COST_ROWS)
+async def test_total_cost_across_results(
+    tmp_path: Path, result_costs: tuple[float, float], expected_cost: object) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-zerocost", name="Zero Cost", backend=OPUS_BACKEND_ID)
+  meta = SessionMetadata(id="session-cost", name="Cost", backend=OPUS_BACKEND_ID)
   _write_session(
       session_mgr, meta, [
-          _result_event(0.0, {"claude-opus-4-6": {
+          _result_event(result_costs[0], {"claude-opus-4-6": {
               "contextWindow": 200_000
           }}, input_tokens=1000),
-          _result_event(0.0, {"claude-opus-4-6": {
+          _result_event(result_costs[1], {"claude-opus-4-6": {
               "contextWindow": 200_000
           }}, input_tokens=2000),
           _assistant_event("claude-opus-4-6", input_tokens=50_000),
@@ -443,29 +454,7 @@ async def test_cost_is_none_when_all_results_report_zero(tmp_path: Path) -> None
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage is not None
-  assert usage["total_cost_usd"] is None
-
-
-@pytest.mark.asyncio
-async def test_cost_sums_positive_results_across_full_list(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-poscost", name="Positive Cost", backend=OPUS_BACKEND_ID)
-  _write_session(
-      session_mgr, meta, [
-          _result_event(0.10, {"claude-opus-4-6": {
-              "contextWindow": 200_000
-          }}, input_tokens=1000),
-          _result_event(0.20, {"claude-opus-4-6": {
-              "contextWindow": 200_000
-          }}, input_tokens=2000),
-          _assistant_event("claude-opus-4-6", input_tokens=50_000),
-      ])
-
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
-  assert usage["total_cost_usd"] == pytest.approx(0.30)
+  assert usage["total_cost_usd"] == expected_cost
 
 
 # ---------------------------------------------------------------------------
@@ -1239,8 +1228,19 @@ def test_extract_codex_rollout_usage_event_uses_last_input_tokens() -> None:
   }
 
 
+# Rows are the two turn_model shapes the native-cost resolver must
+# distinguish: a model present in the pricing table prices the cumulative
+# token counts, an unknown model prices nothing. The columns are the rollout's
+# turn_context model, then the expected resolved cost.
+_CODEX_NATIVE_COST_ROWS = [
+    pytest.param("gpt-5.5", pytest.approx(1.85, abs=0.01), id="priced-model-sums"),
+    pytest.param("gpt-unknown", None, id="unknown-model-none"),
+]
+
+
 @pytest.mark.asyncio
-async def test_codex_native_cost_sums_cumulative_tokens(tmp_path: Path) -> None:
+@pytest.mark.parametrize("turn_model, expected_cost", _CODEX_NATIVE_COST_ROWS)
+async def test_codex_native_cost_by_turn_model(tmp_path: Path, turn_model: str, expected_cost: object) -> None:
   cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"))
   session_mgr = SessionManager(cfg)
   meta = _seed_codex_session(
@@ -1250,7 +1250,7 @@ async def test_codex_native_cost_sums_cumulative_tokens(tmp_path: Path) -> None:
       backend="codex-test",
       native_thread_id="019d9f9e-5d7a-7f44-81a8-e9cb8261a51d",
       codex_home=tmp_path / "codex-tree",
-      turn_model="gpt-5.5",
+      turn_model=turn_model,
       token_event=_codex_token_count_event(
           timestamp="2026-03-31T20:43:12.454Z",
           total_input=1_951_892,
@@ -1265,38 +1265,8 @@ async def test_codex_native_cost_sums_cumulative_tokens(tmp_path: Path) -> None:
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage is not None
-  assert usage["total_cost_usd"] == pytest.approx(1.85, abs=0.01)
-  assert usage["model"] == "gpt-5.5"
-
-
-@pytest.mark.asyncio
-async def test_codex_native_cost_is_none_for_unknown_model(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"))
-  session_mgr = SessionManager(cfg)
-  meta = _seed_codex_session(
-      session_mgr,
-      session_id="session-codex-unknown-cost",
-      name="Codex Unknown Cost Session",
-      backend="codex-test",
-      native_thread_id="019d9fb0-c3f8-72ec-9d8d-0ed32d404b30",
-      codex_home=tmp_path / "codex-tree",
-      turn_model="gpt-unknown",
-      token_event=_codex_token_count_event(
-          timestamp="2026-03-31T20:43:12.454Z",
-          total_input=1_951_892,
-          total_cached=1_858_304,
-          total_output=15_209,
-          last_input=179_319,
-          last_cached=176_640,
-          last_output=1_732,
-          last_total=181_051),
-  )
-
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
-  assert usage["total_cost_usd"] is None
-  assert usage["model"] == "gpt-unknown"
+  assert usage["total_cost_usd"] == expected_cost
+  assert usage["model"] == turn_model
 
 
 # ---------------------------------------------------------------------------

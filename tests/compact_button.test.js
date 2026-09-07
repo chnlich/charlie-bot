@@ -46,6 +46,7 @@ function loadChatContext(elements) {
     marked: { parse: (v) => String(v || '') },
     fixNestedFences: (v) => String(v || ''),
     renderChatMath: () => {},
+    scheduleCodeHighlightFlush: () => {},
     renderUserMessageBubble: () => '',
     showScrollToBottom: () => {},
     hideStreaming: () => {},

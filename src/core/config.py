@@ -42,9 +42,10 @@ CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 # cannot shift these pins.
 HOUSE_TIMEZONE = "America/Los_Angeles"
 
-# The API request model TaskCreate (src/api/cron.py) shares this default; the web UI
-# re-pins the value in three literals (templates/index.html, two fallbacks in
-# sidebar/modals.js) that cannot import from Python — a change moves all four sites.
+# The API request model TaskCreate (src/api/cron.py) inherits this default through
+# ScheduledTaskFields; the web UI re-pins the value in three literals
+# (templates/index.html, two fallbacks in sidebar/modals.js) that cannot import
+# from Python — a change moves all three sites.
 DEFAULT_TIMEZONE = HOUSE_TIMEZONE
 
 # The resolved home and its string form, per raw ``CHARLIEBOT_HOME`` value plus
@@ -148,28 +149,21 @@ class StepConfig(BaseModel):
   backend: str | None = None
 
 
-class ScheduledTaskConfig(BaseModel):
-  """Configuration for a single scheduled (cron-like) task.
+class ScheduledTaskFields(BaseModel):
+  """Field block every scheduled task carries, shared by the loader's task model
+  and the API's create-request model so a new task field ships to both with one edit.
 
-  ``name`` is supplied by the loader (from the host file stem) and is required,
-  but the persisted per-job file body never carries ``name``. ``extra='forbid'``
-  turns an unknown key (a typo such as ``promt_file:``) into that file's error
-  instead of silently dropping it.
+  pydantic merges a parent's config into each child, so every subclass pins its
+  own extra-keys policy: the loader model rejects unknown keys
+  (``extra='forbid'``), the create-request body keeps ignoring them
+  (``extra='ignore'``).
   """
-
-  model_config = ConfigDict(extra='forbid')
 
   name: str
   cron: str
-  prompt: str | None = None
   # Pre-resolution path string a host cron.d file declared. It is an in-process
   # field for transport to the API and UI only; no write path persists it.
   prompt_file: str | None = None
-  handler: str | None = None
-  loop: ImprovementLoopConfig | None = None
-  # Ordered worker chain: each step spawns after the previous one exits 0, and
-  # the session master is woken once at the end (src/core/task_chain.py).
-  steps: list[StepConfig] | None = None
   repo: str | None = None
   backend: str | None = None
   timezone: str = DEFAULT_TIMEZONE
@@ -182,6 +176,25 @@ class ScheduledTaskConfig(BaseModel):
   # prompt.
   mode: Literal['worker', 'master'] | None = None
   allow_failure: bool = False
+
+
+class ScheduledTaskConfig(ScheduledTaskFields):
+  """Configuration for a single scheduled (cron-like) task.
+
+  ``name`` is supplied by the loader (from the host file stem) and is required,
+  but the persisted per-job file body never carries ``name``. ``extra='forbid'``
+  turns an unknown key (a typo such as ``promt_file:``) into that file's error
+  instead of silently dropping it.
+  """
+
+  model_config = ConfigDict(extra='forbid')
+
+  prompt: str | None = None
+  handler: str | None = None
+  loop: ImprovementLoopConfig | None = None
+  # Ordered worker chain: each step spawns after the previous one exits 0, and
+  # the session master is woken once at the end (src/core/task_chain.py).
+  steps: list[StepConfig] | None = None
   notify: str | None = None  # 'telegram' or None
 
   @model_validator(mode='after')

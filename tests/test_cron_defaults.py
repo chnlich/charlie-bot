@@ -166,7 +166,10 @@ def test_loader_loads_prompt_file_pointer(temp_home: Path) -> None:
 @pytest.mark.parametrize(
     "task_yaml",
     [
-        pytest.param({"cron": "* * * * *", "prompt": "body v1"}, id="inline-prompt"),
+        pytest.param({
+            "cron": "* * * * *",
+            "prompt": "body v1"
+        }, id="inline-prompt"),
         pytest.param({"cron": "* * * * *"}, id="no-prompt-source"),
     ],
 )

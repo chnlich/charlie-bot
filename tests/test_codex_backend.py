@@ -112,147 +112,88 @@ def test_turn_completed_includes_codex_cost(monkeypatch) -> None:
   ]
 
 
-def test_file_change_html_artifact_emits_file_write(monkeypatch, tmp_path: Path) -> None:
+# The translation maps a completed file_change item in memory; disk state never gates the
+# emit, so the missing-artifact and regular-file rows create nothing while the artifact
+# rows seed their files.
+_FILE_CHANGE_ROWS = [
+    pytest.param(
+        {"artifacts/x.html": "<!doctype html><p>artifact</p>"},
+        [("artifacts/x.html", "update")],
+        "item.completed",
+        "completed",
+        ["artifacts/x.html"],
+        id="html-artifact-completed-emits-file-write",
+    ),
+    pytest.param(
+        {
+            "artifacts/x.html": "<main>inline</main>",
+            "kernel.cu": "__global__ void k() {}\n",
+        },
+        [("artifacts/x.html", "update"), ("kernel.cu", "update")],
+        "item.completed",
+        "completed",
+        ["artifacts/x.html", "kernel.cu"],
+        id="multi-file-completed-emits-file-writes",
+    ),
+    pytest.param(
+        {},
+        [("artifacts/x.html", "update")],
+        "item.completed",
+        "completed",
+        ["artifacts/x.html"],
+        id="missing-html-artifact-still-emits-file-write",
+    ),
+    pytest.param(
+        {"artifacts/x.html": "<p>started</p>"},
+        [("artifacts/x.html", "update")],
+        "item.started",
+        "in_progress",
+        [],
+        id="started-html-artifact-emits-nothing",
+    ),
+    pytest.param(
+        {},
+        [("kernel.cu", "update")],
+        "item.completed",
+        "completed",
+        ["kernel.cu"],
+        id="regular-file-emits-file-write-without-filename-field",
+    ),
+]
+
+
+@pytest.mark.parametrize(("files", "changes", "event_type", "status", "expected_paths"), _FILE_CHANGE_ROWS)
+def test_file_change_translation(
+    monkeypatch,
+    tmp_path: Path,
+    files: dict[str, str],
+    changes: list[tuple[str, str]],
+    event_type: str,
+    status: str,
+    expected_paths: list[str],
+) -> None:
+  """One file_change scenario per row; the emit follows the event alone, never disk state."""
   backend = _build_backend(monkeypatch)
-  artifact_dir = tmp_path / "artifacts"
-  artifact_dir.mkdir()
-  artifact_path = artifact_dir / "x.html"
-  artifact_path.write_text("<!doctype html><p>artifact</p>", encoding="utf-8")
+  for rel_path, content in files.items():
+    seeded = tmp_path / rel_path
+    seeded.parent.mkdir(parents=True, exist_ok=True)
+    seeded.write_text(content, encoding="utf-8")
 
   translated = backend.translate_event(
       {
-          "type": "item.completed",
+          "type": event_type,
           "item":
               {
                   "type": "file_change",
                   "changes": [{
-                      "path": str(artifact_path),
-                      "kind": "update",
-                  }],
-                  "status": "completed",
+                      "path": str(tmp_path / rel_path),
+                      "kind": kind,
+                  } for rel_path, kind in changes],
+                  "status": status,
               },
       })
 
-  assert translated == [
-      {
-          "type": ET.FILE_WRITE,
-          "path": str(artifact_path),
-      },
-  ]
-
-
-def test_file_change_multi_file_emits_file_writes(monkeypatch, tmp_path: Path) -> None:
-  backend = _build_backend(monkeypatch)
-  artifact_dir = tmp_path / "artifacts"
-  artifact_dir.mkdir()
-  artifact_path = artifact_dir / "x.html"
-  artifact_path.write_text("<main>inline</main>", encoding="utf-8")
-  source_path = tmp_path / "kernel.cu"
-  source_path.write_text("__global__ void k() {}\n", encoding="utf-8")
-
-  translated = backend.translate_event(
-      {
-          "type": "item.completed",
-          "item":
-              {
-                  "type": "file_change",
-                  "changes":
-                      [
-                          {
-                              "path": str(artifact_path),
-                              "kind": "update",
-                          },
-                          {
-                              "path": str(source_path),
-                              "kind": "update",
-                          },
-                      ],
-                  "status": "completed",
-              },
-      })
-
-  assert translated == [
-      {
-          "type": ET.FILE_WRITE,
-          "path": str(artifact_path),
-      },
-      {
-          "type": ET.FILE_WRITE,
-          "path": str(source_path),
-      },
-  ]
-
-
-def test_file_change_missing_html_artifact_emits_file_write(monkeypatch, tmp_path: Path) -> None:
-  backend = _build_backend(monkeypatch)
-  artifact_path = tmp_path / "artifacts" / "x.html"
-
-  translated = backend.translate_event(
-      {
-          "type": "item.completed",
-          "item":
-              {
-                  "type": "file_change",
-                  "changes": [{
-                      "path": str(artifact_path),
-                      "kind": "update",
-                  }],
-                  "status": "completed",
-              },
-      })
-
-  assert translated == [{
-      "type": ET.FILE_WRITE,
-      "path": str(artifact_path),
-  }]
-
-
-def test_file_change_started_html_artifact_emits_nothing(monkeypatch, tmp_path: Path) -> None:
-  backend = _build_backend(monkeypatch)
-  artifact_dir = tmp_path / "artifacts"
-  artifact_dir.mkdir()
-  artifact_path = artifact_dir / "x.html"
-  artifact_path.write_text("<p>started</p>", encoding="utf-8")
-
-  translated = backend.translate_event(
-      {
-          "type": "item.started",
-          "item":
-              {
-                  "type": "file_change",
-                  "changes": [{
-                      "path": str(artifact_path),
-                      "kind": "update",
-                  }],
-                  "status": "in_progress",
-              },
-      })
-
-  assert not translated
-
-
-def test_file_change_regular_file_emits_file_write_without_filename_field(monkeypatch, tmp_path: Path) -> None:
-  backend = _build_backend(monkeypatch)
-  source_path = tmp_path / "kernel.cu"
-
-  translated = backend.translate_event(
-      {
-          "type": "item.completed",
-          "item":
-              {
-                  "type": "file_change",
-                  "changes": [{
-                      "path": str(source_path),
-                      "kind": "update",
-                  }],
-                  "status": "completed",
-              },
-      })
-
-  assert translated == [{
-      "type": ET.FILE_WRITE,
-      "path": str(source_path),
-  }]
+  assert translated == [{"type": ET.FILE_WRITE, "path": str(tmp_path / rel_path)} for rel_path in expected_paths]
 
 
 @pytest.mark.parametrize(

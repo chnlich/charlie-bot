@@ -9,7 +9,7 @@ from pathlib import Path
 
 import structlog
 
-from src.agents import master_cc_state
+from src.agents import master_cc_relay, master_cc_state
 from src.agents.backends.base import (
     AgentBackend,
     _read_stderr_tail,
@@ -20,7 +20,7 @@ from src.agents.backends.claude_code import (
     claude_supervisor_env,
     out_of_family_served_models,
 )
-from src.core import claude_accounts, runs
+from src.core import claude_accounts, claude_relay, runs
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, claude_config_dir
 from src.core.latex import check_tex_changed, clear_snapshot
@@ -29,6 +29,7 @@ from src.core.models import (
     PROJECT_ROLE,
     BackendOption,
     BackendType,
+    ClaudeAccount,
     MasterRunRecord,
     SessionCallbacks,
     SessionMetadata,
@@ -521,6 +522,28 @@ def _route_resume_session(backend_type: str, cc_session_id: str | None) -> tuple
   return [], None
 
 
+def _build_extra_flags(
+    option: BackendOption,
+    resume_id: str | None,
+    item: master_cc_state._WorkItem,
+) -> tuple[list[str], str | None]:
+  """CLI flags and native resume id for one spawn of this turn.
+
+  Shared by the first spawn and every account relay, so a relayed process
+  resumes with exactly the flags the turn started with plus the transcript id.
+  """
+  extra_flags, resume_session_id = _route_resume_session(option.type, resume_id)
+  # Move per-machine sections (cwd, env info, memory paths, git status) out of the
+  # system prompt into the first user message. Keeps the system prompt stable across
+  # sessions so cross-run prompt-cache reuse improves. Only the Claude Code CLI
+  # family supports this flag.
+  if option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
+    extra_flags = [*extra_flags, "--exclude-dynamic-system-prompt-sections"]
+  if item.extra_claude_flags:
+    extra_flags.extend(item.extra_claude_flags)
+  return extra_flags, resume_session_id
+
+
 def _build_master_env(cfg: CharlieBotConfig, session_id: str) -> dict[str, str]:
   """Build the environment for the master backend subprocess.
 
@@ -709,7 +732,23 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     )
     return await _refuse_turn(item, msg)
 
+  pooled = claude_accounts.is_pooled(option, cfg)
+  account: ClaudeAccount | None = None
+  context_tokens: int | None = None
+  last_request_at: datetime | None = None
+  if pooled and item.callbacks.claude_context_state is not None:
+    context_tokens, last_request_at = await item.callbacks.claude_context_state(session_meta.id, session_meta)
   resume_id = _resolve_resume_id(option, session_meta, cfg=cfg)
+  if pooled:
+    # The pool picks the login for this turn, moves the transcript to it when the
+    # account changes, and compacts a large Fable context when the cache is cold.
+    account, place_error = await master_cc_relay.place_turn(
+        cfg, item, option, resume_id, cwd, context_tokens, last_request_at)
+    if account is None:
+      log.error("master_cc_account_unavailable", session=session_meta.id, error=place_error)
+      return await _refuse_turn(item, place_error)
+    # A moved transcript is re-resolved under the chosen account.
+    resume_id = _resolve_resume_id(option, session_meta, cfg=cfg)
   # Pre-flight: a resume-capable backend about to run with no resolved resume
   # id, when the session already has an anchor on disk or a completed round, is
   # about to start a zero-context conversation. Fail loudly unless the caller
@@ -729,13 +768,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
               "type": ET.RESUME_CONTEXT_DROPPED,
               "reason": reason,
           })
-  extra_flags, resume_session_id = _route_resume_session(option.type, resume_id)
-  # Move per-machine sections (cwd, env info, memory paths, git status) out of the
-  # system prompt into the first user message. Keeps the system prompt stable across
-  # sessions so cross-run prompt-cache reuse improves. Only the Claude Code CLI
-  # family supports this flag.
-  if option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
-    extra_flags = [*extra_flags, "--exclude-dynamic-system-prompt-sections"]
+  extra_flags, resume_session_id = _build_extra_flags(option, resume_id, item)
   resume_session = bool(resume_id)
   # Gate on backend capability, not on a resume-id variable: a backend outside
   # _RESUME_CAPABLE_BACKEND_TYPES cannot resume any prior session, so a session
@@ -745,10 +778,12 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   # start, unreachable transcript) and let the misconfiguration pass undetected.
   if session_meta.cc_session_id and option.type not in _RESUME_CAPABLE_BACKEND_TYPES:
     log.warning("master_cc_resume_unsupported_backend", session=session_meta.id, backend=option.type)
-  if item.extra_claude_flags:
-    extra_flags.extend(item.extra_claude_flags)
 
   env = _build_master_env(cfg, session_meta.id)
+  if pooled:
+    # The pool chose the login directory; an inherited CLAUDE_CONFIG_DIR must
+    # never shadow it (LESSONS 2026-08-05).
+    env.pop("CLAUDE_CONFIG_DIR", None)
 
   prompt = _build_prompt(item.user_content, item.is_voice)
 
@@ -760,6 +795,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       prompt_chars=len(prompt),
       resume_session=resume_session,
       cwd=cwd,
+      account=account.label if account is not None else None,
   )
 
   cc_session_id: str | None = session_meta.cc_session_id
@@ -775,10 +811,14 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
 
   tracker = _RunTimingTracker(session_meta.id, option.type, option.model)
   backend: AgentBackend | None = None
+  # Account relays this turn performed (pooled options only).
+  relays = 0
+  watch: claude_relay.RelayWatch | None = None
 
   # Per-turn transport dir: the backend pins its raw NDJSON log, stderr log,
   # and read cursor here so a restarted server can re-attach to this exact
-  # turn from the persisted master_run record.
+  # turn from the persisted master_run record. A relay's fresh process gets a
+  # dir and record of its own (see _spawn_and_stream).
   started_at = datetime.now(UTC)
   log_dir = cfg.sessions_dir / session_meta.id / "data" / "master_runs" / started_at.isoformat()
   raw_log = str(log_dir / runs.RAW_LOG_NAME)
@@ -800,28 +840,73 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     await item.callbacks.persist_master_run(session_meta.id, record)
     record_persisted = True
 
-  try:
+  async def _spawn_and_stream(
+      spawn_option: BackendOption,
+      spawn_prompt: str,
+      spawn_flags: list[str],
+      spawn_resume_id: str | None,
+  ) -> None:
+    """One process of this turn: build the backend, stream its events, record its exit."""
+    nonlocal backend, exit_code, cc_session_id, record_persisted, started_at, log_dir, raw_log
+    if backend is not None:
+      record_persisted = False
+      started_at = datetime.now(UTC)
+      log_dir = cfg.sessions_dir / session_meta.id / "data" / "master_runs" / started_at.isoformat()
+      raw_log = str(log_dir / runs.RAW_LOG_NAME)
     backend = build_backend(
-        option,
+        spawn_option,
         cfg,
-        extra_flags=extra_flags or None,
+        extra_flags=spawn_flags or None,
         buffer_limit=cfg.subprocess_buffer_limit,
         on_spawn=_on_spawn,
         instructions_content=instructions_content,
-        resume_session_id=resume_session_id,
+        resume_session_id=spawn_resume_id,
         log_dir=log_dir,
     )
     master_cc_state._active_procs[session_meta.id] = backend
 
-    async for event in backend.run(prompt, cwd, env):
+    async for event in backend.run(spawn_prompt, cwd, env):
       tracker.on_event(event)
       cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)
+      if watch is not None and watch.observe(event):
+        # Armed relay at its safe point: the tool result is on disk, stop here.
+        await backend.terminate()
 
     exit_code = backend.exit_code
     if backend.stderr_text:
       log.warning("master_cc_stderr", session=session_meta.id, stderr=backend.stderr_text)
-      if exit_code != 0 and not backend.terminated:
-        error_msg = backend.stderr_text[:500]
+
+  try:
+    spawn_option = option.model_copy(update={"claude_config_dir": account.config_dir}) if account else option
+    spawn_prompt, spawn_flags, spawn_resume_id = prompt, extra_flags, resume_session_id
+    while True:
+      watch = claude_relay.RelayWatch(account.label, option.model) if account is not None else None
+      await _spawn_and_stream(spawn_option, spawn_prompt, spawn_flags, spawn_resume_id)
+      assert backend is not None
+      decision = watch.decision(exit_code, backend.stderr_text) if watch is not None else None
+      if decision is None:
+        if exit_code != 0 and backend.stderr_text and not backend.terminated:
+          error_msg = backend.stderr_text[:500]
+        break
+      assert account is not None
+      if decision == claude_relay.LOGIN_FAILED:
+        await master_cc_relay.report_login_failure(item, account)
+      if relays >= claude_relay.MAX_RELAYS_PER_TURN:
+        error_msg = claude_relay.relay_limit_message()
+        exit_code = 1
+        break
+      next_account, relay_error = await master_cc_relay.prepare_relay(
+          cfg, item, option, cc_session_id, account, cwd, decision)
+      if next_account is None:
+        error_msg = relay_error
+        exit_code = 1
+        break
+      relays += 1
+      account = next_account
+      session_meta.claude_account = account.label
+      spawn_option = option.model_copy(update={"claude_config_dir": account.config_dir})
+      spawn_prompt = claude_relay.CONTINUATION_PROMPT
+      spawn_flags, spawn_resume_id = _build_extra_flags(option, cc_session_id, item)
 
     # Turn-end model attribution: when the CLI silently served this round's
     # visible reply with a model outside the pinned family, one synthetic
@@ -871,6 +956,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   finally:
     master_cc_state._active_procs.pop(session_meta.id, None)
     finish_extras = tracker.build_finish_extras()
+    if relays:
+      finish_extras["account_relays"] = relays
 
     # The pair runs before the let-go branch below: a let-go turn still gets
     # its error event and silent-turn salvage; only the terminal state writes

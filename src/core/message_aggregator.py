@@ -91,6 +91,16 @@ def _context_compact_failed_msg(ev: dict) -> dict:
   return {'role': 'system', 'kind': 'context_compact_failed', 'content': content}
 
 
+def _claude_account_login_required_msg(ev: dict) -> dict:
+  """Account-free by design: the login directory is on the usage panel, never in chat."""
+  del ev
+  return {
+      'role': 'system',
+      'kind': 'claude_account_login_required',
+      'content': 'One account in the Claude pool needs a new login; see the usage panel.',
+  }
+
+
 def _resume_context_dropped_msg(ev: dict) -> dict:
   reason = ev.get('reason')
   if reason == 'anchor_missing':
@@ -219,6 +229,8 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         _context_compact_failed_msg,
     ET.RESUME_CONTEXT_DROPPED:
         _resume_context_dropped_msg,
+    ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED:
+        _claude_account_login_required_msg,
     ET.SYSTEM:
         _system_msg,
     ET.CLONE_START:

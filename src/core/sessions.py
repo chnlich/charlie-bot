@@ -1682,6 +1682,28 @@ class SessionManager:
       read_back = await self._get_session_bypassing_cache(session_id)
     return read_back.claude_account if read_back is not None else None
 
+  async def claude_context_state(self, session_id: str,
+                                 session_meta: SessionMetadata) -> tuple[int | None, datetime | None]:
+    """Context size and the time of the last model request, for the account pool.
+
+    ``context_tokens`` is the usage panel's reading (``resolve_session_usage``);
+    ``last_request_at`` is the timestamp of the newest assistant or result event,
+    the moment the prompt cache was last renewed. Either is None when unknown.
+    """
+    usage = await self.resolve_session_usage(session_id, session_meta)
+    context_tokens = usage.get("context_tokens") if isinstance(usage, dict) else None
+
+    def newest_request() -> datetime | None:
+      for ev in reversed(self.load_chat_events_sync(session_id)):
+        if ev.get("type") in (ET.ASSISTANT, ET.RESULT) and isinstance(ev.get("timestamp"), str):
+          try:
+            return parse_utc_datetime(ev["timestamp"])
+          except ValueError:
+            continue
+      return None
+
+    return context_tokens, await asyncio.to_thread(newest_request)
+
   async def has_completed_round(self, session_id: str) -> bool:
     """True when the live event stream contains a master_done event.
 
@@ -1838,6 +1860,7 @@ class SessionManager:
         has_completed_round=self.has_completed_round,
         persist_master_run=self.persist_master_run,
         persist_claude_account=self.persist_claude_account,
+        claude_context_state=self.claude_context_state,
     )
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:

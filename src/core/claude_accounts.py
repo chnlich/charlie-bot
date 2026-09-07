@@ -43,6 +43,10 @@ log = structlog.get_logger()
 # Fable, Opus and Sonnet switch in place inside the pool without touching accounts.
 POOL_DOMAIN = "pool"
 
+# Utilization at which Claude Code starts reporting ``allowed_warning``; an
+# account at or above it is one to leave before the window rejects.
+WARNING_UTILIZATION = 0.90
+
 # An account whose last authentication failure is younger than this is skipped:
 # a failed OAuth refresh is not cleared by retrying within minutes.
 AUTH_FAILURE_COOLDOWN = timedelta(minutes=15)
@@ -79,6 +83,8 @@ _event_readings: dict[str, RateLimitReading] = {}
 _panel_readings: dict[str, dict[str, Any]] = {}
 # Time of the last authentication failure per account label.
 _auth_failures: dict[str, datetime] = {}
+# Accounts already reported as needing a login, cleared when they recover.
+_login_notified: set[str] = set()
 
 
 def reset_for_tests() -> None:
@@ -86,6 +92,7 @@ def reset_for_tests() -> None:
   _event_readings.clear()
   _panel_readings.clear()
   _auth_failures.clear()
+  _login_notified.clear()
 
 
 def _now(now: datetime | None) -> datetime:
@@ -156,6 +163,18 @@ def record_auth_failure(label: str, now: datetime | None = None) -> None:
 def auth_failed_recently(label: str, now: datetime | None = None) -> bool:
   failed_at = _auth_failures.get(label)
   return failed_at is not None and _now(now) - failed_at < AUTH_FAILURE_COOLDOWN
+
+
+def login_notice_due(label: str, *, unhealthy: bool) -> bool:
+  """True once per unhealthy spell of *label*: the first call after it goes unhealthy, and
+  again only after a call has seen it healthy."""
+  if not unhealthy:
+    _login_notified.discard(label)
+    return False
+  if label in _login_notified:
+    return False
+  _login_notified.add(label)
+  return True
 
 
 def healthy(account: ClaudeAccount, now: datetime | None = None) -> bool:

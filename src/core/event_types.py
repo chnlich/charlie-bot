@@ -93,6 +93,14 @@ FILE_WRITE = "file_write"
 # detection chain consumes the same type on read-back.
 RATE_LIMIT_EVENT = "rate_limit_event"
 
+# -- Claude account pool -----------------------------------------------------
+# Operator notice from the account pool (src/core/claude_accounts.py): one login
+# lost its credentials or failed to authenticate and needs an interactive
+# `claude /login` in ``config_dir``. Fields: account, config_dir, reason
+# ("auth_failed" | "empty_credentials"). The chat renders it account-free; the
+# account and directory are for the server log and the usage panel.
+CLAUDE_ACCOUNT_LOGIN_REQUIRED = "claude_account_login_required"
+
 # -- Session backend switching ----------------------------------------------
 BACKEND_SWITCHED = "backend_switched"
 

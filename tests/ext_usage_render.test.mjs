@@ -1000,3 +1000,20 @@ test('a refusing localStorage degrades to the in-memory boolean', () => {
   assert.equal(strip.classList.contains('collapsed'), !collapsedBefore, 'strip class still follows');
   assert.equal(chip.textContent, (!collapsedBefore) ? '▸' : '▾', 'chip glyph still follows');
 });
+
+test('renderExtUsage marks a pool account that needs a new login with its directory', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'claude:main': _claudePayload(),
+      'claude:ext-2': _claudePayload({ account: 'ext-2', login_required: '~/.claude-ext-2' }),
+    },
+  });
+
+  const flagged = _rowByKey(strip, 'claude:ext-2');
+  assert.ok(flagged);
+  assert.equal(_field(flagged, 'login-required').textContent, 're-login needed: ~/.claude-ext-2');
+  const healthy = _rowByKey(strip, 'claude:main');
+  assert.equal(_field(healthy, 'login-required'), null, 'a healthy account carries no login note');
+});

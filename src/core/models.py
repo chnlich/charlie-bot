@@ -584,6 +584,9 @@ class SessionCallbacks:
   # label read back from disk. Optional so callback bundles built before the
   # account pool existed (tests) stay valid; the live bundle always sets it.
   persist_claude_account: Callable[[str, str], Awaitable[str | None]] | None = None
+  # (context_tokens, last_request_at) for the account pool's cold-cache rule;
+  # None when the caller wired no pool (tests).
+  claude_context_state: Callable[[str, SessionMetadata], Awaitable[tuple[int | None, datetime | None]]] | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -299,6 +299,14 @@ function _buildRow(key, providerData) {
   const label = _el('span', 'text-slate-300 font-medium');
   label.textContent = providerData.account || key;
   row.appendChild(label);
+  if (providerData.login_required) {
+    // The account pool flagged this login (empty credential store or a failed
+    // refresh); the chat notice names no account, so the directory shows here.
+    const note = _el('span', 'italic text-amber-400');
+    note.setAttribute('data-field', 'login-required');
+    note.textContent = 're-login needed: ' + providerData.login_required;
+    row.appendChild(note);
+  }
 
   const windows = Array.isArray(providerData.windows) ? providerData.windows : [];
   const buckets = [];

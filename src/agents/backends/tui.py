@@ -19,7 +19,7 @@ from typing import Any
 import structlog
 from fastapi import WebSocket
 
-from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, SKIP_PERMISSIONS_SETTINGS
+from src.agents.backends.base import SKIP_PERMISSIONS_SETTINGS, build_claude_argv
 from src.agents.backends.pty_common import (
     PTY_EXIT,
     PtyAttachment,
@@ -73,34 +73,6 @@ def _claude_jsonl_busy(session_id: str, threshold_seconds: float = _BUSY_THRESHO
     return False
   mtime = jsonl.stat().st_mtime
   return (time.time() - mtime) < threshold_seconds
-
-
-def _build_claude_argv(
-    session_id: str,
-    resume: bool,
-    *,
-    model: str | None = None,
-    effort: str | None = None,
-    disallowed_tools: list[str] | None = None,
-) -> list[str]:
-  session_arg = "--resume" if resume else "--session-id"
-  argv = [
-      "claude",
-      "--settings",
-      _CLAUDE_TUI_SETTINGS,
-      SKIP_PERMISSIONS_FLAG,
-      session_arg,
-      session_id,
-  ]
-  if model:
-    argv.extend(["--model", model])
-  if effort:
-    argv.extend(["--effort", effort])
-  # Collapse every incoming entry into one comma-joined value: the launched `claude`
-  # reliably honors a single --disallowed-tools flag, not repeated ones.
-  if disallowed_tools:
-    argv.extend(["--disallowed-tools", ",".join(disallowed_tools)])
-  return argv
 
 
 def _claude_config_path() -> Path:
@@ -157,9 +129,10 @@ async def ensure_tmux_session(
   if await tmux_session_exists(session_id):
     return
   resume = _find_existing_claude_jsonl(session_id) is not None
-  command_args = _build_claude_argv(
+  command_args = build_claude_argv(
       session_id,
       resume,
+      settings=_CLAUDE_TUI_SETTINGS,
       model=model,
       effort=effort,
       disallowed_tools=disallowed_tools,

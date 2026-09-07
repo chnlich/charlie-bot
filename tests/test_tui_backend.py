@@ -16,9 +16,10 @@ def _clear_jsonl_memo() -> None:
 
 
 def test_build_claude_argv_joins_disallowed_tools_into_single_flag() -> None:
-  argv = tui._build_claude_argv(
+  argv = tui.build_claude_argv(
       "session-id",
       resume=False,
+      settings=tui._CLAUDE_TUI_SETTINGS,
       disallowed_tools=["Monitor,CronCreate", "AskUserQuestion,ExitPlanMode"],
   )
 
@@ -29,7 +30,7 @@ def test_build_claude_argv_joins_disallowed_tools_into_single_flag() -> None:
 
 
 def test_build_claude_argv_omits_disallowed_flag_when_empty() -> None:
-  argv = tui._build_claude_argv("session-id", resume=False, disallowed_tools=[])
+  argv = tui.build_claude_argv("session-id", resume=False, settings=tui._CLAUDE_TUI_SETTINGS, disallowed_tools=[])
 
   assert "--disallowed-tools" not in argv
 

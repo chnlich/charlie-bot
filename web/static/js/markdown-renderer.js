@@ -90,6 +90,53 @@ function applyFenceUpgrades(lines, upgrades) {
 // cache serves every later paint.
 var streamPaintCodeTokens = null;
 
+// The page parse's deferral state, driven by renderProseMarkdown below: true
+// only around one of its parses, with the body text the flush needs to settle
+// the memo entry. renderer.code records each deferred block's marker id, its
+// (lang, code) highlight key, and the exact block html it emitted, so the
+// flush can swap the highlighted bytes into both the DOM node and the memo
+// entry without re-parsing the body.
+var deferCodeHighlights = false;
+var deferredBodyText = '';
+var deferredSeq = 0;
+var deferredBlocks = new Map();
+var highlightFlushScheduled = false;
+
+// Every streaming paint re-parses the whole accumulated draft, so unchanged
+// code blocks re-highlight on every paint, and highlightAuto scores the block
+// against every registered language (~0.26 s per 24 KB on the served
+// highlight.js 11.9.0 common build). Highlight output is a pure function of
+// (lang, code), so a bounded LRU serves repeat blocks without re-running it.
+const highlightCache = new Map();
+const HIGHLIGHT_CACHE_CAP = 32;
+// One code-block emission, shared by every render mode so a deferred block's
+// settled bytes stay byte-identical to the direct highlight's.
+function codeBlockHtml(displayLang, isMarkdown, innerHtml, markerId) {
+  const renderBtn = isMarkdown
+    ? '<button class="copy-btn" onclick="renderMarkdown(this)">Render</button>'
+    : '';
+  const marker = markerId === null ? '' : ` data-hl="${markerId}"`;
+  return `<div class="code-block"><div class="code-header"><span class="code-lang">${displayLang}</span>${renderBtn}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div><pre><code class="hljs"${marker}>${innerHtml}</code></pre></div>`;
+}
+function highlightKey(lang, code) {
+  return lang + '\u0000' + code;
+}
+function cachedHighlight(lang, code, run) {
+  const key = highlightKey(lang, code);
+  let value = highlightCache.get(key);
+  if (value !== undefined) {
+    highlightCache.delete(key);
+    highlightCache.set(key, value);
+    return value;
+  }
+  value = run();
+  highlightCache.set(key, value);
+  if (highlightCache.size > HIGHLIGHT_CACHE_CAP) {
+    highlightCache.delete(highlightCache.keys().next().value);
+  }
+  return value;
+}
+
 // A complete block's raw ends on its closing fence line (marked strips the
 // trailing newline from a terminated token's raw but keeps it on an
 // unterminated one); an unterminated block's raw ends on content. The one
@@ -143,31 +190,6 @@ function recordCodeTokens(tokens) {
   }
 
   const renderer = new marked.Renderer();
-  // Every streaming paint re-parses the whole accumulated draft, so unchanged
-  // code blocks re-highlight on every paint, and highlightAuto scores the block
-  // against every registered language (~0.26 s per 24 KB on the served
-  // highlight.js 11.9.0 common build). Highlight output is a pure function of
-  // (lang, code), so a bounded LRU serves repeat blocks without re-running it.
-  const highlightCache = new Map();
-  const HIGHLIGHT_CACHE_CAP = 32;
-  function highlightKey(lang, code) {
-    return lang + '\u0000' + code;
-  }
-  function cachedHighlight(lang, code, run) {
-    const key = highlightKey(lang, code);
-    let value = highlightCache.get(key);
-    if (value !== undefined) {
-      highlightCache.delete(key);
-      highlightCache.set(key, value);
-      return value;
-    }
-    value = run();
-    highlightCache.set(key, value);
-    if (highlightCache.size > HIGHLIGHT_CACHE_CAP) {
-      highlightCache.delete(highlightCache.keys().next().value);
-    }
-    return value;
-  }
   // The growing tail's escape, carried across paints: escapeText maps each
   // character independently, so escape(prefix + delta) is escape(prefix) +
   // escape(delta) exactly, and a tail that grows by appends re-escapes only
@@ -208,18 +230,31 @@ function recordCodeTokens(tokens) {
       && !highlightCache.has(highlightKey(resolvedLang, trimmed))
       && token === streamPaintCodeTokens[streamPaintCodeTokens.length - 1]
       && !endsOnClosingFence(token.raw);
+    const displayLang = escapeText(lang || 'text');
+    const isMarkdown = (lang === 'markdown' || lang === 'md');
+    // The page parse defers the highlight off the first paint (see
+    // renderProseMarkdown); the growing tail's own escape already covers the
+    // streaming shape, and the two deferrals never co-occur because
+    // streamPaintCodeTokens is non-null only inside the streaming paint.
+    if (deferCodeHighlights && !isGrowingTail) {
+      const id = String(++deferredSeq);
+      deferredBlocks.set(id, {
+        lang: resolvedLang,
+        code: trimmed,
+        text: deferredBodyText,
+        displayLang,
+        isMarkdown,
+        plainBlock: codeBlockHtml(displayLang, isMarkdown, escapeText(trimmed), id),
+      });
+      return codeBlockHtml(displayLang, isMarkdown, escapeText(trimmed), id);
+    }
     const run = () => (resolvedLang
       ? hljs.highlight(trimmed, { language: resolvedLang }).value
       : hljs.highlightAuto(trimmed).value);
     const highlighted = isGrowingTail
       ? escapeStreamTail(trimmed)
       : cachedHighlight(resolvedLang, trimmed, run);
-    const displayLang = escapeText(lang || 'text');
-    const isMarkdown = (lang === 'markdown' || lang === 'md');
-    const renderBtn = isMarkdown
-      ? '<button class="copy-btn" onclick="renderMarkdown(this)">Render</button>'
-      : '';
-    return `<div class="code-block"><div class="code-header"><span class="code-lang">${displayLang}</span>${renderBtn}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div><pre><code class="hljs">${highlighted}</code></pre></div>`;
+    return codeBlockHtml(displayLang, isMarkdown, highlighted, null);
   };
   renderer.link = function(token) {
     const href = escapeAttr(token.href);
@@ -315,6 +350,15 @@ function recordCodeTokens(tokens) {
 // renders. Cap holds the 64 most recently rendered bodies: the tail pages a
 // re-entry renders. The streaming draft paint (usage.js) stays off this memo
 // on purpose: its content grows every delta, so it would only evict.
+//
+// A body's first parse defers the code highlight off the first paint: the
+// highlight is pure per-block work (highlightAuto scores every registered
+// language, ~0.26 s per 24 KB on the served common build — the dominant slice
+// of a code-heavy page's cold render), so the parse emits escaped-plain blocks
+// with data-hl markers and the scheduled flush swaps the highlighted bytes
+// into the DOM nodes and the memo entry, timeboxed across frames. A memo hit
+// on a settled entry renders highlighted bytes directly; on a not-yet-flushed
+// entry it re-emits the same markers, which the one pending flush covers.
 // ---------------------------------------------------------------------------
 const PROSE_PARSE_CACHE_CAP = 64;
 const proseParseCache = new Map();
@@ -325,12 +369,117 @@ function renderProseMarkdown(text) {
     proseParseCache.set(text, html);
     return html;
   }
-  html = marked.parse(fixNestedFences(text));
+  deferCodeHighlights = true;
+  deferredBodyText = text;
+  try {
+    html = marked.parse(fixNestedFences(text));
+  } finally {
+    deferCodeHighlights = false;
+  }
   proseParseCache.set(text, html);
   if (proseParseCache.size > PROSE_PARSE_CACHE_CAP) {
     proseParseCache.delete(proseParseCache.keys().next().value);
   }
+  scheduleCodeHighlightFlush();
   return html;
+}
+
+function scheduleCodeHighlightFlush(root) {
+  // The turn-engine prerender post-processes detached fragments; a root
+  // handed in here while records are pending joins the flush's sweep, so its
+  // markers get the swap even before the fragment attaches.
+  if (root && deferredBlocks.size) registerHighlightRoot(root);
+  if (highlightFlushScheduled || !deferredBlocks.size) return;
+  highlightFlushScheduled = true;
+  const run = () => {
+    highlightFlushScheduled = false;
+    flushDeferredCodeHighlights();
+  };
+  // The rAF frame is the upgrade slot: the plain first paint is already on
+  // screen, and the swap lands before the next one. setTimeout carries the
+  // vm harnesses, which define no rAF.
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else setTimeout(run, 0);
+}
+
+// Roots whose renders still carry unswapped markers. WeakRefs let a discarded
+// render's tree be collected; the WeakSet dedupes repeated registrations of
+// the same root.
+var highlightRootRefs = new Set();
+var highlightRootsSeen = new WeakSet();
+var HIGHLIGHT_FLUSH_RETRY_MS = 250;
+var HIGHLIGHT_FLUSH_MAX_ATTEMPTS = 120;
+
+function registerHighlightRoot(root) {
+  if (!root || highlightRootsSeen.has(root)) return;
+  highlightRootsSeen.add(root);
+  if (typeof WeakRef === 'function') highlightRootRefs.add(new WeakRef(root));
+}
+
+function flushDeferredCodeHighlights() {
+  if (!deferredBlocks.size) return;
+  // The flush swaps the highlighted bytes into every marker the document and
+  // the registered roots still hold — the turn-engine prerenders atoms
+  // detached and holds the fragment alive until the segment materializes, so
+  // a root sweep settles the block before it ever attaches. The 8 ms timebox
+  // bounds each pass's highlight work — highlightAuto on one block can exceed
+  // it, so the deadline is checked between records. A record no sweep finds
+  // retries on a bounded backoff (the attach can land much later, on a
+  // scroll) and gives up after HIGHLIGHT_FLUSH_MAX_ATTEMPTS; the memo entry
+  // settles on the first pass either way, so every later render serves the
+  // settled bytes.
+  const deadline = performance.now() + 8;
+  const roots = [];
+  for (const ref of highlightRootRefs) {
+    const root = ref.deref();
+    if (root) roots.push(root);
+    else highlightRootRefs.delete(ref);
+  }
+  for (const [id, rec] of deferredBlocks) {
+    const run = () => (rec.lang
+      ? hljs.highlight(rec.code, { language: rec.lang }).value
+      : hljs.highlightAuto(rec.code).value);
+    const highlighted = cachedHighlight(rec.lang, rec.code, run);
+    const settledBlock = codeBlockHtml(rec.displayLang, rec.isMarkdown, highlighted, null);
+    const cached = proseParseCache.get(rec.text);
+    if (cached !== undefined && cached.includes(rec.plainBlock)) {
+      // The replacer function keeps the highlighted bytes literal: String's
+      // replacement string would read $$/$&/$`/$' patterns out of them.
+      proseParseCache.set(rec.text, cached.replace(rec.plainBlock, () => settledBlock));
+    }
+    const selector = `code[data-hl="${id}"]`;
+    let found = false;
+    for (const el of document.querySelectorAll(selector)) {
+      el.innerHTML = highlighted;
+      el.removeAttribute('data-hl');
+      found = true;
+    }
+    for (const root of roots) {
+      for (const el of root.querySelectorAll(selector)) {
+        el.innerHTML = highlighted;
+        el.removeAttribute('data-hl');
+        found = true;
+      }
+    }
+    if (found) deferredBlocks.delete(id);
+    else rec.attempts = (rec.attempts || 0) + 1;
+    if (performance.now() >= deadline && deferredBlocks.size) {
+      scheduleCodeHighlightFlush();
+      return;
+    }
+  }
+  let retry = false;
+  for (const [id, rec] of deferredBlocks) {
+    if ((rec.attempts || 0) >= HIGHLIGHT_FLUSH_MAX_ATTEMPTS) deferredBlocks.delete(id);
+    else retry = true;
+  }
+  if (retry) {
+    highlightFlushScheduled = true;
+    setTimeout(() => {
+      highlightFlushScheduled = false;
+      flushDeferredCodeHighlights();
+    }, HIGHLIGHT_FLUSH_RETRY_MS);
+  }
 }
 
 function renderChatMath(el) {

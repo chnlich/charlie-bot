@@ -19,6 +19,7 @@ function loadChatRendering() {
     fixNestedFences: (value) => String(value || ''),
     renderProseMarkdown: (value) => String(value || ''),
     renderChatMath: () => {},
+    scheduleCodeHighlightFlush: () => {},
     renderUserMessageBubble: () => '',
   };
   vm.createContext(context);

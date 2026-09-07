@@ -149,14 +149,15 @@ _REAL_SESSION_EVENTS = _real_session_events()
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("name", "events"), FIXTURE_EVENTS)
+@pytest.mark.parametrize(("name", "events"), [*FIXTURE_EVENTS, *_REAL_SESSION_EVENTS])
 def test_projection_history_equals_events_to_messages(name: str, events: list[dict]) -> None:
-  """projection.history must equal events_to_messages(all_events) by definition."""
+  """projection.history must equal events_to_messages(all_events) by definition —
+  on the fixture events and on every real session under ~/.charliebot/sessions."""
   projection = MessageProjection(events)
   reference = events_to_messages(events)
   proj_identities = [_identity_tuple(m) for m in projection.history]
   ref_identities = [_identity_tuple(m) for m in reference]
-  assert proj_identities == ref_identities, f"mismatch in fixture '{name}'"
+  assert proj_identities == ref_identities, f"mismatch in '{name}'"
 
 
 def test_projection_reorder_fixture_reorders_queued_user() -> None:
@@ -176,16 +177,6 @@ def test_projection_pending_draft_fixture_has_draft() -> None:
   assert projection.pending_draft["content"] == "draft response"
   assert len(projection.history) == 2
   assert projection.history[1] is projection.pending_draft
-
-
-@pytest.mark.parametrize(("name", "events"), _REAL_SESSION_EVENTS)
-def test_projection_history_equals_events_to_messages_real_sessions(name: str, events: list[dict]) -> None:
-  """Definitional equivalence on real sessions under ~/.charliebot/sessions."""
-  projection = MessageProjection(events)
-  reference = events_to_messages(events)
-  proj_identities = [_identity_tuple(m) for m in projection.history]
-  ref_identities = [_identity_tuple(m) for m in reference]
-  assert proj_identities == ref_identities, f"mismatch in real session '{name}'"
 
 
 # ---------------------------------------------------------------------------

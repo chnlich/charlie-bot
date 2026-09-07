@@ -380,12 +380,16 @@ _opencode_row_memos: dict[str, dict[str, tuple[int, list | None]]] = {}
 _opencode_row_epochs: dict[str, int] = {}
 
 # Per-db proof aggregates of the row memo's last full scan: (row count, sum of time_updated).
-# The pair moves whenever the key scan's (id, time_updated) diff would: an insert or delete
-# moves the count, and a moved row rewrites time_updated so the sum changes with it — a
-# data-only rewrite with an unchanged time_updated is invisible to the key scan itself. The
-# one shape both miss is a delete and an insert inside one millisecond whose time_updated
-# values coincide, the same terminal-pair class the row memo vocabulary documents above.
-# Equal aggregates prove the memo current without the per-row key read.
+# The pair is a strictly weaker proof than the key scan's per-id diff: every single-row move
+# changes it — an insert or delete moves the count, and a moved row rewrites time_updated so
+# the sum changes with it, while a data-only rewrite with an unchanged time_updated is
+# invisible to the key scan itself — but a multi-row coincidence whose count and sum both net
+# to zero (a delete and an insert landing in the same millisecond, the only window where the
+# inserted row's time_updated can equal the deleted row's last write) dodges the probe where
+# the per-id diff would see it, and that wrong serve stands until the next proof miss
+# re-scans. The one same-row shape both miss is a terminal pair of writes inside one
+# millisecond, the class the row memo vocabulary documents above. Equal aggregates skip the
+# per-row key read.
 _OPENCODE_PROBE_SQL = "select count(*), coalesce(sum(time_updated), 0) from message"
 _opencode_probes: dict[str, tuple[int, int]] = {}
 
@@ -687,8 +691,9 @@ def _advance_opencode_rows(db: Path) -> _OpencodeScan:
   """Advance the db's row memo to its message table's current rows, bumping the epoch when any
   row moved. Read-only: the scan never writes. Absent or unreadable dbs advance nothing and
   return ``ok=False``. A warm memo first checks the proof aggregates: unchanged (count, sum)
-  proves no row the key scan could see has landed, moved, or vanished, and the scan is
-  skipped — the WAL writing an unrelated table is the steady state this gate exists for.
+  proves every row move the aggregates can see is absent and the scan is skipped — a weaker
+  proof than the key scan's per-id diff (see the probe comment), traded for not reading
+  85k keys on the WAL-noise rounds that are the steady state this gate exists for.
   """
   key = str(db)
   sig = _opencode_db_signature(db)
@@ -1006,13 +1011,16 @@ def collect_token_usage(
   if cache is not None:
     try:
       cache.save(cache_path)
+      # Adopt the round's next document as the memo only where the save succeeded — the
+      # on-disk state now describes it, and entries this round stopped seeing (deleted
+      # logs) drop out with it. A failed save leaves the previous memo: its per-file
+      # signatures gate every lookup, so moved files re-scan and correctness never rides
+      # the document.
+      _tally_cache_docs[str(cache_path)] = {
+          source: dict(files) for source, files in cache._next.items()
+      }
     except OSError as exc:
       t.notes.append(f"Tally cache: save failed: {exc}")
-    # Adopt the round's next document as the memo: the on-disk state now describes it, and
-    # entries this round stopped seeing (deleted logs) drop out with it.
-    _tally_cache_docs[str(cache_path)] = {
-        source: dict(files) for source, files in cache._next.items()
-    }
   rows = _build(t)
   if read_sig is not None:
     _tally_memo = ((signature, read_sig, epoch, from_scan), rows, list(t.notes))

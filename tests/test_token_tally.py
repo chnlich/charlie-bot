@@ -1174,7 +1174,7 @@ def test_cache_document_parses_once_per_process(tmp_path: Path, monkeypatch: pyt
   loads = []
   orig = tt.TallyCache.load
 
-  def spy(path, notes):
+  def spy(path: Path, notes: list) -> tt.TallyCache:
     loads.append(path)
     return orig(path, notes)
 
@@ -1199,11 +1199,11 @@ def test_reset_drops_the_probe_and_document_memos(tmp_path: Path, monkeypatch: p
   orig_scan = tt._scan_opencode_rows
   orig_load = tt.TallyCache.load
 
-  def spy_scan(con, memo):
+  def spy_scan(con: sqlite3.Connection, memo: dict) -> tuple:
     scans.append(1)
     return orig_scan(con, memo)
 
-  def spy_load(path, notes):
+  def spy_load(path: Path, notes: list) -> tt.TallyCache:
     loads.append(path)
     return orig_load(path, notes)
 

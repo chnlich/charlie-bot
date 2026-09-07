@@ -22,6 +22,7 @@ from src.agents.backends.base import (
     resolve_binary,
 )
 from src.core import event_types as ET
+from src.core.log_once import WarnOnceRegistry
 from src.core.process import make_pdeathsig_kill_preexec, wait_or_kill_group
 from src.core.sse import iter_sse_lines
 from src.core.timeouts import (
@@ -64,37 +65,15 @@ _LOCK_SIGNATURE_RE = re.compile(r"database is locked|LockTimeoutError")
 _LOCK_RETRY_MAX_ATTEMPTS = 2
 _LOCK_RETRY_BACKOFF_SECONDS = 10.0
 
-
-class _WarnOnceRegistry:
-  """One debug line per key per process.
-
-  A caller relies on at most one line per key: a later input of an
-  already-logged key re-fires a fired alarm and earns no second line, and a
-  key the translator grows a branch or an ignore entry for stops reaching the
-  registry at all. One sighting carries the whole signal because the set of
-  mapped keys is code, fixed for the process.
-  """
-
-  def __init__(self, event_name: str) -> None:
-    self._event_name = event_name
-    self._seen: set[str] = set()
-
-  def log_once(self, key: str) -> None:
-    if key in self._seen:
-      return
-    self._seen.add(key)
-    log.debug(self._event_name, type=key)
-
-  def reset_for_tests(self) -> None:
-    """Clear the registry, restoring the process-start state."""
-    self._seen.clear()
-
-
-_UNHANDLED_PART_TYPES = _WarnOnceRegistry("opencode_part_unhandled")
+# Both registries sit on the translator's unhandled paths only, so a key that
+# grows a branch or an ignore entry stops reaching them at all; one sighting
+# carries the whole signal because the set of mapped keys is code, fixed for
+# the process.
+_UNHANDLED_PART_TYPES = WarnOnceRegistry()
 
 # opencode emits todo.updated on every todo write, so an unmapped SSE event
 # type re-fires once per unhandled frame.
-_UNHANDLED_SSE_EVENT_TYPES = _WarnOnceRegistry("opencode_sse_event_unhandled")
+_UNHANDLED_SSE_EVENT_TYPES = WarnOnceRegistry()
 
 
 class OpenCodeSseSilenceError(RuntimeError):
@@ -605,7 +584,7 @@ class OpenCodeBackend(AgentBackend):
     if ev_type in _IGNORED_SSE_EVENT_TYPES:
       return []
 
-    _UNHANDLED_SSE_EVENT_TYPES.log_once(ev_type)
+    _UNHANDLED_SSE_EVENT_TYPES.log(log.debug, "opencode_sse_event_unhandled", ev_type, type=ev_type)
     return []
 
   def _translate_part(self, part: dict) -> list[dict]:
@@ -623,7 +602,7 @@ class OpenCodeBackend(AgentBackend):
       return []
     if part_type == "step-start":
       return []
-    _UNHANDLED_PART_TYPES.log_once(part_type)
+    _UNHANDLED_PART_TYPES.log(log.debug, "opencode_part_unhandled", part_type, type=part_type)
     return []
 
   def _part_delta(self, part_id: str, full_text: str) -> str:

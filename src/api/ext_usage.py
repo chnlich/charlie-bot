@@ -17,6 +17,7 @@ from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import get_config
 from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
+from src.core.log_once import WarnOnceRegistry
 from src.core.models import BackendType
 from src.core.streaming import streaming_manager
 from src.core.timeouts import EXT_USAGE_ROUND_GAP_SECONDS, HTTP_OAUTH_TIMEOUT
@@ -596,7 +597,7 @@ LIMIT_GROUP_WINDOW_MINUTES = {"session": 300, "weekly": 10080}
 
 # The poller re-transforms an unchanged response every round, so one sighting of
 # an unmapped shape is the whole alarm; every later round repeats a fired alarm.
-_UNKNOWN_LIMIT_SHAPES_SEEN: set[tuple[str, str, str, str]] = set()
+_UNKNOWN_LIMIT_SHAPES_SEEN = WarnOnceRegistry()
 
 
 def _warn_unknown_limit_shape(*, provider: str, account: str, slot: str | int, reason: str) -> None:
@@ -608,11 +609,13 @@ def _warn_unknown_limit_shape(*, provider: str, account: str, slot: str | int, r
   not a new shape. ``slot`` is a field name, or the entry index when the entry
   does not name itself.
   """
-  key = (provider, account, str(slot), reason)
-  if key in _UNKNOWN_LIMIT_SHAPES_SEEN:
-    return
-  _UNKNOWN_LIMIT_SHAPES_SEEN.add(key)
-  log.warning("ext_usage_unknown_limit_shape", provider=provider, account=account, slot=slot, reason=reason)
+  _UNKNOWN_LIMIT_SHAPES_SEEN.log(
+      log.warning,
+      "ext_usage_unknown_limit_shape", (provider, account, str(slot), reason),
+      provider=provider,
+      account=account,
+      slot=slot,
+      reason=reason)
 
 
 def _reset_unknown_limit_shapes_for_tests() -> None:

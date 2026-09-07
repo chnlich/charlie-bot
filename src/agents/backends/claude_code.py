@@ -11,6 +11,7 @@ import structlog
 
 from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, AgentBackend
 from src.core import event_types as ET
+from src.core.log_once import WarnOnceRegistry
 from src.core.process import kill_process_group
 
 log = structlog.get_logger()
@@ -70,7 +71,7 @@ CLAUDE_COMPACT_CONTEXT_RESERVE = 13_000
 # Usage resolution re-derives the declared window per call while the environment a
 # degradation warning reports is fixed for the process's life, so the first sighting
 # of each reported shape is the whole alarm and every repeat re-fires it.
-_DECLARED_WINDOW_WARNINGS_SEEN: set[tuple[str, str, tuple[tuple[str, str], ...]]] = set()
+_DECLARED_WINDOW_WARNINGS_SEEN = WarnOnceRegistry()
 
 
 def _warn_declared_window_once(event: str, *, variable: str, **fields: str) -> None:
@@ -82,11 +83,8 @@ def _warn_declared_window_once(event: str, *, variable: str, **fields: str) -> N
   that swaps one bad setting for another earns one new line, and nothing outside
   the log statement can drift the key away from what was reported.
   """
-  key = (event, variable, tuple(sorted(fields.items())))
-  if key in _DECLARED_WINDOW_WARNINGS_SEEN:
-    return
-  _DECLARED_WINDOW_WARNINGS_SEEN.add(key)
-  log.warning(event, variable=variable, **fields)
+  _DECLARED_WINDOW_WARNINGS_SEEN.log(
+      log.warning, event, (event, variable, tuple(sorted(fields.items()))), variable=variable, **fields)
 
 
 def _reset_declared_window_warnings_for_tests() -> None:

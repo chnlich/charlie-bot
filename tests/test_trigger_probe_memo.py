@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -112,7 +113,14 @@ def test_earliest_fire_tracks_a_new_pending_file(tmp_path: Path) -> None:
   assert earliest is not None and earliest < datetime.now(UTC) + timedelta(hours=2)
 
 
-def test_failed_parse_is_not_memoized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failed_parse_rereads_once_per_directory_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A corrupt file re-reads once per proved directory state, not once per scan.
+
+  The parse failure keeps the file out of the per-file memo, but the verdict
+  serves the proved directory state — so the repeat scan reads nothing, and the
+  next directory move (any atomic rename into the dir) re-reads the file once
+  for the new state.
+  """
   cfg = make_home_config(tmp_path)
   triggers_dir = cfg.sessions_dir / "s1" / "triggers"
   path = _write_trigger(cfg, "s1", _pending("t1", 3))
@@ -121,4 +129,64 @@ def test_failed_parse_is_not_memoized(tmp_path: Path, monkeypatch: pytest.Monkey
   assert _probe(triggers_dir) == (0, None)
   reads = count_path_read_text(monkeypatch, lambda path: True)
   assert _probe(triggers_dir) == (0, None)
+  assert reads == []
+
+  tmp = path.with_name("trigger.json.memo-test")
+  tmp.write_text("{still not json", encoding="utf-8")
+  os.replace(tmp, path)
+  assert _probe(triggers_dir) == (0, None)
   assert len(reads) == 1
+
+
+def test_walked_path_stores_and_serves_the_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The probe's walked shape keys its verdict on the walk-instant directory signature."""
+  cfg = make_home_config(tmp_path)
+  triggers_dir = cfg.sessions_dir / "s1" / "triggers"
+  _write_trigger(cfg, "s1", _pending("t1", 3))
+
+  st = os.stat(triggers_dir)
+  dir_sig = (st.st_mtime_ns, st.st_size)
+  walked = [(str(p), p.stat()) for p in sorted(triggers_dir.glob("*.json"))]
+  first = pending_trigger_state_sync(triggers_dir, walked=walked, dir_sig=dir_sig)
+  assert first[0] == 1 and first[1] is not None
+
+  reads = count_path_read_text(monkeypatch, lambda path: True)
+  fresh_walked = [(str(p), p.stat()) for p in sorted(triggers_dir.glob("*.json"))]
+  assert pending_trigger_state_sync(triggers_dir, walked=fresh_walked, dir_sig=dir_sig) == first
+  assert reads == []  # the verdict serves the proved state; the walked pairs are not re-read
+
+  _rewrite_atomically(triggers_dir / "t1.json", {**_pending("t1", 3), "status": "cancelled"})
+  st = os.stat(triggers_dir)
+  moved_walked = [(str(p), p.stat()) for p in sorted(triggers_dir.glob("*.json"))]
+  assert pending_trigger_state_sync(
+      triggers_dir, walked=moved_walked, dir_sig=(st.st_mtime_ns, st.st_size)) == (0, None)
+
+
+def test_walked_path_rereads_after_the_directory_moves(tmp_path: Path) -> None:
+  """A rename into the dir moves its signature; the walked shape re-walks once for the new state."""
+  cfg = make_home_config(tmp_path)
+  triggers_dir = cfg.sessions_dir / "s1" / "triggers"
+  path = _write_trigger(cfg, "s1", _pending("t1", 3))
+
+  st = os.stat(triggers_dir)
+  walked = [(str(p), p.stat()) for p in sorted(triggers_dir.glob("*.json"))]
+  assert pending_trigger_state_sync(triggers_dir, walked=walked, dir_sig=(st.st_mtime_ns, st.st_size))[0] == 1
+
+  _rewrite_atomically(path, {**_pending("t1", 3), "status": "cancelled"})
+  st = os.stat(triggers_dir)
+  moved_walked = [(str(p), p.stat()) for p in sorted(triggers_dir.glob("*.json"))]
+  assert pending_trigger_state_sync(
+      triggers_dir, walked=moved_walked, dir_sig=(st.st_mtime_ns, st.st_size)) == (0, None)
+
+
+def test_missing_dir_answers_empty_and_drops_the_verdict(tmp_path: Path) -> None:
+  cfg = make_home_config(tmp_path)
+  triggers_dir = cfg.sessions_dir / "s1" / "triggers"
+  _write_trigger(cfg, "s1", _pending("t1", 3))
+  assert _probe(triggers_dir)[0] == 1
+
+  shutil.rmtree(triggers_dir)
+  assert _probe(triggers_dir) == (0, None)
+  triggers_dir.mkdir(parents=True)
+  (triggers_dir / "t2.json").write_text(json.dumps(_pending("t2", 1)), encoding="utf-8")
+  assert _probe(triggers_dir)[0] == 1

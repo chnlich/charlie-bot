@@ -228,28 +228,69 @@ def has_running_tasks_sync(threads_dir: Path, walked: list | None = None) -> boo
 _TRIGGER_META_MEMO_LIMIT = 1024
 _trigger_meta_memo: BoundedMemo[str, tuple[int, int, dict]] = BoundedMemo(_TRIGGER_META_MEMO_LIMIT)
 
+# The trigger scan's directory verdict: dir path -> (dir (mtime_ns, size),
+# pending count, earliest fire). Every trigger-file write publishes through the
+# atomic rename INTO the triggers directory, and a rename that creates,
+# replaces, or removes a directory entry moves the directory's own mtime_ns —
+# so an unchanged directory signature proves the derived state current, and the
+# steady-state scan serves it for one directory stat without the scandir+stat
+# walk or the per-file memo loop.
+_TRIGGER_STATE_VERDICT_LIMIT = 1024
+_trigger_state_verdicts: BoundedMemo[str, tuple[tuple[int, int], int,
+                                                datetime | None]] = BoundedMemo(_TRIGGER_STATE_VERDICT_LIMIT)
+
 
 def _reset_trigger_meta_memo_for_tests() -> None:
   """Clear the trigger-file scan memo, restoring the process-start state."""
   _trigger_meta_memo.clear()
+  _trigger_state_verdicts.clear()
 
 
 def pending_trigger_state_sync(
     triggers_dir: Path,
     walked: list[tuple[str, os.stat_result]] | None = None,
+    dir_sig: tuple[int, int] | None = None,
 ) -> tuple[int, datetime | None]:
   """(pending trigger count, earliest fire time) from the *.json files under *triggers_dir*.
 
+  Steady state pays one directory stat: an unchanged (mtime_ns, size) of the
+  directory serves the stored verdict without the scandir+stat walk or the
+  per-file memo loop. Every trigger-file write publishes through the atomic
+  rename into the directory — a rename that creates, replaces, or removes an
+  entry moves the directory's own mtime_ns — the same ground the per-file
+  memo's key stands on; a file edited in place (no rename) would evade the
+  directory proof. The signature is taken before the walk, so a write landing
+  mid-walk moves the directory past the stored signature and the next call
+  re-walks; within one proved directory state, a file that fails to parse
+  re-reads and re-warns once for that state, not once per call.
+
   *walked* supplies (path, stat) pairs a caller already walked, replacing this
-  scan's own scandir+stat phase; non-regular *.json entries (a directory named
-  like a trigger file) are skipped off the walked stat, the same ``is_file``
-  gate the self-walked path applies before its stat.
+  scan's own scandir+stat phase; *dir_sig* must then be the directory's
+  (mtime_ns, size) taken at that walk's instant (the verdict keys on it, so a
+  sig newer than the walked contents could never be stored). Without *walked*
+  the scan stats the directory itself before its scandir, and *dir_sig* is
+  ignored. Non-regular *.json* entries (a directory named like a trigger file)
+  are skipped off the walked stat, the same ``is_file`` gate the self-walked
+  path applies before its stat.
   """
+  triggers_str = os.fspath(triggers_dir)
   if walked is None:
-    if not triggers_dir.exists():
+    try:
+      dst = os.stat(triggers_str)
+    except OSError:
+      _trigger_state_verdicts.drop(triggers_str)
       return 0, None
+    if not stat.S_ISDIR(dst.st_mode):
+      _trigger_state_verdicts.drop(triggers_str)
+      return 0, None
+    dir_sig = (dst.st_mtime_ns, dst.st_size)
+  if dir_sig is not None:
+    verdict = _trigger_state_verdicts.get(triggers_str)
+    if verdict is not None and verdict[0] == dir_sig:
+      return verdict[1], verdict[2]
+  if walked is None:
     walked = []
-    with os.scandir(triggers_dir) as entries:
+    with os.scandir(triggers_str) as entries:
       for entry in entries:
         if not entry.name.endswith(".json") or not entry.is_file():
           continue
@@ -289,6 +330,8 @@ def pending_trigger_state_sync(
     if next_trigger_at is None or fire_at < next_trigger_at:
       next_trigger_at = fire_at
 
+  if dir_sig is not None:
+    _trigger_state_verdicts.store(triggers_str, (dir_sig, pending_count, next_trigger_at))
   return pending_count, next_trigger_at
 
 
@@ -408,13 +451,17 @@ class _WalkedProbeInputs(NamedTuple):
 
   ``trigger_files`` is None when the triggers dir itself is missing; the
   trigger core then falls back to its self-walked path and answers its empty
-  state. The pairs describe the walk's instant, and the caller stores the
-  probe result with that same walk's signature, so entry and signature always
-  describe one state.
+  state. ``trigger_dir_sig`` is that directory's (mtime_ns, size) taken at the
+  walk's instant — the trigger scan's verdict keys on it, so a write landing
+  between the walk and the scan keys the older signature and can never be
+  served for the newer state. The pairs describe the walk's instant, and the
+  caller stores the probe result with that same walk's signature, so entry and
+  signature always describe one state.
   """
 
   thread_metas: list[tuple[str, str, os.stat_result]]
   trigger_files: list[tuple[str, os.stat_result]] | None
+  trigger_dir_sig: tuple[int, int] | None
 
 
 def probe_sidebar_state_sync(
@@ -438,7 +485,10 @@ def probe_sidebar_state_sync(
     inputs = walked.get(session_id) if walked is not None else None
     running = has_running_tasks_sync(threads_dir, walked=inputs.thread_metas if inputs else None)
     pending_count, next_trigger_at = pending_trigger_state_sync(
-        triggers_dir, walked=inputs.trigger_files if inputs else None)
+        triggers_dir,
+        walked=inputs.trigger_files if inputs else None,
+        dir_sig=inputs.trigger_dir_sig if inputs else None,
+    )
     results[session_id] = {
         "thread_running": running,
         "pending_trigger_count": pending_count,
@@ -478,8 +528,14 @@ def _sidebar_probe_walk(threads_dir: Path, triggers_dir: Path, plans_path: Path)
     rollovers.append(st.st_mtime + RUNNING_SCAN_WINDOW.total_seconds())
   trigger_sig = []
   trigger_pairs: list[tuple[str, os.stat_result]] | None = None
+  trigger_dir_sig: tuple[int, int] | None = None
   triggers_str = os.fspath(triggers_dir)
-  if os.path.isdir(triggers_str):
+  try:
+    dir_st = os.stat(triggers_str)
+  except OSError:
+    dir_st = None
+  if dir_st is not None and stat.S_ISDIR(dir_st.st_mode):
+    trigger_dir_sig = (dir_st.st_mtime_ns, dir_st.st_size)
     trigger_pairs = []
     with os.scandir(triggers_str) as entries:
       for entry in entries:
@@ -498,7 +554,7 @@ def _sidebar_probe_walk(threads_dir: Path, triggers_dir: Path, plans_path: Path)
     plans_sig = None
   rollover = min(rollovers) if rollovers else float("inf")
   signature = (tuple(sorted(thread_sig)), tuple(sorted(trigger_sig)), plans_sig, rollover)
-  return signature, _WalkedProbeInputs(thread_pairs, trigger_pairs)
+  return signature, _WalkedProbeInputs(thread_pairs, trigger_pairs, trigger_dir_sig)
 
 
 def _sidebar_signature_fresh(session_id: str, signature: tuple, now_ts: float) -> bool:

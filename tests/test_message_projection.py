@@ -869,3 +869,96 @@ async def test_projection_memo_hit_archived_session_is_always_miss(tmp_path: Pat
   assert meta is not None and meta.archive_offset > 0
   assert mgr.get_message_projection(session.id) is None
   assert mgr.projection_memo_hit(session.id) is None
+
+
+# ---------------------------------------------------------------------------
+# Page-body cache (repeat page fetches)
+# ---------------------------------------------------------------------------
+
+
+def _page_payload(projection: MessageProjection, before: int, limit: int) -> dict:
+  from src.api.responses import fast_json_bytes
+
+  messages, next_before, has_more = projection.slice_before(before, limit)
+  return json.loads(fast_json_bytes({"messages": messages, "has_more": has_more, "next_before": next_before}))
+
+
+def test_page_body_cache_repeat_serves_identical_bytes() -> None:
+  """A repeat page serves the stored bytes, identical to a direct render."""
+  from src.api.responses import fast_json_bytes
+
+  projection = MessageProjection(_turned_messages_events([3, 1, 6, 2]))
+  before, limit = len(projection.committed), 5
+  messages, next_before, has_more = projection.slice_before(before, limit)
+  body = fast_json_bytes({"messages": messages, "has_more": has_more, "next_before": next_before})
+
+  assert projection.cached_page_body(before, limit) is None
+  projection.store_page_body(before, limit, body)
+  assert projection.cached_page_body(before, limit) == body
+  # The cached page equals a fresh render of the same slice.
+  assert json.loads(projection.cached_page_body(before, limit)) == _page_payload(projection, before, limit)
+
+
+def test_page_body_cache_rewind_rebuild_misses() -> None:
+  """Every advance publishes a new projection whose cache starts empty."""
+  projection = MessageProjection(_turned_messages_events([2, 2]))
+  before, limit = len(projection.committed), 3
+  projection.store_page_body(before, limit, b"{}")
+
+  advanced = projection.advanced(_turned_messages_events([1]))
+  assert advanced.event_count == projection.event_count + 2
+  assert advanced.cached_page_body(before, limit) is None
+  # The old object is immutable and keeps serving its own cached page.
+  assert projection.cached_page_body(before, limit) == b"{}"
+
+
+def test_page_body_cache_lru_cap_evicts_oldest() -> None:
+  """The page-body cache holds at most _PAGE_BODY_LIMIT entries, LRU order."""
+  projection = MessageProjection(_many_messages_events(30))
+  cap = projection._PAGE_BODY_LIMIT
+  for i in range(cap):
+    projection.store_page_body(30 - i, 1, f"body-{i}".encode())
+  # Insertion order: 30, 29, 28, ... Touching 29 reorders it newest.
+  assert projection.cached_page_body(29, 1) == b"body-1"
+
+  projection.store_page_body(0, 1, b"new")
+  assert projection.cached_page_body(30, 1) is None, "untouched oldest entry must evict first"
+  assert projection.cached_page_body(29, 1) == b"body-1"
+  assert projection.cached_page_body(0, 1) == b"new"
+  assert len(projection._page_bodies) == cap
+
+
+@pytest.mark.asyncio
+async def test_events_route_repeat_page_serves_cached_bytes(tmp_path: Path) -> None:
+  """The events route serves a repeat page from the projection's body cache,
+  byte-identical, and a fresh append produces a new body with the new message."""
+  from src.api.sessions import get_session_events_page
+
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  _append_events(
+      mgr.get_chat_events_path(session.id),
+      _turned_messages_events([2, 2, 2]),
+  )
+  meta = await mgr.get_session(session.id)
+  projection = await asyncio.to_thread(mgr.get_message_projection, session.id)
+  assert projection is not None
+  before, limit = len(projection.committed), 3
+
+  first = await get_session_events_page(session.id, before=before, limit=limit, meta=meta, session_mgr=mgr)
+  second = await get_session_events_page(session.id, before=before, limit=limit, meta=meta, session_mgr=mgr)
+  assert first.body == second.body
+  assert json.loads(first.body) == _page_payload(projection, before, limit)
+
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
+    await mgr.persist_and_broadcast(
+        session.id, {"id": "u9", "type": ET.USER, "content": "q9", "timestamp": "t9-u"})
+    await mgr.persist_and_broadcast(
+        session.id, {"id": "done9", "type": ET.MASTER_DONE, "thinking_seconds": 1, "timestamp": "t9-done"})
+  grown = await asyncio.to_thread(mgr.get_message_projection, session.id)
+  assert grown is not None and grown is not projection
+  new_before = len(grown.committed)
+  third = await get_session_events_page(session.id, before=new_before, limit=limit, meta=meta, session_mgr=mgr)
+  # The advanced projection's own page carries the new turn — not a cached body.
+  page = json.loads(third.body)
+  assert any(m.get("content") == "q9" for m in page["messages"])
+  assert json.loads(third.body) == _page_payload(grown, new_before, limit)

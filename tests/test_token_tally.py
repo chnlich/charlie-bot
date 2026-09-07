@@ -127,6 +127,12 @@ def _write_opencode(path: Path, rows: list[tuple[dict, str, str]]) -> None:
   con.close()
 
 
+def _padded_opencode_row(pad: int) -> tuple[dict, str, str]:
+  """An appended row whose bulk grows the db file, so the signature moves on size
+  even when mtime_ns repeats; the tokens stay input 100 / output 2 (total 102)."""
+  return ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * pad}, "oc-m", "prov")
+
+
 def _collect(claude: Claude | None, codex: Codex | None, db: Path, cache: Path | None = None):
   return collect_token_usage(
       claude_homes=claude.dirs if claude else {},
@@ -597,18 +603,7 @@ def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, m
     raise AssertionError("claude log re-parsed when only the opencode db moved")
 
   monkeypatch.setattr(tt, "_claude_file_contribution", boom)
-  _append_opencode(
-      db, [
-          ({
-              "input": 100,
-              "output": 2,
-              "cache": {
-                  "read": 0,
-                  "write": 0
-              },
-              "pad": "x" * 5000
-          }, "oc-m", "prov"),
-      ])
+  _append_opencode(db, [_padded_opencode_row(5000)])
 
   second = _collect(claude, None, db, cache)
   assert _row(second, "Claude Code", NAME).total == _row(first, "Claude Code", NAME).total
@@ -624,18 +619,7 @@ def test_opencode_only_change_is_not_persisted(tmp_path: Path) -> None:
   first_doc = json.loads(cache.read_text())
   assert set(first_doc["sources"]) == {"claude", "opencode"}
 
-  _append_opencode(
-      db, [
-          ({
-              "input": 100,
-              "output": 2,
-              "cache": {
-                  "read": 0,
-                  "write": 0
-              },
-              "pad": "x" * 5000
-          }, "oc-m", "prov"),
-      ])
+  _append_opencode(db, [_padded_opencode_row(5000)])
   tally = _collect(claude, None, db, cache)
   assert _row(tally, "opencode", "oc-m").total == 6 + 102
 
@@ -848,19 +832,7 @@ def test_opencode_cache_invalidates_on_insert(tmp_path: Path) -> None:
   _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
   before = _row(_collect(None, None, db, cache), "opencode", "oc-m")
 
-  # The pad forces a new db page, so the signature moves on size even if mtime_ns repeats.
-  _append_opencode(
-      db, [
-          ({
-              "input": 100,
-              "output": 2,
-              "cache": {
-                  "read": 0,
-                  "write": 0
-              },
-              "pad": "x" * 5000
-          }, "oc-m", "prov"),
-      ])
+  _append_opencode(db, [_padded_opencode_row(5000)])
 
   after = _row(_collect(None, None, db, cache), "opencode", "oc-m")
   assert after.total == before.total + 102
@@ -875,18 +847,7 @@ def test_opencode_row_memo_rereads_only_moved_rows(tmp_path: Path, monkeypatch: 
   first = _collect(None, None, db, cache)
   assert first.scanned_bytes > 0
 
-  _append_opencode(
-      db, [
-          ({
-              "input": 100,
-              "output": 2,
-              "cache": {
-                  "read": 0,
-                  "write": 0
-              },
-              "pad": "x" * 500
-          }, "oc-m", "prov"),
-      ])
+  _append_opencode(db, [_padded_opencode_row(500)])
   projected: list[str] = []
   orig = tt._opencode_row_data
 
@@ -1051,18 +1012,7 @@ def test_wal_move_with_new_row_still_counts(tmp_path: Path, monkeypatch: pytest.
   first = _collect(None, None, db, cache)
   before = _row(first, "opencode", "oc-m")
 
-  _insert_opencode_raw(
-      con, [
-          ({}, ({
-              "input": 100,
-              "output": 2,
-              "cache": {
-                  "read": 0,
-                  "write": 0
-              },
-              "pad": "x" * 500
-          }, "oc-m", "prov")),
-      ])
+  _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
   con.commit()
 
   projected: list[str] = []

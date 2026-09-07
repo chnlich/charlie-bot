@@ -163,42 +163,44 @@ async def test_maybe_auto_name_rechecks_current_name_before_renaming() -> None:
   mock_broadcast.assert_not_awaited()
 
 
+_VERBATIM_NAME_ROWS = [
+    pytest.param(
+        "session-snake",
+        7,
+        '{"name":"CHARLIEBOT_HOME cleanup"}',
+        "Set CHARLIEBOT_HOME for the run.",
+        "Done.",
+        id="snake-case-identifier",
+    ),
+    pytest.param(
+        "session-cjk",
+        8,
+        '{"name":"「TRELLIS.2」分支重构"}',
+        "重构「TRELLIS.2」的分支。",
+        "好的，开始重构。",
+        id="cjk-title",
+    ),
+]
+
+
 @pytest.mark.asyncio
-async def test_maybe_auto_name_keeps_snake_case_identifier_verbatim() -> None:
+@pytest.mark.parametrize(("session_id", "session_no", "raw", "ask", "answer"), _VERBATIM_NAME_ROWS)
+async def test_maybe_auto_name_keeps_backend_name_verbatim(
+    session_id: str, session_no: int, raw: str, ask: str, answer: str) -> None:
+  """The backend-proposed name is applied verbatim, whatever script it is written in."""
   cfg = build_light_cc_cfg()
-  session_meta = SessionMetadata(id="session-snake", name="Session 7", backend="light-cc")
+  session_meta = SessionMetadata(id=session_id, name=f"Session {session_no}", backend="light-cc")
   session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id="session-snake", name="Session 7")
-  raw = '{"name":"CHARLIEBOT_HOME cleanup"}'
-  one_shot = AsyncMock(return_value=raw)
+  session_mgr.get_session.return_value = SessionMetadata(id=session_id, name=f"Session {session_no}")
 
   with (
-      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
+      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(AsyncMock(return_value=raw))),
       patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
-    await maybe_auto_name(cfg, session_meta, "Set CHARLIEBOT_HOME for the run.", "Done.", session_mgr, [])
+    await maybe_auto_name(cfg, session_meta, ask, answer, session_mgr, [])
 
   expected_name = json.loads(raw)["name"]
-  session_mgr.rename_session.assert_awaited_once_with("session-snake", f"7: {expected_name}")
-
-
-@pytest.mark.asyncio
-async def test_maybe_auto_name_keeps_chinese_title_verbatim() -> None:
-  cfg = build_light_cc_cfg()
-  session_meta = SessionMetadata(id="session-cjk", name="Session 8", backend="light-cc")
-  session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id="session-cjk", name="Session 8")
-  raw = '{"name":"「TRELLIS.2」分支重构"}'
-  one_shot = AsyncMock(return_value=raw)
-
-  with (
-      patch(_BUILD_BACKEND_PATCH_TARGET, return_value=make_one_shot_backend(one_shot)),
-      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
-  ):
-    await maybe_auto_name(cfg, session_meta, "重构「TRELLIS.2」的分支。", "好的，开始重构。", session_mgr, [])
-
-  expected_name = json.loads(raw)["name"]
-  session_mgr.rename_session.assert_awaited_once_with("session-cjk", f"8: {expected_name}")
+  session_mgr.rename_session.assert_awaited_once_with(session_id, f"{session_no}: {expected_name}")
 
 
 @pytest.mark.asyncio
@@ -259,14 +261,38 @@ async def test_maybe_auto_name_keeps_default_name_when_all_first_responses_are_u
   assert all(call.args[0] == "autonamer_failed" for call in mock_log.warning.call_args_list)
 
 
+_FALLBACK_ROWS = [
+    pytest.param(
+        "session-fallback",
+        9,
+        "Sure, here's a title: Refactoring the Loader",
+        '{"name":"Loader Refactor"}',
+        "Refactor the loader",
+        "Done.",
+        id="non-json-response",
+    ),
+    pytest.param(
+        "session-long",
+        10,
+        json.dumps({"name": "x" * 61}),
+        '{"name":"Short Title"}',
+        "Some ask",
+        "Some answer.",
+        id="name-too-long",
+    ),
+]
+
+
 @pytest.mark.asyncio
-async def test_maybe_auto_name_falls_back_to_next_backend_on_non_json_response() -> None:
+@pytest.mark.parametrize(("session_id", "session_no", "first_raw", "second_raw", "ask", "answer"), _FALLBACK_ROWS)
+async def test_maybe_auto_name_falls_back_to_next_backend_on_unusable_first_name(
+    session_id: str, session_no: int, first_raw: str, second_raw: str, ask: str, answer: str) -> None:
+  """A first backend whose response yields no usable name falls through to the next preference."""
   cfg = _fallback_chain_cfg()
-  session_meta = SessionMetadata(id="session-fallback", name="Session 9", backend="first-backend")
+  session_meta = SessionMetadata(id=session_id, name=f"Session {session_no}", backend="first-backend")
   session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id="session-fallback", name="Session 9")
-  first_one_shot = AsyncMock(return_value="Sure, here's a title: Refactoring the Loader")
-  second_raw = '{"name":"Loader Refactor"}'
+  session_mgr.get_session.return_value = SessionMetadata(id=session_id, name=f"Session {session_no}")
+  first_one_shot = AsyncMock(return_value=first_raw)
   second_one_shot = AsyncMock(return_value=second_raw)
 
   with (
@@ -276,39 +302,13 @@ async def test_maybe_auto_name_falls_back_to_next_backend_on_non_json_response()
       ) as mock_build,
       patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
-    await maybe_auto_name(cfg, session_meta, "Refactor the loader", "Done.", session_mgr, [])
+    await maybe_auto_name(cfg, session_meta, ask, answer, session_mgr, [])
 
   assert [call.args[0].id for call in mock_build.call_args_list] == ["first-backend", "second-backend"]
   first_one_shot.assert_awaited_once()
   second_one_shot.assert_awaited_once()
   expected_name = json.loads(second_raw)["name"]
-  session_mgr.rename_session.assert_awaited_once_with("session-fallback", f"9: {expected_name}")
-
-
-@pytest.mark.asyncio
-async def test_maybe_auto_name_falls_back_to_next_backend_when_name_too_long() -> None:
-  cfg = _fallback_chain_cfg()
-  session_meta = SessionMetadata(id="session-long", name="Session 10", backend="first-backend")
-  session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id="session-long", name="Session 10")
-  first_one_shot = AsyncMock(return_value=json.dumps({"name": "x" * 61}))
-  second_raw = '{"name":"Short Title"}'
-  second_one_shot = AsyncMock(return_value=second_raw)
-
-  with (
-      patch(
-          _BUILD_BACKEND_PATCH_TARGET,
-          side_effect=[make_one_shot_backend(first_one_shot), make_one_shot_backend(second_one_shot)],
-      ) as mock_build,
-      patch(_STREAMING_BROADCAST_PATCH_TARGET, new=AsyncMock()),
-  ):
-    await maybe_auto_name(cfg, session_meta, "Some ask", "Some answer.", session_mgr, [])
-
-  assert [call.args[0].id for call in mock_build.call_args_list] == ["first-backend", "second-backend"]
-  first_one_shot.assert_awaited_once()
-  second_one_shot.assert_awaited_once()
-  expected_name = json.loads(second_raw)["name"]
-  session_mgr.rename_session.assert_awaited_once_with("session-long", f"10: {expected_name}")
+  session_mgr.rename_session.assert_awaited_once_with(session_id, f"{session_no}: {expected_name}")
 
 
 # ---------------------------------------------------------------------------

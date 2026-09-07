@@ -10,6 +10,7 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     FakeBackend,
     fresh_state_fixture,
+    make_transcript,
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
@@ -29,7 +30,6 @@ from src.core.models import BackendOption, ClaudeAccount, SessionMetadata
 NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
 FABLE = "claude-fable-5-1"
 UUID = "uuid-relay-1"
-SLUG = "-home-u--charliebot-sessions-s1"
 
 _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
@@ -47,13 +47,6 @@ def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2
               id="pinned", label="Pinned", type="cc-claude", model=FABLE, claude_config_dir=str(tmp_path / "pinned")),
       ],
   )
-
-
-def _write_transcript(config_dir: Path, cc_session_id: str = UUID) -> Path:
-  transcript = config_dir / "projects" / SLUG / f"{cc_session_id}.jsonl"
-  transcript.parent.mkdir(parents=True, exist_ok=True)
-  transcript.write_text('{"type":"user"}\n', encoding="utf-8")
-  return transcript
 
 
 def _tool_result() -> dict:
@@ -160,7 +153,7 @@ def test_choose_turn_account_returns_none_when_the_pool_is_exhausted(tmp_path: P
 @pytest.mark.asyncio
 async def test_place_turn_moves_the_transcript_when_the_account_changes(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", UUID)
   claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
   meta = _session_on("main")
   item = make_work_item(cfg, meta, cfg.backend_options[0])
@@ -224,7 +217,7 @@ def test_relay_watch_reports_a_login_failure_from_text_or_stderr() -> None:
 @pytest.mark.asyncio
 async def test_run_cc_relays_a_rejected_turn_onto_another_account(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   first = _ScriptedBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   second = _ScriptedBackend([backend_base.make_result_event()], exit_code=0)
@@ -249,7 +242,7 @@ async def test_run_cc_relays_a_rejected_turn_onto_another_account(tmp_path: Path
 @pytest.mark.asyncio
 async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   first = _ScriptedBackend(
       [rate_limit_event("allowed_warning", 0.92),
@@ -274,7 +267,7 @@ async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, mon
   cfg = _pool_cfg(tmp_path)
   write_pool_credentials(tmp_path / "claude-ext-1", access_token="")
   write_pool_credentials(tmp_path / "claude-ext-2", access_token="")
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   first = _ScriptedBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   builds = _install_backends(monkeypatch, [first])
@@ -296,7 +289,7 @@ async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, mon
 @pytest.mark.asyncio
 async def test_run_cc_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path, labels=("main", "a", "b", "c", "d"))
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   backends = [
       _ScriptedBackend(
@@ -316,7 +309,7 @@ async def test_run_cc_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -
 @pytest.mark.asyncio
 async def test_run_cc_marks_a_login_failure_and_relays(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   first = _ScriptedBackend(
       [_assistant("Failed to authenticate: OAuth session expired and could not be refreshed")], exit_code=1)
@@ -352,7 +345,7 @@ async def test_run_cc_marks_a_login_failure_and_relays(tmp_path: Path, monkeypat
 async def test_run_cc_compacts_with_sonnet_before_spawning_on_an_expired_cache(
     tmp_path: Path, monkeypatch, context_tokens: int, minutes_since: int, compacted: bool) -> None:
   cfg = _pool_cfg(tmp_path)
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   order: list[str] = []
 
@@ -389,7 +382,7 @@ async def test_run_cc_compacts_with_sonnet_before_spawning_on_an_expired_cache(
 @pytest.mark.asyncio
 async def test_run_cc_relay_compacts_a_large_fable_context_on_the_new_account(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   compactions: list[tuple[str, int | None]] = []
 
@@ -421,7 +414,7 @@ async def test_run_cc_without_a_pool_spawns_the_option_unchanged(tmp_path: Path,
               id="pinned", label="Pinned", type="cc-claude", model=FABLE, claude_config_dir=str(tmp_path / "pinned"))
       ],
   )
-  _write_transcript(tmp_path / "pinned")
+  make_transcript(tmp_path / "pinned", UUID)
   meta = SessionMetadata(id="s1", name="t", backend="pinned", cc_session_id=UUID)
   backend = _ScriptedBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   builds = _install_backends(monkeypatch, [backend])

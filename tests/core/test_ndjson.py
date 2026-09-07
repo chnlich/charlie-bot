@@ -6,13 +6,16 @@ reader's ``total_line_count`` feeds global ordinal math in the chat paging
 paths.
 """
 
+import asyncio
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from src.core.ndjson import (
     _COUNT_MEMO_LIMIT,
+    append_ndjson,
     count_ndjson_lines,
     parse_ndjson_file,
     parse_ndjson_tail,
@@ -231,3 +234,26 @@ def test_count_memo_lru_eviction_bounds_size(tmp_path: Path, monkeypatch: pytest
   calls.clear()
   assert count_ndjson_lines(tmp_path / f"f{_COUNT_MEMO_LIMIT}.jsonl") == 1
   assert not calls
+
+
+def test_append_ndjson_fdatasyncs_once_after_the_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  target = tmp_path / "events.jsonl"
+  ops: list[tuple[str, int]] = []
+  real_write, real_fdatasync = os.write, os.fdatasync
+
+  def spy_write(fd: int, data: memoryview) -> int:
+    n = real_write(fd, data)
+    ops.append(("write", fd))
+    return n
+
+  def spy_fdatasync(fd: int) -> None:
+    ops.append(("fdatasync", fd))
+    real_fdatasync(fd)
+
+  monkeypatch.setattr(os, "write", spy_write)
+  monkeypatch.setattr(os, "fdatasync", spy_fdatasync)
+  asyncio.run(append_ndjson(target, {"i": 1}))
+
+  # One fdatasync, on the fd that received the writes, after every write.
+  fd = ops[0][1]
+  assert ops == [("write", fd), ("fdatasync", fd)]

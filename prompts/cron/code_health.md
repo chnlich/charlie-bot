@@ -87,9 +87,9 @@ model, api_base, and context_window of the `charlie-code-kimi-k3` entry in
 backend_options:
 
     charlie-code --json \
-      --model openai/moonshotai/Kimi-K3 \
-      --api-base https://fpt-jp-slurm-kimi-k3.onca-snapper.ts.net/v1 \
-      --context-window 262144 \
+      --model <model> \
+      --api-base <api_base> \
+      --context-window <context_window> \
       --task-file <task-file>
 
 The scratch cwd keeps the reviewer's own git checkouts away from this worktree's HEAD.

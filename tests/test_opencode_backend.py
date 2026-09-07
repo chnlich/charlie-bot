@@ -196,13 +196,10 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
 def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  assert not backend._translate_sse_event(
-      _part_updated(_text_part("message-1", "part-1", "text", "Hello")))
-  assert not backend._translate_sse_event(
-      _part_updated(_text_part("message-1", "part-1", "text", "Hello world")))
+  assert not backend._translate_sse_event(_part_updated(_text_part("message-1", "part-1", "text", "Hello")))
+  assert not backend._translate_sse_event(_part_updated(_text_part("message-1", "part-1", "text", "Hello world")))
 
-  translated = backend._translate_sse_event(
-      _message_updated({"id": "message-1", "role": "assistant"}))
+  translated = backend._translate_sse_event(_message_updated({"id": "message-1", "role": "assistant"}))
 
   assert translated == [
       {
@@ -229,11 +226,9 @@ def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch) 
 def test_translate_sse_event_discards_buffered_non_assistant_parts(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  assert not backend._translate_sse_event(
-      _part_updated(_text_part("message-1", "part-1", "text", "Hello")))
+  assert not backend._translate_sse_event(_part_updated(_text_part("message-1", "part-1", "text", "Hello")))
 
-  translated = backend._translate_sse_event(
-      _message_updated({"id": "message-1", "role": "user"}))
+  translated = backend._translate_sse_event(_message_updated({"id": "message-1", "role": "user"}))
 
   assert not translated
   assert not backend._pending_parts
@@ -552,13 +547,11 @@ def test_is_cancellation_disconnect_false_without_terminate(monkeypatch) -> None
 def test_translate_sse_event_reasoning_part_emits_thinking_delta(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  assert not backend._translate_sse_event(
-      _part_updated(_text_part("message-1", "part-r", "reasoning", "I need")))
+  assert not backend._translate_sse_event(_part_updated(_text_part("message-1", "part-r", "reasoning", "I need")))
   assert not backend._translate_sse_event(
       _part_updated(_text_part("message-1", "part-r", "reasoning", "I need to think")))
 
-  translated = backend._translate_sse_event(
-      _message_updated({"id": "message-1", "role": "assistant"}))
+  translated = backend._translate_sse_event(_message_updated({"id": "message-1", "role": "assistant"}))
 
   assert translated == [
       {
@@ -822,7 +815,10 @@ async def test_consume_sse_events_emits_snapshot_with_last_step_tokens(monkeypat
       backend._consume_sse_events(
           _FakeEventStream(
               [
-                  _message_updated({"id": "m1", "role": "assistant"}, session_id="parent-session"),
+                  _message_updated({
+                      "id": "m1",
+                      "role": "assistant"
+                  }, session_id="parent-session"),
                   _part_updated(_step_finish_part(100, 10, 5, 20, 30, 0.1), session_id="parent-session"),
                   _part_updated(_step_finish_part(200, 20, 8, 40, 60, 0.2), session_id="parent-session"),
                   {
@@ -933,12 +929,10 @@ def test_compaction_message_full_sequence_emits_no_chat_content(monkeypatch) -> 
   message_id = "msg_compaction_full"
 
   translated: list[dict] = []
-  translated += backend._translate_sse_event(
-      _message_updated(_compaction_message_info(message_id, completed=False)))
+  translated += backend._translate_sse_event(_message_updated(_compaction_message_info(message_id, completed=False)))
   for part in _compaction_parts(message_id):
     translated += backend._translate_sse_event(_part_updated(part))
-  translated += backend._translate_sse_event(
-      _message_updated(_compaction_message_info(message_id, completed=True)))
+  translated += backend._translate_sse_event(_message_updated(_compaction_message_info(message_id, completed=True)))
 
   assert not any(event["type"] == ET.ASSISTANT for event in translated)
   assert not any(event["type"] == ET.THINKING for event in translated)
@@ -952,8 +946,7 @@ def test_compaction_message_adversarial_buffered_order_emits_no_chat_content(mon
   translated: list[dict] = []
   for part in _compaction_parts(message_id):
     translated += backend._translate_sse_event(_part_updated(part))
-  translated += backend._translate_sse_event(
-      _message_updated(_compaction_message_info(message_id, completed=True)))
+  translated += backend._translate_sse_event(_message_updated(_compaction_message_info(message_id, completed=True)))
 
   assert not any(event["type"] == ET.ASSISTANT for event in translated)
   assert not any(event["type"] == ET.THINKING for event in translated)
@@ -967,11 +960,9 @@ def test_compaction_step_finish_usage_is_conserved(monkeypatch) -> None:
   normal_step_finish = _step_finish_part(500, 50, 10, 5, 7, 0.03)
   message_id = "msg_compaction_usage"
 
-  backend._translate_sse_event(
-      _message_updated({"id": normal_step_finish["messageID"], "role": "assistant"}))
+  backend._translate_sse_event(_message_updated({"id": normal_step_finish["messageID"], "role": "assistant"}))
   backend._translate_sse_event(_part_updated(normal_step_finish))
-  backend._translate_sse_event(
-      _message_updated(_compaction_message_info(message_id, completed=False)))
+  backend._translate_sse_event(_message_updated(_compaction_message_info(message_id, completed=False)))
   for part in _compaction_parts(message_id):
     backend._translate_sse_event(_part_updated(part))
 
@@ -991,17 +982,13 @@ def test_compaction_boundary_emitted_exactly_once_per_message(monkeypatch) -> No
   backend = _build_backend(monkeypatch)
 
   events: list[dict] = []
-  events += backend._translate_sse_event(
-      _message_updated(_compaction_message_info("msg_c1", completed=False)))
-  events += backend._translate_sse_event(
-      _message_updated(_compaction_message_info("msg_c1", completed=True)))
+  events += backend._translate_sse_event(_message_updated(_compaction_message_info("msg_c1", completed=False)))
+  events += backend._translate_sse_event(_message_updated(_compaction_message_info("msg_c1", completed=True)))
 
   backend._accumulate_step_finish(_step_finish_part(999, 88, 7, 3, 4, 0.02))
 
-  events += backend._translate_sse_event(
-      _message_updated(_compaction_message_info("msg_c2", completed=False)))
-  events += backend._translate_sse_event(
-      _message_updated(_compaction_message_info("msg_c2", completed=True)))
+  events += backend._translate_sse_event(_message_updated(_compaction_message_info("msg_c2", completed=False)))
+  events += backend._translate_sse_event(_message_updated(_compaction_message_info("msg_c2", completed=True)))
 
   boundary_events = [e for e in events if e.get("type") == "system" and e.get("subtype") == "compact_boundary"]
   assert len(boundary_events) == 2
@@ -1015,8 +1002,7 @@ async def test_compaction_boundary_event_wires_into_handle_compaction_events(mon
   exactly one persisted ET.CONTEXT_COMPACTED event carrying the same trigger/pre_tokens."""
   backend = _build_backend(monkeypatch)
 
-  events = backend._translate_sse_event(
-      _message_updated(_compaction_message_info("msg_wire", completed=False)))
+  events = backend._translate_sse_event(_message_updated(_compaction_message_info("msg_wire", completed=False)))
   assert len(events) == 1
   boundary_event = events[0]
 
@@ -1115,14 +1101,22 @@ async def test_sse_watchdog_child_session_event_is_progress(monkeypatch) -> None
               "sessionID": "child-session"
           }
       },
-      _message_updated({"id": "m1", "role": "assistant", "sessionID": "child-session"}),
+      _message_updated({
+          "id": "m1",
+          "role": "assistant",
+          "sessionID": "child-session"
+      }),
       {
           "type": "session.updated",
           "properties": {
               "sessionID": "child-session"
           }
       },
-      _message_updated({"id": "m1", "role": "assistant", "sessionID": "child-session"}),
+      _message_updated({
+          "id": "m1",
+          "role": "assistant",
+          "sessionID": "child-session"
+      }),
   ]
 
   received = await _drain(
@@ -1416,7 +1410,10 @@ def _sse_session_error(session_id: str, message: str) -> dict:
 
 def _sse_assistant_text(session_id: str, message_id: str, part_id: str, text: str) -> list[dict]:
   return [
-      _message_updated({"id": message_id, "role": "assistant"}, session_id=session_id),
+      _message_updated({
+          "id": message_id,
+          "role": "assistant"
+      }, session_id=session_id),
       _part_updated(_text_part(message_id, part_id, "text", text), session_id=session_id),
   ]
 

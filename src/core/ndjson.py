@@ -242,6 +242,7 @@ def _append_ndjson_sync(path: Path, line: str) -> None:
   try:
     while view:
       view = view[os.write(fd, view):]
+    os.fdatasync(fd)  # durable before close: a hard VM kill must not leave a size-without-data NUL hole
   finally:
     os.close(fd)
 

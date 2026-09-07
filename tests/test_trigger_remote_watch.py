@@ -355,9 +355,19 @@ async def test_recover_pending_rewrites_legacy_file(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("spec", "expected"),
     [
-        ("12345", {"kind": "local_pid", "pid": 12345}),
-        ("neptune:67890", {"kind": "remote_pid", "host": "neptune", "pid": 67890}),
-        ("slurm:98765", {"kind": "slurm_job", "job_id": 98765}),
+        ("12345", {
+            "kind": "local_pid",
+            "pid": 12345
+        }),
+        ("neptune:67890", {
+            "kind": "remote_pid",
+            "host": "neptune",
+            "pid": 67890
+        }),
+        ("slurm:98765", {
+            "kind": "slurm_job",
+            "job_id": 98765
+        }),
     ],
     ids=["local", "remote", "slurm"],
 )

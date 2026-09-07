@@ -285,3 +285,88 @@ async def test_dir_names_memo_rescans_only_when_root_changes(
   shrunk = await mgr._load_session_metas()
   assert [meta.id for meta in shrunk] == [first.id]
   assert len(root_scans) == 2
+
+
+@pytest.mark.asyncio
+async def test_listings_memo_serves_repeat_without_walking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  mgr = _make_session_mgr(tmp_path)
+  meta = SessionMetadata(name="memoized")
+  _write_metadata(mgr, meta)
+  await mgr._load_session_metas()
+
+  real_scandir = os.scandir
+  root_scans: list[str] = []
+
+  def counting_scandir(path):
+    if isinstance(path, (str, os.PathLike)) and os.fspath(path) == os.fspath(mgr._cfg.sessions_dir):
+      root_scans.append(os.fspath(path))
+    return real_scandir(path)
+
+  monkeypatch.setattr(os, "scandir", counting_scandir)
+  metadata_reads = count_path_read_text(monkeypatch, lambda path: path.name == "metadata.json")
+
+  steady = await mgr._load_session_metas()
+
+  assert [item.id for item in steady] == [meta.id]
+  assert not root_scans
+  assert not metadata_reads
+
+
+@pytest.mark.asyncio
+async def test_listings_memo_serves_write_funnel_change_immediately(tmp_path: Path) -> None:
+  mgr = _make_session_mgr(tmp_path)
+  meta = SessionMetadata(name="before")
+  await mgr.save_metadata(meta)
+  first = await mgr._load_session_metas()
+  assert [item.name for item in first] == ["before"]
+
+  meta.name = "after"
+  await mgr.save_metadata(meta)
+
+  second = await mgr._load_session_metas()
+  assert [item.name for item in second] == ["after"]
+
+
+@pytest.mark.asyncio
+async def test_listings_memo_sweep_surfaces_out_of_band_edit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  mgr = _make_session_mgr(tmp_path)
+  meta = SessionMetadata(name="before")
+  _write_metadata(mgr, meta)
+  first = await mgr._load_session_metas()
+  assert [item.name for item in first] == ["before"]
+
+  # Out-of-band edit: raw file rewrite inside the session dir — no write
+  # funnel, no root signature move, only the sweep window bounds it.
+  edited = SessionMetadata(id=meta.id, name="after")
+  _write_metadata(mgr, edited)
+  stale = await mgr._load_session_metas()
+  assert [item.name for item in stale] == ["before"]
+
+  # Age the memo past the sweep and the cache entry past its TTL — the idle
+  # state the sweep walk revalidates, the M61 collector's aging protocol.
+  aged = mgr._listings_memo[None]
+  mgr._listings_memo[None] = (aged[0], aged[1] - 30.0, aged[2], aged[3])
+  cached = mgr._metadata_cache[meta.id]
+  mgr._metadata_cache[meta.id] = (cached[0], time.monotonic() - 60.0, cached[2])
+  walked = await mgr._load_session_metas()
+  assert [item.name for item in walked] == ["after"]
+
+
+@pytest.mark.asyncio
+async def test_listings_memo_picks_up_raw_created_session_immediately(tmp_path: Path) -> None:
+  mgr = _make_session_mgr(tmp_path)
+  first = SessionMetadata(name="first")
+  _write_metadata(mgr, first)
+  await mgr._load_session_metas()
+
+  second = SessionMetadata(name="second")
+  _write_metadata(mgr, second)
+
+  grown = await mgr._load_session_metas()
+  assert {item.id for item in grown} == {first.id, second.id}

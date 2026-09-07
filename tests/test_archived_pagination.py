@@ -230,10 +230,17 @@ async def test_expired_active_entry_revalidates_by_stat_until_the_file_moves(
   The revalidation chain on the listing path: a read-keyed entry (signature
   taken before the read) survives TTL expiry on one stat; a rewrite that moves
   metadata.json's signature forces exactly one re-read, and the new bytes are
-  what the next listing serves.
+  what the next listing serves. The listings memo serves repeats without the
+  walk, so each revalidation round ages the memo past its sweep window first —
+  the sweep walk is where entry revalidation lives now.
   """
   mgr = make_session_mgr(tmp_path)
   active = await _add_session(mgr, "live", status=SessionStatus.ACTIVE, minutes=1)
+
+  def age_listings_memo() -> None:
+    stored = mgr._listings_memo.get(SessionStatus.ACTIVE)
+    if stored is not None:
+      mgr._listings_memo[SessionStatus.ACTIVE] = (stored[0], stored[1] - 3600.0, stored[2], stored[3])
 
   # The save-populated entry carries no provable signature: ageing it past the
   # TTL forces the first read, whose pre-read stat keys the entry.
@@ -245,6 +252,7 @@ async def test_expired_active_entry_revalidates_by_stat_until_the_file_moves(
   assert [p.parent.name for p in reads] == [active.id]
 
   # Unchanged file: the expired entry revalidates by stat, zero reads.
+  age_listings_memo()
   for sid, (meta, _ts, sig) in list(mgr._metadata_cache.items()):
     mgr._metadata_cache[sid] = (meta, time.monotonic() - 3600, sig)
   reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
@@ -257,6 +265,7 @@ async def test_expired_active_entry_revalidates_by_stat_until_the_file_moves(
   moved = SessionMetadata.model_validate_json(path.read_text(encoding="utf-8"))
   moved.name = "renamed on disk"
   path.write_text(moved.model_dump_json(), encoding="utf-8")
+  age_listings_memo()
   for sid, (meta, _ts, sig) in list(mgr._metadata_cache.items()):
     mgr._metadata_cache[sid] = (meta, time.monotonic() - 3600, sig)
   reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)

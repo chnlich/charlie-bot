@@ -587,6 +587,17 @@ async def _report_turn_error_and_salvage(
   await _salvage_silent_turn(tracker, error_msg, session_id, item.callbacks.persist_and_broadcast)
 
 
+async def _refuse_turn(item: master_cc_state._WorkItem, msg: str) -> tuple[None, int, str, dict]:
+  """Fail a turn before any backend spawn: one error event in chat, the triggering message left unread.
+
+  Returns the run's refusal shape: no cc_session_id, exit code 1, the message, no finish extras.
+  """
+  await item.callbacks.persist_and_broadcast(
+      item.session_meta.id, {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {msg}"})
+  await item.callbacks.mark_unread(item.session_meta.id)
+  return None, 1, msg, {}
+
+
 async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
   """Execute a single CC run — spawn backend, stream events.
 
@@ -635,13 +646,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
           session=session_meta.id,
           requested="(none)",
       )
-    await item.callbacks.persist_and_broadcast(
-        session_meta.id, {
-            "type": ET.ASSISTANT_ERROR,
-            "content": f"Agent error: {msg}"
-        })
-    await item.callbacks.mark_unread(session_meta.id)
-    return None, 1, msg, {}
+    return await _refuse_turn(item, msg)
   if backend_type_allows_missing_model(option.type) and option.model is not None:
     option = option.model_copy(update={"model": None})
 
@@ -689,9 +694,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
 
   # Project-layer failure is fatal, unlike the overlay: an enabled project
   # whose config or applicable body cannot be read must not run a turn with
-  # missing rules. Fail the turn the same way the backend-unresolved path
-  # does — one error event in chat, the triggering message left unread, no
-  # backend spawn. The next new turn re-reads the files.
+  # missing rules. The next new turn re-reads the files.
   project_error = getattr(instructions_content, "project_error", None)
   if project_error is not None:
     msg = f"project instruction loading failed: {project_error}"
@@ -701,13 +704,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         group=session_meta.group,
         error=str(project_error),
     )
-    await item.callbacks.persist_and_broadcast(
-        session_meta.id, {
-            "type": ET.ASSISTANT_ERROR,
-            "content": f"Agent error: {msg}"
-        })
-    await item.callbacks.mark_unread(session_meta.id)
-    return None, 1, msg, {}
+    return await _refuse_turn(item, msg)
 
   resume_id = _resolve_resume_id(option, session_meta, cfg=cfg)
   # Pre-flight: a resume-capable backend about to run with no resolved resume

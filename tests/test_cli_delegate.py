@@ -354,21 +354,31 @@ def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch
   assert payload["delegate_invocation"]["reviewer_context_file"] == str(reviewer_context_file)
 
 
-def test_main_requires_task_spec_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", [
-      "delegate",
-      "--session",
-      "s1",
-      "--repo",
-      str(tmp_path),
-      "--base-branch",
-      "main",
-      "--keep-worktree",
-      "0",
-  ]), pytest.raises(SystemExit) as exc_info:
+_REQUIRED_FLAG_OMISSION_CASES = [
+    pytest.param("--task-spec-file", id="task-spec-file-omitted"),
+    pytest.param("--keep-worktree", id="keep-worktree-omitted"),
+]
+
+
+@pytest.mark.parametrize("required_flag", _REQUIRED_FLAG_OMISSION_CASES)
+def test_main_rejects_omitted_required_flag(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], required_flag: str) -> None:
+  """Omitting a required repo-skeleton flag rejects with a message naming the flag."""
+  flag_values = {
+      "--repo": str(tmp_path),
+      "--base-branch": "main",
+      "--task-spec-file": str(_write_task_spec(tmp_path)),
+      "--keep-worktree": "0",
+  }
+  del flag_values[required_flag]
+  argv = ["delegate", "--session", "s1"]
+  for flag, value in flag_values.items():
+    argv += [flag, value]
+
+  with patch("sys.argv", argv), pytest.raises(SystemExit) as exc_info:
     main()
 
-  assert_cli_reject(exc_info, capsys, "--task-spec-file")
+  assert_cli_reject(exc_info, capsys, required_flag)
 
 
 @pytest.mark.parametrize(
@@ -449,73 +459,49 @@ def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytes
   assert exc_info.value.code == 1
 
 
-def test_main_requires_keep_worktree_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-  task_spec_file = _write_task_spec(tmp_path)
-
-  with patch("sys.argv", [
-      "delegate",
-      "--session",
-      "s1",
-      "--repo",
-      str(tmp_path),
-      "--base-branch",
-      "main",
-      "--task-spec-file",
-      str(task_spec_file),
-  ]), pytest.raises(SystemExit) as exc_info:
-    main()
-
-  assert_cli_reject(exc_info, capsys, "--keep-worktree")
-
-
+@pytest.mark.parametrize(
+    ("file_flag", "staged_name", "with_valid_task_spec"),
+    [
+        pytest.param("--task-spec-file", "task_spec.md", False, id="task-spec-file"),
+        pytest.param("--reviewer-context-file", "reviewer_context.md", True, id="reviewer-context-file"),
+    ],
+)
 @pytest.mark.parametrize(
     ("file_body", "err_fragment"),
     [
-        (None, "not found"),
-        ("  \n", "empty"),
+        pytest.param(None, "not found", id="missing"),
+        pytest.param("  \n", "empty", id="empty"),
     ],
-    ids=["missing", "empty"],
 )
-def test_main_rejects_unusable_task_spec_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], file_body: str | None,
-    err_fragment: str) -> None:
+def test_main_rejects_unusable_file_argument(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    file_flag: str,
+    staged_name: str,
+    with_valid_task_spec: bool,
+    file_body: str | None,
+    err_fragment: str,
+) -> None:
+  """An unusable required file argument rejects before posting, naming the flag and the cause."""
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  spec_file = tmp_path / "task_spec.md"
+  staged_file = tmp_path / staged_name
   if file_body is not None:
-    spec_file.write_text(file_body)
-
-  with _patched_main(cfg, _repo_argv(str(tmp_path), spec_file)) as post_mock, pytest.raises(SystemExit) as exc_info:
-    main()
-
-  assert_cli_reject_exit2(exc_info, capsys, "task-spec-file", err_fragment)
-  post_mock.assert_not_called()
-
-
-@pytest.mark.parametrize(
-    ("context_body", "err_fragment"),
-    [
-        (None, "not found"),
-        ("  \n", "empty"),
-    ],
-    ids=["missing", "empty"],
-)
-def test_main_rejects_unusable_reviewer_context_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], context_body: str | None,
-    err_fragment: str) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  task_spec_file = _write_task_spec(tmp_path)
-  context_file = tmp_path / "reviewer_context.md"
-  if context_body is not None:
-    context_file.write_text(context_body)
+    staged_file.write_text(file_body)
+  if with_valid_task_spec:
+    task_spec_file = _write_task_spec(tmp_path)
+    extra_argv = [file_flag, str(staged_file)]
+  else:
+    task_spec_file = staged_file
+    extra_argv = []
 
   with (
-      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file", str(context_file))) as
-      post_mock,
+      _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, *extra_argv)) as post_mock,
       pytest.raises(SystemExit) as exc_info,
   ):
     main()
 
-  assert_cli_reject_exit2(exc_info, capsys, "reviewer-context-file", err_fragment)
+  assert_cli_reject_exit2(exc_info, capsys, file_flag, err_fragment)
   post_mock.assert_not_called()
 
 

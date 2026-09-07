@@ -594,8 +594,7 @@ _config_mtime: object = None
 _config_failed_mtime: object = None
 # First sighting per error string per process: a persisting broken corpus
 # re-fires a fired alarm on every reload attempt otherwise. A successful load
-# clears the registry, so a later relapse earns one new line (M50's recovery
-# rule).
+# clears the registry, so a later relapse earns one new line.
 _config_reload_errors_seen = WarnOnceRegistry()
 
 
@@ -1171,8 +1170,8 @@ def _cron_fingerprint(
   ``config.d/cron.yaml`` exists.
 
   This walk runs on every ``get_scheduled_tasks`` call (each /scheduled and
-  /api/cron/tasks request, every scheduler tick), so it is the M58 shape: one
-  ``os.scandir`` over the raw string dir with ``DirEntry`` answering
+  /api/cron/tasks request, every scheduler tick), so it is one ``os.scandir``
+  over the raw string dir with ``DirEntry`` answering
   ``is_file`` from the directory record, no per-entry ``Path`` construction —
   the pathlib form measured 174 us vs 53 us on the live 13-file corpus.
   """

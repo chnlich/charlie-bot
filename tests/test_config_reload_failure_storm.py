@@ -120,7 +120,7 @@ def _touch_config(home) -> None:
 
 def test_recovery_rearms_the_warning(profile_home, reload_log, counted_loads) -> None:
   """A load that succeeds clears the registry: a later relapse is a new onset
-  and earns one new line (the M50 recovery rule)."""
+  and earns one new line."""
   _seed_good_config()
   _write_broken(profile_home, "broken.yaml", "unknown_m53_key")
   core_config.get_config()

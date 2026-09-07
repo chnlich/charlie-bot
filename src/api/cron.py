@@ -160,7 +160,7 @@ async def list_cron_tasks():
   # json.dumps directly with no encoder pass left to convert types, so it must
   # stay dumps-safe: mode="json" is that guarantee should a datetime or enum
   # field join the model (today every field is already a primitive, so the
-  # bytes equal the encoder-rendered output the M46 row was taken with).
+  # bytes equal the encoder-rendered output).
   # Returning the mapped list instead would pay jsonable_encoder's dict
   # recursion per request for the same bytes.
   valid = [

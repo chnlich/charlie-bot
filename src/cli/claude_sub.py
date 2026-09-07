@@ -23,7 +23,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, SKIP_PERMISSIONS_SETTINGS
+from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, SKIP_PERMISSIONS_SETTINGS, build_claude_argv
 from src.agents.backends.claude_code import headless_claude_env
 from src.agents.backends.pty_common import (
     _TMUX_SOCKET,
@@ -485,39 +485,6 @@ def _session_settings(args: ClaudeSubArgs) -> str:
   return json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
 
 
-def _disallowed_tool_value(values: list[str]) -> str:
-  return ",".join(values)
-
-
-def _build_claude_argv(
-    args: ClaudeSubArgs,
-    session_id: str,
-    resume: bool,
-    plugin_dir: Path,
-) -> list[str]:
-  argv = [
-      "claude",
-      "--settings",
-      _session_settings(args),
-      SKIP_PERMISSIONS_FLAG,
-      "--plugin-dir",
-      str(plugin_dir),
-      "--resume" if resume else "--session-id",
-      session_id,
-  ]
-  if args.model:
-    argv.extend(["--model", args.model])
-  if args.effort:
-    argv.extend(["--effort", args.effort])
-  if args.disallowed_tools:
-    argv.extend(["--disallowed-tools", _disallowed_tool_value(args.disallowed_tools)])
-  # Claude Code 2.1.212 accepts `--` and treats the following value as the prompt,
-  # even when it starts with '-'.  tmux respawn-pane passes these argv entries
-  # directly to Claude; it does not invoke a shell for the command after the target.
-  argv.extend(["--", args.prompt])
-  return argv
-
-
 async def _run_cli_capture(*args: str) -> tuple[int, str, str]:
   binary = shutil.which(args[0]) if args else None
   if binary is None:
@@ -639,7 +606,17 @@ async def _respawn_claude(
     tmux_args.extend(["-e", f"{key}={value}"])
   if config_dir is not None:
     tmux_args.extend(["-e", f"CLAUDE_CONFIG_DIR={config_dir}"])
-  tmux_args.extend(_build_claude_argv(args, session_id, resume, plugin_dir))
+  tmux_args.extend(
+      build_claude_argv(
+          session_id,
+          resume,
+          settings=_session_settings(args),
+          plugin_dir=str(plugin_dir),
+          model=args.model,
+          effort=args.effort,
+          disallowed_tools=args.disallowed_tools,
+          prompt=args.prompt,
+      ))
   await _tmux_checked(*tmux_args)
 
 

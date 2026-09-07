@@ -48,17 +48,16 @@ function scanFences(lines) {
     }
   }
 
-  // The earliest fence still open at EOF is where marked's unterminated code
-  // block starts: no line after it closes any fence, so the block's content is
-  // every line after that opening line, inner fence lines included.
-  var openTailLine = stack.length > 0 ? stack[0].line : -1;
-  return {upgrades: upgrades, openTailLine: openTailLine};
+  return upgrades;
 }
 
 function fixNestedFences(md) {
   var lines = md.split('\n');
-  var upgrades = scanFences(lines).upgrades;
+  return applyFenceUpgrades(lines, scanFences(lines));
+}
 
+// The delimiter rewrite fixNestedFences applies, in reverse line order.
+function applyFenceUpgrades(lines, upgrades) {
   // Apply upgrades in reverse line order
   var upgradeLines = Object.keys(upgrades).map(Number).sort(function(a, b) { return b - a; });
   for (var j = 0; j < upgradeLines.length; j++) {
@@ -74,27 +73,58 @@ function fixNestedFences(md) {
     for (var k = 0; k < newLen; k++) newDelim += charType;
     lines[lineIdx] = indent + newDelim + line.slice(indent.length + oldLen);
   }
-
   return lines.join('\n');
 }
 
-// The content of the code block still growing at the source's end (the fence
-// marked lexes as unterminated), or null when no fence is open at EOF. Upgrades
-// rewrite fence delimiters only, never content lines or line counts, so the
-// tail read off the original text is the tail marked parses.
-//
-// streamPaintTailCode carries that tail to renderer.code: the stream-draft
-// paint (usage.js) sets it around its parse, and every other render path
-// leaves it null. That block's content changes again before it settles, so a
-// cache miss on it renders escaped-plain instead of re-running highlight per
-// paint — the paint where the fence closes, and the committed render after
-// the turn, highlight it once and the cache serves every later paint.
-var streamPaintTailCode = null;
+// The streaming paint's state, owned here and driven by usage.js's
+// paintStreamDraft: null on every render path except the streaming paint's
+// parse, where it holds an array that walkTokens fills with the parse's code
+// tokens in document order. The block still growing at the draft's end is the
+// LAST of them (an unterminated fence runs to EOF), so renderer.code can skip
+// its highlight by token identity — no model of marked's block structure
+// needed, which line-level fence scanning cannot supply (list and blockquote
+// dedent the lines a fence rule would see). That block's content changes
+// again before it settles, so a cache miss on it renders escaped-plain
+// instead of re-running highlight per paint — the paint where the fence
+// closes, and the committed render after the turn, highlight it once and the
+// cache serves every later paint.
+var streamPaintCodeTokens = null;
 
-function openFenceTail(md) {
-  var lines = md.split('\n');
-  var openTailLine = scanFences(lines).openTailLine;
-  return openTailLine < 0 ? null : lines.slice(openTailLine + 1).join('\n');
+// A complete block's raw ends on its closing fence line (marked strips the
+// trailing newline from a terminated token's raw but keeps it on an
+// unterminated one); an unterminated block's raw ends on content. The one
+// shape this misreads — a long-fence draft whose content ends on a shorter
+// bare fence line — reads as complete and keeps today's per-paint highlight,
+// so a misread costs coverage, never bytes.
+function endsOnClosingFence(raw) {
+  var body = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
+  var lastLine = body.slice(body.lastIndexOf('\n') + 1);
+  return /^ {0,3}(?:`{3,}|~{3,})[ \t]*$/.test(lastLine);
+}
+
+// The streaming paint's parse: lex once, record the code tokens by plain
+// recursion (marked's walkTokens hook routes the same walk through
+// Promise.all — ~215k promise allocations per replay on the 98 KB M33
+// corpus), then render those same token objects, so the renderer's identity
+// check sees what was recorded.
+function parseStreamDraft(fixed) {
+  if (streamPaintCodeTokens === null) return marked.parse(fixed);
+  var tokens = marked.lexer(fixed);
+  recordCodeTokens(tokens);
+  return marked.parser(tokens);
+}
+
+function recordCodeTokens(tokens) {
+  for (var i = 0; i < tokens.length; i++) {
+    var token = tokens[i];
+    if (token.type === 'code') streamPaintCodeTokens.push(token);
+    if (token.tokens) recordCodeTokens(token.tokens);
+    if (token.items) {
+      for (var j = 0; j < token.items.length; j++) {
+        if (token.items[j].tokens) recordCodeTokens(token.items[j].tokens);
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +168,25 @@ function openFenceTail(md) {
     }
     return value;
   }
+  // The growing tail's escape, carried across paints: escapeText maps each
+  // character independently, so escape(prefix + delta) is escape(prefix) +
+  // escape(delta) exactly, and a tail that grows by appends re-escapes only
+  // the new bytes. The skip path refreshes both strings every paint it runs;
+  // any other paint leaves them stale for the next stream's first paint to
+  // replace.
+  var streamTailRaw = '';
+  var streamTailEscaped = '';
+  function escapeStreamTail(trimmed) {
+    let escaped;
+    if (trimmed.startsWith(streamTailRaw)) {
+      escaped = streamTailEscaped + escapeText(trimmed.slice(streamTailRaw.length));
+    } else {
+      escaped = escapeText(trimmed);
+    }
+    streamTailRaw = trimmed;
+    streamTailEscaped = escaped;
+    return escaped;
+  }
   renderer.html = function(token) {
     // Support both marked v4 (html string) and v5+ ({ text } object), same
     // tolerance as renderer.code. Escape so raw tags render as literal text.
@@ -150,18 +199,20 @@ function openFenceTail(md) {
     const lang = (typeof token === 'object' ? token.lang : arguments[1]) || '';
     const trimmed = code.replace(/\n$/, '');
     const resolvedLang = (lang && hljs.getLanguage(lang)) ? lang : '';
-    // A cache hit keeps today's bytes for a completed block that shares the
-    // growing block's content; the tail comparison normalizes the trailing
-    // newline the same way trimmed does, since marked strips it from an
-    // unterminated fence's token text.
-    const isGrowingTail = streamPaintTailCode !== null
+    // The growing tail skips by token identity: walkTokens recorded this
+    // parse's code tokens in document order, the unterminated block is the
+    // last of them, and its raw not ending on a closing fence says it never
+    // closed. The cache check first keeps a completed block that shares the
+    // tail's cache key on today's highlighted bytes.
+    const isGrowingTail = streamPaintCodeTokens !== null
       && !highlightCache.has(highlightKey(resolvedLang, trimmed))
-      && trimmed === streamPaintTailCode.replace(/\n$/, '');
+      && token === streamPaintCodeTokens[streamPaintCodeTokens.length - 1]
+      && !endsOnClosingFence(token.raw);
     const run = () => (resolvedLang
       ? hljs.highlight(trimmed, { language: resolvedLang }).value
       : hljs.highlightAuto(trimmed).value);
     const highlighted = isGrowingTail
-      ? escapeText(trimmed)
+      ? escapeStreamTail(trimmed)
       : cachedHighlight(resolvedLang, trimmed, run);
     const displayLang = escapeText(lang || 'text');
     const isMarkdown = (lang === 'markdown' || lang === 'md');
@@ -250,7 +301,8 @@ function openFenceTail(md) {
         tokens: [{ type: 'text', raw: run, text: run }],
       };
     }
-  }});
+  }
+});
 })();
 
 // ---------------------------------------------------------------------------

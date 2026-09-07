@@ -29,13 +29,13 @@ function paintStreamDraft(draft) {
   if (thinking) {
     html += thinkingToggleHtml('streaming-thinking', thinking);
   }
-  // The parse below must see the growing tail only, and a parse that throws
-  // must not leave the flag set into later renders.
-  streamPaintTailCode = openFenceTail(content);
+  // The parse below must see the recording window only, and a parse that
+  // throws must not leave it set into later renders.
+  streamPaintCodeTokens = [];
   try {
-    html += marked.parse(fixNestedFences(content));
+    html += parseStreamDraft(fixNestedFences(content));
   } finally {
-    streamPaintTailCode = null;
+    streamPaintCodeTokens = null;
   }
   inner.innerHTML = html;
   renderChatMath(inner);

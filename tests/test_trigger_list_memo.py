@@ -78,7 +78,8 @@ async def test_list_triggers_missing_dir_returns_empty(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_list_triggers_verdict_skips_the_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   mgr = _make_manager(tmp_path)
-  saved = [await _save(mgr, "s1", f"trigger {i}") for i in range(3)]
+  for i in range(3):
+    await _save(mgr, "s1", f"trigger {i}")
   first = await mgr.list_triggers("s1")
 
   calls = []
@@ -113,7 +114,7 @@ async def test_list_triggers_rewalks_after_rename_write(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_list_triggers_picks_up_externally_created_file(tmp_path: Path) -> None:
   mgr = _make_manager(tmp_path)
-  await _save(mgr, "s1", "existing")
+  existing = await _save(mgr, "s1", "existing")
   assert len(await mgr.list_triggers("s1")) == 1
 
   external = PendingTrigger(
@@ -122,7 +123,8 @@ async def test_list_triggers_picks_up_externally_created_file(tmp_path: Path) ->
       message="external",
       watch_targets=[],
   )
-  await mgr._save_trigger(external)
+  triggers_dir = mgr._cfg.sessions_dir / "s1" / "triggers"
+  (triggers_dir / f"{external.id}.json").write_text(external.model_dump_json(), encoding="utf-8")
   listed = await mgr.list_triggers("s1")
-  assert {t.id for t in listed} == {t.id for t in (await mgr.list_triggers("s1"))}
-  assert len(listed) == 2
+  assert {t.id for t in listed} == {existing.id, external.id}
+  assert [t.message for t in listed if t.id == external.id] == ["external"]

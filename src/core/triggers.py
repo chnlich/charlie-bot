@@ -429,8 +429,8 @@ class TriggerManager:
     # the directory's own mtime_ns — so an unchanged directory signature proves no file
     # appeared, vanished, or was replaced, and the steady-state poll serves without the
     # per-file stat walk or its executor round-trip.
-    self._list_verdicts: BoundedMemo[str, tuple[tuple[int, int], list[PendingTrigger]]] = BoundedMemo(
-        _TRIGGER_LIST_MEMO_SESSION_LIMIT)
+    self._list_verdicts: BoundedMemo[str, tuple[tuple[int, int],
+                                                list[PendingTrigger]]] = BoundedMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
 
   async def create_trigger(
       self,
@@ -563,8 +563,9 @@ class TriggerManager:
     (mtime_ns, size) matches its memo entry reuses the parsed record; a file edited in
     place (no rename) would move only its own mtime and evade the directory proof — every
     writer here publishes through the atomic rename, the same ground the per-file memo's
-    key already stands on. Files that fail to parse stay out of the memo, so an unreadable
-    file keeps logging one warning per call exactly as an unmemoized read would.
+    key already stands on. Files that fail to parse stay out of the memo: within one proved
+    directory state the verdict carries their single warning, and a directory-state change
+    re-reads and re-warns once for that state.
     """
     triggers_dir = self._triggers_dir(session_id)
     try:

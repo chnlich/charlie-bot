@@ -121,11 +121,17 @@ def project_dir(home: Path, group: str) -> Path:
 def _resolve_confined(project_dir: Path, candidate: Path, what: str) -> Path:
   """Resolve *candidate* and require its real path to stay inside *project_dir*.
 
-  Resolution follows symlinks to their real target; a ``..`` climb, a symlink
-  out of the project directory, or an unresolvable path (missing intermediate,
-  symlink loop, embedded NUL) fails here. The project directory itself may be
-  a symlink: confinement is checked against its resolved target, so a body can
-  still only come from inside the (possibly redirected) project directory.
+  Resolution follows symlinks to their real target and must stay inside
+  *project_dir*: a ``..`` climb or a symlink out of the project directory
+  fails here. Where an unusable candidate fails is interpreter-dependent, and
+  both failure points raise ProjectInstructionError. Embedded NUL raises
+  ValueError inside resolve() on every Python. A symlink loop raises
+  RuntimeError inside resolve() on Python 3.12, while on 3.13 resolve() folds
+  the loop into itself and it surfaces as OSError at the body read. A missing
+  intermediate passes resolve() on both and surfaces at the body read. The
+  project directory itself may be a symlink: confinement is checked against
+  its resolved target, so a body can still only come from inside the
+  (possibly redirected) project directory.
   """
   try:
     resolved = candidate.resolve()

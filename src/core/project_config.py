@@ -36,10 +36,12 @@ from src.core.yaml_utils import load_yaml
 PROJECTS_DIR_NAME = "projects"
 PROJECT_CONFIG_FILENAME = "project.yaml"
 
-# pathlib raises a plain RuntimeError (not OSError) when resolve() hits a
-# symlink loop, and a ValueError for an embedded NUL; all of these mean "this
-# path cannot be resolved" and all of them are config errors, never raw
-# escapes past ProjectInstructionError.
+# Which exceptions resolve() raises is interpreter-dependent (see
+# _resolve_confined's docstring): a symlink loop is RuntimeError there on
+# Python 3.12 and nothing there on 3.13 — the loop then fails the read —
+# while an embedded NUL is ValueError on every version. All of these mean
+# "this path cannot be resolved" and all of them are config errors, never
+# raw escapes past ProjectInstructionError.
 _RESOLVE_ERRORS = (OSError, RuntimeError, ValueError)
 
 

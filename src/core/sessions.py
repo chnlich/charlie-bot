@@ -2288,8 +2288,8 @@ class SessionManager:
         include_pending_plan_approval=include_pending_plan_approval,
         force=force,
     )
-    _apply_sidebar_state(sessions, derived, include_running_status, include_pending_trigger_status,
-                         include_pending_plan_approval)
+    _apply_sidebar_state(
+        sessions, derived, include_running_status, include_pending_trigger_status, include_pending_plan_approval)
 
   async def get_sessions_readonly(self, session_ids: list[str]) -> list[SessionMetadata]:
     """Resolve *session_ids* to metadata for consumers that only read it.

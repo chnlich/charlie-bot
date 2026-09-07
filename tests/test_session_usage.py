@@ -221,8 +221,7 @@ def _compact_boundary_event(trigger: str = "manual", pre_tokens=None, post_token
 _COMPACT_BOUNDARY_ROWS = [
     pytest.param(
         "postboundary",
-        "Post Boundary",
-        [
+        "Post Boundary", [
             _assistant_event("claude-opus-4-6", input_tokens=239_708),
             _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
         ],
@@ -230,8 +229,7 @@ _COMPACT_BOUNDARY_ROWS = [
         id="post-boundary-reads-post-tokens"),
     pytest.param(
         "preboundary",
-        "Pre Boundary",
-        [
+        "Pre Boundary", [
             _compact_boundary_event(pre_tokens=239_708, post_tokens=4_670),
             _assistant_event("claude-opus-4-6", input_tokens=100_000),
         ],
@@ -251,8 +249,8 @@ _COMPACT_BOUNDARY_ROWS = [
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("session_tag", "session_name", "boundary_events", "expected_context_tokens"),
-                         _COMPACT_BOUNDARY_ROWS)
+@pytest.mark.parametrize(
+    ("session_tag", "session_name", "boundary_events", "expected_context_tokens"), _COMPACT_BOUNDARY_ROWS)
 async def test_claude_tier_context_tokens_across_a_compact_boundary(
     tmp_path: Path,
     session_tag: str,
@@ -264,8 +262,7 @@ async def test_claude_tier_context_tokens_across_a_compact_boundary(
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id=f"session-{session_tag}", name=session_name, backend=OPUS_BACKEND_ID)
   _write_session(
-      session_mgr, meta,
-      [_result_event(0.5, {"claude-opus-4-6": {
+      session_mgr, meta, [_result_event(0.5, {"claude-opus-4-6": {
           "contextWindow": 200_000
       }}), *boundary_events])
 

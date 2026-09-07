@@ -14,6 +14,7 @@ from conftest import (
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
+    pool_accounts,
     rate_limit_event,
     write_pool_credentials,
 )
@@ -25,7 +26,7 @@ from src.core import claude_accounts, claude_relay
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.message_aggregator import MessageAggregator
-from src.core.models import BackendOption, ClaudeAccount, SessionMetadata
+from src.core.models import BackendOption, SessionMetadata
 
 NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
 FABLE = "claude-fable-5-1"
@@ -35,12 +36,9 @@ _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
 def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
-  accounts = [ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
-  for account in accounts:
-    write_pool_credentials(Path(account.config_dir))
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      claude_accounts=accounts,
+      claude_accounts=pool_accounts(tmp_path, labels),
       backend_options=[
           BackendOption(id="claude-fable-5", label="Fable", type="cc-claude", model=FABLE),
           BackendOption(

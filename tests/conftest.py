@@ -596,6 +596,19 @@ def write_pool_credentials(config_dir: Path, access_token: str = "token") -> Non
       }}), encoding="utf-8")
 
 
+def pool_accounts(tmp_path: Path, labels: tuple[str, ...]) -> list[models.ClaudeAccount]:
+  """One ClaudeAccount per label, each config dir under tmp_path with pool credentials written.
+
+  Selection only considers accounts whose config dir carries credentials
+  (``claude_accounts.healthy`` requires ``credentials_present``), so every pooled
+  label gets them seeded here.
+  """
+  accounts = [models.ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
+  for account in accounts:
+    write_pool_credentials(Path(account.config_dir))
+  return accounts
+
+
 def session_dir_names(cfg: CharlieBotConfig) -> set[str]:
   """Snapshot the names of session directories on disk (existence, not content)."""
   if not cfg.sessions_dir.exists():

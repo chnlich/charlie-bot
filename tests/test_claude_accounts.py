@@ -11,6 +11,7 @@ from conftest import (
     make_transcript,
     make_work_item,
     mock_session_callbacks,
+    pool_accounts,
     run_session_consumer,
     write_pool_credentials,
 )
@@ -48,11 +49,10 @@ def _options(pinned_dir: Path) -> list[BackendOption]:
 
 
 def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
-  accounts = [ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
-  for account in accounts:
-    write_pool_credentials(Path(account.config_dir))
   return CharlieBotConfig(
-      charliebot_home=tmp_path / "home", claude_accounts=accounts, backend_options=_options(tmp_path / "pinned"))
+      charliebot_home=tmp_path / "home",
+      claude_accounts=pool_accounts(tmp_path, labels),
+      backend_options=_options(tmp_path / "pinned"))
 
 
 def _legacy_cfg(tmp_path: Path) -> CharlieBotConfig:

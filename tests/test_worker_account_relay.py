@@ -11,7 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import JudgmentShim, fresh_state_fixture, make_transcript, rate_limit_event, write_pool_credentials
+from conftest import JudgmentShim, fresh_state_fixture, make_transcript, pool_accounts, rate_limit_event
 
 from src.agents import worker as worker_mod
 from src.agents.worker import QuotaExhaustedException, Worker
@@ -27,7 +27,6 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import (
     BackendOption,
-    ClaudeAccount,
     SpawnRequest,
     ThreadMetadata,
     ThreadStatus,
@@ -41,13 +40,10 @@ _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
 def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
-  accounts = [ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
-  for account in accounts:
-    write_pool_credentials(Path(account.config_dir))
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       worktree_dir=str(tmp_path / "worktrees"),
-      claude_accounts=accounts,
+      claude_accounts=pool_accounts(tmp_path, labels),
       backend_options=[
           BackendOption(id=POOLED_ID, label="Fable", type="cc-claude", model=FABLE),
           BackendOption(

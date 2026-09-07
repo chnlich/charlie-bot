@@ -22,10 +22,10 @@ from src.core.init import iter_recent_thread_metas
 from src.core.init_worker_recovery import walk_thread_meta_stats
 from src.core.models import utc_now
 from src.core.sessions import (
-  _sidebar_probe_walk,
-  pending_trigger_state_sync,
-  probe_sidebar_state_sync,
-  selective_probe_sidebar_state,
+    _sidebar_probe_walk,
+    pending_trigger_state_sync,
+    probe_sidebar_state_sync,
+    selective_probe_sidebar_state,
 )
 
 
@@ -59,13 +59,19 @@ def test_walked_thread_scan_yields_identical_triples(tmp_path: Path) -> None:
   os.utime(cfg.sessions_dir / "s1" / "threads" / "t1" / "metadata.json", (old_ts, old_ts))
 
   direct = list(iter_recent_thread_metas(threads_dir, utc_now(), "thread_meta_read_failed"))
-  walked = list(iter_recent_thread_metas(
-    threads_dir, utc_now(), "thread_meta_read_failed",
-    walked=walk_thread_meta_stats(threads_dir, "thread_meta_read_failed")))
+  walked = list(
+      iter_recent_thread_metas(
+          threads_dir,
+          utc_now(),
+          "thread_meta_read_failed",
+          walked=walk_thread_meta_stats(threads_dir, "thread_meta_read_failed")))
   expected = [(
-    str(threads_dir / "t0"),
-    str(threads_dir / "t0" / "metadata.json"),
-    {"id": "t0", "status": "running"},
+      str(threads_dir / "t0"),
+      str(threads_dir / "t0" / "metadata.json"),
+      {
+          "id": "t0",
+          "status": "running"
+      },
   )]
   assert direct == walked == expected
 
@@ -78,8 +84,7 @@ def test_walked_thread_scan_missing_dir_and_bare_thread_dir(tmp_path: Path) -> N
   assert walk_thread_meta_stats(cfg.sessions_dir / "s1" / "nope", "thread_meta_read_failed") == []
   walked = walk_thread_meta_stats(threads_dir, "thread_meta_read_failed")
   assert walked == []  # the bare dir's stat failed with FileNotFoundError — nothing to read
-  assert list(iter_recent_thread_metas(
-    threads_dir, utc_now(), "thread_meta_read_failed", walked=walked)) == []
+  assert list(iter_recent_thread_metas(threads_dir, utc_now(), "thread_meta_read_failed", walked=walked)) == []
 
 
 def test_walked_trigger_scan_parity_and_non_regular_gate(tmp_path: Path) -> None:
@@ -90,7 +95,7 @@ def test_walked_trigger_scan_parity_and_non_regular_gate(tmp_path: Path) -> None
   (triggers_dir / "dir.json").mkdir()  # a directory named like a trigger file
 
   _, inputs = _sidebar_probe_walk(
-    cfg.sessions_dir / "s1" / "threads", triggers_dir, cfg.sessions_dir / "s1" / "plans.json")
+      cfg.sessions_dir / "s1" / "threads", triggers_dir, cfg.sessions_dir / "s1" / "plans.json")
   assert inputs.trigger_files is not None
   expected = (1, datetime.fromisoformat("2026-10-01T00:00:00+00:00"))
   assert pending_trigger_state_sync(triggers_dir) == expected
@@ -98,8 +103,7 @@ def test_walked_trigger_scan_parity_and_non_regular_gate(tmp_path: Path) -> None
 
   # A missing triggers dir walks to None; the core answers its empty state either way.
   missing = cfg.sessions_dir / "s1" / "no-triggers"
-  _, inputs = _sidebar_probe_walk(
-    cfg.sessions_dir / "s1" / "threads", missing, cfg.sessions_dir / "s1" / "plans.json")
+  _, inputs = _sidebar_probe_walk(cfg.sessions_dir / "s1" / "threads", missing, cfg.sessions_dir / "s1" / "plans.json")
   assert inputs.trigger_files is None
   assert pending_trigger_state_sync(missing, walked=None) == (0, None)
 
@@ -133,8 +137,11 @@ def test_post_write_probe_verdict_matches_full_probe(tmp_path: Path) -> None:
   threads_dir = cfg.sessions_dir / "s1" / "threads"
   write_thread_meta(cfg, "s1", {"id": "t0", "status": "running"})
   write_thread_meta(cfg, "s1", {"id": "t1", "status": "completed"})
-  _write_trigger(cfg.sessions_dir / "s1" / "triggers", "a.json",
-         {"status": "pending", "fire_at": "2026-10-01T00:00:00+00:00"})
+  _write_trigger(
+      cfg.sessions_dir / "s1" / "triggers", "a.json", {
+          "status": "pending",
+          "fire_at": "2026-10-01T00:00:00+00:00"
+      })
   spec = ("s1", threads_dir, cfg.sessions_dir / "s1" / "triggers", cfg.sessions_dir / "s1" / "plans.json")
 
   sig, inputs = _sidebar_probe_walk(*spec[1:])

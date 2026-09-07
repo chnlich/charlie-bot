@@ -593,7 +593,10 @@ async def _refuse_turn(item: master_cc_state._WorkItem, msg: str) -> tuple[None,
   Returns the run's refusal shape: no cc_session_id, exit code 1, the message, no finish extras.
   """
   await item.callbacks.persist_and_broadcast(
-      item.session_meta.id, {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {msg}"})
+      item.session_meta.id, {
+          "type": ET.ASSISTANT_ERROR,
+          "content": f"Agent error: {msg}"
+      })
   await item.callbacks.mark_unread(item.session_meta.id)
   return None, 1, msg, {}
 

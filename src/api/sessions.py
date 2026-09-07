@@ -450,11 +450,28 @@ async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get
         include_running_status=True,
         include_pending_trigger_status=True,
     )
-  return await session_mgr.search_sessions(
+  # The capped name-match shape (a short query) is this route's slowest
+  # request: the read-only search serves cache references and the response
+  # renders through FastJsonResponse with the derived fields overlaid, the
+  # same shape the /status poll took — the manager's per-row copy+populate
+  # pass and the response-model walk both measured multi-ms on the 200-row cap.
+  rows, derived = await session_mgr.search_sessions_readonly(
       q.strip(),
       include_running_status=True,
       include_pending_trigger_status=True,
   )
+  payload = []
+  for meta in rows:
+    busy = thinking_state.busy_since(meta.id)
+    entry = derived[meta.id]
+    row = meta.model_dump(mode="json")
+    row["thinking_since"] = busy.isoformat() if busy else None
+    row["has_running_tasks"] = entry["has_running_tasks"]
+    row["has_pending_trigger"] = entry["has_pending_trigger"]
+    row["pending_trigger_count"] = entry["pending_trigger_count"]
+    row["next_trigger_at"] = entry["next_trigger_at"].isoformat() if entry["next_trigger_at"] else None
+    payload.append(row)
+  return FastJsonResponse(payload)
 
 
 @router.get('/{session_id}/view')

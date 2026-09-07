@@ -59,6 +59,7 @@ def mock_session_callbacks() -> models.SessionCallbacks:
       has_completed_round=AsyncMock(return_value=False),
       persist_master_run=AsyncMock(),
       persist_claude_account=AsyncMock(side_effect=lambda sid, label: label),
+      claude_context_state=AsyncMock(return_value=(None, None)),
   )
 
 

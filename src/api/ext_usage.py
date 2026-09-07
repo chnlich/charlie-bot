@@ -18,7 +18,7 @@ from src.core.config import get_config
 from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
 from src.core.log_once import WarnOnceRegistry
-from src.core.models import BackendType
+from src.core.models import BackendType, ClaudeAccount
 from src.core.streaming import streaming_manager
 from src.core.timeouts import EXT_USAGE_ROUND_GAP_SECONDS, HTTP_OAUTH_TIMEOUT
 
@@ -135,6 +135,9 @@ def _derive_accounts() -> dict[str, list[tuple[str, str]]]:
   codex_opts = [o for o in cfg.backend_options if o.type == BackendType.CODEX]
   claude_pool = [(account.label, account.config_dir) for account in cfg.claude_accounts]
   return {
+      "pool": {
+          label: os.path.abspath(os.path.expanduser(raw)) for label, raw in claude_pool
+      },
       "claude":
           _derive_provider_accounts(
               "claude", CLAUDE_DEFAULT_DIR, claude_opts, lambda o: o.claude_config_dir, pool=claude_pool),
@@ -875,6 +878,9 @@ async def _poll_loop() -> None:
   while True:
     try:
       accounts = _derive_accounts()
+      # Pool accounts (label -> login dir) carry the login-required marker; a
+      # derivation without the key (older callers, tests) marks nothing.
+      pool_dirs: dict[str, str] = dict(accounts.get("pool") or {})
       cycle: list[_UsageInstance] = []
       live_keys: set[tuple[str, str]] = set()
       for provider in ("claude", "codex"):
@@ -939,6 +945,8 @@ async def _poll_loop() -> None:
                 "account": inst.label,
                 "error": inst.last_error,
             }
+        if inst.provider == "claude" and inst.label in pool_dirs:
+          _annotate_login_state(cache_key, ClaudeAccount(label=inst.label, config_dir=pool_dirs[inst.label]))
         if _cached_usage:
           await streaming_manager.broadcast("sidebar", {"type": "ext_usage", "providers": dict(_cached_usage)})
           log.info("ext_usage_fetched", providers=list(_cached_usage.keys()))
@@ -949,6 +957,22 @@ async def _poll_loop() -> None:
       # reaching one (e.g. from _derive_accounts()) would otherwise skip every
       # await point and busy-spin the event loop instead of backing off.
       await asyncio.sleep(ROUND_GAP_SECONDS)
+
+
+def _annotate_login_state(cache_key: str, account: ClaudeAccount) -> None:
+  """Mark a pool account's panel entry with the login directory while it needs a new login.
+
+  The pool is the judge (empty credential store or a recent authentication
+  failure); the chat notice for the same condition names no account, so this
+  marker is where the operator learns which directory to `claude /login` in.
+  """
+  entry = _cached_usage.get(cache_key)
+  if entry is None:
+    return
+  if claude_accounts.healthy(account):
+    entry.pop("login_required", None)
+  else:
+    entry["login_required"] = account.config_dir
 
 
 # ---------------------------------------------------------------------------

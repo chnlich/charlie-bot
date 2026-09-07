@@ -254,83 +254,65 @@ async def test_backoff_intervals_and_plateau(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_migrate_legacy_watch_pids_helper() -> None:
-  legacy = json.dumps(
-      {
-          "id": "leg-1",
-          "session_id": "s1",
-          "fire_at": "2030-01-01T00:00:00+00:00",
-          "message": "hi",
-          "created_at": "2030-01-01T00:00:00+00:00",
-          "status": "pending",
-          "fired_at": None,
-          "watch_pids": [123, 456],
-      })
-  trigger, migrated = _migrate_legacy_watch_pids(legacy)
-  assert migrated is True
-  assert trigger.watch_targets == [LocalPid(pid=123), LocalPid(pid=456)]
+def _legacy_trigger_payload(**overrides: object) -> dict:
+  """A minimal legacy-schema trigger file; overrides replace or add top-level keys."""
+  payload: dict = {
+      "id": "leg-1",
+      "session_id": "s1",
+      "fire_at": "2030-01-01T00:00:00+00:00",
+      "message": "hi",
+      "created_at": "2030-01-01T00:00:00+00:00",
+      "status": "pending",
+      "fired_at": None,
+  }
+  payload.update(overrides)
+  return payload
 
 
-def test_migrate_legacy_watch_pids_none_value() -> None:
-  legacy = json.dumps(
-      {
-          "id": "leg-2",
-          "session_id": "s1",
-          "fire_at": "2030-01-01T00:00:00+00:00",
-          "message": "hi",
-          "created_at": "2030-01-01T00:00:00+00:00",
-          "status": "pending",
-          "fired_at": None,
-          "watch_pids": None,
-      })
-  trigger, migrated = _migrate_legacy_watch_pids(legacy)
-  assert migrated is True
-  assert not trigger.watch_targets
+_MIGRATE_ROWS = [
+    pytest.param(
+        _legacy_trigger_payload(watch_pids=[123, 456]),
+        True,
+        [LocalPid(pid=123), LocalPid(pid=456)],
+        id="legacy-watch-pids",
+    ),
+    pytest.param(
+        _legacy_trigger_payload(watch_pids=None),
+        True,
+        [],
+        id="legacy-watch-pids-null",
+    ),
+    pytest.param(
+        _legacy_trigger_payload(watch_targets=[{
+            "kind": "remote_pid",
+            "host": "neptune",
+            "pid": 7
+        }]),
+        False,
+        [RemotePid(host="neptune", pid=7)],
+        id="already-new-schema",
+    ),
+    # Pre-discriminator watch_targets carry no `kind`; the migration backfills LOCAL/REMOTE.
+    pytest.param(
+        _legacy_trigger_payload(watch_targets=[{
+            "host": None,
+            "pid": 1
+        }, {
+            "host": "neptune",
+            "pid": 2
+        }]),
+        True,
+        [LocalPid(pid=1), RemotePid(host="neptune", pid=2)],
+        id="kindless-targets-backfilled",
+    ),
+]
 
 
-def test_migrate_legacy_no_op_when_already_new_schema() -> None:
-  modern = json.dumps(
-      {
-          "id": "new-1",
-          "session_id": "s1",
-          "fire_at": "2030-01-01T00:00:00+00:00",
-          "message": "hi",
-          "created_at": "2030-01-01T00:00:00+00:00",
-          "status": "pending",
-          "fired_at": None,
-          "watch_targets": [{
-              "kind": "remote_pid",
-              "host": "neptune",
-              "pid": 7
-          }],
-      })
-  trigger, migrated = _migrate_legacy_watch_pids(modern)
-  assert migrated is False
-  assert trigger.watch_targets == [RemotePid(host="neptune", pid=7)]
-
-
-def test_migrate_backfills_kind_on_kindless_targets() -> None:
-  """Pre-discriminator watch_targets (no `kind`) get LOCAL/REMOTE backfilled."""
-  legacy = json.dumps(
-      {
-          "id": "kindless-1",
-          "session_id": "s1",
-          "fire_at": "2030-01-01T00:00:00+00:00",
-          "message": "hi",
-          "created_at": "2030-01-01T00:00:00+00:00",
-          "status": "pending",
-          "fired_at": None,
-          "watch_targets": [{
-              "host": None,
-              "pid": 1
-          }, {
-              "host": "neptune",
-              "pid": 2
-          }],
-      })
-  trigger, migrated = _migrate_legacy_watch_pids(legacy)
-  assert migrated is True
-  assert trigger.watch_targets == [LocalPid(pid=1), RemotePid(host="neptune", pid=2)]
+@pytest.mark.parametrize(("payload", "migrated", "expected_targets"), _MIGRATE_ROWS)
+def test_migrate_legacy_watch_pids(payload: dict, migrated: bool, expected_targets: list) -> None:
+  trigger, migrated_flag = _migrate_legacy_watch_pids(json.dumps(payload))
+  assert migrated_flag is migrated
+  assert trigger.watch_targets == expected_targets
 
 
 @pytest.mark.asyncio
@@ -370,19 +352,17 @@ async def test_recover_pending_rewrites_legacy_file(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cli_parse_local_only(monkeypatch) -> None:
-  ns = cli_module._parse_watch_target("12345")
-  assert ns == {"kind": "local_pid", "pid": 12345}
-
-
-def test_cli_parse_remote_host_pid() -> None:
-  ns = cli_module._parse_watch_target("neptune:67890")
-  assert ns == {"kind": "remote_pid", "host": "neptune", "pid": 67890}
-
-
-def test_cli_parse_slurm_job() -> None:
-  ns = cli_module._parse_watch_target("slurm:98765")
-  assert ns == {"kind": "slurm_job", "job_id": 98765}
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        ("12345", {"kind": "local_pid", "pid": 12345}),
+        ("neptune:67890", {"kind": "remote_pid", "host": "neptune", "pid": 67890}),
+        ("slurm:98765", {"kind": "slurm_job", "job_id": 98765}),
+    ],
+    ids=["local", "remote", "slurm"],
+)
+def test_cli_parse_watch_target_kinds(spec: str, expected: dict) -> None:
+  assert cli_module._parse_watch_target(spec) == expected
 
 
 def test_cli_parse_rejects_bad_pid() -> None:

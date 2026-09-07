@@ -306,3 +306,125 @@ test('one HEAD per unique path, whichever prefix each occurrence used', async ()
   assert.equal(requests[0].method, 'HEAD');
   assert.equal(markersIn(prose).length, 3, 'every occurrence carries its own marker');
 });
+
+// ---------------------------------------------------------------------------
+// Unrecognized-prefix artifact links: the second recognition channel. A
+// same-host link neither known prefix resolves still enters the probe when
+// its path carries an /artifacts/ segment — a mis-composed prefix keeps that
+// tail — and a 404 marks it like any other missing file. Same-host
+// application routes carry no such segment, another hostname is another
+// server, and a link channel 1 resolved is never probed twice.
+// ---------------------------------------------------------------------------
+
+test('an unrecognized-prefix artifact link on this host is probed at its normalized URL and marked', async () => {
+  // The incident shape: the prefix was composed from memory and the server answers on neither
+  // known prefix, but the /artifacts/ tail survives. Same host, so the probe runs, and a 404
+  // marks the link where it appears instead of letting it pass as a plain link.
+  const href = 'https://charliebot.example/file-server' + SESSION_DIR + '/artifacts/x.html';
+  const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
+  const link = anchor(href);
+  const {root, prose} = makeMessage([link]);
+
+  await render(context, root);
+
+  assert.deepEqual(requests, [{url: href, method: 'HEAD'}]);
+  const markers = markersIn(prose);
+  assert.equal(markers.length, 1);
+  assert.equal(link.nextSibling, markers[0], 'the marker sits at the occurrence');
+  assert.equal(link.getAttribute('href'), href, 'the anchor is left clickable');
+});
+
+test('a same-host link without an /artifacts/ segment is not probed and not marked', async () => {
+  const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
+  const links = [
+    anchor('/diff?repo=charlie-bot'),
+    anchor('/perfetto'),
+    anchor('/file-server/tmp/notes.md'),
+  ];
+  const {root, prose} = makeMessage(links);
+
+  await render(context, root);
+
+  assert.deepEqual(requests, [], 'an application route and an artifact-less path probe nothing');
+  assert.equal(markersIn(prose).length, 0);
+});
+
+test('an artifact-shaped link to another hostname is left alone', async () => {
+  const foreign = 'https://other.example/file-server' + SESSION_DIR + '/artifacts/x.html';
+  const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
+  const link = anchor(foreign);
+  const {root, prose} = makeMessage([link]);
+
+  await render(context, root);
+
+  assert.deepEqual(requests, [], 'another hostname is another server; no probe');
+  assert.equal(markersIn(prose).length, 0);
+  assert.equal(link.getAttribute('href'), foreign, 'the link is left exactly as written');
+});
+
+test('a known-prefix link is resolved and probed once, with no second probe from the artifact channel', async () => {
+  const href = '/absolute_filepath/tmp/run-18/artifacts/notes.txt';
+  const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
+  const {root, prose} = makeMessage([anchor(href)]);
+
+  await render(context, root);
+
+  assert.deepEqual(requests, [{url: 'https://charliebot.example' + href, method: 'HEAD'}],
+    'channel 1 resolves the prefix; the artifact channel adds no second probe');
+  assert.equal(markersIn(prose).length, 1);
+});
+
+test('two spellings of one unrecognized-prefix artifact URL share one probe', async () => {
+  const path = '/file-server' + SESSION_DIR + '/artifacts/x.html';
+  const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
+  const links = [anchor('https://charliebot.example' + path), anchor(path)];
+  const {root, prose} = makeMessage(links);
+
+  await render(context, root);
+
+  assert.equal(requests.length, 1, 'the channel-2 budget dedupes on the normalized URL');
+  assert.equal(requests[0].method, 'HEAD');
+  assert.equal(markersIn(prose).length, 2, 'each occurrence carries its own marker');
+});
+
+test('an unrecognized-prefix artifact URL in prose text is probed and marked at the occurrence', async () => {
+  const href = 'https://charliebot.example/file-server' + SESSION_DIR + '/artifacts/x.html';
+  const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
+  const {root, prose} = makeMessage([new FakeText('the page is at ' + href + ' if you need it.')]);
+
+  await render(context, root);
+
+  assert.deepEqual(requests, [{url: href, method: 'HEAD'}]);
+  const markers = markersIn(prose);
+  assert.equal(markers.length, 1);
+  const before = markers[0].parentNode.childNodes[markers[0].parentNode.childNodes.indexOf(markers[0]) - 1];
+  assert.equal(before.nodeType, TEXT_NODE);
+  assert.ok(before.nodeValue.endsWith(href), 'the split lands just past the link');
+  assert.equal(prose.textContent.indexOf('if you need it.') !== -1, true, 'the rest of the sentence survives');
+});
+
+test('an unrecognized-prefix artifact URL in inline code is probed and marked', async () => {
+  const href = 'https://charliebot.example/file-server' + SESSION_DIR + '/artifacts/x.html';
+  const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
+  const code = inlineCode('see ' + href + ' for the page');
+  const {root, prose} = makeMessage([code]);
+
+  await render(context, root);
+
+  assert.deepEqual(requests, [{url: href, method: 'HEAD'}]);
+  const markers = markersIn(prose);
+  assert.equal(markers.length, 1);
+  assert.equal(code.nextSibling, markers[0], 'the code carrier takes the marker as a sibling');
+});
+
+test('a scheme-full known-prefix run carrying /artifacts/ is collected once and probed once', async () => {
+  const href = 'https://charliebot.example/absolute_filepath/tmp/run-18/artifacts/z.csv';
+  const {context, requests} = loadArtifactsScript({respond: statusResponder({})});
+  const {root, prose} = makeMessage([new FakeText('the numbers are at ' + href + ' if you want them.')]);
+
+  await render(context, root);
+
+  assert.equal(requests.length, 1, 'both patterns claim the run; the span key keeps one occurrence');
+  assert.equal(requests[0].method, 'HEAD');
+  assert.equal(markersIn(prose).length, 1);
+});

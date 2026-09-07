@@ -314,21 +314,34 @@ function insertHtmlArtifactCard(prose, card, ordinal) {
 // marked where it appears, so a wrong path shows up on the render rather than
 // on the click that fails. Only a 404 marks: any other status, and any network
 // error, leaves the link alone, so the marker keeps meaning "the server looked
-// and the file is not there". HTML artifact links are decided by the fetch that
-// builds their card, so they cost no request of their own here.
+// and the file is not there". Two recognition channels feed the same marking:
+// a link under either known prefix resolves to an absolute path, and a
+// same-host link neither prefix resolves is probed all the same when its path
+// carries an /artifacts/ segment — a mis-composed prefix keeps that tail, so
+// an artifact link pasted under a prefix the server does not answer on is
+// marked where it appears instead of passing as a plain link. HTML artifact
+// links under a known prefix are decided by the fetch that builds their card,
+// so they cost no request of their own here.
 // ---------------------------------------------------------------------------
 var MISSING_FILE_MARKER_TEXT = '\u26A0 missing';
 var MISSING_FILE_MARKER_TITLE = 'The file server found nothing at this path';
-// A run of text naming a path under either prefix, with or without a scheme and host in front.
-// The class ends the run at whitespace, at the closers markdown and prose put after a URL, and
-// at everything outside printable ASCII: a chat URL is a maximal printable-ASCII run
-// [\x21-\x7E]+, so a glued CJK character, full-width mark or emoji is prose, not the tail of
-// the link. \x7F-\uFFFF also covers astral characters, whose UTF-16 surrogate code units fall
-// inside that range. markdown-renderer.js's tokenizer.url override cuts bare URLs at the same
-// boundary — two copies of one definition, kept in sync by the comments in both files; the
-// modules load independently, so sharing a constant would couple their load order.
+// Both recognition patterns cut a text run at the same boundaries, so the tail class is one
+// definition shared by both: it ends the run at whitespace, at the closers markdown and prose
+// put after a URL, and at everything outside printable ASCII — a chat URL is a maximal
+// printable-ASCII run [\x21-\x7E]+, so a glued CJK character, full-width mark or emoji is
+// prose, not the tail of the link. \x7F-\uFFFF also covers astral characters, whose UTF-16
+// surrogate code units fall inside that range. markdown-renderer.js's tokenizer.url override
+// cuts bare URLs at the same boundary — two copies of one definition, kept in sync by the
+// comments in both files; the modules load independently, so sharing a constant would couple
+// their load order.
+var URL_TAIL_SOURCE = '[^\\s\\)\\]"\'`<>\\x7F-\\uFFFF]+';
+// Channel 1: a run naming a path under either prefix, with or without a scheme and host in front.
 var FILE_SERVER_LINK_SOURCE =
-  '(?:https?:\\/\\/[^\\s]+?)?' + FILE_SERVER_PREFIX_GROUP + '\\/[^\\s\\)\\]"\'`<>\\x7F-\\uFFFF]+';
+  '(?:https?:\\/\\/[^\\s]+?)?' + FILE_SERVER_PREFIX_GROUP + '\\/' + URL_TAIL_SOURCE;
+// Channel 2 candidates: a scheme-full URL whose run carries an /artifacts/ segment. The prefix
+// stays open here — a mis-composed prefix is exactly the case — and the URL-level shape check
+// in unrecognizedArtifactOccurrence (same host, /artifacts/ in the path) decides what is probed.
+var ARTIFACT_LINK_SOURCE = 'https?:\\/\\/[^\\s]+?\\/artifacts\\/' + URL_TAIL_SOURCE;
 var LINK_TRAILING_PUNCTUATION_RE = /[.,;:!?*]+$/;
 
 function buildMissingMarker() {
@@ -344,30 +357,55 @@ function missingMarkerHtml() {
     + escapeHtml(MISSING_FILE_MARKER_TEXT) + '</span>';
 }
 
-// One occurrence of a file link: the absolute path it names, the URL a probe would ask for,
-// and where the marker goes. `end` is the offset just past the link inside a text node, which
-// is where that node has to be split; element carriers take the marker as a sibling instead.
+// One occurrence of a file link: the key its probe budget dedupes on — the absolute path for a
+// link under a known prefix, the normalized literal URL for one under an unrecognized prefix —
+// the URL a probe would ask for, and where the marker goes. `end` is the offset just past the
+// link inside a text node, which is where that node has to be split; element carriers take the
+// marker as a sibling instead.
 function fileServerOccurrence(href, node, kind, end) {
   var url = resolveFileServerUrl(href);
   if (!url) return null;
   var pathname = url.pathname || '';
   var absPath = absolutePathFromServedPathname(pathname);
-  if (absPath === null) return null;
-  // An HTML artifact link already has an answer coming from the fetch that builds its card;
-  // probing it here would be a second request for the same thing.
-  if (HTML_ARTIFACT_LINK_RE.test(pathname)) return null;
-  return {absPath: absPath, probeUrl: url.href, node: node, kind: kind, end: end};
+  if (absPath !== null) {
+    // An HTML artifact link already has an answer coming from the fetch that builds its card;
+    // probing it here would be a second request for the same thing.
+    if (HTML_ARTIFACT_LINK_RE.test(pathname)) return null;
+    return {key: absPath, probeUrl: url.href, node: node, kind: kind, end: end};
+  }
+  return unrecognizedArtifactOccurrence(url, node, kind, end);
+}
+
+// Channel 2: a link whose prefix the server does not answer on can still name a file here.
+// Every artifact-page link keeps its /artifacts/<file> tail however its prefix was composed, so
+// a same-host URL carrying an /artifacts/ path segment that channel 1 could not resolve is
+// probed at its normalized literal URL. Same-host application routes (/diff, /perfetto) carry
+// no such segment and never enter; another hostname is another server and is left as written.
+function unrecognizedArtifactOccurrence(url, node, kind, end) {
+  var page = new URL(window.location.href);
+  if (url.origin !== page.origin) return null;
+  if ((url.pathname || '').indexOf('/artifacts/') === -1) return null;
+  return {key: url.href, probeUrl: url.href, node: node, kind: kind, end: end};
 }
 
 function collectFileServerOccurrences(out, text, node, kind) {
   if (!text) return;
-  var pattern = new RegExp(FILE_SERVER_LINK_SOURCE, 'g');
-  var match;
-  while ((match = pattern.exec(text)) !== null) {
-    var href = match[0].replace(LINK_TRAILING_PUNCTUATION_RE, '');
-    var occurrence = fileServerOccurrence(href, node, kind, match.index + href.length);
-    if (occurrence) out.push(occurrence);
-  }
+  // One URL run can match both patterns (a scheme-full link under a known prefix that also
+  // carries /artifacts/); the span key keeps such a run one occurrence, so neither its probe
+  // budget nor its marker is doubled.
+  var claimed = new Set();
+  [FILE_SERVER_LINK_SOURCE, ARTIFACT_LINK_SOURCE].forEach(function(source) {
+    var pattern = new RegExp(source, 'g');
+    var match;
+    while ((match = pattern.exec(text)) !== null) {
+      var href = match[0].replace(LINK_TRAILING_PUNCTUATION_RE, '');
+      var span = match.index + ':' + (match.index + href.length);
+      if (claimed.has(span)) continue;
+      claimed.add(span);
+      var occurrence = fileServerOccurrence(href, node, kind, match.index + href.length);
+      if (occurrence) out.push(occurrence);
+    }
+  });
 }
 
 function probeFileMissing(probeUrl) {
@@ -381,18 +419,20 @@ function probeFileMissing(probeUrl) {
 
 function markMissingFileLinks(occurrences) {
   if (!occurrences.length) return Promise.resolve();
-  var byPath = new Map();
+  var byKey = new Map();
   occurrences.forEach(function(occurrence) {
-    var group = byPath.get(occurrence.absPath);
+    var group = byKey.get(occurrence.key);
     if (!group) {
       group = [];
-      byPath.set(occurrence.absPath, group);
+      byKey.set(occurrence.key, group);
     }
     group.push(occurrence);
   });
-  var groups = Array.from(byPath.values());
-  // One HEAD per unique path, and marking waits for all of them: a text node is split once
-  // with every missing occurrence in it at hand, since splitting it moves the later offsets.
+  var groups = Array.from(byKey.values());
+  // One HEAD per unique probe target — the absolute path for links under a known prefix, the
+  // normalized literal URL for links under an unrecognized one, the two budgets running in
+  // parallel — and marking waits for all of them: a text node is split once with every missing
+  // occurrence in it at hand, since splitting it moves the later offsets.
   return Promise.all(groups.map(function(group) {
     return probeFileMissing(group[0].probeUrl);
   })).then(function(missing) {

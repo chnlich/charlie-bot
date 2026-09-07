@@ -441,13 +441,15 @@ def test_pm_identity_part_appended_for_project_session_with_group(tmp_path: Path
   out = master_cc._build_instructions_content(meta, cfg, None)
 
   assert out is not None
-  # Pointer semantics: identity + group + contract path, not contract clauses.
+  # Pointer semantics: identity + group + not-enabled marker + contract path,
+  # not contract clauses.
   assert out.count("# Project Manager session") == 1
   assert "This session is the Project Manager for group bp-eval." in out
+  assert "Your project is NOT enabled" in out
   assert "prompts/project_manager.md" in out
   # Appended exactly once, after the memory block, at the very end.
   assert out.index("MEMORY BODY") < out.index("# Project Manager session")
-  assert out.endswith("before acting on any message in this session, and follow it.")
+  assert out.endswith("old chat as enablement.")
 
 
 def test_pm_identity_part_absent_without_role_or_group(tmp_path: Path) -> None:

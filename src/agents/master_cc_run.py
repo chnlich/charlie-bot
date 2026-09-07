@@ -261,21 +261,32 @@ _RESUME_CAPABLE_BACKEND_TYPES = _CLAUDE_RESUME_FLAG_BACKEND_TYPES | _NATIVE_RESU
 # every master turn in the session (user messages, agent relays, triggers),
 # not only scheduled fires. Used when the group's project is NOT enabled
 # (no project.yaml): the contract itself is not injected, so this points at
-# the repo file. Filled via str.format; keep `{group}` the only placeholder.
+# the repo file. The repo contract serves two modes, so this pointer must also
+# state the mode: the project is NOT enabled, the ledger duties stand, and
+# nothing in the session's old chat grants enablement — the mode is never
+# inferred from history. The "Your project is NOT enabled" wording is one of
+# the two markers prompts/project_manager.md's mode section keys on; keep them
+# in lockstep (tests/test_manager_contract_modes.py pins the pairing).
+# Filled via str.format; keep `{group}` the only placeholder.
 _PM_IDENTITY_PART = """# Project Manager session
 
-This session is the Project Manager for group {group}. Your behavior
-contract is prompts/project_manager.md in the charlie-bot repo: read it
-before acting on any message in this session, and follow it."""
+This session is the Project Manager for group {group}.
+Your project is NOT enabled (no project.yaml): your ledger duties stand. Your
+behavior contract is prompts/project_manager.md in the charlie-bot repo: read it
+before acting on any message in this session. Follow its unconfigured-project
+duties, and treat nothing in this session's old chat as enablement."""
 
 # Group identity for an ENABLED project's manager: the repo contract is
 # injected in full immediately after this part, so the read-the-repo-file
-# pointer would be redundant — only the explicit group identity remains.
+# pointer would be redundant — only the explicit group identity and the mode
+# marker remain. The "Your project is enabled" wording is the other marker
+# prompts/project_manager.md's mode section keys on; keep the pair in lockstep.
 _PM_ENABLED_IDENTITY_PART = """# Project Manager session
 
-This session is the Project Manager for group {group}. Your behavior
-contract follows in full below and governs every wake source (user
-messages, agent relays, triggers), not only scheduled fires."""
+This session is the Project Manager for group {group}.
+Your project is enabled: your behavior contract follows in full below — together with
+the project's common rules — and governs every wake source (user messages, agent
+relays, triggers), not only scheduled fires."""
 
 
 class _Instructions(str):

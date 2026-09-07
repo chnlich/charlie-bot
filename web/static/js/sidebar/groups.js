@@ -831,7 +831,28 @@ function renderSessionList(sessions, filter) {
 
 
 
-Object.assign(Sidebar, {
+// Two disjoint lists: Object.assign puts both on Sidebar, and only GLOBALS'
+// keys become bare globals for the onclick strings. Adding a function to
+// GLOBALS is enough for both; SIDEBAR_ONLY stays reachable through Sidebar.
+const GLOBALS = {
+  renderEmptyNote,
+  resetGroupLimitState,
+  toggleSessionGroupLimit,
+  toggleCronGroupLimit,
+  showGroupSelector,
+  setSessionGroup,
+  renderScheduledSessionItem,
+  renderGroupedScheduledList,
+  toggleCronGroup,
+  renderProjectManagerRow,
+  renderProjectManagerSlotRow,
+  toggleSessionGroup,
+  renameGroup,
+  deleteGroup,
+  renderSessionItem,
+  renderSessionList,
+};
+const SIDEBAR_ONLY = {
   TRASH_SVG_PATH,
   starButtonOnclick,
   GEAR_SVG_PATH,
@@ -839,50 +860,18 @@ Object.assign(Sidebar, {
   CLOCK_SVG_BODY,
   MODAL_OVERLAY_CLASS,
   MODAL_DIALOG_CLASS,
-  renderEmptyNote,
   loadGroupLimitState,
   isGroupLimitExpanded,
   setGroupLimitExpanded,
-  resetGroupLimitState,
   shouldLimitHideSession,
   isOverGroupLimitExtra,
   groupLimitItemOptions,
   renderGroupLimitToggle,
   updateGroupLimitDom,
-  toggleSessionGroupLimit,
-  toggleCronGroupLimit,
-  showGroupSelector,
-  setSessionGroup,
   renderCronErrorBadge,
-  renderScheduledSessionItem,
-  renderGroupedScheduledList,
-  toggleCronGroup,
-  renderProjectManagerRow,
-  renderProjectManagerSlotRow,
   openPmSlotEditor,
-  toggleSessionGroup,
-  renameGroup,
-  deleteGroup,
-  renderSessionItem,
-  renderSessionList,
-});
-Sidebar.expose([
-  'renderEmptyNote',
-  'resetGroupLimitState',
-  'toggleSessionGroupLimit',
-  'toggleCronGroupLimit',
-  'showGroupSelector',
-  'setSessionGroup',
-  'renderScheduledSessionItem',
-  'renderGroupedScheduledList',
-  'toggleCronGroup',
-  'renderProjectManagerRow',
-  'renderProjectManagerSlotRow',
-  'toggleSessionGroup',
-  'renameGroup',
-  'deleteGroup',
-  'renderSessionItem',
-  'renderSessionList',
-]);
+};
+Object.assign(Sidebar, GLOBALS, SIDEBAR_ONLY);
+Sidebar.expose(Object.keys(GLOBALS));
 
 })();

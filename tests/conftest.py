@@ -31,6 +31,7 @@ from src.api.cron import router as cron_router  # noqa: E402
 from src.api.deps import get_session_manager  # noqa: E402
 from src.api.internal import router as internal_router  # noqa: E402
 from src.api.sessions import router as sessions_router  # noqa: E402
+from src.core import claude_accounts  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
 from src.core import improve_command  # noqa: E402
 from src.core import thinking_state  # noqa: E402
@@ -265,6 +266,27 @@ def assistant_text_tool_use_event(text: str, tool_name: str, tool_input: dict, t
               ]
           },
       "timestamp": timestamp,
+  }
+
+
+def rate_limit_event(status: str, utilization: float, resets_in: timedelta = timedelta(hours=3)) -> dict:
+  """A Claude RATE_LIMIT_EVENT: five_hour window at *utilization*, seven_day at a low fixed value."""
+  return {
+      "type": ET.RATE_LIMIT_EVENT,
+      "rate_limit_info":
+          {
+              "status": status,
+              "rateLimitType": "five_hour",
+              "resetsAt": (datetime.now(UTC) + resets_in).timestamp(),
+              "unifiedWindows": {
+                  "five_hour": {
+                      "utilization": utilization
+                  },
+                  "seven_day": {
+                      "utilization": 0.3
+                  },
+              },
+          },
   }
 
 
@@ -518,6 +540,16 @@ def make_transcript(config_dir: Path, cc_session_id: str) -> Path:
   transcript.parent.mkdir(parents=True, exist_ok=True)
   transcript.write_text("[]", encoding="utf-8")
   return transcript
+
+
+def write_pool_credentials(config_dir: Path, access_token: str = "token") -> None:
+  """Write Claude OAuth credentials into a pool account's config dir, marking the login present."""
+  config_dir.mkdir(parents=True, exist_ok=True)
+  (config_dir / claude_accounts.CREDENTIALS_FILE).write_text(
+      json.dumps({"claudeAiOauth": {
+          "accessToken": access_token,
+          "refreshToken": "r"
+      }}), encoding="utf-8")
 
 
 def session_dir_names(cfg: CharlieBotConfig) -> set[str]:

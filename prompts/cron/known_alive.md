@@ -362,7 +362,11 @@ Known-alive symbols:
   than a TypeError. A tests-only vulture scan flags both at 100% confidence as unused
   variables (a combined src+tests scan does not: the production `annotate` parameters carry
   the same names, so the names are not zero-match repo-wide — the flags only appear in a
-  tests-only scan). Same class as the `check`/`format` signature-mirror entry above.
+  tests-only scan). Same class as the `check`/`format` signature-mirror entry above. The
+  same file's `html_text` (first parameter of the `explode` stub installed for
+  `files_api._inject_artifact_ui`) joins this class: the replaced function is called with
+  two positional arguments at both production call sites (src/api/files.py), so the stub
+  keeps both parameters, and a tests-only vulture scan flags the unused first one.
 - `account_for_dir`, `record_auth_failure`, `observe_rate_limit`, `select`, `earliest_reset`,
   `move_transcript` (`src/core/claude_accounts.py`) — vulture flags each as an unused function;
   `credentials_present`, `auth_failed_recently`, `healthy`, `headroom`, `latest_reading`,

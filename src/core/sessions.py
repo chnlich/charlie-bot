@@ -5,11 +5,12 @@ import io
 import json
 import os
 import shutil
+import stat
 import time
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, NamedTuple
 
 import aiofiles
 import numpy as np
@@ -20,6 +21,7 @@ from src.core import plan_paths, sidebar_state
 from src.core.chat_events import ChatEventStore
 from src.core.config import CharlieBotConfig
 from src.core.init import RUNNING_SCAN_WINDOW, iter_recent_thread_metas
+from src.core.init_worker_recovery import walk_thread_meta_stats
 from src.core.json_utils import (
     atomic_write_stream,
     atomic_write_text,
@@ -194,16 +196,18 @@ def _apply_sidebar_state(
 # ---------------------------------------------------------------------------
 
 
-def has_running_tasks_sync(threads_dir: Path) -> bool:
+def has_running_tasks_sync(threads_dir: Path, walked: list | None = None) -> bool:
   """True if any thread under *threads_dir* is marked 'running'.
 
   The 30-day-window scan (``iter_recent_thread_metas``): only threads whose
   metadata mtime is within the window are read+parsed; older thread dirs cost
   a scandir+stat with zero content reads, and unchanged in-window files cost
   one stat too (parsed-JSON memo in the scan, re-parsed only when the file's
-  (mtime_ns, size) signature moves).
+  (mtime_ns, size) signature moves). *walked* supplies the scan's stat pairs
+  from a walk the caller already took instead of a second one.
   """
-  for _thread_dir, _meta_path, meta in iter_recent_thread_metas(threads_dir, utc_now(), "thread_meta_read_failed"):
+  for _thread_dir, _meta_path, meta in iter_recent_thread_metas(
+      threads_dir, utc_now(), "thread_meta_read_failed", walked=walked):
     if meta.get("status") == "running":
       return True
   return False
@@ -230,45 +234,60 @@ def _reset_trigger_meta_memo_for_tests() -> None:
   _trigger_meta_memo.clear()
 
 
-def pending_trigger_state_sync(triggers_dir: Path) -> tuple[int, datetime | None]:
-  """(pending trigger count, earliest fire time) from the *.json files under *triggers_dir*."""
-  if not triggers_dir.exists():
-    return 0, None
+def pending_trigger_state_sync(
+    triggers_dir: Path,
+    walked: list[tuple[str, os.stat_result]] | None = None,
+) -> tuple[int, datetime | None]:
+  """(pending trigger count, earliest fire time) from the *.json files under *triggers_dir*.
+
+  *walked* supplies (path, stat) pairs a caller already walked, replacing this
+  scan's own scandir+stat phase; non-regular *.json entries (a directory named
+  like a trigger file) are skipped off the walked stat, the same ``is_file``
+  gate the self-walked path applies before its stat.
+  """
+  if walked is None:
+    if not triggers_dir.exists():
+      return 0, None
+    walked = []
+    with os.scandir(triggers_dir) as entries:
+      for entry in entries:
+        if not entry.name.endswith(".json") or not entry.is_file():
+          continue
+        try:
+          st = os.stat(entry.path)
+        except OSError:
+          continue  # vanished between scandir and stat — nothing to read
+        walked.append((entry.path, st))
 
   pending_count = 0
   next_trigger_at: datetime | None = None
-  with os.scandir(triggers_dir) as entries:
-    for entry in entries:
-      if not entry.name.endswith(".json") or not entry.is_file():
+  for trigger_path, st in walked:
+    if not stat.S_ISREG(st.st_mode):
+      continue
+    # entry.path is the str join scandir already built; the memo keys on it
+    # directly, the same string-path pattern the thread-metadata memo uses.
+    cached = _trigger_meta_memo.get(trigger_path)
+    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+      trigger: dict | None = cached[2]
+    else:
+      trigger = load_json_meta(
+          Path(trigger_path),
+          "trigger_meta_read_failed",
+          catch=(OSError, ValueError),
+      )
+      if trigger is None:
         continue
-      try:
-        st = os.stat(entry.path)
-      except OSError:
-        continue  # vanished between scandir and stat — nothing to read
-      # entry.path is the str join scandir already built; the memo keys on it
-      # directly, the same string-path pattern the thread-metadata memo uses.
-      cached = _trigger_meta_memo.get(entry.path)
-      if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-        trigger: dict | None = cached[2]
-      else:
-        trigger = load_json_meta(
-            Path(entry.path),
-            "trigger_meta_read_failed",
-            catch=(OSError, ValueError),
-        )
-        if trigger is None:
-          continue
-        _trigger_meta_memo.store(entry.path, (st.st_mtime_ns, st.st_size, trigger))
-      if trigger.get("status") != "pending":
-        continue
+      _trigger_meta_memo.store(trigger_path, (st.st_mtime_ns, st.st_size, trigger))
+    if trigger.get("status") != "pending":
+      continue
 
-      pending_count += 1
-      fire_at = SessionManager._parse_optional_utc(
-          trigger.get("fire_at"), "trigger_fire_at_parse_failed", trigger_path=entry.path)
-      if fire_at is None:
-        continue
-      if next_trigger_at is None or fire_at < next_trigger_at:
-        next_trigger_at = fire_at
+    pending_count += 1
+    fire_at = SessionManager._parse_optional_utc(
+        trigger.get("fire_at"), "trigger_fire_at_parse_failed", trigger_path=trigger_path)
+    if fire_at is None:
+      continue
+    if next_trigger_at is None or fire_at < next_trigger_at:
+      next_trigger_at = fire_at
 
   return pending_count, next_trigger_at
 
@@ -384,7 +403,23 @@ def _scan_content_for_hit(path: Path, session_id: str, query_lower: str, start: 
     return None
 
 
-def probe_sidebar_state_sync(specs: list[tuple[str, Path, Path, Path]],) -> dict[str, dict]:
+class _WalkedProbeInputs(NamedTuple):
+  """The stat pairs one probe-input walk took, for the probe cores to reuse.
+
+  ``trigger_files`` is None when the triggers dir itself is missing, so the
+  trigger core answers its empty state without an ``exists()`` stat. The pairs
+  describe the walk's instant, and the caller stores the probe result with that
+  same walk's signature, so entry and signature always describe one state.
+  """
+
+  thread_metas: list[tuple[str, str, os.stat_result]]
+  trigger_files: list[tuple[str, os.stat_result]] | None
+
+
+def probe_sidebar_state_sync(
+    specs: list[tuple[str, Path, Path, Path]],
+    walked: dict[str, _WalkedProbeInputs] | None = None,
+) -> dict[str, dict]:
   """Probe every ``(session_id, threads_dir, triggers_dir, plans_path)`` spec serially.
 
   The deep-probe core of a sidebar re-probe: all three probe groups per
@@ -392,11 +427,17 @@ def probe_sidebar_state_sync(specs: list[tuple[str, Path, Path, Path]],) -> dict
   task instead of 3*N. Returns
   ``{session_id: {"thread_running", "pending_trigger_count", "next_trigger_at",
   "has_pending_plan_approval"}}``.
+
+  *walked* maps session id to the stat pairs a probe-input walk already took
+  for that session; the thread and trigger cores consume them instead of
+  re-taking the same scandir+stat phase.
   """
   results: dict[str, dict] = {}
   for session_id, threads_dir, triggers_dir, plans_path in specs:
-    running = has_running_tasks_sync(threads_dir)
-    pending_count, next_trigger_at = pending_trigger_state_sync(triggers_dir)
+    inputs = walked.get(session_id) if walked is not None else None
+    running = has_running_tasks_sync(threads_dir, walked=inputs.thread_metas if inputs else None)
+    pending_count, next_trigger_at = pending_trigger_state_sync(
+        triggers_dir, walked=inputs.trigger_files if inputs else None)
     results[session_id] = {
         "thread_running": running,
         "pending_trigger_count": pending_count,
@@ -406,8 +447,8 @@ def probe_sidebar_state_sync(specs: list[tuple[str, Path, Path, Path]],) -> dict
   return results
 
 
-def _sidebar_probe_signature(threads_dir: Path, triggers_dir: Path, plans_path: Path) -> tuple:
-  """Stat-only identity of every byte the sidebar probe reads, for one session.
+def _sidebar_probe_walk(threads_dir: Path, triggers_dir: Path, plans_path: Path) -> tuple[tuple, _WalkedProbeInputs]:
+  """Stat-only identity of every byte the sidebar probe reads, plus the walk's stat pairs.
 
   A deep probe's result can change only three ways, and the signature pins all
   three: a probed file's content changes (caught by ``(st_mtime_ns, st_size)``
@@ -423,25 +464,21 @@ def _sidebar_probe_signature(threads_dir: Path, triggers_dir: Path, plans_path: 
   Path objects: the sweep runs per poll over every selected session, and
   pathlib's parse/alloc overhead would dominate the raw stat syscalls —
   os.stat on joined strs measures ~2x faster over the active-session corpus.
+
+  The walked pairs ride along for the deep probe (:func:`probe_sidebar_state_sync`
+  with *walked*), which previously re-took this phase per probed session.
   """
   thread_sig = []
   rollovers = []
-  threads_str = os.fspath(threads_dir)
-  if os.path.isdir(threads_str):
-    with os.scandir(threads_str) as entries:
-      for entry in entries:
-        if not entry.is_dir():
-          continue
-        try:
-          st = os.stat(os.path.join(threads_str, entry.name, "metadata.json"))
-        except OSError:
-          thread_sig.append((entry.name, None))
-          continue
-        thread_sig.append((entry.name, st.st_mtime_ns, st.st_size))
-        rollovers.append(st.st_mtime + RUNNING_SCAN_WINDOW.total_seconds())
+  thread_pairs = walk_thread_meta_stats(threads_dir, "thread_meta_read_failed")
+  for thread_dir, _meta_path, st in thread_pairs:
+    thread_sig.append((os.path.basename(thread_dir), st.st_mtime_ns, st.st_size))
+    rollovers.append(st.st_mtime + RUNNING_SCAN_WINDOW.total_seconds())
   trigger_sig = []
+  trigger_pairs: list[tuple[str, os.stat_result]] | None = None
   triggers_str = os.fspath(triggers_dir)
   if os.path.isdir(triggers_str):
+    trigger_pairs = []
     with os.scandir(triggers_str) as entries:
       for entry in entries:
         if not entry.name.endswith(".json"):
@@ -450,6 +487,7 @@ def _sidebar_probe_signature(threads_dir: Path, triggers_dir: Path, plans_path: 
           st = entry.stat()
         except OSError:
           continue
+        trigger_pairs.append((entry.path, st))
         trigger_sig.append((entry.name, st.st_mtime_ns, st.st_size))
   try:
     plans_st = os.stat(os.fspath(plans_path))
@@ -457,7 +495,8 @@ def _sidebar_probe_signature(threads_dir: Path, triggers_dir: Path, plans_path: 
   except OSError:
     plans_sig = None
   rollover = min(rollovers) if rollovers else float("inf")
-  return (tuple(sorted(thread_sig)), tuple(sorted(trigger_sig)), plans_sig, rollover)
+  signature = (tuple(sorted(thread_sig)), tuple(sorted(trigger_sig)), plans_sig, rollover)
+  return signature, _WalkedProbeInputs(thread_pairs, trigger_pairs)
 
 
 def _sidebar_signature_fresh(session_id: str, signature: tuple, now_ts: float) -> bool:
@@ -480,14 +519,16 @@ def selective_probe_sidebar_state(
   caller stores both in :mod:`src.core.sidebar_state` on the event loop.
   """
   sigs: dict[str, tuple] = {}
+  walked_inputs: dict[str, _WalkedProbeInputs] = {}
   to_probe: list[tuple[str, Path, Path, Path]] = []
   now_ts = time.time()
   for session_id, threads_dir, triggers_dir, plans_path in specs:
-    sig = _sidebar_probe_signature(threads_dir, triggers_dir, plans_path)
+    sig, inputs = _sidebar_probe_walk(threads_dir, triggers_dir, plans_path)
     sigs[session_id] = sig
+    walked_inputs[session_id] = inputs
     if deep or not _sidebar_signature_fresh(session_id, sig, now_ts):
       to_probe.append((session_id, threads_dir, triggers_dir, plans_path))
-  return probe_sidebar_state_sync(to_probe), sigs
+  return probe_sidebar_state_sync(to_probe, walked_inputs), sigs
 
 
 _REFERENCE_LINE_WS = b" \t\r\n\x0b\x0c"

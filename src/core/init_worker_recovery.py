@@ -83,11 +83,42 @@ def _reset_thread_meta_memo_for_tests() -> None:
 _silence_reported_thread_ids: set[str] = set()
 
 
+def walk_thread_meta_stats(threads_dir: Path, log_event: str) -> list[tuple[str, str, "os.stat_result"]]:
+  """``(thread_dir, metadata.json path, stat)`` for every thread dir under *threads_dir*.
+
+  The scandir+stat phase the sidebar probe-input signature and
+  ``iter_recent_thread_metas`` both need: one walk whose stat results both
+  consumers previously took separately. Thread dirs without a readable
+  ``metadata.json`` are skipped (mid-creation races have nothing to read);
+  other stat failures log *log_event* and skip.
+  """
+  if not threads_dir.is_dir():
+    return []
+  pairs: list[tuple[str, str, os.stat_result]] = []
+  with os.scandir(threads_dir) as entries:
+    for entry in entries:
+      if not entry.is_dir():
+        continue
+      # entry.path is the str join scandir already built; appending "/metadata.json"
+      # directly yields the same string Path(entry.path) / "metadata.json" would.
+      meta_path = f"{entry.path}/metadata.json"
+      try:
+        st = os.stat(meta_path)
+      except FileNotFoundError:
+        continue  # thread dir without metadata.json (mid-creation) — nothing to read
+      except OSError as e:
+        log.debug(log_event, path=meta_path, error=str(e))
+        continue
+      pairs.append((entry.path, meta_path, st))
+  return pairs
+
+
 def iter_recent_thread_metas(
     threads_dir: Path,
     now: datetime,
     log_event: str,
     window: timedelta = RUNNING_SCAN_WINDOW,
+    walked: list[tuple[str, str, "os.stat_result"]] | None = None,
 ) -> Iterator[tuple[str, str, dict]]:
   """Yield ``(thread_dir, meta_path, meta)`` for threads modified within *window*.
 
@@ -100,11 +131,25 @@ def iter_recent_thread_metas(
   ``_scan_interrupted_runs`` (init) and ``has_running_tasks_sync`` (sessions) so the
   stat-before-read scan stays identical at both sites.
 
+  *walked* replaces the scandir+stat phase with stat results a caller already
+  took over the same corpus — the sidebar's deep probe passes the probe-input
+  signature walk's pairs so one post-write poll walks the thread dirs once, and
+  the probe result is stored with that same walk's signature.
+
   The yielded paths and the stat go through scandir's plain strings, not Path
   objects: the sidebar deep probe re-enters this scan on every post-write poll,
   and the Path allocations measured over half the scan's cost on the 339-thread
   worst corpus (the same finding the sidebar signature pass fixed).
   """
+  if walked is not None:
+    cutoff = (now - window).timestamp()
+    for thread_dir, meta_path, st in walked:
+      if st.st_mtime < cutoff:
+        continue
+      meta = _recent_thread_meta(meta_path, st, log_event)
+      if meta is not None:
+        yield thread_dir, meta_path, meta
+    return
   if not threads_dir.is_dir():
     return
   cutoff = (now - window).timestamp()
@@ -124,19 +169,21 @@ def iter_recent_thread_metas(
         continue
       if st.st_mtime < cutoff:
         continue
-      cached = _thread_meta_memo.get(meta_path)
-      if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-        cached_meta: dict | None = cached[2]
-      else:
-        cached_meta = None
-      if cached_meta is not None:
-        yield entry.path, meta_path, cached_meta
-        continue
-      meta = load_json_meta(Path(meta_path), log_event)
-      if meta is None:
-        continue
-      _thread_meta_memo.store(meta_path, (st.st_mtime_ns, st.st_size, meta))
-      yield entry.path, meta_path, meta
+      meta = _recent_thread_meta(meta_path, st, log_event)
+      if meta is not None:
+        yield entry.path, meta_path, meta
+
+
+def _recent_thread_meta(meta_path: str, st: os.stat_result, log_event: str) -> dict | None:
+  """Parsed metadata for *meta_path* whose stat is *st*: memo hit or one read+parse."""
+  cached = _thread_meta_memo.get(meta_path)
+  if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+    return cached[2]
+  meta = load_json_meta(Path(meta_path), log_event)
+  if meta is None:
+    return None
+  _thread_meta_memo.store(meta_path, (st.st_mtime_ns, st.st_size, meta))
+  return meta
 
 
 @dataclass(frozen=True)

@@ -343,7 +343,10 @@ function eloneSession(sessionId, eventIndex) {
 }
 
 
-Object.assign(Sidebar, {
+// Two disjoint lists: Object.assign puts both on Sidebar, and only GLOBALS'
+// keys become bare globals for the onclick strings. Adding a function to
+// GLOBALS is enough for both; SIDEBAR_ONLY stays reachable through Sidebar.
+const GLOBALS = {
   startRename,
   handleRenameKey,
   commitRename,
@@ -353,26 +356,13 @@ Object.assign(Sidebar, {
   closeCronModal,
   saveCronTask,
   deleteCronTask,
-  applyCronBrokenView,
   closeSessionActionModal,
   submitSessionActionModal,
   forkSession,
   eloneSession,
-});
-Sidebar.expose([
-  'startRename',
-  'handleRenameKey',
-  'commitRename',
-  'initSidebarResize',
-  'openCronEditor',
-  'openCronAdder',
-  'closeCronModal',
-  'saveCronTask',
-  'deleteCronTask',
-  'closeSessionActionModal',
-  'submitSessionActionModal',
-  'forkSession',
-  'eloneSession',
-]);
+};
+const SIDEBAR_ONLY = { applyCronBrokenView };
+Object.assign(Sidebar, GLOBALS, SIDEBAR_ONLY);
+Sidebar.expose(Object.keys(GLOBALS));
 
 })();

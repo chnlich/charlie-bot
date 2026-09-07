@@ -307,12 +307,10 @@ async function toggleSessionStar(id, currentlyStarred) {
 }
 
 
-Object.assign(Sidebar, {
-  registerSidebarFilter,
-  getSidebarFilter,
-  getRestorableSidebarFilters,
-  filterPillClass,
-  renderSidebarFilterPills,
+// Two disjoint lists: Object.assign puts both on Sidebar, and only GLOBALS'
+// keys become bare globals for the onclick strings. Adding a function to
+// GLOBALS is enough for both; SIDEBAR_ONLY stays reachable through Sidebar.
+const GLOBALS = {
   removeSessionRowInline,
   archiveSession,
   deleteSessionPermanently,
@@ -325,20 +323,15 @@ Object.assign(Sidebar, {
   restoreSidebarFromUrl,
   handleSidebarSearch,
   toggleSessionStar,
-});
-Sidebar.expose([
-  'removeSessionRowInline',
-  'archiveSession',
-  'deleteSessionPermanently',
-  'unarchiveSession',
-  'stopActiveTui',
-  'confirmDeletePermanently',
-  'setSidebarFilterPill',
-  'switchSidebarFilter',
-  'enterSidebarFilter',
-  'restoreSidebarFromUrl',
-  'handleSidebarSearch',
-  'toggleSessionStar',
-]);
+};
+const SIDEBAR_ONLY = {
+  registerSidebarFilter,
+  getSidebarFilter,
+  getRestorableSidebarFilters,
+  filterPillClass,
+  renderSidebarFilterPills,
+};
+Object.assign(Sidebar, GLOBALS, SIDEBAR_ONLY);
+Sidebar.expose(Object.keys(GLOBALS));
 
 })();

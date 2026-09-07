@@ -28,30 +28,27 @@ def _reset_config_caches():
   reset_config_caches()
 
 
-def test_unset_env_gives_the_default_home(monkeypatch, tmp_path):
-  monkeypatch.delenv("CHARLIEBOT_HOME", raising=False)
+# (env value to set — None deletes the variable, "{home}" interpolates tmp_path —
+# and the directory the resolver must answer with, relative to tmp_path).
+_HOME_ENV_CASES = [
+    pytest.param(None, ".charliebot", id="unset-env-defaults"),
+    pytest.param("   ", ".charliebot", id="blank-env-defaults"),
+    pytest.param("{home}/profile", "profile", id="env-selects-the-home"),
+    pytest.param("{home}/profile/", "profile", id="trailing-slash-normalized"),
+]
+
+
+@pytest.mark.parametrize(("env_value", "expected_name"), _HOME_ENV_CASES)
+def test_env_resolves_the_home_dir(monkeypatch, tmp_path, env_value: str | None, expected_name: str) -> None:
+  """A set CHARLIEBOT_HOME selects the profile, its trailing slash normalized;
+  unset or blank falls back to the default home."""
+  (tmp_path / "profile").mkdir()
+  if env_value is None:
+    monkeypatch.delenv("CHARLIEBOT_HOME", raising=False)
+  else:
+    monkeypatch.setenv("CHARLIEBOT_HOME", env_value.replace("{home}", str(tmp_path)))
   monkeypatch.setenv("HOME", str(tmp_path))
-  assert core_config.charliebot_home_dir() == tmp_path / ".charliebot"
-
-
-def test_empty_env_gives_the_default_home(monkeypatch, tmp_path):
-  monkeypatch.setenv("CHARLIEBOT_HOME", "   ")
-  monkeypatch.setenv("HOME", str(tmp_path))
-  assert core_config.charliebot_home_dir() == tmp_path / ".charliebot"
-
-
-def test_env_selects_the_home(monkeypatch, tmp_path):
-  profile = tmp_path / "profile"
-  profile.mkdir()
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(profile))
-  assert core_config.charliebot_home_dir() == profile
-
-
-def test_trailing_slash_normalized(monkeypatch, tmp_path):
-  profile = tmp_path / "profile"
-  profile.mkdir()
-  monkeypatch.setenv("CHARLIEBOT_HOME", f"{profile}/")
-  assert core_config.charliebot_home_dir() == profile
+  assert core_config.charliebot_home_dir() == tmp_path / expected_name
 
 
 def test_tilde_expanded(monkeypatch, tmp_path):

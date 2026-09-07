@@ -81,6 +81,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
 | M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.010 s | — (introduced with its first history row) |
 | M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.010 s | — (introduced with its first history row) |
+| M72 file-browser directory listing | M72 collector below | seconds per `GET /files/<dir>` request, worst on-disk listing corpus (the sessions root) | median < 0.013 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -4065,6 +4066,53 @@ print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {len(json.loads(bo
 EOF
 ```
 
+M72 — file-browser directory listing. The file server renders a directory's
+listing per request (`GET /files/<dir>` and `HEAD`); the browser's navigation
+clicks pay the walk. The listing is a pure per-request render of the directory
+scan — no memo (per-entry sizes and mtimes move without the directory's own
+signature moving), so the standing metric is every request. The cost is a
+navigation click, invisible to the standing HTTP probes (the chat log's
+file-server traffic is artifact pages, the M70 shape; directory listings are
+rare — 16 in the 78.85 h live log sampled 2026-09-07), so the collector drives
+the files router through TestClient over the sessions root — the file browser's
+own starting directory and the largest entry count the UI navigates on this
+host, read-only — from the checkout under test: one cold pass, as at the first
+browser open, then nine timed requests, with the served-body sha1 so a corpus
+difference between arms cannot masquerade as a payload difference.
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import hashlib, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from src.api.files import router as files_router
+
+# Worst listing corpus: the sessions root — the file browser's starting
+# directory and the largest entry count the UI navigates on this host.
+corpus = Path.home() / ".charliebot" / "sessions"
+n = sum(1 for _ in os.scandir(corpus))
+
+app = FastAPI()
+app.include_router(files_router, prefix="/files")
+client = TestClient(app)
+url = f"/files{corpus}"
+
+r = client.get(url)  # cold pass, as at the first browser open; not timed
+assert r.status_code == 200, (r.status_code, r.text[:200])
+times, body = [], None
+for _ in range(9):
+    t0 = time.perf_counter()
+    r = client.get(url)
+    times.append(time.perf_counter() - t0)
+    body = r.content
+times.sort()
+print(f"{n} entries; listing request median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms, "
+      f"body {len(body)} B, sha1 {hashlib.sha1(body).hexdigest()[:12]}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -4180,3 +4228,4 @@ EOF
 | 2026-09-06 | this PR | M63 /view handler median 4.30/4.11/4.15 ms → 1.22/1.27/1.20 ms, maxima 4.91/5.08/4.71 ms → 1.38/1.99/1.43 ms (three interleaved rounds of the collector, 339-file worst threads corpus of session 3b91d606, scratch CHARLIEBOT_HOME, main checkout before vs branch worktree after back-to-back at load 2.1-2.2, every paired round faster; body 277206 B byte-identical across all six arms; no-regression re-measures: M35 digests identical — events 46d1d509a0d6, view ea2d0c6b27c3, bootstrap 8e4653af40df — M36 full 2.16 ms / conditional 2.09 ms (204, 0 B) and M68 marked rebuild 4.08 ms at their standing readings; 4735-passed suite) | the view handler re-walked every thread metadata.json and rebuilt every row on every call — its own 339-stat scan plus 339 row builds, ~3.6 ms of the 4.3 ms worst-corpus view (cProfile: 340 stats 1.15 ms + row builds incl. 678 isoformats 1.6 ms + 277 KB render 0.75 ms) — while the workers-panel list route already owned a revision-gated row proof; the view's threads array now rides that proof (view_thread_rows: the M36 revision gate with its own sweep counter, one walk-and-parse executor hop on a mark or the sweep, rows served from the shared M68 row memo and sorted newest-first), SessionViewData carries the rows instead of re-fetching metas |
 | 2026-09-06 | this PR | M24 steady-state list_triggers median 0.0005/0.0006/0.0005 s, max 0.0006 s → 0.0000 s (< 0.05 ms), max 0.0000 s (three interleaved verbatim-collector rounds, 104-file worst trigger corpus of session a481fbde, live state read-only, main checkout before vs branch worktree after back-to-back at load 2.5-2.6, every paired round faster; served trigger lists identical across arms; corroboration: the view handler on the 104-trigger / 28-thread corpus of the same session 2.28 ms → 1.56 ms median on a shared scratch snapshot; no-regression re-measures: M67 probe trigger scan 432 µs, M36 full 2.08 ms / conditional 1.95 ms (204, 0 B), M68 marked rebuild 4.37 ms, M5 in-process list poll 2.04 ms — all at their standing readings; component split on the same corpus: one dir stat 2.8 µs, the scandir+stat walk 361 µs, its executor round-trip 494 µs, full list_triggers 560 µs; 4740-passed suite) | the per-file memo's steady state still paid the full scandir+stat walk and its executor round-trip on every call — the session view handler, the slack thread-follow arm check, and the workers-list rebuild each call list_triggers per request; every trigger-file write publishes through the atomic rename into the triggers directory, and a rename that creates, replaces, or removes an entry moves the directory's own mtime_ns, so a stored (mtime_ns, size) verdict on the directory serves the sorted memoized list for one on-loop stat, re-walking only when the directory state moved (the M29 root-signature shape, strictly stronger here because rewrites are renames; signature taken before the walk, same pre-read rule as M37) |
 | 2026-09-07 | this PR | M54 paint-work median 125.8/148.1/125.1/133.6 ms → 103.7/106.2/97.2/98.6 ms, maxima 218.9/230.0/216.2/224.9 ms → 201.9/205.2/193.0/196.4 ms (four interleaved rounds of the collector's replay, 11.4 KB worst fence-bearing on-disk draft sha1 b155f860788f, 59 deltas at 40 ms virtual cadence, 12 paints, page-pinned marked + hljs 11.9.0 common build (36 languages), main checkout 0cc96919 before vs branch worktree after back-to-back, every paired round faster; final-frame parity true all arms; component attribution on the same replay: highlightAuto 240.3 ms of the 261.0 ms paint work over 18 calls, the growing blocks' partial content re-highlighted per paint on cache misses the (lang, code) key can never serve; mid-stream paints drop 6–22 ms → 0.2–3.5 ms with the completions' deferred one-time highlight riding the next paint; M33 stubbed-hljs replay re-measured 0.405/0.406/0.415 s vs 0.408/0.409/0.403 s interleaved — within noise, an interim walkTokens-recorder shape that cost +60 ms/replay (marked's hook routes the walk through Promise.all) was replaced by a plain-recursion recorder over the lexer's own tokens; M60 repeat-page 0.01 ms — no regression; 4740-passed suite plus 7 new stream-tail tests) | the block still growing at the draft's end renders escaped-plain during a streaming paint instead of re-running highlight per paint: parseStreamDraft lexes once, records the code tokens by plain recursion, and renders those same objects, so renderer.code skips the LAST code token by identity when its raw does not end on a closing fence — marked's own tokens decide, no line-level model of marked's block structure (list/blockquote dedent defeat one, as the review round found); usage.js sets the recorder around the parse with try/finally, and the escape rides an incremental prefix cache (escapeText maps characters independently, so a tail growing by appends re-escapes only the new bytes); the paint where the fence closes, and the committed render after the turn, highlight once and the cache serves every later paint, so the final frame stays byte-identical (parity true) and every completed block keeps today's bytes (cache-first ordering) |
+| 2026-09-07 | this PR | M72 listing request median 21.19/20.97/21.06 ms → 11.31/10.92/11.02 ms, maxima 53.21/46.81/50.76 ms → 12.20/11.64/11.81 ms (three interleaved rounds of the collector, 1089-entry sessions root, live state read-only, main checkout before vs branch worktree after back-to-back at load 1.62/1.64/1.03, every paired round faster; served body byte-identical across arms — 239048 B, sha1 b7005c21bf13; 19-entry threads dir 2.41 ms → 2.00 ms; builder call alone 17.83 ms → 7.76 ms; live-before corroboration: verbatim M72-shape curls against the running instance median 35.4 ms over 5 at load 0.50/0.34/0.38, the instance predates this change) | the listing walk left the per-entry Path.iterdir double-stat pattern (the M29 conversion): one os.scandir pass answers is_dir from the directory record and stats each entry once instead of Path construction plus an is_dir and a stat per child, the row list joins once instead of += re-accumulation, time.gmtime renders the UTC mtime text without a per-entry datetime construction, and the route folds the is_dir probe into the listing's single executor hop (four to_thread round-trips per listing before); M72 definition and healthy range introduced with this PR |

@@ -27,6 +27,7 @@ import html
 import re
 import subprocess
 import uuid
+from collections.abc import Iterator
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -224,7 +225,7 @@ def _parse_dom(text: str) -> _Element:
   return builder.root
 
 
-def _descendants(el: _Element):
+def _descendants(el: _Element) -> Iterator[_Element]:
   for child in el.children:
     if isinstance(child, _Element):
       yield child
@@ -510,11 +511,11 @@ def _ordinal_label(kind: str) -> str:
   return re.sub(r"\s+", " ", kind).strip()
 
 
-def _ordinal_blocks(root: _Element):
+def _ordinal_blocks(root: _Element) -> Iterator[_Element]:
   """Yield every ordinal-scan block element in document order: block tags plus span.mtag chips.
   Nested blocks are yielded after their enclosing block and again on their own."""
 
-  def walk(el: _Element):
+  def walk(el: _Element) -> Iterator[_Element]:
     for child in el.children:
       if not isinstance(child, _Element):
         continue

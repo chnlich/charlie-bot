@@ -233,7 +233,7 @@ class TallyCache:
 
   SCHEMA_VERSION = 1
 
-  def __init__(self, sources: dict[str, dict[str, dict]]):
+  def __init__(self, sources: dict[str, dict[str, dict]]) -> None:
     self._sources = sources
     self._next: dict[str, dict[str, dict]] = defaultdict(dict)
 

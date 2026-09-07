@@ -69,7 +69,7 @@ class Worker:
       extra_env: dict[str, str] | None = None,
       on_spawned: Callable | None = None,
       instructions_content: str | None = None,
-  ):
+  ) -> None:
     self._thread = thread_metadata
     self._worktree = working_dir
     self._events_log = events_log_path

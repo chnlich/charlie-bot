@@ -262,7 +262,7 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
 class MessageAggregator:
   """Convert raw chat events into a stream of message + stream deltas."""
 
-  def __init__(self, event_index_offset: int = 0):
+  def __init__(self, event_index_offset: int = 0) -> None:
     self._idx_offset = event_index_offset
     self._processed = 0
     self._assistant_buf = ""

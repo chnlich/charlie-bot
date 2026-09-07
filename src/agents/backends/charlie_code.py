@@ -55,7 +55,7 @@ class CharlieCodeBackend(AgentBackend):
       context_window: int | None = None,
       api_key: str | None = None,
       **kwargs,
-  ):
+  ) -> None:
     super().__init__(model=model, **kwargs)
     self._api_base = api_base
     if not self._api_base:

@@ -240,7 +240,7 @@ def _read_plans_uncached(plans_path: Path, session_id: str) -> tuple[dict, bool]
 class PlanRegistryManager:
   """Per-session plan registry: lineage state and version mutations."""
 
-  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager):
+  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
     self._cfg = cfg
     self._session_mgr = session_mgr
     self._locks: dict[str, asyncio.Lock] = {}

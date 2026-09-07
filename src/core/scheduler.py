@@ -146,7 +146,7 @@ async def fire_scheduled_worker(
 class Scheduler:
   """Runs enabled ScheduledTaskConfigs on their cron schedules."""
 
-  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager):
+  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
     """Take the process-wide SessionManager; a private instance would keep its own
     chat-event cache, so scheduled rounds would never reach the HTTP/WS read paths."""
     self._cfg = cfg

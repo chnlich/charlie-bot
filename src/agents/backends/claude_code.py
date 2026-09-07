@@ -277,7 +277,7 @@ class ClaudeCodeBackend(AgentBackend):
       fast_mode: bool = False,
       claude_session_id: str | None = None,
       claude_config_dir: str | None = None,
-      **kwargs):
+      **kwargs) -> None:
     super().__init__(model=model, **kwargs)
     self._effort = effort
     self._fast_mode = fast_mode
@@ -356,7 +356,7 @@ class AnthropicEndpointBackend(ClaudeCodeBackend):
   Subclasses own where the endpoint and credential come from.
   """
 
-  def __init__(self, *, base_url: str, auth_token: str, model: str, **kwargs):
+  def __init__(self, *, base_url: str, auth_token: str, model: str, **kwargs) -> None:
     self._base_url = base_url
     self._auth_token = auth_token
     self._env_model = model

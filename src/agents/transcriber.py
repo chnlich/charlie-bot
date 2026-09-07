@@ -18,7 +18,10 @@ import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO
+
+if TYPE_CHECKING:
+  import asyncio
 
 import numpy as np
 import structlog
@@ -129,7 +132,7 @@ def voice_model_paths(cfg: CharlieBotConfig) -> VoiceModelPaths:
   )
 
 
-def start_model_provisioning(cfg: CharlieBotConfig):
+def start_model_provisioning(cfg: CharlieBotConfig) -> asyncio.Task[None] | None:
   """Start non-blocking speech model provisioning and verification."""
   import asyncio
 

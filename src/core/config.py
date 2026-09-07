@@ -1147,7 +1147,8 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
     log.exception("cron_alert_state_write_failed")
 
 
-def _cron_fingerprint(prompt_mtimes: dict[Path, float]):
+def _cron_fingerprint(
+    prompt_mtimes: dict[Path, float],) -> tuple[tuple[tuple[str, float], ...], dict[Path, float] | None, bool]:
   """Compute the hot-reload fingerprint over all four re-read inputs.
 
   The set of ``cron.d/*.yaml`` paths with each file's mtime, the mtime of every

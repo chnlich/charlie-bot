@@ -19,7 +19,7 @@ log = structlog.get_logger()
 class GeminiCliBackend(AgentBackend):
   """Runs a `gemini` CLI subprocess in stream-json mode and translates NDJSON events to CC-compatible format."""
 
-  def __init__(self, *, model: str, **kwargs):
+  def __init__(self, *, model: str, **kwargs) -> None:
     if not model:
       raise ValueError("gemini backend requires a model")
     super().__init__(model=model, **kwargs)
@@ -47,7 +47,7 @@ class GeminiCliBackend(AgentBackend):
     """Translate a single Gemini stream-json NDJSON event into CC-compatible event(s)."""
     ev_type = ev.get("type", "")
 
-    def flush_buffer():
+    def flush_buffer() -> list[dict]:
       if self._text_buffer:
         msg = [make_text_event(self._text_buffer)]
         self._text_buffer = ""

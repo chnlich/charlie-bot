@@ -438,7 +438,7 @@ class AgentBackend(ABC):
       resume_session_id: str | None = None,
       log_dir: Path | None = None,
       **_extra,
-  ):
+  ) -> None:
     self._model = model
     self._extra_flags = extra_flags or []
     self._buffer_limit = buffer_limit or DEFAULT_BUFFER_LIMIT

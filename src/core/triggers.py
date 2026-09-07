@@ -6,6 +6,7 @@ import json
 import os
 import random
 import shutil
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -97,7 +98,7 @@ class ArchivedSessionError(Exception):
   """Raised when create_trigger targets a session archived without a successor."""
 
 
-def _detect_pidfd():
+def _detect_pidfd() -> tuple[Callable[[int, int], int], Callable[[int, int], object | None]] | tuple[None, None]:
   """Return (pidfd_open_callable, waitid_pidfd_callable) or (None, None).
 
   pidfd_open_callable(pid, flags=0) -> int, raises ProcessLookupError on ESRCH.
@@ -109,7 +110,7 @@ def _detect_pidfd():
     def _stdlib_pidfd_open(pid: int, flags: int = 0) -> int:
       return os.pidfd_open(pid, flags)
 
-    def _stdlib_waitid_pidfd(fd: int, options: int):
+    def _stdlib_waitid_pidfd(fd: int, options: int) -> object | None:
       return os.waitid(os.P_PIDFD, fd, options)
 
     return _stdlib_pidfd_open, _stdlib_waitid_pidfd
@@ -162,7 +163,7 @@ def _detect_pidfd():
 
   class _WaitidResult:
 
-    def __init__(self, si: _Siginfo):
+    def __init__(self, si: _Siginfo) -> None:
       self.si_pid = si.si_pid
       self.si_uid = si.si_uid
       self.si_signo = si.si_signo
@@ -171,7 +172,7 @@ def _detect_pidfd():
 
   p_pidfd_const = 3
 
-  def _ctypes_waitid_pidfd(fd: int, options: int):
+  def _ctypes_waitid_pidfd(fd: int, options: int) -> object | None:
     si = _Siginfo()
     ctypes.set_errno(0)
     rc = libc.waitid(p_pidfd_const, fd, ctypes.byref(si), options)
@@ -416,7 +417,7 @@ def _migrate_legacy_watch_pids(raw_text: str) -> tuple[PendingTrigger, bool]:
 class TriggerManager:
   """Manages delayed one-shot triggers that wake the master CC."""
 
-  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager):
+  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
     self._cfg = cfg
     self._session_mgr = session_mgr
     self._tasks: dict[str, asyncio.Task] = {}

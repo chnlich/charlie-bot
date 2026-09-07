@@ -117,7 +117,7 @@ class CodexUsageResolver:
       cfg: CharlieBotConfig,
       events_cache: dict[str, list[dict]],
       chat_events_path_fn: Callable[[str], Path],
-  ):
+  ) -> None:
     self._cfg = cfg
     self._events_cache = events_cache
     self._chat_events_path_fn = chat_events_path_fn

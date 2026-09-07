@@ -367,7 +367,7 @@ class SessionUsageResolver:
       events_cache: dict[str, list[dict]],
       chat_events_path_fn: Callable[[str], "object"],
       load_chat_events_sync_fn: Callable[[str], list[dict]],
-  ):
+  ) -> None:
     self._load_chat_events_sync = load_chat_events_sync_fn
     self._codex_resolver = CodexUsageResolver(cfg, events_cache, chat_events_path_fn)
     # session_id -> (events list, len at last fold, fold state). Pinning the

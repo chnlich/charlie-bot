@@ -205,7 +205,7 @@ def _scan_interrupted_runs(cfg: CharlieBotConfig, boot_time: datetime) -> tuple[
   return interrupted, threads
 
 
-def _translate_for_thread(cfg: CharlieBotConfig, meta: dict):
+def _translate_for_thread(cfg: CharlieBotConfig, meta: dict) -> Callable[[dict], list[dict]]:
   """A fresh translate_event callable for resolving a run's raw log.
 
   Stateful translates (codex text buffering, gemini) require one instance per

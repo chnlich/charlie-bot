@@ -86,7 +86,7 @@ class OpenCodeBackend(AgentBackend):
   _SERVER_START_TIMEOUT = 30.0
   _SERVER_STOP_TIMEOUT = 5.0
 
-  def __init__(self, *, opencode_proxy_url: str | None = None, **kwargs):
+  def __init__(self, *, opencode_proxy_url: str | None = None, **kwargs) -> None:
     super().__init__(**kwargs)
     self._opencode_bin = resolve_binary("opencode", str(Path.home() / ".opencode" / "bin"))
     self._opencode_proxy_url = opencode_proxy_url

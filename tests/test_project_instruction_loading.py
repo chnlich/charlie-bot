@@ -62,6 +62,17 @@ def _make_project(
   return cfg
 
 
+def _seed_project_dir(tmp_path: Path) -> tuple[SimpleNamespace, Path]:
+  """A fake home whose ``projects/proj`` directory exists and holds a valid common body.
+  Tests break one thing on top of it: ``project.yaml`` is replaced, malformed, or points
+  at a body file made into a symlink loop."""
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
+  project_dir = cfg.charliebot_home / "projects" / "proj"
+  project_dir.mkdir(parents=True)
+  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  return cfg, project_dir
+
+
 def _meta(role: str | None, group: str | None) -> SimpleNamespace:
   return SimpleNamespace(id="s1", role=role, group=group)
 
@@ -265,10 +276,7 @@ def test_duplicate_body_destinations_fail_ordinary_session(tmp_path: Path) -> No
 
 def test_duplicate_body_destinations_via_symlink_alias_fail(tmp_path: Path) -> None:
   """Two fields pointing at one file through a symlink alias are the same destination."""
-  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
-  project_dir = cfg.charliebot_home / "projects" / "proj"
-  project_dir.mkdir(parents=True)
-  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  cfg, project_dir = _seed_project_dir(tmp_path)
   (project_dir / "alias.md").symlink_to(project_dir / "common.md")
   (project_dir / "project.yaml").write_text("prompt_file: common.md\nmanager_prompt_file: alias.md\n", encoding="utf-8")
   for meta in (_meta(None, "proj"), _meta(PROJECT_ROLE, "proj")):
@@ -301,10 +309,7 @@ def test_body_path_outside_project_dir_fails(tmp_path: Path) -> None:
 
 def test_absolute_body_path_inside_project_dir_fails(tmp_path: Path) -> None:
   """An absolute path is invalid schema even when it points inside the project directory."""
-  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
-  project_dir = cfg.charliebot_home / "projects" / "proj"
-  project_dir.mkdir(parents=True)
-  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  cfg, project_dir = _seed_project_dir(tmp_path)
   (project_dir / "project.yaml").write_text(f"prompt_file: {project_dir / 'common.md'}\n", encoding="utf-8")
   out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
   _assert_project_error(out, "relative path")
@@ -354,10 +359,7 @@ def test_group_traversal_fails(tmp_path: Path) -> None:
 
 def test_dangling_config_symlink_fails_instead_of_disabling(tmp_path: Path) -> None:
   """A broken project.yaml symlink is a present-but-broken config, never "not enabled"."""
-  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
-  project_dir = cfg.charliebot_home / "projects" / "proj"
-  project_dir.mkdir(parents=True)
-  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  cfg, project_dir = _seed_project_dir(tmp_path)
   (project_dir / "project.yaml").symlink_to(project_dir / "missing.yaml")
 
   with pytest.raises(ProjectInstructionError, match="broken symlink"):
@@ -419,10 +421,7 @@ def test_absent_project_directory_still_unconfigured(tmp_path: Path) -> None:
 
 def test_config_symlink_outside_project_dir_fails(tmp_path: Path) -> None:
   """A project.yaml symlink out of the project directory breaks the declared isolation."""
-  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
-  project_dir = cfg.charliebot_home / "projects" / "proj"
-  project_dir.mkdir(parents=True)
-  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  cfg, project_dir = _seed_project_dir(tmp_path)
   outside = tmp_path / "elsewhere" / "project.yaml"
   outside.parent.mkdir()
   outside.write_text("prompt_file: common.md\n", encoding="utf-8")
@@ -433,10 +432,7 @@ def test_config_symlink_outside_project_dir_fails(tmp_path: Path) -> None:
 
 def test_config_symlink_inside_project_dir_loads(tmp_path: Path) -> None:
   """An in-directory alias for project.yaml is a valid config location."""
-  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
-  project_dir = cfg.charliebot_home / "projects" / "proj"
-  project_dir.mkdir(parents=True)
-  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  cfg, project_dir = _seed_project_dir(tmp_path)
   (project_dir / "real-config.yaml").write_text("prompt_file: common.md\n", encoding="utf-8")
   (project_dir / "project.yaml").symlink_to(project_dir / "real-config.yaml")
   out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
@@ -447,10 +443,7 @@ def test_config_symlink_inside_project_dir_loads(tmp_path: Path) -> None:
 
 def test_bad_utf8_config_fails(tmp_path: Path) -> None:
   """A non-UTF-8 config is a per-turn project error, not a raw UnicodeDecodeError escape."""
-  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
-  project_dir = cfg.charliebot_home / "projects" / "proj"
-  project_dir.mkdir(parents=True)
-  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  cfg, project_dir = _seed_project_dir(tmp_path)
   (project_dir / "project.yaml").write_bytes(b"prompt_file: \xff\xfe.md\n")
   out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
   _assert_project_error(out, "unreadable")
@@ -458,10 +451,7 @@ def test_bad_utf8_config_fails(tmp_path: Path) -> None:
 
 def test_config_directory_fails(tmp_path: Path) -> None:
   """project.yaml as a directory is an unreadable config, never a silent skip."""
-  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
-  project_dir = cfg.charliebot_home / "projects" / "proj"
-  project_dir.mkdir(parents=True)
-  (project_dir / "common.md").write_text(COMMON_MARK, encoding="utf-8")
+  cfg, project_dir = _seed_project_dir(tmp_path)
   (project_dir / "project.yaml").mkdir()
   out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
   _assert_project_error(out, "unreadable")
@@ -469,10 +459,9 @@ def test_config_directory_fails(tmp_path: Path) -> None:
 
 def test_symlink_loop_body_resolution_fails(tmp_path: Path) -> None:
   """A symlink-loop body destination is a config error, not a raw resolve crash."""
-  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_MARK)
-  project_dir = cfg.charliebot_home / "projects" / "proj"
-  project_dir.mkdir(parents=True)
+  cfg, project_dir = _seed_project_dir(tmp_path)
   loop = project_dir / "common.md"
+  loop.unlink()
   loop.symlink_to(loop)
   (project_dir / "project.yaml").write_text("prompt_file: common.md\n", encoding="utf-8")
   out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)

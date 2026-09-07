@@ -53,8 +53,11 @@ on), generate the URL instead of dumping file contents into chat. This is especi
 
 ## Rules
 
-1. Take the path in a link from the current turn's command output: run `ls` on the exact full path
-   about to be pasted, rather than reconstructing it from memory.
+1. Every file link is certified before it is pasted: probe the link's exact prefix and path on
+   the local server, `curl -s --noproxy '*' -o /dev/null -w '%{http_code}'
+   http://localhost:<server_port>/<prefix>/<path>`, and read 200. The pasted link's public base
+   URL names the same server, so the local 200 certifies the path the reader opens; probe and
+   paste share the exact prefix and path, and nothing is reconstructed from memory.
 2. Present the link in markdown format: `[descriptive text](url)`
 3. **If the file is a Perfetto/Chrome trace** (`.json` trace from training/profiling, or a directory
    of rank traces), ALWAYS also include a Perfetto viewer link alongside the file link. Read the

@@ -12,6 +12,7 @@ trees under ``tmp_path``; no live ``~/.charliebot`` state is touched.
 """
 
 import hashlib
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -475,7 +476,13 @@ def test_symlink_loop_body_resolution_fails(tmp_path: Path) -> None:
   loop.symlink_to(loop)
   (project_dir / "project.yaml").write_text("prompt_file: common.md\n", encoding="utf-8")
   out = master_cc._build_instructions_content(_meta(None, "proj"), cfg, None)
-  _assert_project_error(out, "cannot be resolved")
+  # Where the loop fails splits on the interpreter: Python 3.12 resolve()
+  # raises RuntimeError and the error reads "cannot be resolved"; 3.13
+  # resolve() folds the loop into itself, so the loop surfaces as OSError at
+  # the read and the error reads "body unreadable". Either way the turn
+  # fails with a ProjectInstructionError naming the file.
+  fragment = "body unreadable" if sys.version_info >= (3, 13) else "cannot be resolved"
+  _assert_project_error(out, fragment)
 
 
 def test_symlinked_project_directory_stays_confined(tmp_path: Path) -> None:

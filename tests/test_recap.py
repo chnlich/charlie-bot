@@ -115,123 +115,86 @@ async def test_recap_uses_preferences_when_session_backend_is_empty() -> None:
   mock_write.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_recap_falls_back_after_first_candidate_failure() -> None:
-  cfg = build_chain_cfg(
-      BackendOption(id="first", label="First", type="cc-claude", model="haiku"),
-      BackendOption(id="second", label="Second", type="codex", model="gpt-x"),
-  )
-  session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="")
-  first_one_shot = AsyncMock(side_effect=RuntimeError("first candidate failed"))
-  second_one_shot = AsyncMock(return_value="fallback summary")
-
-  with (
-      patch(
-          _BUILD_BACKEND_PATCH_TARGET,
-          side_effect=make_one_shot_chain(first_one_shot, second_one_shot),
-      ) as mock_build,
-      patch(_EXTRACT_RECAP_PATCH_TARGET, return_value={"asks": ["do X"], "last": None}),
-      patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
-  ):
-    result = await generate_and_cache_summary(session_mgr, "s", 5, cfg)
-
-  assert result == "fallback summary"
-  first_one_shot.assert_awaited_once()
-  second_one_shot.assert_awaited_once()
-  assert [entry.args[0].id for entry in mock_build.call_args_list] == ["first", "second"]
-  mock_write.assert_called_once()
+_RECAP_CHAIN_OPTIONS = {
+    "first": BackendOption(id="first", label="First", type="cc-claude", model="haiku"),
+    "second": BackendOption(id="second", label="Second", type="codex", model="gpt-x"),
+    "empty": BackendOption(id="empty", label="Empty", type="codex", model="gpt-x"),
+    "last": BackendOption(id="last", label="Last", type="kimi", model="k2"),
+}
 
 
 @pytest.mark.asyncio
-async def test_recap_returns_empty_without_cache_when_all_candidates_are_empty() -> None:
-  cfg = build_chain_cfg(
-      BackendOption(id="first", label="First", type="cc-claude", model="haiku"),
-      BackendOption(id="second", label="Second", type="codex", model="gpt-x"),
-  )
+@pytest.mark.parametrize(
+    ("candidates", "outcome", "write_called"),
+    [
+        pytest.param(
+            (("first", "error", "first candidate failed"), ("second", "summary", "fallback summary")),
+            ("returns", "fallback summary"),
+            True,
+            id="first-error-falls-back-to-second-summary",
+        ),
+        pytest.param(
+            (("first", "empty", ""), ("second", "empty", "")),
+            ("returns", ""),
+            False,
+            id="all-empty-returns-empty-without-cache",
+        ),
+        pytest.param(
+            (("first", "error", "first error"), ("last", "error", "last error")),
+            ("raises", None),
+            False,
+            id="all-error-raises-last-exception",
+        ),
+        pytest.param(
+            (("first", "error", "first error"), ("empty", "empty", ""), ("last", "error", "last error")),
+            ("raises", None),
+            False,
+            id="error-empty-error-still-raises-last-exception",
+        ),
+    ],
+)
+async def test_recap_chain_resolves_from_first_answering_candidate_or_raises_last_error(
+    candidates: tuple[tuple[str, str, str], ...], outcome: tuple[str, str | None], write_called: bool) -> None:
+  """The preference chain walks its candidates in order and resolves the summary from the
+  first one that answers non-empty, caching it; an exhausted walk raises the last
+  candidate's exception, or returns "" without caching when every candidate answered empty.
+  """
+  cfg = build_chain_cfg(*(_RECAP_CHAIN_OPTIONS[cid] for cid, _, _ in candidates))
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="")
-  first_one_shot = AsyncMock(return_value="")
-  second_one_shot = AsyncMock(return_value="")
+  one_shots: list[AsyncMock] = []
+  errors: list[RuntimeError] = []
+  for _, behavior, payload in candidates:
+    if behavior == "error":
+      error = RuntimeError(payload)
+      errors.append(error)
+      one_shots.append(AsyncMock(side_effect=error))
+    elif behavior == "empty":
+      one_shots.append(AsyncMock(return_value=""))
+    elif behavior == "summary":
+      one_shots.append(AsyncMock(return_value=payload))
+    else:
+      raise AssertionError(f"unknown candidate behavior: {behavior}")
 
   with (
-      patch(
-          _BUILD_BACKEND_PATCH_TARGET,
-          side_effect=make_one_shot_chain(first_one_shot, second_one_shot),
-      ) as mock_build,
+      patch(_BUILD_BACKEND_PATCH_TARGET, side_effect=make_one_shot_chain(*one_shots)) as mock_build,
       patch(_EXTRACT_RECAP_PATCH_TARGET, return_value={"asks": [], "last": None}),
       patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
   ):
-    result = await generate_and_cache_summary(session_mgr, "s", 5, cfg)
+    if outcome[0] == "raises":
+      with pytest.raises(RuntimeError) as exc_info:
+        await generate_and_cache_summary(session_mgr, "s", 5, cfg)
+      assert exc_info.value is errors[-1]
+    else:
+      assert await generate_and_cache_summary(session_mgr, "s", 5, cfg) == outcome[1]
 
-  assert result == ""
-  first_one_shot.assert_awaited_once()
-  second_one_shot.assert_awaited_once()
-  assert [entry.args[0].id for entry in mock_build.call_args_list] == ["first", "second"]
-  mock_write.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_recap_raises_last_exception_when_all_candidates_raise() -> None:
-  cfg = build_chain_cfg(
-      BackendOption(id="first", label="First", type="cc-claude", model="haiku"),
-      BackendOption(id="last", label="Last", type="codex", model="gpt-x"),
-  )
-  session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="")
-  first_error = RuntimeError("first error")
-  last_error = RuntimeError("last error")
-  first_one_shot = AsyncMock(side_effect=first_error)
-  last_one_shot = AsyncMock(side_effect=last_error)
-
-  with (
-      patch(
-          _BUILD_BACKEND_PATCH_TARGET,
-          side_effect=make_one_shot_chain(first_one_shot, last_one_shot),
-      ),
-      patch(_EXTRACT_RECAP_PATCH_TARGET, return_value={"asks": [], "last": None}),
-      patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
-      pytest.raises(RuntimeError) as exc_info,
-  ):
-    await generate_and_cache_summary(session_mgr, "s", 5, cfg)
-
-  assert exc_info.value is last_error
-  first_one_shot.assert_awaited_once()
-  last_one_shot.assert_awaited_once()
-  mock_write.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_recap_raises_last_exception_after_error_and_empty_result() -> None:
-  cfg = build_chain_cfg(
-      BackendOption(id="first", label="First", type="cc-claude", model="haiku"),
-      BackendOption(id="empty", label="Empty", type="codex", model="gpt-x"),
-      BackendOption(id="last", label="Last", type="kimi", model="k2"),
-  )
-  session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="")
-  first_error = RuntimeError("first error")
-  last_error = RuntimeError("last error")
-  first_one_shot = AsyncMock(side_effect=first_error)
-  empty_one_shot = AsyncMock(return_value="")
-  last_one_shot = AsyncMock(side_effect=last_error)
-
-  with (
-      patch(
-          _BUILD_BACKEND_PATCH_TARGET,
-          side_effect=make_one_shot_chain(first_one_shot, empty_one_shot, last_one_shot),
-      ),
-      patch(_EXTRACT_RECAP_PATCH_TARGET, return_value={"asks": [], "last": None}),
-      patch(_WRITE_CACHE_ENTRY_PATCH_TARGET) as mock_write,
-      pytest.raises(RuntimeError) as exc_info,
-  ):
-    await generate_and_cache_summary(session_mgr, "s", 5, cfg)
-
-  assert exc_info.value is last_error
-  first_one_shot.assert_awaited_once()
-  empty_one_shot.assert_awaited_once()
-  last_one_shot.assert_awaited_once()
-  mock_write.assert_not_called()
+  assert [entry.args[0].id for entry in mock_build.call_args_list] == [cid for cid, _, _ in candidates]
+  for one_shot in one_shots:
+    one_shot.assert_awaited_once()
+  if write_called:
+    mock_write.assert_called_once()
+  else:
+    mock_write.assert_not_called()
 
 
 @pytest.mark.asyncio

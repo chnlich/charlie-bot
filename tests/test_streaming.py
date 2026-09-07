@@ -31,38 +31,34 @@ async def test_compact_boundary_still_emits_context_compacted_unchanged() -> Non
   }]
 
 
+_STATUS_FAILED_ROWS = [
+    pytest.param(
+        {
+            "type": "system",
+            "subtype": "status",
+            "compact_result": "failed",
+            "compact_error": "context too large",
+        },
+        "context too large",
+        id="carrying-compact-error"),
+    pytest.param({
+        "type": "system",
+        "subtype": "status",
+        "compact_result": "failed",
+    }, None, id="compact-error-absent"),
+]
+
+
 @pytest.mark.asyncio
-async def test_status_failed_with_error_emits_context_compact_failed_carrying_it() -> None:
+@pytest.mark.parametrize(("event", "expected_error"), _STATUS_FAILED_ROWS)
+async def test_status_failed_emits_context_compact_failed(event: dict, expected_error: str | None) -> None:
   persisted: list[dict] = []
-  event = {
-      "type": "system",
-      "subtype": "status",
-      "compact_result": "failed",
-      "compact_error": "context too large",
-  }
 
   await handle_compaction_events(event, lambda ev: _record(persisted, ev), {"session": "s1"})
 
   assert persisted == [{
       "type": ET.CONTEXT_COMPACT_FAILED,
-      "error": "context too large",
-  }]
-
-
-@pytest.mark.asyncio
-async def test_status_failed_without_error_emits_error_none() -> None:
-  persisted: list[dict] = []
-  event = {
-      "type": "system",
-      "subtype": "status",
-      "compact_result": "failed",
-  }
-
-  await handle_compaction_events(event, lambda ev: _record(persisted, ev), {"session": "s1"})
-
-  assert persisted == [{
-      "type": ET.CONTEXT_COMPACT_FAILED,
-      "error": None,
+      "error": expected_error,
   }]
 
 

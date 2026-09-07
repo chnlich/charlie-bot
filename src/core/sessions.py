@@ -160,6 +160,31 @@ def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
   return meta
 
 
+def _apply_sidebar_state(
+    sessions: list[SessionMetadata],
+    derived: dict[str, dict],
+    include_running_status: bool,
+    include_pending_trigger_status: bool,
+    include_pending_plan_approval: bool = False,
+) -> None:
+  """Write :meth:`SessionManager.resolve_sidebar_state`'s derived fields onto *sessions*.
+
+  The callers hand rows they own (copies or fresh builds), so the write may
+  mutate them; a holder of shared cache references must serve the derived
+  dict alongside the rows instead (:meth:`SessionManager.search_sessions_readonly`).
+  """
+  for meta in sessions:
+    entry = derived[meta.id]
+    if include_running_status:
+      meta.has_running_tasks = entry["has_running_tasks"]
+    if include_pending_trigger_status:
+      meta.has_pending_trigger = entry["has_pending_trigger"]
+      meta.pending_trigger_count = entry["pending_trigger_count"]
+      meta.next_trigger_at = entry["next_trigger_at"]
+    if include_pending_plan_approval:
+      meta.has_pending_plan_approval = entry["has_pending_plan_approval"]
+
+
 # ---------------------------------------------------------------------------
 # Sidebar probe cores — pure path-in/result-out functions shared by the
 # per-session probe methods below and by the poll's serial re-probe (one
@@ -987,17 +1012,45 @@ class SessionManager:
 
     Returns at most ``_SEARCH_RESULT_LIMIT`` rows, newest first: the cap keeps
     the render bounded when a short query matches thousands of archived names.
+    The rows are owned copies (thinking-stamped, sidebar-state applied) for
+    callers that mutate or hand them on; read-only consumers call
+    :meth:`search_sessions_readonly`.
+    """
+    rows, derived = await self.search_sessions_readonly(
+        query,
+        include_running_status=include_running_status,
+        include_pending_trigger_status=include_pending_trigger_status,
+    )
+    sessions = [_stamp_thinking_since(row.model_copy()) for row in rows]
+    _apply_sidebar_state(sessions, derived, include_running_status, include_pending_trigger_status)
+    return sessions
+
+  async def search_sessions_readonly(
+      self,
+      query: str,
+      include_running_status: bool = False,
+      include_pending_trigger_status: bool = False,
+  ) -> tuple[list[SessionMetadata], dict[str, dict]]:
+    """Search sessions by name (every status) and chat event content (active only), case-insensitive.
+
+    Returns ``(rows, derived)`` for consumers that only read: rows are the
+    shared cached metadata references, newest first, at most
+    ``_SEARCH_RESULT_LIMIT`` of them (the caller must not mutate them), and
+    derived maps each row's id to the sidebar-state fields for the requested
+    include flags. The cap applies to the sorted name matches before any row
+    work: 200 newer-or-equal matches always outrank a name match below the
+    cap line, and a content hit can only displace rows at the line from
+    above, so the dropped matches can never reach the returned rows.
     """
     query_lower = query.lower()
     all_meta = await self._load_session_metas()
-    results: list[SessionMetadata] = []
-    content_candidates: list[tuple[SessionMetadata, Path]] = []
-    for meta in all_meta:
-      if query_lower in meta.name.lower():
-        results.append(_stamp_thinking_since(meta.model_copy()))
-        continue
-      if meta.status == SessionStatus.ACTIVE:
-        content_candidates.append((meta, self.get_chat_events_path(meta.id)))
+    matches = [meta for meta in all_meta if query_lower in meta.name.lower()]
+    matches.sort(key=lambda meta: meta.updated_at, reverse=True)
+    content_candidates: list[tuple[SessionMetadata, Path]] = [
+        (meta, self.get_chat_events_path(meta.id))
+        for meta in all_meta
+        if meta.status == SessionStatus.ACTIVE and query_lower not in meta.name.lower()
+    ]
 
     # Classification runs on the event loop: one hot stat per candidate plus a
     # memo lookup measures ~0.1 ms for the whole set, while the same checks as
@@ -1026,19 +1079,21 @@ class SessionManager:
       if verdict is None:
         return None  # errored scan proves no absence, so nothing is memoized
       if verdict:
-        return _stamp_thinking_since(meta.model_copy())
+        return meta
       self._memoize_search_miss(str(path), sig, query_lower)
       return None
 
     content_hits = await asyncio.gather(
         *(_check_content(meta, path, sig, start) for meta, path, sig, start in read_jobs))
-    results.extend(meta for meta in content_hits if meta is not None)
-    enriched = await self._enrich_and_sort(
-        results,
+    rows = matches[:_SEARCH_RESULT_LIMIT] + [meta for meta in content_hits if meta is not None]
+    rows.sort(key=lambda meta: meta.updated_at, reverse=True)
+    rows = rows[:_SEARCH_RESULT_LIMIT]
+    derived = await self.resolve_sidebar_state(
+        rows,
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
     )
-    return enriched[:_SEARCH_RESULT_LIMIT]
+    return rows, derived
 
   def _memoize_search_miss(self, memo_key: str, sig: tuple[int, int, int], needle: str) -> None:
     """Record a clean-scan miss as one more proven-absent root for the file.
@@ -2233,16 +2288,8 @@ class SessionManager:
         include_pending_plan_approval=include_pending_plan_approval,
         force=force,
     )
-    for meta in sessions:
-      entry = derived[meta.id]
-      if include_running_status:
-        meta.has_running_tasks = entry["has_running_tasks"]
-      if include_pending_trigger_status:
-        meta.has_pending_trigger = entry["has_pending_trigger"]
-        meta.pending_trigger_count = entry["pending_trigger_count"]
-        meta.next_trigger_at = entry["next_trigger_at"]
-      if include_pending_plan_approval:
-        meta.has_pending_plan_approval = entry["has_pending_plan_approval"]
+    _apply_sidebar_state(sessions, derived, include_running_status, include_pending_trigger_status,
+                         include_pending_plan_approval)
 
   async def get_sessions_readonly(self, session_ids: list[str]) -> list[SessionMetadata]:
     """Resolve *session_ids* to metadata for consumers that only read it.

@@ -294,6 +294,28 @@ async def test_search_names_cover_archived_and_cap_at_200(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_search_cap_keeps_content_hits_above_the_cap_line(tmp_path: Path) -> None:
+  mgr = make_session_mgr(tmp_path)
+  for i in range(200):
+    await _add_session(mgr, f"needle-{i:03d}", minutes=i)
+  above = await _add_session(mgr, "unrelated-a", status=SessionStatus.ACTIVE, minutes=1000)
+  below = await _add_session(mgr, "unrelated-b", status=SessionStatus.ACTIVE, minutes=-1)
+  await mgr.save_chat_event(above.id, {"type": "user", "content": "needle in the events"})
+  await mgr.save_chat_event(below.id, {"type": "user", "content": "needle in the events"})
+
+  rows, derived = await mgr.search_sessions_readonly(
+      "needle", include_running_status=True, include_pending_trigger_status=True)
+  ids = [r.id for r in rows]
+  assert len(rows) == 200
+  assert above.id in ids  # a hit newer than the cap line displaces the oldest match
+  assert below.id not in ids  # a hit older than every match cannot enter the top rows
+  assert set(derived) == set(ids)
+
+  sessions = await mgr.search_sessions("needle", include_running_status=True, include_pending_trigger_status=True)
+  assert [s.id for s in sessions] == ids  # the copying wrapper serves the same rows
+
+
+@pytest.mark.asyncio
 async def test_boot_scan_warms_cache_for_every_status(tmp_path: Path) -> None:
   mgr = make_session_mgr(tmp_path)
   archived = await _add_session(mgr, "cold-archived", minutes=0)

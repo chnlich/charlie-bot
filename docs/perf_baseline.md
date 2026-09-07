@@ -80,6 +80,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M68 worker-list marked changed-poll rebuild | M68 collector below | seconds per body rebuild after one writer mark, worst on-disk thread-metadata corpus; the unchanged poll and its conditional are M36's shapes | median < 0.007 s | — (introduced with its first history row) |
 | M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
 | M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.010 s | — (introduced with its first history row) |
+| M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.010 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -3960,6 +3961,110 @@ print(f"{NAME} ({os.environ['M70_SIZE']} B); first view {cold:.4f} s; repeat-vie
 EOF
 ```
 
+M71 — sidebar search capped name-match response, steady state. The search box's
+short queries are the route's worst shape: a one-character query matches
+hundreds of archived names, and the pre-fix manager copied and sidebar-populated
+every match before the 200-row cap applied at the end. The cost is a per-
+keystroke latency invisible to the standing probes (M8 reads the absent-needle
+shape, whose result rows are zero), so the collector snapshots the search corpus
+(every session's metadata.json, the active sessions' live chat files, and every
+session's triggers/ — the derived trigger fields ride the response) into a
+scratch `CHARLIEBOT_HOME` under /tmp (live home read once for the copy, never
+written), resolves the single character matching the most session names, and
+drives the route through TestClient in each checkout's process: one cold pass,
+as at the first capped search after a server start, then nine timed requests,
+with a parsed-body digest so a corpus difference between arms cannot masquerade
+as a payload difference. Evidence points the same collector at the before and
+after checkouts (``CHECKOUT`` at each root, shared snapshot), the same shape as
+the M35 protocol. Snapshot once:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import json, shutil, tempfile
+from pathlib import Path
+
+# Worst capped-search corpus snapshot: every session's metadata.json, the
+# active sessions' live chat files, and every session's triggers/ — exactly
+# what the search route reads. Live home read once for the copy, never written.
+root = Path.home() / ".charliebot" / "sessions"
+home = Path(tempfile.mkdtemp(prefix="m71-search-home-", dir="/tmp"))
+counts: dict[str, int] = {}
+total_meta = 0
+total_live_bytes = 0
+for d in root.iterdir():
+    meta_p = d / "metadata.json"
+    if not meta_p.is_file():
+        continue
+    try:
+        raw = json.loads(meta_p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        continue
+    dst = home / "sessions" / d.name
+    dst.mkdir(parents=True)
+    shutil.copy2(meta_p, dst / "metadata.json")
+    total_meta += 1
+    name = (raw.get("name") or "").lower()
+    for ch in set(name):
+        counts[ch] = counts.get(ch, 0) + 1
+    if raw.get("status") == "active":
+        live = d / "data" / "chat_events.jsonl"
+        if live.is_file():
+            (dst / "data").mkdir()
+            shutil.copy2(live, dst / "data" / "chat_events.jsonl")
+            total_live_bytes += live.stat().st_size
+    triggers = d / "triggers"
+    if triggers.is_dir():
+        shutil.copytree(triggers, dst / "triggers")
+
+best_q, best_n = None, -1
+for ch, n in counts.items():
+    if n > best_n:
+        best_q, best_n = ch, n
+print(f"{total_meta} session metas, {total_live_bytes / 1e6:.1f} MB active live chat files")
+print(f"worst capped query: {best_q!r} matching {best_n} names (cap 200)")
+print(f"export M71_HOME={home} M71_Q={best_q}")
+EOF
+```
+
+Then run per checkout (``eval`` the snapshot export first):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import hashlib, json, os, sys, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+from pathlib import Path
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from src.api.deps import get_session_manager
+from src.api.sessions import router as sessions_router
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+home = Path(os.environ["M71_HOME"])
+cfg = CharlieBotConfig(charliebot_home=home)
+mgr = SessionManager(cfg)
+app = FastAPI()
+app.include_router(sessions_router, prefix="/api/sessions")
+app.dependency_overrides[get_session_manager] = lambda: mgr
+client = TestClient(app)
+url = f"/api/sessions/search?q={os.environ['M71_Q']}"
+
+def digest(body):
+    return hashlib.sha256(json.dumps(json.loads(body), sort_keys=True).encode()).hexdigest()[:12]
+
+client.get(url)  # cold pass, as at the first capped search after a server start; not timed
+times, body = [], None
+for _ in range(9):
+    t0 = time.perf_counter()
+    r = client.get(url)
+    times.append(time.perf_counter() - t0)
+    body = r.content
+times.sort()
+print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {len(json.loads(body))} rows, body {len(body)} B, "
+      f"digest {digest(body)}; capped search median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -4071,3 +4176,4 @@ EOF
 | 2026-09-06 | this PR | M69 60 → 0 opencode_sse_event_unhandled debug lines per 60 steady-state `_translate_sse_event` frames of one unhandled type (collector verbatim, main checkout before at load 1.62/1.05/0.72 vs branch worktree after at load 2.73/1.84/1.11, back-to-back; live-log corroboration 306 lines in the 68.85 h server log, 295 type=todo.updated + 11 type=session.compacted; unhandled frames still translate to []; M49's part-type stream re-measured 0 lines per 60 rounds, no regression; 4675-passed suite) | the SSE event-type fallthrough routed through an event-type warn-once registry — one line per unmapped type per process, the M49 part-type registry's mechanism applied to the sibling SSE fallthrough; M69 definition and healthy range introduced with this PR |
 | 2026-09-06 | this PR | M70 repeat-view median 0.0118/0.0124 s → 0.0027/0.0029 s, maxima 0.0128/0.0141 s → 0.0034/0.0038 s (two interleaved rounds of the collector, shared 1.08 MB / 1084780 B served-body snapshot of session 3dfa5384's worst artifact page, main checkout before vs branch worktree after back-to-back at load 0.59-0.72, every paired round faster; first views unchanged 0.0200-0.0218 s → 0.0192-0.0199 s both arms; served bodies byte-identical across arms except the per-checkout cache-bust version query the injection embeds; M55 repeat-view re-measured 0.0025 s → 0.0026 s, no regression; 4677-passed suite) | the credentialed artifact view re-read and re-injected the whole page on every request — 823 artifact views in the 69.85 h live log, 794 of them repeats of an already-viewed file, the read alone ~4.8 ms of an ~11.5 ms repeat view on the 1.08 MB worst page — the injected body now memoizes on (path, mtime_ns, size) served as pre-encoded bytes behind one executor hop, mirroring the M55 annotate memo; M70 definition and healthy range introduced with this PR |
 | 2026-09-06 | this PR | M44 steady-state /scheduled median 3.08/3.78/3.11 ms → 2.05/2.14/2.11 ms, body 14457 B digest f035d8fa1147 identical across all six arms (three interleaved verbatim-collector rounds, 13 scheduled rows, live session + cron corpus read-only, main checkout before vs branch worktree after back-to-back at load 2.78/2.15/1.42, every paired round faster; no-regression re-measures: M56 /status 2.42/2.16 → 2.31/2.27 ms digest 2f2a9909e4c7 identical — the readonly path does not route through the listing; M61 single get_session 0.053/0.040 → 0.040/0.044 ms and its sweep-walk state 1.29 ms bare / 2.32 ms archived-page inside the row's healthy ranges; 4679-passed suite) | the listing preamble walked every cached meta (~1086 entries: per-entry TTL check plus round-rating migration) on every call to serve a filtered subset; the per-filter result now memoizes on (listings revision, sessions-root (mtime_ns, size), 10 s sweep) — in-process writes bump the revision through the save_metadata single funnel (and _invalidate_cache, the write-funnel entry's expiry eviction, and list_active_session_metas' repopulate), a create/delete moves the root signature, and the sweep bounds an out-of-band edit to the entry TTL plus one interval; every listing caller shares the cut |
+| 2026-09-06 | this PR | M71 capped search request median 9.49/9.04/9.73 ms → 5.50/5.68/5.44 ms, maxima 43.97/40.70/50.06 ms → 8.42/8.45/8.49 ms (three interleaved rounds of the collector, 200 rows / 207 KB body, shared snapshot of 1086 metas + 163.5 MB active live chat files + 182 triggers dirs, parsed-body digest 915d8ad4d28e identical across all six arms with 3 trigger-bearing rows in every response; manager-level corroboration 7.45 → 2.89 ms; absent-needle shape re-measured 2.69 → 2.92 ms, within noise; 4734-passed suite) | the 200-row cap applied to the sorted name matches before any row work: 200 newer-or-equal matches always outrank a match below the cap line and a content hit can only displace rows from above, so the dropped matches are never copied, stamped, probed, or sorted (the live corpus matched 1034 of 1086 names per request); the route serves the shared cached references through a read-only search returning (rows, resolve_sidebar_state dict) rendered via FastJsonResponse with the derived fields overlaid through the model's own UtcDatetime JSON scheme (a hand-rolled isoformat emitted +00:00 where the old response-model render emitted Z — the review finding the triggers-bearing snapshot corpus caught), the M56 /status shape; M71 definition and healthy range introduced with this PR |

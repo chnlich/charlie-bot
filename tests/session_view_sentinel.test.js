@@ -1,8 +1,9 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { baseSessionContext, buildUsageElements, createChatSidebarContext } = require('./session_context_stub');
-const { createElement } = require('./dom_element_stub');
+const {baseSessionContext, buildUsageElements, createChatSidebarContext, installSessionDocumentLookups,
+  stubPageTimers} = require('./session_context_stub');
+const {createElement} = require('./dom_element_stub');
 
 function buildContext(overrides = {}) {
   const fetchCalls = [];
@@ -12,23 +13,9 @@ function buildContext(overrides = {}) {
     fetchCalls.push(url);
     return {ok: true, async json() { return {has_more: false, next_before: 0, messages: []}; }};
   });
-  context.setInterval = () => 1;
+  stubPageTimers(context);
   context.setTimeout = (fn) => { if (overrides.autoTimeout) fn(); return 1; };
-  context.clearInterval = () => {};
-  context.clearTimeout = () => {};
-  context.document.getElementById = (id) => {
-    const fromMap = elements.get(id);
-    if (fromMap) return fromMap;
-    const container = elements.get('messages');
-    if (container) {
-      for (const child of container.children) {
-        if (child.id === id) return child;
-      }
-    }
-    return null;
-  };
-  context.document.querySelectorAll = () => [];
-  context.document.querySelector = () => null;
+  installSessionDocumentLookups(context, elements, elements.get('messages'), []);
   context.renderUserMessageBubble = (content) => `<div>${content || ''}</div>`;
   context.alert = () => {};
   context.confirm = () => true;

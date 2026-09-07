@@ -206,8 +206,8 @@ def has_running_tasks_sync(threads_dir: Path, walked: list | None = None) -> boo
   (mtime_ns, size) signature moves). *walked* supplies the scan's stat pairs
   from a walk the caller already took instead of a second one.
   """
-  for _thread_dir, _meta_path, meta in iter_recent_thread_metas(
-      threads_dir, utc_now(), "thread_meta_read_failed", walked=walked):
+  for _thread_dir, _meta_path, meta in iter_recent_thread_metas(threads_dir, utc_now(), "thread_meta_read_failed",
+                                                                walked=walked):
     if meta.get("status") == "running":
       return True
   return False

@@ -1446,8 +1446,9 @@ def _usage_reference(session_mgr: SessionManager, meta: SessionMetadata) -> dict
   """Full-scan reference: the tiers over a fresh fold of the whole event list."""
   events = session_mgr.load_chat_events_sync(meta.id)
   facts = session_usage._scan_usage_facts(events)
-  return (session_usage._resolve_claude_tier(facts) or session_usage._resolve_snapshot_tier(facts)
-          or (None if not events else session_usage._resolve_no_source_tier(facts)))
+  return (
+      session_usage._resolve_claude_tier(facts) or session_usage._resolve_snapshot_tier(facts) or
+      (None if not events else session_usage._resolve_no_source_tier(facts)))
 
 
 @pytest.mark.asyncio
@@ -1455,12 +1456,13 @@ async def test_usage_hit_and_suffix_advance_answer_on_event_loop(tmp_path: Path,
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-hit-on-loop", name="Hit On Loop", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {
-          "contextWindow": 200_000
-      }}, input_tokens=1_500_000),
-      _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}, input_tokens=1_500_000),
+          _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
+      ])
 
   warm = await session_mgr.resolve_session_usage(meta.id, meta)
 
@@ -1482,12 +1484,13 @@ async def test_usage_cold_cache_and_replaced_list_take_threaded_scan(tmp_path: P
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-hit-miss", name="Hit Miss", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {
-          "contextWindow": 200_000
-      }}, input_tokens=1_500_000),
-      _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}, input_tokens=1_500_000),
+          _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
+      ])
 
   calls = []
   real_scan = session_usage.SessionUsageResolver._load_and_scan
@@ -1517,12 +1520,13 @@ async def test_usage_suffix_past_cap_takes_threaded_scan(tmp_path: Path, monkeyp
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(id="session-hit-cap", name="Hit Cap", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, [
-      _result_event(0.5, {"claude-opus-4-6": {
-          "contextWindow": 200_000
-      }}, input_tokens=1_500_000),
-      _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
-  ])
+  _write_session(
+      session_mgr, meta, [
+          _result_event(0.5, {"claude-opus-4-6": {
+              "contextWindow": 200_000
+          }}, input_tokens=1_500_000),
+          _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
+      ])
   await session_mgr.resolve_session_usage(meta.id, meta)
 
   for i in range(session_usage._ON_LOOP_SUFFIX_CAP + 1):

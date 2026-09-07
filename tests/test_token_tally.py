@@ -706,52 +706,57 @@ def test_opencode_cache_serves_unchanged_db(tmp_path: Path) -> None:
   assert ([n for n in second.notes if n.startswith("opencode")] == [n for n in first.notes if n.startswith("opencode")])
 
 
+# The opencode message shapes the LIKE prefilter admits (assistant role, object tokens, not
+# all counters zero). The scan SQL and the incremental _opencode_row_data projection must
+# agree on every admitted shape, so the corpus is defined once here and both tests consume
+# it; a new admitted shape is added here once.
+_ADMITTED_OPENCODE_ROWS = [
+    {
+        "role": "assistant",
+        "modelID": "oc-full",
+        "providerID": "prov",
+        "time": {
+            "created": 1700000000000
+        },
+        "tokens": {
+            "input": 10,
+            "output": 2,
+            "cache": {
+                "read": 4,
+                "write": 1
+            }
+        }
+    },
+    {
+        "role": "assistant",
+        "modelID": "/models/oc-local",
+        "providerID": "lmstudio",
+        "tokens": {
+            "input": 0,
+            "output": 3,
+            "total": 3
+        }
+    },
+    {
+        "role": "assistant",
+        "modelID": "oc-nocache",
+        "providerID": "prov",
+        "tokens": {
+            "input": 5,
+            "output": 1,
+            "total": 6
+        }
+    },
+]
+
+
 def test_opencode_scan_row_filters(tmp_path: Path) -> None:
   # Every row shape the LIKE prefilter admits must land exactly where the old fetch-and-parse
   # path put it: counted, skipped as non-contributing, or skipped as malformed.
   db = tmp_path / "db.sqlite"
   con = sqlite3.connect(db)
   _create_message_table(con)
-  rows = [
-      (
-          {
-              "role": "assistant",
-              "modelID": "oc-full",
-              "providerID": "prov",
-              "time": {
-                  "created": 1700000000000
-              },
-              "tokens": {
-                  "input": 10,
-                  "output": 2,
-                  "cache": {
-                      "read": 4,
-                      "write": 1
-                  }
-              }
-          }, (None, "", "")),
-      (
-          {
-              "role": "assistant",
-              "modelID": "/models/oc-local",
-              "providerID": "lmstudio",
-              "tokens": {
-                  "input": 0,
-                  "output": 3,
-                  "total": 3
-              }
-          }, (None, "", "")),
-      (
-          {
-              "role": "assistant",
-              "modelID": "oc-nocache",
-              "providerID": "prov",
-              "tokens": {
-                  "input": 5,
-                  "output": 1,
-                  "total": 6
-              }
-          }, (None, "", "")),
+  rows = [(data, (None, "", "")) for data in _ADMITTED_OPENCODE_ROWS] + [
       # skipped rows below: non-assistant role; all counters zero; tokens not an object;
       # malformed JSON that still matches the LIKE prefilter
       ({
@@ -796,46 +801,13 @@ def test_opencode_scan_row_filters(tmp_path: Path) -> None:
 def test_opencode_row_data_matches_the_scan_projection() -> None:
   # The incremental path projects fetched blobs through _opencode_row_data; that projection
   # must agree with the scan SQL on every shape the prefilter admits, including the skips.
-  shapes = [
-      (
-          {
-              "role": "assistant",
-              "modelID": "oc-full",
-              "providerID": "prov",
-              "time": {
-                  "created": 1700000000000
-              },
-              "tokens": {
-                  "input": 10,
-                  "output": 2,
-                  "cache": {
-                      "read": 4,
-                      "write": 1
-                  }
-              }
-          }, (["oc-full", "prov", "2023-11-14T22:13:20+00:00", 10, 1, 4, 2], True)),
-      (
-          {
-              "role": "assistant",
-              "modelID": "/models/oc-local",
-              "providerID": "lmstudio",
-              "tokens": {
-                  "input": 0,
-                  "output": 3,
-                  "total": 3
-              }
-          }, (["oc-local (lmstudio)", "lmstudio", None, 0, 0, 0, 3], True)),
-      (
-          {
-              "role": "assistant",
-              "modelID": "oc-nocache",
-              "providerID": "prov",
-              "tokens": {
-                  "input": 5,
-                  "output": 1,
-                  "total": 6
-              }
-          }, (["oc-nocache", "prov", None, 5, 0, 0, 1], True)),
+  projections = [
+      (["oc-full", "prov", "2023-11-14T22:13:20+00:00", 10, 1, 4, 2], True),
+      (["oc-local (lmstudio)", "lmstudio", None, 0, 0, 0, 3], True),
+      (["oc-nocache", "prov", None, 5, 0, 0, 1], True),
+  ]
+  # strict=True fails loud when the admitted corpus and its expected projections drift apart.
+  shapes = list(zip(_ADMITTED_OPENCODE_ROWS, projections, strict=True)) + [
       # skipped rows below: non-assistant role counted 0 bytes; zero counters and
       # string tokens pass the filters but project to None with bytes counted
       ({

@@ -1385,11 +1385,11 @@ async def test_sse_watchdog_timeout_fails_run_end_to_end(monkeypatch, tmp_path: 
 @pytest.fixture(autouse=True)
 def _fresh_unhandled_part_type_registry():
   """Keep the process-wide warn-once registry from leaking across tests."""
-  opencode_mod._UNHANDLED_PART_TYPES.reset_for_tests()
-  opencode_mod._UNHANDLED_SSE_EVENT_TYPES.reset_for_tests()
+  opencode_mod._UNHANDLED_PART_TYPES.clear()
+  opencode_mod._UNHANDLED_SSE_EVENT_TYPES.clear()
   yield
-  opencode_mod._UNHANDLED_PART_TYPES.reset_for_tests()
-  opencode_mod._UNHANDLED_SSE_EVENT_TYPES.reset_for_tests()
+  opencode_mod._UNHANDLED_PART_TYPES.clear()
+  opencode_mod._UNHANDLED_SSE_EVENT_TYPES.clear()
 
 
 def test_unhandled_part_type_logs_once_per_process(monkeypatch) -> None:

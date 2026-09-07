@@ -26,6 +26,7 @@ from src.core.json_utils import (
     load_json_meta,
     write_json_atomically,
 )
+from src.core.log_once import WarnOnceRegistry
 from src.core.memo import BoundedMemo
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection
@@ -298,7 +299,7 @@ def has_pending_plan_approval_sync(plans_path: Path, session_id: str) -> bool:
 # first event), and each scan reports the same failure again — one line per
 # search request per stuck file — while only the first sighting of a reported
 # (session, error) pair carries information.
-_SEARCH_READ_FAILURES_SEEN: set[tuple[str, str]] = set()
+_SEARCH_READ_FAILURES_SEEN = WarnOnceRegistry()
 
 
 def _log_search_read_failed_once(session_id: str, error: OSError) -> None:
@@ -310,11 +311,8 @@ def _log_search_read_failed_once(session_id: str, error: OSError) -> None:
   errno changed) earns one new line and nothing outside the log statement
   drifts the key away from what was reported.
   """
-  key = (session_id, str(error))
-  if key in _SEARCH_READ_FAILURES_SEEN:
-    return
-  _SEARCH_READ_FAILURES_SEEN.add(key)
-  log.debug("search_read_failed", session_id=session_id, error=str(error))
+  _SEARCH_READ_FAILURES_SEEN.log(
+      log.debug, "search_read_failed", (session_id, str(error)), session_id=session_id, error=str(error))
 
 
 def _reset_search_read_failures_for_tests() -> None:

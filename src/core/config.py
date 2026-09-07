@@ -20,6 +20,7 @@ from pydantic import (
     model_validator,
 )
 
+from src.core.log_once import WarnOnceRegistry
 from src.core.models import (
     BackendOption,
     BackendType,
@@ -580,8 +581,9 @@ _config_mtime: object = None
 _config_failed_mtime: object = None
 # First sighting per error string per process: a persisting broken corpus
 # re-fires a fired alarm on every reload attempt otherwise. A successful load
-# clears the set, so a later relapse earns one new line (M50's recovery rule).
-_config_reload_errors_seen: set[str] = set()
+# clears the registry, so a later relapse earns one new line (M50's recovery
+# rule).
+_config_reload_errors_seen = WarnOnceRegistry()
 
 
 def _warn_config_reload_failed_once(error: Exception) -> None:
@@ -592,10 +594,7 @@ def _warn_config_reload_failed_once(error: Exception) -> None:
   line logs, so a changed failure earns one new line and nothing outside the
   log statement drifts the key away from what was reported.
   """
-  if str(error) in _config_reload_errors_seen:
-    return
-  _config_reload_errors_seen.add(str(error))
-  log.warning("config_reload_failed", error=str(error))
+  _config_reload_errors_seen.log(log.warning, "config_reload_failed", str(error), error=str(error))
 
 
 def _reset_config_reload_failures_for_tests() -> None:

@@ -34,6 +34,13 @@ _LAST_CHARS = 250
 
 _EXTRACT_MEMO_CAP = 8
 
+# Parsed recap_summaries.json documents memoized per path on (mtime_ns, size).
+# The only writer is _write_cache_entry, which publishes through the atomic
+# tmp-file rename, so any content change moves the signature; the signature is
+# taken before the read so an entry recorded during a concurrent write keys the
+# older signature and can never be served for the newer bytes.
+_SUMMARY_CACHE_MEMO_CAP = 8
+
 # (session_id, end) -> extraction over the global event range [0, end). A
 # session's global event stream is append-only (the weekly archive rotation
 # shifts the live/archive split but never moves an event's global index), so a
@@ -42,6 +49,11 @@ _EXTRACT_MEMO_CAP = 8
 # CreateSessionRequest ids) are covered by _drop_session_runtime_state hooking
 # drop_extract_memo.
 _extract_memo: BoundedMemo[tuple[str, int], dict] = BoundedMemo(_EXTRACT_MEMO_CAP)
+
+# path -> (mtime_ns, size, parsed document). Served values are treated
+# read-only: readers only run dict lookups, and the writer side (_write_cache_entry)
+# loads the file fresh instead of touching this memo.
+_summary_cache_memo: BoundedMemo[Path, tuple[int, int, dict]] = BoundedMemo(_SUMMARY_CACHE_MEMO_CAP)
 
 
 def drop_extract_memo(session_id: str) -> None:
@@ -131,6 +143,18 @@ def extract_recap(session_mgr: SessionManager, session_id: str, upto: int | None
   return result
 
 
+def extract_recap_memo_hit(session_id: str, upto: int | None) -> dict | None:
+  """The memo-hit half of extract_recap: a dict lookup, safe on the event loop.
+
+  ``None`` sends the caller to the threaded :func:`extract_recap`, which
+  re-checks the memo before scanning. An explicit divider is required: the
+  default-divider shape needs the count read the memo cannot answer.
+  """
+  if upto is None:
+    return None
+  return _extract_memo.get((session_id, upto + 1))
+
+
 def _extract_from_events(events: list[dict]) -> dict:
   """The extract_recap scan body: events already sliced to the divider."""
   messages = events_to_messages(events)
@@ -173,14 +197,28 @@ def _load_cache(path: Path) -> dict:
   return json.loads(path.read_text(encoding="utf-8"))
 
 
-def lookup_cached_summary(session_mgr: SessionManager, session_id: str, upto: int) -> tuple[str | None, bool]:
-  """Return ``(summary, stale)`` for the divider at *upto*.
+def _load_cache_signed(path: Path) -> dict:
+  """The parsed cache document behind a signature memo, or ``{}`` when absent.
 
-  Exact cache hit -> ``(summary, False)``. No exact hit but a summary computed at
-  an earlier point exists -> ``(that_summary, True)`` since newer events are not
-  yet reflected. Otherwise ``(None, False)``.
+  The signature is taken before the read: a write landing between the two keys
+  the entry under the older signature, which the next stat mismatches — an
+  entry can never be served for bytes it did not parse. Only successful parses
+  memoize; a corrupt document keeps raising on every call.
   """
-  cache = _load_cache(_cache_path(session_mgr, session_id))
+  try:
+    st = path.stat()
+    sig = (st.st_mtime_ns, st.st_size)
+  except OSError:
+    return {}
+  entry = _summary_cache_memo.get(path)
+  if entry is not None and (entry[0], entry[1]) == sig:
+    return entry[2]
+  cache = json.loads(path.read_text(encoding="utf-8"))
+  _summary_cache_memo.store(path, (sig[0], sig[1], cache))
+  return cache
+
+
+def _summary_verdict(cache: dict, upto: int) -> tuple[str | None, bool]:
   exact = cache.get(str(upto))
   if exact is not None:
     return exact["summary"], False
@@ -188,6 +226,37 @@ def lookup_cached_summary(session_mgr: SessionManager, session_id: str, upto: in
   if earlier:
     return cache[str(max(earlier))]["summary"], True
   return None, False
+
+
+def summary_lookup_memo_hit(session_mgr: SessionManager, session_id: str, upto: int) -> tuple[str | None, bool] | None:
+  """The stat + memo half of lookup_cached_summary, safe on the event loop.
+
+  Returns the ``(summary, stale)`` verdict, or ``None`` when the cache file's
+  current signature has no parsed entry — the caller pays the threaded read,
+  which re-parses and stores. A missing cache file answers ``(None, False)``
+  here: no document exists whose bytes could move the verdict.
+  """
+  path = _cache_path(session_mgr, session_id)
+  try:
+    st = path.stat()
+    sig = (st.st_mtime_ns, st.st_size)
+  except OSError:
+    return (None, False)
+  entry = _summary_cache_memo.get(path)
+  if entry is None or (entry[0], entry[1]) != sig:
+    return None
+  return _summary_verdict(entry[2], upto)
+
+
+def lookup_cached_summary(session_mgr: SessionManager, session_id: str, upto: int) -> tuple[str | None, bool]:
+  """Return ``(summary, stale)`` for the divider at *upto*.
+
+  Exact cache hit -> ``(summary, False)``. No exact hit but a summary computed at
+  an earlier point exists -> ``(that_summary, True)`` since newer events are not
+  yet reflected. Otherwise ``(None, False)``.
+  """
+  cache = _load_cache_signed(_cache_path(session_mgr, session_id))
+  return _summary_verdict(cache, upto)
 
 
 def _write_cache_entry(session_mgr: SessionManager, session_id: str, upto: int, summary: str) -> None:

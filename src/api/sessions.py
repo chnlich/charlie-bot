@@ -26,7 +26,7 @@ from src.api.message_utils import (
     build_session_view_data,
     events_to_messages,
 )
-from src.api.responses import FastJsonResponse
+from src.api.responses import FastJsonResponse, PreencodedJSONResponse, fast_json_bytes
 from src.api.threads import view_thread_rows
 from src.core import claude_accounts, thinking_state
 from src.core.chat_events import chat_events_path
@@ -592,8 +592,16 @@ async def get_session_events_page(
     if projection is None:
       projection = await asyncio.to_thread(session_mgr.get_message_projection, session_id)
     if projection is not None:
-      messages, next_before, has_more = projection.slice_before(before, limit)
-      return FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": next_before})
+      # The chat UI re-fetches a page whenever it re-enters the viewport or the
+      # session is reopened, and the published projection is immutable, so a
+      # repeat page serves its rendered body from the projection's own cache;
+      # every advance publishes a new projection whose cache starts empty.
+      body = projection.cached_page_body(before, limit)
+      if body is None:
+        messages, next_before, has_more = projection.slice_before(before, limit)
+        body = fast_json_bytes({"messages": messages, "has_more": has_more, "next_before": next_before})
+        projection.store_page_body(before, limit, body)
+      return PreencodedJSONResponse(body)
   start = max(0, before - limit)
   events, has_more = await asyncio.to_thread(session_mgr.load_chat_events_range, session_id, start, before)
   messages = events_to_messages(events, event_index_offset=start)

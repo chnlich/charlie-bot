@@ -21,6 +21,7 @@ from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 from src.core.models import (
     CreateSessionRequest,
+    SessionMetadata,
     TaskType,
 )
 from src.core.plans import PlanRegistryManager
@@ -38,6 +39,20 @@ def _build_app(
   app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
   app.dependency_overrides[get_plan_manager] = lambda: plan_mgr
   return app
+
+
+async def _presented_rig(
+    tmp_path: Path,
+) -> tuple[FastAPI, CharlieBotConfig, PlanRegistryManager, SessionMetadata]:
+  """Plan-endpoints app over a fresh registry with plan 1 already presented from plan_01.html.
+
+  Returns (app, cfg, plan_mgr, meta); amend tests need cfg to stage a second artifact, and
+  the closed-state tests close the plan through plan_mgr.
+  """
+  cfg, session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  f = _write_artifact(cfg, meta.id, "plan_01.html")
+  await plan_mgr.present(meta.id, file=f, title="P1")
+  return _build_app(cfg, session_mgr, thread_mgr, plan_mgr), cfg, plan_mgr, meta
 
 
 # ---------------------------------------------------------------------------
@@ -63,11 +78,8 @@ async def test_plan_present_endpoint_happy_path(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_plan_amend_endpoint_happy_path(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
+  app, cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/amend",
@@ -89,29 +101,35 @@ async def test_plan_amend_endpoint_happy_path(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_amend_requires_note_422(tmp_path: Path) -> None:
-  """note is a required field on the amend request; a request without one is a 422."""
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
+@pytest.mark.parametrize(
+    "amend_fields",
+    [
+        pytest.param({}, id="missing-note"),
+        pytest.param({
+            "note": "why changed",
+            "trigger": "initial"
+        }, id="initial-trigger"),
+    ],
+)
+async def test_plan_amend_rejects_422(tmp_path: Path, amend_fields: dict[str, Any]) -> None:
+  """note is required on the amend request, and trigger=initial — the create-time value — is a 422."""
+  app, cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
-        "/api/internal/plan/amend", json={
+        "/api/internal/plan/amend",
+        json={
             "session_id": meta.id,
             "file": f2,
             "plan_id": 1,
+            **amend_fields,
         })
   assert resp.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_plan_approve_endpoint_happy_path(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, title="P1")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  app, _cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
   with TestClient(app) as client:
     resp = client.post("/api/internal/plan/approve", json={"session_id": meta.id})
   assert resp.status_code == 200
@@ -120,10 +138,7 @@ async def test_plan_approve_endpoint_happy_path(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_plan_close_endpoint_happy_path(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, title="P1")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  app, _cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
   with TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/close", json={
@@ -137,10 +152,7 @@ async def test_plan_close_endpoint_happy_path(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_plan_close_completed_then_list_shows_completed(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, title="P1")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  app, _cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
   with TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/close", json={
@@ -167,10 +179,7 @@ async def test_plan_close_completed_then_list_shows_completed(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_get_plans_endpoint_returns_registry(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, title="P1")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  app, _cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
   with TestClient(app) as client:
     resp = client.get(f"/api/sessions/{meta.id}/plans")
   assert resp.status_code == 200
@@ -217,12 +226,9 @@ async def test_plan_present_rejects_missing_file_400(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_plan_amend_rejects_closed_400(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
+  app, cfg, plan_mgr, meta = await _presented_rig(tmp_path)
   await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/amend", json={
@@ -237,11 +243,8 @@ async def test_plan_amend_rejects_closed_400(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_plan_close_rejects_already_closed_400(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, title="P1")
+  app, _cfg, plan_mgr, meta = await _presented_rig(tmp_path)
   await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
   with TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/close", json={
@@ -275,10 +278,7 @@ async def test_plan_reverify_endpoint_removed(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_session_view_omits_plans(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, title="P1")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  app, _cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
   with TestClient(app) as client:
     resp = client.get(f"/api/sessions/{meta.id}/view")
   assert resp.status_code == 200
@@ -396,38 +396,10 @@ async def test_get_plans_endpoint_corrupt_file_200_with_error_entry(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_get_plans_endpoint_normal_file_200_with_empty_errors(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f, title="P1")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
+  app, _cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
   with TestClient(app) as client:
     resp = client.get(f"/api/sessions/{meta.id}/plans")
   assert resp.status_code == 200
   body = resp.json()
   assert len(body["plans"]) == 1
   assert body["errors"] == []
-
-
-# ---------------------------------------------------------------------------
-# Amend trigger tightening (A4) — API request with trigger=initial → 422 (pydantic)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_plan_amend_rejects_initial_trigger_422(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f1 = _write_artifact(cfg, meta.id, "plan_01.html")
-  await plan_mgr.present(meta.id, file=f1, title="P1")
-  f2 = _write_artifact(cfg, meta.id, "plan_02.html")
-  app = _build_app(cfg, _session_mgr, thread_mgr, plan_mgr)
-  with TestClient(app) as client:
-    resp = client.post(
-        "/api/internal/plan/amend",
-        json={
-            "session_id": meta.id,
-            "file": f2,
-            "plan_id": 1,
-            "note": "why changed",
-            "trigger": "initial",
-        })
-  assert resp.status_code == 422

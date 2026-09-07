@@ -261,23 +261,17 @@ async def test_same_thread_twice_reuses_the_session(tmp_path: Path) -> None:
   assert sessions[0].id == first
 
 
-@pytest.mark.asyncio
-async def test_disallowed_user_drops_with_no_side_effects(tmp_path: Path) -> None:
-  cfg, session_mgr, client = _rig(tmp_path)
-  event = _make_event(user="U_OTHER")
-
-  with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
-    result = await handle_app_mention(event, cfg, session_mgr, client)
-
-  assert result is None
-  assert not client.calls
-  assert await session_mgr.get_session(_sid(event)) is None
+_DROP_ROWS = [
+    pytest.param({"user": "U_OTHER"}, id="disallowed-user"),
+    pytest.param({"type": "message"}, id="non-app-mention"),
+]
 
 
 @pytest.mark.asyncio
-async def test_non_app_mention_message_drops_with_no_side_effects(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("event_overrides",), _DROP_ROWS)
+async def test_unhandled_event_drops_with_no_side_effects(tmp_path: Path, event_overrides: dict) -> None:
   cfg, session_mgr, client = _rig(tmp_path)
-  event = _make_event(type="message")
+  event = _make_event(**event_overrides)
 
   with patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()):
     result = await handle_app_mention(event, cfg, session_mgr, client)

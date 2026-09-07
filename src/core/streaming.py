@@ -40,7 +40,7 @@ _PREVIEW_HIDING_TYPES = frozenset({"message", "assistant_error", "error"})
 class StreamingManager:
   """Fan-out WebSocket events from Worker subprocesses to browser clients."""
 
-  def __init__(self):
+  def __init__(self) -> None:
     self._connections: dict[str, set[WebSocket]] = defaultdict(set)
     self._pending_stream: dict[str, dict[str, Any]] = {}
     self._stream_timers: dict[str, asyncio.TimerHandle] = {}

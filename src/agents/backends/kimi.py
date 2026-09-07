@@ -12,7 +12,7 @@ class KimiBackend(AnthropicEndpointBackend):
   api.anthropic.com; the model rides the env vars, not a ``--model`` flag.
   """
 
-  def __init__(self, *, api_key: str, model: str, **kwargs):
+  def __init__(self, *, api_key: str, model: str, **kwargs) -> None:
     if not model:
       raise ValueError("kimi backend requires a model")
     super().__init__(base_url=_MOONSHOT_BASE_URL, auth_token=api_key, model=model, **kwargs)

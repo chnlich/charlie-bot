@@ -59,7 +59,7 @@ def _read_cron_yaml(name: str) -> dict:
   return load_yaml(cron_path(name), default={})
 
 
-def _write_cron_yaml(name: str, data: dict):
+def _write_cron_yaml(name: str, data: dict) -> None:
   save_yaml(cron_path(name), data)
 
 

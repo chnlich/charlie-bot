@@ -158,3 +158,41 @@ test('a repeat render before the flush re-emits markers the pending flush covers
   assert.doesNotMatch(settled, /data-hl/);
   assert.equal(c.marked.parseCallCount(), 2); // 1 memo parse + 1 direct; the repeat served the settled entry
 });
+
+test('a settled body with replacement patterns stays byte-identical to the direct render', () => {
+  const c = loadCodeRenderer();
+  const text = 'echo $$ and $1 and $& and $` tail';
+  c.renderProseMarkdown(text);
+  c.__runTimers();
+  const settled = c.renderProseMarkdown(text);
+  const direct = c.marked.parse(c.fixNestedFences(text));
+  assert.equal(settled, direct); // a replacement-string replace would corrupt $$/$&/$`
+});
+
+test('the flush sweeps a detached postProcess root the prerender registered', () => {
+  const c = loadCodeRenderer();
+  c.document = { querySelectorAll: () => [] };
+  const el = { innerHTML: '', removed: false, removeAttribute() { this.removed = true; } };
+  const root = {
+    querySelectorAll(sel) {
+      return /data-hl="\d+"/.test(sel) ? [el] : [];
+    },
+  };
+  c.renderProseMarkdown('body five');
+  c.scheduleCodeHighlightFlush(root); // registers the root; the first flush is still pending
+  c.__runTimers();
+  assert.equal(el.innerHTML, 'body five');
+  assert.equal(el.removed, true);
+  assert.equal(c.__timerCount(), 0); // found on the first pass: no retries
+});
+
+test('markers no sweep ever finds give up after the bounded retries', () => {
+  const c = loadCodeRenderer();
+  c.document = { querySelectorAll: () => [] };
+  c.renderProseMarkdown('body six');
+  for (let i = 0; i < 10000 && c.__timerCount() > 0; i++) c.__runTimers();
+  assert.equal(c.__timerCount(), 0); // the retry loop terminated
+  const settled = c.renderProseMarkdown('body six');
+  assert.equal(settled, c.marked.parse(c.fixNestedFences('body six')));
+  assert.doesNotMatch(settled, /data-hl/); // the memo settled on the first pass regardless
+});

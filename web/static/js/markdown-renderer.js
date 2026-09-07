@@ -384,7 +384,11 @@ function renderProseMarkdown(text) {
   return html;
 }
 
-function scheduleCodeHighlightFlush() {
+function scheduleCodeHighlightFlush(root) {
+  // The turn-engine prerender post-processes detached fragments; a root
+  // handed in here while records are pending joins the flush's sweep, so its
+  // markers get the swap even before the fragment attaches.
+  if (root && deferredBlocks.size) registerHighlightRoot(root);
   if (highlightFlushScheduled || !deferredBlocks.size) return;
   highlightFlushScheduled = true;
   const run = () => {
@@ -398,13 +402,39 @@ function scheduleCodeHighlightFlush() {
   else setTimeout(run, 0);
 }
 
+// Roots whose renders still carry unswapped markers. WeakRefs let a discarded
+// render's tree be collected; the WeakSet dedupes repeated registrations of
+// the same root.
+var highlightRootRefs = new Set();
+var highlightRootsSeen = new WeakSet();
+var HIGHLIGHT_FLUSH_RETRY_MS = 250;
+var HIGHLIGHT_FLUSH_MAX_ATTEMPTS = 120;
+
+function registerHighlightRoot(root) {
+  if (!root || highlightRootsSeen.has(root)) return;
+  highlightRootsSeen.add(root);
+  if (typeof WeakRef === 'function') highlightRootRefs.add(new WeakRef(root));
+}
+
 function flushDeferredCodeHighlights() {
   if (!deferredBlocks.size) return;
-  // The flush swaps the highlighted bytes into every marker this document
-  // still holds; nodes a discarded render left detached settle the memo entry
-  // only. The 8 ms timebox bounds each frame's highlight work — highlightAuto
-  // on one block can exceed it, so the deadline is checked between records.
+  // The flush swaps the highlighted bytes into every marker the document and
+  // the registered roots still hold — the turn-engine prerenders atoms
+  // detached and holds the fragment alive until the segment materializes, so
+  // a root sweep settles the block before it ever attaches. The 8 ms timebox
+  // bounds each pass's highlight work — highlightAuto on one block can exceed
+  // it, so the deadline is checked between records. A record no sweep finds
+  // retries on a bounded backoff (the attach can land much later, on a
+  // scroll) and gives up after HIGHLIGHT_FLUSH_MAX_ATTEMPTS; the memo entry
+  // settles on the first pass either way, so every later render serves the
+  // settled bytes.
   const deadline = performance.now() + 8;
+  const roots = [];
+  for (const ref of highlightRootRefs) {
+    const root = ref.deref();
+    if (root) roots.push(root);
+    else highlightRootRefs.delete(ref);
+  }
   for (const [id, rec] of deferredBlocks) {
     const run = () => (rec.lang
       ? hljs.highlight(rec.code, { language: rec.lang }).value
@@ -413,17 +443,42 @@ function flushDeferredCodeHighlights() {
     const settledBlock = codeBlockHtml(rec.displayLang, rec.isMarkdown, highlighted, null);
     const cached = proseParseCache.get(rec.text);
     if (cached !== undefined && cached.includes(rec.plainBlock)) {
-      proseParseCache.set(rec.text, cached.replace(rec.plainBlock, settledBlock));
+      // The replacer function keeps the highlighted bytes literal: String's
+      // replacement string would read $$/$&/$`/$' patterns out of them.
+      proseParseCache.set(rec.text, cached.replace(rec.plainBlock, () => settledBlock));
     }
-    for (const el of document.querySelectorAll(`code[data-hl="${id}"]`)) {
+    const selector = `code[data-hl="${id}"]`;
+    let found = false;
+    for (const el of document.querySelectorAll(selector)) {
       el.innerHTML = highlighted;
       el.removeAttribute('data-hl');
+      found = true;
     }
-    deferredBlocks.delete(id);
+    for (const root of roots) {
+      for (const el of root.querySelectorAll(selector)) {
+        el.innerHTML = highlighted;
+        el.removeAttribute('data-hl');
+        found = true;
+      }
+    }
+    if (found) deferredBlocks.delete(id);
+    else rec.attempts = (rec.attempts || 0) + 1;
     if (performance.now() >= deadline && deferredBlocks.size) {
       scheduleCodeHighlightFlush();
       return;
     }
+  }
+  let retry = false;
+  for (const [id, rec] of deferredBlocks) {
+    if ((rec.attempts || 0) >= HIGHLIGHT_FLUSH_MAX_ATTEMPTS) deferredBlocks.delete(id);
+    else retry = true;
+  }
+  if (retry) {
+    highlightFlushScheduled = true;
+    setTimeout(() => {
+      highlightFlushScheduled = false;
+      flushDeferredCodeHighlights();
+    }, HIGHLIGHT_FLUSH_RETRY_MS);
   }
 }
 

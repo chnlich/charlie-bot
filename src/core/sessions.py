@@ -406,10 +406,11 @@ def _scan_content_for_hit(path: Path, session_id: str, query_lower: str, start: 
 class _WalkedProbeInputs(NamedTuple):
   """The stat pairs one probe-input walk took, for the probe cores to reuse.
 
-  ``trigger_files`` is None when the triggers dir itself is missing, so the
-  trigger core answers its empty state without an ``exists()`` stat. The pairs
-  describe the walk's instant, and the caller stores the probe result with that
-  same walk's signature, so entry and signature always describe one state.
+  ``trigger_files`` is None when the triggers dir itself is missing; the
+  trigger core then falls back to its self-walked path and answers its empty
+  state. The pairs describe the walk's instant, and the caller stores the
+  probe result with that same walk's signature, so entry and signature always
+  describe one state.
   """
 
   thread_metas: list[tuple[str, str, os.stat_result]]
@@ -453,15 +454,16 @@ def _sidebar_probe_walk(threads_dir: Path, triggers_dir: Path, plans_path: Path)
   A deep probe's result can change only three ways, and the signature pins all
   three: a probed file's content changes (caught by ``(st_mtime_ns, st_size)``
   for both atomic-rename and in-place writers), a probed file or thread dir
-  appears or disappears (caught by the sorted name sets, with ``None`` marking
-  a thread dir still missing its metadata.json), or the 30-day
-  ``RUNNING_SCAN_WINDOW`` rolls past a metadata's mtime and drops it from
-  ``has_running_tasks_sync``'s read set without any file changing (caught by
-  the rollover element: the earliest ``mtime + window`` over scanned metas, or
-  ``float('inf')`` when nothing was scanned). The stat pass mirrors the probe
-  cores' own scandir+stat phase, so a signature sweep costs the cheap half of
-  a probe and skips every content read and parse. String paths instead of
-  Path objects: the sweep runs per poll over every selected session, and
+  appears or disappears among the readable entries (caught by the sorted name
+  sets — a thread dir whose metadata.json cannot be statted contributes
+  nothing until the file lands, and its arrival then moves the set), or the
+  30-day ``RUNNING_SCAN_WINDOW`` rolls past a metadata's mtime and drops it
+  from ``has_running_tasks_sync``'s read set without any file changing (caught
+  by the rollover element: the earliest ``mtime + window`` over scanned metas,
+  or ``float('inf')`` when nothing was scanned). The stat pass mirrors the
+  probe cores' own scandir+stat phase, so a signature sweep costs the cheap
+  half of a probe and skips every content read and parse. String paths instead
+  of Path objects: the sweep runs per poll over every selected session, and
   pathlib's parse/alloc overhead would dominate the raw stat syscalls —
   os.stat on joined strs measures ~2x faster over the active-session corpus.
 

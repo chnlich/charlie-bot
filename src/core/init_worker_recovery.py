@@ -86,9 +86,10 @@ _silence_reported_thread_ids: set[str] = set()
 def walk_thread_meta_stats(threads_dir: Path, log_event: str) -> list[tuple[str, str, "os.stat_result"]]:
   """``(thread_dir, metadata.json path, stat)`` for every thread dir under *threads_dir*.
 
-  The scandir+stat phase the sidebar probe-input signature and
-  ``iter_recent_thread_metas`` both need: one walk whose stat results both
-  consumers previously took separately. Thread dirs without a readable
+  The scandir+stat phase the sidebar probe's signature walk takes once and
+  hands to ``iter_recent_thread_metas``' walked branch, which previously
+  re-took it per probe. The boot recovery scan keeps its own lazy inline loop
+  because its consumers short-circuit mid-scan. Thread dirs without a readable
   ``metadata.json`` are skipped (mid-creation races have nothing to read);
   other stat failures log *log_event* and skip.
   """

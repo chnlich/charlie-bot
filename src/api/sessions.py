@@ -616,9 +616,17 @@ async def get_session_recap(
   if upto is None:
     count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id)
     upto = max(0, count - 1)
-  extract = await asyncio.to_thread(recap.extract_recap, session_mgr, session_id, upto)
-  summary, stale = await asyncio.to_thread(recap.lookup_cached_summary, session_mgr, session_id, upto)
-  return {**extract, "summary": summary, "summary_stale": stale}
+  # The chat UI re-requests an open recap panel on every re-materialization, so a
+  # repeat read answers from the extract + summary-cache memos on the event loop;
+  # the executor round-trips are paid only on a memo miss.
+  extract = recap.extract_recap_memo_hit(session_id, upto)
+  if extract is None:
+    extract = await asyncio.to_thread(recap.extract_recap, session_mgr, session_id, upto)
+  summary = recap.summary_lookup_memo_hit(session_mgr, session_id, upto)
+  if summary is None:
+    summary = await asyncio.to_thread(recap.lookup_cached_summary, session_mgr, session_id, upto)
+  summary_text, stale = summary
+  return FastJsonResponse({**extract, "summary": summary_text, "summary_stale": stale})
 
 
 @router.post('/{session_id}/recap/summarize')

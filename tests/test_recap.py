@@ -311,6 +311,78 @@ async def test_extract_memo_drops_with_session_runtime_state(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_extract_recap_memo_hit_serves_repeat_without_scan(tmp_path: Path) -> None:
+  """The hit-check serves a stored extraction without any corpus work.
+
+  The route's on-loop fast path needs the memo answer without paying the
+  executor round-trip extract_recap's threaded body carries; None must send the
+  caller to the threaded path, which re-checks the memo before scanning.
+  """
+  _cfg, mgr, session = await make_home_session(tmp_path, name="memo-hit")
+  _append_events(mgr.get_chat_events_path(session.id), [{"type": "user", "content": "ask"}])
+
+  assert recap.extract_recap_memo_hit(session.id, 0) is None  # cold memo
+  recap.extract_recap(mgr, session.id, upto=0)
+  hit = recap.extract_recap_memo_hit(session.id, 0)
+  assert hit == recap.extract_recap(mgr, session.id, upto=0)
+  assert recap.extract_recap_memo_hit(session.id, None) is None  # default-divider shape needs the count read
+
+
+@pytest.mark.asyncio
+async def test_summary_lookup_memo_hit_serves_repeat_and_misses_on_write(tmp_path: Path) -> None:
+  """The hit-check answers an unchanged cache file and defers a moved one.
+
+  The signature check is what keeps the served verdict current: the only writer
+  publishes through the atomic rename, so a rewrite always moves (mtime_ns,
+  size) and the hit-check must answer None for the newer bytes until a threaded
+  read re-parses. A missing cache file answers (None, False) directly — no
+  document exists whose bytes could move the verdict.
+  """
+  _cfg, mgr, session = await make_home_session(tmp_path, name="summary-hit")
+  assert recap.summary_lookup_memo_hit(mgr, session.id, 0) == (None, False)  # no cache file
+
+  recap._write_cache_entry(mgr, session.id, 0, "the summary")
+  assert recap.summary_lookup_memo_hit(mgr, session.id, 0) is None  # signature not parsed yet
+  assert recap.lookup_cached_summary(mgr, session.id, 0) == ("the summary", False)  # threaded parse stores
+
+  with patch.object(Path, "read_text", side_effect=AssertionError("hit path must not re-read the file")):
+    assert recap.summary_lookup_memo_hit(mgr, session.id, 0) == ("the summary", False)
+    assert recap.lookup_cached_summary(mgr, session.id, 0) == ("the summary", False)
+
+  recap._write_cache_entry(mgr, session.id, 0, "the newer summary")
+  assert recap.summary_lookup_memo_hit(mgr, session.id, 0) is None  # moved signature defers to the threaded read
+  assert recap.lookup_cached_summary(mgr, session.id, 0) == ("the newer summary", False)
+  assert recap.lookup_cached_summary(mgr, session.id, 5) == ("the newer summary", True)  # stale-earlier verdict
+
+
+@pytest.mark.asyncio
+async def test_summary_cache_memo_never_serves_bytes_it_did_not_parse(tmp_path: Path) -> None:
+  """A memo entry recorded against a pre-read signature cannot serve newer bytes.
+
+  A write landing between the signature stat and the file read keys the entry
+  under the older signature; the next call's stat sees the newer signature and
+  must miss, so a served document is always one whose bytes a read actually
+  parsed.
+  """
+  _cfg, mgr, session = await make_home_session(tmp_path, name="summary-sig")
+  recap._write_cache_entry(mgr, session.id, 0, "first")
+  path = recap._cache_path(mgr, session.id)
+  st = path.stat()
+
+  # An entry stored under the current signature serves the next stat's match...
+  recap.lookup_cached_summary(mgr, session.id, 0)
+  entry = recap._summary_cache_memo.get(path)
+  assert entry is not None and (entry[0], entry[1]) == (st.st_mtime_ns, st.st_size)
+
+  # ...and the rewrite's new signature forces the re-parse that reads the new bytes.
+  recap._write_cache_entry(mgr, session.id, 0, "second")
+  assert recap._summary_cache_memo.get(path) is entry  # old entry still stored
+  assert recap.summary_lookup_memo_hit(mgr, session.id, 0) is None
+  assert recap.lookup_cached_summary(mgr, session.id, 0) == ("second", False)
+  assert recap._summary_cache_memo.get(path) is not entry
+
+
+@pytest.mark.asyncio
 async def test_recap_cache_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
   """The recap summary cache write goes through os.replace on recap_summaries.json.
 

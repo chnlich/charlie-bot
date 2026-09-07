@@ -1433,3 +1433,109 @@ def test_usage_fold_reading_slot_of_appended_suffixes_matches_full_scan() -> Non
   # The slot kind flipped from claude to resolved, and the reading payload won.
   assert full_fold.facts().reading_kind == session_usage._READING_RESOLVED
   assert full_fold.facts().reading == _k3_reading()[ET.CONTEXT_READING]
+
+
+# ---------------------------------------------------------------------------
+# Hit-on-loop: the facts memo's unchanged-list hit and small appended suffixes
+# answer on the event loop; cold caches, replaced lists, and longer suffixes
+# take the threaded scan.
+# ---------------------------------------------------------------------------
+
+
+def _usage_reference(session_mgr: SessionManager, meta: SessionMetadata) -> dict | None:
+  """Full-scan reference: the tiers over a fresh fold of the whole event list."""
+  events = session_mgr.load_chat_events_sync(meta.id)
+  facts = session_usage._scan_usage_facts(events)
+  return (session_usage._resolve_claude_tier(facts) or session_usage._resolve_snapshot_tier(facts)
+          or (None if not events else session_usage._resolve_no_source_tier(facts)))
+
+
+@pytest.mark.asyncio
+async def test_usage_hit_and_suffix_advance_answer_on_event_loop(tmp_path: Path, monkeypatch) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-hit-on-loop", name="Hit On Loop", backend=OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, [
+      _result_event(0.5, {"claude-opus-4-6": {
+          "contextWindow": 200_000
+      }}, input_tokens=1_500_000),
+      _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
+  ])
+
+  warm = await session_mgr.resolve_session_usage(meta.id, meta)
+
+  def fail_scan(self, session_id: str):
+    raise AssertionError("threaded _load_and_scan ran on the memo-hit path")
+
+  monkeypatch.setattr(session_usage.SessionUsageResolver, "_load_and_scan", fail_scan)
+  hit = await session_mgr.resolve_session_usage(meta.id, meta)
+  assert hit == warm
+
+  await session_mgr.save_chat_event(
+      meta.id, _assistant_event("claude-opus-4-6", input_tokens=120_000, cache_creation=1_000, cache_read=2_000))
+  advanced = await session_mgr.resolve_session_usage(meta.id, meta)
+  assert advanced == _usage_reference(session_mgr, meta)
+
+
+@pytest.mark.asyncio
+async def test_usage_cold_cache_and_replaced_list_take_threaded_scan(tmp_path: Path, monkeypatch) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-hit-miss", name="Hit Miss", backend=OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, [
+      _result_event(0.5, {"claude-opus-4-6": {
+          "contextWindow": 200_000
+      }}, input_tokens=1_500_000),
+      _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
+  ])
+
+  calls = []
+  real_scan = session_usage.SessionUsageResolver._load_and_scan
+
+  def recording_scan(self, session_id: str):
+    calls.append(session_id)
+    return real_scan(self, session_id)
+
+  monkeypatch.setattr(session_usage.SessionUsageResolver, "_load_and_scan", recording_scan)
+  cold = await session_mgr.resolve_session_usage(meta.id, meta)
+  assert calls == [meta.id]
+
+  calls.clear()
+  await session_mgr.resolve_session_usage(meta.id, meta)
+  assert calls == []
+
+  session_mgr._chat_events.clear_cache(meta.id)
+  session_mgr.load_chat_events_sync(meta.id)
+  calls.clear()
+  replaced = await session_mgr.resolve_session_usage(meta.id, meta)
+  assert calls == [meta.id]
+  assert replaced == cold
+
+
+@pytest.mark.asyncio
+async def test_usage_suffix_past_cap_takes_threaded_scan(tmp_path: Path, monkeypatch) -> None:
+  cfg = _build_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  meta = SessionMetadata(id="session-hit-cap", name="Hit Cap", backend=OPUS_BACKEND_ID)
+  _write_session(session_mgr, meta, [
+      _result_event(0.5, {"claude-opus-4-6": {
+          "contextWindow": 200_000
+      }}, input_tokens=1_500_000),
+      _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
+  ])
+  await session_mgr.resolve_session_usage(meta.id, meta)
+
+  for i in range(session_usage._ON_LOOP_SUFFIX_CAP + 1):
+    await session_mgr.save_chat_event(meta.id, _assistant_event("claude-opus-4-6", input_tokens=100_001 + i))
+
+  calls = []
+  real_scan = session_usage.SessionUsageResolver._load_and_scan
+
+  def recording_scan(self, session_id: str):
+    calls.append(session_id)
+    return real_scan(self, session_id)
+
+  monkeypatch.setattr(session_usage.SessionUsageResolver, "_load_and_scan", recording_scan)
+  resolved = await session_mgr.resolve_session_usage(meta.id, meta)
+  assert calls == [meta.id]
+  assert resolved == _usage_reference(session_mgr, meta)

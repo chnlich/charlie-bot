@@ -155,7 +155,8 @@ def test_unconfigured_manager_gets_pointer_with_not_enabled_marker_and_no_contra
 
 def test_both_managers_share_one_contract_with_nonconflicting_respective_duties(tmp_path: Path) -> None:
   """The same repo contract file serves both managers; each binds its own mode."""
-  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_TEXT)  # one repo, one contract file, both groups read it
+  # One repo, one contract file: both groups read it.
+  cfg = make_instruction_cfg(tmp_path, manager_contract=CONTRACT_TEXT)
   enabled_dir = cfg.charliebot_home / "projects" / "group-alpha"
   enabled_dir.mkdir(parents=True)
   (enabled_dir / "project.yaml").write_text("prompt_file: project.md\n", encoding="utf-8")

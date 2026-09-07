@@ -163,17 +163,18 @@ def test_loader_loads_prompt_file_pointer(temp_home: Path) -> None:
   assert tasks[0].prompt_file == str(prompt_path)
 
 
-def test_loader_rejects_inline_prompt(temp_home: Path) -> None:
-  _write_task_text(temp_home, "t", _dump({"cron": "* * * * *", "prompt": "body v1"}))
-
-  assert not get_scheduled_tasks()
-  errors = get_scheduled_task_errors()
-  assert len(errors) == 1 and errors[0].name == "t"
-  assert "prompt_file" in errors[0].error
-
-
-def test_loader_rejects_promptless_with_no_handler_or_loop(temp_home: Path) -> None:
-  _write_task_text(temp_home, "t", _dump({"cron": "* * * * *"}))
+@pytest.mark.parametrize(
+    "task_yaml",
+    [
+        pytest.param({
+            "cron": "* * * * *",
+            "prompt": "body v1"
+        }, id="inline-prompt"),
+        pytest.param({"cron": "* * * * *"}, id="no-prompt-source"),
+    ],
+)
+def test_loader_rejects_task_without_prompt_file(temp_home: Path, task_yaml: dict) -> None:
+  _write_task_text(temp_home, "t", _dump(task_yaml))
 
   assert not get_scheduled_tasks()
   errors = get_scheduled_task_errors()

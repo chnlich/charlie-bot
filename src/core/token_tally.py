@@ -379,6 +379,16 @@ _opencode_row_memos: dict[str, dict[str, tuple[int, list | None]]] = {}
 # an equal epoch proves the memo's records — and the rows built from them — still current.
 _opencode_row_epochs: dict[str, int] = {}
 
+# Per-db proof aggregates of the row memo's last full scan: (row count, sum of time_updated).
+# The pair moves whenever the key scan's (id, time_updated) diff would: an insert or delete
+# moves the count, and a moved row rewrites time_updated so the sum changes with it — a
+# data-only rewrite with an unchanged time_updated is invisible to the key scan itself. The
+# one shape both miss is a delete and an insert inside one millisecond whose time_updated
+# values coincide, the same terminal-pair class the row memo vocabulary documents above.
+# Equal aggregates prove the memo current without the per-row key read.
+_OPENCODE_PROBE_SQL = "select count(*), coalesce(sum(time_updated), 0) from message"
+_opencode_probes: dict[str, tuple[int, int]] = {}
+
 # Per-db opencode partial of the last merge, corresponding to the row memo's current state
 # (buckets by model and account, per-model spans, contributing-record count). A scan that
 # moves the memo reports the per-row deltas; the next merge adjusts these buckets by them
@@ -410,6 +420,13 @@ class _OpencodeScan(NamedTuple):
   deltas: list | None = None
 
 
+# Per-cache-path in-process document memo: the parsed per-file entry maps of the document
+# this process last loaded or saved. The multi-MB JSON re-parses on every changed round
+# otherwise; entries are immutable once stored (stores replace, never mutate), so rounds
+# share the maps and each save adopts the round's next-document state as the new memo.
+_tally_cache_docs: dict[str, dict[str, dict[str, dict]]] = {}
+
+
 def _reset_aggregate_memo() -> None:
   """Drop the collection's process-wide memos (test isolation)."""
   global _aggregate_memo, _tally_memo
@@ -418,6 +435,8 @@ def _reset_aggregate_memo() -> None:
   _opencode_row_memos.clear()
   _opencode_row_epochs.clear()
   _opencode_partials.clear()
+  _opencode_probes.clear()
+  _tally_cache_docs.clear()
 
 
 def _prefiltered_jsonl(path: Path, markers: tuple[str, ...]) -> tuple[list, list[dict], int]:
@@ -667,19 +686,33 @@ def _opencode_db_signature(db: Path) -> list | None:
 def _advance_opencode_rows(db: Path) -> _OpencodeScan:
   """Advance the db's row memo to its message table's current rows, bumping the epoch when any
   row moved. Read-only: the scan never writes. Absent or unreadable dbs advance nothing and
-  return ``ok=False``."""
+  return ``ok=False``. A warm memo first checks the proof aggregates: unchanged (count, sum)
+  proves no row the key scan could see has landed, moved, or vanished, and the scan is
+  skipped — the WAL writing an unrelated table is the steady state this gate exists for.
+  """
   key = str(db)
   sig = _opencode_db_signature(db)
   try:
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
       memo = _opencode_row_memos.setdefault(key, {})
+      con.execute("begin")  # one snapshot: the stored proof must describe the scanned state
+      probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone()) if memo else None
+      if probe is not None and _opencode_probes.get(key) == probe:
+        con.commit()
+        return _OpencodeScan(sig, _opencode_row_epochs.get(key, 0), 0, True, None, [])
       nbytes, deltas = _scan_opencode_rows(con, memo)
+      if probe is None:  # cold memo: the scan's snapshot is the state the memo now describes
+        probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone())
+      _opencode_probes[key] = probe
+      con.commit()
     finally:
       con.close()
   except sqlite3.Error as exc:
     # A failed scan leaves its memo partially advanced at worst; dropping the partial forces
     # the next merge down the full replay, which rebuilds both from whatever the memo holds.
+    # The stored proof describes a state the failed scan never reached, so it drops too.
+    _opencode_probes.pop(key, None)
     _opencode_partials[key] = None
     return _OpencodeScan(sig, 0, 0, False, str(exc))
   epoch = _opencode_row_epochs.get(key, 0)
@@ -950,7 +983,16 @@ def collect_token_usage(
           scanned_bytes=0,
       )
   t = _Tally()
-  cache = TallyCache.load(cache_path, t.notes) if fresh_sources and cache_path is not None else None
+  cache = None
+  if fresh_sources and cache_path is not None:
+    # The parsed document memoizes per cache path: a changed round re-parses zero document
+    # bytes and serves unchanged files from the adopted entry maps.
+    key = str(cache_path)
+    sources = _tally_cache_docs.get(key)
+    if sources is None:
+      sources = TallyCache.load(cache_path, t.notes)._sources
+      _tally_cache_docs[key] = sources
+    cache = TallyCache(sources)
   if fresh_sources:
     notes_from = len(t.notes)
     collect_claude(t, claude_homes, cache)
@@ -966,6 +1008,11 @@ def collect_token_usage(
       cache.save(cache_path)
     except OSError as exc:
       t.notes.append(f"Tally cache: save failed: {exc}")
+    # Adopt the round's next document as the memo: the on-disk state now describes it, and
+    # entries this round stopped seeing (deleted logs) drop out with it.
+    _tally_cache_docs[str(cache_path)] = {
+        source: dict(files) for source, files in cache._next.items()
+    }
   rows = _build(t)
   if read_sig is not None:
     _tally_memo = ((signature, read_sig, epoch, from_scan), rows, list(t.notes))

@@ -11,7 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import JudgmentShim, fresh_state_fixture, rate_limit_event, write_pool_credentials
+from conftest import JudgmentShim, fresh_state_fixture, make_transcript, rate_limit_event, write_pool_credentials
 
 from src.agents import worker as worker_mod
 from src.agents.worker import QuotaExhaustedException, Worker
@@ -36,7 +36,6 @@ from src.core.models import (
 FABLE = "claude-fable-5-1"
 POOLED_ID = "claude-fable-5"
 CC_ID = "11111111-2222-3333-4444-555555555555"
-SLUG = "-home-u-worktrees-task"
 
 _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
@@ -55,13 +54,6 @@ def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2
               id="pinned", label="Pinned", type="cc-claude", model=FABLE, claude_config_dir=str(tmp_path / "pinned")),
       ],
   )
-
-
-def _write_transcript(config_dir: Path, cc_session_id: str = CC_ID) -> Path:
-  transcript = config_dir / "projects" / SLUG / f"{cc_session_id}.jsonl"
-  transcript.parent.mkdir(parents=True, exist_ok=True)
-  transcript.write_text('{"type":"user"}\n', encoding="utf-8")
-  return transcript
 
 
 def _reject(label: str) -> None:
@@ -220,7 +212,7 @@ async def test_construct_worker_pins_the_pool_account_onto_the_worker_only(tmp_p
 @pytest.mark.asyncio
 async def test_worker_relays_a_rejected_run_onto_another_account(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
-  _write_transcript(tmp_path / "claude-main")
+  source_transcript = make_transcript(tmp_path / "claude-main", CC_ID)
   first = _ScriptedBackend([_assistant("working"), rate_limit_event("rejected", 1.0)], exit_code=1)
   second = _ScriptedBackend([_assistant("done"), _result()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
@@ -234,7 +226,7 @@ async def test_worker_relays_a_rejected_run_onto_another_account(tmp_path: Path,
   assert "claude_session_id" not in builds[1]["kwargs"]
   assert builds[0]["kwargs"]["claude_session_id"] == CC_ID
   assert second.prompt == claude_relay.CONTINUATION_PROMPT
-  assert (tmp_path / "claude-ext-1" / "projects" / SLUG / f"{CC_ID}.jsonl").exists()
+  assert (tmp_path / "claude-ext-1" / "projects" / source_transcript.parent.name / f"{CC_ID}.jsonl").exists()
   assert (worker.claude_account.label, worker.account_relays) == ("ext-1", 1)
   logged = _logged_events(tmp_path)
   assert [ev["type"] for ev in logged if ev["type"] == ET.ASSISTANT] == [ET.ASSISTANT, ET.ASSISTANT]
@@ -244,7 +236,7 @@ async def test_worker_relays_a_rejected_run_onto_another_account(tmp_path: Path,
 @pytest.mark.asyncio
 async def test_worker_terminates_at_the_safe_point_after_a_far_warning_and_relays(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", CC_ID)
   first = _ScriptedBackend(
       [rate_limit_event("allowed_warning", 0.92),
        _tool_result(), _assistant("never streamed")], exit_code=0)
@@ -277,7 +269,7 @@ async def test_worker_outside_the_pool_still_raises_on_rejection(tmp_path: Path,
 @pytest.mark.asyncio
 async def test_worker_raises_pool_exhausted_when_no_account_is_left(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", CC_ID)
   _reject("ext-1")
   _install_backends(monkeypatch, [_ScriptedBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
   worker = _worker(tmp_path, cfg, "main")
@@ -289,7 +281,7 @@ async def test_worker_raises_pool_exhausted_when_no_account_is_left(tmp_path: Pa
 @pytest.mark.asyncio
 async def test_worker_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path, labels=("main", "a", "b", "c"))
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", CC_ID)
   backends = [_ScriptedBackend([rate_limit_event("rejected", 1.0)], exit_code=1) for _ in range(4)]
   builds = _install_backends(monkeypatch, backends)
   worker = _worker(tmp_path, cfg, "main")
@@ -304,7 +296,7 @@ async def test_worker_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -
 @pytest.mark.asyncio
 async def test_worker_login_failure_marks_the_account_and_notifies_the_session(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", CC_ID)
   first = _ScriptedBackend([_assistant("Failed to authenticate. Please run /login")], exit_code=1)
   second = _ScriptedBackend([_result()], exit_code=0)
   _install_backends(monkeypatch, [first, second])
@@ -327,7 +319,7 @@ async def test_worker_login_failure_marks_the_account_and_notifies_the_session(t
 async def test_worker_relay_compacts_a_large_fable_context_on_the_new_account(
     tmp_path: Path, monkeypatch, prompt_tokens: int, compacted: bool) -> None:
   cfg = _pool_cfg(tmp_path)
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", CC_ID)
   compact = AsyncMock()
   monkeypatch.setattr(claude_compaction, "compact_with_sonnet", compact)
   first = _ScriptedBackend(
@@ -389,7 +381,7 @@ class _LifecycleThreadManager(_ThreadManager):
 async def test_stream_worker_events_reports_an_exhausted_pool_as_quota_with_the_reset(
     tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
-  _write_transcript(tmp_path / "claude-main")
+  make_transcript(tmp_path / "claude-main", CC_ID)
   _reject("ext-1")
   _install_backends(monkeypatch, [_ScriptedBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
   worker = _worker(tmp_path, cfg, "main")

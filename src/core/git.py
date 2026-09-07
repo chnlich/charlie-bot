@@ -329,14 +329,6 @@ async def git_create_worktree(
   return resolution
 
 
-def _is_relative_to(path: Path, parent: Path) -> bool:
-  try:
-    path.relative_to(parent)
-  except ValueError:
-    return False
-  return True
-
-
 def _assert_safe_worktree_cleanup_target(
     repo_path: str,
     wt_path: Path,
@@ -360,7 +352,7 @@ def _assert_safe_worktree_cleanup_target(
     raise RuntimeError(f"refusing to clean unsafe worktree path: {wt_path}")
   if resolved_wt == resolved_repo:
     raise RuntimeError(f"refusing to clean repo root as worktree: {wt_path}")
-  if resolved_wt == resolved_allowed_parent or not _is_relative_to(resolved_wt, resolved_allowed_parent):
+  if resolved_wt == resolved_allowed_parent or not resolved_wt.is_relative_to(resolved_allowed_parent):
     raise RuntimeError(f"refusing to clean worktree outside allowed parent {resolved_allowed_parent}: {wt_path}")
   return resolved_wt
 

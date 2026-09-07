@@ -699,7 +699,7 @@ def _sweep_opencode(
   if dry_run:
     if not targets:
       return
-    for count, size in targets.values():
+    for _count, size in targets.values():
       counter.count += 1
       counter.bytes += size
     return
@@ -718,7 +718,7 @@ def _sweep_opencode(
       log.warning("storage_cool_opencode_setup_failed", db=str(db), error=str(e))
       return
     connection.isolation_level = None  # per-statement transactions: one failure keeps the rest
-    for aggregate_id, (count, size) in sorted(targets.items()):
+    for aggregate_id, (_count, size) in sorted(targets.items()):
       _delete_aggregate_events(connection, aggregate_id)
       try:
         cursor = connection.execute("DELETE FROM event_sequence WHERE aggregate_id = ?", (aggregate_id,))

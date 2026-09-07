@@ -248,7 +248,7 @@ def _thread_list_items(
   """
   refreshed: dict[str, tuple[int, int, dict]] = {}
   items = []
-  for (meta_path, st), meta in zip(thread_pairs, metas):
+  for (meta_path, st), meta in zip(thread_pairs, metas, strict=True):
     if meta is None:
       continue
     hit = _thread_row_memo.get(session_id)

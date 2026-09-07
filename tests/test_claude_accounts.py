@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from conftest import (
     fresh_state_fixture,
+    make_transcript,
     make_work_item,
     mock_session_callbacks,
     run_session_consumer,
@@ -56,13 +57,6 @@ def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2
 
 def _legacy_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(charliebot_home=tmp_path / "home", backend_options=_options(tmp_path / "pinned"))
-
-
-def _write_transcript(config_dir: Path, cc_session_id: str, slug: str = "-home-u--charliebot-sessions-s1") -> Path:
-  transcript = config_dir / "projects" / slug / f"{cc_session_id}.jsonl"
-  transcript.parent.mkdir(parents=True, exist_ok=True)
-  transcript.write_text('{"type":"user"}\n', encoding="utf-8")
-  return transcript
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +288,7 @@ def test_select_skips_excluded_rejected_and_unhealthy_accounts(tmp_path: Path) -
 def test_move_transcript_copies_conversation_and_sidecar_into_the_same_slug(tmp_path: Path) -> None:
   src_dir = tmp_path / "claude-ext-2"
   dst_dir = tmp_path / "claude-main"
-  transcript = _write_transcript(src_dir, "uuid-1")
+  transcript = make_transcript(src_dir, "uuid-1")
   sidecar = transcript.with_suffix("") / "tool-results"
   sidecar.mkdir(parents=True)
   (sidecar / "r.txt").write_text("result", encoding="utf-8")
@@ -315,7 +309,7 @@ def test_move_transcript_without_a_source_raises(tmp_path: Path) -> None:
 
 def test_find_transcript_account_scans_the_pool(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
-  _write_transcript(tmp_path / "claude-ext-2", "uuid-2")
+  make_transcript(tmp_path / "claude-ext-2", "uuid-2")
 
   assert claude_accounts.find_transcript_account(cfg, "uuid-2").label == "ext-2"
   assert claude_accounts.find_transcript_account(cfg, "uuid-9") is None
@@ -329,7 +323,7 @@ def test_find_transcript_account_scans_the_pool(tmp_path: Path) -> None:
 def test_resolve_resume_id_prefers_own_account_then_searches_pool_and_writes_back(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
   fable = cfg.get_backend_option("claude-fable-5")
-  _write_transcript(tmp_path / "claude-ext-2", "uuid-3")
+  make_transcript(tmp_path / "claude-ext-2", "uuid-3")
 
   meta = SessionMetadata(id="s1", name="t", backend="claude-fable-5", cc_session_id="uuid-3")
   assert master_cc_run._resolve_resume_id(fable, meta, cfg=cfg) == "uuid-3"
@@ -337,7 +331,7 @@ def test_resolve_resume_id_prefers_own_account_then_searches_pool_and_writes_bac
 
   # A transcript present under the recorded account is taken from there, even when
   # another login also holds a copy (the source copy left behind by a relay).
-  _write_transcript(tmp_path / "claude-main", "uuid-3")
+  make_transcript(tmp_path / "claude-main", "uuid-3")
   meta_main = SessionMetadata(
       id="s1", name="t", backend="claude-fable-5", cc_session_id="uuid-3", claude_account="main")
   assert master_cc_run._resolve_resume_id(fable, meta_main, cfg=cfg) == "uuid-3"
@@ -356,8 +350,8 @@ def test_resolve_resume_id_pool_miss_returns_none_and_keeps_account(tmp_path: Pa
 def test_resolve_resume_id_without_pool_keeps_the_pinned_directory_rule(tmp_path: Path) -> None:
   cfg = _legacy_cfg(tmp_path)
   pinned = cfg.get_backend_option("pinned-opus")
-  _write_transcript(tmp_path / "pinned", "uuid-5")
-  _write_transcript(tmp_path / "elsewhere", "uuid-6")
+  make_transcript(tmp_path / "pinned", "uuid-5")
+  make_transcript(tmp_path / "elsewhere", "uuid-6")
 
   found = SessionMetadata(id="s1", name="t", backend="pinned-opus", cc_session_id="uuid-5")
   missing = SessionMetadata(id="s1", name="t", backend="pinned-opus", cc_session_id="uuid-6")

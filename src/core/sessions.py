@@ -1952,7 +1952,7 @@ class SessionManager:
     if not self._cfg.sessions_dir.exists():
       return []
 
-    def _session_dir_names() -> list[str]:
+    def _session_dir_names() -> tuple[tuple[int, int], list[str]]:
       # DirEntry.is_dir() answers from the directory record itself on
       # d_type-aware filesystems, while Path.iterdir() rebuilds a Path per
       # entry and pays one stat() each: ~1 ms vs ~6 ms measured at ~1000

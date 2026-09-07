@@ -1,7 +1,7 @@
 """Master run queueing — per-session consumer, run/cancel/resume entry points, restart replay."""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -77,6 +77,32 @@ async def _broadcast_running_changed(
   )
 
 
+async def _persist_with_readback(
+    callbacks: SessionCallbacks,
+    persist: Callable[[str, str], Awaitable[str | None]],
+    session_id: str,
+    value: str,
+    source: str,
+    subject: str,
+) -> None:
+  """Persist *value* through *persist* and verify the value read back from disk.
+
+  A mismatch logs and broadcasts an ERROR event tagged *source*, so a save
+  that did not land reaches the operator's chat panel instead of passing
+  silently.
+  """
+  read_back = await persist(session_id, value)
+  if read_back == value:
+    return
+  log.error(f"{source}_persist_mismatch", session=session_id, written=value, read_back=read_back)
+  await callbacks.persist_and_broadcast(
+      session_id, {
+          "type": ET.ERROR,
+          "source": source,
+          "message": f"{subject} persist mismatch: wrote {value!r}, read back {read_back!r} from disk",
+      })
+
+
 async def _session_consumer(session_id: str) -> None:
   """Drain the per-session queue sequentially, one CC run at a time."""
   queue = master_cc_state._session_queues[session_id]
@@ -136,25 +162,14 @@ async def _session_consumer(session_id: str) -> None:
           # The consumer is the single owner of persisting the resume anchor:
           # every round, unconditionally, with no comparison against any
           # in-memory value. The read-back verifies the write landed on disk.
-          read_back = await item.callbacks.persist_cc_session_id(session_id, cc_session_id)
-          if read_back != cc_session_id:
-            log.error(
-                "resume_anchor_persist_mismatch",
-                session=session_id,
-                written=cc_session_id,
-                read_back=read_back,
-            )
-            await item.callbacks.persist_and_broadcast(
-                session_id, {
-                    "type":
-                        ET.ERROR,
-                    "source":
-                        "resume_anchor",
-                    "message":
-                        (
-                            f"Resume anchor persist mismatch: wrote {cc_session_id!r}, "
-                            f"read back {read_back!r} from disk"),
-                })
+          await _persist_with_readback(
+              item.callbacks,
+              item.callbacks.persist_cc_session_id,
+              session_id,
+              cc_session_id,
+              "resume_anchor",
+              "Resume anchor",
+          )
 
         # The pool account holding the transcript is persisted the same way,
         # every round with a read-back: a relay or a pool-wide transcript search
@@ -162,25 +177,14 @@ async def _session_consumer(session_id: str) -> None:
         claude_account = item.session_meta.claude_account
         if claude_account and item.callbacks.persist_claude_account is not None:
           last_claude_account = claude_account
-          account_read_back = await item.callbacks.persist_claude_account(session_id, claude_account)
-          if account_read_back != claude_account:
-            log.error(
-                "claude_account_persist_mismatch",
-                session=session_id,
-                written=claude_account,
-                read_back=account_read_back,
-            )
-            await item.callbacks.persist_and_broadcast(
-                session_id, {
-                    "type":
-                        ET.ERROR,
-                    "source":
-                        "claude_account",
-                    "message":
-                        (
-                            f"Claude account persist mismatch: wrote {claude_account!r}, "
-                            f"read back {account_read_back!r} from disk"),
-                })
+          await _persist_with_readback(
+              item.callbacks,
+              item.callbacks.persist_claude_account,
+              session_id,
+              claude_account,
+              "claude_account",
+              "Claude account",
+          )
 
         # Computed once, with no re-check: a queued item keeps this round's
         # busy interval alive, so the only question is whether one is queued.

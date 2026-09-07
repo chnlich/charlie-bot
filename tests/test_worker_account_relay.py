@@ -6,13 +6,12 @@ _stream_worker_events and spawn_worker, and the completion notice carrying the r
 """
 
 import json
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import JudgmentShim, fresh_state_fixture
+from conftest import JudgmentShim, fresh_state_fixture, rate_limit_event, write_pool_credentials
 
 from src.agents import worker as worker_mod
 from src.agents.worker import QuotaExhaustedException, Worker
@@ -42,19 +41,10 @@ SLUG = "-home-u-worktrees-task"
 _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
-def _write_credentials(config_dir: Path) -> None:
-  config_dir.mkdir(parents=True, exist_ok=True)
-  (config_dir / claude_accounts.CREDENTIALS_FILE).write_text(
-      json.dumps({"claudeAiOauth": {
-          "accessToken": "token",
-          "refreshToken": "r"
-      }}), encoding="utf-8")
-
-
 def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
   accounts = [ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
   for account in accounts:
-    _write_credentials(Path(account.config_dir))
+    write_pool_credentials(Path(account.config_dir))
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       worktree_dir=str(tmp_path / "worktrees"),
@@ -74,28 +64,8 @@ def _write_transcript(config_dir: Path, cc_session_id: str = CC_ID) -> Path:
   return transcript
 
 
-def _rate_limit(status: str, utilization: float, resets_in: timedelta = timedelta(hours=3)) -> dict:
-  return {
-      "type": ET.RATE_LIMIT_EVENT,
-      "rate_limit_info":
-          {
-              "status": status,
-              "rateLimitType": "five_hour",
-              "resetsAt": (datetime.now(UTC) + resets_in).timestamp(),
-              "unifiedWindows": {
-                  "five_hour": {
-                      "utilization": utilization
-                  },
-                  "seven_day": {
-                      "utilization": 0.3
-                  },
-              },
-          },
-  }
-
-
 def _reject(label: str) -> None:
-  claude_accounts.observe_rate_limit(label, _rate_limit("rejected", 1.0)["rate_limit_info"])
+  claude_accounts.observe_rate_limit(label, rate_limit_event("rejected", 1.0)["rate_limit_info"])
 
 
 def _tool_result() -> dict:
@@ -190,9 +160,9 @@ def _logged_events(tmp_path: Path) -> list[dict]:
 
 def test_pin_pool_account_picks_the_most_headroom_and_passes_pinned_entries_through(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
-  claude_accounts.observe_rate_limit("main", _rate_limit("allowed_warning", 0.95)["rate_limit_info"])
-  claude_accounts.observe_rate_limit("ext-1", _rate_limit("allowed", 0.20)["rate_limit_info"])
-  claude_accounts.observe_rate_limit("ext-2", _rate_limit("allowed", 0.60)["rate_limit_info"])
+  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"])
+  claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.20)["rate_limit_info"])
+  claude_accounts.observe_rate_limit("ext-2", rate_limit_event("allowed", 0.60)["rate_limit_info"])
 
   option, account = claude_relay.pin_pool_account(cfg, cfg.get_backend_option(POOLED_ID))
   pinned, pinned_account = claude_relay.pin_pool_account(cfg, cfg.get_backend_option("pinned"))
@@ -228,7 +198,7 @@ class _ThreadManager:
 @pytest.mark.asyncio
 async def test_construct_worker_pins_the_pool_account_onto_the_worker_only(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
-  claude_accounts.observe_rate_limit("main", _rate_limit("allowed", 0.80)["rate_limit_info"])
+  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed", 0.80)["rate_limit_info"])
   thread = ThreadMetadata(id="t1", session_id="s1", description="task")
   thread_mgr = _ThreadManager(tmp_path / "events.jsonl")
   request = SpawnRequest(resolved_backend=POOLED_ID, resolved_model=FABLE)
@@ -251,7 +221,7 @@ async def test_construct_worker_pins_the_pool_account_onto_the_worker_only(tmp_p
 async def test_worker_relays_a_rejected_run_onto_another_account(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
   _write_transcript(tmp_path / "claude-main")
-  first = _ScriptedBackend([_assistant("working"), _rate_limit("rejected", 1.0)], exit_code=1)
+  first = _ScriptedBackend([_assistant("working"), rate_limit_event("rejected", 1.0)], exit_code=1)
   second = _ScriptedBackend([_assistant("done"), _result()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
   worker = _worker(tmp_path, cfg, "main")
@@ -276,7 +246,7 @@ async def test_worker_terminates_at_the_safe_point_after_a_far_warning_and_relay
   cfg = _pool_cfg(tmp_path)
   _write_transcript(tmp_path / "claude-main")
   first = _ScriptedBackend(
-      [_rate_limit("allowed_warning", 0.92),
+      [rate_limit_event("allowed_warning", 0.92),
        _tool_result(), _assistant("never streamed")], exit_code=0)
   second = _ScriptedBackend([_result()], exit_code=0)
   _install_backends(monkeypatch, [first, second])
@@ -297,7 +267,7 @@ async def test_worker_outside_the_pool_still_raises_on_rejection(tmp_path: Path,
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[BackendOption(id=POOLED_ID, label="Fable", type="cc-claude", model=FABLE)],
   )
-  _install_backends(monkeypatch, [_ScriptedBackend([_rate_limit("rejected", 1.0)], exit_code=1)])
+  _install_backends(monkeypatch, [_ScriptedBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
   worker = _worker(tmp_path, cfg, None)
 
   with pytest.raises(QuotaExhaustedException, match="Rate limited"):
@@ -309,7 +279,7 @@ async def test_worker_raises_pool_exhausted_when_no_account_is_left(tmp_path: Pa
   cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
   _write_transcript(tmp_path / "claude-main")
   _reject("ext-1")
-  _install_backends(monkeypatch, [_ScriptedBackend([_rate_limit("rejected", 1.0)], exit_code=1)])
+  _install_backends(monkeypatch, [_ScriptedBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
   worker = _worker(tmp_path, cfg, "main")
 
   with pytest.raises(claude_relay.PoolExhaustedError, match="earliest reset"):
@@ -320,7 +290,7 @@ async def test_worker_raises_pool_exhausted_when_no_account_is_left(tmp_path: Pa
 async def test_worker_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path, labels=("main", "a", "b", "c"))
   _write_transcript(tmp_path / "claude-main")
-  backends = [_ScriptedBackend([_rate_limit("rejected", 1.0)], exit_code=1) for _ in range(4)]
+  backends = [_ScriptedBackend([rate_limit_event("rejected", 1.0)], exit_code=1) for _ in range(4)]
   builds = _install_backends(monkeypatch, backends)
   worker = _worker(tmp_path, cfg, "main")
 
@@ -360,7 +330,9 @@ async def test_worker_relay_compacts_a_large_fable_context_on_the_new_account(
   _write_transcript(tmp_path / "claude-main")
   compact = AsyncMock()
   monkeypatch.setattr(claude_compaction, "compact_with_sonnet", compact)
-  first = _ScriptedBackend([_assistant("big", prompt_tokens=prompt_tokens), _rate_limit("rejected", 1.0)], exit_code=1)
+  first = _ScriptedBackend(
+      [_assistant("big", prompt_tokens=prompt_tokens),
+       rate_limit_event("rejected", 1.0)], exit_code=1)
   second = _ScriptedBackend([_result()], exit_code=0)
   _install_backends(monkeypatch, [first, second])
   worker = _worker(tmp_path, cfg, "main")
@@ -419,7 +391,7 @@ async def test_stream_worker_events_reports_an_exhausted_pool_as_quota_with_the_
   cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
   _write_transcript(tmp_path / "claude-main")
   _reject("ext-1")
-  _install_backends(monkeypatch, [_ScriptedBackend([_rate_limit("rejected", 1.0)], exit_code=1)])
+  _install_backends(monkeypatch, [_ScriptedBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
   worker = _worker(tmp_path, cfg, "main")
   thread = _thread()
   session_mgr = _SessionManager()

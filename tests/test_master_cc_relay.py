@@ -1,7 +1,6 @@
 """Master account relay: turn placement, the in-run watch, and _run_cc continuing a turn on another pool account."""
 
 import dataclasses
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -14,6 +13,8 @@ from conftest import (
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
+    rate_limit_event,
+    write_pool_credentials,
 )
 
 from src.agents import master_cc_relay, master_cc_run
@@ -33,19 +34,10 @@ SLUG = "-home-u--charliebot-sessions-s1"
 _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
-def _write_credentials(config_dir: Path, access_token: str = "token") -> None:
-  config_dir.mkdir(parents=True, exist_ok=True)
-  (config_dir / claude_accounts.CREDENTIALS_FILE).write_text(
-      json.dumps({"claudeAiOauth": {
-          "accessToken": access_token,
-          "refreshToken": "r"
-      }}), encoding="utf-8")
-
-
 def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
   accounts = [ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
   for account in accounts:
-    _write_credentials(Path(account.config_dir))
+    write_pool_credentials(Path(account.config_dir))
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       claude_accounts=accounts,
@@ -62,26 +54,6 @@ def _write_transcript(config_dir: Path, cc_session_id: str = UUID) -> Path:
   transcript.parent.mkdir(parents=True, exist_ok=True)
   transcript.write_text('{"type":"user"}\n', encoding="utf-8")
   return transcript
-
-
-def _rate_limit(status: str, utilization: float, resets_in: timedelta = timedelta(hours=3)) -> dict:
-  return {
-      "type": ET.RATE_LIMIT_EVENT,
-      "rate_limit_info":
-          {
-              "status": status,
-              "rateLimitType": "five_hour",
-              "resetsAt": (datetime.now(UTC) + resets_in).timestamp(),
-              "unifiedWindows": {
-                  "five_hour": {
-                      "utilization": utilization
-                  },
-                  "seven_day": {
-                      "utilization": 0.3
-                  },
-              },
-          },
-  }
 
 
 def _tool_result() -> dict:
@@ -147,7 +119,7 @@ def _events_of(callbacks, event_type: str) -> list[dict]:
 
 def test_choose_turn_account_keeps_a_warm_healthy_account_under_the_warning_line(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
-  claude_accounts.observe_rate_limit("main", _rate_limit("allowed", 0.50)["rate_limit_info"], now=NOW)
+  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
   meta = _session_on("main")
 
   chosen, cold = master_cc_relay.choose_turn_account(cfg, meta, FABLE, NOW - timedelta(minutes=10), now=NOW)
@@ -157,15 +129,15 @@ def test_choose_turn_account_keeps_a_warm_healthy_account_under_the_warning_line
 
 def test_choose_turn_account_reselects_on_a_cold_cache_or_at_the_warning_line(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
-  claude_accounts.observe_rate_limit("main", _rate_limit("allowed", 0.50)["rate_limit_info"], now=NOW)
-  claude_accounts.observe_rate_limit("ext-1", _rate_limit("allowed", 0.10)["rate_limit_info"], now=NOW)
-  claude_accounts.observe_rate_limit("ext-2", _rate_limit("allowed", 0.20)["rate_limit_info"], now=NOW)
+  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
+  claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.10)["rate_limit_info"], now=NOW)
+  claude_accounts.observe_rate_limit("ext-2", rate_limit_event("allowed", 0.20)["rate_limit_info"], now=NOW)
 
   cold_pick, cold = master_cc_relay.choose_turn_account(
       cfg, _session_on("main"), FABLE, NOW - timedelta(minutes=61), NOW)
   assert (cold_pick.label, cold) == ("ext-1", True)
 
-  claude_accounts.observe_rate_limit("main", _rate_limit("allowed_warning", 0.91)["rate_limit_info"], now=NOW)
+  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.91)["rate_limit_info"], now=NOW)
   warm_pick, warm = master_cc_relay.choose_turn_account(
       cfg, _session_on("main"), FABLE, NOW - timedelta(minutes=5), NOW)
   assert (warm_pick.label, warm) == ("ext-1", False)
@@ -176,7 +148,7 @@ def test_choose_turn_account_reselects_on_a_cold_cache_or_at_the_warning_line(tm
 
 def test_choose_turn_account_returns_none_when_the_pool_is_exhausted(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path, labels=("main",))
-  claude_accounts.observe_rate_limit("main", _rate_limit("rejected", 1.0)["rate_limit_info"], now=NOW)
+  claude_accounts.observe_rate_limit("main", rate_limit_event("rejected", 1.0)["rate_limit_info"], now=NOW)
 
   chosen, _cold = master_cc_relay.choose_turn_account(cfg, _session_on("main"), FABLE, NOW, NOW)
 
@@ -189,7 +161,7 @@ def test_choose_turn_account_returns_none_when_the_pool_is_exhausted(tmp_path: P
 async def test_place_turn_moves_the_transcript_when_the_account_changes(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
   _write_transcript(tmp_path / "claude-main")
-  claude_accounts.observe_rate_limit("main", _rate_limit("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
+  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
   meta = _session_on("main")
   item = make_work_item(cfg, meta, cfg.backend_options[0])
 
@@ -210,7 +182,7 @@ async def test_place_turn_moves_the_transcript_when_the_account_changes(tmp_path
 
 def test_relay_watch_rejection_relays_without_waiting_for_a_safe_point() -> None:
   watch = claude_relay.RelayWatch("main", FABLE)
-  assert watch.observe(_rate_limit("rejected", 1.0)) is False
+  assert watch.observe(rate_limit_event("rejected", 1.0)) is False
   assert watch.observe(_tool_result()) is False
   assert watch.decision(1, "") == claude_relay.RELAY_REJECTED
   assert claude_accounts.headroom("main", FABLE) == 0.0
@@ -218,7 +190,7 @@ def test_relay_watch_rejection_relays_without_waiting_for_a_safe_point() -> None
 
 def test_relay_watch_arms_on_a_far_warning_and_fires_at_the_next_tool_result() -> None:
   watch = claude_relay.RelayWatch("main", FABLE)
-  assert watch.observe(_rate_limit("allowed_warning", 0.92)) is False
+  assert watch.observe(rate_limit_event("allowed_warning", 0.92)) is False
   assert watch.observe(_assistant("working")) is False
   assert watch.observe(_tool_result()) is True
   assert watch.observe(_tool_result()) is False, "fires once"
@@ -227,12 +199,12 @@ def test_relay_watch_arms_on_a_far_warning_and_fires_at_the_next_tool_result() -
 
 def test_relay_watch_ignores_a_warning_whose_reset_is_near_or_under_the_line() -> None:
   near = claude_relay.RelayWatch("main", FABLE)
-  near.observe(_rate_limit("allowed_warning", 0.95, resets_in=timedelta(minutes=20)))
+  near.observe(rate_limit_event("allowed_warning", 0.95, resets_in=timedelta(minutes=20)))
   assert near.observe(_tool_result()) is False
   assert near.decision(0, "") is None
 
   low = claude_relay.RelayWatch("main", FABLE)
-  low.observe(_rate_limit("allowed_warning", 0.85))
+  low.observe(rate_limit_event("allowed_warning", 0.85))
   assert low.observe(_tool_result()) is False
 
 
@@ -254,7 +226,7 @@ async def test_run_cc_relays_a_rejected_turn_onto_another_account(tmp_path: Path
   cfg = _pool_cfg(tmp_path)
   _write_transcript(tmp_path / "claude-main")
   meta = _session_on("main")
-  first = _ScriptedBackend([_rate_limit("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
+  first = _ScriptedBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   second = _ScriptedBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
   item = make_work_item(cfg, meta, cfg.backend_options[0])
@@ -280,7 +252,7 @@ async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(tm
   _write_transcript(tmp_path / "claude-main")
   meta = _session_on("main")
   first = _ScriptedBackend(
-      [_rate_limit("allowed_warning", 0.92),
+      [rate_limit_event("allowed_warning", 0.92),
        _assistant("step 1"),
        _tool_result(),
        _assistant("never streamed")],
@@ -300,11 +272,11 @@ async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(tm
 @pytest.mark.asyncio
 async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
-  _write_credentials(tmp_path / "claude-ext-1", access_token="")
-  _write_credentials(tmp_path / "claude-ext-2", access_token="")
+  write_pool_credentials(tmp_path / "claude-ext-1", access_token="")
+  write_pool_credentials(tmp_path / "claude-ext-2", access_token="")
   _write_transcript(tmp_path / "claude-main")
   meta = _session_on("main")
-  first = _ScriptedBackend([_rate_limit("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
+  first = _ScriptedBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   builds = _install_backends(monkeypatch, [first])
   item = make_work_item(cfg, meta, cfg.backend_options[0])
 
@@ -327,7 +299,8 @@ async def test_run_cc_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -
   _write_transcript(tmp_path / "claude-main")
   meta = _session_on("main")
   backends = [
-      _ScriptedBackend([_rate_limit("rejected", 1.0), backend_base.make_result_event()], exit_code=1) for _ in range(5)
+      _ScriptedBackend(
+          [rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1) for _ in range(5)
   ]
   builds = _install_backends(monkeypatch, backends)
   item = make_work_item(cfg, meta, cfg.backend_options[0])
@@ -425,7 +398,7 @@ async def test_run_cc_relay_compacts_a_large_fable_context_on_the_new_account(tm
     return True
 
   monkeypatch.setattr(master_cc_relay.claude_compaction, "compact_with_sonnet", fake_compact)
-  first = _ScriptedBackend([_rate_limit("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
+  first = _ScriptedBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   second = _ScriptedBackend([backend_base.make_result_event()], exit_code=0)
   _install_backends(monkeypatch, [first, second])
   callbacks = dataclasses.replace(
@@ -450,7 +423,7 @@ async def test_run_cc_without_a_pool_spawns_the_option_unchanged(tmp_path: Path,
   )
   _write_transcript(tmp_path / "pinned")
   meta = SessionMetadata(id="s1", name="t", backend="pinned", cc_session_id=UUID)
-  backend = _ScriptedBackend([_rate_limit("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
+  backend = _ScriptedBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   builds = _install_backends(monkeypatch, [backend])
   item = make_work_item(cfg, meta, cfg.backend_options[0])
 

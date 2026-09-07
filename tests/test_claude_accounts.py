@@ -2,7 +2,6 @@
 reach into resume resolution, the backend-switch domain, the usage panel, and metadata persistence."""
 
 import asyncio
-import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -12,6 +11,7 @@ from conftest import (
     make_work_item,
     mock_session_callbacks,
     run_session_consumer,
+    write_pool_credentials,
 )
 
 from src.agents import master_cc_run
@@ -36,15 +36,6 @@ SONNET = "claude-sonnet-5"
 _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
-def _write_credentials(config_dir: Path, access_token: str = "token") -> None:
-  config_dir.mkdir(parents=True, exist_ok=True)
-  (config_dir / claude_accounts.CREDENTIALS_FILE).write_text(
-      json.dumps({"claudeAiOauth": {
-          "accessToken": access_token,
-          "refreshToken": "refresh"
-      }}), encoding="utf-8")
-
-
 def _options(pinned_dir: Path) -> list[BackendOption]:
   return [
       BackendOption(id="claude-fable-5", label="Fable", type="cc-claude", model=FABLE, aliases=["claude-fable-5-ext1"]),
@@ -58,7 +49,7 @@ def _options(pinned_dir: Path) -> list[BackendOption]:
 def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
   accounts = [ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
   for account in accounts:
-    _write_credentials(Path(account.config_dir))
+    write_pool_credentials(Path(account.config_dir))
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home", claude_accounts=accounts, backend_options=_options(tmp_path / "pinned"))
 
@@ -158,13 +149,13 @@ def test_credentials_present_requires_a_non_empty_access_token(tmp_path: Path) -
   account = ClaudeAccount(label="a", config_dir=str(tmp_path / "a"))
   assert claude_accounts.credentials_present(account) is False  # no file
 
-  _write_credentials(tmp_path / "a", access_token="")
+  write_pool_credentials(tmp_path / "a", access_token="")
   assert claude_accounts.credentials_present(account) is False  # emptied by a failed refresh
 
   (tmp_path / "a" / claude_accounts.CREDENTIALS_FILE).write_text("not json", encoding="utf-8")
   assert claude_accounts.credentials_present(account) is False
 
-  _write_credentials(tmp_path / "a")
+  write_pool_credentials(tmp_path / "a")
   assert claude_accounts.credentials_present(account) is True
 
 
@@ -288,7 +279,7 @@ def test_select_skips_excluded_rejected_and_unhealthy_accounts(tmp_path: Path) -
   claude_accounts.observe_rate_limit("main", _event("allowed", 0.30, 0.10), now=NOW)
   claude_accounts.observe_rate_limit(
       "ext-1", _event("rejected", 1.0, 0.10, (NOW + timedelta(hours=1)).timestamp()), now=NOW)
-  _write_credentials(tmp_path / "claude-ext-2", access_token="")  # emptied credential store
+  write_pool_credentials(tmp_path / "claude-ext-2", access_token="")  # emptied credential store
 
   assert claude_accounts.select(cfg, FABLE, current="main", exclude={"main"}, now=NOW) is None
   assert claude_accounts.select(cfg, FABLE, current="ext-1", now=NOW).label == "main"

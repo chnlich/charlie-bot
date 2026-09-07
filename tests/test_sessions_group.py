@@ -76,27 +76,15 @@ async def _clone_child(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("op", ["fork", "elone"])
-async def test_clone_inherits_group(tmp_path: Path, op: str) -> None:
+@pytest.mark.parametrize("group", ["Research", None], ids=["named-group", "none-group"])
+async def test_clone_inherits_group(tmp_path: Path, op: str, group: str | None) -> None:
   mgr = _make_session_mgr(tmp_path)
-  parent = await _seed_parent(mgr, group="Research")
+  parent = await _seed_parent(mgr, group=group)
 
   child = await _clone_child(mgr, op, parent.id, backend=None)
 
   assert child is not None
-  assert child.group == "Research"
-  assert child.backend == parent.backend
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("op", ["fork", "elone"])
-async def test_clone_inherits_none_group(tmp_path: Path, op: str) -> None:
-  mgr = _make_session_mgr(tmp_path)
-  parent = await _seed_parent(mgr, group=None)
-
-  child = await _clone_child(mgr, op, parent.id, backend=None)
-
-  assert child is not None
-  assert child.group is None
+  assert child.group == group
   assert child.backend == parent.backend
 
 

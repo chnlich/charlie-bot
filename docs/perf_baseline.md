@@ -82,6 +82,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.010 s | — (introduced with its first history row) |
 | M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.010 s | — (introduced with its first history row) |
 | M72 file-browser directory listing | M72 collector below | seconds per `GET /files/<dir>` request, worst on-disk listing corpus (the sessions root) | median < 0.013 s | — (introduced with its first history row) |
+| M73 plan-verb validation event-loop lag | M73 collector below | seconds of loop lag + wall per amend validation (the registration gate: the DOM assertion set plus the headless-Chrome page-height render), scratch home, copied passing plan page (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 1.0 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -4126,10 +4127,121 @@ print(f"{n} entries; listing request median {times[4]*1000:.2f} ms, max {times[-
 EOF
 ```
 
+M73 — plan-verb validation event-loop lag. Every plan present/amend runs
+`_validate_new_version_file`, whose registration gate is the full plan assertion set
+(`run_assertions`): the DOM checks plus the page-height measurement, which renders the page
+through a headless-Chrome subprocess — hundreds of ms of wall time per page. The pre-fix
+form ran that inline in the async verb, so every plan delivery froze the event loop for the
+full Chrome render — the M14 pathology on the plan-delivery path (the live server log shows
+the freeze as POST /api/internal/plan/amend and /plan/present request times of ~0.6-0.7 s).
+The fixed form hops the assertion run to a thread; the loop-lag is the metric (the wall is
+the Chrome render's own cost, now off-loop, and only bounds health). The cost is per
+plan-delivery latency invisible to the standing HTTP probes (the verbs fire when the master
+agent delivers or amends a plan, not on any poll), so the collector copies the smallest plan
+page bound in a live plans.json that still passes the current pure assertion set (read-only
+resolution; the page-height half runs through the host's real headless renderer, so the
+corpus must be one that passes it) into a scratch `CHARLIEBOT_HOME` under /tmp, drives
+`PlanRegistryManager` from the checkout under test — one cold present, as at the first plan
+delivery after a server start, then five timed amends, each validating a fresh unbound copy,
+with a concurrent 5 ms ticker reporting the worst gap plus wall:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, json, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.artifact_check import _ASSERTION_RUNNERS, _Context, _parse_dom
+from src.core.config import CharlieBotConfig, get_config
+from src.core.models import CreateSessionRequest
+from src.core.plans import PlanRegistryManager
+from src.core.sessions import SessionManager
+
+# Validation shape: the smallest plan page bound in a live plans.json that still
+# passes the current pure assertion set (page-height checked by the verb itself,
+# through the host's real headless renderer); read-only resolution, one copy out.
+PURE = ("style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "fork-explainer", "goal-budget",
+        "ordinal-named")
+root = Path.home() / ".charliebot" / "sessions"
+candidates: list[tuple[int, Path]] = []
+for d in root.iterdir():
+    reg, art = d / "plans.json", d / "artifacts"
+    if not (reg.is_file() and art.is_dir()):
+        continue
+    try:
+        bound = {v["file"] for p in json.loads(reg.read_text()).get("plans", []) for v in p.get("versions", [])}
+    except (OSError, ValueError):
+        continue
+    for name in bound:
+        p = d / name
+        if p.is_file():
+            candidates.append((p.stat().st_size, p))
+candidates.sort()
+
+cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+best_src = None
+for size, p in candidates:
+    try:
+        ctx = _Context(genre="plan", artifact=p, root=_parse_dom(p.read_text(encoding="utf-8")), cfg=cfg)
+    except (OSError, ValueError):
+        continue
+    if not [o.name for n in PURE for o in _ASSERTION_RUNNERS[n](ctx) if not o.passed]:
+        best_src = p
+        break
+
+# The headless renderer is host state: the live config's chrome bin (read-only read).
+chrome_bin = get_config().headless_chrome_bin
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp; live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m73-plan-verb-home-", dir="/tmp"))
+verb_cfg = CharlieBotConfig(charliebot_home=home, headless_chrome_bin=chrome_bin)
+mgr = SessionManager(verb_cfg)
+plan_mgr = PlanRegistryManager(verb_cfg, mgr)
+
+async def main():
+    meta = await mgr.create_session(CreateSessionRequest(name="M73"))
+    art_dir = home / "sessions" / meta.id / "artifacts"
+    art_dir.mkdir(parents=True)
+    shutil.copy2(best_src, art_dir / "plan_probe_v0.html")
+
+    async def verb(file_name):
+        gaps = []
+        stop = False
+        async def ticker():
+            prev = time.perf_counter()
+            while not stop:
+                await asyncio.sleep(0.005)
+                now = time.perf_counter()
+                gaps.append(now - prev)
+                prev = now
+        t = asyncio.create_task(ticker())
+        await asyncio.sleep(0.01)  # the ticker must be mid-sleep, or an inline block starves it unrecorded
+        t0 = time.perf_counter()
+        await plan_mgr.amend(meta.id, file=f"artifacts/{file_name}", note="m73 probe")
+        wall = time.perf_counter() - t0
+        stop = True
+        await t
+        return (max(gaps) if gaps else wall), wall
+
+    await plan_mgr.present(meta.id, file="artifacts/plan_probe_v0.html", title="M73")  # cold pass; not timed
+    results = []
+    for i in range(1, 6):
+        shutil.copy2(best_src, art_dir / f"plan_probe_v{i}.html")
+        results.append(await verb(f"plan_probe_v{i}.html"))
+    lags = sorted(r[0] for r in results)
+    walls = sorted(r[1] for r in results)
+    print(f"{best_src.name} ({best_src.stat().st_size / 1e3:.0f} KB); amend validation loop-lag median {lags[2]:.4f} s, "
+          f"max {lags[-1]:.4f} s; wall median {walls[2]:.4f} s, max {walls[-1]:.4f} s over 5")
+    shutil.rmtree(home)
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-07 | this PR | M73 plan amend validation loop-lag median 0.6384/0.6540/0.6360 s → 0.0073/0.0070/0.0075 s (at the 5 ms ticker floor), maxima 0.6644/0.6645/0.6385 s → 0.0079/0.0088/0.0085 s; wall median 0.6390/0.6547/0.6367 s → 0.6516/0.6319/0.6486 s — the render's own cost, now off-loop, unchanged as expected (three interleaved rounds of the collector, the 11 KB bound plan page plan_02.html passing the current pure assertion set, scratch CHARLIEBOT_HOME, main checkout before vs branch worktree after back-to-back, every paired round faster; live corroboration: the 1.37 h server log shows the freeze as POST /api/internal/plan/amend avg 670 ms max 715 ms over 5 calls and /plan/present avg 597 ms max 624 ms over 3, the instance predates this change; no-regression re-measures: M57 /plans 2.27-2.55 ms standing band and M27 tolerant read 9.0 µs unchanged; plan-registry suite 67 passed plus the new loop-responsiveness pin, red on the pre-fix archive, green on this branch) | the plan registration gate (the DOM assertion set plus the headless-Chrome page-height render, hundreds of ms per page) ran inline in the async present/amend verbs, so every plan delivery froze the event loop for the full Chrome render — the M14 pathology on the plan-delivery path; the assertion run now rides one asyncio.to_thread hop inside `_validate_new_version_file`, the same shape as the M55 annotate and M65 gzip hops, leaving every verb's rejection and save semantics untouched; M73 definition and healthy range introduced with this PR |
 | 2026-08-30 | #457 | M5 median 0.068 s → 0.029 s (117-thread worst session) | one executor hop for the threads metadata scan; M5 definition and healthy range introduced with this PR |
 | 2026-08-30 | #461 | M2 tui/status share 1396/3146 status polls (44 %) → 0 tui/status requests in a 15 s headless-page window (scratch A/B) | sidebar tui/status poll scoped to rows rendered as tui-cli; zero tui-cli backends configured on this host |
 | 2026-08-30 | #463 | M6 median 0.015 s → 0.011 s (20534-event worst session, live-before vs scratch-after) | one-pass event scan for usage resolution; M6 definition and healthy range introduced with this PR |

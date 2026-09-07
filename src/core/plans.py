@@ -312,7 +312,7 @@ class PlanRegistryManager:
           return plan["id"], ver["v"]
     return None
 
-  def _validate_new_version_file(self, session_id: str, file: str, data: dict) -> str:
+  async def _validate_new_version_file(self, session_id: str, file: str, data: dict) -> str:
     """Validate *file* as a new plan version's binding and return its session-relative path.
 
     The file must live inside the session directory, pass the plan assertion set
@@ -323,7 +323,11 @@ class PlanRegistryManager:
     file = posixpath.normpath(file)
     file_relative = self._validate_file_in_session_dir(session_id, file)
     artifact = self._cfg.sessions_dir / session_id / file_relative
-    failures = [o for o in run_assertions("plan", artifact, self._cfg) if not o.passed]
+    # The assertion run measures page height through a headless-Chrome
+    # subprocess — hundreds of ms of wall time per page. Inline it would freeze
+    # the event loop for every concurrent request and WebSocket.
+    outcomes = await asyncio.to_thread(run_assertions, "plan", artifact, self._cfg)
+    failures = [o for o in outcomes if not o.passed]
     if failures:
       reasons = "; ".join(f"{o.name}: {o.detail}" for o in failures)
       raise ValueError(
@@ -362,7 +366,7 @@ class PlanRegistryManager:
   ) -> dict:
     async with self._lock_for(session_id):
       data = await self._load(session_id)
-      file_relative = self._validate_new_version_file(session_id, file, data)
+      file_relative = await self._validate_new_version_file(session_id, file, data)
       next_id = max((p["id"] for p in data["plans"]), default=0) + 1
       plan = {
           "id": next_id,
@@ -401,7 +405,7 @@ class PlanRegistryManager:
       raise ValueError("amend requires a non-empty --note stating why this version differs from its predecessor")
     async with self._lock_for(session_id):
       data = await self._load(session_id)
-      file_relative = self._validate_new_version_file(session_id, file, data)
+      file_relative = await self._validate_new_version_file(session_id, file, data)
       plan = self._resolve_target_plan_for_amend(data, plan_id)
       new_v = max(ver["v"] for ver in plan["versions"]) + 1
       plan["versions"].append(

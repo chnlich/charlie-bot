@@ -192,14 +192,32 @@ async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_pa
 
 # --------------------------------------------------------- no silent fallback
 
+# Rows are the two ways a session backend fails to resolve: a pin naming no
+# configured option, and no pin at all. Both must hard-fail identically —
+# no backend started, exit code 1, one assistant error — rather than
+# substitute a different backend.
+_REFUSAL_ROWS = [
+    pytest.param("deleted-id", ("deleted-id", "refusing to substitute"), id="unknown-pin"),
+    pytest.param("", ("no backend option", "backend_options[0]"), id="no-pin"),
+]
+
 
 @pytest.mark.asyncio
-async def test_run_cc_refuses_to_substitute_an_unknown_pinned_backend(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("session_backend, error_fragments", _REFUSAL_ROWS)
+async def test_run_cc_refuses_to_substitute_an_unresolvable_session_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    session_backend: str,
+    error_fragments: tuple[str, str],
+) -> None:
+  """A session backend the config cannot resolve rejects the run instead of
+  substituting another option: exit code 1, no backend started, one assistant
+  error naming the cause."""
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5")],
   )
-  session_meta = models.SessionMetadata(id="session-id", name="S", backend="deleted-id", cc_session_id="conv-1")
+  session_meta = models.SessionMetadata(id="session-id", name="S", backend=session_backend)
   spawned: list[object] = []
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
   patch_instructions_content(monkeypatch)
@@ -210,35 +228,10 @@ async def test_run_cc_refuses_to_substitute_an_unknown_pinned_backend(tmp_path: 
   assert not spawned
   assert cc_session_id is None
   assert exit_code == 1
-  assert "deleted-id" in error_msg and "refusing to substitute" in error_msg
+  assert all(fragment in error_msg for fragment in error_fragments)
   assert not extras
   events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
-  assert any(e["type"] == ET.ASSISTANT_ERROR and "deleted-id" in e["content"] for e in events)
-
-
-@pytest.mark.asyncio
-async def test_run_cc_refuses_no_option_and_no_pin(tmp_path: Path, monkeypatch) -> None:
-  """Neither an explicit per-run option nor a session pin is a documented rejection:
-  exit code 1, no backend started, an assistant error written."""
-  cfg = core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5")],
-  )
-  session_meta = models.SessionMetadata(id="session-id", name="S", backend="")
-  spawned: list[object] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
-  patch_instructions_content(monkeypatch)
-
-  item = make_work_item(cfg, session_meta, None)
-  cc_session_id, exit_code, error_msg, extras = await master_cc._run_cc(item)
-
-  assert not spawned
-  assert cc_session_id is None
-  assert exit_code == 1
-  assert "no backend option" in error_msg and "backend_options[0]" in error_msg
-  assert not extras
-  events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
-  assert any(e["type"] == ET.ASSISTANT_ERROR and "no backend option" in e["content"] for e in events)
+  assert any(e["type"] == ET.ASSISTANT_ERROR and error_fragments[0] in e["content"] for e in events)
 
 
 def test_spawner_refuses_to_substitute_an_unknown_pinned_backend() -> None:
@@ -283,12 +276,30 @@ def test_cc_transcript_exists_ignores_subagent_logs(tmp_path: Path) -> None:
   assert master_cc._cc_transcript_exists(cfg_dir, "absent") is False
 
 
+# Rows are the transcript-reachability gate's two outcomes. --resume survives
+# only when the anchor's transcript exists in the configured account dir; a
+# transcript under any other account's dir drops the resume context instead of
+# resuming a foreign session.
+_TRANSCRIPT_ROWS = [
+    pytest.param(False, id="transcript-in-another-account-dir"),
+    pytest.param(True, id="transcript-in-configured-dir"),
+]
+
+
 @pytest.mark.asyncio
-async def test_run_cc_drops_resume_when_transcript_is_in_another_account_dir(tmp_path: Path, monkeypatch) -> None:
-  other = tmp_path / ".claude-ext-1"
-  _write_transcript(other, "conv-1")
-  target = tmp_path / ".claude"
-  (target / "projects").mkdir(parents=True)
+@pytest.mark.parametrize("transcript_in_configured_dir", _TRANSCRIPT_ROWS)
+async def test_run_cc_resume_gate_by_transcript_location(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    transcript_in_configured_dir: bool,
+) -> None:
+  """The anchor's --resume survives only when its transcript exists in the
+  configured claude_config_dir; otherwise the resume context drops with reason
+  transcript_missing and the run proceeds without it."""
+  target = tmp_path / ".claude-ext-1" if transcript_in_configured_dir else tmp_path / ".claude"
+  _write_transcript(tmp_path / ".claude-ext-1", "conv-1")
+  if not transcript_in_configured_dir:
+    (target / "projects").mkdir(parents=True)
 
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
@@ -306,37 +317,15 @@ async def test_run_cc_drops_resume_when_transcript_is_in_another_account_dir(tmp
   _cc, exit_code, error_msg, _extras = await master_cc._run_cc(item)
 
   assert exit_code == 0 and error_msg is None
-  assert "--resume" not in (captures["kwargs"]["extra_flags"] or [])
+  extra_flags = captures["kwargs"]["extra_flags"] or []
   events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
   dropped = [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED]
-  assert len(dropped) == 1
-  assert dropped[0]["reason"] == "transcript_missing"
-
-
-@pytest.mark.asyncio
-async def test_run_cc_keeps_resume_when_transcript_is_present(tmp_path: Path, monkeypatch) -> None:
-  target = tmp_path / ".claude-ext-1"
-  _write_transcript(target, "conv-1")
-
-  cfg = core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          models.BackendOption(
-              id="cc", label="CC", type="cc-claude", model="claude-fable-5", claude_config_dir=str(target))
-      ],
-  )
-  session_meta = models.SessionMetadata(id="session-id", name="S", backend="cc", cc_session_id="conv-1")
-  captures: dict[str, object] = {}
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **k: captures.update(kwargs=k) or FakeBackend())
-  patch_instructions_content(monkeypatch)
-
-  item = make_work_item(cfg, session_meta, cfg.backend_options[0])
-  await master_cc._run_cc(item)
-
-  extra_flags = captures["kwargs"]["extra_flags"] or []
-  assert extra_flags[:2] == ["--resume", "conv-1"]
-  events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
-  assert not [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED]
+  if transcript_in_configured_dir:
+    assert extra_flags[:2] == ["--resume", "conv-1"]
+    assert dropped == []
+  else:
+    assert "--resume" not in extra_flags
+    assert [d["reason"] for d in dropped] == ["transcript_missing"]
 
 
 def test_resume_context_dropped_renders_backend_neutral_by_reason() -> None:

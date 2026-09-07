@@ -4,6 +4,7 @@
 import asyncio
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -91,12 +92,38 @@ def test_session_view_ships_the_same_truncated_rows(tmp_path: Path) -> None:
   assert view_rows[long_thread_id]["description_full_len"] == len(LONG_DESCRIPTION)
 
 
-def test_session_view_rows_skip_the_walk_until_a_mark_or_the_sweep(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+_WALK_SKIP_ENDPOINTS = [
+    pytest.param(
+        ("_view_rows_memo", "_view_rows_gate"),
+        "/api/sessions/{session_id}/view",
+        "threads",
+        id="session-view",
+    ),
+    pytest.param(
+        ("_list_body_memo", "_sig_gate"),
+        "/api/threads/{session_id}/list",
+        None,
+        id="list-poll",
+    ),
+]
+
+
+@pytest.mark.parametrize(("memos", "url_pattern", "rows_key"), _WALK_SKIP_ENDPOINTS)
+def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    memos: tuple[str, ...],
+    url_pattern: str,
+    rows_key: str | None,
+) -> None:
   client, session_id, _ = _seeded_client(tmp_path)
-  threads_api._view_rows_memo.clear()
-  threads_api._view_rows_gate.clear()
-  url = f"/api/sessions/{session_id}/view"
+  for memo in memos:
+    getattr(threads_api, memo).clear()
+  url = url_pattern.format(session_id=session_id)
+
+  def response_rows(response: httpx.Response) -> list[dict]:
+    body = response.json()
+    return body if rows_key is None else body[rows_key]
 
   walks = {"n": 0}
   real = threads_api._row_source_stats
@@ -117,11 +144,11 @@ def test_session_view_rows_skip_the_walk_until_a_mark_or_the_sweep(
   assert walks["n"] == 2
 
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  rows = {row["id"]: row for row in client.get(url).json()["threads"]}
+  rows = {row["id"]: row for row in response_rows(client.get(url))}
   any_id = next(iter(rows))
   asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
   updated = client.get(url)
-  assert next(row for row in updated.json()["threads"] if row["id"] == any_id)["status"] == "running"
+  assert next(row for row in response_rows(updated) if row["id"] == any_id)["status"] == "running"
   assert walks["n"] == 3
 
 
@@ -177,40 +204,6 @@ def test_list_poll_repeating_the_rendered_etag_gets_a_bodyless_204(tmp_path: Pat
   assert stale.content != first.content
   assert stale.headers["ETag"] != etag
   assert client.get(url, params={"etag": stale.headers["ETag"]}).status_code == 204
-
-
-def test_list_poll_skips_the_signature_walk_until_a_mark_or_the_sweep(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  client, session_id, _ = _seeded_client(tmp_path)
-  threads_api._list_body_memo.clear()
-  threads_api._sig_gate.clear()
-  url = f"/api/threads/{session_id}/list"
-
-  walks = {"n": 0}
-  real = threads_api._row_source_stats
-
-  def counting(threads_dir: str, triggers_dir: str):
-    walks["n"] += 1
-    return real(threads_dir, triggers_dir)
-
-  monkeypatch.setattr(threads_api, "_row_source_stats", counting)
-
-  client.get(url)
-  assert walks["n"] == 1
-  for _ in range(9):
-    assert client.get(url).status_code == 200
-  assert walks["n"] == 1
-
-  client.get(url)
-  assert walks["n"] == 2
-
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  rows = {row["id"]: row for row in client.get(url).json()}
-  any_id = next(iter(rows))
-  asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
-  updated = client.get(url)
-  assert next(row for row in updated.json() if row["id"] == any_id)["status"] == "running"
-  assert walks["n"] == 3
 
 
 def test_marked_rebuild_reuses_rows_and_parses_from_one_walk(tmp_path: Path) -> None:

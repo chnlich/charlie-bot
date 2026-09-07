@@ -108,23 +108,24 @@ def test_serve_file_injects_for_artifact_path(sessions_root: Path) -> None:
   assert "last-modified" not in resp.headers
 
 
-def test_serve_file_injects_thread_artifact_with_session_id_not_thread_id(sessions_root: Path) -> None:
-  page = _write(sessions_root / "S" / "threads" / "T" / "artifacts" / "x.html")
+@pytest.mark.parametrize(
+    "under_thread",
+    [
+        ("artifacts",),
+        ("sub", "artifacts"),
+    ],
+    ids=["thread_artifacts_dir", "deeper_nested_artifacts_dir"],
+)
+def test_serve_file_injects_thread_nested_artifacts_with_session_id(
+    sessions_root: Path, under_thread: tuple[str, ...]) -> None:
+  """The predicate only cares that the page sits under <session>/... with an `artifacts`
+  parent, not how deep; thread-level pages carry the session id, never the thread id."""
+  page = _write(sessions_root.joinpath("S", "threads", "T", *under_thread, "x.html"))
 
   resp = _build_client("secret").get("/files" + str(page))
   assert resp.status_code == 200
   assert 'window.__cbcServerSessionId="S";' in resp.text
   assert '"T"' not in resp.text
-
-
-def test_serve_file_injects_deeper_nested_artifact(sessions_root: Path) -> None:
-  # A depth the old path-shape regex never matched: the predicate only cares that the
-  # page sits under <session>/... with an `artifacts` parent, not how deep.
-  page = _write(sessions_root / "S" / "threads" / "T" / "sub" / "artifacts" / "x.html")
-
-  resp = _build_client("secret").get("/files" + str(page))
-  assert resp.status_code == 200
-  assert 'window.__cbcServerSessionId="S";' in resp.text
 
 
 def test_serve_file_injects_via_bearer_header(sessions_root: Path) -> None:
@@ -136,25 +137,16 @@ def test_serve_file_injects_via_bearer_header(sessions_root: Path) -> None:
   assert 'window.__cbcServerSessionId="S";' in resp.text
 
 
-def test_serve_file_no_credential_returns_original_bytes(sessions_root: Path) -> None:
+@pytest.mark.parametrize("sent_key", [None, "wrong"], ids=["no_credential", "wrong_credential"])
+def test_serve_file_without_the_configured_key_serves_original_bytes(sessions_root: Path, sent_key: str | None) -> None:
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
   original = page.read_text(encoding="utf-8")
 
-  resp = _build_client(None).get("/files" + str(page))
+  resp = _build_client(sent_key).get("/files" + str(page))
   assert resp.status_code == 200
   assert resp.text == original
   assert "artifact-comments.js" not in resp.text
   assert 'window.__cbcServerSessionId="S";' not in resp.text
-
-
-def test_serve_file_wrong_credential_returns_original_bytes(sessions_root: Path) -> None:
-  page = _write(sessions_root / "S" / "artifacts" / "x.html")
-  original = page.read_text(encoding="utf-8")
-
-  resp = _build_client("wrong").get("/files" + str(page))
-  assert resp.status_code == 200
-  assert resp.text == original
-  assert "artifact-comments.js" not in resp.text
 
 
 def test_serve_file_empty_configured_key_injects(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,23 +160,23 @@ def test_serve_file_empty_configured_key_injects(sessions_root: Path, monkeypatc
   assert 'window.__cbcServerSessionId="S";' in resp.text
 
 
-def test_serve_file_session_html_outside_artifacts_not_injected(sessions_root: Path) -> None:
-  page = _write(sessions_root / "S" / "notes" / "x.html")
+@pytest.mark.parametrize(
+    "page_dir",
+    [
+        ("S", "notes"),
+        ("artifacts",),
+    ],
+    ids=["session_html_outside_artifacts", "root_level_artifacts_dir"],
+)
+def test_serve_file_non_artifact_page_serves_from_disk(sessions_root: Path, page_dir: tuple[str, ...]) -> None:
+  """The injection predicate needs an artifacts parent inside a session directory;
+  a page failing either half serves from disk, never injected."""
+  page = _write(sessions_root.joinpath(*page_dir, "x.html"))
 
   resp = _build_client("secret").get("/files" + str(page))
   assert resp.status_code == 200
   assert "artifact-comments.js" not in resp.text
   # Kept as a FileResponse: served from disk with a last-modified validator.
-  assert "last-modified" in resp.headers
-
-
-def test_serve_file_root_level_artifacts_dir_not_injected(sessions_root: Path) -> None:
-  # <root>/artifacts/x.html belongs to no session — there is no session component.
-  page = _write(sessions_root / "artifacts" / "x.html")
-
-  resp = _build_client("secret").get("/files" + str(page))
-  assert resp.status_code == 200
-  assert "artifact-comments.js" not in resp.text
   assert "last-modified" in resp.headers
 
 

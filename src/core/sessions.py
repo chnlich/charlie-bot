@@ -2027,7 +2027,7 @@ class SessionManager:
     # read and the comparison, so a bump cannot land inside the decision. The
     # store tags the revision read after the miss decision, before the walk —
     # a write landing mid-walk bumps past the tag and the next call re-walks
-    # (the M36 gate's rule: a mark landing mid-walk only raises the revision).
+    # (a mark landing mid-walk only raises the revision).
     hit = self._listings_memo.get(status)
     if (hit is not None and hit[0] == self._listings_revision and time.monotonic() - hit[1] < _LISTINGS_SWEEP_INTERVAL):
       try:

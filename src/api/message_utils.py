@@ -15,9 +15,8 @@ from src.core.message_aggregator import (
 )
 
 if TYPE_CHECKING:
-  from src.core.models import SessionMetadata, ThreadMetadata
+  from src.core.models import SessionMetadata
   from src.core.sessions import SessionManager
-  from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
 
@@ -217,7 +216,7 @@ class SessionViewData:
   """Data produced by the load-events → messages → usage → mark-read pipeline."""
   raw_events: list[dict]
   messages: list[dict]
-  threads: list['ThreadMetadata']
+  threads: list[dict]
   usage: dict | None
   pending_draft: dict | None = None
   total_event_count: int | None = None
@@ -324,16 +323,19 @@ async def build_session_bootstrap_data(
 async def build_session_view_data(
     session_id: str,
     session_mgr: 'SessionManager',
-    thread_mgr: 'ThreadManager',
+    thread_rows: list[dict],
     *,
     message_limit: int | None = 40,
 ) -> SessionViewData:
-  """Load events + threads in parallel, derive messages and usage, and mark read.
+  """Load events, derive messages and usage, and mark read.
 
-  When *message_limit* is None, loads all events. When set, loads the last
-  *message_limit* messages — served from the message projection when
-  ``archive_offset == 0`` (turn-aligned page of at least *message_limit*
-  messages, O(page) cost), or from the legacy tail-events path otherwise.
+  *thread_rows* are the session view's thread rows (``view_thread_rows``'s
+  shape), resolved by the caller so the view's row proof is shared with the
+  workers-panel list. When *message_limit* is None, loads all events. When
+  set, loads the last *message_limit* messages — served from the message
+  projection when ``archive_offset == 0`` (turn-aligned page of at least
+  *message_limit* messages, O(page) cost), or from the legacy tail-events path
+  otherwise.
 
   Returns committed messages plus an optional pending_draft (the in-progress
   assistant draft that has not yet been flushed). Live render paths show the
@@ -341,9 +343,7 @@ async def build_session_view_data(
   keeps SSR aligned with the per-session live aggregator and avoids the
   duplicate-bubble seen on mid-stream reload.
   """
-  threads_task = thread_mgr.list_threads(session_id)
-  session_task = session_mgr.get_session(session_id)
-  threads, session_meta = await asyncio.gather(threads_task, session_task)
+  session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during view build")
 
@@ -357,7 +357,7 @@ async def build_session_view_data(
       return SessionViewData(
           raw_events=events,
           messages=messages,
-          threads=threads,
+          threads=thread_rows,
           usage=usage,
           pending_draft=pending_draft,
           total_event_count=total_event_count,
@@ -382,7 +382,7 @@ async def build_session_view_data(
   return SessionViewData(
       raw_events=raw_events,
       messages=messages,
-      threads=threads,
+      threads=thread_rows,
       usage=usage,
       pending_draft=pending_draft,
       total_event_count=total_event_count,

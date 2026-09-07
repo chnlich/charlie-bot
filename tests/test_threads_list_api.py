@@ -91,6 +91,50 @@ def test_session_view_ships_the_same_truncated_rows(tmp_path: Path) -> None:
   assert view_rows[long_thread_id]["description_full_len"] == len(LONG_DESCRIPTION)
 
 
+def test_session_view_rows_skip_the_walk_until_a_mark_or_the_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  client, session_id, _ = _seeded_client(tmp_path)
+  threads_api._view_rows_memo.clear()
+  threads_api._view_rows_gate.clear()
+  url = f"/api/sessions/{session_id}/view"
+
+  walks = {"n": 0}
+  real = threads_api._row_source_stats
+
+  def counting(threads_dir: str, triggers_dir: str):
+    walks["n"] += 1
+    return real(threads_dir, triggers_dir)
+
+  monkeypatch.setattr(threads_api, "_row_source_stats", counting)
+
+  client.get(url)
+  assert walks["n"] == 1
+  for _ in range(9):
+    assert client.get(url).status_code == 200
+  assert walks["n"] == 1
+
+  client.get(url)
+  assert walks["n"] == 2
+
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  rows = {row["id"]: row for row in client.get(url).json()["threads"]}
+  any_id = next(iter(rows))
+  asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
+  updated = client.get(url)
+  assert next(row for row in updated.json()["threads"] if row["id"] == any_id)["status"] == "running"
+  assert walks["n"] == 3
+
+
+def test_session_view_rows_match_the_list_rows_order(tmp_path: Path) -> None:
+  """The view's rows are the list's thread rows: same fields, newest-first."""
+  client, session_id, _ = _seeded_client(tmp_path)
+
+  list_rows = [row for row in client.get(f"/api/threads/{session_id}/list").json() if row["type"] == "thread"]
+  view_rows = client.get(f"/api/sessions/{session_id}/view").json()["threads"]
+
+  assert view_rows == list_rows
+
+
 def test_list_body_memo_invalidates_on_metadata_rewrite(tmp_path: Path) -> None:
   client, session_id, _ = _seeded_client(tmp_path)
   threads_api._list_body_memo.clear()

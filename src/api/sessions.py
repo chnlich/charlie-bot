@@ -27,7 +27,7 @@ from src.api.message_utils import (
     events_to_messages,
 )
 from src.api.responses import FastJsonResponse
-from src.api.threads import _thread_list_item
+from src.api.threads import view_thread_rows
 from src.core import claude_accounts, thinking_state
 from src.core.chat_events import chat_events_path
 from src.core.config import (
@@ -498,7 +498,10 @@ async def get_session_view(
       include_running_status=True,
       include_pending_trigger_status=True,
   )
-  view = await build_session_view_data(session_id, session_mgr, thread_mgr)
+  # The threads array rides the workers-panel list's row proof (revision gate +
+  # row memo): a repeat view of a session no write landed in pays zero stats.
+  thread_rows = await view_thread_rows(session_id, cfg, thread_mgr)
+  view = await build_session_view_data(session_id, session_mgr, thread_rows)
   trigger_mgr = trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
   active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude")
@@ -514,7 +517,7 @@ async def get_session_view(
           "session": meta.model_dump(mode="json"),
           "messages": view.messages,
           "pending_draft": view.pending_draft,
-          "threads": [_thread_list_item(t) for t in view.threads],
+          "threads": view.threads,
           "triggers": [tr.model_dump(mode="json") for tr in triggers],
           "event_count": view.total_event_count,
           "oldest_message_ordinal": view.oldest_message_ordinal,

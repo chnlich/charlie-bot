@@ -263,6 +263,51 @@ def _thread_list_items(
   return items
 
 
+# The session view's threads array rides the same row proof as the list body:
+# sorted rows per session gated on the write revision (the M36 gate — every
+# row-source writer marks through mark_sidebar_dirty). The view's mark_read
+# no-ops once the session is read, so repeat views serve rows with zero stats;
+# a writer mark or the sweep walk rebuilds from the walked pairs, the row memo
+# serving the unmoved files' rows.
+_VIEW_ROWS_MEMO_LIMIT = 8
+_VIEW_ROWS_SWEEP_EVERY = 10
+_view_rows_memo: BoundedMemo[str, list[dict]] = BoundedMemo(_VIEW_ROWS_MEMO_LIMIT)
+_view_rows_gate: dict[str, tuple[int, int]] = {}
+
+
+async def view_thread_rows(
+    session_id: str,
+    cfg: CharlieBotConfig,
+    thread_mgr: ThreadManager,
+) -> list[dict]:
+  """Thread rows for the session view payload, proven current like the list body.
+
+  Serves the stored rows while the session's write revision stands (bounded by
+  the same sweep window as the list poll); a mark or the sweep walks the
+  row-source directories once and rebuilds through the shared row memo. Rows
+  are shared read-only with the workers-panel list's row memo and sorted
+  newest-first, the list_threads order.
+  """
+  hit = _view_rows_memo.get(session_id)
+  rev = session_revision(session_id)
+  gate = _view_rows_gate.get(session_id)
+  if hit is not None and gate is not None and gate[0] == rev and gate[1] + 1 < _VIEW_ROWS_SWEEP_EVERY:
+    _view_rows_gate[session_id] = (rev, gate[1] + 1)
+    return hit
+  session_dir = cfg.sessions_dir / session_id
+
+  def walk_and_parse() -> tuple[list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
+    thread_pairs, _ = _row_source_stats(str(session_dir / "threads"), str(session_dir / "triggers"))
+    return thread_pairs, thread_mgr.list_threads_from_stats(thread_pairs)
+
+  thread_pairs, metas = await asyncio.to_thread(walk_and_parse)
+  rows = _thread_list_items(session_id, thread_pairs, metas)
+  rows.sort(key=lambda row: row["created_at"], reverse=True)
+  _view_rows_memo.store(session_id, rows)
+  _view_rows_gate[session_id] = (rev, 0)
+  return rows
+
+
 @router.get("/{session_id}/list")
 async def list_threads(
     session_id: str,

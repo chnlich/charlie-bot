@@ -366,15 +366,12 @@ async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Pa
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   await recycle_archive_cutoff_events(mgr, session.id)
 
-  thread_mgr = AsyncMock()
-  thread_mgr.list_threads.return_value = []
-
-  full_view = await build_session_view_data(session.id, mgr, thread_mgr)
+  full_view = await build_session_view_data(session.id, mgr, [])
   assert full_view.total_event_count == 8
   assert full_view.has_more is True
   assert [m["event_index"] for m in full_view.messages] == [5, 6, 7]
 
-  tail_view = await build_session_view_data(session.id, mgr, thread_mgr, message_limit=2)
+  tail_view = await build_session_view_data(session.id, mgr, [], message_limit=2)
   assert tail_view.total_event_count == 8
   assert tail_view.has_more is True
   assert full_view.oldest_message_ordinal == 5

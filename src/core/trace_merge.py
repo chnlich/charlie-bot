@@ -54,14 +54,38 @@ class _EventBatcher:
     self._pending.clear()
 
 
+class _IdSequencer:
+  """Maps each original trace id to a dense sequential int, starting at 1.
+
+  One instance spans the whole merge; the key map resets per trace, because the
+  same original tid in two ranks is two different threads, while the ints keep
+  counting so no two threads or flows ever collide.
+  """
+
+  def __init__(self) -> None:
+    self.next_id = 1
+    self._seen: dict[str, int] = {}
+
+  def start_trace(self) -> None:
+    """Drop the key map before a new trace's events; the int counter continues."""
+    self._seen.clear()
+
+  def __call__(self, original: object) -> int:
+    key = str(original)
+    if key not in self._seen:
+      self._seen[key] = self.next_id
+      self.next_id += 1
+    return self._seen[key]
+
+
 def _merge_one_trace(
     path: Path,
     file_index: int,
     batcher: _EventBatcher,
-    next_tid: int,
-    next_flow_id: int,
+    tid_seq: _IdSequencer,
+    flow_seq: _IdSequencer,
     slim: bool,
-) -> tuple[int, int]:
+) -> None:
   with path.open("r", encoding="utf-8") as input_file:
     trace = json.load(input_file)
   if isinstance(trace, dict):
@@ -71,6 +95,8 @@ def _merge_one_trace(
   else:
     raise ValueError(f"Trace root must be an object or array: {path}")
   rank_label = _rank_label(path)
+  tid_seq.start_trace()
+  flow_seq.start_trace()
 
   pid_labels: dict[str, str] = {}
   for event in events:
@@ -90,25 +116,7 @@ def _merge_one_trace(
       gpu_index = int(gpu_match.group(1)) if gpu_match else 0
       synthetic_meta[synthetic_pid] = (base_sort_index + 1000 + gpu_index, f"{rank_label} {label}")
 
-  tid_map: dict[str, int] = {}
-  flow_id_map: dict[str, int] = {}
   emitted_thread_names: set[str] = set()
-
-  def get_numeric_tid(original_tid: object) -> int:
-    nonlocal next_tid
-    key = str(original_tid)
-    if key not in tid_map:
-      tid_map[key] = next_tid
-      next_tid += 1
-    return tid_map[key]
-
-  def get_numeric_flow_id(original_id: object) -> int:
-    nonlocal next_flow_id
-    key = str(original_id)
-    if key not in flow_id_map:
-      flow_id_map[key] = next_flow_id
-      next_flow_id += 1
-    return flow_id_map[key]
 
   for event in events:
     event_name = event.get("name")
@@ -126,7 +134,7 @@ def _merge_one_trace(
     event["pid"] = remapped_pid
     if "tid" in event:
       original_tid = event["tid"]
-      synthetic_tid = get_numeric_tid(original_tid)
+      synthetic_tid = tid_seq(original_tid)
       event["tid"] = synthetic_tid
       thread_key = str(original_tid)
       if thread_key not in emitted_thread_names:
@@ -142,10 +150,10 @@ def _merge_one_trace(
                 },
             })
     if event.get("ph") in {"s", "t", "f"} and "id" in event:
-      event["id"] = get_numeric_flow_id(event["id"])
+      event["id"] = flow_seq(event["id"])
     batcher.add(event)
 
-  meta_tid = get_numeric_tid("meta")
+  meta_tid = tid_seq("meta")
   for synthetic_pid, (sort_index, label) in synthetic_meta.items():
     for name, args in (
         ("process_name", {"name": label}),
@@ -154,24 +162,15 @@ def _merge_one_trace(
     ):
       batcher.add({"ph": "M", "pid": synthetic_pid, "tid": meta_tid, "name": name, "args": args})
 
-  return next_tid, next_flow_id
-
 
 def merge_traces(paths: list[Path], out_path: Path, slim: bool) -> None:
   """Merge Chrome JSON traces into one gzip-compressed Chrome trace."""
-  next_tid = 1
-  next_flow_id = 1
+  tid_seq = _IdSequencer()
+  flow_seq = _IdSequencer()
   with gzip.open(out_path, "wt", encoding="utf-8", compresslevel=_MERGE_COMPRESSLEVEL) as output:
     output.write('{"traceEvents":[')
     batcher = _EventBatcher(output)
     for file_index, path in enumerate(paths):
-      next_tid, next_flow_id = _merge_one_trace(
-          path,
-          file_index,
-          batcher,
-          next_tid,
-          next_flow_id,
-          slim,
-      )
+      _merge_one_trace(path, file_index, batcher, tid_seq, flow_seq, slim)
     batcher.flush()
     output.write("]}")

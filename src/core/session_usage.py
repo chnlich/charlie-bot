@@ -10,9 +10,11 @@ performs) folds just the appended suffix into the carried state, so the
 while the viewed session is thinking — costs O(new events) during a streamed
 turn instead of O(history) per poll. Any wholesale list replacement (a
 cache eviction, an archive recycle) has a new identity and rebuilds from a
-fresh fold. Load and scan run in one ``asyncio.to_thread`` so the fold never
-stalls the event loop. See the plan ``panel-usage-readout-fix`` for the tier
-contract.
+fresh fold. The memo's unchanged-list hit and appended suffixes within
+``_ON_LOOP_SUFFIX_CAP`` answer on the event loop; everything else (cold
+cache, replaced list, longer suffix) runs in one ``asyncio.to_thread`` so
+the fold never stalls the loop. See the plan ``panel-usage-readout-fix``
+for the tier contract.
 
 The readout is decided by the fold's latest-reading slot: the newest
 reading-bearing main-chain event in the table — an ``assistant`` event with a
@@ -356,6 +358,11 @@ def _resolve_no_source_tier(facts: _UsageFacts) -> dict:
 
 
 _FACTS_MEMO_CAP = 8
+# The on-loop suffix advance's bound: the fold costs ~0.4 us/event, so the cap
+# keeps the worst on-loop hold (~0.2 ms) ~25x under the 5 ms ticker floor the
+# polled routes share; a poll delayed past this many streamed deltas takes the
+# thread.
+_ON_LOOP_SUFFIX_CAP = 512
 
 
 class SessionUsageResolver:
@@ -369,6 +376,7 @@ class SessionUsageResolver:
       load_chat_events_sync_fn: Callable[[str], list[dict]],
   ) -> None:
     self._load_chat_events_sync = load_chat_events_sync_fn
+    self._events_cache = events_cache
     self._codex_resolver = CodexUsageResolver(cfg, events_cache, chat_events_path_fn)
     # session_id -> (events list, len at last fold, fold state). Pinning the
     # list keeps id() stable, so an identity match can never be an id-reuse
@@ -388,7 +396,9 @@ class SessionUsageResolver:
 
     Loads the full event list itself (memoised by the chat-events cache, so no
     extra disk I/O) and rescans only when the list changed since the last
-    resolution (see the module docstring for the memo key); tier selection:
+    resolution (see the module docstring for the memo key); the memo's
+    unchanged-list hit and small appended suffixes answer on the event loop
+    via ``_facts_hit``; tier selection:
 
     - codex: first, when the backend is codex and the native rollout resolves
       (unchanged logic).
@@ -402,7 +412,11 @@ class SessionUsageResolver:
 
     Returns ``None`` only when the event list is empty.
     """
-    events, facts = await asyncio.to_thread(self._load_and_scan, session_id)
+    hit = self._facts_hit(session_id)
+    if hit is None:
+      events, facts = await asyncio.to_thread(self._load_and_scan, session_id)
+    else:
+      events, facts = hit
 
     if self._codex_resolver.is_codex_backend(session_meta.backend):
       merged = await asyncio.to_thread(self._codex_resolver.resolve, session_id, session_meta, events)
@@ -419,6 +433,36 @@ class SessionUsageResolver:
     if not events:
       return None
     return _resolve_no_source_tier(facts)
+
+  def _facts_hit(self, session_id: str) -> tuple[list[dict], _UsageFacts] | None:
+    """Return ``(events, facts)`` from the facts memo without leaving the event loop, else ``None``.
+
+    Serves the unchanged-list hit and appends within ``_ON_LOOP_SUFFIX_CAP``
+    (the fold is ~0.4 us/event, so the cap bounds the worst on-loop hold);
+    a cold cache, a replaced list, or a longer suffix returns ``None`` for
+    the threaded ``_load_and_scan``. The cached list is read through the
+    cache dict — never ``_load_chat_events_sync``, whose miss would parse
+    the whole file on the loop. The path holds no awaits, so no other
+    coroutine can move the list between the length check and the store, and
+    an identity match implies ``covered`` counts a prefix of this same
+    list, which only grows in place — the same store contract as
+    ``_load_and_scan``: a copy is fed, never the stored fold.
+    """
+    events = self._events_cache.get(session_id)
+    if events is None:
+      return None
+    cached = self._facts_memo.get(session_id)
+    if cached is None or cached[0] is not events:
+      return None
+    covered, fold = cached[1], cached[2]
+    length = len(events)
+    if length > covered + _ON_LOOP_SUFFIX_CAP:
+      return None
+    if length > covered:
+      fold = fold.copy()
+      fold.feed(events[covered:])
+      self._facts_memo.store(session_id, (events, length, fold))
+    return events, fold.facts()
 
   def _load_and_scan(self, session_id: str) -> tuple[list[dict], _UsageFacts]:
     """Load the session's events and return them with their usage facts.

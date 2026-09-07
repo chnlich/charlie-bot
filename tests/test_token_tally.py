@@ -8,6 +8,7 @@ hard-coded total.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -1140,3 +1141,74 @@ def test_opencode_incremental_merge_matches_full_replay(tmp_path: Path) -> None:
   assert [n for n in incremental.notes if n.startswith("opencode:")] == \
       [n for n in replay.notes if n.startswith("opencode:")]
   assert {r.model for r in incremental.rows if r.source == "opencode"} == {"oc-a", "oc-b2", "oc-c"}
+
+
+def test_row_memo_probe_skips_the_key_scan_on_wal_noise(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The proof aggregates (count, sum of time_updated) answer the WAL-noise round without
+  # the per-row key read: a WAL write that touched no message row skips the scan entirely.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+
+  con.execute("insert into other values ('noise2', 'x')")
+  con.commit()
+
+  def boom(*args, **kwargs) -> None:
+    raise AssertionError("key scan ran although the proof aggregates saw no message row move")
+
+  monkeypatch.setattr(tt, "_scan_opencode_rows", boom)
+  second = _collect(None, None, db, cache)
+  assert second.rows == first.rows
+  assert second.notes == first.notes
+  con.close()
+
+
+def test_cache_document_parses_once_per_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The parsed document memoizes per cache path: a changed round re-parses zero document
+  # bytes; the per-file signature still forces the moved file's own re-read.
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _collect(claude, None, db, cache)
+
+  loads = []
+  orig = tt.TallyCache.load
+
+  def spy(path: Path, notes: list) -> tt.TallyCache:
+    loads.append(path)
+    return orig(path, notes)
+
+  monkeypatch.setattr(tt.TallyCache, "load", staticmethod(spy))
+  os.utime(claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl", None)  # signature moves
+  second = _collect(claude, None, db, cache)
+  assert loads == []  # the memoized document served the changed round
+  assert _row(second, "Claude Code", NAME).calls == 1  # the re-read file still tallies once
+
+
+def test_reset_drops_the_probe_and_document_memos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # _reset_aggregate_memo owns every process-wide memo the collection adds; after it, a
+  # fresh round re-parses the document and re-runs the row scan from an empty memo.
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _collect(None, None, db, cache)
+
+  tt._reset_aggregate_memo()
+  _append_opencode(db, [_padded_opencode_row(100)])
+
+  scans, loads = [], []
+  orig_scan = tt._scan_opencode_rows
+  orig_load = tt.TallyCache.load
+
+  def spy_scan(con: sqlite3.Connection, memo: dict) -> tuple:
+    scans.append(1)
+    return orig_scan(con, memo)
+
+  def spy_load(path: Path, notes: list) -> tt.TallyCache:
+    loads.append(path)
+    return orig_load(path, notes)
+
+  monkeypatch.setattr(tt, "_scan_opencode_rows", spy_scan)
+  monkeypatch.setattr(tt.TallyCache, "load", staticmethod(spy_load))
+  _collect(None, None, db, cache)
+  assert scans == [1]  # empty row memo: the cold scan ran
+  assert loads == [cache]  # empty document memo: the document re-parsed

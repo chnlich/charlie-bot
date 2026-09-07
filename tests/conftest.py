@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -156,6 +157,49 @@ async def drain_session_consumer(session_id: str, timeout: float) -> None:
   consumer = master_cc_state._session_consumers.get(session_id)
   if consumer is not None:
     await asyncio.wait_for(consumer, timeout=timeout)
+
+
+def stall_before_call(delay: float, real: Callable[..., Any]) -> Callable[..., Any]:
+  """A drop-in stand-in that blocks *delay* seconds, then delegates to *real*.
+
+  Event-loop-responsiveness tests install it for the call whose off-loop execution
+  they verify: the stall is long enough that an inline run pins a ticker gap near
+  it, and the tests pair a 0.25 s stall with a 0.15 s ceiling.
+  """
+
+  def slow(*args: Any, **kwargs: Any) -> Any:
+    time.sleep(delay)
+    return real(*args, **kwargs)
+
+  return slow
+
+
+@contextlib.asynccontextmanager
+async def loop_stall_gaps() -> AsyncIterator[list[float]]:
+  """Record event-loop stall gaps (s) on a 5 ms ticker while the body runs; yields the gap list.
+
+  The ticker is mid-sleep before the body runs, so an inline block cannot starve it
+  unrecorded. Callers assert ``max(gaps)`` against a ceiling that separates off-loop
+  execution from an inline run of the stalled call (see ``stall_before_call``).
+  """
+  gaps: list[float] = []
+  stop = False
+
+  async def ticker() -> None:
+    prev = time.perf_counter()
+    while not stop:
+      await asyncio.sleep(0.005)
+      now = time.perf_counter()
+      gaps.append(now - prev)
+      prev = now
+
+  task = asyncio.create_task(ticker())
+  await asyncio.sleep(0.01)
+  try:
+    yield gaps
+  finally:
+    stop = True
+    await task
 
 
 def append_events(path: Path, events: list[dict]) -> None:

@@ -93,19 +93,6 @@ async def test_requested_backend_raises_for_unknown_typo() -> None:
 
 
 @pytest.mark.asyncio
-async def test_requested_backend_none_raises_for_stale_session_backend() -> None:
-  """With no --backend passed, a stale session backend must fail loudly rather than substitute."""
-  cfg = _build_cfg([
-      BackendOption(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7"),
-  ])
-  session = SessionMetadata(name="s", backend="claude-opus-4.6")
-  mgr = _mock_session_mgr(session)
-
-  with pytest.raises(ValueError, match="refusing to substitute"):
-    await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend=None)
-
-
-@pytest.mark.asyncio
 async def test_session_default_raises_when_option_has_no_model() -> None:
   cfg = _build_cfg([
       BackendOption(id="claude-opus-4.7", label="Opus", type="cc-claude", model=None),

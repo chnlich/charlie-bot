@@ -25,6 +25,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 import structlog
 
@@ -156,7 +158,7 @@ def _discover_ncu_python_dir() -> str | None:
   return None
 
 
-def _load_ncu_report_module():
+def _load_ncu_report_module() -> ModuleType | None:
   """Import and memoize the ncu_report module, or None if unavailable."""
   global _ncu_report_module, _ncu_import_attempted
   if _ncu_import_attempted:
@@ -177,7 +179,7 @@ def _load_ncu_report_module():
   return _ncu_report_module
 
 
-def _clean_number(value):
+def _clean_number(value: object) -> object:
   """Replace non-finite floats with None so the result is JSON-safe."""
   if isinstance(value, float) and not math.isfinite(value):
     return None
@@ -282,7 +284,10 @@ def _collect_roofline(kernels: list[dict]) -> dict:
   }
 
 
-def _metric_value(action, name: str) -> tuple[object, str | None]:
+# The ncu_report objects below are SWIG proxies from the optional Nsight
+# Compute install: no importable type exists on hosts without it, so the
+# action parameters stay Any.
+def _metric_value(action: Any, name: str) -> tuple[object, str | None]:
   """Return (value, unit) for a metric, or (None, None) if not collected.
 
   Handles both a missing metric (metric_by_name returns None) and a metric that
@@ -301,7 +306,7 @@ def _metric_value(action, name: str) -> tuple[object, str | None]:
     return None, None
 
 
-def _dims(action, prefix: str) -> str | None:
+def _dims(action: Any, prefix: str) -> str | None:
   """Format a 3D launch dimension (e.g. '64 × 6 × 1'), or None if absent."""
   x = _metric_value(action, f"{prefix}_x")[0]
   y = _metric_value(action, f"{prefix}_y")[0]
@@ -312,7 +317,7 @@ def _dims(action, prefix: str) -> str | None:
   return " × ".join(str(int(p)) if isinstance(p, float) and p.is_integer() else str(p) for p in parts)
 
 
-def _duration_ns(value, unit: str | None):
+def _duration_ns(value: object, unit: str | None) -> float | None:
   """Normalize a duration metric to nanoseconds for sorting/display."""
   if value is None or not isinstance(value, (int, float)):
     return None
@@ -320,7 +325,7 @@ def _duration_ns(value, unit: str | None):
   return float(value) * factor
 
 
-def _function_base_pcs(action) -> list[int]:
+def _function_base_pcs(action: Any) -> list[int]:
   """Return the entry program counters of every function in the action."""
   metric = action.metric_by_name(_FUNCTION_PCS_METRIC)
   if metric is None:
@@ -331,14 +336,14 @@ def _function_base_pcs(action) -> list[int]:
     return []
 
 
-def _object_field(obj, name: str):
+def _object_field(obj: Any, name: str) -> Any:
   """Read a SWIG attribute object or dict field from ncu_report."""
   if isinstance(obj, dict):
     return obj[name]
   return getattr(obj, name)
 
 
-def _collect_source(action) -> dict:
+def _collect_source(action: Any) -> dict:
   """Reconstruct SASS/PTX listings and gather CUDA-C source for one action.
 
   SASS works through the ncu_report module with no ncu binary: instruction text
@@ -374,7 +379,7 @@ def _collect_source(action) -> dict:
   return {"sass": sass, "ptx": ptx, "cuda_sources": cuda_sources}
 
 
-def _extract_rules(action) -> list[dict]:
+def _extract_rules(action: Any) -> list[dict]:
   """Normalize rule recommendations into JSON-safe dicts.
 
   Returns [] for reports without rules (e.g. a narrow --metrics capture). Each
@@ -405,7 +410,7 @@ def _extract_rules(action) -> list[dict]:
   return rules
 
 
-def _device_attributes(action) -> list[dict]:
+def _device_attributes(action: Any) -> list[dict]:
   """Collect device__attribute_* metrics for the Session / Device tab.
 
   These are part of the raw metric set, so the tab is a rendered view of them.
@@ -422,7 +427,7 @@ def _device_attributes(action) -> list[dict]:
   return attrs
 
 
-def _device_summary(action) -> list[dict]:
+def _device_summary(action: Any) -> list[dict]:
   """A short, human-friendly device summary derived from device attributes."""
   summary: list[dict] = []
   major = _metric_value(action, "device__attribute_compute_capability_major")[0]
@@ -437,7 +442,7 @@ def _device_summary(action) -> list[dict]:
   return summary
 
 
-def _action_to_dict(action, idx: int) -> dict:
+def _action_to_dict(action: Any, idx: int) -> dict:
   """Build the per-kernel record: summary fields, raw metrics, rules, source."""
   dur_value, dur_unit = _metric_value(action, _DURATION_METRIC)
   metrics: list[dict] = []
@@ -463,7 +468,7 @@ def _action_to_dict(action, idx: int) -> dict:
   }
 
 
-def _parse_with_module(module, abspath: str) -> dict:
+def _parse_with_module(module: ModuleType, abspath: str) -> dict:
   """Parse a report using the ncu_report module."""
   try:
     ctx = module.load_report(abspath)
@@ -512,7 +517,7 @@ def _format_dims_csv(raw: str) -> str | None:
   return " × ".join(parts) if parts else None
 
 
-def _coerce_csv_value(raw: str):
+def _coerce_csv_value(raw: str) -> int | float | str | None:
   """Convert a CSV metric value string to int/float when numeric."""
   text = (raw or "").strip().replace(",", "")
   if not text:

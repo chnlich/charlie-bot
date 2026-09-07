@@ -359,8 +359,9 @@ def _resolve_no_source_tier(facts: _UsageFacts) -> dict:
 
 _FACTS_MEMO_CAP = 8
 # The on-loop suffix advance's bound: the fold costs ~0.4 us/event, so the cap
-# keeps the worst on-loop hold two orders under the 5 ms ticker floor the polled
-# routes share; a poll delayed past this many streamed deltas takes the thread.
+# keeps the worst on-loop hold (~0.2 ms) ~25x under the 5 ms ticker floor the
+# polled routes share; a poll delayed past this many streamed deltas takes the
+# thread.
 _ON_LOOP_SUFFIX_CAP = 512
 
 

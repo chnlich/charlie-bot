@@ -5,6 +5,7 @@ import html
 import json
 import mimetypes
 import os
+import re
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -165,6 +166,14 @@ def _human_size(size: int) -> str:
   return f"{size:.1f} PB"
 
 
+# A name over [A-Za-z0-9_.~-] is its own html.escape output and its own
+# urllib.parse.quote(safe="") output — both functions' always-safe sets — so a
+# matching entry renders by interpolation and only the rest pay the per-entry
+# escape/quote calls. Session ids (UUIDs) and artifact names match; the
+# charliebot corpus is almost entirely safe names.
+_SAFE_ENTRY_RE = re.compile(r"[A-Za-z0-9_.~-]+")
+
+
 def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -> str | None:
   """Return the HTML listing of *dir_path*, or None when it is not a directory.
 
@@ -199,18 +208,23 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
   entries.sort(key=lambda e: (not e[0], e[1].lower()))
 
   rows = []
+  prefix = url_prefix.rstrip("/")
   # Parent directory link (unless at root)
-  if url_prefix.rstrip("/") != "/files":
-    parent = "/".join(url_prefix.rstrip("/").split("/")[:-1]) or "/files"
+  if prefix != "/files":
+    parent = "/".join(prefix.split("/")[:-1]) or "/files"
     rows.append('<tr>'
                 f'<td>📁</td><td><a href="{html.escape(parent)}">..</a></td>'
                 '<td></td><td></td>'
                 '</tr>\n')
 
+  escaped_prefix = html.escape(prefix)
   for is_dir, name, size, mtime in entries:
     icon = "📁" if is_dir else "📄"
-    name_text = html.escape(name + ("/" if is_dir else ""))
-    href = html.escape(f"{url_prefix.rstrip('/')}/{quote(name, safe='')}")
+    name_text = name + ("/" if is_dir else "")
+    href = f"{escaped_prefix}/{name}"
+    if _SAFE_ENTRY_RE.fullmatch(name) is None:
+      name_text = html.escape(name_text)
+      href = html.escape(f"{prefix}/{quote(name, safe='')}")
     size_text = "" if is_dir else _human_size(size)
     # time.gmtime is the UTC rendering the datetime form produced, minus its
     # per-entry object construction.

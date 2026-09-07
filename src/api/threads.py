@@ -264,8 +264,8 @@ def _thread_list_items(
 
 
 # The session view's threads array rides the same row proof as the list body:
-# sorted rows per session gated on the write revision (the M36 gate — every
-# row-source writer marks through mark_sidebar_dirty). The view's mark_read
+# sorted rows per session gated on the write revision (every row-source
+# writer marks through mark_sidebar_dirty). The view's mark_read
 # no-ops once the session is read, so repeat views serve rows with zero stats;
 # a writer mark or the sweep walk rebuilds from the walked pairs, the row memo
 # serving the unmoved files' rows.

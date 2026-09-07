@@ -104,7 +104,7 @@ function endsOnClosingFence(raw) {
 
 // The streaming paint's parse: lex once, record the code tokens by plain
 // recursion (marked's walkTokens hook routes the same walk through
-// Promise.all — ~215k promise allocations per replay on the 98 KB M33
+// Promise.all — ~215k promise allocations per replay on the 98 KB draft
 // corpus), then render those same token objects, so the renderer's identity
 // check sees what was recorded.
 function parseStreamDraft(fixed) {

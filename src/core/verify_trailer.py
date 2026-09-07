@@ -1,9 +1,8 @@
 """Verify-result trailer format — the single authority for the trailer regex and report reader.
 
-This module owns the verify-trailer surface that ``src.core.spawner`` still needs to teach
+This module owns the verify-trailer surface ``src.core.spawner`` needs to teach
 verify workers the trailer format and to read a verify thread's final report. It knows nothing
-about the plan registry; the dependency direction is spawner -> verify_trailer, and plans.py
-no longer references any of these symbols.
+about the plan registry; the dependency direction is spawner -> verify_trailer.
 """
 
 import asyncio

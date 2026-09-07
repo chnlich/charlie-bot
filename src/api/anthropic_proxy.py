@@ -283,7 +283,7 @@ def _sse_event(event: str, data: dict) -> bytes:
 class OpenAIChatStreamToAnthropic:
   """Stateful translator from OpenAI chat stream chunks to Anthropic SSE events."""
 
-  def __init__(self, model: str):
+  def __init__(self, model: str) -> None:
     self._message_id = f"msg_{uuid.uuid4().hex}"
     self._model = model
     self._next_index = 0

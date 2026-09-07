@@ -11,7 +11,7 @@ class OpenAICompatibleClaudeBackend(AnthropicEndpointBackend):
   the Claude-facing model.
   """
 
-  def __init__(self, *, proxy_base_url: str, auth_token: str, model: str, **kwargs):
+  def __init__(self, *, proxy_base_url: str, auth_token: str, model: str, **kwargs) -> None:
     if not proxy_base_url:
       raise ValueError("cc-openai-compatible backend requires proxy_base_url")
     if not auth_token:

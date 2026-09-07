@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -365,7 +366,7 @@ def _contains_git_marker(path: Path) -> bool:
   return False
 
 
-def _iter_local_worktree_artifacts(wt_path: Path):
+def _iter_local_worktree_artifacts(wt_path: Path) -> Iterator[Path]:
   """Yield paths of known cache/env/build artifact dirs inside the worktree.
 
   Walks top-down without following symlinks and never descends into a nested git

@@ -24,7 +24,7 @@ class ScheduledSessionBusyError(RuntimeError):
 class ScheduledSessionStore:
   """Scheduled-session rotation operations."""
 
-  def __init__(self, session_manager: Any):
+  def __init__(self, session_manager: Any) -> None:
     self._session_manager = session_manager
 
   async def ensure_scheduled_session_backend(

@@ -53,7 +53,7 @@ def iter_thread_meta_stats(threads_dir: str | Path) -> Iterator[tuple[str, os.st
 class ThreadManager:
   """Creates and manages Worker threads."""
 
-  def __init__(self, cfg: CharlieBotConfig):
+  def __init__(self, cfg: CharlieBotConfig) -> None:
     self._cfg = cfg
     # metadata.json path -> (mtime_ns, size, parsed meta). Re-validating every
     # thread file on each 3 s workers-panel poll costs ~176 us per thread; a

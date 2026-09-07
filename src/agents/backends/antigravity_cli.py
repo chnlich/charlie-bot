@@ -34,7 +34,7 @@ class AgentGuard(ValueError):
 class AntigravityCliBackend(AgentBackend):
   """Runs `agy --print` and translates the JSON envelope into CC events."""
 
-  def __init__(self, *, model: str | None = None, print_timeout: str | None = None, **kwargs):
+  def __init__(self, *, model: str | None = None, print_timeout: str | None = None, **kwargs) -> None:
     super().__init__(model=model, **kwargs)
     # agy --print turn budget: explicit config wins, otherwise the 1h default.
     self._print_timeout = print_timeout if print_timeout is not None else "1h"

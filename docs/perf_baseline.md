@@ -17,7 +17,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M4 turns | M4 collector below | seconds per turn; hung sessions | median < 300 s; hung = 0 | median 53 s, max 1133 s; 0 hung |
 | M5 threads/list latency | M5 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
 | M6 session usage latency | M6 collector below | seconds per request, worst session; the append-round repeat (one appended event before each timed resolution — the 3 s usage poll during a streamed turn — scratch home) | median < 0.05 s; append-round median < 0.005 s | — (introduced with its first history row) |
-| M7 token-usage page | M7 collector below | seconds per page load | median < 3 s | — (introduced with its first history row) |
+| M7 token-usage page | M7 collector below | seconds per page load; the changed-round collect (one corpus move since the last collect — the hourly cron's shape, scratch cache doc, live corpus read-only) | median < 3 s; changed-round median < 0.5 s | — (introduced with its first history row) |
 | M8 sidebar search, absent needle | M8 collector below | seconds per request | median < 0.5 s | — (introduced with its first history row) |
 | M9 ext-usage codex spend rescan, steady state | M9 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
 | M10 thread-metadata torn reads | M10 collector below | torn reads per concurrent save stream | 0 torn reads | — (introduced with its first history row) |
@@ -319,6 +319,46 @@ both paths):
 
 ```bash
 KEY=$(grep -m1 '^charliebot_access_key:' ~/.charliebot/config.yaml | awk '{print $2}'); for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: Bearer $KEY" http://127.0.0.1:18498/token-usage; done | sort -n | awk '{a[NR]=$1} END {printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
+```
+
+M7 changed-round — the collect behind a page load whose corpus moved since the last one (any
+grown log moves the walk signature): the persisted document re-parses, unchanged files serve
+from it, and the db row memo re-proves its rows. The standing collector's five back-to-back
+requests never cross a corpus move, so the changed round needs its own timing: the harness
+drops the in-process memos per round and restores a scratch copy of the live document (live
+home read once for the copy, never written), keeping the row memos warm as the running
+server's are:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import shutil, sys, time
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from pathlib import Path
+import src.core.token_tally as tt
+
+CACHE = Path.home() / ".charliebot" / "cache" / "token_tally.json"
+SCRATCH = Path("/tmp/opencode/m7-changed-round.json")
+
+def changed_round():
+    # The changed-round shape: the walk ran, the aggregate memo is gone, the document's
+    # per-file signatures are stale for exactly the files that moved; the row memos stay
+    # warm, as the long-running server's are.
+    tt._aggregate_memo = None
+    tt._tally_memo = None
+    shutil.copy2(CACHE, SCRATCH)
+    t0 = time.perf_counter()
+    tally = tt.collect_token_usage(cache_path=SCRATCH)
+    return time.perf_counter() - t0, tally
+
+changed_round()  # cold pass, as at the first changed round after a server start; not timed
+times = []
+for _ in range(5):
+    dt, tally = changed_round()
+    times.append(dt)
+times.sort()
+print(f"changed-round collect median {times[2]:.3f} s, max {times[-1]:.3f} s over 5, "
+      f"{len(tally.rows)} rows, {tally.scanned_bytes / 1e6:.1f} MB re-read")
+EOF
 ```
 
 M8 — sidebar search latency, worst case: five timed requests for a needle absent from every
@@ -4241,6 +4281,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-07 | this PR | M7 changed-round collect median 0.453/0.463/0.461 s → 0.231/0.273/0.254 s (three interleaved rounds of the new changed-round harness, main checkout before vs branch worktree after back-to-back at load 1.52-2.08, 15 rows and 0.0 MB re-read both arms; pre-fix profile on the same round: 10.5 MB document json.loads ~80 ms + db key scan ~106 ms + document re-dump ~89 ms + record replay ~138 ms + walk ~40 ms); warm row-memo advance median 0.1058/0.1058/0.1064 s → 0.0264/0.0279/0.0271 s (interleaved ×3 against the live 15.28 GB db, 85k message rows; branch maxima 0.133-0.139 s are rounds where live rows landed between calls — the probe misses and the full scan runs, correct); HTTP-level paired interleaved rounds: WAL-noise rounds (sidecar moved, no message row) live-before 0.1404/0.1419/0.1435/0.1456 s → scratch-after (branch server, scratch CHARLIEBOT_HOME, verbatim M7 curls) 0.0377/0.0382/0.0392/0.0399 s, row-landing rounds unchanged (live 0.1328-0.1576 s ≈ scratch 0.1445-0.1606 s — the scan still runs when rows land, by design); fast-hit floor unchanged (live 0.022 s ≈ scratch 0.011 s) | the changed round paid three fixed costs: the 10.5 MB cache document's json re-parse (~80 ms) on every fresh walk, the opencode row memo's full-table key re-read (`select id, time_updated` over 85k rows, ~106 ms) on every WAL-sidecar move, and the proof-less rescan's downstream serve; the row-memo advance now checks proof aggregates first — (row count, sum of time_updated) read under the same snapshot as the scan it may gate; every single-row move changes the pair, so equal aggregates skip the per-row key read (a strictly weaker proof than the key scan's per-id diff: a same-millisecond delete+insert coincidence whose count and sum both net to zero dodges the probe until the next proof miss re-scans, and a data-only rewrite with an unchanged time_updated is invisible to the key scan itself); the parsed document memoizes per cache path and each save adopts the round's next-document state, so a changed round re-parses zero document bytes and entries this round stopped seeing drop out with the save; changed-round sub-metric, healthy range, and harness added to the M7 row in this PR |
 | 2026-09-07 | this PR | M73 plan amend validation loop-lag median 0.6384/0.6540/0.6360 s → 0.0073/0.0070/0.0075 s (at the 5 ms ticker floor), maxima 0.6644/0.6645/0.6385 s → 0.0079/0.0088/0.0085 s; wall median 0.6390/0.6547/0.6367 s → 0.6516/0.6319/0.6486 s — the render's own cost, now off-loop, unchanged as expected (three interleaved rounds of the collector, the 11 KB bound plan page plan_02.html passing the current pure assertion set, scratch CHARLIEBOT_HOME, main checkout before vs branch worktree after back-to-back, every paired round faster; live corroboration: the 1.37 h server log shows the freeze as POST /api/internal/plan/amend avg 670 ms max 715 ms over 5 calls and /plan/present avg 597 ms max 624 ms over 3, the instance predates this change; no-regression re-measures: M57 /plans 2.27-2.55 ms standing band and M27 tolerant read 9.0 µs unchanged; plan-registry suite 67 passed at this branch's head, the pre-fix archive one short (the new loop-responsiveness pin), red there, green here) | the plan registration gate (the DOM assertion set plus the headless-Chrome page-height render, hundreds of ms per page) ran inline in the async present/amend verbs, so every plan delivery froze the event loop for the full Chrome render — the M14 pathology on the plan-delivery path; the assertion run now rides one asyncio.to_thread hop inside `_validate_new_version_file`, the same shape as the M55 annotate and M65 gzip hops, leaving every verb's rejection and save semantics untouched; M73 definition and healthy range introduced with this PR |
 | 2026-08-30 | #457 | M5 median 0.068 s → 0.029 s (117-thread worst session) | one executor hop for the threads metadata scan; M5 definition and healthy range introduced with this PR |
 | 2026-08-30 | #461 | M2 tui/status share 1396/3146 status polls (44 %) → 0 tui/status requests in a 15 s headless-page window (scratch A/B) | sidebar tui/status poll scoped to rows rendered as tui-cli; zero tui-cli backends configured on this host |

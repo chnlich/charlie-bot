@@ -166,11 +166,19 @@ const planPanel = (() => {
       '&' + PLAN_PANEL_MARKER + '=1';
   }
 
-  function buildIframeUrlFromVersion(plan, version, sessionId, sessionsRoot, diffOn) {
+  // The file pair behind both FromVersion builders: the version's file plus,
+  // when the diff toggle is on, its predecessor's. Null when the version is
+  // not in the plan.
+  function _versionFiles(plan, version, diffOn) {
     var ver = _findVersion(plan, version);
     if (!ver) return null;
     var pred = diffOn ? predecessorVersion(plan, version) : null;
-    return buildIframeUrl(ver.file, sessionId, sessionsRoot, pred ? pred.file : null);
+    return {file: ver.file, diffFile: pred ? pred.file : null};
+  }
+
+  function buildIframeUrlFromVersion(plan, version, sessionId, sessionsRoot, diffOn) {
+    var files = _versionFiles(plan, version, diffOn);
+    return files ? buildIframeUrl(files.file, sessionId, sessionsRoot, files.diffFile) : null;
   }
 
   // Standalone URL for the "Open in tab" action: real /files URL with the
@@ -184,10 +192,8 @@ const planPanel = (() => {
   }
 
   function buildStandaloneUrlFromVersion(plan, version, sessionId, sessionsRoot, diffOn) {
-    var ver = _findVersion(plan, version);
-    if (!ver) return null;
-    var pred = diffOn ? predecessorVersion(plan, version) : null;
-    return buildStandaloneUrl(ver.file, sessionId, sessionsRoot, pred ? pred.file : null);
+    var files = _versionFiles(plan, version, diffOn);
+    return files ? buildStandaloneUrl(files.file, sessionId, sessionsRoot, files.diffFile) : null;
   }
 
   function _buildFilesFetchUrl(file, sessionId, sessionsRoot) {

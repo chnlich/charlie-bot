@@ -546,18 +546,26 @@ async function loadOlderIfNeeded(container, isViewportFill) {
     return;
   }
 
-  sessionLoadingMore = true;
+  // In-flight token: the landing paths below apply only while this session
+  // and switch generation still own the view.
+  const flight = {sessionId: SESSION_ID, generation: switchGeneration};
+  sessionLoadingMore = flight;
   ensureSentinel(container, 'loading');
   const url = '/api/sessions/' + SESSION_ID + '/events?before=' + sessionOlderBeforeCursor + '&limit=40';
   const abortCtrl = new AbortController();
   const timeout = setTimeout(() => abortCtrl.abort(), 10000);
   let pageLanded = false;
+  const stale = () => flight.generation !== switchGeneration || flight.sessionId !== SESSION_ID;
   try {
     const res = await fetch(url, {signal: abortCtrl.signal});
     clearTimeout(timeout);
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     if (!Number.isFinite(data.next_before)) throw new Error('events page missing next_before');
+
+    // A session switch superseded this flight: drop the page before any state
+    // or DOM write (including the auto-continue chain below).
+    if (stale()) return;
 
     sessionHasMore = !!data.has_more;
 
@@ -633,6 +641,9 @@ async function loadOlderIfNeeded(container, isViewportFill) {
     pageLanded = true;
   } catch (err) {
     clearTimeout(timeout);
+    // Stale flight: the new session's view owns the sentinel — do not paint
+    // this session's failure onto it.
+    if (stale()) return;
     console.error('loadOlderMessages failed:', err);
     // Failure must NOT clear sessionHasMore — only a server has_more:false
     // or the no-progress guard may do that. Switch sentinel to failed state
@@ -641,7 +652,7 @@ async function loadOlderIfNeeded(container, isViewportFill) {
       ensureSentinel(container, 'failed');
     }
   } finally {
-    sessionLoadingMore = false;
+    if (sessionLoadingMore === flight) sessionLoadingMore = false;
   }
 
   // Bounded auto-continue: only after a page actually lands (not on failure —

@@ -1,13 +1,11 @@
 """Tests for the plan registry: state machine, rejections, derived state, schema migration."""
 
-import asyncio
 import json
-import time
 from pathlib import Path
 
 import pytest
+from conftest import loop_stall_gaps, plan_doc, plan_page_html, stall_before_call
 from conftest import make_plan_setup as _setup
-from conftest import plan_doc, plan_page_html
 from conftest import write_plan_artifact as _write_artifact
 from conftest import write_stub_chrome as _write_stub_chrome
 
@@ -812,31 +810,8 @@ async def test_present_keeps_event_loop_responsive(tmp_path: Path, monkeypatch: 
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
 
-  real_run = plans_mod.run_assertions
+  monkeypatch.setattr(plans_mod, "run_assertions", stall_before_call(0.25, plans_mod.run_assertions))
 
-  def slow_run(*args, **kwargs):  # type: ignore[no-untyped-def]
-    time.sleep(0.25)
-    return real_run(*args, **kwargs)
-
-  monkeypatch.setattr(plans_mod, "run_assertions", slow_run)
-
-  gaps: list[float] = []
-  stop = False
-
-  async def ticker() -> None:
-    prev = time.perf_counter()
-    while not stop:
-      await asyncio.sleep(0.005)
-      now = time.perf_counter()
-      gaps.append(now - prev)
-      prev = now
-
-  tick_task = asyncio.create_task(ticker())
-  # The ticker must be mid-sleep before present runs, or an inline block starves it unrecorded.
-  await asyncio.sleep(0.01)
-  await plan_mgr.present(meta.id, file=file_rel, title="P1")
-  stop = True
-  await tick_task
-  # Inline execution would pin one tick gap near the 0.25 s fake sleep, so 0.15 s
-  # separates offloaded from inline.
+  async with loop_stall_gaps() as gaps:
+    await plan_mgr.present(meta.id, file=file_rel, title="P1")
   assert max(gaps) < 0.15

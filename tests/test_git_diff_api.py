@@ -2,11 +2,11 @@
 
 import asyncio
 import subprocess
-import time
 from pathlib import Path
 
 import httpx
 import pytest
+from conftest import loop_stall_gaps, stall_before_call
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -201,47 +201,28 @@ def test_diff_files_keeps_event_loop_responsive(tmp_path: Path, monkeypatch: pyt
   repo = _build_repo(tmp_path)
   app = _build_app(tmp_path)
 
-  real_run = subprocess.run
+  monkeypatch.setattr(git_api.subprocess, "run", stall_before_call(0.25, subprocess.run))
 
-  def slow_run(*args, **kwargs):  # type: ignore[no-untyped-def]
-    time.sleep(0.25)
-    return real_run(*args, **kwargs)
-
-  monkeypatch.setattr(git_api.subprocess, "run", slow_run)
-
-  async def scenario() -> tuple[httpx.Response, float]:
-    gaps: list[float] = []
-    stop = False
-
-    async def ticker() -> None:
-      prev = time.perf_counter()
-      while not stop:
-        await asyncio.sleep(0.005)
-        now = time.perf_counter()
-        gaps.append(now - prev)
-        prev = now
-
+  async def scenario() -> tuple[httpx.Response, list[float]]:
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-      tick_task = asyncio.create_task(ticker())
-      resp = await client.get(
-          "/api/git/diff/files",
-          params={
-              "repo": str(repo),
-              "base": "main",
-              "head": "feature",
-              "mode": "three-dot"
-          },
-      )
-      stop = True
-      await tick_task
-    return resp, max(gaps)
+      async with loop_stall_gaps() as gaps:
+        resp = await client.get(
+            "/api/git/diff/files",
+            params={
+                "repo": str(repo),
+                "base": "main",
+                "head": "feature",
+                "mode": "three-dot"
+            },
+        )
+    return resp, gaps
 
-  resp, worst_gap = asyncio.run(scenario())
+  resp, gaps = asyncio.run(scenario())
   assert resp.status_code == 200
   assert resp.json()["total_files"] == 4
-  # diff_files fires three subprocess.run calls (rev-parse + two diffs); inline execution would
-  # pin one tick gap near the 0.25 s fake sleep each, so 0.15 s separates offloaded from inline.
-  assert worst_gap < 0.15
+  # diff_files fires three subprocess.run calls (rev-parse + two diffs); an inline run
+  # pins one gap per call near the 0.25 s stall.
+  assert max(gaps) < 0.15
 
 
 # First view's subprocess sequence: one rev-parse resolving both refs, then the two

@@ -13,7 +13,7 @@ import pytest
 from conftest import (
     TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET,
     FakeAsyncProcess,
-    assert_trigger_fired_completed,
+    assert_trigger_fired,
     patch_trigger_fire,
 )
 from conftest import make_trigger_setup as _make_mgr
@@ -120,7 +120,7 @@ async def test_slurm_single_job_terminal_state(
     )
     await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
 
-  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
+  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
   assert sacct.call_count >= min_polls
   assert final_line in msg
 
@@ -173,7 +173,7 @@ async def test_mixed_local_and_slurm_and_semantics(tmp_path: Path, pidfd_open_av
 
   assert elapsed >= 0.4, f"fired before the local pid exited: {elapsed:.2f}s"
   assert elapsed < 5, f"fired too late: {elapsed:.2f}s"
-  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
+  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
   assert str(proc.pid) in msg
   assert "slurm:77: COMPLETED 0:0" in msg
 

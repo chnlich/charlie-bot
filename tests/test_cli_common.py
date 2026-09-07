@@ -97,14 +97,27 @@ def test_resolve_session_id_rejects_mismatches_without_env(
     assert cwd_session in error
 
 
-def test_resolve_session_id_requires_source_outside_session_dir(
+@pytest.mark.parametrize(
+    ("cwd_subpath",),
+    [
+        (None,),
+        (Path("session-id") / "nested",),
+    ],
+    ids=["outside-sessions-tree", "nested-grandchild-of-a-session-dir"],
+)
+def test_resolve_session_id_without_deriving_cwd_exits_2(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    cwd_subpath: Path | None,
 ) -> None:
+  """Only a direct child of the sessions dir derives a session id; a cwd outside the
+  tree and a nested grandchild alike turn an absent --session into an exit-2 rejection."""
   sessions_dir = tmp_path / "sessions"
   sessions_dir.mkdir()
-  _set_cwd(tmp_path, monkeypatch, sessions_dir, None)
+  cwd_dir = tmp_path / "outside" if cwd_subpath is None else sessions_dir / cwd_subpath
+  cwd_dir.mkdir(parents=True)
+  monkeypatch.chdir(cwd_dir)
   monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
 
   with (
@@ -231,25 +244,3 @@ def test_post_internal_api_bearer_header(access_key: str, expect_header: bool) -
     assert headers["Authorization"] == "Bearer secret"
   else:
     assert "Authorization" not in headers
-
-
-def test_resolve_session_id_only_derives_direct_session_child(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-  sessions_dir = tmp_path / "sessions"
-  nested_dir = sessions_dir / "session-id" / "nested"
-  nested_dir.mkdir(parents=True)
-  monkeypatch.chdir(nested_dir)
-  monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
-
-  with (
-      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=_mock_config(sessions_dir)),
-      pytest.raises(SystemExit) as exc_info,
-  ):
-    common.resolve_session_id(None)
-
-  assert exc_info.value.code == 2
-  error = json.loads(capsys.readouterr().err)["error"]
-  assert "--session required" in error

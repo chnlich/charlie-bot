@@ -569,23 +569,25 @@ def test_main_accepts_existing_absolute_source_file(tmp_path: Path, monkeypatch:
   post_mock.assert_called_once()
 
 
-def test_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("session_arg",),
+    [
+        (None,),
+        ("abc",),
+    ],
+    ids=["derived-from-cwd", "explicit-flag-matching-cwd"],
+)
+def test_session_id_reaches_payload_from_cwd_or_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    session_arg: str | None,
+) -> None:
+  """The resolved session id lands in the POST payload whether cwd derived it or an
+  explicit --session matching the cwd supplied it."""
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path)
 
-  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
-    post_mock.return_value.json.return_value = {"thread_id": "t1"}
-    main()
-
-  payload = post_mock.call_args.kwargs["json"]
-  assert payload["session_id"] == "abc"
-
-
-def test_session_matches_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  task_spec_file = _write_task_spec(tmp_path)
-
-  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, session="abc")) as post_mock:
+  with _patched_main(cfg, _repo_argv(str(tmp_path), task_spec_file, session=session_arg)) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1"}
     main()
 

@@ -237,40 +237,31 @@ def test_success_path_with_mocked_ssh(tmp_path: Path, capsys: pytest.CaptureFixt
   assert "make build && echo done" in wrapper
 
 
-def test_success_path_derives_session_from_cwd(
+@pytest.mark.parametrize(
+    ("session_source", "session"),
+    [
+        ("cwd", "sess-cwd"),
+        ("env", "sess-env"),
+    ],
+    ids=["cwd-derived", "env-outranking-cwd"],
+)
+def test_remote_launch_resolves_session_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    session_source: str,
+    session: str,
 ) -> None:
-  session = "sess-cwd"
+  """The launch metadata's session id comes from the shared source ladder: a cwd
+  inside the session dir derives it; from a cwd outside any session dir, the
+  server-written variable supplies it."""
   cfg = _mock_config(_make_session_dir(tmp_path, session))
-  monkeypatch.chdir(cfg.sessions_dir / session)
-  monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
-
-  fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="24680\n", stderr="")
-
-  with _patched_launch(
-      cfg,
-      ["--host", "remote.example.com", "--cwd", str(tmp_path), "--cmd", "echo hi"],
-      patch(_SUBPROCESS_RUN_PATCH_TARGET, return_value=fake_proc),
-  ):
-    main()
-
-  meta = json.loads(capsys.readouterr().out.strip())
-  assert meta["session_id"] == session
-  assert meta["remote_pid"] == 24680
-
-
-def test_session_env_is_the_remote_launch_session_source(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-  """From a cwd outside any session dir, the server-written variable supplies the launch's session."""
-  session = "sess-env"
-  cfg = _mock_config(_make_session_dir(tmp_path, session))
-  monkeypatch.chdir(tmp_path)
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session)
+  if session_source == "cwd":
+    monkeypatch.chdir(cfg.sessions_dir / session)
+    monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
+  else:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session)
 
   fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="24680\n", stderr="")
 

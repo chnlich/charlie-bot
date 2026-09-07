@@ -47,26 +47,20 @@ def test_valid_payload_answers_ok_and_logs_one_diag_switch_line() -> None:
   assert switch_lines[0]["client_ts"] == "2026-09-06T12:00:00Z"
 
 
-def test_invalid_phase_is_rejected() -> None:
+# Each row is one payload override that violates SwitchEventRequest and must answer 422:
+# the phase Literal, the extra="forbid" unknown field, and the ge=0 floor on elapsed_ms.
+_REJECT_ROWS = [
+    pytest.param({"phase": "bogus"}, id="unknown-phase"),
+    pytest.param({"session_name": "leak"}, id="undeclared-field"),
+    pytest.param({"elapsed_ms": -1}, id="negative-elapsed-ms"),
+]
+
+
+@pytest.mark.parametrize("overrides", _REJECT_ROWS)
+def test_schema_violation_payload_is_rejected_with_422(overrides: dict) -> None:
   client = _build_client()
 
-  resp = client.post("/api/diag/switch-events", json=_payload(phase="bogus"))
-
-  assert resp.status_code == 422
-
-
-def test_extra_field_is_rejected() -> None:
-  client = _build_client()
-
-  resp = client.post("/api/diag/switch-events", json=_payload(session_name="leak"))
-
-  assert resp.status_code == 422
-
-
-def test_negative_elapsed_ms_is_rejected() -> None:
-  client = _build_client()
-
-  resp = client.post("/api/diag/switch-events", json=_payload(elapsed_ms=-1))
+  resp = client.post("/api/diag/switch-events", json=_payload(**overrides))
 
   assert resp.status_code == 422
 

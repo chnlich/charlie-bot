@@ -29,7 +29,14 @@ function paintStreamDraft(draft) {
   if (thinking) {
     html += thinkingToggleHtml('streaming-thinking', thinking);
   }
-  html += marked.parse(fixNestedFences(content));
+  // The parse below must see the recording window only, and a parse that
+  // throws must not leave it set into later renders.
+  streamPaintCodeTokens = [];
+  try {
+    html += parseStreamDraft(fixNestedFences(content));
+  } finally {
+    streamPaintCodeTokens = null;
+  }
   inner.innerHTML = html;
   renderChatMath(inner);
   if (wasAtBottom) {

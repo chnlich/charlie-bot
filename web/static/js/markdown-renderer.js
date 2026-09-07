@@ -2,15 +2,18 @@
 // Fix nested code fences so marked.js doesn't close the outer fence early.
 // When an outer ``` fence contains inner ``` fences, upgrade the outer
 // delimiter to use more backticks/tildes than any nested fence.
+// The fence-close rule (same char, len >= top.len, bare info string) lives in
+// scanFences alone; fixNestedFences and openFenceTail are its two consumers.
 // ---------------------------------------------------------------------------
-function fixNestedFences(md) {
-  var lines = md.split('\n');
+// The fence-line rule both the scanner and the delimiter rewrite share.
+var FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)/;
+
+function scanFences(lines) {
   var stack = [];
   var upgrades = {};  // lineIndex -> newLen
-  var fenceRe = /^( {0,3})(`{3,}|~{3,})(.*)/;
 
   for (var i = 0; i < lines.length; i++) {
-    var m = lines[i].match(fenceRe);
+    var m = lines[i].match(FENCE_RE);
     if (!m) continue;
 
     var delim = m[2];
@@ -45,13 +48,23 @@ function fixNestedFences(md) {
     }
   }
 
+  return upgrades;
+}
+
+function fixNestedFences(md) {
+  var lines = md.split('\n');
+  return applyFenceUpgrades(lines, scanFences(lines));
+}
+
+// The delimiter rewrite fixNestedFences applies, in reverse line order.
+function applyFenceUpgrades(lines, upgrades) {
   // Apply upgrades in reverse line order
   var upgradeLines = Object.keys(upgrades).map(Number).sort(function(a, b) { return b - a; });
   for (var j = 0; j < upgradeLines.length; j++) {
     var lineIdx = upgradeLines[j];
     var newLen = upgrades[lineIdx];
     var line = lines[lineIdx];
-    var oldMatch = line.match(fenceRe);
+    var oldMatch = line.match(FENCE_RE);
     if (!oldMatch) continue;
     var indent = oldMatch[1];
     var oldLen = oldMatch[2].length;
@@ -60,8 +73,58 @@ function fixNestedFences(md) {
     for (var k = 0; k < newLen; k++) newDelim += charType;
     lines[lineIdx] = indent + newDelim + line.slice(indent.length + oldLen);
   }
-
   return lines.join('\n');
+}
+
+// The streaming paint's state, owned here and driven by usage.js's
+// paintStreamDraft: null on every render path except the streaming paint's
+// parse, where it holds an array that walkTokens fills with the parse's code
+// tokens in document order. The block still growing at the draft's end is the
+// LAST of them (an unterminated fence runs to EOF), so renderer.code can skip
+// its highlight by token identity — no model of marked's block structure
+// needed, which line-level fence scanning cannot supply (list and blockquote
+// dedent the lines a fence rule would see). That block's content changes
+// again before it settles, so a cache miss on it renders escaped-plain
+// instead of re-running highlight per paint — the paint where the fence
+// closes, and the committed render after the turn, highlight it once and the
+// cache serves every later paint.
+var streamPaintCodeTokens = null;
+
+// A complete block's raw ends on its closing fence line (marked strips the
+// trailing newline from a terminated token's raw but keeps it on an
+// unterminated one); an unterminated block's raw ends on content. The one
+// shape this misreads — a long-fence draft whose content ends on a shorter
+// bare fence line — reads as complete and keeps today's per-paint highlight,
+// so a misread costs coverage, never bytes.
+function endsOnClosingFence(raw) {
+  var body = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
+  var lastLine = body.slice(body.lastIndexOf('\n') + 1);
+  return /^ {0,3}(?:`{3,}|~{3,})[ \t]*$/.test(lastLine);
+}
+
+// The streaming paint's parse: lex once, record the code tokens by plain
+// recursion (marked's walkTokens hook routes the same walk through
+// Promise.all — ~215k promise allocations per replay on the 98 KB M33
+// corpus), then render those same token objects, so the renderer's identity
+// check sees what was recorded.
+function parseStreamDraft(fixed) {
+  if (streamPaintCodeTokens === null) return marked.parse(fixed);
+  var tokens = marked.lexer(fixed);
+  recordCodeTokens(tokens);
+  return marked.parser(tokens);
+}
+
+function recordCodeTokens(tokens) {
+  for (var i = 0; i < tokens.length; i++) {
+    var token = tokens[i];
+    if (token.type === 'code') streamPaintCodeTokens.push(token);
+    if (token.tokens) recordCodeTokens(token.tokens);
+    if (token.items) {
+      for (var j = 0; j < token.items.length; j++) {
+        if (token.items[j].tokens) recordCodeTokens(token.items[j].tokens);
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -87,8 +150,11 @@ function fixNestedFences(md) {
   // (lang, code), so a bounded LRU serves repeat blocks without re-running it.
   const highlightCache = new Map();
   const HIGHLIGHT_CACHE_CAP = 32;
+  function highlightKey(lang, code) {
+    return lang + '\u0000' + code;
+  }
   function cachedHighlight(lang, code, run) {
-    const key = lang + '\u0000' + code;
+    const key = highlightKey(lang, code);
     let value = highlightCache.get(key);
     if (value !== undefined) {
       highlightCache.delete(key);
@@ -102,6 +168,25 @@ function fixNestedFences(md) {
     }
     return value;
   }
+  // The growing tail's escape, carried across paints: escapeText maps each
+  // character independently, so escape(prefix + delta) is escape(prefix) +
+  // escape(delta) exactly, and a tail that grows by appends re-escapes only
+  // the new bytes. The skip path refreshes both strings every paint it runs;
+  // any other paint leaves them stale for the next stream's first paint to
+  // replace.
+  var streamTailRaw = '';
+  var streamTailEscaped = '';
+  function escapeStreamTail(trimmed) {
+    let escaped;
+    if (trimmed.startsWith(streamTailRaw)) {
+      escaped = streamTailEscaped + escapeText(trimmed.slice(streamTailRaw.length));
+    } else {
+      escaped = escapeText(trimmed);
+    }
+    streamTailRaw = trimmed;
+    streamTailEscaped = escaped;
+    return escaped;
+  }
   renderer.html = function(token) {
     // Support both marked v4 (html string) and v5+ ({ text } object), same
     // tolerance as renderer.code. Escape so raw tags render as literal text.
@@ -113,12 +198,22 @@ function fixNestedFences(md) {
     const code = typeof token === 'object' ? token.text : token;
     const lang = (typeof token === 'object' ? token.lang : arguments[1]) || '';
     const trimmed = code.replace(/\n$/, '');
-    let highlighted;
-    if (lang && hljs.getLanguage(lang)) {
-      highlighted = cachedHighlight(lang, trimmed, () => hljs.highlight(trimmed, { language: lang }).value);
-    } else {
-      highlighted = cachedHighlight('', trimmed, () => hljs.highlightAuto(trimmed).value);
-    }
+    const resolvedLang = (lang && hljs.getLanguage(lang)) ? lang : '';
+    // The growing tail skips by token identity: walkTokens recorded this
+    // parse's code tokens in document order, the unterminated block is the
+    // last of them, and its raw not ending on a closing fence says it never
+    // closed. The cache check first keeps a completed block that shares the
+    // tail's cache key on today's highlighted bytes.
+    const isGrowingTail = streamPaintCodeTokens !== null
+      && !highlightCache.has(highlightKey(resolvedLang, trimmed))
+      && token === streamPaintCodeTokens[streamPaintCodeTokens.length - 1]
+      && !endsOnClosingFence(token.raw);
+    const run = () => (resolvedLang
+      ? hljs.highlight(trimmed, { language: resolvedLang }).value
+      : hljs.highlightAuto(trimmed).value);
+    const highlighted = isGrowingTail
+      ? escapeStreamTail(trimmed)
+      : cachedHighlight(resolvedLang, trimmed, run);
     const displayLang = escapeText(lang || 'text');
     const isMarkdown = (lang === 'markdown' || lang === 'md');
     const renderBtn = isMarkdown
@@ -206,7 +301,8 @@ function fixNestedFences(md) {
         tokens: [{ type: 'text', raw: run, text: run }],
       };
     }
-  }});
+  }
+});
 })();
 
 // ---------------------------------------------------------------------------

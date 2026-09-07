@@ -121,6 +121,20 @@ def test_diff_param_on_a_directory_is_rejected(tmp_path: Path) -> None:
   assert "not a session artifact page" in response.json()["detail"]
 
 
+def test_the_diff_400_outranks_the_unreadable_403(tmp_path: Path) -> None:
+  locked = tmp_path / "locked"
+  locked.mkdir()
+  locked.chmod(0o000)
+  try:
+    plain = _client().get(f"/files{locked}")
+    assert plain.status_code == 403
+    with_diff = _client().get(f"/files{locked}?diff=artifacts/other.html")
+    assert with_diff.status_code == 400
+    assert "not a session artifact page" in with_diff.json()["detail"]
+  finally:
+    locked.chmod(0o755)
+
+
 def test_an_absent_path_is_a_404(tmp_path: Path) -> None:
   response = _client().get(f"/files{tmp_path / 'gone'}")
   assert response.status_code == 404

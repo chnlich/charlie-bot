@@ -179,6 +179,10 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
   except NotADirectoryError:
     return None
   except PermissionError as e:
+    # The diff 400 outranks the unreadable 403: the route contract checks the
+    # diff target before it tries to read the directory.
+    if diff_param is not None:
+      raise HTTPException(status_code=400, detail=f"diff target is not a session artifact page: {dir_path}") from e
     raise HTTPException(status_code=403, detail="Permission denied") from e
   if diff_param is not None:
     scandir_iter.close()

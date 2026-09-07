@@ -4,7 +4,7 @@ import os
 import time
 import types
 from collections.abc import Callable
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -360,11 +360,7 @@ async def test_codex_provider_fetch_keeps_quota_when_historical_spend_row_is_mal
   # The provider reads rollout logs from <home_dir>/sessions, so the test seeds
   # that subtree and constructs the instance with home_dir pointing at tmp_path.
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
-  today = date.today()
-  now = datetime.now(UTC)
-  sessions_dir = tmp_path / "sessions"
-  rollout_dir = sessions_dir / f"{today.year:04d}" / f"{today.month:02d}" / f"{today.day:02d}"
-  rollout_dir.mkdir(parents=True)
+  now, rollout_dir = _seed_rollout_dir(tmp_path)
 
   stale_rollout_path = rollout_dir / "rollout-stale.jsonl"
   stale_rollout_path.write_text("{not valid json\n")
@@ -389,11 +385,7 @@ async def test_codex_provider_fetch_returns_quota_when_spend_aggregations_raises
     monkeypatch,
 ) -> None:
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
-  today = date.today()
-  now = datetime.now(UTC)
-  sessions_dir = tmp_path / "sessions"
-  rollout_dir = sessions_dir / f"{today.year:04d}" / f"{today.month:02d}" / f"{today.day:02d}"
-  rollout_dir.mkdir(parents=True)
+  now, rollout_dir = _seed_rollout_dir(tmp_path)
 
   _write_live_quota_rollout(rollout_dir, now)
 
@@ -413,9 +405,7 @@ async def test_codex_provider_fetch_returns_quota_when_spend_aggregations_raises
 async def test_codex_provider_spend_reparses_only_changed_files(tmp_path, monkeypatch) -> None:
   """Steady-state rounds reuse parsed spend events; only a file with a new (mtime, size) re-parses."""
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
-  now = datetime.now(UTC)
-  rollout_dir = tmp_path / "sessions" / f"{now.year:04d}" / f"{now.month:02d}" / f"{now.day:02d}"
-  rollout_dir.mkdir(parents=True)
+  now, rollout_dir = _seed_rollout_dir(tmp_path)
 
   def spend_event(input_tokens: int) -> str:
     return json.dumps(
@@ -452,7 +442,7 @@ async def test_codex_provider_spend_reparses_only_changed_files(tmp_path, monkey
   assert reapplied_usage["spend"]["last_7d_usd"] > first_usage["spend"]["last_7d_usd"]
 
 
-def _seed_rollout_dir(tmp_path) -> Any:
+def _seed_rollout_dir(tmp_path: Path) -> tuple[datetime, Path]:
   """Create <tmp>/sessions/YYYY/MM/DD dated today, the subtree the provider reads."""
   now = datetime.now(UTC)
   rollout_dir = tmp_path / "sessions" / f"{now.year:04d}" / f"{now.month:02d}" / f"{now.day:02d}"

@@ -12,6 +12,7 @@ trees under ``tmp_path``; no live ``~/.charliebot`` state is touched.
 """
 
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -556,84 +557,45 @@ def test_configured_supplement_missing_fails_manager_only(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_run_cc_fails_turn_on_project_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """An enabled project with an unreadable body fails the turn before any backend spawn."""
-  cfg = _make_project(tmp_path, files={"manager.md": SUPPLEMENT_MARK})  # common.md missing
-  cfg = SimpleNamespace(**{**vars(cfg), "sessions_dir": tmp_path / "sessions", "subprocess_buffer_limit": 1024})
-  cfg.sessions_dir.mkdir()
-  session_meta = SessionMetadata(id="s1", name="Researcher", group="proj")
-  option = BackendOption(id="agy", label="Antigravity", type="antigravity", prompt_overlay="none")
-
-  built: dict[str, bool] = {"called": False}
-
-  def fake_build_backend(*args: object, **kwargs: object):
-    built["called"] = True
-    return FakeBackend()
-
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
-  callbacks = mock_session_callbacks()
-  item = make_work_item(cfg, session_meta, option, callbacks=callbacks)
-
-  cc_session_id, exit_code, error_msg, _extras = await master_cc._run_cc(item)
-
-  assert built["called"] is False
-  assert cc_session_id is None
-  assert exit_code == 1
-  assert error_msg is not None and "project instruction loading failed" in error_msg
-  error_events = [
-      c.args[1]
-      for c in callbacks.persist_and_broadcast.await_args_list  # type: ignore[attr-defined]
-      if c.args and isinstance(c.args[1], dict) and c.args[1].get("type") == "assistant_error"
-  ]
-  assert len(error_events) == 1
-  assert "project instruction loading failed" in error_events[0]["content"]
-  callbacks.mark_unread.assert_awaited_once_with("s1")
-
-
-@pytest.mark.asyncio
-async def test_run_cc_fails_turn_on_duplicate_destinations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """An ordinary session fails the turn on duplicated body destinations — no backend spawn."""
-  cfg = _make_project(
-      tmp_path, yaml_body="prompt_file: common.md\nmanager_prompt_file: common.md\n", files={"common.md": COMMON_MARK})
-  cfg = SimpleNamespace(**{**vars(cfg), "sessions_dir": tmp_path / "sessions", "subprocess_buffer_limit": 1024})
-  cfg.sessions_dir.mkdir()
-  session_meta = SessionMetadata(id="s1", name="Researcher", group="proj")
-  option = BackendOption(id="agy", label="Antigravity", type="antigravity", prompt_overlay="none")
-
-  built: dict[str, bool] = {"called": False}
-
-  def fake_build_backend(*args: object, **kwargs: object):
-    built["called"] = True
-    return FakeBackend()
-
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
-  callbacks = mock_session_callbacks()
-  item = make_work_item(cfg, session_meta, option, callbacks=callbacks)
-
-  cc_session_id, exit_code, error_msg, _extras = await master_cc._run_cc(item)
-
-  assert built["called"] is False
-  assert cc_session_id is None
-  assert exit_code == 1
-  assert error_msg is not None and "same file" in error_msg
-  error_events = [
-      c.args[1]
-      for c in callbacks.persist_and_broadcast.await_args_list  # type: ignore[attr-defined]
-      if c.args and isinstance(c.args[1], dict) and c.args[1].get("type") == "assistant_error"
-  ]
-  assert len(error_events) == 1
-  assert "project instruction loading failed" in error_events[0]["content"]
-  callbacks.mark_unread.assert_awaited_once_with("s1")
-
-
-@pytest.mark.asyncio
-async def test_run_cc_fails_turn_on_dangling_project_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A dangling projects/<group> directory symlink fails the turn before any backend spawn."""
+def _dangling_project_dir(tmp_path: Path) -> SimpleNamespace:
+  """A projects/<group> directory that is a symlink to a missing target."""
   cfg = _make_cfg(tmp_path)
   (cfg.charliebot_home / "projects").mkdir(parents=True)
   (cfg.charliebot_home / "projects" / "proj").symlink_to(tmp_path / "gone-project")
-  cfg = SimpleNamespace(**{**vars(cfg), "sessions_dir": tmp_path / "sessions", "subprocess_buffer_limit": 1024})
+  return cfg
+
+
+_FAILING_PROJECT_CASES = [
+    pytest.param(
+        lambda tmp_path: _make_project(tmp_path, files={"manager.md": SUPPLEMENT_MARK}),
+        ("project instruction loading failed",),
+        id="unreadable-common-body"),
+    pytest.param(
+        lambda tmp_path: _make_project(
+            tmp_path,
+            yaml_body="prompt_file: common.md\nmanager_prompt_file: common.md\n",
+            files={"common.md": COMMON_MARK}), ("same file",),
+        id="duplicate-body-destinations"),
+    pytest.param(
+        _dangling_project_dir, ("project instruction loading failed", "broken symlink"),
+        id="dangling-project-directory"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("make_cfg", "error_fragments"), _FAILING_PROJECT_CASES)
+async def test_run_cc_fails_turn_on_project_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    make_cfg: Callable[[Path], SimpleNamespace],
+    error_fragments: tuple[str, ...],
+) -> None:
+  """A broken project — unreadable body, duplicated destinations, dangling directory — fails the turn before any backend spawn."""
+  cfg = SimpleNamespace(
+      **{
+          **vars(make_cfg(tmp_path)), "sessions_dir": tmp_path / "sessions",
+          "subprocess_buffer_limit": 1024
+      })
   cfg.sessions_dir.mkdir()
   session_meta = SessionMetadata(id="s1", name="Researcher", group="proj")
   option = BackendOption(id="agy", label="Antigravity", type="antigravity", prompt_overlay="none")
@@ -653,8 +615,7 @@ async def test_run_cc_fails_turn_on_dangling_project_directory(tmp_path: Path, m
   assert built["called"] is False
   assert cc_session_id is None
   assert exit_code == 1
-  assert error_msg is not None and "project instruction loading failed" in error_msg
-  assert "broken symlink" in error_msg
+  assert error_msg is not None and all(fragment in error_msg for fragment in error_fragments)
   error_events = [
       c.args[1]
       for c in callbacks.persist_and_broadcast.await_args_list  # type: ignore[attr-defined]

@@ -83,19 +83,17 @@ def _reset_thread_meta_memo_for_tests() -> None:
 _silence_reported_thread_ids: set[str] = set()
 
 
-def walk_thread_meta_stats(threads_dir: Path, log_event: str) -> list[tuple[str, str, "os.stat_result"]]:
-  """``(thread_dir, metadata.json path, stat)`` for every thread dir under *threads_dir*.
+def _iter_thread_meta_stats(threads_dir: Path, log_event: str) -> Iterator[tuple[str, str, "os.stat_result"]]:
+  """Yield ``(thread_dir, metadata.json path, stat)`` for every thread dir under *threads_dir*.
 
-  The scandir+stat phase the sidebar probe's signature walk takes once and
-  hands to ``iter_recent_thread_metas``' walked branch, which previously
-  re-took it per probe. The boot recovery scan keeps its own lazy inline loop
-  because its consumers short-circuit mid-scan. Thread dirs without a readable
-  ``metadata.json`` are skipped (mid-creation races have nothing to read);
-  other stat failures log *log_event* and skip.
+  The one scandir+stat walk both stat-first consumers take: the signature walk
+  materializes it into a list, the recent-meta scan filters it in flight.
+  Lazy, so a consumer may short-circuit mid-walk. Thread dirs without a
+  readable ``metadata.json`` are skipped (mid-creation races have nothing to
+  read); other stat failures log *log_event* and skip.
   """
   if not threads_dir.is_dir():
-    return []
-  pairs: list[tuple[str, str, os.stat_result]] = []
+    return
   with os.scandir(threads_dir) as entries:
     for entry in entries:
       if not entry.is_dir():
@@ -110,8 +108,17 @@ def walk_thread_meta_stats(threads_dir: Path, log_event: str) -> list[tuple[str,
       except OSError as e:
         log.debug(log_event, path=meta_path, error=str(e))
         continue
-      pairs.append((entry.path, meta_path, st))
-  return pairs
+      yield entry.path, meta_path, st
+
+
+def walk_thread_meta_stats(threads_dir: Path, log_event: str) -> list[tuple[str, str, "os.stat_result"]]:
+  """``(thread_dir, metadata.json path, stat)`` for every thread dir under *threads_dir*.
+
+  The scandir+stat phase the sidebar probe's signature walk takes once and
+  hands to ``iter_recent_thread_metas``' walked branch, which previously
+  re-took it per probe.
+  """
+  return list(_iter_thread_meta_stats(threads_dir, log_event))
 
 
 def iter_recent_thread_metas(
@@ -142,37 +149,14 @@ def iter_recent_thread_metas(
   and the Path allocations measured over half the scan's cost on the 339-thread
   worst corpus (the same finding the sidebar signature pass fixed).
   """
-  if walked is not None:
-    cutoff = (now - window).timestamp()
-    for thread_dir, meta_path, st in walked:
-      if st.st_mtime < cutoff:
-        continue
-      meta = _recent_thread_meta(meta_path, st, log_event)
-      if meta is not None:
-        yield thread_dir, meta_path, meta
-    return
-  if not threads_dir.is_dir():
-    return
+  triples = walked if walked is not None else _iter_thread_meta_stats(threads_dir, log_event)
   cutoff = (now - window).timestamp()
-  with os.scandir(threads_dir) as entries:
-    for entry in entries:
-      if not entry.is_dir():
-        continue
-      # entry.path is the str join scandir already built; appending "/metadata.json"
-      # directly yields the same string Path(entry.path) / "metadata.json" would.
-      meta_path = f"{entry.path}/metadata.json"
-      try:
-        st = os.stat(meta_path)
-      except FileNotFoundError:
-        continue  # thread dir without metadata.json (mid-creation) — nothing to read
-      except OSError as e:
-        log.debug(log_event, path=meta_path, error=str(e))
-        continue
-      if st.st_mtime < cutoff:
-        continue
-      meta = _recent_thread_meta(meta_path, st, log_event)
-      if meta is not None:
-        yield entry.path, meta_path, meta
+  for thread_dir, meta_path, st in triples:
+    if st.st_mtime < cutoff:
+      continue
+    meta = _recent_thread_meta(meta_path, st, log_event)
+    if meta is not None:
+      yield thread_dir, meta_path, meta
 
 
 def _recent_thread_meta(meta_path: str, st: os.stat_result, log_event: str) -> dict | None:

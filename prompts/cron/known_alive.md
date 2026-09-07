@@ -49,14 +49,18 @@ Known-alive symbols:
   `_clean_memo` (`tests/test_thread_meta_scan_memo.py`),
   `clear_next_run_memo` (`tests/test_cron_next_run_memo.py`) — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
-  definitions, so vulture flags them as unused functions. Vulture also flags
+  definitions, so vulture flags them as unused functions. Most are single-line
+  `fresh_state_fixture(...)` assignments in their module (built by the conftest factory of the
+  same name) rather than `def` fixtures; vulture flags those assignments as unused variables
+  the same way, and name discovery still reaches them. Vulture also flags
   `pidfd_open_available` (`tests/conftest.py`, shared skip gate for the pid/slurm watch
   tests), but it is named in the parameter lists of the tests that use it, so the Step 3
   grep already finds its references; no list entry needed.
 - `reset_bundle_cache` (`tests/test_voice_engine.py` and `tests/test_voice_qwen3_hf.py`, one
-  `@pytest.fixture(autouse=True)` definition in each file) — reached by fixture-name discovery
-  like the autouse block above: zero whole-repo matches outside the two definitions, so vulture
-  flags each as an unused function. Each clears the transcriber module-level bundle cache
+  `fresh_state_fixture(transcriber.reset_bundle_cache_for_tests)` assignment in each file) —
+  reached by fixture-name discovery
+  like the autouse block above: zero whole-repo matches outside the two assignments, so vulture
+  flags each as an unused variable. Each clears the transcriber module-level bundle cache
   around its file's tests.
 - `_reset_declared_window_warnings` (`tests/test_session_usage.py`) — pytest `autouse=True`
   fixture, reached by fixture-name discovery like the block above. A substring grep for the

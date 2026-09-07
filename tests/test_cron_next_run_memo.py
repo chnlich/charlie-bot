@@ -2,17 +2,12 @@
 
 from datetime import UTC, datetime
 
-import pytest
+from conftest import fresh_state_fixture
 
 import src.api.cron as cron_api
 from src.api.cron import next_run_iso
 
-
-@pytest.fixture(autouse=True)
-def clear_next_run_memo():
-  cron_api._NEXT_RUN_MEMO.clear()
-  yield
-  cron_api._NEXT_RUN_MEMO.clear()
+clear_next_run_memo = fresh_state_fixture(cron_api._NEXT_RUN_MEMO.clear)
 
 
 def counting_croniter(monkeypatch) -> list:

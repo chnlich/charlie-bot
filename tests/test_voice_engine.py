@@ -10,18 +10,13 @@ from __future__ import annotations
 import threading
 
 import pytest
+from conftest import fresh_state_fixture
 from structlog.testing import capture_logs
 
 from src.agents import transcriber
 from src.core.config import CharlieBotConfig
 
-
-@pytest.fixture(autouse=True)
-def reset_bundle_cache():
-  """Clear the process-wide bundle cache before and after each test in this file."""
-  transcriber.reset_bundle_cache_for_tests()
-  yield
-  transcriber.reset_bundle_cache_for_tests()
+reset_bundle_cache = fresh_state_fixture(transcriber.reset_bundle_cache_for_tests)
 
 
 def _stub_bundle(engine: str, model_id: str) -> transcriber._SpeechModelBundle:

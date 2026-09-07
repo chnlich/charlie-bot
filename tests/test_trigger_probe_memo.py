@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import count_path_read_text, make_home_config
+from conftest import count_path_read_text, fresh_state_fixture, make_home_config
 
 from src.core.config import CharlieBotConfig
 from src.core.sessions import (
@@ -20,12 +20,7 @@ from src.core.sessions import (
     pending_trigger_state_sync,
 )
 
-
-@pytest.fixture(autouse=True)
-def _clean_memo() -> None:
-  _reset_trigger_meta_memo_for_tests()
-  yield
-  _reset_trigger_meta_memo_for_tests()
+_clean_memo = fresh_state_fixture(_reset_trigger_meta_memo_for_tests)
 
 
 def _write_trigger(cfg: CharlieBotConfig, session_id: str, trigger: dict) -> Path:

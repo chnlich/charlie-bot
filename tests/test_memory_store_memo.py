@@ -4,17 +4,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import count_path_read_text, write_memory_entry, write_memory_topics
+from conftest import count_path_read_text, fresh_state_fixture, write_memory_entry, write_memory_topics
 
 import src.core.memory as memory_module
 from src.core.memory import MemoryFormatError, assemble_master, load_store
 
-
-@pytest.fixture(autouse=True)
-def _clear_store_memo():
-  memory_module._store_memo.clear()
-  yield
-  memory_module._store_memo.clear()
+_clear_store_memo = fresh_state_fixture(memory_module._store_memo.clear)
 
 
 def test_steady_state_load_pays_no_file_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

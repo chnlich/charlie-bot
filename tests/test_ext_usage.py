@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import fresh_state_fixture
 
 from src.api import ext_usage as ext_usage_mod
 from src.api.ext_usage import (
@@ -30,21 +31,8 @@ from src.api.ext_usage import (
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption
 
-
-@pytest.fixture(autouse=True)
-def _fresh_unknown_limit_shape_registry():
-  """Keep the process-wide warn-once registry from leaking across tests."""
-  ext_usage_mod._reset_unknown_limit_shapes_for_tests()
-  yield
-  ext_usage_mod._reset_unknown_limit_shapes_for_tests()
-
-
-@pytest.fixture(autouse=True)
-def _fresh_credential_read_warning_registry():
-  """Keep the process-wide warn-once registry from leaking across tests."""
-  ext_usage_mod._reset_credential_read_warnings_for_tests()
-  yield
-  ext_usage_mod._reset_credential_read_warnings_for_tests()
+_fresh_unknown_limit_shape_registry = fresh_state_fixture(ext_usage_mod._reset_unknown_limit_shapes_for_tests)
+_fresh_credential_read_warning_registry = fresh_state_fixture(ext_usage_mod._reset_credential_read_warnings_for_tests)
 
 
 def _build_token_count_event(

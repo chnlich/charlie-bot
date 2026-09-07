@@ -4,20 +4,19 @@ import asyncio
 import copy
 import re
 from datetime import datetime
-from typing import Literal
 from zoneinfo import ZoneInfo
 
 import structlog
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from src.api.deps import get_session_manager
 from src.api.responses import FastJsonResponse
 from src.core.config import (
-    DEFAULT_TIMEZONE,
     CharlieBotConfig,
     ScheduledTaskConfig,
+    ScheduledTaskFields,
     _load_cron_file,
     _validate_cron_body,
     cron_dir,
@@ -136,17 +135,12 @@ class TaskUpdate(BaseModel):
   allow_failure: bool | None = None
 
 
-class TaskCreate(BaseModel):
-  name: str
-  cron: str
-  prompt_file: str | None = None
-  repo: str | None = None
-  backend: str | None = None
-  timezone: str = DEFAULT_TIMEZONE
-  enabled: bool = True
-  project: str | None = None
-  mode: Literal['worker', 'master'] | None = None
-  allow_failure: bool = False
+class TaskCreate(ScheduledTaskFields):
+  """Create-request body for POST /tasks: the shared task field block, all of it editable."""
+
+  # The loader's task model rejects unknown keys (extra='forbid'); this body keeps
+  # its own looser contract of ignoring them, so the pydantic default is pinned.
+  model_config = ConfigDict(extra='ignore')
 
 
 @router.get('/tasks')

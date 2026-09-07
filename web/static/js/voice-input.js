@@ -1,16 +1,13 @@
 // ---------------------------------------------------------------------------
 // Voice input
 // ---------------------------------------------------------------------------
-let voiceSocket = null;
-let voiceStream = null;
-let voiceAudioContext = null;
-let voiceSourceNode = null;
-let voiceWorkletNode = null;
-let isRecording = false;
-let voiceStopping = false;
-let voiceAwaitingFinal = false;
-let voiceFlushId = 0;
-let voiceFlushResolvers = new Map();
+// One recording = one run object owning its WebSocket, mic stream, and capture
+// graph. A single module-level slot (`activeVoiceRun`) is claimed
+// synchronously inside the click handler, so two pipelines can never coexist:
+// every asynchronous continuation and event of a run first checks that the
+// slot still belongs to it and silently exits otherwise, and no socket can
+// outlive the click that created it.
+let activeVoiceRun = null;
 
 const VOICE_CHUNK_SAMPLES = 2048;
 
@@ -90,11 +87,15 @@ registerProcessor('voice-capture', VoiceCaptureProcessor);
 `;
 
 async function toggleVoice() {
-  if (isRecording) {
-    await stopRecording();
-  } else {
+  const run = activeVoiceRun;
+  if (!run) {
     await startRecording();
+    return;
   }
+  // Clicks during arming or finalizing are ignored, not queued; only a live
+  // recording converts a click into a stop (and stop is idempotent: the
+  // recording flag clears before the first await).
+  if (run.recording) await stopRecording(run);
 }
 
 async function startRecording() {
@@ -111,9 +112,24 @@ async function startRecording() {
     return;
   }
 
+  const run = {
+    socket: null,
+    stream: null,
+    audioContext: null,
+    sourceNode: null,
+    workletNode: null,
+    recording: false,
+    stopping: false,
+    awaitingFinal: false,
+    flushId: 0,
+    flushResolvers: new Map(),
+  };
   const targetSession = SESSION_ID;
+  activeVoiceRun = run;
+  setVoiceButtonRecording(true);
+  showVoiceOverlay('Starting...');
   try {
-    voiceStream = await navigator.mediaDevices.getUserMedia({
+    run.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         channelCount: 1,
         echoCancellation: true,
@@ -121,91 +137,112 @@ async function startRecording() {
         autoGainControl: true,
       },
     });
+    if (activeVoiceRun !== run) {
+      abortVoiceRun(run);
+      return;
+    }
 
-    voiceSocket = await openVoiceSocket(targetSession);
-    setupVoiceSocketHandlers(voiceSocket, targetSession);
+    run.socket = await openVoiceSocket(run, targetSession);
+    if (activeVoiceRun !== run) {
+      abortVoiceRun(run);
+      return;
+    }
+    setupVoiceSocketHandlers(run, targetSession);
 
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-    voiceAudioContext = new AudioContextCtor();
+    run.audioContext = new AudioContextCtor();
     const workletUrl = URL.createObjectURL(new Blob([VOICE_WORKLET_SOURCE], {type: 'application/javascript'}));
     try {
-      await voiceAudioContext.audioWorklet.addModule(workletUrl);
+      await run.audioContext.audioWorklet.addModule(workletUrl);
     } finally {
       URL.revokeObjectURL(workletUrl);
     }
+    if (activeVoiceRun !== run) {
+      abortVoiceRun(run);
+      return;
+    }
 
-    voiceSourceNode = voiceAudioContext.createMediaStreamSource(voiceStream);
-    voiceWorkletNode = new AudioWorkletNode(voiceAudioContext, 'voice-capture', {
+    run.sourceNode = run.audioContext.createMediaStreamSource(run.stream);
+    run.workletNode = new AudioWorkletNode(run.audioContext, 'voice-capture', {
       numberOfInputs: 1,
       numberOfOutputs: 0,
       processorOptions: {
-        inputSampleRate: voiceAudioContext.sampleRate,
+        inputSampleRate: run.audioContext.sampleRate,
         chunkSamples: VOICE_CHUNK_SAMPLES,
       },
     });
-    voiceWorkletNode.port.onmessage = handleVoiceWorkletMessage;
-    voiceSourceNode.connect(voiceWorkletNode);
+    run.workletNode.port.onmessage = (event) => handleVoiceWorkletMessage(run, event);
+    run.sourceNode.connect(run.workletNode);
 
-    isRecording = true;
-    voiceStopping = false;
-    voiceAwaitingFinal = false;
-    setVoiceButtonRecording(true);
+    run.recording = true;
     showVoiceOverlay('Listening...');
   } catch (err) {
+    if (activeVoiceRun !== run) return;
     console.error('Voice input failed:', err);
     showToast('Voice input failed: ' + err.message, true);
-    cleanupVoiceCapture();
-    removeVoiceOverlay();
+    releaseVoiceRun(run);
   }
 }
 
-async function stopRecording() {
-  if (!isRecording || voiceStopping) return;
-  voiceStopping = true;
+async function stopRecording(run) {
+  if (!run.recording) return;
+  run.recording = false;
   setVoiceButtonRecording(false);
   try {
-    await flushVoiceWorklet();
-    cleanupVoiceCapture({keepSocket: true});
-    if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN) {
-      voiceAwaitingFinal = true;
-      voiceSocket.send(JSON.stringify({type: 'stop'}));
+    // The worklet drains its buffered tail while frames are still accepted on
+    // the socket; the drop flag and the stop message follow the flush.
+    await flushVoiceWorklet(run);
+    if (activeVoiceRun !== run) return;
+    run.stopping = true;
+    cleanupVoiceCapture(run);
+    if (run.socket && run.socket.readyState === WebSocket.OPEN) {
+      run.awaitingFinal = true;
+      run.socket.send(JSON.stringify({type: 'stop'}));
       showVoiceOverlay('Finalizing...');
     } else {
-      discardVoiceRecording(VOICE_CONNECTION_CLOSED_MESSAGE);
+      discardVoiceRecording(run, VOICE_CONNECTION_CLOSED_MESSAGE);
     }
   } catch (err) {
     console.error('Voice stop failed:', err);
-    discardVoiceRecording('Voice input failed: ' + err.message);
+    discardVoiceRecording(run, 'Voice input failed: ' + err.message);
   }
 }
 
 function resetVoiceState() {
-  cleanupVoiceCapture();
-  closeVoiceSocket();
+  // Teardown takes the run out of the slot first, then aborts it: pending
+  // continuations die on the ownership check and no socket outlives the view.
+  const run = activeVoiceRun;
+  activeVoiceRun = null;
+  if (run) abortVoiceRun(run);
+  setVoiceButtonRecording(false);
   removeVoiceOverlay();
   Chat.setVoiceContributed(false);
 }
 
-function openVoiceSocket(targetSession) {
+function openVoiceSocket(run, targetSession) {
+  // The socket is claimed onto the run synchronously, so a teardown that lands
+  // during the connecting window can abort it like any other resource.
+  const wsUrl = wsUrlWithToken(`/ws/voice/${encodeURIComponent(targetSession)}`);
+  const socket = new WebSocket(wsUrl);
+  socket.binaryType = 'arraybuffer';
+  run.socket = socket;
   return new Promise((resolve, reject) => {
-    const wsUrl = wsUrlWithToken(`/ws/voice/${encodeURIComponent(targetSession)}`);
-    const socket = new WebSocket(wsUrl);
-    socket.binaryType = 'arraybuffer';
     socket.onopen = () => resolve(socket);
     socket.onerror = () => reject(new Error('voice WebSocket connection failed'));
     socket.onclose = () => reject(new Error('voice WebSocket closed before recording started'));
   });
 }
 
-function setupVoiceSocketHandlers(socket, targetSession) {
+function setupVoiceSocketHandlers(run, targetSession) {
+  const socket = run.socket;
   socket.onmessage = (event) => {
-    if (socket !== voiceSocket || targetSession !== SESSION_ID) return;
+    if (activeVoiceRun !== run || targetSession !== SESSION_ID) return;
     let data;
     try {
       data = JSON.parse(event.data);
     } catch (err) {
       console.error('Invalid voice message:', err);
-      discardVoiceRecording(VOICE_INVALID_RESPONSE_MESSAGE);
+      discardVoiceRecording(run, VOICE_INVALID_RESPONSE_MESSAGE);
       return;
     }
 
@@ -214,68 +251,66 @@ function setupVoiceSocketHandlers(socket, targetSession) {
       return;
     }
     if (data.type === 'final') {
-      applyVoiceFinal(data.text || '');
-      closeVoiceSocket();
+      applyVoiceFinal(run, data.text || '');
       return;
     }
     if (data.type === 'error') {
-      discardVoiceRecording(data.text || 'Voice transcription failed');
+      discardVoiceRecording(run, data.text || 'Voice transcription failed');
       return;
     }
-    discardVoiceRecording(VOICE_INVALID_RESPONSE_MESSAGE);
+    discardVoiceRecording(run, VOICE_INVALID_RESPONSE_MESSAGE);
   };
 
   socket.onclose = () => {
-    if (socket !== voiceSocket) return;
-    if (isRecording || voiceStopping || voiceAwaitingFinal) {
-      discardVoiceRecording(VOICE_CONNECTION_CLOSED_MESSAGE);
+    if (activeVoiceRun !== run) return;
+    if (run.recording || run.stopping || run.awaitingFinal) {
+      discardVoiceRecording(run, VOICE_CONNECTION_CLOSED_MESSAGE);
     }
   };
 
   socket.onerror = () => {
-    if (socket !== voiceSocket) return;
-    discardVoiceRecording('Voice connection error');
+    if (activeVoiceRun !== run) return;
+    discardVoiceRecording(run, 'Voice connection error');
   };
 }
 
-function handleVoiceWorkletMessage(event) {
+function handleVoiceWorkletMessage(run, event) {
+  if (activeVoiceRun !== run) return;
   const data = event.data || {};
   if (data.type === 'pcm') {
-    if (voiceSocket && voiceSocket.readyState === WebSocket.OPEN && !voiceStopping) {
-      voiceSocket.send(data.buffer);
+    if (run.socket && run.socket.readyState === WebSocket.OPEN && !run.stopping) {
+      run.socket.send(data.buffer);
     }
     return;
   }
   if (data.type === 'flushed') {
-    const resolve = voiceFlushResolvers.get(data.id);
+    const resolve = run.flushResolvers.get(data.id);
     if (resolve) {
-      voiceFlushResolvers.delete(data.id);
+      run.flushResolvers.delete(data.id);
       resolve();
     }
   }
 }
 
-function flushVoiceWorklet() {
-  if (!voiceWorkletNode) return Promise.resolve();
-  const id = ++voiceFlushId;
+function flushVoiceWorklet(run) {
+  if (!run.workletNode) return Promise.resolve();
+  const id = ++run.flushId;
   return new Promise((resolve) => {
-    voiceFlushResolvers.set(id, resolve);
-    voiceWorkletNode.port.postMessage({type: 'flush', id});
+    run.flushResolvers.set(id, resolve);
+    run.workletNode.port.postMessage({type: 'flush', id});
     setTimeout(() => {
-      const pending = voiceFlushResolvers.get(id);
+      const pending = run.flushResolvers.get(id);
       if (pending) {
-        voiceFlushResolvers.delete(id);
+        run.flushResolvers.delete(id);
         pending();
       }
     }, 500);
   });
 }
 
-function applyVoiceFinal(text) {
+function applyVoiceFinal(run, text) {
   const finalText = text.trim();
-  voiceAwaitingFinal = false;
-  cleanupVoiceCapture();
-  removeVoiceOverlay();
+  releaseVoiceRun(run);
   if (!finalText) {
     showToast('No speech detected');
     return;
@@ -290,46 +325,56 @@ function applyVoiceFinal(text) {
   input.focus();
 }
 
-function discardVoiceRecording(message) {
-  cleanupVoiceCapture();
-  voiceAwaitingFinal = false;
-  closeVoiceSocket();
-  removeVoiceOverlay();
+function discardVoiceRecording(run, message) {
+  releaseVoiceRun(run);
   if (message) showToast(message, true);
 }
 
-function cleanupVoiceCapture(options) {
-  const keepSocket = options && options.keepSocket;
-  isRecording = false;
-  voiceStopping = false;
+// End-of-run release for the run that owns the slot: tear down its resources,
+// free the slot, and reset the button and overlay. Callers add any toast.
+function releaseVoiceRun(run) {
+  abortVoiceRun(run);
+  if (activeVoiceRun === run) activeVoiceRun = null;
   setVoiceButtonRecording(false);
-
-  if (voiceSourceNode) {
-    try { voiceSourceNode.disconnect(); } catch (err) { console.warn('Voice source disconnect failed:', err); }
-    voiceSourceNode = null;
-  }
-  if (voiceWorkletNode) {
-    voiceWorkletNode.port.onmessage = null;
-    try { voiceWorkletNode.disconnect(); } catch (err) { console.warn('Voice worklet disconnect failed:', err); }
-    voiceWorkletNode = null;
-  }
-  if (voiceAudioContext) {
-    const ctx = voiceAudioContext;
-    voiceAudioContext = null;
-    ctx.close().catch((err) => console.warn('Voice audio context close failed:', err));
-  }
-  if (voiceStream) {
-    voiceStream.getTracks().forEach((track) => track.stop());
-    voiceStream = null;
-  }
-  voiceFlushResolvers.forEach((resolve) => resolve());
-  voiceFlushResolvers.clear();
-  if (!keepSocket) closeVoiceSocket();
+  removeVoiceOverlay();
 }
 
-function closeVoiceSocket() {
-  const socket = voiceSocket;
-  voiceSocket = null;
+// Tear down every resource a run owns: capture graph, mic stream, and socket
+// (closing even a still-connecting socket and an acquired-but-unused stream).
+// Idempotent, so an ownership-lost continuation and the teardown path can both
+// call it; the later call only sees nulls. View state (button, overlay, slot)
+// belongs to the slot holder and is handled by the callers.
+function abortVoiceRun(run) {
+  cleanupVoiceCapture(run);
+  closeVoiceSocket(run);
+}
+
+function cleanupVoiceCapture(run) {
+  if (run.sourceNode) {
+    try { run.sourceNode.disconnect(); } catch (err) { console.warn('Voice source disconnect failed:', err); }
+    run.sourceNode = null;
+  }
+  if (run.workletNode) {
+    run.workletNode.port.onmessage = null;
+    try { run.workletNode.disconnect(); } catch (err) { console.warn('Voice worklet disconnect failed:', err); }
+    run.workletNode = null;
+  }
+  if (run.audioContext) {
+    const ctx = run.audioContext;
+    run.audioContext = null;
+    ctx.close().catch((err) => console.warn('Voice audio context close failed:', err));
+  }
+  if (run.stream) {
+    run.stream.getTracks().forEach((track) => track.stop());
+    run.stream = null;
+  }
+  run.flushResolvers.forEach((resolve) => resolve());
+  run.flushResolvers.clear();
+}
+
+function closeVoiceSocket(run) {
+  const socket = run.socket;
+  run.socket = null;
   if (!socket) return;
   detachSocketHandlers(socket);
   if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {

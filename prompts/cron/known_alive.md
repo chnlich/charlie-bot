@@ -383,3 +383,9 @@ Known-alive symbols:
   `CharlieBotConfig.claude_compaction` ships the config plumbed for the trigger sites. A staged
   feature foundation, kept deliberately; never delete on static-tool evidence while the trigger
   wiring is pending.
+- `_nonempty`, `_relative`, `_no_explicit_null_supplement` (`src/core/project_config.py`) —
+  pydantic `@field_validator` / `@model_validator` methods on `ProjectConfig`, registered with
+  pydantic at class-definition time and invoked during model validation. The method names have
+  exactly zero whole-repo matches outside their definitions, so vulture flags them as unused
+  methods. Same framework-registered class as the `check_prompt_or_handler_or_loop` /
+  `migrate_and_expand` entry above.

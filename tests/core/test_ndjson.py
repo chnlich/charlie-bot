@@ -37,15 +37,10 @@ def test_count_ndjson_lines_empty_file(tmp_path: Path) -> None:
   assert count_ndjson_lines(target) == 0
 
 
-def test_count_ndjson_lines_terminated_lines(tmp_path: Path) -> None:
+@pytest.mark.parametrize("trailing_newline", [True, False], ids=["terminated", "unterminated"])
+def test_count_ndjson_lines_final_line_counts(tmp_path: Path, trailing_newline: bool) -> None:
   target = tmp_path / "events.jsonl"
-  _write_ndjson(target, [{"i": i} for i in range(5)])
-  assert count_ndjson_lines(target) == 5
-
-
-def test_count_ndjson_lines_unterminated_last_line(tmp_path: Path) -> None:
-  target = tmp_path / "events.jsonl"
-  _write_ndjson(target, [{"i": i} for i in range(5)], trailing_newline=False)
+  _write_ndjson(target, [{"i": i} for i in range(5)], trailing_newline=trailing_newline)
   assert count_ndjson_lines(target) == 5
 
 

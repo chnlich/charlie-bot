@@ -342,111 +342,82 @@ def test_handler_result_flushes_draft_and_emits_system_message() -> None:
   assert deltas[1]["message"]["content"] == "✓ Lint: All clean"
 
 
-def test_tui_menu_dismissed_system_event_emits_system_message() -> None:
-  agg = MessageAggregator()
-  deltas = list(
-      agg.feed(
-          {
-              "type": "system",
-              "subtype": "tui_menu_dismissed",
-              "content": "Warning: dismissed a Claude TUI startup menu with Escape before sending the prompt.",
-              "timestamp": "t",
-          }))
-
-  assert deltas == [
-      {
-          "type": "message",
-          "message":
-              {
-                  "role": "system",
-                  "content": "Warning: dismissed a Claude TUI startup menu with Escape before sending the prompt.",
-                  "event_index": 0,
-                  "id": "legacy:0",
-                  "timestamp": "t",
-              },
-      }
-  ]
-
-
-def test_context_compacted_projection_carries_kind() -> None:
-  agg = MessageAggregator()
-  deltas = list(agg.feed({
-      "type": "context_compacted",
-      "trigger": "manual",
-      "pre_tokens": 21988,
-      "timestamp": "t",
-  }))
-
-  assert deltas == [
-      {
-          "type": "message",
-          "message":
-              {
-                  "role": "system",
-                  "content": "Context compacted (manual) — was 22k tokens",
-                  "kind": "context_compacted",
-                  "event_index": 0,
-                  "id": "legacy:0",
-                  "timestamp": "t",
-              },
-      }
-  ]
-
-
 @pytest.mark.parametrize(
-    ("error", "expected_content"),
+    ("event", "expected_content", "expected_kind"),
     [
-        pytest.param("context too large", "Compaction failed — context too large", id="with_error"),
-        pytest.param(None, "Compaction failed", id="without_error"),
+        pytest.param(
+            {
+                "type": "system",
+                "subtype": "tui_menu_dismissed",
+                "content": "Warning: dismissed a Claude TUI startup menu with Escape before sending the prompt.",
+                "timestamp": "t",
+            },
+            "Warning: dismissed a Claude TUI startup menu with Escape before sending the prompt.",
+            None,
+            id="tui_menu_dismissed",
+        ),
+        pytest.param(
+            {
+                "type": "context_compacted",
+                "trigger": "manual",
+                "pre_tokens": 21988,
+                "timestamp": "t",
+            },
+            "Context compacted (manual) — was 22k tokens",
+            "context_compacted",
+            id="context_compacted",
+        ),
+        pytest.param(
+            {
+                "type": "context_compact_failed",
+                "error": "context too large",
+                "timestamp": "t",
+            },
+            "Compaction failed — context too large",
+            "context_compact_failed",
+            id="compact_failed_with_error",
+        ),
+        pytest.param(
+            {
+                "type": "context_compact_failed",
+                "error": None,
+                "timestamp": "t",
+            },
+            "Compaction failed",
+            "context_compact_failed",
+            id="compact_failed_without_error",
+        ),
+        pytest.param(
+            {
+                "type": ET.BACKEND_SWITCHED,
+                "from": "claude-opus-5",
+                "to": "claude-fable-5",
+                "timestamp": "t",
+            },
+            "Backend switched: claude-opus-5 → claude-fable-5",
+            None,
+            id="backend_switched",
+        ),
     ],
 )
-def test_context_compact_failed_projection(error: str | None, expected_content: str) -> None:
+def test_system_event_projects_to_one_system_message(
+    event: dict, expected_content: str, expected_kind: str | None) -> None:
   agg = MessageAggregator()
-  deltas = list(agg.feed({
-      "type": "context_compact_failed",
-      "error": error,
+  deltas = list(agg.feed(event))
+
+  expected_message = {
+      "role": "system",
+      "content": expected_content,
+      "event_index": 0,
+      "id": "legacy:0",
       "timestamp": "t",
-  }))
-
-  assert deltas == [
-      {
-          "type": "message",
-          "message":
-              {
-                  "role": "system",
-                  "content": expected_content,
-                  "kind": "context_compact_failed",
-                  "event_index": 0,
-                  "id": "legacy:0",
-                  "timestamp": "t",
-              },
-      }
-  ]
-
-
-def test_backend_switched_event_emits_system_message() -> None:
-  agg = MessageAggregator()
-  deltas = list(
-      agg.feed({
-          "type": ET.BACKEND_SWITCHED,
-          "from": "claude-opus-5",
-          "to": "claude-fable-5",
-          "timestamp": "t",
-      }))
-
-  assert deltas == [
-      {
-          "type": "message",
-          "message":
-              {
-                  "role": "system",
-                  "content": "Backend switched: claude-opus-5 → claude-fable-5",
-                  "event_index": 0,
-                  "id": "legacy:0",
-                  "timestamp": "t",
-              },
-      }
-  ]
+  }
+  if expected_kind is not None:
+    expected_message["kind"] = expected_kind
+  assert deltas == [{
+      "type": "message",
+      "message": expected_message,
+  }]
 
 
 def test_init_system_event_is_ignored() -> None:

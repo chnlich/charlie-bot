@@ -5,12 +5,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config, write_trigger
+from conftest import make_home_config, make_sessions_client, write_trigger
+from pydantic import TypeAdapter
 
 from src.api import sessions as sessions_api
+from src.core import thinking_state
 from src.core.models import (
     CreateSessionRequest,
     PendingTrigger,
+    SessionMetadata,
     SessionStatus,
     TriggerStatus,
 )
@@ -81,6 +84,33 @@ async def test_pending_trigger_state_is_derived_without_persisting_metadata(tmp_
   assert "has_pending_trigger" not in raw_metadata
   assert "pending_trigger_count" not in raw_metadata
   assert "next_trigger_at" not in raw_metadata
+
+
+@pytest.mark.asyncio
+async def test_search_route_renders_derived_datetimes_through_the_model_scheme(tmp_path: Path) -> None:
+  """The read-only search overlay serializes datetime fields the way the old
+  response-model render did: a hand-rolled isoformat() emits +00:00 where the
+  model's UtcDatetime scheme emits Z, and the wire contract is the Z form."""
+  cfg = make_home_config(tmp_path)
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="Wake later"))
+  now = datetime.now(UTC)
+  write_trigger(
+      cfg.sessions_dir / session.id / "triggers" / "pending.json",
+      PendingTrigger(id="pending", session_id=session.id, fire_at=now + timedelta(minutes=5), message="soon"),
+  )
+  thinking_state.mark_busy(session.id, since=datetime(2026, 9, 6, 12, 0, tzinfo=UTC))
+  try:
+    client = make_sessions_client(cfg, session_mgr)
+    rows = client.get("/api/sessions/search?q=wake").json()
+    assert len(rows) == 1
+    assert rows[0]["next_trigger_at"].endswith("Z")
+    assert rows[0]["thinking_since"].endswith("Z")
+    copies = await session_mgr.search_sessions("wake", include_running_status=True, include_pending_trigger_status=True)
+    reference = TypeAdapter(list[SessionMetadata]).dump_python(copies, mode="json")
+    assert rows == reference
+  finally:
+    thinking_state.clear_busy(session.id)
 
 
 @pytest.mark.asyncio

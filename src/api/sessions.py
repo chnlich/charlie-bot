@@ -7,7 +7,7 @@ from pathlib import Path
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from starlette.responses import Response
 
 from src.api.cron import TaskUpdate, apply_task_yaml_update, next_run_iso
@@ -52,6 +52,7 @@ from src.core.models import (
     SetGroupRequest,
     SwitchBackendRequest,
     ThreadMetadata,
+    UtcDatetime,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import (
@@ -65,6 +66,11 @@ from src.core.threads import ThreadManager
 
 log = structlog.get_logger()
 router = APIRouter()
+
+# The search route's read-only overlay serializes derived datetimes through the
+# model's own JSON scheme: a hand-rolled isoformat() emits +00:00 where the
+# UtcDatetime fields the old response-model render serialized emit Z.
+_UTC_DATETIME_JSON = TypeAdapter(UtcDatetime | None)
 
 
 def _default_backend_id(cfg: CharlieBotConfig) -> str:
@@ -450,11 +456,27 @@ async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get
         include_running_status=True,
         include_pending_trigger_status=True,
     )
-  return await session_mgr.search_sessions(
+  # The capped name-match shape (a short query) is this route's slowest
+  # request: the read-only search serves cache references and the response
+  # renders through FastJsonResponse with the derived fields overlaid, the
+  # same shape the /status poll took — the manager's per-row copy+populate
+  # pass and the response-model walk both measured multi-ms on the 200-row cap.
+  rows, derived = await session_mgr.search_sessions_readonly(
       q.strip(),
       include_running_status=True,
       include_pending_trigger_status=True,
   )
+  payload = []
+  for meta in rows:
+    entry = derived[meta.id]
+    row = meta.model_dump(mode="json")
+    row["thinking_since"] = _UTC_DATETIME_JSON.dump_python(thinking_state.busy_since(meta.id), mode="json")
+    row["has_running_tasks"] = entry["has_running_tasks"]
+    row["has_pending_trigger"] = entry["has_pending_trigger"]
+    row["pending_trigger_count"] = entry["pending_trigger_count"]
+    row["next_trigger_at"] = _UTC_DATETIME_JSON.dump_python(entry["next_trigger_at"], mode="json")
+    payload.append(row)
+  return FastJsonResponse(payload)
 
 
 @router.get('/{session_id}/view')

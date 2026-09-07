@@ -233,7 +233,7 @@ async def test_adapter_frames_random_byte_chunkings_like_one_buffer() -> None:
     for _ in range(50):
       cuts = sorted(rng.sample(range(1, len(wire)), 8))
       bounds = [0, *cuts, len(wire)]
-      chunks = [wire[a:b] for a, b in zip(bounds, bounds[1:])]
+      chunks = [wire[a:b] for a, b in zip(bounds, bounds[1:], strict=False)]
       assert await _drain_lines(chunks) == expected
 
 

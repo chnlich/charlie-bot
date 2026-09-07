@@ -85,49 +85,51 @@ async def test_fork_route_inherits_parent_backend_when_backend_omitted(two_backe
   assert response.json()["backend"] == OPUS_BACKEND_ID
 
 
+# The fork row exercises the codex family alias (codex-future resolves to codex-o3);
+# the elone row pins the resolved id directly.
+_ROUTE_OVERRIDE_ROWS = [
+    pytest.param("fork", {
+        "event_index": 1,
+        "backend": "codex-future"
+    }, "codex-o3", id="fork-family-alias"),
+    pytest.param("elone", {
+        "event_index": 1,
+        "backend": "codex-o3"
+    }, "codex-o3", id="elone-explicit-id"),
+]
+
+
 @pytest.mark.asyncio
-async def test_fork_route_resolves_codex_family_override(two_backend_env: _RouteEnv) -> None:
+@pytest.mark.parametrize(("route", "payload", "expected_backend"), _ROUTE_OVERRIDE_ROWS)
+async def test_route_resolves_requested_backend(
+    two_backend_env: _RouteEnv, route: str, payload: dict[str, Any], expected_backend: str) -> None:
   cfg, session_mgr, _ = two_backend_env
   parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
 
   with _build_client(cfg, session_mgr) as client:
-    response = client.post(
-        f"/api/sessions/{parent_id}/fork",
-        json={
-            "event_index": 1,
-            "backend": "codex-future"
-        },
-    )
+    response = client.post(f"/api/sessions/{parent_id}/{route}", json=payload)
 
   assert response.status_code == 200
-  assert response.json()["backend"] == "codex-o3"
+  assert response.json()["backend"] == expected_backend
+
+
+# Each route seeds its bootstrap prompt with its own context fragments; both
+# must stay free of the reconstructed-context and recap phrasing.
+_ROUTE_BOOTSTRAP_ROWS = [
+    pytest.param("fork", 0, ("chronological", "newest entries at the end"), id="fork"),
+    pytest.param("elone", 1, ("wasn't satisfied", "Confirm with the user before acting."), id="elone"),
+]
 
 
 @pytest.mark.asyncio
-async def test_elone_route_accepts_valid_backend_override(two_backend_env: _RouteEnv) -> None:
-  cfg, session_mgr, _ = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
-
-  with _build_client(cfg, session_mgr) as client:
-    response = client.post(
-        f"/api/sessions/{parent_id}/elone",
-        json={
-            "event_index": 1,
-            "backend": "codex-o3"
-        },
-    )
-
-  assert response.status_code == 200
-  assert response.json()["backend"] == "codex-o3"
-
-
-@pytest.mark.asyncio
-async def test_fork_route_bootstrap_points_at_reference_file(two_backend_env: _RouteEnv) -> None:
+@pytest.mark.parametrize(("route", "event_index", "prompt_fragments"), _ROUTE_BOOTSTRAP_ROWS)
+async def test_route_bootstrap_points_at_reference_file(
+    two_backend_env: _RouteEnv, route: str, event_index: int, prompt_fragments: tuple[str, str]) -> None:
   cfg, session_mgr, calls = two_backend_env
   parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
 
   with _build_client(cfg, session_mgr) as client:
-    response = client.post(f"/api/sessions/{parent_id}/fork", json={"event_index": 0})
+    response = client.post(f"/api/sessions/{parent_id}/{route}", json={"event_index": event_index})
 
   assert response.status_code == 200
   child_id = response.json()["id"]
@@ -135,28 +137,8 @@ async def test_fork_route_bootstrap_points_at_reference_file(two_backend_env: _R
   assert len(calls) == 1
   prompt = calls[0]["content"]
   assert str(reference_path) in prompt
-  assert "chronological" in prompt
-  assert "newest entries at the end" in prompt
-  assert "reconstructed recent context" not in prompt
-  assert "recap" not in prompt.lower()
-
-
-@pytest.mark.asyncio
-async def test_elone_route_bootstrap_points_at_reference_file(two_backend_env: _RouteEnv) -> None:
-  cfg, session_mgr, calls = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
-
-  with _build_client(cfg, session_mgr) as client:
-    response = client.post(f"/api/sessions/{parent_id}/elone", json={"event_index": 1})
-
-  assert response.status_code == 200
-  child_id = response.json()["id"]
-  reference_path = session_mgr.get_chat_events_path(child_id).parent / "parent_reference.jsonl"
-  assert len(calls) == 1
-  prompt = calls[0]["content"]
-  assert str(reference_path) in prompt
-  assert "wasn't satisfied" in prompt
-  assert "Confirm with the user before acting." in prompt
+  for fragment in prompt_fragments:
+    assert fragment in prompt
   assert "reconstructed recent context" not in prompt
   assert "recap" not in prompt.lower()
 

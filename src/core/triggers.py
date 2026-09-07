@@ -423,6 +423,14 @@ class TriggerManager:
     # list_triggers memo: session id -> {file name: (mtime_ns, size, parsed record)}.
     self._list_memo: BoundedMemo[str, dict[str, tuple[int, int,
                                                       PendingTrigger]]] = BoundedMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
+    # list_triggers' directory verdict: session id -> (dir (mtime_ns, size), sorted list).
+    # Every trigger-file write publishes through the atomic rename INTO the triggers
+    # directory, and a rename that creates, replaces, or removes a directory entry moves
+    # the directory's own mtime_ns — so an unchanged directory signature proves no file
+    # appeared, vanished, or was replaced, and the steady-state poll serves without the
+    # per-file stat walk or its executor round-trip.
+    self._list_verdicts: BoundedMemo[str, tuple[tuple[int, int],
+                                                list[PendingTrigger]]] = BoundedMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
 
   async def create_trigger(
       self,
@@ -545,17 +553,31 @@ class TriggerManager:
     """Read all triggers for a session from disk, memoized per file.
 
     Steady state (the workers-panel threads/list poll, the session view render) pays one
-    scandir per call: a file whose (mtime_ns, size) matches its memo entry reuses the parsed
-    record. The key is sound because every trigger-file write goes through
-    ``write_model_json_atomically``, which replaces the inode and bumps mtime_ns; a rewrite
-    that edited the file in place would serve a stale memo. Files that
-    fail to parse stay out of the memo, so an unreadable file keeps logging one warning per
-    call exactly as an unmemoized read would.
+    directory stat per call: every trigger-file write goes through
+    ``write_model_json_atomically``, whose rename into the triggers directory moves the
+    directory's own mtime_ns whether it creates, replaces, or removes an entry, so an
+    unchanged (mtime_ns, size) of the directory proves the stored sorted list current and
+    serves it without the per-file stat walk or its executor round-trip. The signature is
+    taken before the walk, so a write landing mid-walk moves the directory past the stored
+    signature and the next call re-walks. Within one proved directory state, a file whose
+    (mtime_ns, size) matches its memo entry reuses the parsed record; a file edited in
+    place (no rename) would move only its own mtime and evade the directory proof — every
+    writer here publishes through the atomic rename, the same ground the per-file memo's
+    key already stands on. Files that fail to parse stay out of the memo: within one proved
+    directory state the verdict carries their single warning, and a directory-state change
+    re-reads and re-warns once for that state.
     """
     triggers_dir = self._triggers_dir(session_id)
-    if not triggers_dir.exists():
+    try:
+      st = triggers_dir.stat()
+    except FileNotFoundError:
       self._list_memo.drop(session_id)
+      self._list_verdicts.drop(session_id)
       return []
+    dir_sig = (st.st_mtime_ns, st.st_size)
+    verdict = self._list_verdicts.get(session_id)
+    if verdict is not None and verdict[0] == dir_sig:
+      return list(verdict[1])
     stats = await asyncio.to_thread(self._stat_trigger_files, triggers_dir)
 
     memo = self._list_memo.get(session_id)
@@ -594,7 +616,8 @@ class TriggerManager:
         triggers.append(trigger)
 
     triggers.sort(key=lambda t: t.created_at, reverse=True)
-    return triggers
+    self._list_verdicts.store(session_id, (dir_sig, triggers))
+    return list(triggers)
 
   async def cancel_trigger(self, session_id: str, trigger_id: str) -> None:
     """Mark a trigger as cancelled and cancel its asyncio task."""

@@ -73,3 +73,58 @@ async def test_list_triggers_drops_deleted_files(tmp_path: Path) -> None:
 async def test_list_triggers_missing_dir_returns_empty(tmp_path: Path) -> None:
   mgr = _make_manager(tmp_path)
   assert await mgr.list_triggers("no-such-session") == []
+
+
+@pytest.mark.asyncio
+async def test_list_triggers_verdict_skips_the_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  mgr = _make_manager(tmp_path)
+  for i in range(3):
+    await _save(mgr, "s1", f"trigger {i}")
+  first = await mgr.list_triggers("s1")
+
+  calls = []
+  real = mgr._stat_trigger_files
+
+  def counting(triggers_dir: Path) -> dict[str, tuple[int, int]]:
+    calls.append(triggers_dir)
+    return real(triggers_dir)
+
+  monkeypatch.setattr(mgr, "_stat_trigger_files", counting)
+  for _ in range(3):
+    assert [t.id for t in await mgr.list_triggers("s1")] == [t.id for t in first]
+  assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_list_triggers_rewalks_after_rename_write(tmp_path: Path) -> None:
+  mgr = _make_manager(tmp_path)
+  trigger = await _save(mgr, "s1", "rewrite me")
+  first = await mgr.list_triggers("s1")
+
+  trigger.message = "rewritten"
+  await mgr._save_trigger(trigger)
+  listed = await mgr.list_triggers("s1")
+  assert len(listed) == len(first)
+  assert listed[0].message == "rewritten"
+  # The verdict re-proves through the same one-stat shape after the walk.
+  again = await mgr.list_triggers("s1")
+  assert again[0].message == "rewritten"
+
+
+@pytest.mark.asyncio
+async def test_list_triggers_picks_up_externally_created_file(tmp_path: Path) -> None:
+  mgr = _make_manager(tmp_path)
+  existing = await _save(mgr, "s1", "existing")
+  assert len(await mgr.list_triggers("s1")) == 1
+
+  external = PendingTrigger(
+      session_id="s1",
+      fire_at=datetime.now(UTC) + timedelta(hours=1),
+      message="external",
+      watch_targets=[],
+  )
+  triggers_dir = mgr._cfg.sessions_dir / "s1" / "triggers"
+  (triggers_dir / f"{external.id}.json").write_text(external.model_dump_json(), encoding="utf-8")
+  listed = await mgr.list_triggers("s1")
+  assert {t.id for t in listed} == {existing.id, external.id}
+  assert [t.message for t in listed if t.id == external.id] == ["external"]

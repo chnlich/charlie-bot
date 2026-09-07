@@ -137,7 +137,13 @@ def test_leading_dash_prompt_is_one_protected_argv_element(tmp_path: Path) -> No
   )
 
   claude_sub.validate_prompt(args.prompt)
-  argv = claude_sub._build_claude_argv(args, SESSION_ID, False, tmp_path / "plugin")
+  argv = claude_sub.build_claude_argv(
+      SESSION_ID,
+      resume=False,
+      settings=claude_sub._session_settings(args),
+      plugin_dir=str(tmp_path / "plugin"),
+      prompt=args.prompt,
+  )
 
   assert argv[-2:] == ["--", args.prompt]
   assert argv.count(args.prompt) == 1

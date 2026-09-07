@@ -71,11 +71,29 @@ def _no_master_wake(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
 
 
+# Rows are the two probe outcomes the gate consults on every exception or
+# cancellation path. A live probe means the failure is ours, not the run's:
+# one recovery event, thread left running. A dead probe is proven death: the
+# FAILED finalize runs unchanged and nothing is reported.
+_GATE_ROWS = [
+    pytest.param(True, "running", True, id="live-probe"),
+    pytest.param(False, "failed", False, id="dead-probe"),
+]
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_no_master_wake")
-async def test_generic_exception_with_live_probe_reports_and_skips_finalize(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Generic exception + probe true -> recovery event, thread left running."""
+@pytest.mark.parametrize("is_alive, expected_status, expect_alive_report", _GATE_ROWS)
+async def test_generic_exception_gate_by_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    is_alive: bool,
+    expected_status: str,
+    expect_alive_report: bool,
+) -> None:
+  """A generic exception in resume consults the same is_alive probe it was
+  mounted with: live -> recovery event, thread left running; dead -> FAILED
+  finalize."""
   home = tmp_path / "home"
   cfg, session_mgr, thread_mgr, session_meta, thread = await _make_running_thread(home)
 
@@ -88,47 +106,32 @@ async def test_generic_exception_with_live_probe_reports_and_skips_finalize(
       cfg,
       session_mgr,
       thread_mgr,
-      is_alive=lambda: True,
+      is_alive=lambda: is_alive,
       interrupt_reason="",
       on_silence=None)
 
-  assert _thread_status(home, session_meta.id, thread.id) == "running"
+  assert _thread_status(home, session_meta.id, thread.id) == expected_status
   reports = _recovery_reports(home, session_meta.id)
-  assert len(reports) == 1
-  assert RESUME_EXCEPTION_ALIVE_REASON in reports[0]["content"]
+  if expect_alive_report:
+    assert len(reports) == 1
+    assert RESUME_EXCEPTION_ALIVE_REASON in reports[0]["content"]
+  else:
+    assert reports == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_no_master_wake")
-async def test_generic_exception_with_dead_probe_finalizes_failed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Generic exception + probe false (death proven) -> current FAILED finalize."""
-  home = tmp_path / "home"
-  cfg, session_mgr, thread_mgr, session_meta, thread = await _make_running_thread(home)
-
-  monkeypatch.setattr(Worker, "resume", _boom_resume)
-
-  await spawner.resume_worker(
-      session_meta.id,
-      "gate task",
-      thread.id,
-      cfg,
-      session_mgr,
-      thread_mgr,
-      is_alive=lambda: False,
-      interrupt_reason="",
-      on_silence=None)
-
-  assert _thread_status(home, session_meta.id, thread.id) == "failed"
-  assert _recovery_reports(home, session_meta.id) == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_no_master_wake")
-async def test_cancellation_with_live_probe_reports_and_skips_finalize(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("is_alive, expected_status, expect_alive_report", _GATE_ROWS)
+async def test_cancellation_gate_by_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    is_alive: bool,
+    expected_status: str,
+    expect_alive_report: bool,
+) -> None:
   """asyncio.CancelledError bypasses ``except Exception`` and still hits the
-  same gate: probe true -> recovery event, thread left running."""
+  same gate: live -> recovery event, thread left running; dead -> FAILED
+  finalize while the cancellation still propagates."""
   home = tmp_path / "home"
   cfg, session_mgr, thread_mgr, session_meta, thread = await _make_running_thread(home)
   resume_entered = asyncio.Event()
@@ -143,7 +146,7 @@ async def test_cancellation_with_live_probe_reports_and_skips_finalize(
           cfg,
           session_mgr,
           thread_mgr,
-          is_alive=lambda: True,
+          is_alive=lambda: is_alive,
           interrupt_reason="",
           on_silence=None))
   await asyncio.wait_for(resume_entered.wait(), timeout=10.0)
@@ -152,39 +155,10 @@ async def test_cancellation_with_live_probe_reports_and_skips_finalize(
     await task
   assert task.cancelled()
 
-  assert _thread_status(home, session_meta.id, thread.id) == "running"
+  assert _thread_status(home, session_meta.id, thread.id) == expected_status
   reports = _recovery_reports(home, session_meta.id)
-  assert len(reports) == 1
-  assert RESUME_EXCEPTION_ALIVE_REASON in reports[0]["content"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("_no_master_wake")
-async def test_cancellation_with_dead_probe_finalizes_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """CancelledError + probe false -> current FAILED finalize (and the
-  cancellation still propagates)."""
-  home = tmp_path / "home"
-  cfg, session_mgr, thread_mgr, session_meta, thread = await _make_running_thread(home)
-  resume_entered = asyncio.Event()
-
-  monkeypatch.setattr(Worker, "resume", _hang_resume(resume_entered))
-
-  task = asyncio.create_task(
-      spawner.resume_worker(
-          session_meta.id,
-          "gate task",
-          thread.id,
-          cfg,
-          session_mgr,
-          thread_mgr,
-          is_alive=lambda: False,
-          interrupt_reason="",
-          on_silence=None))
-  await asyncio.wait_for(resume_entered.wait(), timeout=10.0)
-  task.cancel()
-  with contextlib.suppress(asyncio.CancelledError):
-    await task
-  assert task.cancelled()
-
-  assert _thread_status(home, session_meta.id, thread.id) == "failed"
-  assert _recovery_reports(home, session_meta.id) == []
+  if expect_alive_report:
+    assert len(reports) == 1
+    assert RESUME_EXCEPTION_ALIVE_REASON in reports[0]["content"]
+  else:
+    assert reports == []

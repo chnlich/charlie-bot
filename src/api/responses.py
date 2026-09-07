@@ -13,10 +13,11 @@ import json
 from typing import Any
 
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 
 
-class FastJsonResponse(JSONResponse):
-  """JSONResponse whose render escapes non-ASCII as \\uXXXX escapes.
+def fast_json_bytes(content: Any) -> bytes:
+  """Render *content* to the FastJsonResponse body bytes.
 
   Callers rely on: the parsed content equals the ensure_ascii=False render
   (\\uXXXX decodes to the same string; only the raw bytes differ, and the
@@ -24,12 +25,31 @@ class FastJsonResponse(JSONResponse):
   render time instead of emitting invalid JSON (Starlette's allow_nan=False
   contract).
   """
+  return json.dumps(
+      content,
+      ensure_ascii=True,
+      allow_nan=False,
+      indent=None,
+      separators=(",", ":"),
+  ).encode("utf-8")
+
+
+class FastJsonResponse(JSONResponse):
+  """JSONResponse whose render escapes non-ASCII as \\uXXXX escapes."""
 
   def render(self, content: Any) -> bytes:
-    return json.dumps(
-        content,
-        ensure_ascii=True,
-        allow_nan=False,
-        indent=None,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    return fast_json_bytes(content)
+
+
+class PreencodedJSONResponse(Response):
+  """JSON response serving body bytes a caller already rendered.
+
+  The bytes must come from :func:`fast_json_bytes` (directly or via a memo of
+  its output), so served bodies stay byte-identical to the FastJsonResponse
+  render of the same payload.
+  """
+
+  media_type = "application/json"
+
+  def __init__(self, body: bytes) -> None:
+    super().__init__(content=body)

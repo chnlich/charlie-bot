@@ -57,6 +57,7 @@ class MessageProjection:
       "_committed_final",
       "_history",
       "_offset",
+      "_page_bodies",
       "_region_events",
       "_seps_final",
       "committed",
@@ -71,6 +72,7 @@ class MessageProjection:
     self._committed_final: list[dict] = []
     self._seps_final: list[int] = []
     self._region_events: list[dict] = []
+    self._page_bodies: dict[tuple[int, int], bytes] = {}
     self.event_count = event_index_offset
     self._ingest(events)
 
@@ -87,6 +89,7 @@ class MessageProjection:
     copied._committed_final = list(self._committed_final)
     copied._seps_final = list(self._seps_final)
     copied._region_events = list(self._region_events)
+    copied._page_bodies = {}
     copied.event_count = self.event_count
     copied._ingest(events)
     return copied
@@ -180,3 +183,24 @@ class MessageProjection:
     before = max(0, min(before, total))
     start = self._snap_to_turn_start(max(0, before - limit))
     return self.committed[start:before], start, start > 0
+
+  _PAGE_BODY_LIMIT = 4
+
+  def cached_page_body(self, before: int, limit: int) -> bytes | None:
+    """Rendered response body for the (``before``, ``limit``) page, or None.
+
+    A published projection is immutable, so the body rendered for one page
+    stays valid for the projection's lifetime; every ``advanced`` copy starts
+    with an empty cache, which is what invalidates the bodies when the
+    history grows.
+    """
+    body = self._page_bodies.get((before, limit))
+    if body is not None:
+      self._page_bodies[(before, limit)] = self._page_bodies.pop((before, limit))
+    return body
+
+  def store_page_body(self, before: int, limit: int, body: bytes) -> None:
+    """Cache the rendered body of the (``before``, ``limit``) page, LRU-capped."""
+    self._page_bodies[(before, limit)] = body
+    while len(self._page_bodies) > self._PAGE_BODY_LIMIT:
+      del self._page_bodies[next(iter(self._page_bodies))]

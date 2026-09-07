@@ -10,8 +10,7 @@ from conftest import (
     TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
     TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET,
     FakeAsyncProcess,
-    assert_trigger_fired_completed,
-    assert_trigger_fired_timeout,
+    assert_trigger_fired,
     patch_trigger_fire,
 )
 from conftest import make_trigger_setup as _make_mgr
@@ -72,7 +71,7 @@ async def test_remote_slurm_completes(tmp_path: Path) -> None:
     )
     await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
 
-  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
+  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
   assert "finished: host2:slurm:122111: COMPLETED 0:0" in msg
 
 
@@ -90,7 +89,7 @@ async def test_remote_slurm_timeout_while_running(tmp_path: Path) -> None:
     )
     await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
 
-  msg = await assert_trigger_fired_timeout(trigger_mgr, session_id, trigger.id, mock_master)
+  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="timeout")
   assert "still alive: host2:slurm:122111" in msg
 
 
@@ -202,7 +201,7 @@ async def test_unreachable_host_fires_early_with_note(tmp_path: Path) -> None:
     )
     await asyncio.wait_for(trigger_mgr._tasks[trigger.id], timeout=10)
 
-  msg = await assert_trigger_fired_timeout(trigger_mgr, session_id, trigger.id, mock_master)
+  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="timeout")
   assert "host2:slurm:122111 (unreachable " in msg
   stored = await trigger_mgr._load_trigger(session_id, trigger.id)
   assert stored.fired_at < trigger.fire_at

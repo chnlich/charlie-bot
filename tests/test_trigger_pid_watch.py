@@ -12,8 +12,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import (
     TRIGGER_MASTER_PATCH_TARGET,
-    assert_trigger_fired_completed,
-    assert_trigger_fired_timeout,
+    assert_trigger_fired,
     patch_trigger_mocks,
 )
 from conftest import make_trigger_setup as _make_mgr
@@ -57,7 +56,7 @@ async def test_pid_gone_immediate_fire(tmp_path: Path, pidfd_open_available: Non
     task = trigger_mgr._tasks[trigger.id]
     await asyncio.wait_for(task, timeout=5)
 
-  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
+  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
   assert f"finished: {missing_pid} (gone at start)" in msg
 
 
@@ -82,7 +81,7 @@ async def test_pid_exit_before_timeout(tmp_path: Path, pidfd_open_available: Non
   proc.wait(timeout=2)
   assert elapsed < 5, f"trigger took {elapsed:.1f}s, expected <5s"
 
-  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
+  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
   assert f"finished: {proc.pid}" in msg
 
 
@@ -102,7 +101,7 @@ async def test_timeout_before_pid_exit(tmp_path: Path, pidfd_open_available: Non
       task = trigger_mgr._tasks[trigger.id]
       await asyncio.wait_for(task, timeout=10)
 
-    msg = await assert_trigger_fired_timeout(trigger_mgr, session_id, trigger.id, mock_master)
+    msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="timeout")
     assert f"still alive: {proc.pid}" in msg
   finally:
     proc.kill()
@@ -131,7 +130,7 @@ async def test_multiple_pids_all_semantics(tmp_path: Path, pidfd_open_available:
 
     assert elapsed >= 1.0, f"fired too early: {elapsed:.2f}s"
     assert elapsed < 5, f"fired too late: {elapsed:.2f}s"
-    msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
+    msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
     assert str(fast.pid) in msg
     assert str(slow.pid) in msg
   finally:

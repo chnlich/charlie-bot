@@ -17,8 +17,7 @@ from conftest import (
     TRIGGER_MASTER_PATCH_TARGET,
     TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
     FakeAsyncProcess,
-    assert_trigger_fired_completed,
-    assert_trigger_fired_timeout,
+    assert_trigger_fired,
     fake_cli_cfg,
     patch_trigger_fire,
     schedule_trigger_argv,
@@ -173,7 +172,7 @@ async def test_remote_multi_host_all_die_fires(tmp_path: Path) -> None:
     task = trigger_mgr._tasks[trigger.id]
     await asyncio.wait_for(task, timeout=10)
 
-  msg = await assert_trigger_fired_completed(trigger_mgr, session_id, trigger.id, mock_master)
+  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="completed")
   assert "neptune:1" in msg
   assert "neptune:2" in msg
   assert "noire:3" in msg
@@ -195,7 +194,7 @@ async def test_remote_timeout_with_alive_pids(tmp_path: Path) -> None:
     task = trigger_mgr._tasks[trigger.id]
     await asyncio.wait_for(task, timeout=10)
 
-  msg = await assert_trigger_fired_timeout(trigger_mgr, session_id, trigger.id, mock_master)
+  msg = await assert_trigger_fired(trigger_mgr, session_id, trigger.id, mock_master, reason="timeout")
   assert "still alive: neptune:1" in msg
 
 

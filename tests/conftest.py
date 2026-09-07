@@ -1477,30 +1477,18 @@ def patch_trigger_mocks() -> Iterator[AsyncMock]:
     yield mock_master
 
 
-async def assert_trigger_fired_completed(
-    trigger_mgr: TriggerManager, session_id: str, trigger_id: str, mock_master: AsyncMock) -> str:
-  """Asserts the trigger persisted FIRED with the "completed" reason and the standard fired prefix;
-  returns the fired message so the caller can assert its site-specific suffix (pids, slurm states)."""
-  stored = await trigger_mgr._load_trigger(session_id, trigger_id)
-  assert stored.status == models.TriggerStatus.FIRED
-  assert stored.fire_reason == "completed"
-  msg = mock_master.await_args.args[1]
-  assert "[Scheduled trigger fired | completed]" in msg
-  return msg
-
-
-async def assert_trigger_fired_timeout(
-    trigger_mgr: TriggerManager, session_id: str, trigger_id: str, mock_master: AsyncMock) -> str:
-  """Asserts the trigger persisted FIRED with the "timeout" reason and the standard fired prefix;
+async def assert_trigger_fired(
+    trigger_mgr: TriggerManager, session_id: str, trigger_id: str, mock_master: AsyncMock, *, reason: str) -> str:
+  """Asserts the trigger persisted FIRED with the given reason and the standard fired prefix;
   returns the fired message so the caller can assert its site-specific suffix (pids, slurm states).
 
   Only watch-target triggers take the prefixed message form, so the bare-form pure-delay path
   asserts its whole message at the test site instead of calling this helper."""
   stored = await trigger_mgr._load_trigger(session_id, trigger_id)
   assert stored.status == models.TriggerStatus.FIRED
-  assert stored.fire_reason == "timeout"
+  assert stored.fire_reason == reason
   msg = mock_master.await_args.args[1]
-  assert "[Scheduled trigger fired | timeout]" in msg
+  assert f"[Scheduled trigger fired | {reason}]" in msg
   return msg
 
 

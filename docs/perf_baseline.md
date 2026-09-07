@@ -83,6 +83,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.010 s | — (introduced with its first history row) |
 | M72 file-browser directory listing | M72 collector below | seconds per `GET /files/<dir>` request, worst on-disk listing corpus (the sessions root) | median < 0.013 s | — (introduced with its first history row) |
 | M73 plan-verb validation event-loop lag | M73 collector below | seconds of loop lag + wall per amend validation (the registration gate: the DOM assertion set plus the headless-Chrome page-height render), scratch home, copied passing plan page (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 1.0 s | — (introduced with its first history row) |
+| M74 master turn-end raw-log rescan | M74 collector below | seconds of loop lag + wall per fallback-notice projection (whole read+parse+project of the turn's raw log), worst on-disk master-run raw log, fresh cc-claude translate (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.015 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -4277,10 +4278,102 @@ asyncio.run(main())
 EOF
 ```
 
+M74 — master turn-end raw-log rescan. Every claude-family master turn ends with
+the model-attribution rescan: a whole read+parse+project of the turn's own raw
+log through a fresh backend translate, tens of ms on a multi-MB turn — inline
+on the event loop before the fix, freezing every concurrent request and
+WebSocket at the exact moment the client renders the turn's result (the M14
+pathology on the turn-end path); the fixed site hops to a thread, which trades
+the inline freeze for the GIL-handoff surcharge the M45 history documented
+(~11 ms worst-corpus vs the 5 ms ticker floor on this host). The cost is a
+per-turn freeze invisible to the standing HTTP probes, so the collector
+resolves the largest on-disk master-run raw log under the live sessions dir
+(read-only), builds the scan's translate from the config's first cc-claude
+option — the corpus is claude-shaped and the worst log's session backend id no
+longer resolves in the config, while the live path's fallback for an
+unresolvable option degrades to the identity translate — and drives the scan
+through the production call shape with a concurrent 5 ms ticker, from the
+checkout under test: one cold pass, as at a first turn end, then five timed
+scans. The pre-fix numbers in the landing row are the same scan inline (the
+pre-fix call shape, `runs.project_raw_events(runs.parse_raw_lines(...))`
+without the hop). Evidence while the live server runs older code points the
+same collector at the branch checkout (``CHECKOUT`` at the worktree root), the
+same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, json, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+import structlog
+structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(30))  # silence the translate's debug stream
+from src.core import runs
+from src.core.config import get_config
+from src.agents.master_cc_run import _build_fresh_translate
+
+# Worst turn-end rescan corpus: the largest on-disk master-run raw log under
+# the live sessions dir; the fallback-notice projection re-reads it whole at
+# every claude-family master turn end. Live home read-only.
+best, best_n = None, -1
+for p in Path.home().glob(".charliebot/sessions/*/data/master_runs/*/agent.raw.ndjson"):
+    n = p.stat().st_size
+    if n > best_n:
+        best, best_n = p, n
+print(f"worst raw log: {best_n / 1e6:.1f} MB ({best})")
+
+# The turn's own backend builds the scan's translate: the corpus is claude-
+# shaped (every claude-family turn ends with this rescan), so the translate
+# comes from the config's first cc-claude option — the id the worst log's
+# session carries no longer exists in the config, and the fallback option the
+# live path would build for it degrades to the identity translate.
+cfg = get_config()
+backend_id = json.loads((best.parents[3] / "metadata.json").read_text()).get("backend")
+option = next((o for o in cfg.backend_options if o.id == backend_id),
+              next(o for o in cfg.backend_options if o.type == "cc-claude"))
+print(f"session backend {backend_id!r} -> option {option.id} ({option.type})")
+
+def fresh_translate():
+    return _build_fresh_translate(cfg, option)  # a fresh translate per scan, as the call site builds
+
+async def run_once():
+    gaps = []
+    stop = False
+    async def ticker():
+        nonlocal stop
+        prev = time.perf_counter()
+        while not stop:
+            await asyncio.sleep(0.005)
+            now = time.perf_counter()
+            gaps.append(now - prev)
+            prev = now
+    t = asyncio.create_task(ticker())
+    await asyncio.sleep(0.01)  # the ticker must be mid-sleep, or an inline block starves it unrecorded
+    t0 = time.perf_counter()
+    events = await asyncio.to_thread(runs.project_raw_file, best, fresh_translate())
+    wall = time.perf_counter() - t0
+    stop = True
+    await t
+    return len(events), (max(gaps) if gaps else wall), wall
+
+async def main():
+    await run_once()  # cold pass, as at a first turn end; not timed
+    results = []
+    for _ in range(5):
+        results.append(await run_once())
+    lags = sorted(r[1] for r in results)
+    walls = sorted(r[2] for r in results)
+    print(f"{results[0][0]} projected events; turn-end rescan loop-lag median {lags[2]:.4f} s, "
+          f"max {lags[-1]:.4f} s; wall median {walls[2]:.4f} s, max {walls[-1]:.4f} s")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-07 | this PR | M74 turn-end rescan loop-lag median 0.0302/0.0262 s → 0.0110/0.0104 s, maxima 0.0377/0.0353 s → 0.0115/0.0109 s (two interleaved rounds of the collector, 9.9 MB / 391-event worst on-disk raw log of session 4fcd4c43, live home read-only, main checkout before — the pre-fix inline call shape `runs.project_raw_events(runs.parse_raw_lines(...))` — vs branch worktree after back-to-back at load 1.54/1.18/0.82, every paired round faster; earlier same-conditions pair 0.0203 → 0.0110 s at load 1.45; wall median 0.0211-0.0251 → 0.0205-0.0215 s — the scan's own CPU, now off-loop, unchanged as expected; typical recent turns 0.02-0.55 MB read the 5.4 ms ticker floor in both shapes) | every claude-family master turn ended with the model-attribution rescan inline on the event loop — a whole read+parse+project of the turn's raw log through a fresh translate, freezing every concurrent request and WebSocket at turn end (the M14 pathology on the turn-end path); the live turn-end projection hops to a thread via `runs.project_raw_file` (new whole-file helper, also single-homing `scan_result_exit` and `resolve_run`'s inline scans), and the re-attach path's whole-file result scan hops the same way; M74 definition and healthy range introduced with this PR |
 | 2026-09-07 | this PR | M7 changed-round collect median 0.453/0.463/0.461 s → 0.231/0.273/0.254 s (three interleaved rounds of the new changed-round harness, main checkout before vs branch worktree after back-to-back at load 1.52-2.08, 15 rows and 0.0 MB re-read both arms; pre-fix profile on the same round: 10.5 MB document json.loads ~80 ms + db key scan ~106 ms + document re-dump ~89 ms + record replay ~138 ms + walk ~40 ms); warm row-memo advance median 0.1058/0.1058/0.1064 s → 0.0264/0.0279/0.0271 s (interleaved ×3 against the live 15.28 GB db, 85k message rows; branch maxima 0.133-0.139 s are rounds where live rows landed between calls — the probe misses and the full scan runs, correct); HTTP-level paired interleaved rounds: WAL-noise rounds (sidecar moved, no message row) live-before 0.1404/0.1419/0.1435/0.1456 s → scratch-after (branch server, scratch CHARLIEBOT_HOME, verbatim M7 curls) 0.0377/0.0382/0.0392/0.0399 s, row-landing rounds unchanged (live 0.1328-0.1576 s ≈ scratch 0.1445-0.1606 s — the scan still runs when rows land, by design); fast-hit floor unchanged (live 0.022 s ≈ scratch 0.011 s) | the changed round paid three fixed costs: the 10.5 MB cache document's json re-parse (~80 ms) on every fresh walk, the opencode row memo's full-table key re-read (`select id, time_updated` over 85k rows, ~106 ms) on every WAL-sidecar move, and the proof-less rescan's downstream serve; the row-memo advance now checks proof aggregates first — (row count, sum of time_updated) read under the same snapshot as the scan it may gate; every single-row move changes the pair, so equal aggregates skip the per-row key read (a strictly weaker proof than the key scan's per-id diff: a same-millisecond delete+insert coincidence whose count and sum both net to zero dodges the probe until the next proof miss re-scans, and a data-only rewrite with an unchanged time_updated is invisible to the key scan itself); the parsed document memoizes per cache path and each save adopts the round's next-document state, so a changed round re-parses zero document bytes and entries this round stopped seeing drop out with the save; changed-round sub-metric, healthy range, and harness added to the M7 row in this PR |
 | 2026-09-07 | this PR | M73 plan amend validation loop-lag median 0.6384/0.6540/0.6360 s → 0.0073/0.0070/0.0075 s (at the 5 ms ticker floor), maxima 0.6644/0.6645/0.6385 s → 0.0079/0.0088/0.0085 s; wall median 0.6390/0.6547/0.6367 s → 0.6516/0.6319/0.6486 s — the render's own cost, now off-loop, unchanged as expected (three interleaved rounds of the collector, the 11 KB bound plan page plan_02.html passing the current pure assertion set, scratch CHARLIEBOT_HOME, main checkout before vs branch worktree after back-to-back, every paired round faster; live corroboration: the 1.37 h server log shows the freeze as POST /api/internal/plan/amend avg 670 ms max 715 ms over 5 calls and /plan/present avg 597 ms max 624 ms over 3, the instance predates this change; no-regression re-measures: M57 /plans 2.27-2.55 ms standing band and M27 tolerant read 9.0 µs unchanged; plan-registry suite 67 passed at this branch's head, the pre-fix archive one short (the new loop-responsiveness pin), red there, green here) | the plan registration gate (the DOM assertion set plus the headless-Chrome page-height render, hundreds of ms per page) ran inline in the async present/amend verbs, so every plan delivery froze the event loop for the full Chrome render — the M14 pathology on the plan-delivery path; the assertion run now rides one asyncio.to_thread hop inside `_validate_new_version_file`, the same shape as the M55 annotate and M65 gzip hops, leaving every verb's rejection and save semantics untouched; M73 definition and healthy range introduced with this PR |
 | 2026-08-30 | #457 | M5 median 0.068 s → 0.029 s (117-thread worst session) | one executor hop for the threads metadata scan; M5 definition and healthy range introduced with this PR |

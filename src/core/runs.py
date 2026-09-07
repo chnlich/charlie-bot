@@ -311,6 +311,16 @@ def result_success(result: dict) -> bool:
   return result.get("subtype") in (None, "success") and result.get("is_error") in (None, False)
 
 
+def project_raw_file(raw_path: Path, translate: Callable[[dict], list[dict]]) -> list[dict]:
+  """Whole-file projection: read, parse, and project one raw log.
+
+  ``translate`` must be fresh (see project_raw_events). The scan is a full
+  read+parse of the log's bytes, so event-loop callers reach it through
+  asyncio.to_thread.
+  """
+  return project_raw_events(parse_raw_lines(raw_path.read_bytes()), translate)
+
+
 def scan_result_exit(
     raw_path: Path,
     translate: Callable[[dict], list[dict]],
@@ -324,7 +334,7 @@ def scan_result_exit(
   event exists and ``result_success`` holds, else -1, the code a died-mid-run
   live turn reports for its missing result event.
   """
-  events = project_raw_events(parse_raw_lines(raw_path.read_bytes()), translate) if raw_path.is_file() else []
+  events = project_raw_file(raw_path, translate) if raw_path.is_file() else []
   result = summarize_result(events)
   exit_code = 0 if result is not None and result_success(result) else -1
   return events, result, exit_code
@@ -428,7 +438,7 @@ def resolve_run(
   result: dict | None = None
   if raw_exists:
     completed_at = raw_completion_time(raw_path)
-    events = project_raw_events(parse_raw_lines(raw_path.read_bytes()), translate)
+    events = project_raw_file(raw_path, translate)
     result = summarize_result(events)
 
   if backend_type in UNCOVERED_BACKEND_TYPES and result is None:

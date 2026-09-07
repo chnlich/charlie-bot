@@ -495,6 +495,7 @@ function renderMessagesIntoContainer(container, messages, sessionId) {
 function postProcessRenderedMessages(root) {
   root.querySelectorAll('.prose-msg').forEach(renderChatMath);
   embedLinkedHtmlArtifacts(root);
+  scheduleCodeHighlightFlush();
   root.querySelectorAll('.bubble-time[data-ts]').forEach(el => {
     el.textContent = formatBubbleTime(el.dataset.ts);
   });

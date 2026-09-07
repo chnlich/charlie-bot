@@ -15,6 +15,18 @@ globalThis.marked = {
   parseCallCount: () => parseCalls,
 };`;
 
+// Fake marked that routes every parse through the registered code renderer,
+// the surface the highlight deferral touches.
+const FAKE_MARKED_CODE_SRC = `
+let parseCalls = 0;
+let codeRenderer = null;
+globalThis.marked = {
+  Renderer: function() { return {}; },
+  use(opts) { if (opts.renderer && opts.renderer.code) codeRenderer = opts.renderer.code; },
+  parse: (s) => { parseCalls++; return '<pre>' + codeRenderer({ text: s, lang: '', raw: '' }) + '</pre>'; },
+  parseCallCount: () => parseCalls,
+};`;
+
 function loadRenderer() {
   const context = {
     console: { error() {}, warn() {}, log() {} },
@@ -24,6 +36,25 @@ function loadRenderer() {
   };
   vm.createContext(context);
   vm.runInContext(FAKE_MARKED_SRC, context, { filename: 'marked-fake.js' });
+  vm.runInContext(readStatic('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
+  return context;
+}
+
+function loadCodeRenderer() {
+  const timers = [];
+  const context = {
+    console: { error() {}, warn() {}, log() {} },
+    hljs: hljsStub,
+    document: { querySelectorAll: () => [] },
+    platform: {},
+    performance,
+    setTimeout: (fn) => timers.push(fn),
+    requestAnimationFrame: undefined,
+    __timerCount: () => timers.length,
+    __runTimers: () => { while (timers.length) timers.shift()(); },
+  };
+  vm.createContext(context);
+  vm.runInContext(FAKE_MARKED_CODE_SRC, context, { filename: 'marked-code-fake.js' });
   vm.runInContext(readStatic('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
   return context;
 }
@@ -65,4 +96,65 @@ test('the LRU cap evicts the least recently rendered body', () => {
   assert.equal(c.marked.parseCallCount(), 66);
   c.renderProseMarkdown('body 0'); // still resident: no re-parse
   assert.equal(c.marked.parseCallCount(), 66);
+});
+
+test('a code body parses deferred and never runs hljs before the flush', () => {
+  const c = loadCodeRenderer();
+  let autoCalls = 0;
+  c.hljs = { ...hljsStub, highlightAuto: (s) => { autoCalls++; return { value: String(s) }; } };
+  const first = c.renderProseMarkdown('body one');
+  assert.match(first, /data-hl="/);
+  assert.equal(autoCalls, 0);
+  assert.equal(c.__timerCount(), 1);
+});
+
+test('a body without code blocks schedules no flush', () => {
+  const c = loadRenderer();
+  c.renderProseMarkdown('plain body');
+  assert.equal(c.__timerCount === undefined ? 0 : c.__timerCount(), 0);
+});
+
+test('the flush settles the memo entry to the direct render bytes', () => {
+  const c = loadCodeRenderer();
+  const text = 'body two';
+  c.renderProseMarkdown(text);
+  c.__runTimers();
+  const settled = c.renderProseMarkdown(text);
+  const direct = c.marked.parse(c.fixNestedFences(text));
+  assert.equal(settled, direct);
+  assert.doesNotMatch(settled, /data-hl/);
+  assert.equal(c.marked.parseCallCount(), 2); // 1 memo parse + 1 direct; the repeat served the settled entry
+});
+
+test('the flush swaps the highlighted bytes into the marker nodes', () => {
+  const c = loadCodeRenderer();
+  const nodes = [];
+  c.document = {
+    querySelectorAll(sel) {
+      const m = /data-hl="(\d+)"/.exec(sel);
+      if (!m) return [];
+      const el = { id: m[1], innerHTML: '', removed: false, removeAttribute() { this.removed = true; } };
+      nodes.push(el);
+      return [el];
+    },
+  };
+  c.renderProseMarkdown('body three');
+  c.__runTimers();
+  assert.equal(nodes.length, 1);
+  assert.equal(nodes[0].innerHTML, 'body three'); // the stub highlight returns the input unchanged
+  assert.equal(nodes[0].removed, true);
+});
+
+test('a repeat render before the flush re-emits markers the pending flush covers', () => {
+  const c = loadCodeRenderer();
+  const text = 'body four';
+  const first = c.renderProseMarkdown(text);
+  const second = c.renderProseMarkdown(text); // memo hit on the not-yet-settled entry
+  assert.equal(second, first);
+  assert.match(second, /data-hl="/);
+  c.__runTimers();
+  const settled = c.renderProseMarkdown(text);
+  assert.equal(settled, c.marked.parse(c.fixNestedFences(text)));
+  assert.doesNotMatch(settled, /data-hl/);
+  assert.equal(c.marked.parseCallCount(), 2); // 1 memo parse + 1 direct; the repeat served the settled entry
 });

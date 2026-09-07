@@ -72,6 +72,7 @@ function baseSessionContext(overrides = {}) {
     fixNestedFences: (txt) => txt,
     renderProseMarkdown: (txt) => txt,
     renderChatMath: () => {},
+    scheduleCodeHighlightFlush: () => {},
     formatBubbleTime: (txt) => txt,
     shouldAutoScroll: () => true,
     showScrollToBottom: () => {},

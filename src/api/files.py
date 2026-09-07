@@ -4,7 +4,8 @@ import asyncio
 import html
 import json
 import mimetypes
-from datetime import UTC, datetime
+import os
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -164,44 +165,60 @@ def _human_size(size: int) -> str:
   return f"{size:.1f} PB"
 
 
-def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
-  """Return a minimal HTML page listing directory contents."""
-  entries: list[dict] = []
+def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -> str | None:
+  """Return the HTML listing of *dir_path*, or None when it is not a directory.
+
+  Carries the route's dir contract: the ``?diff=`` 400 (a diff target must be a
+  session artifact page, never a directory) and the unreadable-directory 403.
+  One scandir pass answers is_dir from the directory record and stats each
+  entry once; the per-entry Path construction and second stat of a
+  Path.iterdir walk dominate the listing of a thousand-entry directory.
+  """
   try:
-    for child in sorted(dir_path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+    scandir_iter = os.scandir(os.fspath(dir_path))
+  except NotADirectoryError:
+    return None
+  except PermissionError as e:
+    # The diff 400 outranks the unreadable 403: the route contract checks the
+    # diff target before it tries to read the directory.
+    if diff_param is not None:
+      raise HTTPException(status_code=400, detail=f"diff target is not a session artifact page: {dir_path}") from e
+    raise HTTPException(status_code=403, detail="Permission denied") from e
+  if diff_param is not None:
+    scandir_iter.close()
+    raise HTTPException(status_code=400, detail=f"diff target is not a session artifact page: {dir_path}")
+  entries: list[tuple[bool, str, int, float]] = []
+  with scandir_iter:
+    for entry in scandir_iter:
       try:
-        stat = child.stat()
+        stat = entry.stat()
+        is_dir = entry.is_dir()
       except OSError:
         continue
-      entries.append(
-          {
-              "name": child.name,
-              "is_dir": child.is_dir(),
-              "size": stat.st_size,
-              "mtime": datetime.fromtimestamp(stat.st_mtime, tz=UTC),
-          })
-  except PermissionError as e:
-    raise HTTPException(status_code=403, detail="Permission denied") from e
+      entries.append((is_dir, entry.name, stat.st_size, stat.st_mtime))
+  entries.sort(key=lambda e: (not e[0], e[1].lower()))
 
-  rows = ""
+  rows = []
   # Parent directory link (unless at root)
   if url_prefix.rstrip("/") != "/files":
     parent = "/".join(url_prefix.rstrip("/").split("/")[:-1]) or "/files"
-    rows += ('<tr>'
-             f'<td>📁</td><td><a href="{html.escape(parent)}">..</a></td>'
-             '<td></td><td></td>'
-             '</tr>\n')
+    rows.append('<tr>'
+                f'<td>📁</td><td><a href="{html.escape(parent)}">..</a></td>'
+                '<td></td><td></td>'
+                '</tr>\n')
 
-  for e in entries:
-    icon = "📁" if e["is_dir"] else "📄"
-    name = html.escape(e["name"] + ("/" if e["is_dir"] else ""))
-    href = html.escape(f"{url_prefix.rstrip('/')}/{quote(e['name'], safe='')}")
-    size = "" if e["is_dir"] else _human_size(e["size"])
-    mtime = e["mtime"].strftime("%Y-%m-%d %H:%M")
-    rows += (
+  for is_dir, name, size, mtime in entries:
+    icon = "📁" if is_dir else "📄"
+    name_text = html.escape(name + ("/" if is_dir else ""))
+    href = html.escape(f"{url_prefix.rstrip('/')}/{quote(name, safe='')}")
+    size_text = "" if is_dir else _human_size(size)
+    # time.gmtime is the UTC rendering the datetime form produced, minus its
+    # per-entry object construction.
+    mtime_text = time.strftime("%Y-%m-%d %H:%M", time.gmtime(mtime))
+    rows.append(
         f'<tr>'
-        f'<td>{icon}</td><td><a href="{href}">{name}</a></td>'
-        f'<td style="text-align:right">{size}</td><td>{mtime}</td>'
+        f'<td>{icon}</td><td><a href="{href}">{name_text}</a></td>'
+        f'<td style="text-align:right">{size_text}</td><td>{mtime_text}</td>'
         f'</tr>\n')
 
   display_path = html.escape("/" + dir_path.as_posix().lstrip("/"))
@@ -220,7 +237,7 @@ def _dir_listing_html(dir_path: Path, url_prefix: str) -> str:
 <h2>Index of {display_path}</h2>
 <table>
 <tr><th></th><th>Name</th><th>Size</th><th>Modified</th></tr>
-{rows}
+{''.join(rows)}
 </table>
 </body>
 </html>"""
@@ -239,11 +256,11 @@ async def serve_file(path: str, request: Request):
     raise HTTPException(status_code=404, detail="Not found")
 
   diff_param = request.query_params.get("diff")
-  if await asyncio.to_thread(fs_path.is_dir):
-    if diff_param is not None:
-      raise HTTPException(status_code=400, detail=f"diff target is not a session artifact page: {fs_path}")
-    url_prefix = f"/files/{path}" if path else "/files"
-    listing = await asyncio.to_thread(_dir_listing_html, fs_path, url_prefix)
+  url_prefix = f"/files/{path}" if path else "/files"
+  # One executor hop carries the is_dir answer and the whole listing build;
+  # None means a file, falling through to the artifact and FileResponse arms.
+  listing = await asyncio.to_thread(_dir_listing_html, fs_path, url_prefix, diff_param)
+  if listing is not None:
     return HTMLResponse(listing)
 
   # Standalone artifact HTML gets the review UI injected here — the single chokepoint

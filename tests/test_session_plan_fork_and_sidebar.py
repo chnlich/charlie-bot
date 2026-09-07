@@ -25,6 +25,9 @@ from src.core.sessions import SessionManager, has_pending_plan_approval_sync
 _PLAN_V1_REL = "artifacts/plan_01.html"
 _PLAN_V2_REL = "artifacts/plan_02.html"
 
+_TAKEOFF = {"v": 1, "at": "2026-07-20T00:00:00+00:00"}
+_CLOSED_SUPERSEDED = {"as": "superseded", "at": "2026-07-20T00:00:00+00:00"}
+
 
 def _make_version(v: int, file: str, verify_state: str = "pending") -> dict:
   return {
@@ -258,88 +261,45 @@ async def test_elone_also_copies_plans_and_artifacts(tmp_path: Path) -> None:
 # D2: sidebar pending-approval flag (all_sessions_status)
 # ---------------------------------------------------------------------------
 
-
-@pytest.mark.asyncio
-async def test_all_sessions_status_pending_plan_approval_awaiting_approval(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="Awaiting")
-
-  # not closed, no takeoff, latest verify_state clean -> derived "awaiting approval"
-  _write_plans(cfg, session.id, {"plans": [plan_doc(1, [_make_version(1, _PLAN_V1_REL, "clean")]),]})
-
-  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
-  assert status[session.id]["has_pending_plan_approval"] is True
-
-
-@pytest.mark.asyncio
-async def test_all_sessions_status_pending_plan_approval_approved_is_unset(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="Approved")
-
-  # takeoff set + verify_state clean -> derived "approved"
-  _write_plans(
-      cfg, session.id, {
-          "plans":
-              [
-                  plan_doc(
-                      1, [_make_version(1, _PLAN_V1_REL, "clean")], takeoff={
-                          "v": 1,
-                          "at": "2026-07-20T00:00:00+00:00"
-                      }),
-              ]
-      })
-
-  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
-  assert status[session.id]["has_pending_plan_approval"] is False
+# The flag ORs the registry's per-lineage derived state: a lineage is awaiting
+# approval exactly when it is neither closed nor taken off (src/core/plans.py
+# _derive_state); a session without plans.json has no lineages, so no flag.
+_PENDING_PLAN_APPROVAL_ROWS = [
+    pytest.param([plan_doc(1, [_make_version(1, _PLAN_V1_REL, "clean")])], True, id="awaiting-approval"),
+    pytest.param(
+        [plan_doc(1, [_make_version(1, _PLAN_V1_REL, "clean")], takeoff=_TAKEOFF)],
+        False,
+        id="approved-is-unset",
+    ),
+    pytest.param(
+        [plan_doc(1, [_make_version(1, _PLAN_V1_REL, "clean")], closed=_CLOSED_SUPERSEDED)],
+        False,
+        id="closed-is-unset",
+    ),
+    pytest.param(None, False, id="no-plans-json"),
+    # One approved lineage plus one awaiting lineage: the OR still fires.
+    pytest.param(
+        [
+            plan_doc(1, [_make_version(1, _PLAN_V1_REL, "clean")], takeoff=_TAKEOFF),
+            plan_doc(2, [_make_version(1, _PLAN_V2_REL, "clean")]),
+        ],
+        True,
+        id="mixed-lineages",
+    ),
+]
 
 
 @pytest.mark.asyncio
-async def test_all_sessions_status_pending_plan_approval_closed_is_unset(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="Closed")
+@pytest.mark.parametrize(("plans", "expected"), _PENDING_PLAN_APPROVAL_ROWS)
+async def test_all_sessions_status_pending_plan_approval(
+    tmp_path: Path, plans: list[dict] | None, expected: bool) -> None:
+  cfg, mgr, session = await make_home_session(tmp_path, name="PendingFlag")
 
-  _write_plans(
-      cfg, session.id, {
-          "plans":
-              [
-                  plan_doc(
-                      1, [_make_version(1, _PLAN_V1_REL, "clean")],
-                      closed={
-                          "as": "superseded",
-                          "at": "2026-07-20T00:00:00+00:00"
-                      }),
-              ]
-      })
+  if plans is not None:
+    _write_plans(cfg, session.id, {"plans": plans})
 
   status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
-  assert status[session.id]["has_pending_plan_approval"] is False
-
-
-@pytest.mark.asyncio
-async def test_all_sessions_status_pending_plan_approval_no_plans_json_is_unset(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="NoPlans")
-
-  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
-  assert status[session.id]["has_pending_plan_approval"] is False
-
-
-@pytest.mark.asyncio
-async def test_all_sessions_status_pending_plan_approval_mixed_lineages(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="Mixed")
-
-  # One approved lineage + one awaiting-approval lineage -> flag set (at least one awaiting).
-  _write_plans(
-      cfg, session.id, {
-          "plans":
-              [
-                  plan_doc(
-                      1, [_make_version(1, _PLAN_V1_REL, "clean")], takeoff={
-                          "v": 1,
-                          "at": "2026-07-20T00:00:00+00:00"
-                      }),
-                  plan_doc(2, [_make_version(1, _PLAN_V2_REL, "clean")]),
-              ]
-      })
-
-  status = json.loads((await sessions_api.all_sessions_status(ids=session.id, session_mgr=mgr)).body)
-  assert status[session.id]["has_pending_plan_approval"] is True
+  assert status[session.id]["has_pending_plan_approval"] is expected
 
 
 @pytest.mark.asyncio
@@ -467,31 +427,26 @@ async def test_probe_partial_degradation_still_reports_pending_approval_true(tmp
 
 
 @pytest.mark.asyncio
-async def test_list_sessions_endpoint_includes_pending_plan_approval_true(tmp_path: Path) -> None:
-  """Acceptance #7: GET /api/sessions/ items include has_pending_plan_approval: true."""
-  cfg, mgr, session = await make_home_session(tmp_path, name="Awaiting")
-  _write_plans(cfg, session.id, {"plans": [plan_doc(1, [_make_version(1, _PLAN_V1_REL, "clean")]),]})
+@pytest.mark.parametrize(
+    ("plans", "expected"),
+    [
+        ([plan_doc(1, [_make_version(1, _PLAN_V1_REL, "clean")])], True),
+        (None, False),
+    ],
+    ids=["with-plans", "no-plans-json"],
+)
+async def test_list_sessions_endpoint_carries_pending_plan_approval(
+    tmp_path: Path, plans: list[dict] | None, expected: bool) -> None:
+  """GET /api/sessions/ items carry the derived has_pending_plan_approval flag."""
+  cfg, mgr, session = await make_home_session(tmp_path, name="PendingBadge")
+
+  if plans is not None:
+    _write_plans(cfg, session.id, {"plans": plans})
 
   app = _build_sessions_app(mgr)
   with TestClient(app) as client:
     resp = client.get("/api/sessions/")
 
   assert resp.status_code == 200
-  body = resp.json()
-  item = next(s for s in body if s["id"] == session.id)
-  assert item["has_pending_plan_approval"] is True
-
-
-@pytest.mark.asyncio
-async def test_list_sessions_endpoint_pending_plan_approval_false_without_plans_json(tmp_path: Path) -> None:
-  """Sanity: a session with no plans.json reports has_pending_plan_approval: false on GET /."""
-  _cfg, mgr, session = await make_home_session(tmp_path, name="NoPlans")
-
-  app = _build_sessions_app(mgr)
-  with TestClient(app) as client:
-    resp = client.get("/api/sessions/")
-
-  assert resp.status_code == 200
-  body = resp.json()
-  item = next(s for s in body if s["id"] == session.id)
-  assert item["has_pending_plan_approval"] is False
+  item = next(s for s in resp.json() if s["id"] == session.id)
+  assert item["has_pending_plan_approval"] is expected

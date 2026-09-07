@@ -19,12 +19,13 @@ from src.agents.backends.base import (
 )
 from src.agents.backends.claude_code import ClaudeCodeBackend, claude_supervisor_env
 from src.agents.backends.registry import build_backend
+from src.core import claude_accounts, claude_compaction, claude_relay, runs
 from src.core import event_types as ET
-from src.core import runs
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, BackendType, ThreadMetadata
+from src.core.models import BackendOption, BackendType, ClaudeAccount, ThreadMetadata
 from src.core.ndjson import append_ndjson
 from src.core.process import kill_group_escalating
+from src.core.session_usage import _prompt_token_sum
 from src.core.streaming import handle_compaction_events, streaming_manager
 
 log = structlog.get_logger()
@@ -56,7 +57,14 @@ def _clamp_ts(clamp_to: datetime | None) -> str:
 
 
 class Worker:
-  """Manages a single Claude Code Worker subprocess for one task."""
+  """Manages the Claude Code Worker subprocesses of one task.
+
+  One task is one process, except on a pool account (src/core/claude_accounts.py):
+  when that account runs out of quota the Worker relays, moving the transcript to
+  the account with the most headroom and resuming the same session id there with
+  the shared continuation prompt (src/core/claude_relay.py). Every process of the
+  task appends to the same events log; the terminal events belong to the last one.
+  """
 
   def __init__(
       self,
@@ -69,6 +77,7 @@ class Worker:
       extra_env: dict[str, str] | None = None,
       on_spawned: Callable | None = None,
       instructions_content: str | None = None,
+      claude_account: ClaudeAccount | None = None,
   ) -> None:
     self._thread = thread_metadata
     self._worktree = working_dir
@@ -80,6 +89,25 @@ class Worker:
     self._on_spawned = on_spawned
     self._instructions_content = instructions_content
     self._backend: AgentBackend | None = None
+    # The pool account this task runs on; None outside the pool.
+    self._claude_account = claude_account
+    self._relay_watch: claude_relay.RelayWatch | None = None
+    self._relays = 0
+    # Set by a relay: the next process resumes the transcript instead of opening a session.
+    self._resume_session_id: str | None = None
+    # Context size from the newest assistant usage block, for the relay compaction rule.
+    self._context_tokens: int | None = None
+    # Session-level notices (the login-required event) leave through this hook; the
+    # run entry that knows the session binds it (spawner_finalize._stream_worker_events).
+    self.on_session_event: Callable[[dict], Awaitable[None]] | None = None
+
+  @property
+  def claude_account(self) -> ClaudeAccount | None:
+    return self._claude_account
+
+  @property
+  def account_relays(self) -> int:
+    return self._relays
 
   def _build_backend(self, on_spawn: Callable[[int], Awaitable[None]] | None) -> AgentBackend:
     """Build the backend for this task; *on_spawn* is None for translate-only instances.
@@ -99,7 +127,10 @@ class Worker:
           "log_dir": self._events_log.parent,
       }
       if self._backend_option.type == BackendType.CC_CLAUDE:
-        backend_kwargs["claude_session_id"] = self._thread.claude_session_id
+        if self._resume_session_id:
+          backend_kwargs["extra_flags"] = ["--resume", self._resume_session_id]
+        else:
+          backend_kwargs["claude_session_id"] = self._thread.claude_session_id
       if on_spawn is not None:
         return build_backend(self._backend_option, self._cfg, **backend_kwargs)
       try:
@@ -133,17 +164,31 @@ class Worker:
       if self._on_spawned:
         await self._on_spawned(self._thread)
 
-    self._backend = self._build_backend(_on_spawn)
-
-    log.info("worker_starting", thread=self._thread.id, cwd=str(self._worktree))
-
-    # Read stdout (NDJSON) line by line via the backend
+    # Read stdout (NDJSON) line by line via the backend; a pooled task loops once
+    # per account relay, each process appending to the same events log.
     self._events_log.parent.mkdir(parents=True, exist_ok=True)
     async with aiofiles.open(self._events_log, "a", encoding="utf-8") as log_file:
-      async for event in self._backend.run(self._task_description, str(self._worktree), env):
-        await self._process_event(event, log_file)
+      while True:
+        self._backend = self._build_backend(_on_spawn)
+        account = self._claude_account
+        self._relay_watch = (
+            claude_relay.RelayWatch(account.label, self._backend_option.model)
+            if account is not None and self._backend_option is not None else None)
+        log.info(
+            "worker_starting",
+            thread=self._thread.id,
+            cwd=str(self._worktree),
+            account=account.label if account is not None else None,
+            relays=self._relays)
+        async for event in self._backend.run(self._task_description, str(self._worktree), env):
+          await self._process_event(event, log_file)
+        exit_code = self._backend.exit_code
+        decision = (
+            self._relay_watch.decision(exit_code, self._backend.stderr_text) if self._relay_watch is not None else None)
+        if decision is None:
+          break
+        await self._relay(decision, exit_code, log_file)
 
-    exit_code = self._backend.exit_code
     completion = runs.raw_completion_time(self._raw_log_path())
     await self._emit_terminal_events(
         exit_code,
@@ -215,6 +260,71 @@ class Worker:
     )
     log.info("worker_resume_finished", thread=self._thread.id, exit_code=exit_code)
     return exit_code
+
+  async def _relay(self, decision: str, exit_code: int, log_file: AsyncTextIOWrapper) -> None:
+    """Move this task to the next pool account, or end it loudly.
+
+    A login failure marks the account unhealthy and tells the operator first. The
+    pool exhausted raises PoolExhaustedError (reported as quota exhaustion with the
+    reset time); the relay cap raises RuntimeError (reported as the task's error).
+    """
+    assert self._backend_option is not None and self._claude_account is not None
+    current = self._claude_account
+    if decision == claude_relay.LOGIN_FAILED:
+      claude_accounts.record_auth_failure(current.label)
+      log.error(
+          "claude_account_login_required",
+          thread=self._thread.id,
+          account=current.label,
+          config_dir=current.config_dir,
+          reason="auth_failed")
+      notice = claude_relay.login_required_event(current, "auth_failed")
+      await self._persist_and_broadcast(log_file, notice)
+      if self.on_session_event is not None:
+        await self.on_session_event(notice)
+    if self._relays >= claude_relay.MAX_RELAYS_PER_TURN:
+      raise RuntimeError(claude_relay.relay_limit_message())
+    nxt, error = claude_relay.move_to_next_account(
+        self._cfg, self._backend_option.model, current, self._thread.claude_session_id)
+    if nxt is None:
+      raise claude_relay.PoolExhaustedError(error)
+    log.warning(
+        "worker_account_relay",
+        thread=self._thread.id,
+        reason=decision,
+        exit_code=exit_code,
+        from_account=current.label,
+        to_account=nxt.label,
+        relays=self._relays + 1)
+    if claude_compaction.relay_compaction_wanted(self._cfg, self._backend_option.model, self._context_tokens):
+
+      async def persist(evt: dict) -> None:
+        await self._persist_and_broadcast(log_file, evt)
+
+      await claude_compaction.compact_with_sonnet(
+          cc_session_id=self._thread.claude_session_id,
+          cwd=str(self._worktree),
+          config_dir=nxt.config_dir,
+          pre_tokens=self._context_tokens,
+          persist_and_broadcast=persist,
+          log_context={
+              "thread": self._thread.id,
+              "account": nxt.label,
+              "trigger": "relay"
+          },
+      )
+    self._relays += 1
+    self._claude_account = nxt
+    self._backend_option = self._backend_option.model_copy(update={"claude_config_dir": nxt.config_dir})
+    self._task_description = claude_relay.CONTINUATION_PROMPT
+    self._resume_session_id = self._thread.claude_session_id
+
+  async def _persist_and_broadcast(self, log_file: AsyncTextIOWrapper, event: dict) -> None:
+    if not event.get("timestamp"):
+      event["timestamp"] = datetime.now(UTC).isoformat()
+    await log_file.write(json.dumps(event) + "\n")
+    await log_file.flush()
+    await streaming_manager.broadcast(self._thread.id, event)
 
   def _raw_log_path(self) -> Path:
     # The events log lives in <thread>/data/, which is also the backend's
@@ -290,16 +400,33 @@ class Worker:
     if not event_data.get("timestamp"):
       event_data["timestamp"] = datetime.now(UTC).isoformat()
 
+    # A pooled task folds every event into its relay decision; a rejection ends
+    # the process on its own and the relay follows in run(), so the event is
+    # persisted like any other instead of raising.
+    terminate_now = self._relay_watch is not None and self._relay_watch.observe(event_data)
+
     # Detect rate-limit rejections from Claude Code (type=ET.RATE_LIMIT_EVENT)
     if event_type == ET.RATE_LIMIT_EVENT:
       rli = event_data.get("rate_limit_info", {})
       if rli.get("status") == "rejected":
         rate_type = rli.get("rateLimitType", "unknown")
         resets_at = rli.get("resetsAt", "unknown")
-        log.warning("worker_rate_limited", thread=self._thread.id, rate_type=rate_type, resets_at=resets_at)
-        await log_file.write(json.dumps(event_data) + "\n")
-        await log_file.flush()
-        raise QuotaExhaustedException(f"Rate limited ({rate_type}), resets at {resets_at}")
+        log.warning(
+            "worker_rate_limited",
+            thread=self._thread.id,
+            rate_type=rate_type,
+            resets_at=resets_at,
+            account=self._claude_account.label if self._claude_account is not None else None)
+        if self._relay_watch is None:
+          await log_file.write(json.dumps(event_data) + "\n")
+          await log_file.flush()
+          raise QuotaExhaustedException(f"Rate limited ({rate_type}), resets at {resets_at}")
+
+    if event_type == ET.ASSISTANT:
+      message = event_data.get("message")
+      usage = message.get("usage") if isinstance(message, dict) else None
+      if isinstance(usage, dict) and _prompt_token_sum(usage) > 0:
+        self._context_tokens = _prompt_token_sum(usage)
 
     if event_type == ET.ERROR and any(p in event_message or p in event_content for p in QUOTA_ERROR_PATTERNS):
       await log_file.write(json.dumps(event_data) + "\n")
@@ -323,3 +450,9 @@ class Worker:
         persist_and_broadcast=_persist_and_broadcast,
         log_context={"thread": self._thread.id},
     )
+
+    if terminate_now:
+      # Armed relay at its safe point: the tool result is on disk, stop here.
+      assert self._backend is not None and self._claude_account is not None
+      log.warning("worker_account_relay_safe_point", thread=self._thread.id, account=self._claude_account.label)
+      await self._backend.terminate()

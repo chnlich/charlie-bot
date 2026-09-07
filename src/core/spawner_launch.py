@@ -7,7 +7,7 @@ from pathlib import Path
 import structlog
 
 from src.agents.worker import Worker
-from src.core import spawner_backends, spawner_prompt
+from src.core import claude_relay, spawner_backends, spawner_prompt
 from src.core.config import CharlieBotConfig
 from src.core.git import (
     git_create_worktree,
@@ -45,6 +45,9 @@ async def _construct_worker(
   if backend_option.type == BackendType.CC_CLAUDE and thread.claude_session_id is None:
     thread.claude_session_id = str(uuid.uuid4())
   await thread_mgr.save_metadata(thread)
+  # A pooled Claude entry runs on the account with the most headroom; the thread
+  # keeps the entry's id, the login directory rides on this copy only.
+  backend_option, account = claude_relay.pin_pool_account(cfg, backend_option)
   events_log = await thread_mgr.get_events_log_path(session_id, thread.id)
   return Worker(
       thread,
@@ -54,6 +57,7 @@ async def _construct_worker(
       cfg,
       backend_option=backend_option,
       on_spawned=thread_mgr.save_metadata,
+      claude_account=account,
   )
 
 

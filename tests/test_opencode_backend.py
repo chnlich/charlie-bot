@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1206,34 +1207,50 @@ def _fresh_unhandled_part_type_registry():
   opencode_mod._UNHANDLED_SSE_EVENT_TYPES.clear()
 
 
-def test_unhandled_part_type_logs_once_per_process(monkeypatch) -> None:
-  """60 unhandled parts of one type log one line; a second type earns one more."""
+_UNHANDLED_PART_EVENTS = [
+    {
+        "id": "p1",
+        "messageID": "m1",
+        "type": "patch"
+    },
+    {
+        "id": "p2",
+        "messageID": "m1",
+        "type": "snapshot"
+    },
+]
+_UNHANDLED_SSE_EVENTS = [
+    {
+        "type": "todo.updated",
+        "properties": {}
+    },
+    {
+        "type": "session.compacted",
+        "properties": {}
+    },
+]
+_UNHANDLED_TYPE_ROWS = [
+    pytest.param(OpenCodeBackend._translate_part, _UNHANDLED_PART_EVENTS, "opencode_part_unhandled", id="part"),
+    pytest.param(
+        OpenCodeBackend._translate_sse_event, _UNHANDLED_SSE_EVENTS, "opencode_sse_event_unhandled", id="sse-event"),
+]
+
+
+@pytest.mark.parametrize(("feed_unhandled", "events", "log_event"), _UNHANDLED_TYPE_ROWS)
+def test_unhandled_type_logs_once_per_process(
+    monkeypatch, feed_unhandled: Callable[[OpenCodeBackend, dict], list[dict]], events: list[dict],
+    log_event: str) -> None:
+  """60 unhandled events of one type log one line; a second type earns one more."""
   backend = _build_backend(monkeypatch)
   logged = []
   monkeypatch.setattr(opencode_mod.log, "debug", lambda event, **kw: logged.append({"event": event, **kw}))
 
-  for _ in range(60):
-    assert backend._translate_part({"id": "p1", "messageID": "m1", "type": "patch"}) == []
-  for _ in range(60):
-    assert backend._translate_part({"id": "p2", "messageID": "m1", "type": "snapshot"}) == []
+  for event in events:
+    for _ in range(60):
+      assert feed_unhandled(backend, event) == []
 
-  lines = [line for line in logged if line["event"] == "opencode_part_unhandled"]
-  assert [(line["type"]) for line in lines] == ["patch", "snapshot"]
-
-
-def test_unhandled_sse_event_type_logs_once_per_process(monkeypatch) -> None:
-  """60 unhandled SSE frames of one type log one line; a second type earns one more."""
-  backend = _build_backend(monkeypatch)
-  logged = []
-  monkeypatch.setattr(opencode_mod.log, "debug", lambda event, **kw: logged.append({"event": event, **kw}))
-
-  for _ in range(60):
-    assert backend._translate_sse_event({"type": "todo.updated", "properties": {}}) == []
-  for _ in range(60):
-    assert backend._translate_sse_event({"type": "session.compacted", "properties": {}}) == []
-
-  lines = [line for line in logged if line["event"] == "opencode_sse_event_unhandled"]
-  assert [(line["type"]) for line in lines] == ["todo.updated", "session.compacted"]
+  lines = [line for line in logged if line["event"] == log_event]
+  assert [line["type"] for line in lines] == [event["type"] for event in events]
 
 
 # --- SQLite lock-retry harness: a stub `opencode serve` (fake process + fake

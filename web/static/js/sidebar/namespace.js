@@ -20,6 +20,17 @@
     });
   }
 
+  // A backend id retired by a config edit (config `aliases`) resolves to the
+  // option that answers for it, so a session or thread that recorded the old id
+  // renders under the live option's label and matches the switch dropdown; an id
+  // without an alias passes through unchanged. BACKEND_ALIASES rides the page
+  // inline; a harness without it sees every id as canonical.
+  function canonicalBackendId(backendId) {
+    if (!backendId) return backendId;
+    const aliases = typeof BACKEND_ALIASES === 'undefined' ? null : BACKEND_ALIASES;
+    return (aliases && aliases[backendId]) || backendId;
+  }
+
   exposeState('sessionUnread', {});
   exposeState('switching', false);
   exposeState('currentFilter', 'all');
@@ -30,5 +41,7 @@
   exposeState('thinkingStart', null);
 
   Sidebar.expose = expose;
+  Sidebar.canonicalBackendId = canonicalBackendId;
+  expose(['canonicalBackendId']);
   global.Sidebar = Sidebar;
 })(globalThis);

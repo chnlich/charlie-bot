@@ -710,7 +710,7 @@ async function deleteGroup(groupName) {
 // 320px sidebar leaves only ~67px next to the timestamp. Returns null when the
 // session carries no backend id.
 function sessionBackendLabel(session) {
-  const backendId = (session && session.backend) || '';
+  const backendId = canonicalBackendId((session && session.backend) || '');
   if (!backendId) return null;
   const options = typeof BACKEND_OPTIONS === 'undefined' ? null : BACKEND_OPTIONS;
   const full = (options && options[backendId]) || backendId;

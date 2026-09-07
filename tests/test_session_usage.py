@@ -626,69 +626,45 @@ async def test_claude_tier_point_none_under_forwarded_unmodelled_override(tmp_pa
 # Acceptance test 10: snapshot tier (opencode context_snapshot)
 # ---------------------------------------------------------------------------
 
+# The limit's shape decides the tier's readout:
+# - input-limit: full = limit.input; point = input - min(20000, output).
+# - no-input-limit: full = context - output; no input leaves the point None.
+# - no-limit: nothing limit-derived survives; the token sum still resolves.
+# - non-int-output: a non-int output degrades the limit-derived fields to None
+#   instead of raising TypeError from min().
+_SNAPSHOT_LIMIT_SHAPES = [
+    pytest.param(_SNAPSHOT_LIMIT, 270_000, 250_000, id="input-limit"),
+    pytest.param({
+        "context": 409_600,
+        "input": None,
+        "output": 131_072
+    }, 409_600 - 131_072, None, id="no-input-limit"),
+    pytest.param(None, None, None, id="no-limit"),
+    pytest.param({
+        "context": 409_600,
+        "input": 270_000,
+        "output": None
+    }, None, None, id="non-int-output"),
+]
+
 
 @pytest.mark.asyncio
-async def test_snapshot_tier_full_and_point_for_limit_with_input(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("limit", "expected_full", "expected_compact_at"), _SNAPSHOT_LIMIT_SHAPES)
+async def test_snapshot_tier_full_and_point_for_limit_shape(
+    tmp_path: Path, limit: dict | None, expected_full: int | None, expected_compact_at: int | None) -> None:
   cfg = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-snap-input", name="Snapshot Input", backend="opencode-glm52")
+  meta = SessionMetadata(id="session-snap-shape", name="Snapshot Limit Shape", backend="opencode-glm52")
   _write_session(
       session_mgr, meta, [
-          _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, _SNAPSHOT_LIMIT)),
+          _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, limit)),
       ])
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
 
   assert usage is not None
-  # full = limit.input = 270000; point = limit.input - min(20000, limit.output) = 270000 - 20000.
-  assert usage["context_full"] == 270_000
-  assert usage["context_compact_at"] == 250_000
-  assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
-  assert usage["model"] == SYNTHETIC_MODEL
-
-
-@pytest.mark.asyncio
-async def test_snapshot_tier_full_for_limit_without_input(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-snap-noinput", name="Snapshot No Input", backend="opencode-glm52")
-  _write_session(
-      session_mgr, meta, [
-          _result_event(
-              0.5,
-              context_snapshot=_snapshot(
-                  SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, {
-                      "context": 409_600,
-                      "input": None,
-                      "output": 131_072
-                  })),
-      ])
-
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
-  # full = limit.context - limit.output = 409600 - 131072; point = None (no input).
-  assert usage["context_full"] == 409_600 - 131_072
-  assert usage["context_compact_at"] is None
-  assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
-
-
-@pytest.mark.asyncio
-async def test_snapshot_tier_with_none_limit_yields_all_none_context(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-snap-nolimit", name="Snapshot No Limit", backend="opencode-glm52")
-  _write_session(
-      session_mgr, meta, [
-          _result_event(0.5, context_snapshot=_snapshot(SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, None)),
-      ])
-
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
-  assert usage["context_full"] is None
-  assert usage["context_compact_at"] is None
-  # context_tokens still resolved from the snapshot's token sum.
+  assert usage["context_full"] == expected_full
+  assert usage["context_compact_at"] == expected_compact_at
   assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
   assert usage["model"] == SYNTHETIC_MODEL
 
@@ -783,39 +759,6 @@ async def test_snapshot_tier_compact_at_ignores_claude_constants_but_claude_tier
   # moves it to 500000 — the claude tier follows Claude Code's constants.
   assert claude_usage["context_full"] == 600_000
   assert claude_usage["context_compact_at"] == 500_000
-
-
-# ---------------------------------------------------------------------------
-# Acceptance test 10b: non-int output degrades instead of raising
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_snapshot_tier_with_non_int_output_degrades_to_none(tmp_path: Path) -> None:
-  cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  meta = SessionMetadata(id="session-snap-null-output", name="Snapshot Null Output", backend="opencode-glm52")
-  _write_session(
-      session_mgr, meta, [
-          _result_event(
-              0.5,
-              context_snapshot=_snapshot(
-                  SYNTHETIC_MODEL, _SNAPSHOT_TOKENS, {
-                      "context": 409_600,
-                      "input": 270_000,
-                      "output": None
-                  })),
-      ])
-
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
-
-  assert usage is not None
-  # A non-int output degrades both limit-derived context fields to None instead of
-  # raising TypeError from min(); the token sum is still resolved.
-  assert usage["context_full"] is None
-  assert usage["context_compact_at"] is None
-  assert usage["context_tokens"] == 100_000 + 5_000 + 2_000 + 30_000 + 10_000
-  assert usage["model"] == SYNTHETIC_MODEL
 
 
 # ---------------------------------------------------------------------------

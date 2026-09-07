@@ -12,7 +12,7 @@ import threading
 from pathlib import Path
 
 import pytest
-from conftest import count_path_read_text, make_home_config, write_thread_meta
+from conftest import count_path_read_text, fresh_state_fixture, make_home_config, write_thread_meta
 
 import src.core.init_worker_recovery as worker_recovery_module
 from src.core.init_worker_recovery import (
@@ -21,12 +21,7 @@ from src.core.init_worker_recovery import (
 )
 from src.core.models import utc_now
 
-
-@pytest.fixture(autouse=True)
-def _clean_memo() -> None:
-  _reset_thread_meta_memo_for_tests()
-  yield
-  _reset_thread_meta_memo_for_tests()
+_clean_memo = fresh_state_fixture(_reset_thread_meta_memo_for_tests)
 
 
 def _rewrite_atomically(path: Path, meta: dict) -> None:

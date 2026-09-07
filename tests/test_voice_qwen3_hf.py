@@ -8,6 +8,7 @@ import wave
 
 import numpy as np
 import pytest
+from conftest import fresh_state_fixture
 
 import src.core.voice_setup as voice_setup
 from src.agents import transcriber
@@ -17,13 +18,7 @@ pytestmark = pytest.mark.local_only
 
 CHUNK_SAMPLES = 2048
 
-
-@pytest.fixture(autouse=True)
-def reset_bundle_cache():
-  """Clear the process-wide bundle cache around each test so the GPU bundle stays local."""
-  transcriber.reset_bundle_cache_for_tests()
-  yield
-  transcriber.reset_bundle_cache_for_tests()
+reset_bundle_cache = fresh_state_fixture(transcriber.reset_bundle_cache_for_tests)
 
 
 def _require_gpu_assets(cfg: CharlieBotConfig) -> None:

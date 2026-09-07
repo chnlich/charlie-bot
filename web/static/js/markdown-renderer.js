@@ -2,15 +2,18 @@
 // Fix nested code fences so marked.js doesn't close the outer fence early.
 // When an outer ``` fence contains inner ``` fences, upgrade the outer
 // delimiter to use more backticks/tildes than any nested fence.
+// The fence-close rule (same char, len >= top.len, bare info string) lives in
+// scanFences alone; fixNestedFences and openFenceTail are its two consumers.
 // ---------------------------------------------------------------------------
-function fixNestedFences(md) {
-  var lines = md.split('\n');
+// The fence-line rule both the scanner and the delimiter rewrite share.
+var FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)/;
+
+function scanFences(lines) {
   var stack = [];
   var upgrades = {};  // lineIndex -> newLen
-  var fenceRe = /^( {0,3})(`{3,}|~{3,})(.*)/;
 
   for (var i = 0; i < lines.length; i++) {
-    var m = lines[i].match(fenceRe);
+    var m = lines[i].match(FENCE_RE);
     if (!m) continue;
 
     var delim = m[2];
@@ -45,13 +48,24 @@ function fixNestedFences(md) {
     }
   }
 
+  // The earliest fence still open at EOF is where marked's unterminated code
+  // block starts: no line after it closes any fence, so the block's content is
+  // every line after that opening line, inner fence lines included.
+  var openTailLine = stack.length > 0 ? stack[0].line : -1;
+  return {upgrades: upgrades, openTailLine: openTailLine};
+}
+
+function fixNestedFences(md) {
+  var lines = md.split('\n');
+  var upgrades = scanFences(lines).upgrades;
+
   // Apply upgrades in reverse line order
   var upgradeLines = Object.keys(upgrades).map(Number).sort(function(a, b) { return b - a; });
   for (var j = 0; j < upgradeLines.length; j++) {
     var lineIdx = upgradeLines[j];
     var newLen = upgrades[lineIdx];
     var line = lines[lineIdx];
-    var oldMatch = line.match(fenceRe);
+    var oldMatch = line.match(FENCE_RE);
     if (!oldMatch) continue;
     var indent = oldMatch[1];
     var oldLen = oldMatch[2].length;
@@ -62,6 +76,25 @@ function fixNestedFences(md) {
   }
 
   return lines.join('\n');
+}
+
+// The content of the code block still growing at the source's end (the fence
+// marked lexes as unterminated), or null when no fence is open at EOF. Upgrades
+// rewrite fence delimiters only, never content lines or line counts, so the
+// tail read off the original text is the tail marked parses.
+//
+// streamPaintTailCode carries that tail to renderer.code: the stream-draft
+// paint (usage.js) sets it around its parse, and every other render path
+// leaves it null. That block's content changes again before it settles, so a
+// cache miss on it renders escaped-plain instead of re-running highlight per
+// paint — the paint where the fence closes, and the committed render after
+// the turn, highlight it once and the cache serves every later paint.
+var streamPaintTailCode = null;
+
+function openFenceTail(md) {
+  var lines = md.split('\n');
+  var openTailLine = scanFences(lines).openTailLine;
+  return openTailLine < 0 ? null : lines.slice(openTailLine + 1).join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -87,8 +120,11 @@ function fixNestedFences(md) {
   // (lang, code), so a bounded LRU serves repeat blocks without re-running it.
   const highlightCache = new Map();
   const HIGHLIGHT_CACHE_CAP = 32;
+  function highlightKey(lang, code) {
+    return lang + '\u0000' + code;
+  }
   function cachedHighlight(lang, code, run) {
-    const key = lang + '\u0000' + code;
+    const key = highlightKey(lang, code);
     let value = highlightCache.get(key);
     if (value !== undefined) {
       highlightCache.delete(key);
@@ -113,12 +149,20 @@ function fixNestedFences(md) {
     const code = typeof token === 'object' ? token.text : token;
     const lang = (typeof token === 'object' ? token.lang : arguments[1]) || '';
     const trimmed = code.replace(/\n$/, '');
-    let highlighted;
-    if (lang && hljs.getLanguage(lang)) {
-      highlighted = cachedHighlight(lang, trimmed, () => hljs.highlight(trimmed, { language: lang }).value);
-    } else {
-      highlighted = cachedHighlight('', trimmed, () => hljs.highlightAuto(trimmed).value);
-    }
+    const resolvedLang = (lang && hljs.getLanguage(lang)) ? lang : '';
+    // A cache hit keeps today's bytes for a completed block that shares the
+    // growing block's content; the tail comparison normalizes the trailing
+    // newline the same way trimmed does, since marked strips it from an
+    // unterminated fence's token text.
+    const isGrowingTail = streamPaintTailCode !== null
+      && !highlightCache.has(highlightKey(resolvedLang, trimmed))
+      && trimmed === streamPaintTailCode.replace(/\n$/, '');
+    const run = () => (resolvedLang
+      ? hljs.highlight(trimmed, { language: resolvedLang }).value
+      : hljs.highlightAuto(trimmed).value);
+    const highlighted = isGrowingTail
+      ? escapeText(trimmed)
+      : cachedHighlight(resolvedLang, trimmed, run);
     const displayLang = escapeText(lang || 'text');
     const isMarkdown = (lang === 'markdown' || lang === 'md');
     const renderBtn = isMarkdown

@@ -59,6 +59,24 @@ async function loadRenderer(hljs) {
   return context.marked;
 }
 
+// The same load, returning the whole vm context so a test can reach the file's
+// own globals (fixNestedFences, openFenceTail, streamPaintTailCode) beside
+// marked.
+async function loadRendererContext(hljs) {
+  const markedSrc = await loadMarkedSrc();
+  const context = {
+    console,
+    hljs: hljs || hljsStub,
+    document: { querySelectorAll: () => [] },
+    platform: {},
+  };
+  vm.createContext(context);
+  vm.runInContext(markedSrc, context, { filename: 'marked.min.js' });
+  const src = readStatic('markdown-renderer.js');
+  vm.runInContext(src, context, { filename: 'markdown-renderer.js' });
+  return context;
+}
+
 // The same marked build with no repo renderer loaded, so its tokenizer is
 // pristine stock: the control for tokenizer comparisons against loadRenderer().
 async function loadStockMarked() {
@@ -69,4 +87,4 @@ async function loadStockMarked() {
   return context.marked;
 }
 
-module.exports = { loadRenderer, loadStockMarked };
+module.exports = { loadRenderer, loadRendererContext, loadStockMarked };

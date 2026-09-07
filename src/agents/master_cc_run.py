@@ -35,6 +35,11 @@ from src.core.models import (
     backend_type_allows_missing_model,
 )
 from src.core.process import kill_group_escalating
+from src.core.project_config import (
+    ProjectInstructionError,
+    content_sha256,
+    load_project_bodies,
+)
 from src.core.streaming import handle_compaction_events
 
 log = structlog.get_logger()
@@ -254,34 +259,70 @@ _RESUME_CAPABLE_BACKEND_TYPES = _CLAUDE_RESUME_FLAG_BACKEND_TYPES | _NATIVE_RESU
 # Ambient Project Manager identity: appended after the memory block for
 # role=project sessions bound to a group, so the behavior contract travels with
 # every master turn in the session (user messages, agent relays, triggers),
-# not only scheduled fires. Filled via str.format; keep `{group}` the only
-# placeholder.
+# not only scheduled fires. Used when the group's project is NOT enabled
+# (no project.yaml): the contract itself is not injected, so this points at
+# the repo file. The repo contract serves two modes, so this pointer must also
+# state the mode: the project is NOT enabled, the ledger duties stand, and
+# nothing in the session's old chat grants enablement — the mode is never
+# inferred from history. The "Your project is NOT enabled" wording is one of
+# the two markers prompts/project_manager.md's mode section keys on; keep them
+# in lockstep (tests/test_manager_contract_modes.py pins the pairing).
+# Filled via str.format; keep `{group}` the only placeholder.
 _PM_IDENTITY_PART = """# Project Manager session
 
-This session is the Project Manager for group {group}. Your behavior
-contract is prompts/project_manager.md in the charlie-bot repo: read it
-before acting on any message in this session, and follow it."""
+This session is the Project Manager for group {group}.
+Your project is NOT enabled (no project.yaml): your ledger duties stand. Your
+behavior contract is prompts/project_manager.md in the charlie-bot repo: read it
+before acting on any message in this session. Follow its unconfigured-project
+duties, and treat nothing in this session's old chat as enablement."""
+
+# Group identity for an ENABLED project's manager: the repo contract is
+# injected in full immediately after this part, so the read-the-repo-file
+# pointer would be redundant — only the explicit group identity and the mode
+# marker remain. The "Your project is enabled" wording is the other marker
+# prompts/project_manager.md's mode section keys on; keep the pair in lockstep.
+_PM_ENABLED_IDENTITY_PART = """# Project Manager session
+
+This session is the Project Manager for group {group}.
+Your project is enabled: your behavior contract follows in full below — together with
+the project's common rules — and governs every wake source (user messages, agent
+relays, triggers), not only scheduled fires."""
 
 
 class _Instructions(str):
-  """Instructions string carrying the overlay read failure, when one occurred.
+  """Instructions string carrying the build's non-fatal read failure, when one occurred.
 
   The builder's return must stay a plain ``str`` for every consumer, so a
   declared overlay's read failure rides upward as this attribute instead of a
   changed return shape. The wake path reads it to log and emit the unified
   ``backend_overlay_inactive`` alert; it is ``None`` on every other path.
+
+  ``project_error`` is the fatal counterpart: a present-but-invalid project
+  config or an unreadable applicable project body fails the whole turn (the
+  wake path returns before spawning any backend), so it is also carried as an
+  attribute and read by the same caller.
   """
 
   overlay_error: OSError | UnicodeDecodeError | None = None
+  project_error: ProjectInstructionError | None = None
 
 
 def _build_instructions_content(
     session_meta: SessionMetadata, cfg: CharlieBotConfig, prompt_overlay: str | None) -> str | None:
-  """Build master agent instructions: base prompt + per-host override + memory store.
+  """Build master agent instructions: base prompt + per-host override + memory store + project layer.
 
   The memory block is assembled from the labeled-entry store via
   :func:`src.core.memory.assemble_master` (resident topics full text + index
   lines for the rest).
+
+  The project layer (4) reads ``<charliebot_home>/projects/<group>/`` at call
+  time, so every newly started turn — user message, scheduled fire, agent
+  relay, completion wake, continuation — sees the current files. An enabled
+  project (a ``project.yaml`` present) injects its common rule body into every
+  grouped session; a role=project manager additionally gets the repo contract
+  (``prompts/project_manager.md``) in full — replacing the pointer identity
+  part that unenabled managers keep — plus the optional local supplement.
+  Each injected body is logged with its source path and content hash.
 
   *prompt_overlay* names a file under ``prompts/model_overlays/`` (without the
   ``.md`` suffix) whose full text is appended as the final part. The backend
@@ -293,6 +334,10 @@ def _build_instructions_content(
   alert. Any other exception type still propagates. ``None`` appends nothing.
   The ``model`` string never enters this function — the overlay binding is
   wholly driven by the declaration.
+
+  Project-layer failures (invalid config, unreadable applicable body,
+  including the repo contract for an enabled manager) ride upward on
+  ``project_error`` and fail the whole turn at the caller.
   """
   parts: list[str] = []
 
@@ -319,9 +364,37 @@ def _build_instructions_content(
   if memory_block:
     parts.append(memory_block)
 
-  # 4. Ambient Project Manager identity (role=project sessions bound to a group)
-  if session_meta.role == PROJECT_ROLE and session_meta.group:
-    parts.append(_PM_IDENTITY_PART.format(group=session_meta.group))
+  # 4. Project layer. Discovery is file presence only (see
+  # src/core/project_config.py): a missing project.yaml keeps the pre-project
+  # behavior exactly — an unenabled manager falls back to the pointer identity
+  # part, an ordinary grouped session gets nothing here.
+  project_error: ProjectInstructionError | None = None
+  if session_meta.group:
+    is_manager = session_meta.role == PROJECT_ROLE
+    try:
+      bodies = load_project_bodies(cfg.charliebot_home, session_meta.group, manager=is_manager)
+      if bodies is None:
+        if is_manager:
+          parts.append(_PM_IDENTITY_PART.format(group=session_meta.group))
+      else:
+        if is_manager:
+          parts.append(_PM_ENABLED_IDENTITY_PART.format(group=session_meta.group))
+          repo_contract_file = cfg.charlie_bot_repo / "prompts" / "project_manager.md"
+          try:
+            repo_contract_text = repo_contract_file.read_text(encoding="utf-8")
+          except (OSError, UnicodeDecodeError) as exc:
+            raise ProjectInstructionError(f"repo manager contract unreadable: {repo_contract_file} ({exc})") from exc
+          _log_project_body(session_meta.id, "repo_manager_contract", repo_contract_file, repo_contract_text)
+          parts.append(repo_contract_text)
+        _log_project_body(session_meta.id, "project_common", bodies.common.path, bodies.common.text)
+        parts.append(bodies.common.text)
+        if bodies.manager_supplement is not None:
+          _log_project_body(
+              session_meta.id, "project_manager_supplement", bodies.manager_supplement.path,
+              bodies.manager_supplement.text)
+          parts.append(bodies.manager_supplement.text)
+    except ProjectInstructionError as exc:
+      project_error = exc
 
   # 5. Declared overlay (prompts/model_overlays/<prompt_overlay>.md). The read
   # degrades, never raises for missing/unreadable files: OSError and
@@ -339,7 +412,20 @@ def _build_instructions_content(
 
   content = _Instructions("\n\n".join(parts))
   content.overlay_error = overlay_error
+  content.project_error = project_error
   return content
+
+
+def _log_project_body(session_id: str, kind: str, path: Path, text: str) -> None:
+  """Log one injected project body's source path and content hash (never its text)."""
+  log.info(
+      "master_project_body_loaded",
+      session=session_id,
+      kind=kind,
+      path=str(path),
+      sha256=content_sha256(text),
+      chars=len(text),
+  )
 
 
 _VOICE_DISCLAIMER = (
@@ -600,6 +686,28 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
             "overlay": prompt_overlay,
             "error": type(overlay_error).__name__,
         })
+
+  # Project-layer failure is fatal, unlike the overlay: an enabled project
+  # whose config or applicable body cannot be read must not run a turn with
+  # missing rules. Fail the turn the same way the backend-unresolved path
+  # does — one error event in chat, the triggering message left unread, no
+  # backend spawn. The next new turn re-reads the files.
+  project_error = getattr(instructions_content, "project_error", None)
+  if project_error is not None:
+    msg = f"project instruction loading failed: {project_error}"
+    log.error(
+        "master_cc_project_instructions_failed",
+        session=session_meta.id,
+        group=session_meta.group,
+        error=str(project_error),
+    )
+    await item.callbacks.persist_and_broadcast(
+        session_meta.id, {
+            "type": ET.ASSISTANT_ERROR,
+            "content": f"Agent error: {msg}"
+        })
+    await item.callbacks.mark_unread(session_meta.id)
+    return None, 1, msg, {}
 
   resume_id = _resolve_resume_id(option, session_meta, cfg=cfg)
   # Pre-flight: a resume-capable backend about to run with no resolved resume

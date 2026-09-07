@@ -42,6 +42,7 @@ def _cfg(tmp_path: Path) -> SimpleNamespace:
       charlie_bot_repo=repo,
       claude_md_file=home / "MASTER_AGENT_PROMPT.md",
       memory_dir=memory_dir,
+      charliebot_home=home,
   )
 
 
@@ -80,6 +81,7 @@ def test_missing_memory_dir_still_builds(tmp_path: Path) -> None:
       charlie_bot_repo=repo,
       claude_md_file=home / "MASTER_AGENT_PROMPT.md",
       memory_dir=home / "memory",  # does not exist
+      charliebot_home=home,
   )
   out = master_cc._build_instructions_content(SimpleNamespace(id="session-1", role=None, group=None), cfg, None)
   assert out is not None

@@ -623,6 +623,17 @@ function makeTwoVersionRegistry() {
   ])]};
 }
 
+// Fetch stub answering the plans registry on /api/sessions/ and empty text for every
+// other URL. Pass a zero-arg function to have the registry read at call time, so a
+// test can swap it between fetches.
+function makeRegistryFetch(registry) {
+  return async (url) => {
+    if (String(url).indexOf('/api/sessions/') !== -1)
+      return {ok: true, json: async () => (typeof registry === 'function' ? registry() : registry)};
+    return {ok: true, text: async () => ''};
+  };
+}
+
 function makeTogglePanelHarness(elements, toggle) {
   elements['plan-diff-toggle-wrap'] = toggle.wrap;
   elements['plan-diff-toggle'] = toggle.box;
@@ -635,11 +646,7 @@ test('diff toggle renders: absent for a single-version lineage, visible and on f
   const elements = makePanelElements();
   const toggle = makeToggleElements();
   const {viewer} = makeTogglePanelHarness(elements, toggle);
-  const fetch = async (url) => {
-    if (String(url).indexOf('/api/sessions/') !== -1)
-      return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01_v1.html')])]})};
-    return {ok: true, text: async () => ''};
-  };
+  const fetch = makeRegistryFetch({plans: [makePlan(1, [makeVersion(1, 'artifacts/plan_01_v1.html')])]});
   const {planPanel} = loadPlanPanelScript({document: makePlanDocument(elements), fetch});
   await planPanel.refresh();
   assert.equal(toggle.wrap.classList.contains('hidden'), true, 'v1 lineage: the toggle is absent');
@@ -647,11 +654,7 @@ test('diff toggle renders: absent for a single-version lineage, visible and on f
   const elements2 = makePanelElements();
   const toggle2 = makeToggleElements();
   const {viewer: viewer2} = makeTogglePanelHarness(elements2, toggle2);
-  const fetch2 = async (url) => {
-    if (String(url).indexOf('/api/sessions/') !== -1)
-      return {ok: true, json: async () => makeTwoVersionRegistry()};
-    return {ok: true, text: async () => ''};
-  };
+  const fetch2 = makeRegistryFetch(makeTwoVersionRegistry);
   const {planPanel: pp2} = loadPlanPanelScript({document: makePlanDocument(elements2), fetch: fetch2});
   await pp2.refresh();
   assert.equal(toggle2.wrap.classList.contains('hidden'), false, 'version 2: the toggle is present');
@@ -665,11 +668,7 @@ test('turning the toggle off drops the query and reloads the iframe; on restores
   const elements = makePanelElements();
   const toggle = makeToggleElements();
   const {viewer, writes} = makeTogglePanelHarness(elements, toggle);
-  const fetch = async (url) => {
-    if (String(url).indexOf('/api/sessions/') !== -1)
-      return {ok: true, json: async () => makeTwoVersionRegistry()};
-    return {ok: true, text: async () => ''};
-  };
+  const fetch = makeRegistryFetch(makeTwoVersionRegistry);
   const {planPanel} = loadPlanPanelScript({document: makePlanDocument(elements), fetch});
   await planPanel.refresh();
   assert.ok(viewer.src.indexOf('?diff=artifacts/plan_01_v1.html') !== -1, 'loaded with the diff query');
@@ -715,11 +714,7 @@ test('selecting another version resets the toggle to the new version default', a
   const elements = makePanelElements();
   const toggle = makeToggleElements();
   const {viewer} = makeTogglePanelHarness(elements, toggle);
-  const fetch = async (url) => {
-    if (String(url).indexOf('/api/sessions/') !== -1)
-      return {ok: true, json: async () => makeTwoVersionRegistry()};
-    return {ok: true, text: async () => ''};
-  };
+  const fetch = makeRegistryFetch(makeTwoVersionRegistry);
   const {planPanel} = loadPlanPanelScript({document: makePlanDocument(elements), fetch});
   await planPanel.refresh();
   assert.equal(toggle.box.checked, true, 'v2 selected by default, toggle on');
@@ -841,11 +836,7 @@ test('_commitRegistry discards a stale-generation write (newer fetch supersedes 
 
 test('_commitRegistry warns and renders normally when the response carries a non-empty errors array', async () => {
   const warnings = [];
-  const fetch = async (url) => {
-    if (String(url).indexOf('/api/sessions/') !== -1)
-      return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1)])], errors: ['boom']})};
-    return {ok: true, text: async () => ''};
-  };
+  const fetch = makeRegistryFetch({plans: [makePlan(1, [makeVersion(1)])], errors: ['boom']});
   const {context, planPanel} = loadPlanPanelScript({sessionId: 's1', fetch});
   context.console.warn = (...args) => { warnings.push(args); };
   await planPanel.refresh();
@@ -893,11 +884,7 @@ test('_renderViewer leaves iframe.src untouched when selection is unchanged', as
     getElementById: (id) => elements[id] || null,
     createElement: () => ({addEventListener() {}, appendChild() {}}),
   };
-  const fetch = async (url) => {
-    if (String(url).indexOf('/api/sessions/') !== -1)
-      return {ok: true, json: async () => ({plans: [makePlan(1, [makeVersion(1), makeVersion(2)])]})};
-    return {ok: true, text: async () => ''};
-  };
+  const fetch = makeRegistryFetch({plans: [makePlan(1, [makeVersion(1), makeVersion(2)])]});
   const {planPanel} = loadPlanPanelScript({document, fetch});
   await planPanel.refresh();
   const writesAfterRefresh = srcWrites.length;
@@ -916,11 +903,7 @@ test('_renderViewer leaves iframe.src untouched when selection is unchanged', as
 
 test('onPlanUpdated keeps the badge + selection jump but does not force a tab switch', async () => {
   let registryResponse = {plans: [makePlan(1, [makeVersion(1)])]};
-  const fetch = async (url) => {
-    if (String(url).indexOf('/api/sessions/') !== -1)
-      return {ok: true, json: async () => registryResponse};
-    return {ok: true, text: async () => ''};
-  };
+  const fetch = makeRegistryFetch(() => registryResponse);
   const switchCalls = [];
   const {context, planPanel} = loadPlanPanelScript({sessionId: 's1', fetch});
   context.switchTab = (t) => { switchCalls.push(t); };

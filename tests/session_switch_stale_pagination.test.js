@@ -239,7 +239,7 @@ test('interleaving (b): stale page landing after B rendered, no B flight, is dro
   const h = buildHarness(alwaysPending);
   startHangingAFlight(h);
   await completeSwitch(h, 'session-b');
-  // Render pinned scrollTop at scrollHeight(100) > 80, so the :486 auto-fetch
+  // Render pinned scrollTop at scrollHeight(100) > 80, so the switch tail's auto-fetch
   // exited early: B is rendered with no flight of its own.
 
   h.pendingEvents[0].resolve(aPage(false));  // has_more:false poisons B if applied

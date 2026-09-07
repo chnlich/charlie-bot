@@ -1976,8 +1976,7 @@ class SessionManager:
     # a write landing mid-walk bumps past the tag and the next call re-walks
     # (the M36 gate's rule: a mark landing mid-walk only raises the revision).
     hit = self._listings_memo.get(status)
-    if (hit is not None and hit[0] == self._listings_revision
-            and time.monotonic() - hit[1] < _LISTINGS_SWEEP_INTERVAL):
+    if (hit is not None and hit[0] == self._listings_revision and time.monotonic() - hit[1] < _LISTINGS_SWEEP_INTERVAL):
       try:
         root = os.stat(self._cfg.sessions_dir)
       except OSError:

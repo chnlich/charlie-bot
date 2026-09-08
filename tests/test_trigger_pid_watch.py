@@ -185,37 +185,21 @@ async def test_pidfd_fallback_works_on_host(tmp_path: Path, pidfd_open_available
     proc.wait()
 
 
-def test_format_suffix_completed_gone_at_start() -> None:
-  assert _format_suffix("completed", ["111 (gone at start)", "222"], []) == (" (finished: 111 (gone at start), 222)")
-
-
-def test_format_suffix_completed_pids() -> None:
-  assert _format_suffix("completed", ["111", "222"], []) == " (finished: 111, 222)"
-
-
-def test_format_suffix_timeout_with_finished() -> None:
-  out = _format_suffix("timeout", ["111"], ["222", "333"])
-  assert out == " (finished: 111; still alive: 222, 333)"
-
-
-def test_format_suffix_timeout_all_alive() -> None:
-  out = _format_suffix("timeout", [], ["222", "333"])
-  assert out == " (still alive: 222, 333)"
-
-
-def test_format_suffix_completed_remote_only() -> None:
-  out = _format_suffix("completed", ["neptune:5678", "noire:9012"], [])
-  assert out == " (finished: neptune:5678, noire:9012)"
-
-
-def test_format_suffix_completed_slurm() -> None:
-  out = _format_suffix("completed", ["slurm:42: COMPLETED 0:0"], [])
-  assert out == " (finished: slurm:42: COMPLETED 0:0)"
-
-
-def test_format_suffix_timeout_mixed_kinds() -> None:
-  out = _format_suffix("timeout", ["neptune:5678", "slurm:42: COMPLETED 0:0"], ["1234", "slurm:99"])
-  assert out == " (finished: neptune:5678, slurm:42: COMPLETED 0:0; still alive: 1234, slurm:99)"
+@pytest.mark.parametrize(
+    ("reason", "finished", "still_alive", "suffix"), [
+        ("completed", ["111 (gone at start)", "222"], [], " (finished: 111 (gone at start), 222)"),
+        ("completed", ["111", "222"], [], " (finished: 111, 222)"),
+        ("completed", ["neptune:5678", "noire:9012"], [], " (finished: neptune:5678, noire:9012)"),
+        ("completed", ["slurm:42: COMPLETED 0:0"], [], " (finished: slurm:42: COMPLETED 0:0)"),
+        ("timeout", ["111"], ["222", "333"], " (finished: 111; still alive: 222, 333)"),
+        ("timeout", [], ["222", "333"], " (still alive: 222, 333)"),
+        (
+            "timeout", ["neptune:5678", "slurm:42: COMPLETED 0:0"], ["1234", "slurm:99"],
+            " (finished: neptune:5678, slurm:42: COMPLETED 0:0; still alive: 1234, slurm:99)"),
+    ])
+def test_format_suffix(reason: str, finished: list[str], still_alive: list[str], suffix: str) -> None:
+  """Every watch outcome renders its pre-formatted labels into the message suffix."""
+  assert _format_suffix(reason, finished, still_alive) == suffix
 
 
 def test_load_legacy_trigger_without_watch_pids() -> None:

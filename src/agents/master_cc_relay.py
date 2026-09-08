@@ -108,7 +108,7 @@ async def place_turn(
         cold_cache=cold,
     )
   session_meta.claude_account = chosen.label
-  await report_empty_credentials(cfg, item, now)
+  await report_empty_credentials(cfg, item)
   if (resume_id and cold and
       claude_compaction.expired_cache_compaction_wanted(cfg, option.model, context_tokens, last_request_at, now)):
     await claude_compaction.compact_with_sonnet(
@@ -147,8 +147,7 @@ async def report_login_failure(
   await _persist(item)(claude_relay.login_required_event(account, "auth_failed"))
 
 
-async def report_empty_credentials(
-    cfg: CharlieBotConfig, item: master_cc_state._WorkItem, now: datetime | None = None) -> None:
+async def report_empty_credentials(cfg: CharlieBotConfig, item: master_cc_state._WorkItem) -> None:
   """One notice per account whose credential store has gone empty, until it recovers."""
   for account in claude_accounts.pool(cfg):
     present = claude_accounts.credentials_present(account)

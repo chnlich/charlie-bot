@@ -34,6 +34,7 @@ from pathlib import Path
 from src.agents.backends.registry import build_backend
 from src.core.autonamer import iter_light_backends
 from src.core.config import CharlieBotConfig
+from src.core.plan_diff import VOID_TAGS
 from src.core.timeouts import ARTIFACT_PROBE_TIMEOUT
 
 # Repo root derived from this file: src/core/artifact_check.py -> parents[2] == repo root.
@@ -171,9 +172,6 @@ def _require_chrome_bin(cfg: CharlieBotConfig) -> Path:
 # Minimal DOM over the standard-library HTML parser
 # ---------------------------------------------------------------------------
 
-_VOID_TAGS = frozenset(
-    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"})
-
 
 class _Element:
   """DOM element: tag, class tokens, ordered children (elements and text chunks), parent link."""
@@ -197,7 +195,7 @@ class _TreeBuilder(HTMLParser):
   def handle_starttag(self, tag: str, attrs: list) -> None:
     el = _Element(tag, dict(attrs), self._stack[-1])
     self._stack[-1].children.append(el)
-    if tag not in _VOID_TAGS:
+    if tag not in VOID_TAGS:
       self._stack.append(el)
 
   def handle_startendtag(self, tag: str, attrs: list) -> None:

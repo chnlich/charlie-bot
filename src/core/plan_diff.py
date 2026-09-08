@@ -16,7 +16,10 @@ from html.parser import HTMLParser
 from typing import Iterable
 
 _IGNORED_TAGS = frozenset({"head", "style", "script", "template", "noscript", "title"})
-_VOID_TAGS = frozenset(
+# HTML's void elements cannot hold content, so a DOM builder over html.parser must not push
+# them onto its open-element stack. This module is the single home of that set: the plan
+# differ's offset parser and artifact_check's tree builder share it.
+VOID_TAGS = frozenset(
     {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"})
 _BLOCK_TAGS = frozenset(
     {
@@ -110,7 +113,7 @@ class _Parser(_OffsetParser):
 
   def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
     node = self._open_node(tag, attrs)
-    if tag not in _VOID_TAGS:
+    if tag not in VOID_TAGS:
       self._stack.append(node)
 
   def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -200,7 +203,7 @@ class _BoundaryParser(_OffsetParser):
   def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
     start, start_end = self._start_tag()
     record = self._track(tag, start, start_end)
-    if tag not in _VOID_TAGS:
+    if tag not in VOID_TAGS:
       self._open.append((tag, record))
 
   def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:

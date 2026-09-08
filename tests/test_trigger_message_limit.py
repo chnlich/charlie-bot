@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -14,6 +13,7 @@ from conftest import (
     make_home_config,
     patch_trigger_mocks,
     schedule_trigger_argv,
+    write_trigger,
 )
 from pydantic import ValidationError
 
@@ -21,6 +21,7 @@ from src.cli import schedule_trigger as cli_module
 from src.core.models import (
     MAX_TRIGGER_MESSAGE_CHARS,
     CreateSessionRequest,
+    PendingTrigger,
     ScheduleTriggerRequest,
     TriggerStatus,
 )
@@ -107,25 +108,16 @@ async def test_persisted_over_limit_message_fires_verbatim(tmp_path: Path) -> No
   trigger_mgr = TriggerManager(cfg, session_mgr)
 
   trigger_id = "over-limit-1"
-  fire_at = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
-  now = datetime.now(UTC).isoformat()
   long_message = "y" * 201
-  triggers_dir = cfg.sessions_dir / session.id / "triggers"
-  triggers_dir.mkdir(parents=True)
-  (triggers_dir / f"{trigger_id}.json").write_text(
-      json.dumps(
-          {
-              "id": trigger_id,
-              "session_id": session.id,
-              "fire_at": fire_at,
-              "message": long_message,
-              "created_at": now,
-              "status": "pending",
-              "fired_at": None,
-              "watch_targets": [],
-          }),
-      encoding="utf-8",
-  )
+  write_trigger(
+      cfg.sessions_dir / session.id / "triggers" / f"{trigger_id}.json",
+      PendingTrigger(
+          id=trigger_id,
+          session_id=session.id,
+          message=long_message,
+          fire_at=datetime.now(UTC) - timedelta(seconds=1),
+          created_at=datetime.now(UTC),
+      ))
 
   with patch_trigger_mocks() as mock_master:
     trigger = await trigger_mgr._load_trigger(session.id, trigger_id)

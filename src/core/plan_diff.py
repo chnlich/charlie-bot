@@ -97,7 +97,6 @@ class _OffsetParser(HTMLParser):
     return self._line_starts[line - 1] + column
 
   def _start_tag_span(self) -> tuple[int, int]:
-    """Source span of the start tag at the reader's position, verified against the raw source."""
     start = self._offset()
     raw = self.get_starttag_text()
     if raw is None or self.source[start:start + len(raw)] != raw:
@@ -105,7 +104,6 @@ class _OffsetParser(HTMLParser):
     return start, start + len(raw)
 
   def _end_tag_span(self) -> tuple[int, int]:
-    """Source span of the end tag opening at the reader's position, closed by the next '>'."""
     start = self._offset()
     close = self.source.find(">", start)
     if close < 0:

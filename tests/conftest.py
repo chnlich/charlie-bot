@@ -338,6 +338,20 @@ def rate_limit_event(status: str, utilization: float, resets_in: timedelta = tim
   }
 
 
+def compact_boundary_event(
+    trigger: str | None = "manual", pre_tokens: int | None = None, post_tokens: int | None = None) -> dict:
+  """A translated compact_boundary system event in the shape the stream carries and
+  handle_compaction_events reads; *trigger* = None omits the key (the shape some fixtures carry)."""
+  meta: dict[str, Any] = {}
+  if trigger is not None:
+    meta["trigger"] = trigger
+  if pre_tokens is not None:
+    meta["pre_tokens"] = pre_tokens
+  if post_tokens is not None:
+    meta["post_tokens"] = post_tokens
+  return {"type": ET.SYSTEM, "subtype": ET.COMPACT_BOUNDARY, ET.COMPACT_METADATA: meta}
+
+
 def queued_user_reorder_events() -> list[dict]:
   """Two runs on one session: thinking + tool_use + tool_result + assistant + master_done in the first, a queued
   USER event inside the first run's interval, then a repeated session_id marker and a second assistant + master_done.

@@ -307,9 +307,6 @@ async function toggleSessionStar(id, currentlyStarred) {
 }
 
 
-// Two disjoint lists: Object.assign puts both on Sidebar, and only GLOBALS'
-// keys become bare globals for the onclick strings. Adding a function to
-// GLOBALS is enough for both; SIDEBAR_ONLY stays reachable through Sidebar.
 const GLOBALS = {
   removeSessionRowInline,
   archiveSession,
@@ -331,7 +328,6 @@ const SIDEBAR_ONLY = {
   filterPillClass,
   renderSidebarFilterPills,
 };
-Object.assign(Sidebar, GLOBALS, SIDEBAR_ONLY);
-Sidebar.expose(Object.keys(GLOBALS));
+Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 
 })();

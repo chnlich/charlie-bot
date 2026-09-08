@@ -26,8 +26,10 @@ and directory-permission changes all move the signature, while a file-level chmo
 leaves (mtime_ns, size) untouched keeps serving the cached parse. The memo is order-safe
 under an unstable walk order: cross-file dedupe arbitrates verbatim replays, which carry
 identical token values, so first-wins cannot move a sum. The opencode db stays outside that
-corpus memo: its WAL sidecar moves under plain serve traffic, so its entry always round-trips
-the persisted document, and the miss path is incremental per message row (see row memo below).
+corpus memo: its WAL sidecar moves under plain serve traffic, and the miss path is incremental
+per message row (see row memo below). Its document entry re-stores only when the row memo
+moved: a WAL write over unchanged rows keeps the stored entry, so the document rewrite waits
+for a real contribution change.
 One more memo sits above both: the whole-tally memo, keyed on the walk signature, the opencode
 db signature its rows were read at, and the row memo's change epoch, holds the built rows and
 notes of the last collect. Two hits serve the tally without loading the persisted document,
@@ -430,6 +432,14 @@ class _OpencodeScan(NamedTuple):
 # share the maps and each save adopts the round's next-document state as the new memo.
 _tally_cache_docs: dict[str, dict[str, dict[str, dict]]] = {}
 
+# Whether the cache document's opencode entry holds this db's current row memo. A probe hit
+# proves the rows unchanged since the entry was stored, so re-storing it would only re-sign
+# the document — a multi-MB rewrite for a WAL signature the next write stales anyway — and
+# the entry keeps its stored signature, leaving the save's equality check to skip the
+# rewrite. Any scan that changes the row memo sets False, forcing the next cached merge to
+# re-store current records.
+_opencode_doc_synced: dict[str, bool] = {}
+
 
 def _reset_aggregate_memo() -> None:
   """Drop the collection's process-wide memos (test isolation)."""
@@ -441,6 +451,7 @@ def _reset_aggregate_memo() -> None:
   _opencode_partials.clear()
   _opencode_probes.clear()
   _tally_cache_docs.clear()
+  _opencode_doc_synced.clear()
 
 
 def _prefiltered_jsonl(path: Path, markers: tuple[str, ...]) -> tuple[list, list[dict], int]:
@@ -709,6 +720,11 @@ def _advance_opencode_rows(db: Path) -> _OpencodeScan:
       nbytes, deltas = _scan_opencode_rows(con, memo)
       if probe is None:  # cold memo: the scan's snapshot is the state the memo now describes
         probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone())
+        _opencode_doc_synced[key] = False
+      elif any(old is not None or new is not None for old, new in deltas):
+        # (None, None) pairs are non-contributing rows whose key moved; the records the
+        # document holds are unchanged, so only a record-bearing move unsyncs the entry.
+        _opencode_doc_synced[key] = False
       _opencode_probes[key] = probe
       con.commit()
     finally:
@@ -788,8 +804,16 @@ def _merge_opencode(
   else:
     count = _adjust_opencode_partial(t, memo, partial, scan.deltas)
   if cache is not None and sig is not None:
-    records = [rec for _, rec in memo.values() if rec is not None]
-    cache.store("opencode", db, {"sig": sig, "records": records})
+    entry = cache._sources.get("opencode", {}).get(str(db))
+    if entry is not None and _opencode_doc_synced.get(key):
+      # The probe proved the rows unchanged since this entry was stored: its signature is
+      # stale only by WAL writes to rows the tally never reads, and re-signing it would
+      # rewrite the multi-MB document for a signature the next WAL write stales anyway.
+      cache.store("opencode", db, entry)
+    else:
+      records = [rec for _, rec in memo.values() if rec is not None]
+      cache.store("opencode", db, {"sig": sig, "records": records})
+      _opencode_doc_synced[key] = True
   # The stored partial must never alias a served tally's containers, so it copies out.
   _opencode_partials[key] = _OpencodePartial(
       by_model={

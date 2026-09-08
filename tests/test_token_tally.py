@@ -989,6 +989,46 @@ def test_wal_noise_hit_reproves_until_the_next_write(tmp_path: Path, monkeypatch
   con.close()
 
 
+def test_wal_only_source_walk_round_skips_the_document_rewrite(tmp_path: Path) -> None:
+  # The changed round's shape (the hourly cron's): the walk ran fresh, the db's WAL moved,
+  # no message row did. The stored opencode entry keeps its signature and the document
+  # skips the multi-MB rewrite its re-sign would force.
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  _collect(claude, None, db, cache)
+  doc_before = cache.read_bytes()
+
+  tt._aggregate_memo = None  # the changed round: the walk memo is gone, no log moved
+  tt._tally_memo = None
+  con.execute("insert into other values ('noise', 'x')")
+  con.commit()
+  _collect(claude, None, db, cache)
+
+  assert cache.read_bytes() == doc_before
+  con.close()
+
+
+def test_source_walk_round_persists_moved_opencode_rows(tmp_path: Path) -> None:
+  # The counterpart: rows that moved reach the persisted document on the next source-walk
+  # round with a fresh signature, so a fresh process serves them without a cold rescan.
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  _collect(claude, None, db, cache)
+  sig_before = json.loads(cache.read_text())["sources"]["opencode"][str(db)]["sig"]
+
+  tt._aggregate_memo = None
+  tt._tally_memo = None
+  _append_opencode(db, [_padded_opencode_row(500)])
+  _collect(claude, None, db, cache)
+
+  entry = json.loads(cache.read_text())["sources"]["opencode"][str(db)]
+  assert entry["sig"] != sig_before
+  assert sum(r[3] for r in entry["records"]) == 5 + 100  # in_fresh: both rows' inputs
+  con.close()
+
+
 def test_wal_move_with_new_row_still_counts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # A real message row under a moved WAL bumps the epoch, so the proof misses and the
   # collect replays — re-reading only the new row's blob.
@@ -1176,6 +1216,7 @@ def test_reset_drops_the_probe_and_document_memos(tmp_path: Path, monkeypatch: p
   _collect(None, None, db, cache)
 
   tt._reset_aggregate_memo()
+  assert tt._opencode_doc_synced == {}
   _append_opencode(db, [_padded_opencode_row(100)])
 
   scans, loads = [], []

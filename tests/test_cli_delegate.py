@@ -434,7 +434,8 @@ def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytes
       self.response = MagicMock()
       self.response.json.return_value = {"detail": "requested backend 'missing' is not in backend_options"}
 
-  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "missing", session="s1")) as post_mock:
+  with patched_cli_post(
+      cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "missing", session="s1")) as post_mock:
     post_mock.side_effect = FakeRequestException()
     with pytest.raises(SystemExit) as exc_info:
       main()

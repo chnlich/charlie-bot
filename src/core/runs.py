@@ -19,7 +19,6 @@ This module owns the pure/queryable parts of that contract:
 - reading the run's true completion time (the raw log's final mtime).
 """
 
-import json
 import os
 import stat
 from collections.abc import Callable, Iterable
@@ -28,14 +27,11 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-import structlog
-
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendType
+from src.core.ndjson import iter_ndjson_events
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
-
-log = structlog.get_logger()
 
 RAW_LOG_NAME = "agent.raw.ndjson"
 STDERR_LOG_NAME = "agent.stderr.log"
@@ -269,16 +265,11 @@ def parse_raw_lines(raw_bytes: bytes) -> list[dict]:
   its offset stays un-consumed semantics make re-reading it produce at most a
   duplicate, never a loss.
   """
-  events: list[dict] = []
-  for raw_line in raw_bytes.split(b"\n"):
-    line = raw_line.decode("utf-8", errors="replace").strip()
-    if not line:
-      continue
-    try:
-      events.append(json.loads(line))
-    except json.JSONDecodeError as e:
-      log.debug("raw_line_not_json", error=str(e))
-  return events
+  # decode with errors="replace" first: json.loads on bytes raises
+  # UnicodeDecodeError on a torn multi-byte char, and the shared skip
+  # contract catches JSONDecodeError only
+  lines = (raw.decode("utf-8", errors="replace") for raw in raw_bytes.split(b"\n"))
+  return list(iter_ndjson_events(lines, log_event="raw_line_not_json", log_fields={}))
 
 
 def project_raw_events(

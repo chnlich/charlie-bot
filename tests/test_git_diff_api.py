@@ -57,6 +57,23 @@ def _build_client(workspace: Path) -> TestClient:
   return TestClient(_build_app(workspace))
 
 
+def _counting_run(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+  """Patch the git API's subprocess.run to record each call's argv and delegate to the real run.
+
+  Returns the list the argvs land in; a test clears it between rounds to count
+  only the calls after that point.
+  """
+  calls: list[list[str]] = []
+  real_run = subprocess.run
+
+  def counting_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+    calls.append(args[0])
+    return real_run(*args, **kwargs)
+
+  monkeypatch.setattr(git_api.subprocess, "run", counting_run)
+  return calls
+
+
 def test_diff_files_manifest(tmp_path: Path) -> None:
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
@@ -244,14 +261,7 @@ def test_diff_repeat_view_uses_memo(
   """A repeat view of the same resolved range re-runs zero git diff subprocesses."""
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
-  calls: list[list[str]] = []
-  real_run = subprocess.run
-
-  def counting_run(*args, **kwargs):  # type: ignore[no-untyped-def]
-    calls.append(args[0])
-    return real_run(*args, **kwargs)
-
-  monkeypatch.setattr(git_api.subprocess, "run", counting_run)
+  calls = _counting_run(monkeypatch)
 
   params = {"repo": str(repo), "base": "main", "head": "feature", **extra_params}
   first = client.get(f"/api/git/diff/{endpoint}", params=params)
@@ -301,14 +311,7 @@ def test_branch_repeat_view_uses_memo(tmp_path: Path, monkeypatch: pytest.Monkey
   """A repeat branch listing re-runs zero git subprocesses and serves the same list."""
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
-  calls: list[list[str]] = []
-  real_run = subprocess.run
-
-  def counting_run(*args, **kwargs):  # type: ignore[no-untyped-def]
-    calls.append(args[0])
-    return real_run(*args, **kwargs)
-
-  monkeypatch.setattr(git_api.subprocess, "run", counting_run)
+  calls = _counting_run(monkeypatch)
 
   first = client.get("/api/git/branches", params={"repo": str(repo)})
   assert first.status_code == 200
@@ -327,14 +330,7 @@ def test_branch_new_ref_busts_memo(tmp_path: Path, monkeypatch: pytest.MonkeyPat
   """A ref the listing reads (a new branch) moves the signature, so the list re-computes."""
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
-  calls: list[list[str]] = []
-  real_run = subprocess.run
-
-  def counting_run(*args, **kwargs):  # type: ignore[no-untyped-def]
-    calls.append(args[0])
-    return real_run(*args, **kwargs)
-
-  monkeypatch.setattr(git_api.subprocess, "run", counting_run)
+  calls = _counting_run(monkeypatch)
 
   first = client.get("/api/git/branches", params={"repo": str(repo)}).json()
   assert calls, "the first listing runs the branch subprocess"
@@ -437,14 +433,7 @@ def test_refs_signature_moves_on_unrelated_branch_growth(tmp_path: Path) -> None
 def test_ref_resolution_memo_skips_rev_parse_until_refs_move(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The memoized resolver re-runs rev-parse only when the ref state has moved."""
   repo = _build_repo(tmp_path)
-  calls: list[list[str]] = []
-  real_run = subprocess.run
-
-  def counting_run(*args, **kwargs):  # type: ignore[no-untyped-def]
-    calls.append(args[0])
-    return real_run(*args, **kwargs)
-
-  monkeypatch.setattr(git_api.subprocess, "run", counting_run)
+  calls = _counting_run(monkeypatch)
 
   first = git_api._resolve_commits_memoized_sync(repo, ["main", "feature"])
   second = git_api._resolve_commits_memoized_sync(repo, ["main", "feature"])

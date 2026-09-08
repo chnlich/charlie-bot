@@ -1571,12 +1571,7 @@ class FakeStdout:
     return self._lines.pop(0)
 
 
-def fake_one_shot_proc(
-    lines: list[bytes],
-    *,
-    stderr: bytes = b"",
-    returncode: int = 0,
-    pid: int = 9000) -> MagicMock:
+def fake_one_shot_proc(lines: list[bytes], *, stderr: bytes = b"", returncode: int = 0, pid: int = 9000) -> MagicMock:
   """Process double for one-shot backend subprocess tests.
 
   stdout replays *lines* then ends (a FakeStdout). stderr.read() yields *stderr*

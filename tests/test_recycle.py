@@ -186,6 +186,60 @@ async def test_archive_range_repeat_reads_reuse_memo(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_archive_range_multi_file_matches_full_concatenation(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
+
+  # A second recycle at a later ISO week writes a second archive file; the
+  # f0..f2 events the first recycle left live are the ones it archives.
+  second_cutoff = cutoff + timedelta(days=10)
+  await mgr.recycle_scheduled_session(session.id, second_cutoff)
+  _append_events(
+      live_path,
+      [
+          {
+              "type": "user",
+              "content": f"l{i}",
+              "timestamp": (second_cutoff + timedelta(hours=i)).isoformat()
+          } for i in range(3)
+      ],
+  )
+
+  archives_dir = live_path.parent / "archives"
+  reference: list[str] = []
+  for archive in sorted(archives_dir.glob("chat_events.*.jsonl")):
+    reference.extend(
+        json.loads(line)["content"] for line in archive.read_text(encoding="utf-8").splitlines() if line.strip())
+  live_contents = [
+      json.loads(line)["content"] for line in live_path.read_text(encoding="utf-8").splitlines() if line.strip()
+  ]
+  reference += live_contents
+  assert len(list(archives_dir.glob("chat_events.*.jsonl"))) == 2, "corpus must span two archive files"
+
+  for start, end in [(0, 3), (0, 8), (3, 8), (4, 10), (5, 8), (6, 100), (8, 11), (9, 9), (0, 0), (11, 12), (20, 30)]:
+    events, has_more = mgr.load_chat_events_range(session.id, start, end)
+    assert [e["content"] for e in events] == reference[start:end], (start, end)
+    assert has_more is (start > 0)
+
+
+@pytest.mark.asyncio
+async def test_archive_files_memo_picks_up_new_archive_file(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
+
+  first, _ = mgr.load_chat_events_range(session.id, 0, 5)
+  assert [e["content"] for e in first] == [f"e{i}" for i in range(5)]
+
+  # A new weekly archive file (a directory-entry change, not a same-week
+  # append) must invalidate the memoized name list on the next read.
+  second_cutoff = cutoff + timedelta(days=10)
+  await mgr.recycle_scheduled_session(session.id, second_cutoff)
+
+  second, _ = mgr.load_chat_events_range(session.id, 0, 8)
+  assert [e["content"] for e in second] == [f"e{i}" for i in range(5)] + [f"f{i}" for i in range(3)]
+
+
+@pytest.mark.asyncio
 async def test_archive_range_reparses_after_archive_append(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   cutoff, _ = await recycle_archive_cutoff_events(mgr, session.id)

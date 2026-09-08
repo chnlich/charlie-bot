@@ -52,8 +52,6 @@ RELAY_REJECTED = "rejected"
 RELAY_WARNING = "warning"
 LOGIN_FAILED = "login_failed"
 
-_now = claude_accounts._now
-
 
 def _is_tool_result_event(event: dict) -> bool:
   """A Claude Code ``user`` event whose content carries a tool_result block: the relay safe point."""
@@ -98,7 +96,7 @@ class RelayWatch:
       info = event.get("rate_limit_info")
       if not isinstance(info, dict):
         return False
-      moment = _now(self._now)
+      moment = claude_accounts.now_or(self._now)
       reading = claude_accounts.observe_rate_limit(self.label, info, moment)
       status = info.get("status")
       if status == "rejected":

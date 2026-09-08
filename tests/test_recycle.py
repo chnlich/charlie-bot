@@ -464,7 +464,8 @@ async def test_unarchived_range_cache_slice_keeps_parsed_event_domain(tmp_path: 
   # islice) would drop the tail event from a count-sized window; the cache's
   # parsed-event index must not.
   live_path.write_text(
-      '{"type": "user", "content": "c0"}\n{bad json\n{"type": "user", "content": "c1"}\n{"type": "user", "content": "c2"}\n',
+      '{"type": "user", "content": "c0"}\n{bad json\n'
+      '{"type": "user", "content": "c1"}\n{"type": "user", "content": "c2"}\n',
       encoding="utf-8")
 
   warm = mgr.load_chat_events_sync(session.id)

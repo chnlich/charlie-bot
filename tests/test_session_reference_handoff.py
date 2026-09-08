@@ -48,6 +48,25 @@ async def test_fork_session_writes_truncated_reference_and_live_banner(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_partial_reference_from_warm_cache_strips_in_memory_event_index(tmp_path: Path) -> None:
+  """persist_and_broadcast stamps an in-memory-only event_index onto the cached
+  event dicts after the disk write; the fork's partial reference re-serializes
+  range output verbatim, so a warm parent's reference must not inherit a stamp
+  the persisted lines never carried."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  parent = await make_parent(mgr)
+  for content in ["w0", "w1"]:
+    await mgr.persist_and_broadcast(parent, {"type": "user", "content": content})
+
+  child = await mgr.fork_session(parent, event_index=2)
+
+  reference_events = _read_events(_reference_path(mgr, child.id))
+  assert [event["content"] for event in reference_events] == ["e0", "e1", "w0"]
+  assert all("event_index" not in event for event in reference_events)
+
+
+@pytest.mark.asyncio
 async def test_elone_session_writes_reference_and_archives_parent(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)

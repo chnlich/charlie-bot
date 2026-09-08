@@ -23,7 +23,7 @@ from src.agents.backends.claude_code import (
 )
 from src.core import claude_accounts, claude_relay, runs
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig, claude_config_dir
+from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, claude_config_dir
 from src.core.latex import check_tex_changed, clear_snapshot
 from src.core.memory import assemble_master
 from src.core.models import (
@@ -784,7 +784,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   if pooled:
     # The pool chose the login directory; an inherited CLAUDE_CONFIG_DIR must
     # never shadow it (LESSONS 2026-08-05).
-    env.pop("CLAUDE_CONFIG_DIR", None)
+    env.pop(CLAUDE_CONFIG_DIR_ENV_VAR, None)
 
   prompt = _build_prompt(item.user_content, item.is_voice)
 

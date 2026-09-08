@@ -11,6 +11,7 @@ import structlog
 
 from src.agents.backends.base import SESSION_ID_ENV_VAR, SKIP_PERMISSIONS_FLAG, AgentBackend
 from src.core import event_types as ET
+from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR
 from src.core.log_once import WarnOnceRegistry
 from src.core.process import kill_process_group
 
@@ -305,7 +306,7 @@ class ClaudeCodeBackend(AgentBackend):
   def _prepare_env(self, env: dict) -> dict:
     out = {**env, **headless_claude_env()}
     if self._claude_config_dir:
-      out["CLAUDE_CONFIG_DIR"] = self._claude_config_dir
+      out[CLAUDE_CONFIG_DIR_ENV_VAR] = self._claude_config_dir
     return out
 
   def _build_command(self, prompt: str) -> list[str]:

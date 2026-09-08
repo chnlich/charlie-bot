@@ -40,7 +40,7 @@ from src.agents.backends.claude_code import (
 )
 from src.core import event_types as ET
 from src.core.claude_accounts import model_family, now_or, transcript_path
-from src.core.config import CharlieBotConfig
+from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
 from src.core.process import kill_process_group
 
 log = structlog.get_logger()
@@ -171,8 +171,8 @@ def compaction_env(config_dir: str | Path) -> dict[str, str]:
   (LESSONS 2026-08-05).
   """
   env = {**claude_supervisor_env(os.environ), **headless_claude_env()}
-  env.pop("CLAUDE_CONFIG_DIR", None)
-  env["CLAUDE_CONFIG_DIR"] = str(Path(config_dir).expanduser())
+  env.pop(CLAUDE_CONFIG_DIR_ENV_VAR, None)
+  env[CLAUDE_CONFIG_DIR_ENV_VAR] = str(Path(config_dir).expanduser())
   return env
 
 

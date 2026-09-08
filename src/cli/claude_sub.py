@@ -38,7 +38,7 @@ from src.cli.claude_sub_bridge import (
     HookTurnState,
     PromptDelivery,
 )
-from src.core.config import charliebot_home_dir
+from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, charliebot_home_dir
 from src.core.json_utils import write_json_atomically
 from src.core.process import kill_process_group
 
@@ -312,7 +312,7 @@ def _write_marker(session_id: str, state: SessionMarkerState) -> None:
 
 def _claude_user_config_paths() -> tuple[Path, Path, Path, Path]:
   """Return the active Claude global, user-settings, credentials, and remote paths."""
-  configured_root = os.environ.get("CLAUDE_CONFIG_DIR")
+  configured_root = os.environ.get(CLAUDE_CONFIG_DIR_ENV_VAR)
   if configured_root:
     root = Path(configured_root).expanduser()
     settings_root = root
@@ -605,7 +605,7 @@ async def _respawn_claude(
   for key, value in headless_claude_env().items():
     tmux_args.extend(["-e", f"{key}={value}"])
   if config_dir is not None:
-    tmux_args.extend(["-e", f"CLAUDE_CONFIG_DIR={config_dir}"])
+    tmux_args.extend(["-e", f"{CLAUDE_CONFIG_DIR_ENV_VAR}={config_dir}"])
   tmux_args.extend(
       build_claude_argv(
           session_id,

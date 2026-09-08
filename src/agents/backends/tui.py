@@ -30,6 +30,7 @@ from src.agents.backends.pty_common import (
     tmux_session_exists,
     tmux_session_name,
 )
+from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR
 from src.core.models import BackendType
 
 log = structlog.get_logger()
@@ -76,7 +77,7 @@ def _claude_jsonl_busy(session_id: str, threshold_seconds: float = _BUSY_THRESHO
 
 
 def _claude_config_path() -> Path:
-  config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+  config_dir = os.environ.get(CLAUDE_CONFIG_DIR_ENV_VAR)
   if config_dir:
     return Path(config_dir) / ".claude.json"
   return Path.home() / ".claude.json"

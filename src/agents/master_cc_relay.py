@@ -27,7 +27,6 @@ import structlog
 
 from src.agents import master_cc_state
 from src.core import claude_accounts, claude_compaction, claude_relay
-from src.core.claude_accounts import now_or
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, ClaudeAccount, SessionMetadata
 
@@ -61,7 +60,7 @@ def choose_turn_account(
   newest reading sits under the warning line with no rejection pending; every
   other case re-selects (a tie keeps the current account).
   """
-  moment = now_or(now)
+  moment = claude_accounts.now_or(now)
   current = claude_accounts.account_by_label(cfg, session_meta.claude_account)
   cold = claude_compaction.cache_expired(last_request_at, moment)
   if current is not None and not cold and claude_accounts.healthy(current, moment):

@@ -67,6 +67,14 @@ class _Node:
   text_parts: list[_TextPart] = field(default_factory=list)
 
 
+@dataclass
+class _Anchor:
+  start: int | None = None
+  start_end: int | None = None
+  end: int | None = None
+  end_end: int | None = None
+
+
 class _Parser(HTMLParser):
   """DOM builder retaining source offsets and decoded text ranges."""
 
@@ -144,6 +152,77 @@ class _Parser(HTMLParser):
       length += 1
     text = _html.unescape(self.source[start:start + length])
     self._append_part(start, start + length, text, [(start, start + length)] * len(text))
+
+
+class _BoundaryParser(HTMLParser):
+  """First head/body anchors only, riding _Parser's tokenizer walk without the DOM build.
+
+  Same offset math (``convert_charrefs=False``, the line-start table) and the same
+  innermost-open-tag end matching as ``_Parser`` — the record rides the stack slot
+  that opened it, so a nested same-tag element takes the end tag and the tracked
+  first element stays end-less exactly as the tree's node would — so the anchors
+  equal the full parse's ``_first_descendant`` answers on every input.
+  """
+
+  def __init__(self, source: str) -> None:
+    super().__init__(convert_charrefs=False)
+    self.source = source
+    self._line_starts = [0]
+    for match in re.finditer("\n", source):
+      self._line_starts.append(match.end())
+    self._open: list[tuple[str, _Anchor | None]] = []
+    self.head: _Anchor | None = None
+    self.body: _Anchor | None = None
+
+  def _offset(self) -> int:
+    line, column = self.getpos()
+    return self._line_starts[line - 1] + column
+
+  def _start_tag(self) -> tuple[int, int]:
+    start = self._offset()
+    raw = self.get_starttag_text()
+    if raw is None or self.source[start:start + len(raw)] != raw:
+      raise ValueError(f"could not locate start tag at offset {start}")
+    return start, start + len(raw)
+
+  def _track(self, tag: str, start: int, start_end: int) -> _Anchor | None:
+    if tag == "head" and self.head is None:
+      self.head = _Anchor(start, start_end)
+      return self.head
+    if tag == "body" and self.body is None:
+      self.body = _Anchor(start, start_end)
+      return self.body
+    return None
+
+  def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    start, start_end = self._start_tag()
+    record = self._track(tag, start, start_end)
+    if tag not in _VOID_TAGS:
+      self._open.append((tag, record))
+
+  def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+    start, start_end = self._start_tag()
+    self._track(tag, start, start_end)
+
+  def handle_endtag(self, tag: str) -> None:
+    start = self._offset()
+    end = self.source.find(">", start)
+    if end < 0:
+      raise ValueError(f"could not locate end tag at offset {start}")
+    for index in range(len(self._open) - 1, -1, -1):
+      if self._open[index][0] == tag:
+        record = self._open[index][1]
+        if record is not None and record.end is None:
+          record.end, record.end_end = start, end + 1
+        del self._open[index:]
+        return
+
+
+def _parse_anchors(source: str) -> tuple[_Anchor | None, _Anchor | None]:
+  parser = _BoundaryParser(source)
+  parser.feed(source)
+  parser.close()
+  return parser.head, parser.body
 
 
 @dataclass
@@ -722,12 +801,12 @@ def _append_style_and_header(source: str) -> str:
   # The anchors are read off a re-parse of the spliced page on purpose: the
   # render passes can rewrite the body start tag itself (class and data-del
   # attributes) and insert synthetic start tags, so a spliced page's DOM can
-  # disagree with the pre-splice parse about where head and body sit.
-  parser = _parse(source)
+  # disagree with the pre-splice parse about where head and body sit. The
+  # re-parse rides the anchor-only parser — the same tokenizer walk as _Parser,
+  # minus the DOM build nothing here reads.
+  head, body = _parse_anchors(source)
   insertions: dict[int, list[str]] = {}
   style_tag = f'<style data-cbd-style>{_CBD_STYLE}</style>'
-  head = _first_descendant(parser.root, "head")
-  body = _first_descendant(parser.root, "body")
   if head is not None and head.end is not None:
     _add_insertion(insertions, head.end, style_tag)
   else:
@@ -735,8 +814,6 @@ def _append_style_and_header(source: str) -> str:
     _add_insertion(insertions, offset, style_tag)
   if body is not None and body.start_end is not None:
     offset = body.start_end
-  elif parser.root.end is not None:
-    offset = parser.root.end
   else:
     offset = len(source)
   header = f'<div class="cbd-header" data-cbd-header="{_html.escape(_HEADER_TEXT, quote=True)}"></div>'

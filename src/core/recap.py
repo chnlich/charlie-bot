@@ -18,7 +18,7 @@ from src.api.message_utils import events_to_messages
 from src.core.autonamer import iter_light_backends
 from src.core.config import CharlieBotConfig
 from src.core.json_utils import write_json_atomically
-from src.core.memo import BoundedMemo
+from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import utc_now
 from src.core.sessions import (
     ELONE_BOOTSTRAP_OPENER,
@@ -36,9 +36,7 @@ _EXTRACT_MEMO_CAP = 8
 
 # Parsed recap_summaries.json documents memoized per path on (mtime_ns, size).
 # The only writer is _write_cache_entry, which publishes through the atomic
-# tmp-file rename, so any content change moves the signature; the signature is
-# taken before the read so an entry recorded during a concurrent write keys the
-# older signature and can never be served for the newer bytes.
+# tmp-file rename, so any content change moves the signature.
 _SUMMARY_CACHE_MEMO_CAP = 8
 
 # (session_id, end) -> extraction over the global event range [0, end). A
@@ -53,7 +51,7 @@ _extract_memo: BoundedMemo[tuple[str, int], dict] = BoundedMemo(_EXTRACT_MEMO_CA
 # path -> (mtime_ns, size, parsed document). Served values are treated
 # read-only: readers only run dict lookups, and the writer side (_write_cache_entry)
 # loads the file fresh instead of touching this memo.
-_summary_cache_memo: BoundedMemo[Path, tuple[int, int, dict]] = BoundedMemo(_SUMMARY_CACHE_MEMO_CAP)
+_summary_cache_memo: StatSignatureMemo[Path, dict] = StatSignatureMemo(_SUMMARY_CACHE_MEMO_CAP)
 
 
 def drop_extract_memo(session_id: str) -> None:
@@ -200,21 +198,18 @@ def _load_cache(path: Path) -> dict:
 def _load_cache_signed(path: Path) -> dict:
   """The parsed cache document behind a signature memo, or ``{}`` when absent.
 
-  The signature is taken before the read: a write landing between the two keys
-  the entry under the older signature, which the next stat mismatches — an
-  entry can never be served for bytes it did not parse. Only successful parses
-  memoize; a corrupt document keeps raising on every call.
+  Only successful parses memoize; a corrupt document keeps raising on every
+  call. The stat-before-read race contract is StatSignatureMemo's.
   """
   try:
     st = path.stat()
-    sig = (st.st_mtime_ns, st.st_size)
   except OSError:
     return {}
-  entry = _summary_cache_memo.get(path)
-  if entry is not None and (entry[0], entry[1]) == sig:
-    return entry[2]
+  cache = _summary_cache_memo.fresh(path, st)
+  if cache is not None:
+    return cache
   cache = json.loads(path.read_text(encoding="utf-8"))
-  _summary_cache_memo.store(path, (sig[0], sig[1], cache))
+  _summary_cache_memo.record(path, st, cache)
   return cache
 
 
@@ -239,13 +234,12 @@ def summary_lookup_memo_hit(session_mgr: SessionManager, session_id: str, upto: 
   path = _cache_path(session_mgr, session_id)
   try:
     st = path.stat()
-    sig = (st.st_mtime_ns, st.st_size)
   except OSError:
     return (None, False)
-  entry = _summary_cache_memo.get(path)
-  if entry is None or (entry[0], entry[1]) != sig:
+  cache = _summary_cache_memo.fresh(path, st)
+  if cache is None:
     return None
-  return _summary_verdict(entry[2], upto)
+  return _summary_verdict(cache, upto)
 
 
 def lookup_cached_summary(session_mgr: SessionManager, session_id: str, upto: int) -> tuple[str | None, bool]:

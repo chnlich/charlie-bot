@@ -1,11 +1,11 @@
 """Chat event persistence for CharlieBot sessions."""
 
-import json
 import uuid
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+import orjson
 import structlog
 
 from src.core.finalize_effects import _MASTER_OUTPUT_TYPES, _is_terminal_worker_summary
@@ -59,13 +59,18 @@ def _universal_newline_segments(buf: bytes) -> tuple[list[str], bool]:
 
 
 def _live_range_event(segment: str, session_id: str) -> dict | None:
-  """Parse one physical line; a blank or malformed line parses to None and consumes its index."""
+  """Parse one physical line; a blank or malformed line parses to None and consumes its index.
+
+  The parser is orjson (the iter_ndjson_events skip contract's boundary: the
+  stdlib NaN/Infinity extensions and double-overflow floats skip as malformed;
+  ints at or beyond 2**64 parse as float).
+  """
   stripped = segment.strip()
   if not stripped:
     return None
   try:
-    return json.loads(stripped)
-  except json.JSONDecodeError as e:
+    return orjson.loads(stripped)
+  except ValueError as e:
     log.debug("live_range_parse_skip", session_id=session_id, error=str(e))
     return None
 
@@ -357,8 +362,8 @@ class ChatEventStore:
           stripped = line.strip()
           if stripped:
             try:
-              events.append(json.loads(stripped))
-            except json.JSONDecodeError as e:
+              events.append(orjson.loads(stripped))
+            except ValueError as e:
               log.debug("archive_parse_skip", session_id=session_id, error=str(e))
     except OSError as e:
       log.debug("archive_read_failed", path=str(path), error=str(e))
@@ -439,8 +444,8 @@ class ChatEventStore:
         if not stripped:
           continue
         try:
-          event = json.loads(stripped)
-        except json.JSONDecodeError as e:
+          event = orjson.loads(stripped)
+        except ValueError as e:
           log.debug("chat_event_archive_parse_skip", session_id=session_id, error=str(e))
           split_reached = True
           kept_raw.append(raw)

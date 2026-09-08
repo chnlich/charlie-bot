@@ -87,6 +87,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M75 live-aggregator catch-up, first streamed event | M75 collector below | seconds of loop lag + wall per first-`persist_and_broadcast` catch-up (whole read+feed of the live corpus), worst on-disk live chat corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.020 s | — (introduced with its first history row) |
 | M76 finalize-judgment reads, warm chain | M76 collector below | seconds of loop lag + wall per judgment pair (summary-present then master-woke — the two full-history scans the finalize chain runs per worker/reviewer completion), worst on-disk live-events corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.0005 s | — (introduced with its first history row) |
 | M77 session-switch projection reuse, rotating tabs | M77 collector below | seconds per `get_message_projection` re-entry over a 12-active-session rotation (3 rounds), worst live corpora; the rebuilt count is the eviction shape (a warm re-entry is a dict read + len compare, a rebuild parses the corpus) | re-entry median < 0.5 ms; 0 rebuilt re-entries in a 12-session rotation | — (introduced with its first history row) |
+| M78 ndjson event parse, cold whole-file | M78 collector below | seconds per `parse_ndjson_file` call, worst on-disk live chat file and worst on-disk worker log | chat file median < 0.08 s; worker log median < 0.02 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -4697,10 +4698,65 @@ print(f"re-entry median {times[n // 2] * 1000:.2f} ms, max {times[-1] * 1000:.2f
 EOF
 ```
 
+M78 — ndjson event parse, cold whole-file. The events cache, the M13 worker-events
+reader, and every range/tail reader parse through one funnel whose per-line parse
+dominates every cold events load (catch-up, projection build, usage, first view). The
+collector times `parse_ndjson_file` over the worst on-disk live chat file and the
+largest on-disk worker log (read-only), from the checkout under test: one cold pass,
+as at a first view after a server start, then five timed calls each. Evidence while
+the live server runs older code points the same collector at the branch checkout
+(`CHECKOUT` at the worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.ndjson import parse_ndjson_file
+
+# Worst parse corpus: the live chat file carrying the most bytes, plus the
+# largest on-disk worker log; the events cache and the M13 reader parse both.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        n = p.stat().st_size
+        if n > best_n:
+            best, best_n = p, n
+wlog, wlog_n = None, -1
+for p in root.glob("*/threads/*/data/events.jsonl"):
+    n = p.stat().st_size
+    if n > wlog_n:
+        wlog, wlog_n = p, n
+
+parse_ndjson_file(best)  # cold pass, as at first view after a server start; not timed
+times = []
+events = []
+for _ in range(5):
+    t0 = time.perf_counter()
+    events = parse_ndjson_file(best)
+    times.append(time.perf_counter() - t0)
+times.sort()
+parse_ndjson_file(wlog)
+wtimes = []
+wevents = []
+for _ in range(5):
+    t0 = time.perf_counter()
+    wevents = parse_ndjson_file(wlog)
+    wtimes.append(time.perf_counter() - t0)
+wtimes.sort()
+print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {best_n / 1e6:.1f} MB chat file ({len(events)} events) "
+      f"parse median {times[2] * 1000:.1f} ms, max {times[-1] * 1000:.1f} ms; "
+      f"{wlog_n / 1e6:.1f} MB worker log ({len(wevents)} events) median {wtimes[2] * 1000:.1f} ms, max {wtimes[-1] * 1000:.1f} ms")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-08 | this PR | M78 cold whole-file parse median 97.9/98.0/100.1 → 55.4/53.4/51.5 ms on the 36.3 MB / 5519-event worst live chat file and 26.5/27.0/26.5 → 12.6/13.1/12.7 ms on the 6.7 MB / 2315-event worst on-disk worker log, −44 % to −53 % (three interleaved rounds of the new collector, live corpora read-only, main checkout before vs branch worktree after back-to-back at load 0.96-1.03, every paired round faster; parser parity asserted beyond the parse-success check: a strict type-sensitive deep comparison of orjson vs stdlib json.loads over the whole 14 GB / 2,258,811-line live corpus — 6,279 files — found 0 divergences; M75 catch-up wall re-measured interleaved ×2: 0.1755/0.1751 → 0.0988/0.0965 s, loop-lag unchanged 0.0153 → 0.0155/0.0116 s; no-regression re-measures on the branch: M26 advance 0.17 ms parity True digest e94c56635194, M6 append-round 0.05 ms parity True, M23 0.0003 s, M30 0.0002/0.0003 s, M76 0.00000 s, M77 0.06 ms with 0/36 rebuilt; 4861-passed suite plus 9 new parser-contract tests) | the NDJSON event parse funnel ran stdlib json.loads per line — the hottest parse in the system, feeding every cold events load (the M75 catch-up, the projection build, usage resolution, the M13 cold worker-log read, archive and range reads) — while orjson parses the same lines ~2x faster with identical output; the swap covers the one funnel (`iter_ndjson_events`, which the M13 worker-events reader feeds bytes lines through) plus chat_events' live-range and archive readers; the boundary change is deliberate and test-pinned: the stdlib json NaN/Infinity extensions and double-overflow floats skip as malformed (invisible lines, the skip contract's own answer) and ints at or beyond 2**64 parse as float where stdlib kept exact precision — no live line sits at any boundary; orjson>=3.11 already a dependency since the M66 merge; M78 definition and healthy range introduced with this PR |
 | 2026-09-08 | this PR | M66 merged build median 5.26/5.30/5.39 s → 3.26/3.21/3.19 s, −38 % to −39 %, maxima 5.29-5.42 → 3.22-3.29 s (three interleaved rounds of the collector, 191.2 MB / 496,099-event worst on-disk trace /home/chaoli/data/stage3_current_traces/221054_trace_rank000_step000110.json, scratch output under /tmp, main checkout before vs branch worktree after back-to-back at load 0.87-1.12, every paired round faster; artifact 15.6 MB.gz both arms; parsed-trace parity True across all rounds — 496,116 events both arms, normalized digest b07896653af5 identical; 4847-passed suite, the two payload reference tests re-pinned to the orjson encoder's own forms) | the merge's two dominant passes rode the stdlib json module — the 2.25 s parse of the 191 MB corpus plus the 1.6 s batched C-encoder dumps on a corpus that is machine-written JSON parsed and re-serialized with no hand-authored edge cases — while orjson parses the same corpus ~3.5x faster and renders each batch ~5x faster; the event walk and the level-1 gzip pass are untouched, and the artifact size is unchanged; the wire payload changes rendering form (raw UTF-8 where the stdlib form emitted \uXXXX) and the parsed trace is pinned identical; the parse pass rejects the NaN/Infinity literals stdlib json.load accepts, so a trace carrying them fails the build loudly instead of shipping Perfetto-invalid JSON (orjson.dumps renders an in-memory non-finite float as null — unreachable from a trace file); orjson>=3.11 joins the dependencies (uv.lock updated, the host venv carries 3.12.0); healthy range recalibrated median < 12 s → < 8 s with this PR — the old line sat ~2x above the pre-fix reading and 3.7x above the new one |
 | 2026-09-08 | #1086 | slack follow-backfill listing 3.42/3.52/3.66 ms → 0.18/0.19/0.20 ms, group-rewrite listing 3.49/3.76/3.84 ms → 0.04/0.04/0.05 ms medians, maxima 5.17-6.00/29.81-34.35 → 0.19-0.40/0.08-0.11 ms (three interleaved manager-level rounds per arm, 1090-meta live corpus read-only — 46 active, 4 slack-active — main checkout before-shape vs branch worktree after-shape back-to-back at load 0.76-0.95, survivor-set parity asserted for both shapes in both arms; the manager code is identical across arms, the diff is the callers' arguments; 4847-passed suite) | the Socket Mode (re)connection backfill and the group rewrite listed every session unfiltered and read one field each — the leaving-the-manager copy, thinking stamp, and sidebar populate ran over the ~1044 archived rows they drop on the next line; the backfill lists ACTIVE directly (identical survivor set — `_load_session_metas(status)` filters `meta.status == status`) and the rewrite scans the shared cached metas read-only, the M40 pattern; no standing collector drives either caller, so the row self-measures its before numbers per the no-baseline-row rule; recorded in this docs-only follow-up per the #1046 precedent, the landing PR #1086 shipped without it |
 | 2026-09-08 | this PR | M7 changed-round collect_claude median 87.6/84.1/80.6 → 41.8/40.9/41.0 ms, maxima 91.0/86.3/82.6 → 45.8/42.6/41.3 ms (three interleaved rounds of the component harness — the standing changed-round collector's stale-document restore around tt.collect_claude alone, 7 timed rounds each, live corpus read-only, main checkout before vs branch worktree after back-to-back at load 1.70-1.74, every paired round faster; Claude notes identical across all six arms — 23,293 unique API responses, 30,273 replayed lines skipped, 9 models; mechanism probe: t.add calls per changed round 23,293 → 0 over two interleaved 5-round sets in the quiet regime, the fold's per-record replay gone; a busy-window corroboration run with one live session appending ~16.5 MB per round: 199.8/190.2/204.8 → 146.2/152.9/140.5 ms median, t.add 23,296 → 1,519 — the moved files' own new keys, the full-corpus fold gone there too; whole-collect changed-round medians 232.5/142.2/137.6 → 98.4/60.4/109.4 ms in the same interleaved shape, maxima polluted by the db row-landing regime #1059's row documents, untouched here; no-regression re-measures interleaved ×2: whole-tally warm hit 16.3/16.2 → 17.4/15.3 ms, rows 15 / notes 3 identical both arms, M26 advance 0.20 ms parity True digest e94c56635194; 4847-passed suite plus the 10-round partial-parity test) | the changed round re-folded every served entry's 24,948 Claude records through the cross-file replay dedupe — the seen-set scan and one t.add per unique key were 84-87 ms of the component wall — although the corpus's keys and their first-fold values change only when a file moves; the merged buckets are now incremental per file: each file keeps a partial (its post-dedupe bucket deltas, span, record and within-file-dupe counts, per replay key its copy count), the corpus keeps per-key copy counts with the contributing file, its record values and the copy holders, and a round releases the moved, re-parsed, relabelled, failed and vanished files' partials and key copies, re-folds only those files' records, and sums the surviving partials plus an orphan pool for contributions whose file moved while a copy survives elsewhere, anchored per round at the earliest-walked surviving holder — verbatim replays carry identical token values (the dedupe's own premise), so only the account label a fresh scan would credit moves, and an earlier-walked newcomer carrying an already-credited key takes the credit back (the review-found divergence, fixed before landing); parity pinned by a sequence test asserting the incremental collect equals a fresh fold after an append, the credit transfer, a contributor dropping a replayed key (orphan transfer), the last copy dropping, a file deletion, an account relabel and a cacheless round |

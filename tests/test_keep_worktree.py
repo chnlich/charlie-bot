@@ -14,6 +14,7 @@ from conftest import (
     CapturingThreadManager,
     SpawnFlowSessionManager,
     build_codex_worktree_cfg,
+    build_finalize_ctx,
     build_worker_prompt,
     recording_notify_completion,
     stage_worktree_spawn,
@@ -70,20 +71,8 @@ async def test_cleanup_worker_directory_skips_when_keep_worktree(
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
   monkeypatch.setattr(git_module, "git_worktree_remove", fail_git_worktree_remove)
 
-  await spawner._finalize_worker(
-      spawner_finalize._FinalizeCtx(
-          session_id="session-id",
-          description="slurm benchmark",
-          thread=thread,
-          outcome=CLEAN_EXIT_OUTCOME,
-          thread_mgr=CapturingThreadManager(thread, captures),
-          session_mgr=object(),
-          cfg=cfg,
-      ),
-      skip_notify=False,
-      task_type=TaskType.IMPLEMENT,
-      completed_at=None,
-  )
+  ctx = build_finalize_ctx(thread, CLEAN_EXIT_OUTCOME, CapturingThreadManager(thread, captures), object(), cfg)
+  await spawner._finalize_worker(ctx, skip_notify=False, task_type=TaskType.IMPLEMENT, completed_at=None)
 
   assert captures["status"] == ThreadStatus.COMPLETED
   assert captures["notified"] is True

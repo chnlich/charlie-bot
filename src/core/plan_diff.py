@@ -75,14 +75,16 @@ class _Anchor:
   end_end: int | None = None
 
 
-class _Parser(HTMLParser):
-  """DOM builder retaining source offsets and decoded text ranges."""
+class _OffsetParser(HTMLParser):
+  """HTMLParser over ``source`` whose ``_offset()`` answers a source offset.
+
+  Callers rely on ``convert_charrefs=False``: ``getpos()`` must keep addressing
+  raw source spans, which ``_offset()`` and every downstream splice assume.
+  """
 
   def __init__(self, source: str) -> None:
     super().__init__(convert_charrefs=False)
     self.source = source
-    self.root = _Node("#root", {}, None)
-    self._stack = [self.root]
     self._line_starts = [0]
     for match in re.finditer("\\n", source):
       self._line_starts.append(match.end())
@@ -90,6 +92,15 @@ class _Parser(HTMLParser):
   def _offset(self) -> int:
     line, column = self.getpos()
     return self._line_starts[line - 1] + column
+
+
+class _Parser(_OffsetParser):
+  """DOM builder retaining source offsets and decoded text ranges."""
+
+  def __init__(self, source: str) -> None:
+    super().__init__(source)
+    self.root = _Node("#root", {}, None)
+    self._stack = [self.root]
 
   def _append_part(self, raw_start: int, raw_end: int, text: str, raw_ranges: list[tuple[int, int]]) -> None:
     node = self._stack[-1]
@@ -154,29 +165,21 @@ class _Parser(HTMLParser):
     self._append_part(start, start + length, text, [(start, start + length)] * len(text))
 
 
-class _BoundaryParser(HTMLParser):
+class _BoundaryParser(_OffsetParser):
   """First head/body anchors only, riding _Parser's tokenizer walk without the DOM build.
 
-  Same offset math (``convert_charrefs=False``, the line-start table) and the same
-  innermost-open-tag end matching as ``_Parser`` — the record rides the stack slot
-  that opened it, so a nested same-tag element takes the end tag and the tracked
-  first element stays end-less exactly as the tree's node would — so the anchors
-  equal the full parse's ``_first_descendant`` answers on every input.
+  Inherits _OffsetParser's offset math.  The same innermost-open-tag end
+  matching as ``_Parser`` — the record rides the stack slot that opened it, so
+  a nested same-tag element takes the end tag and the tracked first element
+  stays end-less exactly as the tree's node would — so the anchors equal the
+  full parse's ``_first_descendant`` answers on every input.
   """
 
   def __init__(self, source: str) -> None:
-    super().__init__(convert_charrefs=False)
-    self.source = source
-    self._line_starts = [0]
-    for match in re.finditer("\n", source):
-      self._line_starts.append(match.end())
+    super().__init__(source)
     self._open: list[tuple[str, _Anchor | None]] = []
     self.head: _Anchor | None = None
     self.body: _Anchor | None = None
-
-  def _offset(self) -> int:
-    line, column = self.getpos()
-    return self._line_starts[line - 1] + column
 
   def _start_tag(self) -> tuple[int, int]:
     start = self._offset()

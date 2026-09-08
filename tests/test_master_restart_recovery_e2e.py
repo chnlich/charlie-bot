@@ -51,12 +51,12 @@ from pathlib import Path
 import pytest
 from conftest import (
     MASTER_RECOVERY_TASK_PREFIXES,
+    _wait_for,
     await_recovery_tasks,
     patch_instructions_content,
     read_chat_events,
 )
 from structlog.testing import capture_logs
-from test_restart_recovery_e2e import _wait_for
 
 from src.agents import master_cc, master_cc_queue
 from src.core import init as init_module

@@ -14,9 +14,9 @@ Legs:
 Same two-process A/B protocol as test_restart_recovery_e2e.py: a driver
 subprocess spawns a worker with a fake `claude` shim and is SIGKILLed; this
 test process then runs startup crash recovery against the truth on disk. The
-protocol's scaffolding (shim, driver template, launcher, killer, waits,
-chat-event readers, the _recover helper) is shared by import from that
-module — edit it there.
+protocol's waits, readers, killer, and the _recover helper are single-homed
+in tests/conftest.py; the shim/driver/launcher trio lives in
+test_restart_recovery_e2e.py — edit each there.
 """
 
 from __future__ import annotations
@@ -25,16 +25,16 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import build_recovery_cfg
-from test_restart_recovery_e2e import (
+from conftest import (
     _assert_failed_with_transport_reason,
     _kill_driver_mid_run,
-    _launch_driver,
     _read_meta,
     _recover,
     _recovery_reports,
     _terminal_summaries,
+    build_recovery_cfg,
 )
+from test_restart_recovery_e2e import _launch_driver
 
 from src.agents.backends.base import AgentBackend
 from src.core import runs

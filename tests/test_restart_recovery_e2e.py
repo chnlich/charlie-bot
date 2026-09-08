@@ -32,16 +32,21 @@ import subprocess
 import sys
 import time
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 from conftest import (
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-    RECOVERY_TASK_PREFIXES,
     REVIEW_TRIGGER_MASTER_PATCH_TARGET,
-    SPAWNER_RESUME_WORKER_PATCH_TARGET,
-    await_recovery_tasks,
+    _assert_failed_with_transport_reason,
+    _await_recovery_tasks,
+    _cfg,
+    _kill_driver_mid_run,
+    _read_meta,
+    _recover,
+    _terminal_summaries,
+    _wait_for,
     build_recovery_cfg,
     read_chat_events,
 )
@@ -51,10 +56,8 @@ from src.core import event_types as ET
 from src.core import init as init_module
 from src.core import runs
 from src.core import spawner as spawner_module
-from src.core.config import CharlieBotConfig
 from src.core.git import git_create_worktree, git_worktree_dir_name
 from src.core.models import (
-    BackendOption,
     CreateSessionRequest,
     SpawnRequest,
     TaskType,
@@ -64,17 +67,9 @@ from src.core.models import (
 )
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
-from src.core.spawner import resume_worker as _real_resume_worker
 from src.core.threads import ThreadManager
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-FAKE_SHIM = """#!/bin/sh
-echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"E2E-ASSISTANT-MARKER"}]}}'
-sleep "$FAKE_RESULT_DELAY"
-echo '{"type":"result","subtype":"success","is_error":false,"result":"E2E-RESULT-MARKER","usage":{"input_tokens":1,"output_tokens":1}}'
-exit 0
-"""
 
 # A fake reviewer: no LLM, just a real commit-of-its-own plus a `git push` of the
 # worker's already-committed change to the shared worktree's base branch, standing
@@ -108,6 +103,13 @@ CLEAN_RETRY_SHIM = """#!/bin/sh
 cat >/dev/null
 echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ATTEMPT-2-MARKER"}]}}'
 echo '{"type":"result","subtype":"success","is_error":false,"result":"ATTEMPT-2-RESULT","usage":{"input_tokens":1,"output_tokens":1}}'
+exit 0
+"""
+
+FAKE_SHIM = """#!/bin/sh
+echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"E2E-ASSISTANT-MARKER"}]}}'
+sleep "$FAKE_RESULT_DELAY"
+echo '{"type":"result","subtype":"success","is_error":false,"result":"E2E-RESULT-MARKER","usage":{"input_tokens":1,"output_tokens":1}}'
 exit 0
 """
 
@@ -150,37 +152,11 @@ asyncio.run(main())
 """
 
 
-def _cfg(home: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model")],
-  )
-
-
-def _wait_for(predicate, timeout: float, what: str) -> None:
-  deadline = time.monotonic() + timeout
-  while time.monotonic() < deadline:
-    if predicate():
-      return
-    time.sleep(0.05)
-  raise TimeoutError(what)
-
-
-def _read_meta(home: Path, session_id: str, thread_id: str) -> dict:
-  meta_path = home / "sessions" / session_id / "threads" / thread_id / "metadata.json"
-  return json.loads(meta_path.read_text(encoding="utf-8"))
-
-
 def _read_events(home: Path, session_id: str, thread_id: str) -> list[dict]:
   events_path = home / "sessions" / session_id / "threads" / thread_id / "data" / "events.jsonl"
   if not events_path.exists():
     return []
   return [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-
-
-async def _await_recovery_tasks() -> None:
-  await await_recovery_tasks(RECOVERY_TASK_PREFIXES)
 
 
 def _install_shim(tmp_path: Path) -> Path:
@@ -209,60 +185,6 @@ def _launch_driver(tmp_path: Path, home: Path, result_delay: float) -> tuple[sub
   ids_file = home / "driver_ids.json"
   _wait_for(ids_file.exists, timeout=20.0, what="driver did not create session/thread")
   return proc, json.loads(ids_file.read_text(encoding="utf-8"))
-
-
-def _kill_driver_mid_run(proc: subprocess.Popen, home: Path, ids: dict) -> None:
-  """SIGKILL the driver once the run's identity is persisted and output is flowing."""
-  thread_dir = home / "sessions" / ids["session"] / "threads" / ids["thread"]
-  raw = thread_dir / "data" / runs.RAW_LOG_NAME
-
-  def run_started() -> bool:
-    if not raw.exists() or "E2E-ASSISTANT-MARKER" not in raw.read_text(encoding="utf-8", errors="replace"):
-      return False
-    try:
-      meta = _read_meta(home, ids["session"], ids["thread"])
-    except json.JSONDecodeError:
-      # metadata.json is a plain (non-atomic) "w"-mode write; the driver may be
-      # mid-write when this polls, which is exactly "not ready yet".
-      return False
-    return meta.get("pid") is not None and meta.get("pid_start") is not None and meta.get("status") == "running"
-
-  _wait_for(run_started, timeout=20.0, what="worker run did not start/persist identity")
-  proc.kill()
-  proc.wait(timeout=10)
-
-
-async def _recover(monkeypatch: pytest.MonkeyPatch,
-                   home: Path,
-                   cfg: CharlieBotConfig | None = None) -> tuple[int, list[bool], list[str], list[runs.RunOutcome]]:
-  """Run startup crash recovery as process B; record reattach mode, master
-  wakes, and the resolve outcome each interrupted run received."""
-  alive_at_reattach: list[bool] = []
-  master_wakes: list[str] = []
-  outcomes: list[runs.RunOutcome] = []
-
-  async def spy_resume(*args, **kwargs):
-    alive_at_reattach.append(bool(kwargs["is_alive"]()))
-    await _real_resume_worker(*args, **kwargs)
-
-  async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
-    master_wakes.append(summary)
-
-  real_resolve = runs.resolve_run
-
-  def spy_resolve(**kwargs):
-    resolution = real_resolve(**kwargs)
-    outcomes.append(resolution.outcome)
-    return resolution
-
-  monkeypatch.setattr(SPAWNER_RESUME_WORKER_PATCH_TARGET, spy_resume)
-  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
-  monkeypatch.setattr("src.core.runs.resolve_run", spy_resolve)
-
-  cfg = cfg or _cfg(home)
-  recovered = await init_module.run_crash_recovery(cfg, datetime.now(UTC))
-  await _await_recovery_tasks()
-  return recovered, alive_at_reattach, master_wakes, outcomes
 
 
 def _assert_run_converged(home: Path, ids: dict) -> dict:
@@ -442,10 +364,6 @@ def _thread_metas(home: Path, session_id: str) -> list[dict]:
       for p in threads_dir.iterdir()
       if (p / "metadata.json").exists()
   ]
-
-
-def _recovery_reports(home: Path, session_id: str) -> list[dict]:
-  return [e for e in read_chat_events(home, session_id) if e.get("source") == "crash_recovery"]
 
 
 async def _settle_finalize_window(home: Path, session_id: str, original_id: str) -> None:
@@ -770,24 +688,6 @@ def _launch_graceful_driver(tmp_path: Path,
   proc.wait(timeout=10)
   ids = json.loads((home / "driver_ids.json").read_text(encoding="utf-8"))
   return proc, ids
-
-
-def _terminal_summaries(home: Path, ids: dict) -> list[dict]:
-  return [
-      e for e in read_chat_events(home, ids["session"])
-      if e.get("type") == "worker_summary" and e.get("thread_id") == ids["thread"] and e.get("status") != "running"
-  ]
-
-
-def _assert_failed_with_transport_reason(home: Path, ids: dict) -> None:
-  """Shared tail of the uncovered-backend recovery tests: the thread finalizes failed with exit
-  code -1 and resolve_run's transport reason lands in exactly one terminal worker_summary."""
-  meta = _read_meta(home, ids["session"], ids["thread"])
-  assert meta["status"] == "failed"
-  assert meta["exit_code"] == -1
-  summaries = _terminal_summaries(home, ids)
-  assert len(summaries) == 1
-  assert runs.TRANSPORT_NOT_COVERED_REASON in summaries[0]["full_content"]
 
 
 def _pid_alive(pid: int) -> bool:

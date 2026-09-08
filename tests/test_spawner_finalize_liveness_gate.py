@@ -20,8 +20,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
-from conftest import REVIEW_TRIGGER_MASTER_PATCH_TARGET
-from test_restart_recovery_e2e import _cfg, _recovery_reports
+from conftest import REVIEW_TRIGGER_MASTER_PATCH_TARGET, _cfg, _recovery_reports
 
 from src.agents.worker import Worker
 from src.core import spawner

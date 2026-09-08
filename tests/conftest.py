@@ -35,6 +35,8 @@ from src.api.sessions import router as sessions_router  # noqa: E402
 from src.core import claude_accounts  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
 from src.core import improve_command  # noqa: E402
+from src.core import init as init_module  # noqa: E402
+from src.core import runs  # noqa: E402
 from src.core import thinking_state  # noqa: E402
 from src.core import init_worker_recovery as worker_recovery_module  # noqa: E402
 from src.core import models  # noqa: E402
@@ -48,6 +50,7 @@ from src.core.sessions import SessionManager  # noqa: E402
 from src.core import spawner  # noqa: E402
 from src.core import spawner_finalize  # noqa: E402
 from src.core import spawner_launch  # noqa: E402
+from src.core.spawner import resume_worker as _real_resume_worker  # noqa: E402
 from src.core.threads import ThreadManager  # noqa: E402
 from src.core.triggers import TriggerManager  # noqa: E402
 
@@ -2264,6 +2267,113 @@ async def await_recovery_tasks(prefixes: tuple[str, ...]) -> None:
     if not pending:
       return
     await asyncio.gather(*pending)
+
+
+# Restart-recovery e2e helpers, single-homed here for test_restart_recovery_e2e.py
+# and its sibling files. The A/B protocol's driver side (fake `claude` shim,
+# driver template, launcher) stays in test_restart_recovery_e2e.py; these are
+# the waits, readers, and the startup-crash-recovery entry the sibling files
+# share.
+def _cfg(home: Path) -> CharlieBotConfig:
+  return CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(home / "worktrees"),
+      backend_options=[models.BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model")],
+  )
+
+
+def _wait_for(predicate, timeout: float, what: str) -> None:
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    if predicate():
+      return
+    time.sleep(0.05)
+  raise TimeoutError(what)
+
+
+def _read_meta(home: Path, session_id: str, thread_id: str) -> dict:
+  meta_path = home / "sessions" / session_id / "threads" / thread_id / "metadata.json"
+  return json.loads(meta_path.read_text(encoding="utf-8"))
+
+
+async def _await_recovery_tasks() -> None:
+  await await_recovery_tasks(RECOVERY_TASK_PREFIXES)
+
+
+def _kill_driver_mid_run(proc: subprocess.Popen, home: Path, ids: dict) -> None:
+  """SIGKILL the driver once the run's identity is persisted and output is flowing."""
+  thread_dir = home / "sessions" / ids["session"] / "threads" / ids["thread"]
+  raw = thread_dir / "data" / runs.RAW_LOG_NAME
+
+  def run_started() -> bool:
+    if not raw.exists() or "E2E-ASSISTANT-MARKER" not in raw.read_text(encoding="utf-8", errors="replace"):
+      return False
+    try:
+      meta = _read_meta(home, ids["session"], ids["thread"])
+    except json.JSONDecodeError:
+      # metadata.json is a plain (non-atomic) "w"-mode write; the driver may be
+      # mid-write when this polls, which is exactly "not ready yet".
+      return False
+    return meta.get("pid") is not None and meta.get("pid_start") is not None and meta.get("status") == "running"
+
+  _wait_for(run_started, timeout=20.0, what="worker run did not start/persist identity")
+  proc.kill()
+  proc.wait(timeout=10)
+
+
+async def _recover(monkeypatch: pytest.MonkeyPatch,
+                   home: Path,
+                   cfg: CharlieBotConfig | None = None) -> tuple[int, list[bool], list[str], list[runs.RunOutcome]]:
+  """Run startup crash recovery as process B; record reattach mode, master
+  wakes, and the resolve outcome each interrupted run received."""
+  alive_at_reattach: list[bool] = []
+  master_wakes: list[str] = []
+  outcomes: list[runs.RunOutcome] = []
+
+  async def spy_resume(*args, **kwargs):
+    alive_at_reattach.append(bool(kwargs["is_alive"]()))
+    await _real_resume_worker(*args, **kwargs)
+
+  async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
+    master_wakes.append(summary)
+
+  real_resolve = runs.resolve_run
+
+  def spy_resolve(**kwargs):
+    resolution = real_resolve(**kwargs)
+    outcomes.append(resolution.outcome)
+    return resolution
+
+  monkeypatch.setattr(SPAWNER_RESUME_WORKER_PATCH_TARGET, spy_resume)
+  monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
+  monkeypatch.setattr("src.core.runs.resolve_run", spy_resolve)
+
+  cfg = cfg or _cfg(home)
+  recovered = await init_module.run_crash_recovery(cfg, datetime.now(UTC))
+  await _await_recovery_tasks()
+  return recovered, alive_at_reattach, master_wakes, outcomes
+
+
+def _recovery_reports(home: Path, session_id: str) -> list[dict]:
+  return [e for e in read_chat_events(home, session_id) if e.get("source") == "crash_recovery"]
+
+
+def _terminal_summaries(home: Path, ids: dict) -> list[dict]:
+  return [
+      e for e in read_chat_events(home, ids["session"])
+      if e.get("type") == "worker_summary" and e.get("thread_id") == ids["thread"] and e.get("status") != "running"
+  ]
+
+
+def _assert_failed_with_transport_reason(home: Path, ids: dict) -> None:
+  """Shared tail of the uncovered-backend recovery tests: the thread finalizes failed with exit
+  code -1 and resolve_run's transport reason lands in exactly one terminal worker_summary."""
+  meta = _read_meta(home, ids["session"], ids["thread"])
+  assert meta["status"] == "failed"
+  assert meta["exit_code"] == -1
+  summaries = _terminal_summaries(home, ids)
+  assert len(summaries) == 1
+  assert runs.TRANSPORT_NOT_COVERED_REASON in summaries[0]["full_content"]
 
 
 def spy_on_load_json_meta(monkeypatch: pytest.MonkeyPatch) -> list[Path]:

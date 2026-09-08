@@ -53,10 +53,10 @@ Vocabulary (opencode row memo):
               the pair — so the three projected token buckets the tally sums cannot go stale,
               and any later write to the row re-reads it.
   partial     the opencode source's accumulated buckets plus its contributing-record count,
-              kept in lockstep with the row memo: every merge ends with the partial matching
-              the memo, a merge that moves it adjusts the partial by the scan's deltas, and a
-              merge that serves the document entry adopts it (the entry's stored signature
-              proves the rows the memo tracks are the rows it sums).
+              kept against the rows the last merge served: a scan-path merge rebuilds it from
+              the row memo's fold (in lockstep with the memo), an entry-served merge adopts
+              or rebuilds it from the entry it serves, and every merge ends with the partial
+              describing exactly the rows that merge folded.
 Vocabulary:
   signature   ``[mtime_ns, size]`` for a log file; a file re-scans whole whenever either value
               moves. The opencode db signs as ``[mtime_ns, size, wal_sig]`` with ``wal_sig`` the
@@ -781,8 +781,8 @@ def _merge_opencode(
   when no signature applies (absent, unstatable, or unreadable db), so the whole-tally memo
   never signs rows it cannot key. A scan-reported delta set with a current partial adjusts
   the source's buckets instead of replaying every record; an entry-served merge adopts the
-  partial the same way (its rows are provably the memo's — see the entry comment); the
-  partial always ends the merge matching the row memo it sums."""
+  partial the same way (the partial's rows are the served entry's — see the entry comment);
+  the partial always ends the merge describing the rows that merge served."""
   if not db.exists():
     t.notes.append("opencode: db absent")
     return None, 0, False
@@ -794,9 +794,11 @@ def _merge_opencode(
   if entry is not None:
     # The signature is taken before the read and stored with the rows, so an entry can only
     # be served while the file still matches it, and a row move writes the db or its WAL
-    # sidecar, which moves that signature — a served entry's records are therefore exactly
-    # the rows the row memo tracks and its partial sums, so the buckets adopt in place of
-    # the per-record fold. The row memo itself is still only ever advanced by scans.
+    # sidecar, which moves that signature — a served entry's records are therefore unchanged
+    # since the merge that stored them, so a partial built from those records (by the replay
+    # below or a scan-path fold) sums exactly what this merge would fold, and its buckets
+    # adopt in place of the per-record fold. The row memo itself is still only ever advanced
+    # by scans.
     epoch = _opencode_row_epochs.get(key, 0)
     partial = _opencode_partials.get(key)
     if partial is None:

@@ -1044,9 +1044,9 @@ def test_entry_served_changed_round_adopts_the_partial(tmp_path: Path, monkeypat
   replays: list[int] = []
   orig_replay = tt._replay_opencode_records
 
-  def spy_replay(t, records):
+  def spy_replay(t: tt._Tally, records: list) -> None:
     replays.append(len(records))
-    return orig_replay(t, records)
+    orig_replay(t, records)
 
   monkeypatch.setattr(tt, "_replay_opencode_records", spy_replay)
 

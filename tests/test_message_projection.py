@@ -809,7 +809,9 @@ def test_worker_summary_without_origin_keeps_fields_unchanged() -> None:
   summary = messages[0]
   assert summary["role"] == "worker_summary"
   assert summary["content"] == "locator"
-  assert summary["full_content"] == "full"
+  # The full summary text stays on the persisted event; the bubble renders
+  # content alone, so the projection carries no full_content key at all.
+  assert "full_content" not in summary
   assert summary["timestamp"] == "t-ws"
   # The event has no origin_session_id, so the projected message must not
   # present the key at all -- indistinguishable from today's projection.

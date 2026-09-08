@@ -95,6 +95,11 @@ def _build_weekly_token_count_event(
   }
 
 
+def _build_turn_context_event(model: str) -> dict:
+  """The turn_context event whose payload.model prices the token_count events after it."""
+  return {"type": "turn_context", "payload": {"model": model}}
+
+
 def _build_spend_token_count_event(
     *,
     timestamp: Any,
@@ -323,12 +328,7 @@ def test_spend_aggregation_prices_recent_turns_by_model(tmp_path) -> None:
   rollout_path = tmp_path / "rollout-recent.jsonl"
 
   events = [
-      {
-          "type": "turn_context",
-          "payload": {
-              "model": "gpt-5.5"
-          },
-      },
+      _build_turn_context_event(model="gpt-5.5"),
       _build_spend_token_count_event(
           timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
           input_tokens=1_000_000,
@@ -412,7 +412,7 @@ async def test_codex_provider_spend_reparses_only_changed_files(tmp_path, monkey
         _build_spend_token_count_event(
             timestamp=now.isoformat(), input_tokens=input_tokens, cached_input_tokens=0, output_tokens=0))
 
-  model_line = json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.3-codex"}})
+  model_line = json.dumps(_build_turn_context_event(model="gpt-5.3-codex"))
   first = rollout_dir / "rollout-first.jsonl"
   second = rollout_dir / "rollout-second.jsonl"
   first.write_text(model_line + "\n" + spend_event(1000) + "\n")
@@ -543,12 +543,7 @@ def test_spend_aggregation_skips_bad_rows_without_poisoning_totals(tmp_path) -> 
   rollout_path = tmp_path / "rollout-mixed.jsonl"
 
   events = [
-      {
-          "type": "turn_context",
-          "payload": {
-              "model": "gpt-5.5"
-          }
-      },
+      _build_turn_context_event(model="gpt-5.5"),
       _build_spend_token_count_event(
           timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
           input_tokens=1_000_000,
@@ -599,12 +594,7 @@ def test_spend_aggregation_skips_unreadable_file(tmp_path) -> None:
 
   readable_path = tmp_path / "rollout-readable.jsonl"
   events = [
-      {
-          "type": "turn_context",
-          "payload": {
-              "model": "gpt-5.5"
-          }
-      },
+      _build_turn_context_event(model="gpt-5.5"),
       _build_spend_token_count_event(
           timestamp=now.isoformat().replace("+00:00", "Z"),
           input_tokens=1_000_000,
@@ -638,12 +628,7 @@ def test_codex_provider_spend_prunes_files_untouched_for_a_week(tmp_path) -> Non
   rollout_path.write_text(
       "\n".join(
           [
-              json.dumps({
-                  "type": "turn_context",
-                  "payload": {
-                      "model": "gpt-5.5"
-                  }
-              }),
+              json.dumps(_build_turn_context_event(model="gpt-5.5")),
               json.dumps(
                   _build_spend_token_count_event(
                       timestamp=now.isoformat().replace("+00:00", "Z"),
@@ -1395,7 +1380,7 @@ def test_list_rollout_files_finds_nested_rollout_logs(tmp_path) -> None:
   rollout_dir = sessions_dir / "2026" / "06" / "01"
   rollout_dir.mkdir(parents=True)
   rollout_path = rollout_dir / "rollout-shared.jsonl"
-  rollout_path.write_text('{"type": "turn_context", "payload": {"model": "gpt-5.3-codex"}}\n')
+  rollout_path.write_text(json.dumps(_build_turn_context_event(model="gpt-5.3-codex")) + "\n")
 
   assert _list_rollout_files(sessions_dir) == [rollout_path]
 

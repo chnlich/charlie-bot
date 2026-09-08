@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NamedTuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -47,6 +47,7 @@ from src.core.scheduler import Scheduler  # noqa: E402
 from src.core.sessions import SessionManager  # noqa: E402
 from src.core import spawner  # noqa: E402
 from src.core import spawner_finalize  # noqa: E402
+from src.core import spawner_launch  # noqa: E402
 from src.core.threads import ThreadManager  # noqa: E402
 from src.core.triggers import TriggerManager  # noqa: E402
 
@@ -1964,6 +1965,50 @@ class SpawnFlowSessionManager(JudgmentShim):
 
   async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
     pass
+
+
+class WorktreeSpawnRig(NamedTuple):
+  """The staged inputs the worktree spawn_worker e2e tests share.
+
+  stage_worktree_spawn installs the three spawn-flow fakes (git_create_worktree, Worker,
+  _notify_completion) and builds the thread/cfg/repo/event-log stage; the test drives
+  spawner.spawn_worker itself and asserts on the rig's fields.
+  """
+
+  cfg: CharlieBotConfig
+  repo_path: Path
+  thread: models.ThreadMetadata
+  captures: dict[str, Any]
+  thread_mgr: CapturingThreadManager
+  description: str
+
+
+def stage_worktree_spawn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    description: str = "Do work",
+    git_fake_mkdir: bool = False,
+) -> WorktreeSpawnRig:
+  """Stage the worktree spawn_worker e2e rig on a fresh codex-backend cfg.
+
+  The git fake records its call into the shared captures dict (key "git_create_worktree")
+  alongside the Worker and _notify_completion fakes; git_fake_mkdir additionally creates
+  the worktree dir for flows that write into it after creation.
+  """
+  cfg = build_codex_worktree_cfg(tmp_path)
+  repo_path = (tmp_path / "repo").resolve()
+  repo_path.mkdir(parents=True, exist_ok=True)
+  thread = models.ThreadMetadata(id="thread-1", session_id="session-id", description=description)
+  captures: dict[str, Any] = {}
+  monkeypatch.setattr(
+      spawner_launch, "git_create_worktree", make_fake_git_create_worktree(mkdir=git_fake_mkdir, captures=captures))
+  monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
+  monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
+  events_log = tmp_path / "events.jsonl"
+  thread_mgr = CapturingThreadManager(thread, captures, events_log)
+  return WorktreeSpawnRig(
+      cfg=cfg, repo_path=repo_path, thread=thread, captures=captures, thread_mgr=thread_mgr, description=description)
 
 
 class ReviewSpawnThreadManager(JudgmentShim):

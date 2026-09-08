@@ -15,13 +15,12 @@ from conftest import (
     SpawnFlowSessionManager,
     build_codex_worktree_cfg,
     build_worker_prompt,
-    capturing_worker,
-    make_fake_git_create_worktree,
     recording_notify_completion,
+    stage_worktree_spawn,
 )
 
 from src.core import git as git_module
-from src.core import review, spawner, spawner_finalize, spawner_launch
+from src.core import review, spawner, spawner_finalize
 from src.core.models import (
     SpawnRequest,
     TaskType,
@@ -173,33 +172,19 @@ async def test_finalize_review_chain_removes_worktree_by_default(
 
 
 @pytest.mark.asyncio
-async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> None:
+async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """End-to-end-ish: SpawnRequest(keep_worktree=True) propagates to ThreadMetadata."""
-  cfg = build_codex_worktree_cfg(tmp_path)
-  repo_path = (tmp_path / "repo").resolve()
-  repo_path.mkdir(parents=True, exist_ok=True)
-  events_log = tmp_path / "events.jsonl"
-  thread = ThreadMetadata(
-      id="thread-1",
-      session_id="session-id",
-      description="Run SLURM benchmark",
-  )
-  captures: dict[str, Any] = {}
-
-  monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner_launch, "git_create_worktree", make_fake_git_create_worktree(mkdir=True))
-  monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
-  monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
+  rig = stage_worktree_spawn(tmp_path, monkeypatch, description="Run SLURM benchmark", git_fake_mkdir=True)
 
   await spawner.spawn_worker(
       session_id="session-id",
-      description="Run SLURM benchmark",
+      description=rig.description,
       thread_id="thread-1",
-      cfg=cfg,
+      cfg=rig.cfg,
       session_mgr=SpawnFlowSessionManager(),
-      thread_mgr=CapturingThreadManager(thread, captures, events_log),
+      thread_mgr=rig.thread_mgr,
       request=SpawnRequest(
-          repo_path=str(repo_path),
+          repo_path=str(rig.repo_path),
           base_branch="main",
           resolved_backend="codex-o3",
           resolved_model="o3",
@@ -208,8 +193,8 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path) -> 
   )
   monkeypatch.undo()
 
-  assert thread.keep_worktree is True
-  assert "This worktree will persist after the reviewer merges." in captures["task_description"]
-  wt_path = Path(thread.worktree_path)
+  assert rig.thread.keep_worktree is True
+  assert "This worktree will persist after the reviewer merges." in rig.captures["task_description"]
+  wt_path = Path(rig.thread.worktree_path)
   assert wt_path.exists()
-  assert captures["notify_thread"].keep_worktree is True
+  assert rig.captures["notify_thread"].keep_worktree is True

@@ -16,6 +16,7 @@ from conftest import (
     make_fake_git_create_worktree,
     patch_review_spawn_path,
     recording_notify_completion,
+    stage_worktree_spawn,
 )
 
 from src.core import review, spawner, spawner_events, spawner_finalize, spawner_launch
@@ -324,32 +325,19 @@ async def test_resolve_requested_subagent_backend_model_allows_antigravity_missi
 
 
 @pytest.mark.asyncio
-async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Path) -> None:
-  cfg = _build_tmp_cfg(tmp_path, CODEX_BACKEND_OPTION)
-  repo_path = (tmp_path / "repo").resolve()
-  repo_path.mkdir(parents=True, exist_ok=True)
-  events_log = tmp_path / "events.jsonl"
-  thread = ThreadMetadata(
-      id="thread-1",
-      session_id="session-id",
-      description="Do work",
-  )
-  captures: dict[str, Any] = {}
-
-  monkeypatch = pytest.MonkeyPatch()
-  monkeypatch.setattr(spawner_launch, "git_create_worktree", make_fake_git_create_worktree(captures=captures))
-  monkeypatch.setattr(spawner_launch, "Worker", capturing_worker(captures))
-  monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
+async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  rig = stage_worktree_spawn(tmp_path, monkeypatch, description="Do work")
 
   await spawner.spawn_worker(
       session_id="session-id",
-      description="Do work",
+      description=rig.description,
       thread_id="thread-1",
-      cfg=cfg,
+      cfg=rig.cfg,
       session_mgr=SpawnFlowSessionManager(),
-      thread_mgr=CapturingThreadManager(thread, captures, events_log),
+      thread_mgr=rig.thread_mgr,
       request=SpawnRequest(
-          repo_path=str(repo_path),
+          repo_path=str(rig.repo_path),
           base_branch="main",
           resolved_backend="codex-o3",
           resolved_model="o3-pro",
@@ -357,11 +345,11 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(tmp_path: Pat
   )
   monkeypatch.undo()
 
-  assert "git_create_worktree" in captures
-  assert captures["worker_dir"] == captures["git_create_worktree"]["wt_path"].resolve()
-  assert captures["worker_dir"] != repo_path
-  assert thread.worktree_path == str(captures["git_create_worktree"]["wt_path"])
-  assert thread.base_branch == "main"
+  assert "git_create_worktree" in rig.captures
+  assert rig.captures["worker_dir"] == rig.captures["git_create_worktree"]["wt_path"].resolve()
+  assert rig.captures["worker_dir"] != rig.repo_path
+  assert rig.thread.worktree_path == str(rig.captures["git_create_worktree"]["wt_path"])
+  assert rig.thread.base_branch == "main"
 
 
 @pytest.mark.asyncio

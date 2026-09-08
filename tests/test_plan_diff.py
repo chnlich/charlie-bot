@@ -1,3 +1,4 @@
+import random
 import re
 from dataclasses import dataclass, field
 from html import unescape
@@ -360,3 +361,81 @@ def test_style_and_header_splice_positions() -> None:
   annotated = annotate('<div>alpha</div>', fragment_new)
   assert annotated.startswith("<style data-cbd-style>")
   assert '<div class="cbd-header"' in annotated
+
+
+def _anchors_from_full_parse(source: str) -> tuple[tuple | None, tuple | None]:
+  from src.core.plan_diff import _first_descendant, _Node, _parse
+
+  parser = _parse(source)
+
+  def quad(node: "_Node | None") -> tuple | None:
+    return (node.start, node.start_end, node.end, node.end_end) if node is not None else None
+
+  return quad(_first_descendant(parser.root, "head")), quad(_first_descendant(parser.root, "body"))
+
+
+def _anchors_as_quads(anchors: tuple) -> tuple[tuple | None, tuple | None]:
+  return tuple(
+      None if anchor is None else (anchor.start, anchor.start_end, anchor.end, anchor.end_end) for anchor in anchors)
+
+
+_FUZZ_TAGS = [
+    "html", "head", "body", "div", "p", "span", "section", "table", "tr", "td", "ul", "li", "h1", "h2", "em", "strong",
+    "code", "pre", "script", "style", "title", "meta", "br", "hr", "img"
+]
+_FUZZ_ATTRS = ["class", "id", "data-x", "style", "open"]
+_FUZZ_ATTR_VALUES = ["a", "b c", "", "x>y", "a&amp;b"]
+
+
+def _fuzz_document(rng: random.Random) -> str:
+  pieces: list[str] = []
+  stack: list[str] = []
+  for _ in range(rng.randint(1, 14)):
+    roll = rng.random()
+    if roll < 0.10 and stack:
+      tag = rng.choice(stack)
+      pieces.append(f"</{tag}>")
+      stack.remove(tag)
+    elif roll < 0.16:
+      pieces.append(rng.choice(["hello world", "alpha beta", "&amp; &lt;", "  \n  ", "e" * 5]))
+    elif roll < 0.20:
+      pieces.append(f"<!-- {rng.choice(['</head>', '<body>', '---', 'x'])} -->")
+    elif roll < 0.26:
+      tag = rng.choice(["script", "style"])
+      pieces.append(f"<{tag}>{rng.choice(['</head> inside script', 'a < b', 'var x=1;'])}</{tag}>")
+    elif roll < 0.30:
+      pieces.append(f"<{rng.choice(_FUZZ_TAGS)}{_fuzz_attrs(rng)}/>")
+    else:
+      tag = rng.choice(_FUZZ_TAGS)
+      pieces.append(f"<{tag}{_fuzz_attrs(rng)}>")
+      if tag not in _VOID_TAGS:
+        stack.append(tag)
+  for tag in reversed(stack):
+    if rng.random() < 0.7:
+      pieces.append(f"</{tag}>")
+  return "".join(pieces)
+
+
+def _fuzz_attrs(rng: random.Random) -> str:
+  count = rng.randint(0, 3)
+  if not count:
+    return ""
+  return " " + " ".join(f'{rng.choice(_FUZZ_ATTRS)}="{rng.choice(_FUZZ_ATTR_VALUES)}"' for _ in range(count))
+
+
+def test_boundary_anchors_match_the_full_parse_on_a_randomized_corpus() -> None:
+  from src.core.plan_diff import _parse_anchors
+
+  rng = random.Random(20260907)
+  for _ in range(1500):
+    doc = _fuzz_document(rng)
+    assert _anchors_as_quads(_parse_anchors(doc)) == _anchors_from_full_parse(doc), f"anchor drift on {doc!r}"
+
+
+def test_boundary_anchors_match_the_full_parse_on_the_fixture_pair_and_spliced_output() -> None:
+  from src.core.plan_diff import _parse_anchors, annotate
+
+  base = (_ROOT / "tests/data/plan_move2-direct-kill_v10.html").read_text(encoding="utf-8")
+  new = (_ROOT / "tests/data/plan_move2-direct-kill_v11.html").read_text(encoding="utf-8")
+  for source in (base, new, annotate(base, new)):
+    assert _anchors_as_quads(_parse_anchors(source)) == _anchors_from_full_parse(source)

@@ -2483,8 +2483,9 @@ class SessionManager:
     if _sidebar_sweep_task is not None and not _sidebar_sweep_task.done():
       return
     specs_template = [
-        (meta.id, self._threads_dir(meta.id), self._session_dir(meta.id) / "triggers",
-         self._session_dir(meta.id) / "plans.json") for meta in sessions
+        (
+            meta.id, self._threads_dir(meta.id), self._session_dir(meta.id) / "triggers",
+            self._session_dir(meta.id) / "plans.json") for meta in sessions
     ]
 
     async def _run() -> None:

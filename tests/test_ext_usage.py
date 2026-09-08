@@ -467,9 +467,9 @@ def _counting_scan(monkeypatch) -> list[int]:
   scanned: list[int] = []
   real_scan = ext_usage_mod._latest_token_count_event
 
-  def _wrapped(lines):
+  def _wrapped(lines, match=None):
     scanned.append(len(lines))
-    return real_scan(lines)
+    return real_scan(lines, match)
 
   monkeypatch.setattr(ext_usage_mod, "_latest_token_count_event", _wrapped)
   return scanned
@@ -536,6 +536,150 @@ async def test_codex_provider_usage_scrape_full_read_on_tail_miss(tmp_path, monk
   assert [w["utilization"] for w in usage["windows"]] == [99.0, 2.0]
   assert len(scanned) == 2
   assert scanned[1] > scanned[0]
+
+
+def _iso_z(moment: datetime) -> str:
+  return moment.isoformat().replace("+00:00", "Z")
+
+
+def _plan_quota_line(moment: datetime, used_percent: float) -> str:
+  """One jsonl line: a plan-pool (limit_id codex) token_count event stamped *moment*."""
+  event = _build_weekly_token_count_event(
+      timestamp=_iso_z(moment), used_percent=used_percent, resets_at=int(moment.timestamp()) + 86400)
+  event["payload"]["rate_limits"]["limit_id"] = "codex"
+  event["payload"]["rate_limits"]["limit_name"] = None
+  return json.dumps(event)
+
+
+def _model_pool_line(moment: datetime) -> str:
+  """One jsonl line: a model-level (spark) pool token_count event stamped *moment*."""
+  return json.dumps(
+      {
+          "timestamp": _iso_z(moment),
+          "type": "event_msg",
+          "payload":
+              {
+                  "type": "token_count",
+                  "rate_limits":
+                      {
+                          "limit_id": "codex_bengalfox",
+                          "limit_name": "GPT-5.3-Codex-Spark",
+                          "primary":
+                              {
+                                  "used_percent": 0.0,
+                                  "window_minutes": 300,
+                                  "resets_at": int(moment.timestamp()) + 3600,
+                              },
+                          "secondary":
+                              {
+                                  "used_percent": 0.0,
+                                  "window_minutes": 10080,
+                                  "resets_at": int(moment.timestamp()) + 86400,
+                              },
+                      },
+              },
+      })
+
+
+@pytest.mark.asyncio
+async def test_codex_provider_fetch_picks_freshest_plan_event_across_recent_files(tmp_path) -> None:
+  """The in-flight file holds the newest mtime but an old plan event; the finished file's fresher event wins."""
+  provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
+  now, rollout_dir = _seed_rollout_dir(tmp_path)
+
+  inflight = rollout_dir / "rollout-inflight.jsonl"
+  inflight.write_text(_plan_quota_line(now - timedelta(minutes=61), 6.0) + "\n")
+  os.utime(inflight, (now.timestamp(), now.timestamp()))
+  finished_event_at = now - timedelta(seconds=6)
+  finished = rollout_dir / "rollout-finished.jsonl"
+  finished.write_text(_plan_quota_line(finished_event_at, 18.0) + "\n")
+  os.utime(finished, (finished_event_at.timestamp(), finished_event_at.timestamp()))
+
+  usage = await provider.fetch()
+
+  assert usage is not None
+  assert usage["windows"]
+  assert usage["windows"][0]["utilization"] == 18.0
+  assert usage["token_count_observed_at"] == _iso_z(finished_event_at)
+
+
+@pytest.mark.asyncio
+async def test_codex_provider_fetch_keeps_older_file_inside_scan_window(tmp_path) -> None:
+  """Every file written inside the window counts; an outside file's fresher event never contributes."""
+  provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
+  now, rollout_dir = _seed_rollout_dir(tmp_path)
+  window = timedelta(hours=ext_usage_mod._CODEX_USAGE_SCAN_WINDOW_HOURS)
+
+  inside_event_at = now - timedelta(minutes=10)
+  inside = rollout_dir / "rollout-inside.jsonl"
+  inside.write_text(_plan_quota_line(inside_event_at, 30.0) + "\n")
+  inside_mtime = (now - window + timedelta(minutes=5)).timestamp()
+  os.utime(inside, (inside_mtime, inside_mtime))
+  outside = rollout_dir / "rollout-outside.jsonl"
+  outside.write_text(_plan_quota_line(now - timedelta(minutes=1), 90.0) + "\n")
+  outside_mtime = (now - window - timedelta(minutes=5)).timestamp()
+  os.utime(outside, (outside_mtime, outside_mtime))
+
+  usage = await provider.fetch()
+
+  assert usage is not None
+  assert usage["windows"][0]["utilization"] == 30.0
+  assert usage["token_count_observed_at"] == _iso_z(inside_event_at)
+
+
+@pytest.mark.asyncio
+async def test_codex_provider_fetch_falls_back_to_single_newest_file_past_scan_window(tmp_path) -> None:
+  """All files past the window: the newest-mtime file alone yields its event, fresher events elsewhere are ignored."""
+  provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
+  now, rollout_dir = _seed_rollout_dir(tmp_path)
+
+  newest_event_at = now - timedelta(days=2)
+  newest = rollout_dir / "rollout-newest.jsonl"
+  newest.write_text(_plan_quota_line(newest_event_at, 96.0) + "\n")
+  os.utime(newest, (newest_event_at.timestamp(), newest_event_at.timestamp()))
+  older = rollout_dir / "rollout-older.jsonl"
+  older.write_text(_plan_quota_line(now - timedelta(days=1), 40.0) + "\n")
+  older_mtime = (now - timedelta(days=3)).timestamp()
+  os.utime(older, (older_mtime, older_mtime))
+
+  usage = await provider.fetch()
+
+  assert usage is not None
+  assert usage["windows"][0]["utilization"] == 96.0
+  assert usage["token_count_observed_at"] == _iso_z(newest_event_at)
+
+
+@pytest.mark.asyncio
+async def test_codex_provider_fetch_reports_no_plan_reading_when_scan_set_is_model_only(tmp_path) -> None:
+  """A scan set with only model-level events is a no-reading state, never an empty-windows payload."""
+  provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
+  now, rollout_dir = _seed_rollout_dir(tmp_path)
+
+  spark_only = rollout_dir / "rollout-spark.jsonl"
+  spark_only.write_text(_model_pool_line(now) + "\n")
+  os.utime(spark_only, (now.timestamp(), now.timestamp()))
+
+  assert await provider.fetch() is None
+  assert provider.last_error == "no plan-quota reading in 6h"
+
+
+@pytest.mark.asyncio
+async def test_codex_provider_fetch_finds_plan_event_buried_under_model_events(tmp_path) -> None:
+  """A mid-session model switch leaves newer model-level lines above the file's last plan event."""
+  provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
+  now, rollout_dir = _seed_rollout_dir(tmp_path)
+
+  plan_event_at = now - timedelta(minutes=10)
+  rollout_path = rollout_dir / "rollout-switched.jsonl"
+  rollout_path.write_text(
+      _plan_quota_line(plan_event_at, 12.0) + "\n" + _model_pool_line(now - timedelta(minutes=5)) + "\n")
+  os.utime(rollout_path, (now.timestamp(), now.timestamp()))
+
+  usage = await provider.fetch()
+
+  assert usage is not None
+  assert usage["windows"][0]["utilization"] == 12.0
+  assert usage["token_count_observed_at"] == _iso_z(plan_event_at)
 
 
 def test_spend_aggregation_skips_bad_rows_without_poisoning_totals(tmp_path) -> None:

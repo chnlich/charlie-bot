@@ -95,7 +95,12 @@ def _stat_metadata_signature(path: Path) -> tuple[int, int] | None:
 
 
 _SEARCH_RESULT_LIMIT = 200  # newest rows a name/content search returns; keeps the render bounded
-_PROJECTION_LRU_LIMIT = 8
+# The window must cover the tabs' session rotation, so a re-entry never re-pays
+# the cold build: the switch diagnostic rotated among 21 distinct sessions in a
+# 16 h sample. A retained projection shares the events cache's strings (~0.5 MB
+# per big session measured), so the window's memory rides the unbounded events
+# cache's profile.
+_PROJECTION_LRU_LIMIT = 64
 # LRU cap on the content-search miss memo: chat-file path -> {proven-absent
 # lowercase needle -> the (mtime_ns, size, ino) the absence was proven at}.
 # Absence of N proves every superstring of N absent while the file keeps that

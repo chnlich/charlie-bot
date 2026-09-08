@@ -9,7 +9,7 @@ from pathlib import Path
 
 import structlog
 
-from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, AgentBackend
+from src.agents.backends.base import SESSION_ID_ENV_VAR, SKIP_PERMISSIONS_FLAG, AgentBackend
 from src.core import event_types as ET
 from src.core.log_once import WarnOnceRegistry
 from src.core.process import kill_process_group
@@ -107,7 +107,7 @@ def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
   """
   out = dict(env)
   out.pop("CLAUDECODE", None)
-  out.pop("CHARLIEBOT_SESSION_ID", None)
+  out.pop(SESSION_ID_ENV_VAR, None)
   out["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
   return out
 

@@ -18,6 +18,8 @@ import termios
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
+from src.agents.backends.base import SESSION_ID_ENV_VAR
+
 log = structlog.get_logger()
 
 PTY_INPUT = "pty_input"
@@ -51,7 +53,7 @@ def tmux_session_name(session_id: str) -> str:
 
 def _tmux_client_env() -> dict[str, str]:
   env = {**os.environ}
-  env.pop("CHARLIEBOT_SESSION_ID", None)
+  env.pop(SESSION_ID_ENV_VAR, None)
   return env
 
 

@@ -25,6 +25,7 @@ from typing import Any, NoReturn
 
 import requests
 
+from src.agents.backends.base import SESSION_ID_ENV_VAR
 from src.core.buildinfo import read_repo_head_sha
 from src.core.config import CharlieBotConfig, get_config
 from src.core.timeouts import (
@@ -33,10 +34,6 @@ from src.core.timeouts import (
     HTTP_VERSION_SKEW_TIMEOUT,
     SUBPROCESS_GIT_SHA_TIMEOUT,
 )
-
-# The server writes this variable into every master process environment; the
-# CLIs read their session identity from it (see ``resolve_session_id``).
-SESSION_ID_ENV_VAR = "CHARLIEBOT_SESSION_ID"
 
 TASK_SPEC_REQUIRED_HEADINGS = (
     "Goal",

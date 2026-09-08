@@ -11,6 +11,7 @@ import structlog
 
 from src.agents import master_cc_relay, master_cc_state
 from src.agents.backends.base import (
+    SESSION_ID_ENV_VAR,
     AgentBackend,
     _read_stderr_tail,
     make_text_event,
@@ -554,7 +555,7 @@ def _build_master_env(cfg: CharlieBotConfig, session_id: str) -> dict[str, str]:
   environment hands down no stale id.
   """
   env = claude_supervisor_env(os.environ)
-  env["CHARLIEBOT_SESSION_ID"] = session_id
+  env[SESSION_ID_ENV_VAR] = session_id
   env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
 
   venv_bin = cfg.charlie_bot_repo / ".venv" / "bin"

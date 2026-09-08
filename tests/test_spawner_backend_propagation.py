@@ -359,7 +359,7 @@ async def test_create_worktree_and_process_raises_when_session_missing(
     monkeypatch: pytest.MonkeyPatch,
     worktree_override: bool,
 ) -> None:
-  """The session lookup fails both worktree paths before any git worktree work lands."""
+  """Both worktree paths fail the session lookup and create no worker."""
   cfg = _build_tmp_cfg(tmp_path, CODEX_BACKEND_OPTION)
   repo_path = (tmp_path / "repo").resolve()
   repo_path.mkdir(parents=True, exist_ok=True)

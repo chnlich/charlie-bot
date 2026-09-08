@@ -339,6 +339,11 @@ async def list_branches(repo: str = Query(..., description="Full path to git rep
   repo_path = Path(repo).expanduser()
   if not (repo_path / ".git").exists() and not repo_path.name == ".git":
     raise HTTPException(status_code=400, detail=f"Not a git repo: {repo}")
+  # The endpoint deliberately accepts a path that IS a .git dir (git resolves the
+  # repo from cwd); the signature walk reads <repo>/.git, so normalize to the
+  # parent — same repo, same listing, one memo key.
+  if repo_path.name == ".git":
+    repo_path = repo_path.parent
   # The signature walk and any `git branch` subprocess stay off the event loop
   # in one thread hop, the _resolve_commits_memoized shape.
   lines = await asyncio.to_thread(_list_branches_memoized_sync, repo_path)

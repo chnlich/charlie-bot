@@ -352,6 +352,17 @@ def test_branch_new_ref_busts_memo(tmp_path: Path, monkeypatch: pytest.MonkeyPat
   assert [c[1] for c in calls] == []
 
 
+def test_branch_list_accepts_git_dir_path_form(tmp_path: Path) -> None:
+  """The endpoint's own validation admits a path that IS a .git dir; the signature
+  walk must not 500 on it where the subprocess-only form returned 200."""
+  repo = _build_repo(tmp_path)
+  client = _build_client(tmp_path)
+  root = client.get("/api/git/branches", params={"repo": str(repo)}).json()
+  via_git_dir = client.get("/api/git/branches", params={"repo": str(repo / ".git")})
+  assert via_git_dir.status_code == 200
+  assert via_git_dir.json() == root
+
+
 def test_repo_outside_workspace_rejected(tmp_path: Path) -> None:
   repo = _build_repo(tmp_path)
   # Point the workspace somewhere else so the repo fails the under-workspace check.

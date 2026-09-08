@@ -462,7 +462,19 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
 
 
 @pytest.mark.asyncio
-async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "origin_model",
+    ["o3-pro", None],
+    ids=["propagates", "missing-model-fails"],
+)
+async def test_spawn_review_worker_backend_model_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    origin_model: str | None,
+) -> None:
+  """spawn_review_worker copies the origin thread's backend and model onto the review SpawnRequest and
+  saves the review thread in the origin's worktree; a None model raises ValueError before any spawn
+  seam is reached."""
   cfg = _build_cfg()
   captured: dict[str, Any] = {}
   repo_path = tmp_path / "repo"
@@ -480,9 +492,20 @@ async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.
       repo_path=str(repo_path),
       worktree_path=str(worktree_path),
       backend="codex-o3",
-      model="o3-pro",
+      model=origin_model,
   )
   thread_mgr = ReviewSpawnThreadManager()
+
+  if origin_model is None:
+    with pytest.raises(ValueError, match="missing model metadata"):
+      await review.spawn_review_worker(
+          "session-id",
+          original,
+          cfg,
+          ReviewSpawnSessionManager("Scheduled: nightly"),
+          thread_mgr,
+      )
+    return
 
   await review.spawn_review_worker(
       "session-id",
@@ -497,36 +520,6 @@ async def test_spawn_review_worker_propagates_backend_model(monkeypatch: pytest.
   assert captured["request"].resolved_backend == "codex-o3"
   assert captured["request"].resolved_model == "o3-pro"
   assert thread_mgr.saved[0].worktree_path == str(worktree_path)
-
-
-@pytest.mark.asyncio
-async def test_spawn_review_worker_fails_if_backend_model_missing(tmp_path: Path) -> None:
-  cfg = _build_cfg()
-  repo_path = tmp_path / "repo"
-  worktree_path = tmp_path / "worktrees" / "charliebot-task-1"
-  repo_path.mkdir()
-  worktree_path.mkdir(parents=True)
-
-  original = ThreadMetadata(
-      id="origin-thread-id",
-      session_id="session-id",
-      description="Do work",
-      branch_name="charliebot/task-1",
-      base_branch="main",
-      repo_path=str(repo_path),
-      worktree_path=str(worktree_path),
-      backend="codex-o3",
-      model=None,
-  )
-
-  with pytest.raises(ValueError, match="missing model metadata"):
-    await review.spawn_review_worker(
-        "session-id",
-        original,
-        cfg,
-        ReviewSpawnSessionManager("Scheduled: nightly"),
-        ReviewSpawnThreadManager(),
-    )
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 import pytest
 from conftest import (
+    PUBLISH_BASE_URL,
     SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
     SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
     SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
@@ -583,7 +584,7 @@ async def test_reply_binding_tracks_the_running_round_under_metadata_churn(tmp_p
 # Reply: the publish-lane rewrite before any chunk posts
 # ---------------------------------------------------------------------------
 
-_PUB_BASE = "https://pub.example.test/charliebot_pub"
+_PUB_BASE = PUBLISH_BASE_URL
 _FILE_HOST = "https://agent.example.test:18498"
 
 

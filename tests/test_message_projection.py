@@ -29,8 +29,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.message_projection import MessageProjection
 from src.core.models import CreateSessionRequest
-from src.core.sessions import SessionManager
-from src.core.sessions import _PROJECTION_LRU_LIMIT
+from src.core.sessions import _PROJECTION_LRU_LIMIT, SessionManager
 
 # ---------------------------------------------------------------------------
 # Fixture event builders

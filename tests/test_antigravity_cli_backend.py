@@ -1,12 +1,11 @@
 from pathlib import Path
 
 import pytest
-from conftest import ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, build_cli_backend
+from conftest import AGY_BACKEND_OPTION, ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, build_cli_backend
 
 from src.agents.backends.antigravity_cli import AntigravityCliBackend
 from src.agents.backends.registry import build_backend
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption
 
 
 def _build_backend(monkeypatch, **kwargs) -> AntigravityCliBackend:
@@ -73,7 +72,7 @@ def test_registry_forwards_print_timeout_option(monkeypatch) -> None:
       ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/agy",
   )
-  option = BackendOption(id="agy", label="Antigravity", type="antigravity", print_timeout="30m")
+  option = AGY_BACKEND_OPTION.model_copy(update={"print_timeout": "30m"})
 
   backend = build_backend(option, CharlieBotConfig())
 
@@ -286,7 +285,7 @@ def test_registry_builds_antigravity_backend(monkeypatch) -> None:
       ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/agy",
   )
-  option = BackendOption(id="agy", label="Antigravity", type="antigravity")
+  option = AGY_BACKEND_OPTION
   backend = build_backend(option, CharlieBotConfig(), extra_flags=["--sandbox"])
 
   assert isinstance(backend, AntigravityCliBackend)

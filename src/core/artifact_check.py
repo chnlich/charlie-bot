@@ -25,13 +25,13 @@ import asyncio
 import dataclasses
 import html
 import re
-import subprocess
 import uuid
 from collections.abc import Iterator
 from html.parser import HTMLParser
 from pathlib import Path
 
 from src.agents.backends.registry import build_backend
+from src.core import headless_render
 from src.core.autonamer import iter_light_backends
 from src.core.config import CharlieBotConfig
 from src.core.plan_diff import VOID_TAGS
@@ -87,13 +87,11 @@ def _measure_goal_weighted(artifact: Path) -> int:
 PAGE_HEIGHT_BUDGET = 1600
 
 _PAGE_PROBE_WIDTH_PX = 1280
-_RENDER_TIMEOUT_S = 60
-_HEIGHT_MARKER_RE = re.compile(r'<pre id="page-height">(\d+)</pre>')
 
 # The probe loads the artifact in a fixed-width iframe over file://, hides the revision
 # marks (revision badges and revnotes ride outside the budget, per the plan template's
 # Page budget rule), leaves details elements in their default collapsed state, then
-# writes the artifact's measured height into its own DOM so --dump-dom hands it back.
+# writes the artifact's measured height into its own DOM so the renderer reads it back.
 _PAGE_PROBE_TEMPLATE = """<!doctype html>
 <html><head><meta charset="utf-8">
 <style>html,body{{margin:0;padding:0}}iframe{{width:{width}px;border:0;display:block}}</style>
@@ -120,35 +118,7 @@ def _measure_page_height(chrome_bin: Path, artifact: Path) -> int:
   probe.write_text(
       _PAGE_PROBE_TEMPLATE.format(width=_PAGE_PROBE_WIDTH_PX, src=artifact.resolve().as_uri()), encoding="utf-8")
   try:
-    try:
-      proc = subprocess.run(
-          [
-              str(chrome_bin),
-              "--headless",
-              "--disable-gpu",
-              "--no-sandbox",
-              "--allow-file-access-from-files",
-              "--virtual-time-budget=8000",
-              "--dump-dom",
-              probe.as_uri(),
-          ],
-          capture_output=True,
-          check=False,
-          timeout=_RENDER_TIMEOUT_S,
-      )
-    except subprocess.TimeoutExpired as e:
-      raise ValueError(
-          f"headless renderer timed out after {_RENDER_TIMEOUT_S}s while measuring the plan page height") from e
-    except OSError as e:
-      raise ValueError(f"headless renderer could not be launched: {chrome_bin} ({e})") from e
-    if proc.returncode != 0:
-      stderr = proc.stderr.decode("utf-8", errors="replace").strip()
-      tail = stderr[-400:] if stderr else "no stderr output"
-      raise ValueError(f"headless renderer exited {proc.returncode} while measuring the plan page height: {tail}")
-    match = _HEIGHT_MARKER_RE.search(proc.stdout.decode("utf-8", errors="replace"))
-    if match is None:
-      raise ValueError("headless renderer output carried no page-height marker; cannot measure the plan page")
-    return int(match.group(1))
+    return headless_render.render_height(chrome_bin, probe.as_uri())
   finally:
     probe.unlink()
 

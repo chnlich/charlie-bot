@@ -890,14 +890,13 @@ class SessionManager:
   async def _get_session_bypassing_cache(self, session_id: str) -> SessionMetadata | None:
     """get_session forced past the TTL cache, so the read lands on disk.
 
-    The single-field mutators (``persist_cc_session_id``, ``persist_master_run``,
-    ``update_thinking_state``) and ``persist_cc_session_id``'s post-save
-    read-back must act on the latest on-disk state, not a TTL-cached view: a
-    stale view would clobber a concurrent writer's save. Unlike
-    ``read_metadata_fresh`` this stays a ``get_session`` call — the rating-key
-    migration still runs and the cache is re-populated from the read. Hold
-    ``self._lock_for(session_id)`` around the whole mutate-save; without the
-    lock the fresh view races other writers.
+    The single-field mutators (``_save_field_fresh``, ``persist_cc_session_id``,
+    ``persist_claude_account``) and their post-save read-backs must act on the
+    latest on-disk state, not a TTL-cached view: a stale view would clobber a
+    concurrent writer's save. Unlike ``read_metadata_fresh`` this stays a
+    ``get_session`` call — the rating-key migration still runs and the cache
+    is re-populated from the read. Hold ``self._lock_for(session_id)`` around
+    the whole mutate-save; without the lock the fresh view races other writers.
     """
     self._invalidate_cache(session_id)
     return await self.get_session(session_id)
@@ -1789,34 +1788,27 @@ class SessionManager:
     events = self.load_chat_events_sync(session_id)
     return any(ev.get("type") == ET.MASTER_DONE for ev in events)
 
-  async def persist_master_run(self, session_id: str, record: MasterRunRecord | None) -> None:
-    """Set or clear the session's in-flight master-turn record.
+  async def _save_field_fresh(self, session_id: str, field: str, value: Any) -> None:
+    """Set one metadata field on a fresh disk read, under the per-session lock.
 
-    Same read-modify-write-under-lock pattern as ``persist_cc_session_id``: a
-    whole-object save would clobber concurrent single-field writes.
+    The fresh read inside the save lock is the single-field-mutator contract
+    (see ``_get_session_bypassing_cache``). No-op when the session does not
+    exist.
     """
     async with self._lock_for(session_id):
       fresh = await self._get_session_bypassing_cache(session_id)
       if fresh is None:
         return
-      fresh.master_run = record
+      setattr(fresh, field, value)
       await self.save_metadata(fresh)
 
-  async def update_thinking_state(
-      self,
-      session_id: str,
-      updated_at: datetime,
-  ) -> None:
-    """Persist updated_at without clobbering unrelated fields.
+  async def persist_master_run(self, session_id: str, record: MasterRunRecord | None) -> None:
+    """Set or clear the session's in-flight master-turn record."""
+    await self._save_field_fresh(session_id, "master_run", record)
 
-    Re-reads fresh metadata from disk before writing, so concurrent changes
-    to fields like 'group' are preserved.
-    """
-    async with self._lock_for(session_id):
-      fresh = await self._get_session_bypassing_cache(session_id)
-      if fresh:
-        fresh.updated_at = updated_at
-        await self.save_metadata(fresh)
+  async def update_thinking_state(self, session_id: str, updated_at: datetime) -> None:
+    """Persist updated_at without clobbering unrelated fields."""
+    await self._save_field_fresh(session_id, "updated_at", updated_at)
 
   def list_active_session_metas(self) -> list[SessionMetadata]:
     """Return metadata for active sessions by reading metadata.json files.

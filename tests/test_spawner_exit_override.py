@@ -5,6 +5,7 @@ failed. The helper inspects events.jsonl and overrides non-zero exit codes accor
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import CLEAN_EXIT_OUTCOME, append_events
@@ -35,104 +36,42 @@ async def _override_from_events(tmp_path: Path, events: list[dict], exit_code: i
       exit_code, "session-id", _thread(), _FakeThreadManager(events_path))
 
 
-@pytest.mark.asyncio
-async def test_success_result_with_nonzero_exit_overrides_to_zero(tmp_path: Path) -> None:
-  result = await _override_from_events(
-      tmp_path, [
-          {
-              "type": "assistant",
-              "message": {
-                  "content": "working"
-              }
-          },
-          {
-              "type": "result",
-              "subtype": "success",
-              "is_error": False,
-              "result": "done"
-          },
-      ], 143)
+def _assistant_event(content: str) -> dict:
+  return {"type": "assistant", "message": {"content": content}}
 
-  assert result == 0
+
+def _result_event(subtype: str, **extra: Any) -> dict:
+  return {"type": "result", "subtype": subtype, **extra}
 
 
 @pytest.mark.asyncio
-async def test_success_result_with_is_error_none_overrides_to_zero(tmp_path: Path) -> None:
-  result = await _override_from_events(tmp_path, [
-      {
-          "type": "result",
-          "subtype": "success",
-          "result": "done"
-      },
-  ], 143)
-
-  assert result == 0
-
-
-@pytest.mark.asyncio
-async def test_error_max_turns_subtype_does_not_override(tmp_path: Path) -> None:
-  result = await _override_from_events(
-      tmp_path, [
-          {
-              "type": "result",
-              "subtype": "error_max_turns",
-              "is_error": False
-          },
-      ], 143)
-
-  assert result == 143
-
-
-@pytest.mark.asyncio
-async def test_is_error_true_does_not_override(tmp_path: Path) -> None:
-  result = await _override_from_events(tmp_path, [
-      {
-          "type": "result",
-          "subtype": "success",
-          "is_error": True
-      },
-  ], 143)
-
-  assert result == 143
-
-
-@pytest.mark.asyncio
-async def test_no_result_event_returns_original(tmp_path: Path) -> None:
-  result = await _override_from_events(
-      tmp_path, [
-          {
-              "type": "assistant",
-              "message": {
-                  "content": "thinking"
-              }
-          },
-          {
-              "type": "tool_use",
-              "name": "Bash"
-          },
-      ], 143)
-
-  assert result == 143
-
-
-@pytest.mark.asyncio
-async def test_only_last_result_event_is_considered(tmp_path: Path) -> None:
-  # Earlier success result followed by a later failure result: should NOT override.
-  result = await _override_from_events(
-      tmp_path, [
-          {
-              "type": "result",
-              "subtype": "success",
-              "is_error": False
-          },
-          {
-              "type": "result",
-              "subtype": "error_max_turns",
-              "is_error": True
-          },
-      ], 143)
-
-  assert result == 143
+@pytest.mark.parametrize(
+    ("events", "expected"),
+    [
+        ([_assistant_event("working"),
+          _result_event("success", is_error=False, result="done")], 0),
+        ([_result_event("success", result="done")], 0),
+        ([_result_event("error_max_turns", is_error=False)], 143),
+        ([_result_event("success", is_error=True)], 143),
+        ([_assistant_event("thinking"), {
+            "type": "tool_use",
+            "name": "Bash"
+        }], 143),
+        ([_result_event("success", is_error=False),
+          _result_event("error_max_turns", is_error=True)], 143),
+    ],
+    ids=[
+        "success-overrides",
+        "success-without-is-error-overrides",
+        "error-subtype-keeps",
+        "is-error-keeps",
+        "no-result-keeps",
+        "last-result-wins",
+    ],
+)
+async def test_exit_override_decision_by_last_result_event(tmp_path: Path, events: list[dict], expected: int) -> None:
+  """The last result event decides: success with is_error False or absent overrides 143 to 0."""
+  assert await _override_from_events(tmp_path, events, 143) == expected
 
 
 @pytest.mark.asyncio

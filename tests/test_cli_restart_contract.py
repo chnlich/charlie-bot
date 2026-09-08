@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 import requests
+from conftest import write_trigger
 
 from src.cli import common
 from src.cli import improve as improve_module
@@ -29,6 +30,7 @@ from src.cli import plan as plan_module
 from src.cli import schedule_trigger as schedule_trigger_module
 from src.cli.plan import _PLAN_REMINDER
 from src.core.config import CharlieBotConfig
+from src.core.models import PendingTrigger, TriggerStatus
 
 
 def _cfg(tmp_path: Path, **overrides) -> CharlieBotConfig:
@@ -285,19 +287,15 @@ def test_schedule_trigger_readback_resolves_to_seeded_trigger_on_sent_but_lost(
   monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
 
   session_id = "sess-trigger"
-  triggers_dir = cfg.sessions_dir / session_id / "triggers"
-  triggers_dir.mkdir(parents=True)
-  (triggers_dir / "trg1.json").write_text(
-      json.dumps(
-          {
-              "id": "trg1",
-              "message": "Check the job",
-              "watch_targets": [],
-              "fire_at": "2024-01-01T00:00:00+00:00",
-              "created_at": "2024-01-01T00:00:00+00:00",
-              "status": "pending",
-          }),
-      encoding="utf-8")
+  write_trigger(
+      cfg.sessions_dir / session_id / "triggers" / "trg1.json",
+      PendingTrigger(
+          id="trg1",
+          session_id=session_id,
+          message="Check the job",
+          fire_at="2024-01-01T00:00:00+00:00",
+          created_at="2024-01-01T00:00:00+00:00",
+      ))
 
   monkeypatch.setattr(
       sys, "argv",
@@ -306,7 +304,7 @@ def test_schedule_trigger_readback_resolves_to_seeded_trigger_on_sent_but_lost(
   schedule_trigger_module.main()
 
   out = json.loads(capsys.readouterr().out)
-  assert out == {"trigger_id": "trg1", "fire_at": "2024-01-01T00:00:00+00:00"}
+  assert out == {"trigger_id": "trg1", "fire_at": "2024-01-01T00:00:00Z"}
 
 
 def test_schedule_trigger_readback_reports_outcome_unknown_when_nothing_matches(
@@ -341,19 +339,16 @@ def test_schedule_trigger_readback_ignores_fired_trigger_reports_outcome_unknown
   monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
 
   session_id = "sess-trigger-fired-only"
-  triggers_dir = cfg.sessions_dir / session_id / "triggers"
-  triggers_dir.mkdir(parents=True)
-  (triggers_dir / "trg-fired.json").write_text(
-      json.dumps(
-          {
-              "id": "trg-fired",
-              "message": "renew the watch",
-              "watch_targets": [],
-              "fire_at": "2024-01-01T00:00:00+00:00",
-              "created_at": "2024-01-01T00:00:00+00:00",
-              "status": "fired",
-          }),
-      encoding="utf-8")
+  write_trigger(
+      cfg.sessions_dir / session_id / "triggers" / "trg-fired.json",
+      PendingTrigger(
+          id="trg-fired",
+          session_id=session_id,
+          message="renew the watch",
+          fire_at="2024-01-01T00:00:00+00:00",
+          created_at="2024-01-01T00:00:00+00:00",
+          status=TriggerStatus.FIRED,
+      ))
 
   monkeypatch.setattr(
       sys, "argv",
@@ -379,30 +374,25 @@ def test_schedule_trigger_readback_picks_pending_over_fired_historical_leg(
   monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
 
   session_id = "sess-trigger-fired-plus-pending"
-  triggers_dir = cfg.sessions_dir / session_id / "triggers"
-  triggers_dir.mkdir(parents=True)
-  (triggers_dir / "trg-old.json").write_text(
-      json.dumps(
-          {
-              "id": "trg-old",
-              "message": "renew the watch",
-              "watch_targets": [],
-              "fire_at": "2024-01-01T00:00:00+00:00",
-              "created_at": "2024-01-01T00:00:00+00:00",
-              "status": "fired",
-          }),
-      encoding="utf-8")
-  (triggers_dir / "trg-new.json").write_text(
-      json.dumps(
-          {
-              "id": "trg-new",
-              "message": "renew the watch",
-              "watch_targets": [],
-              "fire_at": "2024-02-01T00:00:00+00:00",
-              "created_at": "2024-02-01T00:00:00+00:00",
-              "status": "pending",
-          }),
-      encoding="utf-8")
+  write_trigger(
+      cfg.sessions_dir / session_id / "triggers" / "trg-old.json",
+      PendingTrigger(
+          id="trg-old",
+          session_id=session_id,
+          message="renew the watch",
+          fire_at="2024-01-01T00:00:00+00:00",
+          created_at="2024-01-01T00:00:00+00:00",
+          status=TriggerStatus.FIRED,
+      ))
+  write_trigger(
+      cfg.sessions_dir / session_id / "triggers" / "trg-new.json",
+      PendingTrigger(
+          id="trg-new",
+          session_id=session_id,
+          message="renew the watch",
+          fire_at="2024-02-01T00:00:00+00:00",
+          created_at="2024-02-01T00:00:00+00:00",
+      ))
 
   monkeypatch.setattr(
       sys, "argv",
@@ -411,7 +401,7 @@ def test_schedule_trigger_readback_picks_pending_over_fired_historical_leg(
   schedule_trigger_module.main()
 
   out = json.loads(capsys.readouterr().out)
-  assert out == {"trigger_id": "trg-new", "fire_at": "2024-02-01T00:00:00+00:00"}
+  assert out == {"trigger_id": "trg-new", "fire_at": "2024-02-01T00:00:00Z"}
 
 
 class _StubPlanListener:

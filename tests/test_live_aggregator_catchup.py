@@ -79,3 +79,29 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path) -> None:
 
   assert inits == 1
   assert first is second
+
+
+@pytest.mark.asyncio
+async def test_drop_during_catchup_discards_stale_init(tmp_path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  sid = await _seed_session(mgr)
+
+  original = SessionManager._init_live_aggregator
+  calls = 0
+
+  def dropping_init(self, session_id):
+    nonlocal calls
+    calls += 1
+    aggregator = original(self, session_id)
+    if calls == 1:
+      # A drop landing while the threaded catch-up runs must win over it.
+      self._drop_session_runtime_state(session_id)
+    return aggregator
+
+  with patch.object(SessionManager, "_init_live_aggregator", dropping_init):
+    aggregator = await mgr._get_or_init_aggregator(sid)
+
+  assert calls == 2
+  assert mgr._aggregators[sid] is aggregator
+  assert aggregator.emit_stream_deltas is True

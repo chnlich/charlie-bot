@@ -758,6 +758,10 @@ class SessionManager:
     # init reads and feeds the whole live corpus in a thread, so two events
     # arriving back-to-back for the same session must not double-init.
     self._aggregator_init_locks: dict[str, asyncio.Lock] = {}
+    # Bumped by every _drop_session_runtime_state so an in-flight threaded
+    # catch-up can detect that the corpus it read is no longer current and
+    # discard its result instead of resurrecting dropped runtime state.
+    self._aggregator_epoch: dict[str, int] = {}
     # Per-session MessageProjection cache (LRU, cap _PROJECTION_LRU_LIMIT). A
     # hit requires the cached event_count to equal the live event count
     # (get_message_projection, projection_memo_hit), so a stale projection is
@@ -1899,20 +1903,31 @@ class SessionManager:
     and feeds the whole live corpus (~150 ms parse + feed on the worst on-disk
     corpus), so it runs in a thread; its deltas are stream-snapshot builds the
     caller drops, and the init feed constructs with emit_stream_deltas=False.
+
+    A drop landing while the threaded catch-up runs must win: the corpus the
+    read saw can be mid-drop (archived, recycled, deleted), so the finished
+    init is discarded whenever `_drop_session_runtime_state` bumped the
+    session's epoch during the hop, the events cache it re-primed is cleared,
+    and the init reruns against the new state.
     """
     aggregator = self._aggregators.get(session_id)
     if aggregator is not None:
       return aggregator
-    lock = self._aggregator_init_locks.setdefault(session_id, asyncio.Lock())
-    async with lock:
-      # A concurrent first event for the same session may have finished the
-      # init while this caller waited on the lock.
-      aggregator = self._aggregators.get(session_id)
-      if aggregator is not None:
+    while True:
+      epoch = self._aggregator_epoch.get(session_id, 0)
+      lock = self._aggregator_init_locks.setdefault(session_id, asyncio.Lock())
+      async with lock:
+        # A concurrent first event for the same session may have finished the
+        # init while this caller waited on the lock.
+        aggregator = self._aggregators.get(session_id)
+        if aggregator is not None:
+          return aggregator
+        aggregator = await asyncio.to_thread(self._init_live_aggregator, session_id)
+        if self._aggregator_epoch.get(session_id, 0) != epoch:
+          self._chat_events.clear_cache(session_id)
+          continue
+        self._aggregators[session_id] = aggregator
         return aggregator
-      aggregator = await asyncio.to_thread(self._init_live_aggregator, session_id)
-      self._aggregators[session_id] = aggregator
-      return aggregator
 
   def _init_live_aggregator(self, session_id: str) -> MessageAggregator:
     """Build and catch up the live aggregator off the event loop (see above)."""
@@ -2020,6 +2035,7 @@ class SessionManager:
     self._chat_events.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
     self._aggregator_init_locks.pop(session_id, None)
+    self._aggregator_epoch[session_id] = self._aggregator_epoch.get(session_id, 0) + 1
     self._projection_cache.drop(session_id)
     from src.core import recap  # lazy: recap imports SessionManager from this module
 

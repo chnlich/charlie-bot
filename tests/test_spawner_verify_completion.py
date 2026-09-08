@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import CLEAN_EXIT_OUTCOME, OPUS_BACKEND_ID, JudgmentShim, append_events
+from conftest import CLEAN_EXIT_OUTCOME, OPUS_BACKEND_ID, JudgmentShim, append_events, build_finalize_ctx
 from conftest import THREE_BACKEND_OPTIONS as BACKEND_OPTIONS
 
 from src.core import event_types as ET
@@ -166,15 +166,7 @@ async def test_verify_completion_uses_untruncated_result_without_task_spec_prefi
   session_mgr = FakeSessionManager(thread.session_id)
 
   events_summary, full_summary = await spawner._broadcast_completion(
-      spawner_finalize._FinalizeCtx(
-          session_id=thread.session_id,
-          description=thread.description,
-          thread=thread,
-          outcome=CLEAN_EXIT_OUTCOME,
-          thread_mgr=thread_mgr,
-          session_mgr=session_mgr,
-          cfg=CharlieBotConfig(),
-      ),
+      build_finalize_ctx(thread, CLEAN_EXIT_OUTCOME, thread_mgr, session_mgr, CharlieBotConfig()),
       verify_report=report,
   )
 

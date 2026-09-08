@@ -1886,6 +1886,29 @@ def recording_notify_completion(captures: dict[str, Any]) -> Callable[..., Await
   return fake_notify_completion
 
 
+def build_finalize_ctx(
+    thread: models.ThreadMetadata,
+    outcome: spawner._WorkerRunOutcome,
+    thread_mgr: Any,
+    session_mgr: Any,
+    cfg: CharlieBotConfig,
+) -> spawner_finalize._FinalizeCtx:
+  """The _FinalizeCtx the finalize and broadcast-completion tests share.
+
+  Callers rely on session_id and description being the thread's own; the
+  thread manager, session manager, outcome, and cfg stay per-site arguments.
+  """
+  return spawner_finalize._FinalizeCtx(
+      session_id=thread.session_id,
+      description=thread.description,
+      thread=thread,
+      outcome=outcome,
+      thread_mgr=thread_mgr,
+      session_mgr=session_mgr,
+      cfg=cfg,
+  )
+
+
 def capturing_worker(captures: dict[str, Any]) -> type:
   """A spawner_launch.Worker stand-in recording its constructor args into ``captures``.
 

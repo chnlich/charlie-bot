@@ -11,6 +11,7 @@ from conftest import (
     ReviewSpawnSessionManager,
     ReviewSpawnThreadManager,
     SpawnFlowSessionManager,
+    build_finalize_ctx,
     build_worker_prompt,
     capturing_worker,
     make_fake_git_create_worktree,
@@ -242,15 +243,7 @@ async def test_worker_finish_summary_is_locator_without_task_description(monkeyp
   monkeypatch.setattr(spawner_events, "_worker_summary_timestamp", lambda: "2026-07-01 12:35 PDT")
 
   events_summary, full_summary = await spawner._broadcast_completion(
-      spawner_finalize._FinalizeCtx(
-          session_id="session-id",
-          description="Sensitive task description",
-          thread=thread,
-          outcome=CLEAN_EXIT_OUTCOME,
-          thread_mgr=FakeThreadManager(),
-          session_mgr=FakeSessionManager(),
-          cfg=CharlieBotConfig(),
-      ),
+      build_finalize_ctx(thread, CLEAN_EXIT_OUTCOME, FakeThreadManager(), FakeSessionManager(), CharlieBotConfig()),
       verify_report=None,
   )
 
@@ -440,20 +433,8 @@ async def test_finalize_worker_preserves_thread_dir_for_repoless_worker(
 
   monkeypatch.setattr(spawner_finalize, "_notify_completion", recording_notify_completion(captures))
 
-  await spawner._finalize_worker(
-      spawner_finalize._FinalizeCtx(
-          session_id="session-id",
-          description="Prompt-only task",
-          thread=thread,
-          outcome=CLEAN_EXIT_OUTCOME,
-          thread_mgr=CapturingThreadManager(thread, captures),
-          session_mgr=object(),
-          cfg=cfg,
-      ),
-      skip_notify=False,
-      task_type=TaskType.IMPLEMENT,
-      completed_at=None,
-  )
+  ctx = build_finalize_ctx(thread, CLEAN_EXIT_OUTCOME, CapturingThreadManager(thread, captures), object(), cfg)
+  await spawner._finalize_worker(ctx, skip_notify=False, task_type=TaskType.IMPLEMENT, completed_at=None)
 
   assert captures["status"] == ThreadStatus.COMPLETED
   assert captures["exit_code"] == 0

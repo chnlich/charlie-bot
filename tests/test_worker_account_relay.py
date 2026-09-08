@@ -17,6 +17,7 @@ from conftest import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     JudgmentShim,
     ScriptedRelayBackend,
+    build_finalize_ctx,
     fable_pool_cfg,
     fresh_state_fixture,
     install_scripted_backends,
@@ -384,15 +385,7 @@ async def test_completion_notice_carries_the_pool_message_after_quota_exhaustion
       claude_relay.PoolExhaustedError("Claude account pool has no available account (earliest reset 13:00 UTC)"))
 
   _, full_summary = await spawner_finalize._broadcast_completion(
-      spawner_finalize._FinalizeCtx(
-          session_id="s1",
-          description="task",
-          thread=thread,
-          outcome=outcome,
-          thread_mgr=thread_mgr,
-          session_mgr=session_mgr,
-          cfg=CharlieBotConfig(),
-      ),
+      build_finalize_ctx(thread, outcome, thread_mgr, session_mgr, CharlieBotConfig()),
       verify_report=None,
   )
 

@@ -297,6 +297,61 @@ def test_diff_head_move_busts_memo(tmp_path: Path, endpoint: str, extra_params: 
     assert "+third" in second["diff"]
 
 
+def test_branch_repeat_view_uses_memo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A repeat branch listing re-runs zero git subprocesses and serves the same list."""
+  repo = _build_repo(tmp_path)
+  client = _build_client(tmp_path)
+  calls: list[list[str]] = []
+  real_run = subprocess.run
+
+  def counting_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+    calls.append(args[0])
+    return real_run(*args, **kwargs)
+
+  monkeypatch.setattr(git_api.subprocess, "run", counting_run)
+
+  first = client.get("/api/git/branches", params={"repo": str(repo)})
+  assert first.status_code == 200
+  assert "feature" in first.json() and "main" in first.json()
+
+  calls.clear()
+  second = client.get("/api/git/branches", params={"repo": str(repo)})
+  assert second.status_code == 200
+  assert second.json() == first.json()
+  # The repeat listing pays zero subprocesses: the ref-state signature is
+  # unchanged, so the memoized branch lines serve the response.
+  assert [c[1] for c in calls] == []
+
+
+def test_branch_new_ref_busts_memo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A ref the listing reads (a new branch) moves the signature, so the list re-computes."""
+  repo = _build_repo(tmp_path)
+  client = _build_client(tmp_path)
+  calls: list[list[str]] = []
+  real_run = subprocess.run
+
+  def counting_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+    calls.append(args[0])
+    return real_run(*args, **kwargs)
+
+  monkeypatch.setattr(git_api.subprocess, "run", counting_run)
+
+  first = client.get("/api/git/branches", params={"repo": str(repo)}).json()
+  assert calls, "the first listing runs the branch subprocess"
+
+  calls.clear()
+  _git(repo, "branch", "newly-created")
+  second = client.get("/api/git/branches", params={"repo": str(repo)}).json()
+  assert "newly-created" in second and "newly-created" not in first
+  assert len([c for c in calls if c[1] == "branch" and "-a" in c]) == 1, \
+      "the moved ref state re-runs the branch subprocess exactly once"
+
+  calls.clear()
+  third = client.get("/api/git/branches", params={"repo": str(repo)}).json()
+  assert third == second
+  assert [c[1] for c in calls] == []
+
+
 def test_repo_outside_workspace_rejected(tmp_path: Path) -> None:
   repo = _build_repo(tmp_path)
   # Point the workspace somewhere else so the repo fails the under-workspace check.

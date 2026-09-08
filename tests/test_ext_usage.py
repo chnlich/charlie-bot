@@ -1083,6 +1083,24 @@ def _plan_raw(**extra: Any) -> dict:
   return raw
 
 
+# The fully-formed scoped limit both scoped-window tests start from; the tests
+# that exercise malformed shapes build their own entries with the broken field
+# removed or altered, so they stay literal.
+_NIMBUS_SCOPED_LIMIT = {
+    "kind": "weekly_scoped",
+    "group": "weekly",
+    "percent": 33.0,
+    "resets_at": "2026-08-04T19:00:00+00:00",
+    "scope": {
+        "model": {
+            "id": None,
+            "display_name": "Nimbus"
+        },
+        "surface": None
+    },
+}
+
+
 def test_transform_scoped_limits_each_reading_bound_to_its_own_source() -> None:
   """Every reading renders as its own window, keyed by its own limit.
 
@@ -1090,22 +1108,7 @@ def test_transform_scoped_limits_each_reading_bound_to_its_own_source() -> None:
   observable, and the scoped model name appears nowhere in the source so a
   hardcoded label fails.
   """
-  raw = _plan_raw(
-      limits=[
-          {
-              "kind": "weekly_scoped",
-              "group": "weekly",
-              "percent": 33.0,
-              "resets_at": "2026-08-04T19:00:00+00:00",
-              "scope": {
-                  "model": {
-                      "id": None,
-                      "display_name": "Nimbus"
-                  },
-                  "surface": None
-              }
-          },
-      ],)
+  raw = _plan_raw(limits=[_NIMBUS_SCOPED_LIMIT])
 
   windows = _transform_response(raw, account="main")["windows"]
 
@@ -1121,22 +1124,7 @@ def test_transform_scoped_limits_each_reading_bound_to_its_own_source() -> None:
 
 def test_transform_scoped_windows_leaves_unscoped_untouched_when_limits_removed() -> None:
   """Removing ``limits`` must not change the plan-wide windows at all."""
-  raw = _plan_raw(
-      limits=[
-          {
-              "kind": "weekly_scoped",
-              "group": "weekly",
-              "percent": 33.0,
-              "resets_at": "2026-08-04T19:00:00+00:00",
-              "scope": {
-                  "model": {
-                      "id": None,
-                      "display_name": "Nimbus"
-                  },
-                  "surface": None
-              }
-          },
-      ],)
+  raw = _plan_raw(limits=[_NIMBUS_SCOPED_LIMIT])
 
   with_limits = _transform_response(raw, account="main")["windows"]
   without = dict(raw)

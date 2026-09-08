@@ -29,9 +29,6 @@ function createFakeDocument() {
     dispatch(type) {
       (listeners.get(type) || []).forEach((fn) => fn());
     },
-    hasListener(type) {
-      return (listeners.get(type) || []).length > 0;
-    },
     getElementById(id) {
       return this.elements.get(id) || null;
     },

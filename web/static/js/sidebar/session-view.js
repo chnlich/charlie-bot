@@ -823,8 +823,6 @@ function renderNoActiveSessionView() {
 }
 
 
-// One name list: Object.assign puts each export on Sidebar, and the same keys
-// become bare globals. Adding a function here is enough for both.
 const API = {
   getDefaultBackendId,
   getActiveBackendId,
@@ -842,7 +840,6 @@ const API = {
   createSession,
   renderNoActiveSessionView,
 };
-Object.assign(Sidebar, API);
-Sidebar.expose(Object.keys(API));
+Sidebar.wire(API);
 
 })();

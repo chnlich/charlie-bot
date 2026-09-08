@@ -37,7 +37,7 @@ function loadGroups(cronTasksPayload) {
   const elements = {'session-list': makeEl()};
   const fetches = [];
   const context = {
-    Sidebar: {expose() {}},
+    Sidebar: {expose() {}, wire(globals, sidebarOnly) { Object.assign(this, globals, sidebarOnly || {}); }},
     console: {error: () => {}},
     localStorage: {getItem: () => null, setItem: () => {}},
     document: {getElementById: (id) => elements[id] || (elements[id] = makeEl())},
@@ -99,7 +99,7 @@ test('no badge when nothing is broken', async () => {
 function loadModals() {
   const elements = {};
   const context = {
-    Sidebar: {expose() {}},
+    Sidebar: {expose() {}, wire(globals, sidebarOnly) { Object.assign(this, globals, sidebarOnly || {}); }},
     console: {error: () => {}},
     document: {getElementById: (id) => elements[id] || (elements[id] = makeEl())},
     BACKEND_OPTIONS: {},

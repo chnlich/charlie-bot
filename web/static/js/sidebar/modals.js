@@ -343,9 +343,6 @@ function eloneSession(sessionId, eventIndex) {
 }
 
 
-// Two disjoint lists: Object.assign puts both on Sidebar, and only GLOBALS'
-// keys become bare globals for the onclick strings. Adding a function to
-// GLOBALS is enough for both; SIDEBAR_ONLY stays reachable through Sidebar.
 const GLOBALS = {
   startRename,
   handleRenameKey,
@@ -362,7 +359,6 @@ const GLOBALS = {
   eloneSession,
 };
 const SIDEBAR_ONLY = { applyCronBrokenView };
-Object.assign(Sidebar, GLOBALS, SIDEBAR_ONLY);
-Sidebar.expose(Object.keys(GLOBALS));
+Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 
 })();

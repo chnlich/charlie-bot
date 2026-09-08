@@ -378,8 +378,6 @@ function cancelTrigger(triggerId, sessionId) {
 }
 
 
-// One name list: Object.assign puts each export on Sidebar, and the same keys
-// become bare globals. Adding a function here is enough for both.
 const API = {
   fetchWorkerDescription,
   renderWorkersTab,
@@ -393,7 +391,6 @@ const API = {
   updateTriggerStatus,
   cancelTrigger,
 };
-Object.assign(Sidebar, API);
-Sidebar.expose(Object.keys(API));
+Sidebar.wire(API);
 
 })();

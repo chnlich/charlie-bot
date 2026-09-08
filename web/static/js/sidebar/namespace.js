@@ -20,6 +20,15 @@
     });
   }
 
+  // Two disjoint lists: Object.assign puts both on Sidebar, and only globals'
+  // keys become bare globals for the onclick strings. Adding a function to
+  // globals is enough for both; sidebarOnly stays reachable through Sidebar.
+  // A module whose every member is onclick-reachable passes one list only.
+  function wire(globals, sidebarOnly) {
+    Object.assign(Sidebar, globals, sidebarOnly || {});
+    expose(Object.keys(globals));
+  }
+
   // A backend id retired by a config edit (config `aliases`) resolves to the
   // option that answers for it, so a session or thread that recorded the old id
   // renders under the live option's label and matches the switch dropdown; an id
@@ -41,6 +50,7 @@
   exposeState('thinkingStart', null);
 
   Sidebar.expose = expose;
+  Sidebar.wire = wire;
   Sidebar.canonicalBackendId = canonicalBackendId;
   expose(['canonicalBackendId']);
   global.Sidebar = Sidebar;

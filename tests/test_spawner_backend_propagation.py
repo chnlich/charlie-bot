@@ -353,43 +353,13 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(
 
 
 @pytest.mark.asyncio
-async def test_create_worktree_and_process_raises_when_session_missing_on_worktree_override(tmp_path: Path) -> None:
-  cfg = _build_cfg()
-  repo_path = (tmp_path / "repo").resolve()
-  repo_path.mkdir(parents=True, exist_ok=True)
-  thread = ThreadMetadata(
-      id="thread-1",
-      session_id="session-id",
-      description="Do work",
-  )
-
-  class FakeSessionManager(JudgmentShim):
-
-    async def get_session(self, session_id: str) -> SessionMetadata | None:
-      return None
-
-  with pytest.raises(ValueError, match="session 'session-id' not found"):
-    await spawner._create_worktree_and_process(
-        "session-id",
-        thread,
-        "Do work",
-        cfg,
-        FakeSessionManager(),
-        JudgmentShim(),
-        repo_path,
-        SpawnRequest(
-            repo_path=str(repo_path),
-            base_branch="main",
-            worktree_path_override=str(tmp_path / "worktrees" / "reused"),
-        ),
-    )
-
-
-@pytest.mark.asyncio
-async def test_create_worktree_and_process_raises_when_session_missing_on_fresh_worktree(
+@pytest.mark.parametrize("worktree_override", [False, True], ids=["fresh-worktree", "worktree-override"])
+async def test_create_worktree_and_process_raises_when_session_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    worktree_override: bool,
 ) -> None:
+  """The session lookup fails both worktree paths before any git worktree work lands."""
   cfg = _build_tmp_cfg(tmp_path, CODEX_BACKEND_OPTION)
   repo_path = (tmp_path / "repo").resolve()
   repo_path.mkdir(parents=True, exist_ok=True)
@@ -404,8 +374,15 @@ async def test_create_worktree_and_process_raises_when_session_missing_on_fresh_
     async def get_session(self, session_id: str) -> SessionMetadata | None:
       return None
 
+  # Only the fresh-worktree row reaches this fake; the override row fails at
+  # the session lookup with no worktree creation attempted.
   monkeypatch.setattr(spawner_launch, "git_create_worktree", make_fake_git_create_worktree())
 
+  request = SpawnRequest(
+      repo_path=str(repo_path),
+      base_branch="main",
+      worktree_path_override=str(tmp_path / "worktrees" / "reused") if worktree_override else None,
+  )
   with pytest.raises(ValueError, match="session 'session-id' not found"):
     await spawner._create_worktree_and_process(
         "session-id",
@@ -415,7 +392,7 @@ async def test_create_worktree_and_process_raises_when_session_missing_on_fresh_
         FakeSessionManager(),
         JudgmentShim(),
         repo_path,
-        SpawnRequest(repo_path=str(repo_path), base_branch="main"),
+        request,
     )
 
 

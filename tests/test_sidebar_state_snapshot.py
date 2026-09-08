@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -327,9 +328,11 @@ async def test_every_tenth_poll_is_stat_only_when_probe_inputs_unchanged(
     await _status_json(ids=ids, session_mgr=mgr)
   assert calls == {"running": 0, "trigger": 0, "plan": 0}
 
-  # Poll 10 sweeps every active session, but the stat-only probe-input
-  # signature is unchanged, so no session pays the deep read+parse.
+  # Poll 10 sweeps every active session detached from the response, but the
+  # stat-only probe-input signature is unchanged, so no session pays the deep
+  # read+parse.
   await _status_json(ids=ids, session_mgr=mgr)
+  await sessions_core._sidebar_sweep_task
   assert calls == {"running": 0, "trigger": 0, "plan": 0}
 
 
@@ -351,8 +354,10 @@ async def test_every_tenth_poll_heals_external_write_without_dirty_mark(
     await _status_json(ids=ids, session_mgr=mgr)
   assert calls == {"running": 0, "trigger": 0, "plan": 0}
 
-  healed = await _status_json(ids=ids, session_mgr=mgr)  # poll 10
+  healed = await _status_json(ids=ids, session_mgr=mgr)  # poll 10: answers from the snapshot, sweep detached
+  await sessions_core._sidebar_sweep_task  # the sweep lands in the snapshot
   assert calls == {"running": 1, "trigger": 1, "plan": 1}
+  healed = await _status_json(ids=ids, session_mgr=mgr)  # poll 11 serves the healed entry
   assert healed[second.id]["has_running_tasks"] is True
 
 
@@ -365,8 +370,9 @@ async def test_scan_window_rollover_reprobes_without_file_change(
   assert first[session.id]["has_running_tasks"] is True
 
   # Jump the clock past the 30-day scan window with no file changing. Polls
-  # 2-9 serve the stale snapshot; the poll-10 sweep must re-probe anyway
-  # because the signature's rollover element can't vouch beyond it.
+  # 2-9 serve the stale snapshot; the poll-10 sweep re-probes anyway because
+  # the signature's rollover element can't vouch beyond it — detached, so the
+  # healed verdict lands for the poll that follows the sweep.
   future = datetime.now(UTC) + timedelta(days=31)
   monkeypatch.setattr(sessions_core, "utc_now", lambda: future)
   monkeypatch.setattr(sessions_core.time, "time", lambda: future.timestamp())
@@ -374,8 +380,52 @@ async def test_scan_window_rollover_reprobes_without_file_change(
     interim = await _status_json(ids=session.id, session_mgr=mgr)
   assert interim[session.id]["has_running_tasks"] is True
 
+  await _status_json(ids=session.id, session_mgr=mgr)  # poll 10: sweep detached
+  await sessions_core._sidebar_sweep_task
   tenth = await _status_json(ids=session.id, session_mgr=mgr)
   assert tenth[session.id]["has_running_tasks"] is False
+
+
+@pytest.mark.asyncio
+async def test_sweep_poll_answers_without_awaiting_the_sweep_and_is_single_flight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, mgr, first = await make_home_session(tmp_path, name="A")
+  second = await mgr.create_session(CreateSessionRequest(name="B"))
+
+  ids = f"{first.id},{second.id}"
+  await _status_json(ids=ids, session_mgr=mgr)  # poll 1 (cold)
+
+  # An out-of-funnel write with no dirty mark: only the detached sweep can
+  # pick it up. Gate its deep probe so the task is provably pending while the
+  # sweep poll answers.
+  write_thread_meta(cfg, second.id, {"id": "t1", "status": "running"})
+  gate = threading.Event()
+  calls = {"running": 0}
+  real_running = sessions_core.has_running_tasks_sync
+
+  def gated_running(*args, **kwargs):
+    gate.wait(timeout=5)
+    calls["running"] += 1
+    return real_running(*args, **kwargs)
+
+  monkeypatch.setattr(sessions_core, "has_running_tasks_sync", gated_running)
+
+  for _ in range(8):  # polls 2-9: no dirty mark -> the stale snapshot, no probe work
+    await _status_json(ids=ids, session_mgr=mgr)
+
+  await _status_json(ids=ids, session_mgr=mgr)  # poll 10: answers without the sweep
+  sweep_task = sessions_core._sidebar_sweep_task
+  assert sweep_task is not None and not sweep_task.done()
+  assert calls["running"] == 0  # the gated probe has not run; the poll did not await it
+
+  await _status_json(ids=ids, session_mgr=mgr)  # poll 11 inside the running sweep
+  assert sessions_core._sidebar_sweep_task is sweep_task  # single-flight: nothing stacked
+
+  gate.set()
+  await sweep_task
+  assert calls["running"] == 1  # exactly the moved session, probed once
+  healed = await _status_json(ids=ids, session_mgr=mgr)
+  assert healed[second.id]["has_running_tasks"] is True
 
 
 # ---------------------------------------------------------------------------

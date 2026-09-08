@@ -268,16 +268,8 @@ class PendingTriggerSessionManager(FakeSessionManager):
     return self._session.model_copy()
 
 
-@pytest.mark.asyncio
-async def test_index_embeds_initial_sessions_for_client_sidebar_render(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  cfg = make_home_config(tmp_path)
-  session = SessionMetadata(
-      id="session-with-trigger",
-      name="Wake later",
-      has_pending_trigger=True,
-      pending_trigger_count=2,
-  )
+def _bootstrap_stub(session: SessionMetadata):
+  """Stand-in for build_session_bootstrap_data serving one fixed session, no messages."""
 
   async def fake_build_session_bootstrap_data(*args, **kwargs) -> SimpleNamespace:
     return SimpleNamespace(
@@ -289,7 +281,20 @@ async def test_index_embeds_initial_sessions_for_client_sidebar_render(
         has_more=False,
     )
 
-  monkeypatch.setattr(pages, "build_session_bootstrap_data", fake_build_session_bootstrap_data)
+  return fake_build_session_bootstrap_data
+
+
+@pytest.mark.asyncio
+async def test_index_embeds_initial_sessions_for_client_sidebar_render(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  cfg = make_home_config(tmp_path)
+  session = SessionMetadata(
+      id="session-with-trigger",
+      name="Wake later",
+      has_pending_trigger=True,
+      pending_trigger_count=2,
+  )
+  monkeypatch.setattr(pages, "build_session_bootstrap_data", _bootstrap_stub(session))
 
   response = await pages.index(
       request=make_page_request("/"),
@@ -325,17 +330,7 @@ async def test_index_renders_an_aliased_session_backend_as_its_live_option(
   ]
   session = SessionMetadata(id="legacy-session", name="Legacy", backend="claude-fable-5-invite1")
 
-  async def fake_build_session_bootstrap_data(*args, **kwargs) -> SimpleNamespace:
-    return SimpleNamespace(
-        session=session,
-        messages=[],
-        pending_draft=None,
-        total_event_count=0,
-        oldest_message_ordinal=0,
-        has_more=False,
-    )
-
-  monkeypatch.setattr(pages, "build_session_bootstrap_data", fake_build_session_bootstrap_data)
+  monkeypatch.setattr(pages, "build_session_bootstrap_data", _bootstrap_stub(session))
 
   response = await pages.index(
       request=make_page_request("/"),

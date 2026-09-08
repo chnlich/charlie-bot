@@ -1,42 +1,18 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { baseSessionContext, createChatSidebarContext } = require('./session_context_stub');
-const { createElement } = require('./dom_element_stub');
+const {baseSessionContext, bootstrapPayload, createChatSidebarContext, installSessionDocumentLookups, makeSidebarRow,
+  stubPageTimers, SWITCH_TELEMETRY_URL} = require('./session_context_stub');
+const {createElement} = require('./dom_element_stub');
 
-const TELEMETRY_URL = '/api/diag/switch-events';
 const PENDING = Symbol('pending');
 
 const A_PAGE_900 = '/api/sessions/session-a/events?before=900&limit=40';
 const B_PAGE_500 = '/api/sessions/session-b/events?before=500&limit=40';
 
-function makeSidebarRow(sessionId, name) {
-  const nameEl = createElement({textContent: name});
-  return createElement({
-    id: 'session-' + sessionId,
-    querySelector: (sel) => (sel === '.session-name' ? nameEl : null),
-  });
-}
-
-function bootstrapPayload(sessionId, oldestOrdinal) {
-  return {
-    session: {id: sessionId, name: 'Session ' + sessionId, backend: 'claude-opus-4.6', round_ratings: {}},
-    messages: [{role: 'assistant', content: 'hello from ' + sessionId, event_index: 5}],
-    pending_draft: null,
-    event_count: 6,
-    oldest_message_ordinal: oldestOrdinal,
-    active_backend: 'claude-opus-4.6',
-    active_backend_type: '',
-    switchable_backends: [],
-    has_more: true,
-    threads: [],
-    triggers: [],
-  };
-}
-
 const BOOTSTRAP = {
-  'session-a': bootstrapPayload('session-a', 900),
-  'session-b': bootstrapPayload('session-b', 500),
+  'session-a': bootstrapPayload('session-a', 900, true),
+  'session-b': bootstrapPayload('session-b', 500, true),
 };
 
 // The stale flight's payload: a successful page carrying A's own next cursor
@@ -92,18 +68,9 @@ function buildHarness(eventsHandler) {
   const {context} = baseSessionContext({elements});
   context.eventCursor = 0;
   context.console.error = (...args) => h.errors.push(args);
-  context.document.getElementById = (id) => {
-    const fromMap = elements.get(id);
-    if (fromMap) return fromMap;
-    for (const child of messages.children) {
-      if (child.id === id) return child;
-    }
-    return null;
-  };
-  context.document.querySelectorAll = (sel) => (sel === '[id^="session-"]' ? rows : []);
-  context.document.querySelector = () => null;
+  installSessionDocumentLookups(context, elements, messages, rows);
   context.fetch = async (url, opts = {}) => {
-    if (url === TELEMETRY_URL) {
+    if (url === SWITCH_TELEMETRY_URL) {
       return {ok: true, status: 200, json: async () => ({ok: true})};
     }
     const boot = url.match(/\/api\/sessions\/([^/]+)\/bootstrap/);
@@ -134,10 +101,7 @@ function buildHarness(eventsHandler) {
     }
     return {ok: true, status: 200, json: async () => ({})};
   };
-  context.setInterval = () => 1;
-  context.setTimeout = () => 1;
-  context.clearInterval = () => {};
-  context.clearTimeout = () => {};
+  stubPageTimers(context);
 
   createChatSidebarContext(context);
   h.context = context;

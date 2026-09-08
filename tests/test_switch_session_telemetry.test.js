@@ -2,34 +2,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const { baseSessionContext, createChatSidebarContext } = require('./session_context_stub');
-const { createElement } = require('./dom_element_stub');
-
-const TELEMETRY_URL = '/api/diag/switch-events';
-
-function makeSidebarRow(sessionId, name) {
-  const nameEl = createElement({textContent: name});
-  return createElement({
-    id: 'session-' + sessionId,
-    querySelector: (sel) => (sel === '.session-name' ? nameEl : null),
-  });
-}
-
-function bootstrapPayload(sessionId) {
-  return {
-    session: {id: sessionId, name: 'Session ' + sessionId, backend: 'claude-opus-4.6', round_ratings: {}},
-    messages: [{role: 'assistant', content: 'hello from ' + sessionId, event_index: 5}],
-    pending_draft: null,
-    event_count: 6,
-    oldest_message_ordinal: 0,
-    active_backend: 'claude-opus-4.6',
-    active_backend_type: '',
-    switchable_backends: [],
-    has_more: false,
-    threads: [],
-    triggers: [],
-  };
-}
+const {baseSessionContext, bootstrapPayload, createChatSidebarContext, installSessionDocumentLookups, makeSidebarRow,
+  stubPageTimers, SWITCH_TELEMETRY_URL} = require('./session_context_stub');
+const {createElement} = require('./dom_element_stub');
 
 // vm harness for switchSession: bootstrap fetches resolve through manual
 // promises (pendingSwitches[i].resolve()), telemetry posts are recorded and
@@ -42,9 +17,9 @@ function buildSwitchHarness() {
   const failBootstrap = new Set();
   const knobs = {failTelemetry: false};
   const payloads = {
-    'session-a': bootstrapPayload('session-a'),
-    'session-b': bootstrapPayload('session-b'),
-    'session-c': bootstrapPayload('session-c'),
+    'session-a': bootstrapPayload('session-a', 0, false),
+    'session-b': bootstrapPayload('session-b', 0, false),
+    'session-c': bootstrapPayload('session-c', 0, false),
   };
   const messages = createElement({id: 'messages'});
   messages.clientHeight = 500;
@@ -66,18 +41,9 @@ function buildSwitchHarness() {
 
   const {context} = baseSessionContext({elements});
   context.eventCursor = 0;
-  context.document.getElementById = (id) => {
-    const fromMap = elements.get(id);
-    if (fromMap) return fromMap;
-    for (const child of messages.children) {
-      if (child.id === id) return child;
-    }
-    return null;
-  };
-  context.document.querySelectorAll = (sel) => (sel === '[id^="session-"]' ? rows : []);
-  context.document.querySelector = () => null;
+  installSessionDocumentLookups(context, elements, messages, rows);
   context.fetch = async (url, opts = {}) => {
-    if (url === TELEMETRY_URL) {
+    if (url === SWITCH_TELEMETRY_URL) {
       const body = JSON.parse(opts.body);
       telemetryPosts.push(body);
       sequence.push('telemetry:' + body.phase);
@@ -107,10 +73,7 @@ function buildSwitchHarness() {
     host: 'localhost:8000',
     search: '',
   };
-  context.setInterval = () => 1;
-  context.setTimeout = () => 1;
-  context.clearInterval = () => {};
-  context.clearTimeout = () => {};
+  stubPageTimers(context);
 
   createChatSidebarContext(context);
   return {

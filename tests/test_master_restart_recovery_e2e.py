@@ -450,6 +450,44 @@ def _assert_round_closed_once(events: list[dict], home: Path, session_id: str, e
   assert _session_meta(home, session_id)["master_run"] is None
 
 
+async def _completed_turn_downtime_rig(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transport: str, *, started_what: str
+) -> tuple[Path, Path, CharlieBotConfig, str]:
+  """Launch a ``sleep_first`` turn, kill the server, wait for the result event
+  to land on disk, and run recovery. The final bytes arrive while nobody
+  consumes, so recovery must resolve a COMPLETED row, never re-attach.
+  Returns ``(home, state, cfg, session_id)``."""
+  home = tmp_path / "home"
+  shim, state = _install_shim(tmp_path)
+  proc, session_id = _launch_driver(tmp_path, home, shim, transport, "sleep_first")
+  _wait_turn_started(home, session_id, what=started_what)
+  proc.kill()
+  proc.wait(timeout=10)
+  _wait_for(
+      lambda: _turn_finished_on_disk(home, session_id, "RESULT-INV-1"),
+      timeout=20.0,
+      what="agent did not finish during the server-down window")
+  cfg = await _recover(monkeypatch, home, shim, state)
+  return home, state, cfg, session_id
+
+
+async def _assert_drain_lossless_and_idempotent(
+    home: Path, session_id: str, cfg: CharlieBotConfig, events: list[dict], *, skip_user_event: bool) -> None:
+  """A drained COMPLETED row is lossless — the transported events equal a fresh
+  full projection of the raw log, the cursor ends at file size, and the round
+  is operable — and re-running recovery over the same on-disk state appends
+  nothing."""
+  assert _round_transported_events(events, skip_user_event=skip_user_event) == _full_projection(home, session_id, cfg)
+  raw = _raw_logs(home, session_id)[0]
+  assert runs.read_raw_cursor(raw.parent / runs.CURSOR_NAME) == raw.stat().st_size
+  _assert_round_operable(events)
+  chat_path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
+  before = chat_path.read_bytes()
+  await init_module.run_crash_recovery(cfg, datetime.now(UTC))
+  await _await_recovery_tasks()
+  assert chat_path.read_bytes() == before
+
+
 class _BlackHoleServer:
   """Accept-then-RST server: the request is sent, the response is lost.
 
@@ -680,19 +718,8 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
   """The turn's final result landed on disk inside the server-down window:
   recovery resolves the COMPLETED row, drains the bytes after the cursor
   through the follower, and closes the round exactly once."""
-  home = tmp_path / "home"
-  shim, state = _install_shim(tmp_path)
-  proc, session_id = _launch_driver(tmp_path, home, shim, "chat", "sleep_first")
-  _wait_turn_started(home, session_id, what="turn A did not start/persist identity and first output")
-  # Kill the server; the producer then finishes while nobody is consuming.
-  proc.kill()
-  proc.wait(timeout=10)
-  _wait_for(
-      lambda: _turn_finished_on_disk(home, session_id, "RESULT-INV-1"),
-      timeout=20.0,
-      what="agent did not finish during the server-down window")
-
-  cfg = await _recover(monkeypatch, home, shim, state)
+  home, state, cfg, session_id = await _completed_turn_downtime_rig(
+      tmp_path, monkeypatch, "chat", started_what="turn A did not start/persist identity and first output")
 
   # Exactly one answer: MASTER_DONE landed once, and the user message was NOT
   # replayed (a replay would have spawned a second agent). Both would mean
@@ -703,22 +730,8 @@ async def test_completed_turn_drained_after_server_kill(tmp_path: Path, monkeypa
   assert len([e for e in events if e.get("type") == "user"]) == 1
   _assert_round_closed_once(events, home, session_id, exit_code=0)
 
-  # Lossless, duplicate-free: the round's transported events equal a full
-  # projection of the raw log from offset 0 under a fresh translate, and the
-  # cursor ends exactly at the file size.
-  assert _round_transported_events(events, skip_user_event=True) == _full_projection(home, session_id, cfg)
-  raw = _raw_logs(home, session_id)[0]
-  assert runs.read_raw_cursor(raw.parent / runs.CURSOR_NAME) == raw.stat().st_size
-
-  # The recovered round is operable (separator with event_index).
-  _assert_round_operable(events)
-
-  # Idempotent: re-running recovery over the same on-disk state is a no-op.
-  chat_path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
-  before = chat_path.read_bytes()
-  await init_module.run_crash_recovery(cfg, datetime.now(UTC))
-  await _await_recovery_tasks()
-  assert chat_path.read_bytes() == before
+  await _assert_drain_lossless_and_idempotent(home, session_id, cfg, events, skip_user_event=True)
+  # The re-run must also leave the record cleared, not resurrect it.
   assert _session_meta(home, session_id)["master_run"] is None
 
 
@@ -777,18 +790,8 @@ async def test_completed_delegate_wake_drained_after_server_kill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A delegate/cron wake has no user event to replay: a result that landed
   during downtime is still drained and closed — never left silent."""
-  home = tmp_path / "home"
-  shim, state = _install_shim(tmp_path)
-  proc, session_id = _launch_driver(tmp_path, home, shim, "wake", "sleep_first")
-  _wait_turn_started(home, session_id, what="wake turn did not start/persist identity and first output")
-  proc.kill()
-  proc.wait(timeout=10)
-  _wait_for(
-      lambda: _turn_finished_on_disk(home, session_id, "RESULT-INV-1"),
-      timeout=20.0,
-      what="agent did not finish during the server-down window")
-
-  cfg = await _recover(monkeypatch, home, shim, state)
+  home, state, cfg, session_id = await _completed_turn_downtime_rig(
+      tmp_path, monkeypatch, "wake", started_what="wake turn did not start/persist identity and first output")
 
   # Exactly one answer, delivered by the drain; the replay pass had nothing
   # to redeliver (the chat log holds no user event for this turn).
@@ -797,17 +800,7 @@ async def test_completed_delegate_wake_drained_after_server_kill(
   assert not [e for e in events if e.get("type") == "user"]
   _assert_round_closed_once(events, home, session_id, exit_code=0)
 
-  # Lossless, duplicate-free drain, cursor at file size, round operable, idempotent.
-  assert _round_transported_events(events, skip_user_event=False) == _full_projection(home, session_id, cfg)
-  raw = _raw_logs(home, session_id)[0]
-  assert runs.read_raw_cursor(raw.parent / runs.CURSOR_NAME) == raw.stat().st_size
-  _assert_round_operable(events)
-
-  chat_path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
-  before = chat_path.read_bytes()
-  await init_module.run_crash_recovery(cfg, datetime.now(UTC))
-  await _await_recovery_tasks()
-  assert chat_path.read_bytes() == before
+  await _assert_drain_lossless_and_idempotent(home, session_id, cfg, events, skip_user_event=False)
 
 
 @pytest.mark.asyncio

@@ -362,8 +362,9 @@ async def all_sessions_status(
   Clean sessions are served from the in-process snapshot with zero disk
   access; only sessions whose probed state changed since the last poll are
   re-probed from disk. Pass ``force=1`` to skip the dirty check and re-probe
-  every requested session (a full probe also runs on every 10th poll as a
-  self-heal fallback).
+  every requested session; every 10th poll also schedules the detached
+  single-flight self-heal sweep (its results land for the polls that follow
+  it), while ``force=1`` keeps its probe synchronous and full.
   """
   # The 3 s poll reads the cached metadata references as they are (the
   # manager's per-row get_session path — model_copy, stamp, and the gather —

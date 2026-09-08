@@ -88,6 +88,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M76 finalize-judgment reads, warm chain | M76 collector below | seconds of loop lag + wall per judgment pair (summary-present then master-woke — the two full-history scans the finalize chain runs per worker/reviewer completion), worst on-disk live-events corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.0005 s | — (introduced with its first history row) |
 | M77 session-switch projection reuse, rotating tabs | M77 collector below | seconds per `get_message_projection` re-entry over a 12-active-session rotation (3 rounds), worst live corpora; the rebuilt count is the eviction shape (a warm re-entry is a dict read + len compare, a rebuild parses the corpus) | re-entry median < 0.5 ms; 0 rebuilt re-entries in a 12-session rotation | — (introduced with its first history row) |
 | M78 ndjson event parse, cold whole-file | M78 collector below | seconds per `parse_ndjson_file` call, worst on-disk live chat file and worst on-disk worker log | chat file median < 0.08 s; worker log median < 0.02 s | — (introduced with its first history row) |
+| M79 git branches list, steady state | M79 collector below | seconds per `GET /api/git/branches` handler call over the charlie-bot checkout | repeat-view median < 0.010 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -4752,10 +4753,74 @@ print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {best_n / 1e6:.1f}
 EOF
 ```
 
+M79 — git branches list, steady state. The /diff viewer's branch picker fetches
+``GET /api/git/branches`` on every page open; each fetch ran one ``git branch -a
+--sort=-committerdate`` subprocess to recompute a listing that is a pure function
+of the repo's ref state — the ref set (a branch add/remove/rename renames a loose
+ref file or rewrites packed-refs), every listed branch's committerdate (a ref
+value change rewrites its file), and HEAD all publish through the ref mutations
+the ref-state signature already covers, so an unchanged signature proves the
+listing current. The listing cost grows with the ref count, and the ref count
+grows one file per branch this workflow leaves behind (2,718 refs at the
+landing measurement, 852 loose), an unbounded trend like the one the M41 row
+documented for the resolution walk. The fixed handler serves a repeat listing
+from a bounded memo keyed on (repo, ref-state signature) — the ref-resolution
+memo's own key shape — with the signature walk and any subprocess in one thread
+hop. The cost is per picker open, invisible to the standing HTTP probes, so the
+collector drives the ``list_branches`` handler over the charlie-bot checkout
+(read-only, scratch ``CHARLIEBOT_HOME``), from the checkout under test: the
+first view, as at a picker open with a cold memo, then seven timed repeats,
+with the served-list digest so a corpus difference between arms cannot
+masquerade as a payload difference. Evidence points the same collector at the
+before and after checkouts (``CHECKOUT`` at each root), the same shape as the
+M41 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, hashlib, os, subprocess, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.api.git import list_branches, _refs_signature
+
+REPO = Path("/home/chaoli/workspace/charlie-bot")
+REFS = subprocess.run(["git", "for-each-ref"], cwd=REPO, capture_output=True, text=True,
+                      check=True).stdout.count("\n")
+cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m79-home-")),
+                       workspace_dirs=["/home/chaoli/workspace"])
+
+async def main():
+    t0 = time.perf_counter()
+    first = await list_branches(repo=str(REPO))
+    cold = time.perf_counter() - t0
+    digest = hashlib.sha1(",".join(first).encode()).hexdigest()[:12]
+    times = []
+    last = None
+    for _ in range(7):
+        t0 = time.perf_counter()
+        last = await list_branches(repo=str(REPO))
+        times.append(time.perf_counter() - t0)
+    assert last == first
+    times.sort()
+    sig_walks = []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        _refs_signature(REPO)
+        sig_walks.append(time.perf_counter() - t0)
+    sig_walks.sort()
+    print(f"{REFS} refs; first view {cold:.4f} s; repeat-view median {times[3]:.4f} s, "
+          f"max {times[-1]:.4f} s over 7; list digest {digest} ({len(first)} names); "
+          f"signature walk median {sig_walks[2]*1000:.1f} ms")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-08 | this PR | M79 repeat-view median 0.1045/0.1040/0.1046 s → 0.0011/0.0011/0.0011 s, −99 %, maxima 0.1052-0.1058 → 0.0016-0.0019 s (three interleaved rounds of the new collector, 2718-ref charlie-bot checkout, main checkout before vs branch worktree after back-to-back at load 1.07-1.32; first view unchanged 0.1083-0.1091 → 0.1048-0.1075 s, subprocess-bound both arms; list digest 520bfb331161 (50 names) identical across all six arms; the repeat's remaining 1.1 ms is the ref-state signature walk, measured standalone 0.9-1.0 ms; no-regression re-measures interleaved ×2: M41 repeat-view 0.0014-0.0016 → 0.0014-0.0016 s, M43 0.0014-0.0015 → 0.0014-0.0015 s, M14 loop-lag 0.0056 → 0.0055 s at the 5 ms ticker floor; 19-passed git-diff API suite plus 2 new memo tests) | the /diff branch picker re-ran one `git branch -a --sort=-committerdate` subprocess per fetch over a ref set that grows one loose file per branch this workflow leaves behind (2718 refs, 852 loose at measurement; the listing's 104 ms scales with it, the same unbounded trend the M41 row documented for the resolution walk) — the listing now memoizes on (repo, ref-state signature), the ref-resolution memo's own key and invalidation ground: the ref set, every listed branch's committerdate, and HEAD all publish through ref mutations the signature covers, so an unchanged signature proves the listing current; M79 definition and healthy range introduced with this PR |
 | 2026-09-08 | this PR | M78 cold whole-file parse median 97.9/98.0/100.1 → 55.4/53.4/51.5 ms on the 36.3 MB / 5519-event worst live chat file and 26.5/27.0/26.5 → 12.6/13.1/12.7 ms on the 6.7 MB / 2315-event worst on-disk worker log, −44 % to −53 % (three interleaved rounds of the new collector, live corpora read-only, main checkout before vs branch worktree after back-to-back at load 0.96-1.03, every paired round faster; parser parity asserted beyond the parse-success check: a strict type-sensitive deep comparison of orjson vs stdlib json.loads over the whole 14 GB / 2,258,811-line live corpus — 6,279 files — found 0 divergences; M75 catch-up wall re-measured interleaved ×2: 0.1755/0.1751 → 0.0988/0.0965 s, loop-lag unchanged 0.0153 → 0.0155/0.0116 s; no-regression re-measures on the branch: M26 advance 0.17 ms parity True digest e94c56635194, M6 append-round 0.05 ms parity True, M23 0.0003 s, M30 0.0002/0.0003 s, M76 0.00000 s, M77 0.06 ms with 0/36 rebuilt; 4861-passed suite plus 9 new parser-contract tests) | the NDJSON event parse funnel ran stdlib json.loads per line — the hottest parse in the system, feeding every cold events load (the M75 catch-up, the projection build, usage resolution, the M13 cold worker-log read, archive and range reads) — while orjson parses the same lines ~2x faster with identical output; the swap covers the one funnel (`iter_ndjson_events`, which the M13 worker-events reader feeds bytes lines through) plus chat_events' live-range and archive readers; the boundary change is deliberate and test-pinned: the stdlib json NaN/Infinity extensions and double-overflow floats skip as malformed (invisible lines, the skip contract's own answer) and ints at or beyond 2**64 parse as float where stdlib kept exact precision — no live line sits at any boundary; orjson>=3.11 already a dependency since the M66 merge; M78 definition and healthy range introduced with this PR |
 | 2026-09-08 | this PR | M66 merged build median 5.26/5.30/5.39 s → 3.26/3.21/3.19 s, −38 % to −39 %, maxima 5.29-5.42 → 3.22-3.29 s (three interleaved rounds of the collector, 191.2 MB / 496,099-event worst on-disk trace /home/chaoli/data/stage3_current_traces/221054_trace_rank000_step000110.json, scratch output under /tmp, main checkout before vs branch worktree after back-to-back at load 0.87-1.12, every paired round faster; artifact 15.6 MB.gz both arms; parsed-trace parity True across all rounds — 496,116 events both arms, normalized digest b07896653af5 identical; 4847-passed suite, the two payload reference tests re-pinned to the orjson encoder's own forms) | the merge's two dominant passes rode the stdlib json module — the 2.25 s parse of the 191 MB corpus plus the 1.6 s batched C-encoder dumps on a corpus that is machine-written JSON parsed and re-serialized with no hand-authored edge cases — while orjson parses the same corpus ~3.5x faster and renders each batch ~5x faster; the event walk and the level-1 gzip pass are untouched, and the artifact size is unchanged; the wire payload changes rendering form (raw UTF-8 where the stdlib form emitted \uXXXX) and the parsed trace is pinned identical; the parse pass rejects the NaN/Infinity literals stdlib json.load accepts, so a trace carrying them fails the build loudly instead of shipping Perfetto-invalid JSON (orjson.dumps renders an in-memory non-finite float as null — unreachable from a trace file); orjson>=3.11 joins the dependencies (uv.lock updated, the host venv carries 3.12.0); healthy range recalibrated median < 12 s → < 8 s with this PR — the old line sat ~2x above the pre-fix reading and 3.7x above the new one |
 | 2026-09-08 | #1086 | slack follow-backfill listing 3.42/3.52/3.66 ms → 0.18/0.19/0.20 ms, group-rewrite listing 3.49/3.76/3.84 ms → 0.04/0.04/0.05 ms medians, maxima 5.17-6.00/29.81-34.35 → 0.19-0.40/0.08-0.11 ms (three interleaved manager-level rounds per arm, 1090-meta live corpus read-only — 46 active, 4 slack-active — main checkout before-shape vs branch worktree after-shape back-to-back at load 0.76-0.95, survivor-set parity asserted for both shapes in both arms; the manager code is identical across arms, the diff is the callers' arguments; 4847-passed suite) | the Socket Mode (re)connection backfill and the group rewrite listed every session unfiltered and read one field each — the leaving-the-manager copy, thinking stamp, and sidebar populate ran over the ~1044 archived rows they drop on the next line; the backfill lists ACTIVE directly (identical survivor set — `_load_session_metas(status)` filters `meta.status == status`) and the rewrite scans the shared cached metas read-only, the M40 pattern; no standing collector drives either caller, so the row self-measures its before numbers per the no-baseline-row rule; recorded in this docs-only follow-up per the #1046 precedent, the landing PR #1086 shipped without it |

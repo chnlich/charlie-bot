@@ -67,6 +67,18 @@ _REF_RESOLVE_MEMO_LIMIT = 64
 
 _ref_resolution_memo: BoundedMemo[_RefResolveKey, tuple[str, ...]] = BoundedMemo(_REF_RESOLVE_MEMO_LIMIT)
 
+# Bound on _branch_list_memo: one entry per repo the /diff branch picker has
+# served, and an evicted entry re-runs one `git branch -a`.
+_BRANCH_LIST_MEMO_LIMIT = 8
+
+# Memo key for one branch listing: repo plus the ref-state signature (the same
+# _refs_signature the ref-resolution memo keys). `git branch -a --sort` reads
+# the ref set, every ref's commit, and HEAD — all inside that signature — so an
+# unchanged signature proves the listing current.
+_BranchListKey = tuple[str, _RefSignature]
+
+_branch_list_memo: BoundedMemo[_BranchListKey, tuple[str, ...]] = BoundedMemo(_BRANCH_LIST_MEMO_LIMIT)
+
 
 def _attributes_signature(repo_path: Path) -> tuple[int, int] | None:
   """Return (mtime_ns, size) of the repo's .gitattributes, or None when it has none."""
@@ -309,17 +321,36 @@ def _list_branches_sync(repo_path: Path) -> str:
   )
 
 
+def _list_branches_memoized_sync(repo_path: Path) -> list[str]:
+  """Return the branch listing's lines, re-running the subprocess only when the
+  repo's ref state has moved since the last listing."""
+  signature = _refs_signature(repo_path)
+  key = (str(repo_path), signature)
+  memoized = _branch_list_memo.get(key)
+  if memoized is None:
+    memoized = tuple(_list_branches_sync(repo_path).splitlines())
+    _branch_list_memo.store(key, memoized)
+  return list(memoized)
+
+
 @router.get("/branches")
 async def list_branches(repo: str = Query(..., description="Full path to git repo")):
   """Return branch names for a repo, most recent first, up to 50."""
   repo_path = Path(repo).expanduser()
   if not (repo_path / ".git").exists() and not repo_path.name == ".git":
     raise HTTPException(status_code=400, detail=f"Not a git repo: {repo}")
-  stdout = await asyncio.to_thread(_list_branches_sync, repo_path)
+  # The endpoint deliberately accepts a path that IS a .git dir (git resolves the
+  # repo from cwd); the signature walk reads <repo>/.git, so normalize to the
+  # parent — same repo, same listing, one memo key.
+  if repo_path.name == ".git":
+    repo_path = repo_path.parent
+  # The signature walk and any `git branch` subprocess stay off the event loop
+  # in one thread hop, the _resolve_commits_memoized shape.
+  lines = await asyncio.to_thread(_list_branches_memoized_sync, repo_path)
   seen: set[str] = {"HEAD"}
   branches: list[str] = ["HEAD"]
-  for line in stdout.splitlines():
-    name = line.strip()
+  for name in lines:
+    name = name.strip()
     if not name or name in {"origin", "HEAD"}:
       continue
     if name not in seen:

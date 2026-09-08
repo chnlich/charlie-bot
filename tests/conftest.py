@@ -617,6 +617,33 @@ def pool_cfg(
   )
 
 
+# Resolved model and option id the account-pool suites pin for the pooled Fable backend.
+# One home so a rename stays a one-line change across the master-turn, worker, and ledger
+# suites; wire-payload assertions and yaml text keep the raw strings (same rule as
+# OPUS_BACKEND_ID above).
+FABLE_MODEL = "claude-fable-5-1"
+POOLED_FABLE_ID = "claude-fable-5"
+
+
+def fable_pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
+  """A pooled config with one pooled Fable option and a pinned Fable entry in its own config dir."""
+  return pool_cfg(
+      tmp_path,
+      [
+          models.BackendOption(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL),
+          models.BackendOption(
+              id="pinned",
+              label="Pinned",
+              type="cc-claude",
+              model=FABLE_MODEL,
+              claude_config_dir=str(tmp_path / "pinned")),
+      ],
+      home=tmp_path / ".charliebot",
+      worktree_dir=tmp_path / "worktrees",
+      labels=labels,
+  )
+
+
 def session_dir_names(cfg: CharlieBotConfig) -> set[str]:
   """Snapshot the names of session directories on disk (existence, not content)."""
   if not cfg.sessions_dir.exists():

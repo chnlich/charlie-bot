@@ -54,7 +54,9 @@ Vocabulary (opencode row memo):
               and any later write to the row re-reads it.
   partial     the opencode source's accumulated buckets plus its contributing-record count,
               kept in lockstep with the row memo: every merge ends with the partial matching
-              the memo, and a merge that moves it adjusts the partial by the scan's deltas.
+              the memo, a merge that moves it adjusts the partial by the scan's deltas, and a
+              merge that serves the document entry adopts it (the entry's stored signature
+              proves the rows the memo tracks are the rows it sums).
 Vocabulary:
   signature   ``[mtime_ns, size]`` for a log file; a file re-scans whole whenever either value
               moves. The opencode db signs as ``[mtime_ns, size, wal_sig]`` with ``wal_sig`` the
@@ -409,6 +411,16 @@ class _OpencodePartial(NamedTuple):
   by_account: dict
   span: dict
   count: int
+
+
+def _snapshot_opencode_partial(t: _Tally, count: int) -> _OpencodePartial:
+  """Copy the opencode source's buckets out of the accumulator. The stored partial must never
+  alias a served tally's containers, so every bucket copies."""
+  return _OpencodePartial(
+      by_model={k: dict(v) for k, v in t.by_model.items() if k[0] == "opencode"},
+      by_account={k: dict(v) for k, v in t.by_account.items() if k[0] == "opencode"},
+      span={k: tuple(v) for k, v in t.span.items() if k[0] == "opencode"},
+      count=count)
 
 
 class _OpencodeScan(NamedTuple):
@@ -768,8 +780,9 @@ def _merge_opencode(
   (the signature the rows were read at, the row epoch, scan-sourced); the signature is None
   when no signature applies (absent, unstatable, or unreadable db), so the whole-tally memo
   never signs rows it cannot key. A scan-reported delta set with a current partial adjusts
-  the source's buckets instead of replaying every record; the partial always ends the merge
-  matching the row memo it sums."""
+  the source's buckets instead of replaying every record; an entry-served merge adopts the
+  partial the same way (its rows are provably the memo's — see the entry comment); the
+  partial always ends the merge matching the row memo it sums."""
   if not db.exists():
     t.notes.append("opencode: db absent")
     return None, 0, False
@@ -780,12 +793,22 @@ def _merge_opencode(
   from_scan = False
   if entry is not None:
     # The signature is taken before the read and stored with the rows, so an entry can only
-    # be served while the file still matches it. The row memo and its partial track the db
-    # through scans, not through the document, so neither is touched here.
-    records = entry["records"]
+    # be served while the file still matches it, and a row move writes the db or its WAL
+    # sidecar, which moves that signature — a served entry's records are therefore exactly
+    # the rows the row memo tracks and its partial sums, so the buckets adopt in place of
+    # the per-record fold. The row memo itself is still only ever advanced by scans.
     epoch = _opencode_row_epochs.get(key, 0)
-    _replay_opencode_records(t, records)
-    t.notes.append(f"opencode: {len(records):,} assistant messages with token counts")
+    partial = _opencode_partials.get(key)
+    if partial is None:
+      # Process start: no partial exists yet, so one replay builds it and the next
+      # entry-served merge adopts.
+      records = entry["records"]
+      _replay_opencode_records(t, records)
+      count = len(records)
+      _opencode_partials[key] = _snapshot_opencode_partial(t, count)
+    else:
+      count = _adjust_opencode_partial(t, _opencode_row_memos.setdefault(key, {}), partial, [])
+    t.notes.append(f"opencode: {count:,} assistant messages with token counts")
     return sig, epoch, from_scan
   if scan is None:
     scan = _advance_opencode_rows(db)
@@ -815,17 +838,7 @@ def _merge_opencode(
       cache.store("opencode", db, {"sig": sig, "records": records})
       _opencode_doc_synced[key] = True
   # The stored partial must never alias a served tally's containers, so it copies out.
-  _opencode_partials[key] = _OpencodePartial(
-      by_model={
-          k: dict(v) for k, v in t.by_model.items() if k[0] == "opencode"
-      },
-      by_account={
-          k: dict(v) for k, v in t.by_account.items() if k[0] == "opencode"
-      },
-      span={
-          k: tuple(v) for k, v in t.span.items() if k[0] == "opencode"
-      },
-      count=count)
+  _opencode_partials[key] = _snapshot_opencode_partial(t, count)
   t.notes.append(f"opencode: {count:,} assistant messages with token counts")
   return sig, epoch, from_scan
 
@@ -838,7 +851,8 @@ def _adjust_opencode_partial(
 ) -> int:
   """Carry the partial across one scan's row moves: fold every delta out of and into a copy
   of the buckets, re-derive spans a removal invalidated, drop buckets whose last record went
-  away, and feed the result into *t*. Returns the contributing-record count."""
+  away, and feed the result into *t*. Returns the contributing-record count. An empty delta
+  set is the entry-served merge's adoption: the buckets feed *t* unchanged."""
   by_model = {k: dict(v) for k, v in partial.by_model.items()}
   by_account = {k: dict(v) for k, v in partial.by_account.items()}
   span = {k: tuple(v) for k, v in partial.span.items()}

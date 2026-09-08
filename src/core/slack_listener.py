@@ -610,8 +610,11 @@ async def _backfill_followed_threads(
   session arms exactly once, independent of its unread count.
   """
   armed = 0
-  for meta in await session_mgr.list_sessions():
-    if meta.status != SessionStatus.ACTIVE or meta.slack_origin is None:
+  # The ACTIVE filter rides the listing (whose per-filter result memo the
+  # status polls keep warm) so the backfill never copies+stamps the archived
+  # majority it drops on the line below.
+  for meta in await session_mgr.list_sessions(status=SessionStatus.ACTIVE):
+    if meta.slack_origin is None:
       continue
     origin = meta.slack_origin
     try:

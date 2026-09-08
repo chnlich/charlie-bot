@@ -1705,7 +1705,9 @@ class SessionManager:
 
   async def _rewrite_group(self, old_name: str, new_name: str | None) -> int:
     """Set old_name's group to new_name on every matching session. Returns the count updated."""
-    all_sessions = await self.list_sessions()
+    # Membership reads only, so the shared cached metas serve directly (read-only);
+    # the leaving-the-manager copy is paid per matching row by get_session below.
+    all_sessions = await self._load_session_metas()
     count = 0
     for meta in all_sessions:
       if meta.group != old_name:

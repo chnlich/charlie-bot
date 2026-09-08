@@ -4,8 +4,6 @@ import copy
 import subprocess
 from pathlib import Path
 
-import yaml
-
 from src.core.config import (
     CharlieBotConfig,
     ScheduledTaskConfig,
@@ -86,8 +84,7 @@ async def init_charliebot_home() -> None:
     if template.exists():
       cfg.config_file.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
     else:
-      with open(cfg.config_file, "w") as f:
-        yaml.dump(_default_config_yaml(), f, default_flow_style=False, sort_keys=False)
+      save_yaml(cfg.config_file, _default_config_yaml())
 
 
 def _seed_if_missing(path: Path, content: str) -> None:

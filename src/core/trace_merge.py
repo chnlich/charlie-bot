@@ -13,7 +13,7 @@ import orjson
 # the user-visible cost; big-payload transport gzip is level 1 for the same reason.
 _MERGE_COMPRESSLEVEL = 1
 
-# Events per json.dumps call on the merge output. The encoder's per-element text
+# Events per orjson.dumps call on the merge output. The encoder's per-element text
 # is context-free, so a batch's bracket-stripped rendering is byte-identical to the
 # per-event form; batching cut the serializer pass from 3.0 s to 1.7 s on the input
 # above. The batch is the only buffering beyond the gzip stream.
@@ -52,8 +52,9 @@ class _EventBatcher:
     self._emitted_any = True
     # orjson's compact rendering parses to the same trace the stdlib encoder
     # produced; non-ASCII rides raw UTF-8 where the stdlib form emitted \uXXXX.
-    # orjson.dumps raises on NaN/Infinity (which json.load accepts): a trace
-    # carrying them fails the build instead of shipping Perfetto-invalid JSON.
+    # The parse pass rejects the NaN/Infinity literals stdlib json.load accepts,
+    # so a trace carrying them fails the build; an in-memory non-finite float
+    # (unreachable from a trace file) would render as null here.
     self._output.write(orjson.dumps(self._pending)[1:-1])
     self._pending.clear()
 

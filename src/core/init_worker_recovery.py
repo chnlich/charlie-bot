@@ -23,7 +23,7 @@ from src.core import event_types as ET
 from src.core import finalize_effects, runs
 from src.core.git import git_quarantine_worktree, git_worktree_dir_name
 from src.core.json_utils import load_json_meta
-from src.core.memo import BoundedMemo
+from src.core.memo import StatSignatureMemo
 from src.core.models import (
     TERMINAL_THREAD_STATUSES,
     SessionStatus,
@@ -63,12 +63,11 @@ RUNNING_SCAN_WINDOW = timedelta(days=30)
 # the 339-thread worst corpus); a repeat scan pays one stat per file and re-reads
 # only files whose signature moved. Every thread-metadata writer publishes through
 # write_model_json_atomically's tmp-file rename, so any content change moves
-# mtime_ns and an unchanged (mtime_ns, size) proves the content current. The
-# signature is taken before the read, so an entry recorded while a write raced the
-# scan keys the older signature and can never be served for the newer bytes. Yielded
-# dicts are shared across calls and scans — consumers must treat them as read-only.
+# mtime_ns and an unchanged (mtime_ns, size) proves the content current (the
+# stat-before-read race contract is StatSignatureMemo's). Yielded dicts are shared
+# across calls and scans — consumers must treat them as read-only.
 _THREAD_META_MEMO_LIMIT = 1024
-_thread_meta_memo: BoundedMemo[str, tuple[int, int, dict]] = BoundedMemo(_THREAD_META_MEMO_LIMIT)
+_thread_meta_memo: StatSignatureMemo[str, dict] = StatSignatureMemo(_THREAD_META_MEMO_LIMIT)
 
 
 def _reset_thread_meta_memo_for_tests() -> None:
@@ -161,13 +160,13 @@ def iter_recent_thread_metas(
 
 def _recent_thread_meta(meta_path: str, st: os.stat_result, log_event: str) -> dict | None:
   """Parsed metadata for *meta_path* whose stat is *st*: memo hit or one read+parse."""
-  cached = _thread_meta_memo.get(meta_path)
-  if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-    return cached[2]
+  meta = _thread_meta_memo.fresh(meta_path, st)
+  if meta is not None:
+    return meta
   meta = load_json_meta(Path(meta_path), log_event)
   if meta is None:
     return None
-  _thread_meta_memo.store(meta_path, (st.st_mtime_ns, st.st_size, meta))
+  _thread_meta_memo.record(meta_path, st, meta)
   return meta
 
 

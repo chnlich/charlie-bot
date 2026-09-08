@@ -10,7 +10,7 @@ import structlog
 
 from src.core.finalize_effects import _MASTER_OUTPUT_TYPES, _is_terminal_worker_summary
 from src.core.json_utils import atomic_write_text
-from src.core.memo import BoundedMemo
+from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import SessionMetadata, parse_utc_datetime, utc_now
 from src.core.ndjson import (
     append_ndjson,
@@ -138,13 +138,13 @@ class ChatEventStore:
     # Parsed-archive memo: path -> (mtime_ns, size, events). Archive files are
     # append-only within their week and frozen after, so an unchanged
     # (mtime_ns, size) means unchanged bytes; an append re-parses one file.
-    self._archive_events_memo: BoundedMemo[Path, tuple[int, int, list[dict]]] = BoundedMemo(_ARCHIVE_MEMO_LIMIT)
+    self._archive_events_memo: StatSignatureMemo[Path, list[dict]] = StatSignatureMemo(_ARCHIVE_MEMO_LIMIT)
     # Archive file-list memo: archives dir -> (mtime_ns, size, sorted paths).
     # Membership changes only by creating or removing a directory entry, and
     # either moves the directory's own mtime_ns, so an unchanged signature
     # proves the name list current; a same-week append moves only the file's
     # own signature.
-    self._archive_files_memo: BoundedMemo[Path, tuple[int, int, list[Path]]] = BoundedMemo(_ARCHIVE_MEMO_LIMIT)
+    self._archive_files_memo: StatSignatureMemo[Path, list[Path]] = StatSignatureMemo(_ARCHIVE_MEMO_LIMIT)
     # Live-file range memo: path -> (mtime_ns, size, inode, per-physical-line
     # events with None holes for blank/malformed lines, covered byte size,
     # ends on a line boundary). Gated to archive_offset > 0 sessions:
@@ -315,11 +315,10 @@ class ChatEventStore:
     except OSError as e:
       log.debug("archive_dir_stat_failed", path=str(archives_dir), error=str(e))
       return []
-    memo = self._archive_files_memo.get(archives_dir)
-    if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
-      return memo[2]
-    paths = sorted(archives_dir.glob("chat_events.*.jsonl"))
-    self._archive_files_memo.store(archives_dir, (st.st_mtime_ns, st.st_size, paths))
+    paths = self._archive_files_memo.fresh(archives_dir, st)
+    if paths is None:
+      paths = sorted(archives_dir.glob("chat_events.*.jsonl"))
+      self._archive_files_memo.record(archives_dir, st, paths)
     return paths
 
   def _archive_file_events(self, path: Path, session_id: str) -> list[dict]:
@@ -334,9 +333,9 @@ class ChatEventStore:
     except OSError as e:
       log.debug("archive_read_failed", path=str(path), error=str(e))
       return []
-    memo = self._archive_events_memo.get(path)
-    if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
-      return memo[2]
+    events = self._archive_events_memo.fresh(path, st)
+    if events is not None:
+      return events
     events: list[dict] = []
     try:
       with open(path, encoding="utf-8") as f:
@@ -350,7 +349,7 @@ class ChatEventStore:
     except OSError as e:
       log.debug("archive_read_failed", path=str(path), error=str(e))
       return []
-    self._archive_events_memo.store(path, (st.st_mtime_ns, st.st_size, events))
+    self._archive_events_memo.record(path, st, events)
     return events
 
   def _live_range_lines(self, path: Path, session_id: str) -> list[dict | None]:

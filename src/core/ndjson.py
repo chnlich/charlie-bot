@@ -11,7 +11,7 @@ from typing import Any, BinaryIO
 import numpy as np
 import structlog
 
-from src.core.memo import BoundedMemo
+from src.core.memo import BoundedMemo, StatSignatureMemo
 
 log = structlog.get_logger()
 
@@ -26,32 +26,16 @@ _TAIL_WINDOW_SIZE = 512 * 1024
 _COUNT_MEMO_LIMIT = 64
 
 # path -> (mtime_ns, size, line_count) and (path, limit) -> (mtime_ns, size,
-# events, total, has_more). Tail entries share their event dicts with every
-# caller; consumers must treat them as read-only.
-_count_memo: BoundedMemo[Path, tuple[int, int, int]] = BoundedMemo(_COUNT_MEMO_LIMIT)
+# events, total, has_more). The count entry's signature is the pre-scan stat:
+# an append during the scan keys the count under the older signature, which no
+# later stat can match, so the entry is never served stale — the next call
+# re-stats, misses, and recounts; a post-scan signature could instead key a
+# stale count under bytes the scan never reached, and that entry would serve
+# until the file changed again. Chat event files only append; their atomic
+# archive rewrites replace the whole file. Tail entries share their event
+# dicts with every caller; consumers must treat them as read-only.
+_count_memo: StatSignatureMemo[Path, int] = StatSignatureMemo(_COUNT_MEMO_LIMIT)
 _tail_memo: BoundedMemo[tuple[Path, int], tuple[int, int, list[dict], int, bool]] = BoundedMemo(_COUNT_MEMO_LIMIT)
-
-
-def _count_memo_get(path: Path, mtime_ns: int, size: int) -> int | None:
-  """Return the memoized line count when the file's signature is unchanged."""
-  hit = _count_memo.get(path)
-  if hit is not None and hit[0] == mtime_ns and hit[1] == size:
-    return hit[2]
-  return None
-
-
-def _count_memo_store(path: Path, mtime_ns: int, size: int, total: int) -> None:
-  """Store a line count under the file's pre-read signature.
-
-  The signature is taken before the scan on purpose: an append during the
-  scan stores a count of newer bytes under the older signature, which no
-  later stat can match, so the entry is never served stale — the next call
-  re-stats, misses, and recounts. A post-scan signature could instead key a
-  stale count under bytes the scan never reached, and that entry would serve
-  until the file changed again. Chat event files only append; their atomic
-  archive rewrites replace the whole file.
-  """
-  _count_memo.store(path, (mtime_ns, size, total))
 
 
 def _tail_memo_get(path: Path, limit: int, mtime_ns: int, size: int) -> tuple[list[dict], int, bool] | None:
@@ -115,12 +99,12 @@ def count_ndjson_lines(path: Path) -> int:
   if not path.exists():
     return 0
   st = path.stat()
-  memoized = _count_memo_get(path, st.st_mtime_ns, st.st_size)
+  memoized = _count_memo.fresh(path, st)
   if memoized is not None:
     return memoized
   with open(path, "rb") as f:
     total = _count_lines(f)
-  _count_memo_store(path, st.st_mtime_ns, st.st_size, total)
+  _count_memo.record(path, st, total)
   return total
 
 

@@ -28,6 +28,7 @@ from src.cli.common import (
     resolve_session_id,
 )
 from src.core import plan_diff
+from src.core.models import PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES
 
 _PLAN_REMINDER = (
     "A read-only verify delegation runs, and its adequacy findings are reported alongside "
@@ -108,7 +109,7 @@ def _add_amend(parser: argparse.ArgumentParser) -> None:
       help="One line saying why this version differs from its predecessor; rides on the version record")
   parser.add_argument("--plan", type=int, default=None, help="Target plan id (required when ambiguous)")
   parser.add_argument(
-      "--trigger", choices=["auto_amend", "feedback"], default="feedback", help="Revision trigger (default feedback)")
+      "--trigger", choices=PLAN_AMEND_TRIGGERS, default="feedback", help="Revision trigger (default feedback)")
   _build_base_args(parser)
 
 
@@ -118,7 +119,7 @@ def _add_approve(parser: argparse.ArgumentParser) -> None:
 
 def _add_close(parser: argparse.ArgumentParser) -> None:
   parser.add_argument("--plan", type=int, required=True, help="Target plan id")
-  parser.add_argument("--as", dest="close_as", required=True, choices=["superseded", "abandoned", "completed"])
+  parser.add_argument("--as", dest="close_as", required=True, choices=PLAN_CLOSE_MODES)
 
 
 def _add_diff(parser: argparse.ArgumentParser) -> None:

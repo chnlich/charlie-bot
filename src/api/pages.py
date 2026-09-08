@@ -367,7 +367,7 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
   """Validate the file is parseable JSON, then stream-compress the original bytes unchanged.
 
   Peaks around 2.25 GB RSS for a 525.8 MB file (same order as the merge path's per-input
-  json.load) and reads the source file a second time, after validation, to compress it.
+  orjson.loads) and reads the source file a second time, after validation, to compress it.
   Compression level is the merge path's: one build per cache key, viewer-fetched whole.
   """
   with path.open("rb") as validate_file:

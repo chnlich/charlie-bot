@@ -364,11 +364,11 @@ def test_style_and_header_splice_positions() -> None:
 
 
 def _anchors_from_full_parse(source: str) -> tuple[tuple | None, tuple | None]:
-  from src.core.plan_diff import _first_descendant, _parse
+  from src.core.plan_diff import _first_descendant, _Node, _parse
 
   parser = _parse(source)
 
-  def quad(node):
+  def quad(node: "_Node | None") -> tuple | None:
     return (node.start, node.start_end, node.end, node.end_end) if node is not None else None
 
   return quad(_first_descendant(parser.root, "head")), quad(_first_descendant(parser.root, "body"))

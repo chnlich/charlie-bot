@@ -13,6 +13,7 @@ from conftest import (
     SYNTHETIC_MODEL,
     FakeChunkedResponse,
     build_cli_backend,
+    fake_one_shot_proc,
 )
 
 import src.agents.backends.opencode as opencode_mod
@@ -77,15 +78,6 @@ class _FakeSseResponse:
   async def aiter_bytes(self):
     for line in self._lines:
       yield (line + "\n").encode("utf-8")
-
-
-class _FakeOneShotStdout:
-
-  def __aiter__(self):
-    return self
-
-  async def __anext__(self) -> None:
-    raise StopAsyncIteration
 
 
 def _message_updated(info: dict, session_id: str | None = None) -> dict:
@@ -348,13 +340,7 @@ async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatc
   monkeypatch.setenv("NO_PROXY", "internal.test,localhost")
   monkeypatch.setenv("HTTP_PROXY", "http://ambient-http.test:8080")
   monkeypatch.setenv("HTTPS_PROXY", "http://ambient-https.test:8080")
-  process = MagicMock()
-  process.stdout = _FakeOneShotStdout()
-  process.stderr = MagicMock()
-  process.stderr.read = AsyncMock(return_value=b"")
-  process.wait = AsyncMock(return_value=0)
-  process.pid = 5678
-  process.returncode = 0
+  process = fake_one_shot_proc([], pid=5678)
   create_process = AsyncMock(return_value=process)
 
   with patch(_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=create_process):

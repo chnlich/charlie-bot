@@ -659,7 +659,10 @@ def _stream_reference_lines(out: BinaryIO, data: bytes, take: int) -> tuple[int,
   """
   # Validity parity with the text-mode read this replaces: it raised the same
   # UnicodeDecodeError on undecodable bytes, so the decoded result is unused.
-  data.decode("utf-8")
+  # ASCII bytes are always valid UTF-8, so the isascii() scan proves validity
+  # and only a non-ASCII corpus pays the full decode.
+  if not data.isascii():
+    data.decode("utf-8")
   fast = _fast_reference_frames(data, take)
   if fast is not None:
     raw, start, end, needs_newline = fast

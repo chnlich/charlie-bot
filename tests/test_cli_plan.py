@@ -28,9 +28,12 @@ def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pyt
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
   with patched_cli_post(cfg, [
-      "plan", "present",
-      "--file", "artifacts/plan_01.html",
-      "--title", "P1",
+      "plan",
+      "present",
+      "--file",
+      "artifacts/plan_01.html",
+      "--title",
+      "P1",
   ], return_value=resp) as post_mock:
     main()
 
@@ -48,12 +51,18 @@ def test_plan_present_passes_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
   with patched_cli_post(cfg, [
-      "plan", "present",
-      "--file", "artifacts/plan_01.html",
-      "--title", "P1",
-      "--base-repo", "r",
-      "--base-branch", "b",
-      "--base-sha", "s",
+      "plan",
+      "present",
+      "--file",
+      "artifacts/plan_01.html",
+      "--title",
+      "P1",
+      "--base-repo",
+      "r",
+      "--base-branch",
+      "b",
+      "--base-sha",
+      "s",
   ], return_value=resp) as post_mock:
     main()
 
@@ -68,9 +77,12 @@ def test_plan_amend_posts_with_default_trigger(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "v": 2, "state": "awaiting approval"})
   with patched_cli_post(cfg, [
-      "plan", "amend",
-      "--file", "artifacts/plan_02.html",
-      "--note", "folded the executor back into one",
+      "plan",
+      "amend",
+      "--file",
+      "artifacts/plan_02.html",
+      "--note",
+      "folded the executor back into one",
   ], return_value=resp) as post_mock:
     main()
 
@@ -90,11 +102,16 @@ def test_plan_amend_passes_plan_and_trigger(tmp_path: Path, monkeypatch: pytest.
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 2, "v": 3, "state": "awaiting approval"})
   with patched_cli_post(cfg, [
-      "plan", "amend",
-      "--file", "artifacts/plan_03.html",
-      "--note", "answered verify findings",
-      "--plan", "2",
-      "--trigger", "auto_amend",
+      "plan",
+      "amend",
+      "--file",
+      "artifacts/plan_03.html",
+      "--note",
+      "answered verify findings",
+      "--plan",
+      "2",
+      "--trigger",
+      "auto_amend",
   ], return_value=resp) as post_mock:
     main()
 
@@ -123,9 +140,12 @@ def test_plan_close_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "state": close_as})
   with patched_cli_post(cfg, [
-      "plan", "close",
-      "--plan", "1",
-      "--as", close_as,
+      "plan",
+      "close",
+      "--plan",
+      "1",
+      "--as",
+      close_as,
   ], return_value=resp) as post_mock:
     main()
 
@@ -176,9 +196,12 @@ def test_plan_present_stdout_json(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
   with patched_cli_post(cfg, [
-      "plan", "present",
-      "--file", "artifacts/plan_01.html",
-      "--title", "P1",
+      "plan",
+      "present",
+      "--file",
+      "artifacts/plan_01.html",
+      "--title",
+      "P1",
   ], return_value=resp):
     main()
 

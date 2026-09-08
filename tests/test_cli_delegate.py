@@ -115,7 +115,7 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypa
   task_spec = task_spec_file.read_text()
 
   with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "codex-o3",
-                                     session="s1")) as post_mock:
+                                        session="s1")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1", "description": "do work"}
     main()
 
@@ -160,7 +160,7 @@ def test_main_task_type_lands_in_payload(tmp_path: Path, monkeypatch: pytest.Mon
   task_spec_file = _write_task_spec(tmp_path)
 
   with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--task-type", task_type,
-                                     session="s1")) as post_mock:
+                                        session="s1")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t2", "description": "task"}
     main()
 
@@ -327,7 +327,7 @@ def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch
   reviewer_context_file.write_text("review these state-machine edges")
 
   with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file",
-                                     str(reviewer_context_file), session="s1")) as post_mock:
+                                        str(reviewer_context_file), session="s1")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t3"}
     main()
 
@@ -434,8 +434,8 @@ def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytes
       self.response = MagicMock()
       self.response.json.return_value = {"detail": "requested backend 'missing' is not in backend_options"}
 
-  with patched_cli_post(
-      cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "missing", session="s1")) as post_mock:
+  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "missing",
+                                        session="s1")) as post_mock:
     post_mock.side_effect = FakeRequestException()
     with pytest.raises(SystemExit) as exc_info:
       main()

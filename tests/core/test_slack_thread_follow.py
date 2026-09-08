@@ -574,10 +574,8 @@ def test_cli_ack_posts_the_ids_and_prints_the_readback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = setup_session_cwd(tmp_path, monkeypatch, "abc")
   readback = {"acked": 2, "watermark_ts": _ts(130)}
-  with (
-      patched_cli_post(cfg, ["slack", "ack", "--message-id", _ts(110), _ts(130)],
-                       return_value=make_json_response(readback)) as post,
-  ):
+  with (patched_cli_post(cfg, ["slack", "ack", "--message-id", _ts(110), _ts(130)],
+                         return_value=make_json_response(readback)) as post,):
     cli_main()
 
   assert post.call_args.args[0].endswith("/api/internal/slack/ack")

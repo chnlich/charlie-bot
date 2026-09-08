@@ -46,9 +46,8 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
 
   resp_mock = make_json_response({"status": "started", "session_id": "s1", "iterations": 2})
 
-  with patched_cli_post(
-      cfg, _improve_argv("s1", str(tmp_path), goal_file, "--backend", "codex-o3", "--iterations", "2"),
-      return_value=resp_mock) as post_mock:
+  with patched_cli_post(cfg, _improve_argv("s1", str(tmp_path), goal_file, "--backend", "codex-o3", "--iterations",
+                                           "2"), return_value=resp_mock) as post_mock:
     main()
 
   # Should have posted exactly once to the improve endpoint
@@ -79,9 +78,8 @@ def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.
 
   resp_mock = make_json_response({"status": "started", "session_id": "s1", "iterations": 2})
 
-  with patched_cli_post(
-      cfg, _improve_argv("s1", str(tmp_path), goal_file, "--iterations", "2", "--plan-file", str(plan_file)),
-      return_value=resp_mock) as post_mock:
+  with patched_cli_post(cfg, _improve_argv("s1", str(tmp_path), goal_file, "--iterations", "2", "--plan-file",
+                                           str(plan_file)), return_value=resp_mock) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -100,8 +98,8 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
   goal_file.write_text("fix")
 
   import requests as req_lib
-  with patched_cli_post(
-      cfg, _improve_argv("s1", str(tmp_path), goal_file), side_effect=req_lib.RequestException("conn error")):
+  with patched_cli_post(cfg, _improve_argv("s1", str(tmp_path), goal_file),
+                        side_effect=req_lib.RequestException("conn error")):
     with pytest.raises(SystemExit) as exc_info:
       main()
     assert exc_info.value.code == 1

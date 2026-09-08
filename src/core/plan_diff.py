@@ -96,6 +96,22 @@ class _OffsetParser(HTMLParser):
     line, column = self.getpos()
     return self._line_starts[line - 1] + column
 
+  def _start_tag_span(self) -> tuple[int, int]:
+    """Source span of the start tag at the reader's position, verified against the raw source."""
+    start = self._offset()
+    raw = self.get_starttag_text()
+    if raw is None or self.source[start:start + len(raw)] != raw:
+      raise ValueError(f"could not locate start tag at offset {start}")
+    return start, start + len(raw)
+
+  def _end_tag_span(self) -> tuple[int, int]:
+    """Source span of the end tag opening at the reader's position, closed by the next '>'."""
+    start = self._offset()
+    close = self.source.find(">", start)
+    if close < 0:
+      raise ValueError(f"could not locate end tag at offset {start}")
+    return start, close + 1
+
 
 class _Parser(_OffsetParser):
   """DOM builder retaining source offsets and decoded text ranges."""
@@ -120,24 +136,18 @@ class _Parser(_OffsetParser):
     self._open_node(tag, attrs)
 
   def _open_node(self, tag: str, attrs: list[tuple[str, str | None]]) -> _Node:
-    start = self._offset()
-    raw = self.get_starttag_text()
-    if raw is None or self.source[start:start + len(raw)] != raw:
-      raise ValueError(f"could not locate start tag at offset {start}")
-    node = _Node(tag, {name.lower(): value for name, value in attrs}, self._stack[-1], start, start + len(raw))
+    start, start_end = self._start_tag_span()
+    node = _Node(tag, {name.lower(): value for name, value in attrs}, self._stack[-1], start, start_end)
     self._stack[-1].children.append(node)
     return node
 
   def handle_endtag(self, tag: str) -> None:
-    start = self._offset()
-    end = self.source.find(">", start)
-    if end < 0:
-      raise ValueError(f"could not locate end tag at offset {start}")
+    start, end_end = self._end_tag_span()
     for index in range(len(self._stack) - 1, 0, -1):
       node = self._stack[index]
       if node.tag == tag:
         node.end = start
-        node.end_end = end + 1
+        node.end_end = end_end
         del self._stack[index:]
         return
 
@@ -171,7 +181,7 @@ class _Parser(_OffsetParser):
 class _BoundaryParser(_OffsetParser):
   """First head/body anchors only, riding _Parser's tokenizer walk without the DOM build.
 
-  Inherits _OffsetParser's offset math.  The same innermost-open-tag end
+  Inherits _OffsetParser's offset math and tag-span locating.  The same innermost-open-tag end
   matching as ``_Parser`` — the record rides the stack slot that opened it, so
   a nested same-tag element takes the end tag and the tracked first element
   stays end-less exactly as the tree's node would — so the anchors equal the
@@ -184,13 +194,6 @@ class _BoundaryParser(_OffsetParser):
     self.head: _Anchor | None = None
     self.body: _Anchor | None = None
 
-  def _start_tag(self) -> tuple[int, int]:
-    start = self._offset()
-    raw = self.get_starttag_text()
-    if raw is None or self.source[start:start + len(raw)] != raw:
-      raise ValueError(f"could not locate start tag at offset {start}")
-    return start, start + len(raw)
-
   def _track(self, tag: str, start: int, start_end: int) -> _Anchor | None:
     if tag == "head" and self.head is None:
       self.head = _Anchor(start, start_end)
@@ -201,25 +204,22 @@ class _BoundaryParser(_OffsetParser):
     return None
 
   def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-    start, start_end = self._start_tag()
+    start, start_end = self._start_tag_span()
     record = self._track(tag, start, start_end)
     if tag not in VOID_TAGS:
       self._open.append((tag, record))
 
   def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-    start, start_end = self._start_tag()
+    start, start_end = self._start_tag_span()
     self._track(tag, start, start_end)
 
   def handle_endtag(self, tag: str) -> None:
-    start = self._offset()
-    end = self.source.find(">", start)
-    if end < 0:
-      raise ValueError(f"could not locate end tag at offset {start}")
+    start, end_end = self._end_tag_span()
     for index in range(len(self._open) - 1, -1, -1):
       if self._open[index][0] == tag:
         record = self._open[index][1]
         if record is not None and record.end is None:
-          record.end, record.end_end = start, end + 1
+          record.end, record.end_end = start, end_end
         del self._open[index:]
         return
 

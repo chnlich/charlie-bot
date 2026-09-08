@@ -1,15 +1,15 @@
 import asyncio
 import signal
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
     ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
     CODEX_RESOLVE_BINARY_PATCH_TARGET,
     FLAG_LIKE_PROMPT,
-    FakeStdout,
     build_cli_backend,
+    fake_one_shot_proc,
 )
 from pydantic import ValidationError
 
@@ -18,17 +18,6 @@ from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption
-
-
-def _fake_one_shot_proc(lines: list[bytes], *, stderr: bytes = b"", returncode: int = 0) -> MagicMock:
-  proc = MagicMock()
-  proc.stdout = FakeStdout(lines)
-  proc.stderr = MagicMock()
-  proc.stderr.read = AsyncMock(side_effect=[stderr, b""])
-  proc.wait = AsyncMock(return_value=returncode)
-  proc.returncode = returncode
-  proc.pid = 9000
-  return proc
 
 
 def _build_backend(monkeypatch, **kwargs) -> CodexBackend:
@@ -474,7 +463,7 @@ def test_registry_propagates_auto_compact_limit_into_codex_backend(monkeypatch) 
 
 @pytest.mark.asyncio
 async def test_one_shot_text_raises_structured_error(monkeypatch) -> None:
-  proc = _fake_one_shot_proc(
+  proc = fake_one_shot_proc(
       [
           b'{"type":"error","error":{"message":"unsupported reasoning effort: ultra"}}\n',
       ], stderr=b"generic stderr")
@@ -489,7 +478,7 @@ async def test_one_shot_text_raises_structured_error(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_one_shot_text_raises_turn_failed_diagnostic(monkeypatch) -> None:
-  proc = _fake_one_shot_proc(
+  proc = fake_one_shot_proc(
       [
           b'{"type":"turn.failed","error":{"message":"context window exceeded"}}\n',
       ], stderr=b"generic stderr")
@@ -505,7 +494,7 @@ async def test_one_shot_text_raises_turn_failed_diagnostic(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_one_shot_text_raises_nonzero_exit_with_bounded_stderr(monkeypatch) -> None:
   stderr = b"codex process failed\n" + b"x" * 10000
-  proc = _fake_one_shot_proc([], stderr=stderr, returncode=2)
+  proc = fake_one_shot_proc([], stderr=stderr, returncode=2)
 
   with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = _build_backend(monkeypatch)
@@ -519,7 +508,7 @@ async def test_one_shot_text_raises_nonzero_exit_with_bounded_stderr(monkeypatch
 
 @pytest.mark.asyncio
 async def test_one_shot_text_ignores_non_agent_assistant_events(monkeypatch) -> None:
-  proc = _fake_one_shot_proc(
+  proc = fake_one_shot_proc(
       [
           b'{"type":"item.completed","item":{"type":"todo_list","id":"todo-1",'
           b'"items":[{"text":"not an assistant response","status":"completed"}]}}\n',
@@ -543,7 +532,7 @@ async def test_one_shot_text_kills_process_group_on_timeout(monkeypatch) -> None
       await asyncio.Event().wait()
       raise AssertionError("unreachable")
 
-  proc = _fake_one_shot_proc([])
+  proc = fake_one_shot_proc([])
   proc.stdout = _BlockingStdout()
 
   with (

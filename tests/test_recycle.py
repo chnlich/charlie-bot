@@ -419,8 +419,13 @@ async def test_live_range_counts_physical_lines(tmp_path: Path) -> None:
 async def test_unarchived_range_serves_warm_events_cache_without_disk_read(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   live_path = mgr.get_chat_events_path(session.id)
-  _append_events(live_path, [{"type": "user", "content": f"c{i}", "timestamp": _archive_cutoff_events()[0].isoformat()}
-                             for i in range(4)])
+  _append_events(
+      live_path,
+      [{
+          "type": "user",
+          "content": f"c{i}",
+          "timestamp": _archive_cutoff_events()[0].isoformat()
+      } for i in range(4)])
 
   cold, _ = mgr.load_chat_events_range(session.id, 0, 4)
   warm = mgr.load_chat_events_sync(session.id)

@@ -43,9 +43,21 @@ def _make_blocking_merge(calls: list[int], started: threading.Event,
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
+def merge_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+  """A fresh merge-cache dir; `_perfetto_merge_cache_dir` serves it for the whole test."""
   cache_dir = tmp_path / "cache"
   monkeypatch.setattr(pages, "_perfetto_merge_cache_dir", lambda: cache_dir)
+  return cache_dir
+
+
+@pytest.fixture
+def inline_merge_executor(monkeypatch: pytest.MonkeyPatch) -> None:
+  """`_merge_executor` yields None, so `_cached_merge`'s run_in_executor runs the build inline."""
+  monkeypatch.setattr(pages, "_merge_executor", lambda: None)
+
+
+@pytest.fixture
+def client(merge_cache: Path) -> TestClient:
   app = FastAPI()
   app.add_middleware(server._CharlieBotGZipMiddleware, minimum_size=1)
   app.include_router(pages.router)
@@ -112,6 +124,7 @@ def test_merge_endpoint_combines_trace_then_directory_inputs(client: TestClient,
 
 def test_merge_cache_hits_invalidates_on_mtime_and_prunes(
     client: TestClient,
+    inline_merge_executor: None,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -123,7 +136,6 @@ def test_merge_cache_hits_invalidates_on_mtime_and_prunes(
     real_merge_traces(paths, out_path, slim)
 
   monkeypatch.setattr(pages, "merge_traces", counting_merge)
-  monkeypatch.setattr(pages, "_merge_executor", lambda: None)
 
   # Merge leg: multiple inputs still go through merge_traces.
   first = tmp_path / "rank0.json"
@@ -304,10 +316,7 @@ def test_slim_query_accepts_booleans_and_rejects_other_values(client: TestClient
   assert client.get("/perfetto", params={"trace": str(trace), "slim": "2"}).status_code == 422
 
 
-def test_cache_eviction_follows_last_use(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  cache_dir = tmp_path / "cache"
-  monkeypatch.setattr(pages, "_perfetto_merge_cache_dir", lambda: cache_dir)
-  monkeypatch.setattr(pages, "_merge_executor", lambda: None)
+def test_cache_eviction_follows_last_use(merge_cache: Path, tmp_path: Path) -> None:
   app = FastAPI()
   app.include_router(pages.router)
   client = TestClient(app)
@@ -361,10 +370,12 @@ async def test_two_phase_status_strings_are_present(tmp_path: Path) -> None:
   assert "Content-Length" in body
 
 
-def test_single_flight_one_build_per_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  cache_dir = tmp_path / "cache"
-  monkeypatch.setattr(pages, "_perfetto_merge_cache_dir", lambda: cache_dir)
-  monkeypatch.setattr(pages, "_merge_executor", lambda: None)
+def test_single_flight_one_build_per_key(
+    merge_cache: Path,
+    inline_merge_executor: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
   first = tmp_path / "rank0.json"
   second = tmp_path / "rank1.json"
   _write_trace(first, "first")
@@ -391,11 +402,12 @@ def test_single_flight_one_build_per_key(monkeypatch: pytest.MonkeyPatch, tmp_pa
   asyncio.run(run())
 
 
-def test_single_flight_progress_independently(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  cache_dir = tmp_path / "cache"
-  monkeypatch.setattr(pages, "_perfetto_merge_cache_dir", lambda: cache_dir)
-  monkeypatch.setattr(pages, "_merge_executor", lambda: None)
-
+def test_single_flight_progress_independently(
+    merge_cache: Path,
+    inline_merge_executor: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
   key_a = [tmp_path / "a0.json", tmp_path / "a1.json"]
   key_b = [tmp_path / "b0.json", tmp_path / "b1.json"]
   for trace in (*key_a, *key_b):
@@ -419,10 +431,12 @@ def test_single_flight_progress_independently(monkeypatch: pytest.MonkeyPatch, t
   asyncio.run(run())
 
 
-def test_disconnect_does_not_lose_work(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  cache_dir = tmp_path / "cache"
-  monkeypatch.setattr(pages, "_perfetto_merge_cache_dir", lambda: cache_dir)
-  monkeypatch.setattr(pages, "_merge_executor", lambda: None)
+def test_disconnect_does_not_lose_work(
+    merge_cache: Path,
+    inline_merge_executor: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
   key = [tmp_path / "rank0.json", tmp_path / "rank1.json"]
   _write_trace(key[0], "first")
   _write_trace(key[1], "second")
@@ -441,7 +455,7 @@ def test_disconnect_does_not_lose_work(monkeypatch: pytest.MonkeyPatch, tmp_path
       await waiter
     # The shared build keeps running even though the waiter disconnected.
     release.set()
-    assert await _wait_until(lambda: len(list(cache_dir.glob("*.json.gz"))) == 1)
+    assert await _wait_until(lambda: len(list(merge_cache.glob("*.json.gz"))) == 1)
     # A following request for the same key hits the now-cached entry, no second build.
     second_calls = len(calls)
     hit = await pages._cached_merge(key, False)

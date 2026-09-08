@@ -893,6 +893,14 @@ def plan_page_html(goal_body: str = "Ship the fix.") -> str:
           '<div class="foot"><p>How to respond.</p></div></body></html>')
 
 
+def open_fork_html() -> str:
+  """Minimal open fork passing the fork-open-shape assertion: numbered question,
+  recommendation line, trade-off line."""
+  return (
+      '<div class="fork"><p class="q"><span class="fn">1</span>Scope?</p>'
+      '<p class="rec"><b>Recommendation:</b> R</p><p class="trade">Tradeoff: T</p></div>')
+
+
 def write_stub_chrome(tmp_path: Path, height: int) -> str:
   """Write a fake headless-chrome binary printing a wrapper-shaped DOM with the chosen measured height."""
   stub = tmp_path / f"stub-chrome-{height}.sh"

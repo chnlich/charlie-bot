@@ -417,9 +417,15 @@ def _snapshot_opencode_partial(t: _Tally, count: int) -> _OpencodePartial:
   """Copy the opencode source's buckets out of the accumulator. The stored partial must never
   alias a served tally's containers, so every bucket copies."""
   return _OpencodePartial(
-      by_model={k: dict(v) for k, v in t.by_model.items() if k[0] == "opencode"},
-      by_account={k: dict(v) for k, v in t.by_account.items() if k[0] == "opencode"},
-      span={k: tuple(v) for k, v in t.span.items() if k[0] == "opencode"},
+      by_model={
+          k: dict(v) for k, v in t.by_model.items() if k[0] == "opencode"
+      },
+      by_account={
+          k: dict(v) for k, v in t.by_account.items() if k[0] == "opencode"
+      },
+      span={
+          k: tuple(v) for k, v in t.span.items() if k[0] == "opencode"
+      },
       count=count)
 
 

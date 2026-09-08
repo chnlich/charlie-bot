@@ -9,10 +9,10 @@ import pytest
 from conftest import (
     OPUS_BACKEND_ID,
     SPAWNER_RESUME_WORKER_PATCH_TARGET,
+    _await_recovery_tasks,
     build_worktree_cfg,
     spy_on_load_json_meta,
 )
-from test_restart_recovery_e2e import _await_recovery_tasks
 
 from src.core import git as git_module
 from src.core import init as init_module

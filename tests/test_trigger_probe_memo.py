@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import count_path_read_text, fresh_state_fixture, make_home_config
+from conftest import count_path_read_text, fresh_state_fixture, make_home_config, publish_via_tmp_rename
 
 from src.core.config import CharlieBotConfig
 from src.core.sessions import (
@@ -30,13 +30,6 @@ def _write_trigger(cfg: CharlieBotConfig, session_id: str, trigger: dict) -> Pat
   path = triggers_dir / f"{trigger['id']}.json"
   path.write_text(json.dumps(trigger), encoding="utf-8")
   return path
-
-
-def _rewrite_atomically(path: Path, trigger: dict) -> None:
-  """Publish trigger through the same tmp-file rename the real _save_trigger uses."""
-  tmp = path.with_name("trigger.json.memo-test")
-  tmp.write_text(json.dumps(trigger), encoding="utf-8")
-  os.replace(tmp, path)
 
 
 def _pending(tid: str, hours_ahead: int) -> dict:
@@ -78,7 +71,7 @@ def test_rereads_after_atomic_rewrite(tmp_path: Path) -> None:
   path = _write_trigger(cfg, "s1", _pending("t1", 3))
   assert _probe(triggers_dir)[0] == 1
 
-  _rewrite_atomically(path, {**_pending("t1", 3), "status": "cancelled"})
+  publish_via_tmp_rename(path, json.dumps({**_pending("t1", 3), "status": "cancelled"}), "trigger.json.memo-test")
   assert _probe(triggers_dir) == (0, None)
 
 
@@ -94,7 +87,7 @@ def test_rereads_after_same_size_rewrite(tmp_path: Path) -> None:
   path = _write_trigger(cfg, "s1", _pending("t1", 10))
   first = _probe(triggers_dir)[1]
 
-  _rewrite_atomically(path, _pending("t1", 30))
+  publish_via_tmp_rename(path, json.dumps(_pending("t1", 30)), "trigger.json.memo-test")
   st = path.stat()
   os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
   second = _probe(triggers_dir)[1]
@@ -131,9 +124,7 @@ def test_failed_parse_rereads_once_per_directory_state(tmp_path: Path, monkeypat
   assert _probe(triggers_dir) == (0, None)
   assert reads == []
 
-  tmp = path.with_name("trigger.json.memo-test")
-  tmp.write_text("{still not json", encoding="utf-8")
-  os.replace(tmp, path)
+  publish_via_tmp_rename(path, "{still not json", "trigger.json.memo-test")
   assert _probe(triggers_dir) == (0, None)
   assert len(reads) == 1
 
@@ -155,7 +146,8 @@ def test_walked_path_stores_and_serves_the_verdict(tmp_path: Path, monkeypatch: 
   assert pending_trigger_state_sync(triggers_dir, walked=fresh_walked, dir_sig=dir_sig) == first
   assert reads == []  # the verdict serves the proved state; the walked pairs are not re-read
 
-  _rewrite_atomically(triggers_dir / "t1.json", {**_pending("t1", 3), "status": "cancelled"})
+  cancelled = json.dumps({**_pending("t1", 3), "status": "cancelled"})
+  publish_via_tmp_rename(triggers_dir / "t1.json", cancelled, "trigger.json.memo-test")
   st = os.stat(triggers_dir)
   moved_walked = [(str(p), p.stat()) for p in sorted(triggers_dir.glob("*.json"))]
   assert pending_trigger_state_sync(
@@ -172,7 +164,7 @@ def test_walked_path_rereads_after_the_directory_moves(tmp_path: Path) -> None:
   walked = [(str(p), p.stat()) for p in sorted(triggers_dir.glob("*.json"))]
   assert pending_trigger_state_sync(triggers_dir, walked=walked, dir_sig=(st.st_mtime_ns, st.st_size))[0] == 1
 
-  _rewrite_atomically(path, {**_pending("t1", 3), "status": "cancelled"})
+  publish_via_tmp_rename(path, json.dumps({**_pending("t1", 3), "status": "cancelled"}), "trigger.json.memo-test")
   st = os.stat(triggers_dir)
   moved_walked = [(str(p), p.stat()) for p in sorted(triggers_dir.glob("*.json"))]
   assert pending_trigger_state_sync(

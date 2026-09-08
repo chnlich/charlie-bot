@@ -11,6 +11,8 @@ from conftest import (
     CLI_COMMON_REQUESTS_GET_PATCH_TARGET,
     CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
     make_json_response,
+    patched_cli_get,
+    patched_cli_post,
     plan_doc,
     plan_page_html,
     plan_version_v1,
@@ -25,13 +27,11 @@ from src.core import plan_diff
 def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
-  with patch("sys.argv", [
+  with patched_cli_post(cfg, [
       "plan", "present",
       "--file", "artifacts/plan_01.html",
       "--title", "P1",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
+  ], return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -47,16 +47,14 @@ def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pyt
 def test_plan_present_passes_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
-  with patch("sys.argv", [
+  with patched_cli_post(cfg, [
       "plan", "present",
       "--file", "artifacts/plan_01.html",
       "--title", "P1",
       "--base-repo", "r",
       "--base-branch", "b",
       "--base-sha", "s",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
+  ], return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -69,13 +67,11 @@ def test_plan_amend_posts_with_default_trigger(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "v": 2, "state": "awaiting approval"})
-  with patch("sys.argv", [
+  with patched_cli_post(cfg, [
       "plan", "amend",
       "--file", "artifacts/plan_02.html",
       "--note", "folded the executor back into one",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
+  ], return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -93,15 +89,13 @@ def test_plan_amend_posts_with_default_trigger(
 def test_plan_amend_passes_plan_and_trigger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 2, "v": 3, "state": "awaiting approval"})
-  with patch("sys.argv", [
+  with patched_cli_post(cfg, [
       "plan", "amend",
       "--file", "artifacts/plan_03.html",
       "--note", "answered verify findings",
       "--plan", "2",
       "--trigger", "auto_amend",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
+  ], return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -114,9 +108,7 @@ def test_plan_approve_posts_plan_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "v": 1, "state": "approved"})
-  with patch("sys.argv", ["plan", "approve", "--plan", "1"]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
+  with patched_cli_post(cfg, ["plan", "approve", "--plan", "1"], return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -130,13 +122,11 @@ def test_plan_approve_posts_plan_id(
 def test_plan_close_posts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close_as: str) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "state": close_as})
-  with patch("sys.argv", [
+  with patched_cli_post(cfg, [
       "plan", "close",
       "--plan", "1",
       "--as", close_as,
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
+  ], return_value=resp) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -147,9 +137,7 @@ def test_plan_list_uses_get_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plans": []})
-  with patch("sys.argv", ["plan", "list"]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, return_value=resp) as get_mock:
+  with patched_cli_get(cfg, ["plan", "list"], return_value=resp) as get_mock:
     main()
 
   assert get_mock.call_args.args[0].endswith("/api/sessions/abc/plans")
@@ -171,9 +159,7 @@ def test_plan_list_corrupt_registry_prints_errors_and_exits_0(
       }],
   }
   resp = make_json_response(payload)
-  with patch("sys.argv", ["plan", "list"]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, return_value=resp):
+  with patched_cli_get(cfg, ["plan", "list"], return_value=resp):
     main()  # no SystemExit — exits 0
 
   out = capsys.readouterr().out
@@ -189,13 +175,11 @@ def test_plan_present_stdout_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
-  with patch("sys.argv", [
+  with patched_cli_post(cfg, [
       "plan", "present",
       "--file", "artifacts/plan_01.html",
       "--title", "P1",
-  ]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp):
+  ], return_value=resp):
     main()
 
   out = capsys.readouterr().out
@@ -217,16 +201,14 @@ def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(
       }
 
   with (
-      patch("sys.argv", [
+      patched_cli_post(cfg, [
           "plan",
           "present",
           "--file",
           "artifacts/missing.html",
           "--title",
           "P1",
-      ]),
-      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
-      patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, side_effect=FakeRequestException()),
+      ], side_effect=FakeRequestException()),
       pytest.raises(SystemExit) as exc_info,
   ):
     main()
@@ -240,9 +222,7 @@ def test_plan_server_rejection_exits_nonzero_with_detail_on_stderr(
 def test_plan_session_auto_derived_from_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plans": []})
-  with patch("sys.argv", ["plan", "list"]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, return_value=resp) as get_mock:
+  with patched_cli_get(cfg, ["plan", "list"], return_value=resp) as get_mock:
     main()
 
   assert "/api/sessions/abc/plans" in get_mock.call_args.args[0]
@@ -362,9 +342,7 @@ def test_plan_diff_explicit_v_names_the_pair(
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   _write_diff_pair(cfg)
   resp = make_json_response(_two_version_listing())
-  with patch("sys.argv", ["plan", "diff", "--v", "2"]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, return_value=resp):
+  with patched_cli_get(cfg, ["plan", "diff", "--v", "2"], return_value=resp):
     main()
 
   parsed = json.loads(capsys.readouterr().out)
@@ -376,9 +354,7 @@ def test_plan_diff_rejects_version_1(
   """Version 1 has no predecessor; the command fails with a clear message and exit code 1."""
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plans": [plan_doc(1, [plan_version_v1("artifacts/plan_01.html")])], "errors": []})
-  with patch("sys.argv", ["plan", "diff", "--v", "1"]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, return_value=resp), \
+  with patched_cli_get(cfg, ["plan", "diff", "--v", "1"], return_value=resp), \
        pytest.raises(SystemExit) as exc_info:
     main()
 
@@ -391,9 +367,7 @@ def test_plan_diff_requires_plan_when_several(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plans": [plan_doc(1), plan_doc(2)], "errors": []})
-  with patch("sys.argv", ["plan", "diff"]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, return_value=resp), \
+  with patched_cli_get(cfg, ["plan", "diff"], return_value=resp), \
        pytest.raises(SystemExit) as exc_info:
     main()
 

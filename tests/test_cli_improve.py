@@ -3,12 +3,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import (
-    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
-    assert_cli_reject,
-    make_json_response,
-)
+from conftest import assert_cli_reject, make_json_response, patched_cli_post
 from conftest import setup_session_cwd as _setup_session_cwd
 from pydantic import ValidationError
 
@@ -51,11 +46,9 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
 
   resp_mock = make_json_response({"status": "started", "session_id": "s1", "iterations": 2})
 
-  with patch(
-      "sys.argv",
-      _improve_argv("s1", str(tmp_path), goal_file, "--backend", "codex-o3", "--iterations", "2")), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp_mock) as post_mock:
+  with patched_cli_post(
+      cfg, _improve_argv("s1", str(tmp_path), goal_file, "--backend", "codex-o3", "--iterations", "2"),
+      return_value=resp_mock) as post_mock:
     main()
 
   # Should have posted exactly once to the improve endpoint
@@ -86,11 +79,9 @@ def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.
 
   resp_mock = make_json_response({"status": "started", "session_id": "s1", "iterations": 2})
 
-  with patch(
-      "sys.argv",
-      _improve_argv("s1", str(tmp_path), goal_file, "--iterations", "2", "--plan-file", str(plan_file))), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp_mock) as post_mock:
+  with patched_cli_post(
+      cfg, _improve_argv("s1", str(tmp_path), goal_file, "--iterations", "2", "--plan-file", str(plan_file)),
+      return_value=resp_mock) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -109,12 +100,8 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
   goal_file.write_text("fix")
 
   import requests as req_lib
-  with patch(
-      "sys.argv",
-      _improve_argv("s1", str(tmp_path), goal_file)), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(
-          CLI_COMMON_REQUESTS_POST_PATCH_TARGET, side_effect=req_lib.RequestException("conn error")):
+  with patched_cli_post(
+      cfg, _improve_argv("s1", str(tmp_path), goal_file), side_effect=req_lib.RequestException("conn error")):
     with pytest.raises(SystemExit) as exc_info:
       main()
     assert exc_info.value.code == 1
@@ -154,9 +141,7 @@ def test_main_rejects_bad_file_before_any_request(
     (tmp_path / name).write_text(content)
   extra = ["--plan-file", str(tmp_path / plan_name)] if plan_name is not None else []
 
-  with patch("sys.argv", _improve_argv(None, str(tmp_path), tmp_path / goal_name, *extra)), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET) as post_mock, \
+  with patched_cli_post(cfg, _improve_argv(None, str(tmp_path), tmp_path / goal_name, *extra)) as post_mock, \
        pytest.raises(SystemExit) as exc_info:
     main()
 

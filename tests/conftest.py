@@ -1189,6 +1189,31 @@ def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
       lambda: SimpleNamespace(server_base_url="https://server", charliebot_access_key="", sessions_dir=sessions_dir))
 
 
+def _patched_cli_transport(transport_target: str, cfg: object, argv: list[str],
+                           **transport_kw: object) -> Iterator[MagicMock]:
+  """The externals a CLI main() call touches: sys.argv becomes argv, get_config returns cfg, and the
+  transport verb at transport_target is a MagicMock built from transport_kw (bare when empty, so a
+  test can set the response after entering). The mock is yielded for that and for call assertions."""
+  with patch("sys.argv", argv), \
+       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
+       patch(transport_target, **transport_kw) as transport_mock:
+    yield transport_mock
+
+
+@contextlib.contextmanager
+def patched_cli_post(cfg: object, argv: list[str], **post_kw: object) -> Iterator[MagicMock]:
+  """_patched_cli_transport with requests.post as the patched verb (the POST path every CLI command
+  shares)."""
+  yield from _patched_cli_transport(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, cfg, argv, **post_kw)
+
+
+@contextlib.contextmanager
+def patched_cli_get(cfg: object, argv: list[str], **get_kw: object) -> Iterator[MagicMock]:
+  """_patched_cli_transport with requests.get as the patched verb (the GET-only commands, e.g.
+  plan list/diff)."""
+  yield from _patched_cli_transport(CLI_COMMON_REQUESTS_GET_PATCH_TARGET, cfg, argv, **get_kw)
+
+
 def schedule_trigger_argv(message: str, *extra: str) -> list[str]:
   """The schedule_trigger CLI argv the CLI tests share: session s1, --max-wait 60, --message."""
   return ["schedule_trigger", "--session", "s1", "--max-wait", "60", "--message", message, *extra]

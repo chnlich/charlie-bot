@@ -11,8 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import requests
 from conftest import (
-    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
     SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
     SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
     SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
@@ -22,6 +20,7 @@ from conftest import (
     make_internal_router_client,
     make_json_response,
     make_task_spawner,
+    patched_cli_post,
     setup_session_cwd,
 )
 
@@ -576,9 +575,8 @@ def test_cli_ack_posts_the_ids_and_prints_the_readback(
   cfg = setup_session_cwd(tmp_path, monkeypatch, "abc")
   readback = {"acked": 2, "watermark_ts": _ts(130)}
   with (
-      patch("sys.argv", ["slack", "ack", "--message-id", _ts(110), _ts(130)]),
-      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
-      patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=make_json_response(readback)) as post,
+      patched_cli_post(cfg, ["slack", "ack", "--message-id", _ts(110), _ts(130)],
+                       return_value=make_json_response(readback)) as post,
   ):
     cli_main()
 
@@ -608,10 +606,8 @@ def test_cli_reply_412_refusal_exits_nonzero_with_the_payload_on_stderr(
   refusal.json.return_value = {"detail": refusal_payload}
   refusal.raise_for_status.side_effect = requests.HTTPError(response=refusal)
   with (
-      patch("sys.argv", ["slack", "reply", "--file", str(reply_file)]),
-      patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      patched_cli_post(cfg, ["slack", "reply", "--file", str(reply_file)], return_value=refusal),
       patch("src.cli.common._maybe_version_skew_hint", return_value=None),
-      patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=refusal),
       pytest.raises(SystemExit) as exc_info,
   ):
     cli_main()

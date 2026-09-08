@@ -17,13 +17,13 @@ import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
     CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-    CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
     FakeSessionManager,
     _noop,
     make_home_config,
     make_internal_router_client,
     make_json_response,
     make_task_spawner,
+    patched_cli_post,
     user_event,
 )
 
@@ -238,9 +238,8 @@ def test_cli_session_create_posts_metadata_only_payload(tmp_path: Path) -> None:
   cfg = _mock_cli_config(tmp_path)
   resp = make_json_response({"id": "new-id", "name": "task-a"})
 
-  with patch("sys.argv", ["session", "create", "--name", "task-a", "--backend", "codex-o3", "--role", "project"]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
+  with patched_cli_post(cfg, ["session", "create", "--name", "task-a", "--backend", "codex-o3", "--role", "project"],
+                        return_value=resp) as post_mock:
     session_cli_main()
 
   assert post_mock.call_count == 1
@@ -254,9 +253,8 @@ def test_cli_session_create_group_triggers_second_group_call(tmp_path: Path) -> 
   create_resp = make_json_response({"id": "new-id", "name": "task-a"})
   group_resp = make_json_response({"id": "new-id", "name": "task-a", "group": "bp-eval"})
 
-  with patch("sys.argv", ["session", "create", "--name", "task-a", "--group", "bp-eval"]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, side_effect=[create_resp, group_resp]) as post_mock:
+  with patched_cli_post(cfg, ["session", "create", "--name", "task-a", "--group", "bp-eval"],
+                        side_effect=[create_resp, group_resp]) as post_mock:
     session_cli_main()
 
   assert post_mock.call_count == 2
@@ -271,9 +269,8 @@ def test_cli_session_send_relays_message(tmp_path: Path) -> None:
   cfg = _mock_cli_config(tmp_path)
   resp = make_json_response({"status": "accepted"})
 
-  with patch("sys.argv", ["session", "send", "target-id", "--message", "relay this", "--session", "caller-id"]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
+  with patched_cli_post(cfg, ["session", "send", "target-id", "--message", "relay this", "--session", "caller-id"],
+                        return_value=resp) as post_mock:
     session_cli_main()
 
   assert post_mock.call_count == 1
@@ -292,9 +289,8 @@ def test_cli_session_send_reads_message_file(tmp_path: Path) -> None:
   msg_file.write_text("file content relay")
   resp = make_json_response({"status": "accepted"})
 
-  with patch("sys.argv", ["session", "send", "target-id", "--file", str(msg_file), "--session", "caller-id"]), \
-       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
-       patch(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, return_value=resp) as post_mock:
+  with patched_cli_post(cfg, ["session", "send", "target-id", "--file", str(msg_file), "--session", "caller-id"],
+                        return_value=resp) as post_mock:
     session_cli_main()
 
   assert post_mock.call_args[1]["json"]["content"] == "file content relay"

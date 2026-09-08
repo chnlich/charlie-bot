@@ -19,7 +19,7 @@ from src.core import plan_paths
 from src.core.artifact_check import run_assertions
 from src.core.config import CharlieBotConfig
 from src.core.json_utils import write_json_atomically
-from src.core.memo import BoundedMemo
+from src.core.memo import StatSignatureMemo
 from src.core.models import utc_now
 from src.core.sessions import SessionManager
 from src.core.sidebar_state import mark_sidebar_dirty
@@ -121,14 +121,14 @@ def _project_registry(data: dict) -> dict:
 # Tolerant read — single authority for listing/probe surfaces
 # ---------------------------------------------------------------------------
 
-# Bound on the tolerant-read memo in sessions: plans.json path ->
-# ((mtime_ns, size), result). Registry writes go through write_json_atomically,
-# so a rewrite always moves the mtime_ns half of the key and never serves a
-# stale read. Callers (the list endpoint, the sidebar probe) only read the
-# returned structure. ~0.3 ms read+derive per call on the heaviest on-disk
-# corpus; the list endpoint serves it on every plan-panel poll.
+# Bound on the tolerant-read memo in sessions. Registry writes go through
+# write_json_atomically, so any content change moves mtime_ns and an unchanged
+# (mtime_ns, size) proves the content current (the stat-before-read race
+# contract is StatSignatureMemo's). Callers (the list endpoint, the sidebar
+# probe) only read the returned structure. ~0.3 ms read+derive per call on the
+# heaviest on-disk corpus; the list endpoint serves it on every plan-panel poll.
 _TOLERANT_READ_MEMO_LIMIT = 32
-_tolerant_read_memo: BoundedMemo[str, tuple[tuple[int, int], dict]] = BoundedMemo(_TOLERANT_READ_MEMO_LIMIT)
+_tolerant_read_memo: StatSignatureMemo[str, dict] = StatSignatureMemo(_TOLERANT_READ_MEMO_LIMIT)
 
 
 def tolerant_memo_hit(plans_path: Path) -> dict | None:
@@ -146,10 +146,7 @@ def tolerant_memo_hit(plans_path: Path) -> dict | None:
     # Every stat failure maps to the missing-file answer downstream, and that
     # answer is never memoized, so there is nothing to serve here.
     return None
-  hit = _tolerant_read_memo.get(str(plans_path))
-  if hit is not None and hit[0] == (st.st_mtime_ns, st.st_size):
-    return hit[1]
-  return None
+  return _tolerant_read_memo.fresh(str(plans_path), st)
 
 
 def read_plans_tolerant(plans_path: Path, session_id: str) -> dict:
@@ -179,11 +176,9 @@ def read_plans_tolerant(plans_path: Path, session_id: str) -> dict:
     # stat failure maps to the missing-file answer, mirroring the scan idiom
     # in ThreadManager.
     return {"plans": [], "errors": errors}
-  memo_key = str(plans_path)
-  sig = (st.st_mtime_ns, st.st_size)
   result, cacheable = _read_plans_uncached(plans_path, session_id)
   if cacheable:
-    _tolerant_read_memo.store(memo_key, (sig, result))
+    _tolerant_read_memo.record(str(plans_path), st, result)
   return result
 
 

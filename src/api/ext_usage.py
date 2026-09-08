@@ -5,6 +5,7 @@ import contextlib
 import json
 import os
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,9 @@ ROUND_GAP_SECONDS = EXT_USAGE_ROUND_GAP_SECONDS
 # rollout file's trailing bytes; a tail miss (a turn in flight appended more
 # than this window since the last event) falls back to a full-file read.
 _USAGE_TAIL_BYTES = 1 << 20
+# Scan-set bound for plan-pool readings: time-bounded, not count-bounded, so
+# concurrent sessions can never cut a fresh plan event out of the scan set.
+_CODEX_USAGE_SCAN_WINDOW_HOURS = 6
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -238,11 +242,11 @@ class CodexUsageProvider:
   """Reads usage from <home_dir>/sessions/ JSONL files for one account.
 
   ``_spend_cache`` holds resolved spend events per rollout file keyed on the
-  file's (mtime_ns, size). ``_usage_cache`` holds the newest rollout's latest
-  token_count event under the same key; an unchanged file costs no read, and a
-  changed one is read from its tail window. The poll loop fetches one account
-  at a time and awaits each fetch, so one instance's cache never sees
-  concurrent access.
+  file's (mtime_ns, size). ``_usage_cache`` holds each scanned file's newest
+  plan-pool token_count event under the same key; an unchanged file costs no
+  read, and a changed one is read from its tail window. The poll loop fetches
+  one account at a time and awaits each fetch, so one instance's cache never
+  sees concurrent access.
   """
 
   def __init__(self, label: str, home_dir: str) -> None:
@@ -250,7 +254,7 @@ class CodexUsageProvider:
     self.sessions_dir = Path(home_dir) / "sessions"
     self.last_error = "no sessions found"
     self._spend_cache: dict[Path, tuple[int, int, list[_SpendEvent]]] = {}
-    self._usage_cache: tuple[Path, int, int, dict[str, Any] | None] | None = None
+    self._usage_cache: dict[Path, tuple[int, int, dict[str, Any] | None]] = {}
 
   async def fetch(self) -> dict[str, Any] | None:
     rollout_paths = await asyncio.to_thread(_list_rollout_files, self.sessions_dir)
@@ -264,7 +268,7 @@ class CodexUsageProvider:
       self.last_error = "usage read failed"
       return None
     if usage is None:
-      self.last_error = "no sessions found"
+      # _fetch_usage already named the cause in last_error.
       return None
     if isinstance(spend, Exception):
       log.error("ext_usage_codex_spend_failed", account=self.label, error=str(spend))
@@ -273,19 +277,51 @@ class CodexUsageProvider:
     return usage
 
   def _fetch_usage(self, rollout_paths: list[Path]) -> dict[str, Any] | None:
-    jsonl_path = _newest_rollout(rollout_paths)
-    if jsonl_path is None:
+    """Return the newest plan-pool quota reading across the recently-written rollouts.
+
+    The scan set is every file with an mtime inside the last
+    ``_CODEX_USAGE_SCAN_WINDOW_HOURS`` hours, falling back to the single
+    newest-mtime file when none qualify so a stale weekly reading stays visible
+    however old. Each file contributes its newest plan-pool token_count event;
+    model-level pool events are skipped, and the winning event is the one with
+    the max timestamp. A scan set with no plan-pool event is a no-reading state
+    (None with ``last_error`` set), never an empty-windows payload.
+    """
+    stats: dict[Path, os.stat_result] = {}
+    for path in rollout_paths:
+      try:
+        stats[path] = path.stat()
+      except OSError as e:
+        log.warning("ext_usage_codex_rollout_stat_failed", path=str(path), error=str(e))
+    if not stats:
+      self.last_error = "no sessions found"
       return None
-    stat = jsonl_path.stat()
-    cache = self._usage_cache
-    if cache is not None and cache[0] == jsonl_path and cache[1] == stat.st_mtime_ns and cache[2] == stat.st_size:
-      event = cache[3]
-    else:
-      event = _read_latest_token_count_event(jsonl_path, stat.st_size)
-      self._usage_cache = (jsonl_path, stat.st_mtime_ns, stat.st_size, event)
-    if event is None:
+    min_mtime = time.time() - _CODEX_USAGE_SCAN_WINDOW_HOURS * 3600
+    scan = [path for path, stat in stats.items() if stat.st_mtime >= min_mtime]
+    if not scan:
+      scan = [max(stats, key=lambda path: stats[path].st_mtime)]
+    live = set(scan)
+
+    events: list[dict[str, Any]] = []
+    for path in scan:
+      stat = stats[path]
+      cached = self._usage_cache.get(path)
+      if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+        event = cached[2]
+      else:
+        event = _read_latest_token_count_event(path, stat.st_size, match=_is_plan_pool_event)
+        self._usage_cache[path] = (stat.st_mtime_ns, stat.st_size, event)
+      if event is not None:
+        events.append(event)
+    for path in list(self._usage_cache):
+      if path not in live:
+        del self._usage_cache[path]
+
+    if not events:
+      self.last_error = f"no plan-quota reading in {_CODEX_USAGE_SCAN_WINDOW_HOURS}h"
       return None
-    return _transform_codex_response(event, fetched_at=datetime.now(UTC).isoformat(), account=self.label)
+    chosen = max(events, key=lambda event: _parse_codex_timestamp(event["timestamp"]))
+    return _transform_codex_response(chosen, fetched_at=datetime.now(UTC).isoformat(), account=self.label)
 
   def _compute_spend(self, rollout_paths: list[Path]) -> dict[str, float]:
     # A changed file is re-read from the start, never tail-only: a token_count
@@ -321,31 +357,13 @@ class CodexUsageProvider:
 def _list_rollout_files(sessions_dir: Path) -> list[Path]:
   """List every rollout log under one account's sessions dir.
 
-  A single walk feeds both readers: the usage scrape wants the newest file
-  whatever its age, while the spend aggregation applies its own mtime cutoff.
+  A single walk feeds both readers: the usage scrape applies its own scan-set
+  window with a newest-file fallback, while the spend aggregation applies its
+  own mtime cutoff.
   """
   if not sessions_dir.exists():
     return []
   return list(sessions_dir.glob("**/rollout-*.jsonl"))
-
-
-def _newest_rollout(rollout_paths: list[Path]) -> Path | None:
-  """Newest rollout by mtime, with no date bound.
-
-  A reading's age is shown rather than used to hide it: under a weekly window
-  the last sample is the only information there is, however old.
-  """
-  newest: Path | None = None
-  newest_mtime = float("-inf")
-  for path in rollout_paths:
-    try:
-      mtime = path.stat().st_mtime
-    except OSError as e:
-      log.warning("ext_usage_codex_rollout_stat_failed", path=str(path), error=str(e))
-      continue
-    if mtime > newest_mtime:
-      newest, newest_mtime = path, mtime
-  return newest
 
 
 class _UsageInstance:
@@ -426,8 +444,26 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
   }
 
 
-def _latest_token_count_event(lines: list[str]) -> dict[str, Any] | None:
-  """Return the newest token_count event in *lines*, scanned newest first."""
+def _is_plan_pool_event(event: dict[str, Any]) -> bool:
+  """Whether a token_count event reports the plan quota pool.
+
+  The plan pool is ``rate_limits.limit_id == "codex"`` or an absent/empty
+  ``limit_name``; anything else (e.g. a named model pool) is a model-level
+  reading the usage strip must never show.
+  """
+  rate_limits = event.get("payload", {}).get("rate_limits") or {}
+  return rate_limits.get("limit_id") == "codex" or not rate_limits.get("limit_name")
+
+
+def _latest_token_count_event(
+    lines: list[str],
+    match: Callable[[dict[str, Any]], bool] | None = None,
+) -> dict[str, Any] | None:
+  """Return the newest token_count event in *lines*, scanned newest first.
+
+  *match*, when given, filters candidates: an event it rejects (e.g. a
+  model-level pool reading) is skipped as if it were not a token_count event.
+  """
   for raw_line in reversed(lines):
     line = raw_line.strip()
     if not line:
@@ -441,16 +477,23 @@ def _latest_token_count_event(lines: list[str]) -> dict[str, Any] | None:
     payload = event.get("payload", {})
     if payload.get("type") != "token_count":
       continue
+    if match is not None and not match(event):
+      continue
     return event
   return None
 
 
-def _read_latest_token_count_event(path: Path, size: int) -> dict[str, Any] | None:
+def _read_latest_token_count_event(
+    path: Path,
+    size: int,
+    match: Callable[[dict[str, Any]], bool] | None = None,
+) -> dict[str, Any] | None:
   """Read the newest token_count event in *path*, from a tail window first.
 
   The window starts at a line boundary: a 0x0A byte never sits inside a
   multi-byte UTF-8 sequence, so decoding the window strictly fails exactly
-  where decoding the whole file would.
+  where decoding the whole file would. A tail miss (or a tail holding only
+  *match*-rejected events) falls back to a full-file read.
   """
   offset = max(0, size - _USAGE_TAIL_BYTES)
   with path.open("rb") as stream:
@@ -458,10 +501,10 @@ def _read_latest_token_count_event(path: Path, size: int) -> dict[str, Any] | No
     blob = stream.read()
   if offset:
     blob = blob.split(b"\n", 1)[1] if b"\n" in blob else b""
-  event = _latest_token_count_event(blob.decode().splitlines())
+  event = _latest_token_count_event(blob.decode().splitlines(), match)
   if event is not None or offset == 0:
     return event
-  return _latest_token_count_event(path.read_text().splitlines())
+  return _latest_token_count_event(path.read_text().splitlines(), match)
 
 
 def _parse_codex_timestamp(timestamp: Any) -> datetime:

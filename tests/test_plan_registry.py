@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import loop_stall_gaps, plan_doc, plan_page_html, stall_before_call
+from conftest import loop_stall_gaps, open_fork_html, plan_doc, plan_page_html, stall_before_call
 from conftest import make_plan_setup as _setup
 from conftest import write_plan_artifact as _write_artifact
 from conftest import write_stub_chrome as _write_stub_chrome
@@ -769,10 +769,6 @@ async def test_present_rejection_lists_every_failed_assertion(tmp_path: Path) ->
 # Fork-explainer gate: present/amend enforce the open Trade-off explainer
 # ---------------------------------------------------------------------------
 
-_PLAN_OPEN_FORK = (
-    '<div class="fork"><p class="q"><span class="fn">1</span>Scope?</p>'
-    '<p class="rec"><b>Recommendation:</b> R</p><p class="trade">Tradeoff: T</p></div>')
-
 
 def _plan_doc_with_open_fork(fork: str) -> str:
   """A plan page passing every plan assertion except fork-explainer, carrying *fork* under Trade-offs."""
@@ -783,14 +779,14 @@ def _plan_doc_with_open_fork(fork: str) -> str:
 @pytest.mark.asyncio
 async def test_present_rejects_open_trade_off_without_explainer_block(tmp_path: Path) -> None:
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_plan_doc_with_open_fork(_PLAN_OPEN_FORK))
+  file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_plan_doc_with_open_fork(open_fork_html()))
   with pytest.raises(ValueError, match=r"fork #1 \(section '5 Trade-offs'\) has no details\.details-layer"):
     await plan_mgr.present(meta.id, file=file_rel, title="P1")
 
 
 @pytest.mark.asyncio
 async def test_present_rejects_open_trade_off_with_bodyless_explainer(tmp_path: Path) -> None:
-  bodyless = _PLAN_OPEN_FORK.replace("</div>", '<details class="details-layer"><summary>Why</summary></details></div>')
+  bodyless = open_fork_html().replace("</div>", '<details class="details-layer"><summary>Why</summary></details></div>')
   cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_plan_doc_with_open_fork(bodyless))
   with pytest.raises(ValueError, match="fork-explainer.*explainer has no body"):

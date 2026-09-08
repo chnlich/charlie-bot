@@ -16,6 +16,7 @@ from unittest.mock import patch
 import pytest
 from conftest import (
     make_plan_setup,
+    open_fork_html,
     plan_page_html,
     write_plan_artifact,
     write_stub_chrome,
@@ -227,16 +228,14 @@ def test_req_chips_pass_and_fail(tmp_path: Path) -> None:
 # fork-open-shape / fork-explainer
 # ---------------------------------------------------------------------------
 
-_OPEN_FORK = (
-    '<div class="fork"><p class="q"><span class="fn">1</span>Scope?</p>'
-    '<p class="rec"><b>Recommendation:</b> R</p><p class="trade">Tradeoff: T</p></div>')
-
 
 def test_fork_open_shape_passes_full_and_skips_resolved(tmp_path: Path) -> None:
   resolved = (
       '<div class="fork"><p class="q"><span class="fn">2</span>Done?</p>'
       '<p class="resolved">Resolved: all.</p></div>')
-  doc = _genre_doc("debug", _sections([f"S{i}" for i in range(1, 6)]) + f"<section>{_OPEN_FORK}{resolved}</section>")
+  doc = _genre_doc(
+      "debug",
+      _sections([f"S{i}" for i in range(1, 6)]) + f"<section>{open_fork_html()}{resolved}</section>")
   assert [o.passed for o in _run("debug", _write(tmp_path, doc))["fork-open-shape"]] == [True]
 
 
@@ -253,7 +252,7 @@ def test_fork_open_shape_locates_the_offending_fork_and_section(tmp_path: Path) 
 
 
 def test_fork_explainer_reports_every_open_fork_missing_a_details_layer(tmp_path: Path) -> None:
-  fork = _OPEN_FORK
+  fork = open_fork_html()
   doc = _genre_doc(
       "sitrep", f'<section><h2><span class="n">1</span> What waits on you?</h2>{fork}{fork}</section>'
       '<section><h2><span class="n">2</span> W</h2><p><span class="req">r1</span></p></section>'
@@ -267,7 +266,7 @@ def test_fork_explainer_reports_every_open_fork_missing_a_details_layer(tmp_path
 
 
 def test_fork_explainer_passes_with_details_layer(tmp_path: Path) -> None:
-  fork = _OPEN_FORK.replace(
+  fork = open_fork_html().replace(
       "</div>", '<details class="details-layer"><summary>Why</summary><ul><li>w</li></ul></details></div>')
   doc = _genre_doc(
       "sitrep",
@@ -279,7 +278,7 @@ def test_fork_explainer_passes_with_details_layer(tmp_path: Path) -> None:
 
 def test_fork_explainer_fails_when_details_layer_carries_no_body(tmp_path: Path) -> None:
   """A details-layer holding only its summary — the summary's own text does not count as the body."""
-  fork = _OPEN_FORK.replace("</div>", '<details class="details-layer"><summary>Why</summary></details></div>')
+  fork = open_fork_html().replace("</div>", '<details class="details-layer"><summary>Why</summary></details></div>')
   doc = _genre_doc(
       "sitrep",
       f'<section><h2><span class="n">1</span> S1</h2>{fork}</section>' + _sections([f"S{i}" for i in range(2, 6)]))
@@ -656,7 +655,8 @@ def test_cli_plan_template_assertions_only_passes_and_prints_ok_lines(
 
 def _open_fork_sitrep_doc() -> str:
   return _genre_doc(
-      "sitrep", f'<section><h2><span class="n">1</span> What waits on you?</h2>{_OPEN_FORK}{_OPEN_FORK}</section>'
+      "sitrep",
+      f'<section><h2><span class="n">1</span> What waits on you?</h2>{open_fork_html()}{open_fork_html()}</section>'
       '<section><h2><span class="n">2</span> What is this and why?</h2><p><span class="req">r1</span></p></section>'
       '<section><h2><span class="n">3</span> What was verified?</h2></section>'
       '<section><h2><span class="n">4</span> Risks</h2></section>'
@@ -666,7 +666,7 @@ def _open_fork_sitrep_doc() -> str:
 def _open_fork_plan_doc() -> str:
   return plan_page_html().replace(
       '<h2><span class="n">5</span> Trade-offs</h2>',
-      f'<h2><span class="n">5</span> Trade-offs</h2>{_OPEN_FORK}{_OPEN_FORK}')
+      f'<h2><span class="n">5</span> Trade-offs</h2>{open_fork_html()}{open_fork_html()}')
 
 
 @pytest.mark.parametrize(

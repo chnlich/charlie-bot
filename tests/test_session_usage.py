@@ -956,7 +956,7 @@ async def test_codex_tier_not_consulted_for_non_codex_backend(tmp_path: Path, mo
     seen_backends.append(backend_id)
     return False
 
-  async def _fail_resolve(*args, **kwargs):
+  async def _fail_resolve(*args, **kwargs) -> None:
     raise AssertionError("codex resolver must not run for a non-codex backend")
 
   monkeypatch.setattr(resolver, "is_codex_backend", _record_is_codex)
@@ -1354,7 +1354,7 @@ async def test_usage_hit_and_suffix_advance_answer_on_event_loop(tmp_path: Path,
 
   warm = await session_mgr.resolve_session_usage(meta.id, meta)
 
-  def fail_scan(self, session_id: str):
+  def fail_scan(self, session_id: str) -> None:
     raise AssertionError("threaded _load_and_scan ran on the memo-hit path")
 
   monkeypatch.setattr(session_usage.SessionUsageResolver, "_load_and_scan", fail_scan)

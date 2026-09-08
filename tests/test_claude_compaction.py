@@ -127,7 +127,7 @@ def test_count_compact_boundaries_reads_on_disk_rows(tmp_path: Path) -> None:
 class _FakeProc:
   pid = 4242
 
-  def __init__(self, *, returncode: int, stdout: bytes, on_communicate=None, delay: float = 0.0):
+  def __init__(self, *, returncode: int, stdout: bytes, on_communicate=None, delay: float = 0.0) -> None:
     self.returncode = returncode
     self._stdout = stdout
     self._on_communicate = on_communicate
@@ -298,7 +298,7 @@ async def test_timeout_kills_the_process_group_and_fails(tmp_path: Path, monkeyp
 async def test_missing_transcript_fails_without_spawning(tmp_path: Path, monkeypatch) -> None:
   spawned = []
 
-  async def fake_exec(*args: Any, **kwargs: Any):
+  async def fake_exec(*args: Any, **kwargs: Any) -> None:
     spawned.append(args)
     raise AssertionError("must not spawn")
 

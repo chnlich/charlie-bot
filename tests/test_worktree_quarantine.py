@@ -456,7 +456,7 @@ async def test_maybe_respawn_verify_task_cross_models_backend_when_omitted(
 
   captured: dict[str, Any] = {}
 
-  async def fake_spawn_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr, request=None):
+  async def fake_spawn_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr, request=None) -> None:
     captured["request"] = request
 
   monkeypatch.setattr(spawner_module, "spawn_worker", fake_spawn_worker)
@@ -677,7 +677,7 @@ async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
       *,
       is_alive,
       interrupt_reason="",
-      on_silence=None):
+      on_silence=None) -> None:
     resume_calls.append(is_alive())
 
   monkeypatch.setattr(SPAWNER_RESUME_WORKER_PATCH_TARGET, fake_resume_worker)

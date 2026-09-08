@@ -578,7 +578,7 @@ def test_paging_path_does_not_call_parse_ndjson_range(monkeypatch: pytest.Monkey
   """slice_before on an already-built projection must not read files."""
   from src.core import ndjson
 
-  def _boom(*args, **kwargs):
+  def _boom(*args, **kwargs) -> None:
     raise AssertionError("parse_ndjson_range must not be called on the paging path")
 
   monkeypatch.setattr(ndjson, "parse_ndjson_range", _boom)

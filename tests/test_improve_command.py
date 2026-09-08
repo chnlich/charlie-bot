@@ -61,7 +61,7 @@ def _make_state(loop_id: int, **overrides: object) -> ImproveState:
 
 
 @pytest.mark.asyncio
-async def test_save_and_load_loop_state(tmp_path: Path):
+async def test_save_and_load_loop_state(tmp_path: Path) -> None:
   """State round-trips through per-loop storage."""
   cfg = _make_cfg(tmp_path)
   session_id = "test-session"
@@ -76,14 +76,14 @@ async def test_save_and_load_loop_state(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_load_missing_loop_state(tmp_path: Path):
+async def test_load_missing_loop_state(tmp_path: Path) -> None:
   """Missing state file returns None."""
   cfg = _make_cfg(tmp_path)
   assert await load_loop_state("nonexistent", 1, cfg) is None
 
 
 @pytest.mark.asyncio
-async def test_load_corrupted_loop_state_raises(tmp_path: Path):
+async def test_load_corrupted_loop_state_raises(tmp_path: Path) -> None:
   """Corrupted state files fail fast."""
   cfg = _make_cfg(tmp_path)
   session_id = "corrupt-session"
@@ -96,7 +96,7 @@ async def test_load_corrupted_loop_state_raises(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_loop_state_serialization_includes_all_fields(tmp_path: Path):
+async def test_loop_state_serialization_includes_all_fields(tmp_path: Path) -> None:
   """ImproveState persists the expanded per-loop fields."""
   cfg = _make_cfg(tmp_path)
   session_id = "serialization-session"
@@ -120,14 +120,14 @@ async def test_loop_state_serialization_includes_all_fields(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_next_loop_id_returns_1_when_loops_dir_missing(tmp_path: Path):
+async def test_next_loop_id_returns_1_when_loops_dir_missing(tmp_path: Path) -> None:
   """Sessions with no loops directory start at loop 1."""
   cfg = _make_cfg(tmp_path)
   assert await next_loop_id("new-session", cfg) == 1
 
 
 @pytest.mark.asyncio
-async def test_next_loop_id_uses_highest_numeric_loop_directory(tmp_path: Path):
+async def test_next_loop_id_uses_highest_numeric_loop_directory(tmp_path: Path) -> None:
   """next_loop_id ignores non-numeric entries and increments the max loop id."""
   cfg = _make_cfg(tmp_path)
   loops_dir = cfg.sessions_dir / "test-session" / "loops"
@@ -140,7 +140,7 @@ async def test_next_loop_id_uses_highest_numeric_loop_directory(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_reserve_loop_state_persists_running_state_and_active_lock(tmp_path: Path):
+async def test_reserve_loop_state_persists_running_state_and_active_lock(tmp_path: Path) -> None:
   """Loop reservation happens before background execution begins."""
   cfg = _make_cfg(tmp_path)
   state = await reserve_loop_state(
@@ -162,7 +162,7 @@ async def test_reserve_loop_state_persists_running_state_and_active_lock(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_reserve_loop_state_raises_when_session_already_has_running_loop(tmp_path: Path):
+async def test_reserve_loop_state_raises_when_session_already_has_running_loop(tmp_path: Path) -> None:
   """Concurrent loop starts fail before they can schedule background work."""
   cfg = _make_cfg(tmp_path)
   first = await reserve_loop_state("reserved-session", "optimize", "improve/test", "/tmp/repo", cfg)
@@ -172,7 +172,7 @@ async def test_reserve_loop_state_raises_when_session_already_has_running_loop(t
 
 
 @pytest.mark.asyncio
-async def test_second_loop_starts_after_first_completes(tmp_path: Path):
+async def test_second_loop_starts_after_first_completes(tmp_path: Path) -> None:
   """After loop 1 finishes and the lock is cleared, loop 2 reserves successfully."""
   cfg = _make_cfg(tmp_path)
   session_id = "sequential-session"
@@ -205,7 +205,7 @@ async def test_second_loop_starts_after_first_completes(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_find_running_loop_returns_first_running_loop(tmp_path: Path):
+async def test_find_running_loop_returns_first_running_loop(tmp_path: Path) -> None:
   """The earliest running loop is returned when multiple loops exist."""
   cfg = _make_cfg(tmp_path)
   session_id = "running-session"
@@ -219,7 +219,7 @@ async def test_find_running_loop_returns_first_running_loop(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_find_running_loop_returns_none_when_absent(tmp_path: Path):
+async def test_find_running_loop_returns_none_when_absent(tmp_path: Path) -> None:
   """find_running_loop handles sessions with no active loop."""
   cfg = _make_cfg(tmp_path)
   session_id = "idle-session"
@@ -230,7 +230,7 @@ async def test_find_running_loop_returns_none_when_absent(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_stop_active_loop_updates_running_loop_state(tmp_path: Path):
+async def test_stop_active_loop_updates_running_loop_state(tmp_path: Path) -> None:
   """Stopping an active loop marks only the running loop as stopped."""
   cfg = _make_cfg(tmp_path)
   session_id = "stop-session"
@@ -247,14 +247,14 @@ async def test_stop_active_loop_updates_running_loop_state(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_stop_no_active_loop_returns_false(tmp_path: Path):
+async def test_stop_no_active_loop_returns_false(tmp_path: Path) -> None:
   """Stopping when no active loop exists returns False."""
   cfg = _make_cfg(tmp_path)
   assert await stop_improve_loop("nonexistent", cfg) is False
 
 
 @pytest.mark.asyncio
-async def test_stop_completed_loop_returns_false(tmp_path: Path):
+async def test_stop_completed_loop_returns_false(tmp_path: Path) -> None:
   """Completed loops are not treated as active."""
   cfg = _make_cfg(tmp_path)
   session_id = "done-session"
@@ -263,13 +263,13 @@ async def test_stop_completed_loop_returns_false(tmp_path: Path):
   assert await stop_improve_loop(session_id, cfg) is False
 
 
-def test_quota_blocker_reason_detects_overage_rejected():
+def test_quota_blocker_reason_detects_overage_rejected() -> None:
   """overageStatus == 'rejected' is treated as quota exhaustion (legacy shape)."""
   events = [{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "overageStatus": "rejected"}}]
   assert _quota_blocker_reason(events) is not None
 
 
-def test_quota_blocker_reason_detects_top_level_status_rejected():
+def test_quota_blocker_reason_detects_top_level_status_rejected() -> None:
   """Top-level status == 'rejected' counts even when overageStatus is 'allowed'."""
   events = [
       {
@@ -289,7 +289,7 @@ def test_quota_blocker_reason_detects_top_level_status_rejected():
   assert _quota_blocker_reason(events) is not None
 
 
-def test_quota_blocker_reason_detects_out_of_tokens_error():
+def test_quota_blocker_reason_detects_out_of_tokens_error() -> None:
   """'out of tokens' error text is treated as provider token exhaustion."""
   events = [{
       "type": "error",
@@ -298,7 +298,7 @@ def test_quota_blocker_reason_detects_out_of_tokens_error():
   assert _quota_blocker_reason(events) is not None
 
 
-def test_quota_blocker_reason_ignores_allowed_rate_limit_event():
+def test_quota_blocker_reason_ignores_allowed_rate_limit_event() -> None:
   """A fully allowed rate_limit_event yields no blocker reason."""
   events = [{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "overageStatus": "allowed"}}]
   assert _quota_blocker_reason(events) is None

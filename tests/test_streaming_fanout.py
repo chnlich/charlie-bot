@@ -14,7 +14,7 @@ WINDOW = 0.05
 class _Socket:
   """WebSocket double recording every send_text payload; sends stay ordered."""
 
-  def __init__(self):
+  def __init__(self) -> None:
     self.texts: list[str] = []
     self.closed = False
 

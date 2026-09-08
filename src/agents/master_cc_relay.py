@@ -21,6 +21,7 @@ the usage panel.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 import structlog
@@ -33,7 +34,7 @@ from src.core.models import BackendOption, ClaudeAccount, SessionMetadata
 log = structlog.get_logger()
 
 
-def _persist(item: master_cc_state._WorkItem):
+def _persist(item: master_cc_state._WorkItem) -> Callable[[dict], Awaitable[None]]:
   session_id = item.session_meta.id
 
   async def persist(event: dict) -> None:

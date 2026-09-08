@@ -14,7 +14,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M1 host: load + serve CPU | `uptime`; M1 collector below | load 1/5/15; serve count; %CPU total | load < 4 (CPU count); serve CPU total < 300 % | 3.27 / 2.42 / 2.94; 4 serve processes, 237.9 % CPU |
 | M2 UI polls | M2 collector below | polls/h; log MB | < 6000 polls/h | 2755 polls/h; 3.1 MB log |
 | M3 API latency, 401 path | M3 collector below | seconds per request | median < 0.005 s | median 0.002 s, max 0.002 s |
-| M4 turns | M4 collector below | seconds per turn; hung sessions | median < 300 s; hung = 0 | median 53 s, max 1133 s; 0 hung |
+| M4 turns | M4 collector below | seconds per turn; hung sessions (an archived session is never hung — `_session_archived`'s rule) | median < 300 s; hung = 0 | median 53 s, max 1133 s; 0 hung |
 | M5 threads/list latency | M5 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
 | M6 session usage latency | M6 collector below | seconds per request, worst session; the append-round repeat (one appended event before each timed resolution — the 3 s usage poll during a streamed turn — scratch home) | median < 0.05 s; append-round median < 0.005 s | — (introduced with its first history row) |
 | M7 token-usage page | M7 collector below | seconds per page load; the changed-round collect (one corpus move since the last collect — the hourly cron's shape, scratch cache doc, live corpus read-only) | median < 3 s; changed-round median < 0.5 s | — (introduced with its first history row) |
@@ -130,7 +130,11 @@ for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' http://127.0.0.
 ```
 
 M4 — turn durations and hung sessions. The projection reads only `type` and `timestamp` from chat
-events and `status` from thread metadata; session content is never read:
+events and `status` from thread and session metadata; session content is never read. A session whose
+own metadata says `archived` is never hung — archiving is the user's statement that the session is
+finished, the same rule the boot recovery applies (`_session_archived`), so the stale `running`
+thread markers an archived session keeps do not count; the session metadata is read only when a
+thread claims `running`, so the common scan pays nothing extra:
 
 ```bash
 python3 - <<'EOF'
@@ -159,6 +163,18 @@ for session_dir in root.iterdir():
         for thread_meta in threads_dir.glob("*/metadata.json"):
             if json.loads(thread_meta.read_text()).get("status") == "running":
                 running = True
+    if running:
+        # An archived session's threads are not work to resume: archiving is the
+        # user's statement that the session is finished, the rule the boot
+        # recovery applies (_session_archived), so its stale "running" thread
+        # markers are not a hung session. Read only when a thread claims running.
+        meta_path = session_dir / "metadata.json"
+        if meta_path.is_file():
+            try:
+                if json.loads(meta_path.read_text()).get("status") == "archived":
+                    running = False
+            except (OSError, ValueError):
+                pass
     events_path = session_dir / "data" / "chat_events.jsonl"
     if not events_path.is_file():
         continue
@@ -4690,3 +4706,4 @@ EOF
 | 2026-09-07 | this PR | M35 events page (the repeat page fetch the collector times) median 4.98/5.45/5.17 ms → 2.63/3.07/2.83 ms, maxima 6.07/5.73/5.94 → 3.22/3.30/3.60 ms (three interleaved rounds of the verbatim collector on the shared M35 snapshot of the 20534-event worst corpus, main checkout before vs branch worktree after back-to-back at load 1.0-2.0; body 633236 B and digest 46d1d509a0d6 identical across all six arms; handler-level corroboration 2.22 ms → < 0.01 ms median over 7 timed calls per arm, same sha; view 3.59-3.73 → 3.62-4.07 ms and bootstrap 2.71-2.79 → 2.71-2.95 ms unchanged — no regression; 4805-passed suite) | the chat UI re-fetches a page whenever it re-enters the viewport or the session reopens, and each repeat re-rendered the page — slice plus a 633 KB dumps, ~2.2 ms of the 2.2 ms handler; the rendered body now memoizes on the projection itself (LRU 4, keyed (before, limit)), whose published objects are immutable and whose every advance is a new object with an empty cache — the invalidation is the M26 swap itself, and the served bytes are the same fast_json_bytes render by construction |
 | 2026-09-07 | this PR | M67 steady-state probe trigger scan median 428/437/437 µs → 4/4/4 µs, maxima 444/451/483 → 9 µs (three interleaved rounds of the verbatim collector, 108-file worst trigger corpus of session a481fbde, pending 1, live state read-only, main checkout before vs branch worktree after back-to-back at load 0.70-0.73, every paired round faster; no-regression re-measures on the branch: M21 sweep 0.0036 s, M51 post-write deep probe 2.09 ms, M24 list_triggers < 0.05 ms, M56 /status 2.00 ms — all at their standing readings; healthy range tightened median < 0.0005 s → < 0.00005 s with this PR; 4808-passed suite) | the scan's steady state still paid the scandir+stat walk plus the per-file memo loop on every call while its derived (pending count, earliest fire) state is a pure function of the directory's contents; the verdict keys on the directory's (mtime_ns, size) — every trigger-file write publishes through the atomic rename into the directory, and a rename that creates, replaces, or removes an entry moves the directory's own mtime_ns, the ground #950's list_triggers verdict stands on — so one directory stat serves the repeat scan; the probe's walked shape keys on the walk-instant signature `_sidebar_probe_walk` now carries (`_WalkedProbeInputs.trigger_dir_sig`), so a write landing between the walk and the scan keys the older signature and can never be served for the newer state, and a corrupt trigger file re-reads and re-warns once per proved directory state instead of once per scan |
 | 2026-09-07 | this PR | M72 listing request median 10.94/10.94/11.77 ms → 9.60/9.52/9.89 ms, maxima 12.14/11.95/12.89 → 10.81/11.12/11.05 ms (three interleaved rounds of the verbatim collector, 1088-entry sessions root, live state read-only, main checkout before vs branch worktree after back-to-back at load 1.35-1.42; served body byte-identical across all six arms — 238829 B, sha1 f9afb0828dde; builder alone 7.04 → 6.62 ms median over 9 calls; component microbench: per-1088-entry escape+quote 1.13 ms against the fast path's fullmatch check 0.23 ms; 4806-passed suite) | the per-entry rendering paid two html.escape calls (five str.replace invocations each) plus a urllib.parse.quote per entry while session ids (UUIDs) and artifact names draw from characters where both are the identity transform — a name over [A-Za-z0-9_.~-] renders by interpolation and only the rest pay the escaping calls (the byte-identity ground, pinned by the reference-walk test's mixed corpus); the per-entry stat walk (3.2 ms per 1088) is the remaining floor |
+| 2026-09-07 | this PR | M4 hung 1 → 0 (collector verbatim against the live home at load 0.67/0.30/0.46: old form "1 running sessions with last event older than 1h", new form 0 with the turn stats unchanged — 27 turns, median 220 s, max 1540 s); scratch-home shape check: an ACTIVE session with a running thread and a 2 h-old chat file still reports 1 hung, the same shape archived reports 0 | docs-only calibration: the collector counted an archived session's stale "running" thread marker as a hung session — session 80507dda (memory-reviewer-dryrun-gemini, archived 2026-09-04 23:43) flagged hung for ~3 days of rounds while its only "running" thread is the marker `_scan_interrupted_runs` deliberately leaves alone (archived sessions' threads are not work to resume, `_session_archived`); the collector now reads the session metadata's status only when a thread claims running and applies the same archived rule, so the watch keeps catching genuine active-session hangs at zero extra scan cost; healthy range unchanged (hung = 0) |

@@ -84,6 +84,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M72 file-browser directory listing | M72 collector below | seconds per `GET /files/<dir>` request, worst on-disk listing corpus (the sessions root) | median < 0.013 s | — (introduced with its first history row) |
 | M73 plan-verb validation event-loop lag | M73 collector below | seconds of loop lag + wall per amend validation (the registration gate: the DOM assertion set plus the headless-Chrome page-height render), scratch home, copied passing plan page (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 1.0 s | — (introduced with its first history row) |
 | M74 master turn-end raw-log rescan | M74 collector below | seconds of loop lag + wall per fallback-notice projection (whole read+parse+project of the turn's raw log), worst on-disk master-run raw log, fresh cc-claude translate (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.015 s | — (introduced with its first history row) |
+| M75 live-aggregator catch-up, first streamed event | M75 collector below | seconds of loop lag + wall per first-`persist_and_broadcast` catch-up (whole read+feed of the live corpus), worst on-disk live chat corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.015 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -4369,10 +4370,110 @@ asyncio.run(main())
 EOF
 ```
 
+M75 — live-aggregator catch-up, first streamed event. The first
+`persist_and_broadcast` for a session after server start caught the live
+aggregator up to the whole on-disk live corpus — one whole parse plus one
+feed of every persisted event, with a per-event draft-snapshot build whose
+delta the catch-up discards — inline on the event loop before the fix,
+freezing every concurrent request and WebSocket at the session's first
+persisted event after every server restart (the M14 pathology on the
+streamed-turn funnel); the fixed site hops the catch-up to a thread behind a
+per-session init lock, which trades the inline freeze for the GIL-handoff
+surcharge the M45/M74 history documented (~11 ms worst-corpus vs the 5 ms
+ticker floor on this host), and the feeds that discard stream deltas
+(catch-up, history projection, ``events_to_messages``/``events_to_view``)
+construct with ``emit_stream_deltas=False`` so the discarded snapshots are
+never built. The cost is a per-session freeze invisible to the standing HTTP
+probes, so the collector copies the session whose live chat file carries the
+most events into a scratch ``CHARLIEBOT_HOME`` under /tmp (metadata.json and
+data/ only; live home read once for the copy, never written), and drives the
+init through the production call shape with a concurrent 5 ms ticker, from
+the checkout under test: one cold pass, as at a server start, then five
+timed inits, each on a fresh manager and corpus copy (the call shape differs
+across the fix — sync inline before, awaited after — so the collector
+dispatches on ``iscoroutinefunction``). Evidence while the live server runs
+older code points the same collector at the branch checkout (``CHECKOUT`` at
+the worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, inspect, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+# Worst funnel corpus: the session whose LIVE chat file carries the most events;
+# its first persist_and_broadcast after a server start pays the whole catch-up.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        with open(p, errors="replace") as f:
+            n = sum(1 for _ in f)
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+print(f"worst funnel corpus: session {SID}, {best_n} live chat events")
+
+home = Path(tempfile.mkdtemp(prefix="m75-catchup-home-", dir="/tmp"))
+dst = home / "sessions" / SID
+dst.mkdir(parents=True)
+shutil.copy2(best / "metadata.json", dst / "metadata.json")
+shutil.copytree(best / "data", dst / "data")
+
+async def run_once():
+    cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m75-cfg-", dir="/tmp")))
+    (cfg.charliebot_home / "sessions").mkdir(parents=True, exist_ok=True)
+    shutil.copytree(best, cfg.charliebot_home / "sessions" / SID)
+    mgr = SessionManager(cfg)
+    init = mgr._get_or_init_aggregator
+    gaps = []
+    stop = False
+
+    async def ticker():
+        prev = time.perf_counter()
+        while not stop:
+            await asyncio.sleep(0.005)
+            now = time.perf_counter()
+            gaps.append(now - prev)
+            prev = now
+
+    t = asyncio.create_task(ticker())
+    t0 = time.perf_counter()
+    if inspect.iscoroutinefunction(init):
+        await init(SID)
+    else:
+        init(SID)
+    wall = time.perf_counter() - t0
+    stop = True
+    await t
+    shutil.rmtree(cfg.charliebot_home)
+    return (max(gaps) if gaps else wall), wall
+
+async def main():
+    await run_once()  # cold pass, as at the first streamed event after a server start; not timed
+    worst, walls = [], []
+    for _ in range(5):
+        gap, wall = await run_once()
+        worst.append(gap)
+        walls.append(wall)
+    worst.sort()
+    walls.sort()
+    print(f"{best_n}-event corpus; catch-up loop-lag median {worst[2]:.4f} s, max {worst[-1]:.4f} s; "
+          f"wall median {walls[2]:.4f} s, max {walls[-1]:.4f} s over 5")
+    shutil.rmtree(home)
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-07 | this PR | M75 first-event catch-up loop-lag median 0.1600/0.1611/0.1616 s → 0.0157/0.0108/0.0153 s, maxima 0.2423-0.2486 → 0.1008-0.1067 s (three interleaved rounds of the collector, 20534-event worst live chat file of session d321b9ad, scratch CHARLIEBOT_HOME, main checkout before — the pre-fix inline call shape `mgr._get_or_init_aggregator(SID)` — vs branch worktree after back-to-back at load 0.82-1.56, every paired round faster; an earlier interleaved trio under the full test suite's load read 0.2259/0.1595/0.1594 → 0.0108/0.0123/0.0105 s, same shape; wall median 0.1600-0.1616 → 0.1618-0.1750 s — the catch-up's own CPU, now off-loop, unchanged as expected; after maxima ~0.10 s are the whole-corpus thread run's GIL-handoff surcharge the M45 history documented, medians at the ~11 ms M74 post-hop shape) | the first persist_and_broadcast for a session after server start caught the live aggregator up to the whole on-disk corpus inline on the event loop — parse plus feed of every persisted event including a per-event draft-snapshot build whose delta the catch-up discards — freezing every concurrent request and WebSocket at the session's first persisted event after every server restart (the M14 pathology on the streamed-turn funnel); the catch-up hops to a thread behind a per-session init lock (the same instance then carries the live feed with stream-delta emission restored), and the feeds that discard stream deltas (catch-up, history projection, events_to_messages/events_to_view) construct with emit_stream_deltas=False; rider measured within noise: cold projection build 186.4/183.0 → 182.0/183.6 ms on the d321b9ad corpus and 167.2/173.1 → 175.8/159.3 ms on a481fbde's 12452-event corpus (interleaved pairs of the cold-build harness); no-regression re-measures: M26 advance 0.18 ms parity True digest e94c56635194, M6 append-round 0.07 ms parity True, M35 events/view/bootstrap digests 46d1d509a0d6 / ea2d0c6b27c3 / 8e4653af40df identical, M70 repeat view 0.0028 s; M75 definition and healthy range introduced with this PR |
 | 2026-09-07 | this PR | M74 turn-end rescan loop-lag median 0.0302/0.0262 s → 0.0110/0.0104 s, maxima 0.0377/0.0353 s → 0.0115/0.0109 s (two interleaved rounds of the collector, 9.9 MB / 391-event worst on-disk raw log of session 4fcd4c43, live home read-only, main checkout before — the pre-fix inline call shape `runs.project_raw_events(runs.parse_raw_lines(...))` — vs branch worktree after back-to-back at load 1.54/1.18/0.82, every paired round faster; earlier same-conditions pair 0.0203 → 0.0110 s at load 1.45; wall median 0.0211-0.0251 → 0.0205-0.0215 s — the scan's own CPU, now off-loop, unchanged as expected; typical recent turns 0.02-0.55 MB read the 5.4 ms ticker floor in both shapes) | every claude-family master turn ended with the model-attribution rescan inline on the event loop — a whole read+parse+project of the turn's raw log through a fresh translate, freezing every concurrent request and WebSocket at turn end (the M14 pathology on the turn-end path); the live turn-end projection hops to a thread via `runs.project_raw_file` (new whole-file helper, also single-homing `scan_result_exit` and `resolve_run`'s inline scans), and the re-attach path's whole-file result scan hops the same way; M74 definition and healthy range introduced with this PR |
 | 2026-09-07 | this PR | M7 changed-round collect median 0.453/0.463/0.461 s → 0.231/0.273/0.254 s (three interleaved rounds of the new changed-round harness, main checkout before vs branch worktree after back-to-back at load 1.52-2.08, 15 rows and 0.0 MB re-read both arms; pre-fix profile on the same round: 10.5 MB document json.loads ~80 ms + db key scan ~106 ms + document re-dump ~89 ms + record replay ~138 ms + walk ~40 ms); warm row-memo advance median 0.1058/0.1058/0.1064 s → 0.0264/0.0279/0.0271 s (interleaved ×3 against the live 15.28 GB db, 85k message rows; branch maxima 0.133-0.139 s are rounds where live rows landed between calls — the probe misses and the full scan runs, correct); HTTP-level paired interleaved rounds: WAL-noise rounds (sidecar moved, no message row) live-before 0.1404/0.1419/0.1435/0.1456 s → scratch-after (branch server, scratch CHARLIEBOT_HOME, verbatim M7 curls) 0.0377/0.0382/0.0392/0.0399 s, row-landing rounds unchanged (live 0.1328-0.1576 s ≈ scratch 0.1445-0.1606 s — the scan still runs when rows land, by design); fast-hit floor unchanged (live 0.022 s ≈ scratch 0.011 s) | the changed round paid three fixed costs: the 10.5 MB cache document's json re-parse (~80 ms) on every fresh walk, the opencode row memo's full-table key re-read (`select id, time_updated` over 85k rows, ~106 ms) on every WAL-sidecar move, and the proof-less rescan's downstream serve; the row-memo advance now checks proof aggregates first — (row count, sum of time_updated) read under the same snapshot as the scan it may gate; every single-row move changes the pair, so equal aggregates skip the per-row key read (a strictly weaker proof than the key scan's per-id diff: a same-millisecond delete+insert coincidence whose count and sum both net to zero dodges the probe until the next proof miss re-scans, and a data-only rewrite with an unchanged time_updated is invisible to the key scan itself); the parsed document memoizes per cache path and each save adopts the round's next-document state, so a changed round re-parses zero document bytes and entries this round stopped seeing drop out with the save; changed-round sub-metric, healthy range, and harness added to the M7 row in this PR |
 | 2026-09-07 | this PR | M73 plan amend validation loop-lag median 0.6384/0.6540/0.6360 s → 0.0073/0.0070/0.0075 s (at the 5 ms ticker floor), maxima 0.6644/0.6645/0.6385 s → 0.0079/0.0088/0.0085 s; wall median 0.6390/0.6547/0.6367 s → 0.6516/0.6319/0.6486 s — the render's own cost, now off-loop, unchanged as expected (three interleaved rounds of the collector, the 11 KB bound plan page plan_02.html passing the current pure assertion set, scratch CHARLIEBOT_HOME, main checkout before vs branch worktree after back-to-back, every paired round faster; live corroboration: the 1.37 h server log shows the freeze as POST /api/internal/plan/amend avg 670 ms max 715 ms over 5 calls and /plan/present avg 597 ms max 624 ms over 3, the instance predates this change; no-regression re-measures: M57 /plans 2.27-2.55 ms standing band and M27 tolerant read 9.0 µs unchanged; plan-registry suite 67 passed at this branch's head, the pre-fix archive one short (the new loop-responsiveness pin), red there, green here) | the plan registration gate (the DOM assertion set plus the headless-Chrome page-height render, hundreds of ms per page) ran inline in the async present/amend verbs, so every plan delivery froze the event loop for the full Chrome render — the M14 pathology on the plan-delivery path; the assertion run now rides one asyncio.to_thread hop inside `_validate_new_version_file`, the same shape as the M55 annotate and M65 gzip hops, leaving every verb's rejection and save semantics untouched; M73 definition and healthy range introduced with this PR |

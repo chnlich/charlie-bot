@@ -798,10 +798,11 @@ def test_worker_summary_with_origin_projects_both_extra_fields() -> None:
 
 
 def test_worker_summary_without_origin_keeps_fields_unchanged() -> None:
-  """A non-redirected worker_summary must be indistinguishable from today.
+  """A non-redirected worker_summary adds no keys of its own.
 
-  Its projected key set matches the pre-change shape exactly (no
-  origin_session_id key at all), and the carried content fields are unchanged.
+  Its projected key set matches the redirected shape minus ``origin_session_id``
+  (no such key at all); the bubble's ``content`` rides and the full summary
+  text stays on the persisted event.
   """
   event = _worker_summary_event()
   event["timestamp"] = "t-ws"
@@ -809,7 +810,9 @@ def test_worker_summary_without_origin_keeps_fields_unchanged() -> None:
   summary = messages[0]
   assert summary["role"] == "worker_summary"
   assert summary["content"] == "locator"
-  assert summary["full_content"] == "full"
+  # The full summary text stays on the persisted event; the bubble renders
+  # content alone, so the projection carries no full_content key at all.
+  assert "full_content" not in summary
   assert summary["timestamp"] == "t-ws"
   # The event has no origin_session_id, so the projected message must not
   # present the key at all -- indistinguishable from today's projection.

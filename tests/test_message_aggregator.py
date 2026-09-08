@@ -149,7 +149,6 @@ def test_task_delegated_message_exposes_metadata_without_full_description_body()
                   "role": "task_delegated",
                   "content": "Task delegated",
                   "thread_id": "thread-id",
-                  "description": long_description,
                   "delegate_invocation":
                       {
                           "task_type": "implement",
@@ -168,7 +167,9 @@ def test_task_delegated_message_exposes_metadata_without_full_description_body()
               },
       }
   ]
+  # The description body stays on the persisted event; no bubble text carries it.
   assert long_description not in deltas[0]["message"]["content"]
+  assert "description" not in deltas[0]["message"]
 
 
 def test_tool_use_attaches_to_buffer_then_tool_result_updates_output() -> None:

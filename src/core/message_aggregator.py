@@ -178,11 +178,13 @@ def _scheduled_run_skipped_msg(ev: dict) -> dict:
 def _task_delegated_msg(ev: dict) -> dict:
   backend = ev.get("backend") or ev.get("resolved_backend") or ""
   model = ev.get("model") or ev.get("resolved_model") or ""
+  # Task-spec-length description and the worker summary's full text stay on the
+  # persisted event (the review scan and fork reference read raw events); no
+  # projection reader -- client bubble or server recap -- reads them here.
   return {
       "role": "task_delegated",
       "content": "Task delegated",
       "thread_id": ev.get("thread_id", ""),
-      "description": ev.get("description", ""),
       "delegate_invocation": ev.get("delegate_invocation"),
       "backend": backend,
       "model": model,
@@ -215,7 +217,6 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         lambda ev: {
             'role': 'worker_summary',
             'content': ev.get('content', ''),
-            'full_content': ev.get('full_content', ''),
             'thread_id': ev.get('thread_id'),
             **({
                 'origin_session_id': ev['origin_session_id']

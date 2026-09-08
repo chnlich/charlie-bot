@@ -1462,8 +1462,7 @@ class SessionManager:
     # Cache-served events carry the in-memory event_index stamp
     # persist_and_broadcast injects after the disk write; the reference must
     # match the persisted lines, which predate the stamp.
-    return "".join(
-        json.dumps({k: v for k, v in event.items() if k != "event_index"}) + "\n" for event in events)
+    return "".join(json.dumps({k: v for k, v in event.items() if k != "event_index"}) + "\n" for event in events)
 
   def _write_reference_from_sources_sync(self, path: Path, parent_id: str, end: int) -> None:
     """Write the parent's raw event lines for a full-corpus reference into ``path``.

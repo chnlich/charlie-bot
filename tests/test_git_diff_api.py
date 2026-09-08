@@ -345,6 +345,29 @@ def test_refs_signature_tracks_ref_state(tmp_path: Path) -> None:
   assert git_api._refs_signature(repo) == after_pack
 
 
+def test_refs_signature_entries_bounded_by_dirs(tmp_path: Path) -> None:
+  """Branch accumulation adds signature entries only for new namespace dirs.
+
+  The refs trees contribute their directories (each ref mutation renames into
+  the containing directory and moves its mtime_ns), so fifty new branches move
+  the signature without growing its entry count.
+  """
+  repo = _build_repo(tmp_path)
+  base_len = len(git_api._refs_signature(repo))
+  for i in range(50):
+    _git(repo, "branch", f"bulk{i}")
+  grown = git_api._refs_signature(repo)
+  assert len(grown) - base_len <= 2
+
+
+def test_refs_signature_moves_on_unrelated_branch_growth(tmp_path: Path) -> None:
+  """A new branch renames into refs/heads, moving the directory's mtime_ns."""
+  repo = _build_repo(tmp_path)
+  before = git_api._refs_signature(repo)
+  _git(repo, "branch", "unrelated")
+  assert git_api._refs_signature(repo) != before
+
+
 def test_ref_resolution_memo_skips_rev_parse_until_refs_move(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The memoized resolver re-runs rev-parse only when the ref state has moved."""
   repo = _build_repo(tmp_path)

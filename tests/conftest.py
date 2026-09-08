@@ -773,6 +773,9 @@ CLI_COMMON_REQUESTS_GET_PATCH_TARGET = "src.cli.common.requests.get"
 # resolve. Module-scope binders of the same function (worker.py, autonamer.py, recap.py, ...)
 # keep their own namespaces and are not intercepted through this route.
 BUILD_BACKEND_PATCH_TARGET = "src.agents.backends.registry.build_backend"
+# The worker reads build_backend off its own module binding (src/agents/worker.py
+# imports it at module scope), so a patched registry binding never reaches it.
+WORKER_BUILD_BACKEND_PATCH_TARGET = "src.agents.worker.build_backend"
 
 # Import-path patch target for the binary resolution an OpenCodeBackend construction runs.
 # src/agents/backends/opencode.py binds the helper at import scope (`from
@@ -1450,6 +1453,71 @@ class FakeChunkedResponse:
   async def aiter_bytes(self) -> AsyncIterator[bytes]:
     for chunk in self._chunks:
       yield chunk
+
+
+class ScriptedRelayBackend:
+  """Account-relay backend double whose run() yields a script of events.
+
+  terminate() ends the stream and records the kill (exit_code -15), mirroring
+  the relay paths' safe-point stop. Carries the union of the surface the
+  master-cc and worker relay paths read: exit_code/stderr_text/terminated
+  after the stream ends, the prompt/env/cwd the run launched with, and the
+  cancel let-go trio (detach, pid_start, hang_diagnostics) the worker cancel
+  path touches.
+  """
+
+  def __init__(self, events: list[dict], exit_code: int, stderr_text: str = "") -> None:
+    self._events = events
+    self.exit_code = exit_code
+    self.stderr_text = stderr_text
+    self.terminated = False
+    self.hang_diagnostics = None
+    self.pid_start = "1-1"
+    self.prompt: str | None = None
+    self.env: dict | None = None
+    self.cwd: str | None = None
+
+  async def terminate(self) -> None:
+    self.terminated = True
+    self.exit_code = -15
+
+  def detach(self) -> None:
+    pass
+
+  async def run(self, prompt: str, cwd: str, env: dict):
+    self.prompt = prompt
+    self.cwd = cwd
+    self.env = env
+    for event in self._events:
+      if self.terminated:
+        return
+      yield event
+
+
+def install_scripted_backends(
+    monkeypatch: pytest.MonkeyPatch,
+    backends: list[ScriptedRelayBackend],
+    patch_target: str,
+) -> list[dict]:
+  """Serve *backends* one build at a time from a patched build_backend.
+
+  *patch_target* is the dotted import path of the build_backend binding the
+  tested path reads: the master-cc run path re-imports through
+  src.agents.backends.registry on every call (BUILD_BACKEND_PATCH_TARGET),
+  while the worker path reads src.agents.worker's module binding
+  (WORKER_BUILD_BACKEND_PATCH_TARGET). Returns the build records (option,
+  kwargs, backend) in build order.
+  """
+  builds: list[dict] = []
+  queue = list(backends)
+
+  def fake_build_backend(option: models.BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -> ScriptedRelayBackend:
+    backend = queue.pop(0)
+    builds.append({"option": option, "kwargs": kwargs, "backend": backend})
+    return backend
+
+  monkeypatch.setattr(patch_target, fake_build_backend)
+  return builds
 
 
 class FakeBackend:

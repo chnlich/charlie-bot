@@ -164,11 +164,25 @@ def _stat_or_skip(path: Path, sig: list[tuple[str, int, int]]) -> None:
   sig.append((str(path), st.st_mtime_ns, st.st_size))
 
 
-def _walk_refs_tree(root: Path, sig: list[tuple[str, int, int]]) -> None:
-  """Append (path, mtime_ns, size) for every file under root's refs tree."""
+def _walk_refs_dirs(root: Path, sig: list[tuple[str, int, int]]) -> None:
+  """Append (path, mtime_ns, size) for root and every directory under it.
+
+  Git publishes every ref mutation through a lockfile rename into the containing
+  directory, and a rename that creates, replaces, or removes an entry moves the
+  directory's own mtime_ns, so the directory set carries every ref change a
+  resolution can read. One stat per namespace directory keeps the walk bounded
+  as the loose refs tree grows one file per branch the workflow leaves behind;
+  git never rewrites a ref file in place, so no ref mutation escapes the
+  directory's mtime.
+  """
   stack = [root]
   while stack:
     current = stack.pop()
+    try:
+      st = current.stat()
+    except OSError:
+      continue
+    sig.append((str(current), st.st_mtime_ns, st.st_size))
     try:
       entries = list(os.scandir(current))
     except OSError:
@@ -176,24 +190,19 @@ def _walk_refs_tree(root: Path, sig: list[tuple[str, int, int]]) -> None:
     for entry in entries:
       if entry.is_dir(follow_symlinks=False):
         stack.append(Path(entry.path))
-      else:
-        try:
-          st = entry.stat(follow_symlinks=False)
-        except OSError:
-          continue
-        sig.append((entry.path, st.st_mtime_ns, st.st_size))
 
 
 def _refs_signature(repo_path: Path) -> _RefSignature:
   """Stat-only signature of every file that feeds rev-parse ref resolution.
 
   Covers the git dir's top-level pseudo-refs (HEAD, ORIG_HEAD, FETCH_HEAD, ...),
-  packed-refs, the shallow/grafts files, the shared loose refs tree, and — in a
-  linked worktree, whose refs/bisect, refs/worktree, and refs/rewritten trees
-  are per-worktree — the worktree's own refs tree. `git rev-parse` reads
-  nothing else for ref-shaped inputs, so an equal signature across two requests
-  proves an equal resolution. Scandir serves d_type from readdir, so each
-  entry costs one stat, not two.
+  packed-refs, the shallow/grafts files, the shared refs tree, and — in a linked
+  worktree, whose refs/bisect, refs/worktree, and refs/rewritten trees are
+  per-worktree — the worktree's own refs tree. `git rev-parse` reads nothing
+  else for ref-shaped inputs, so an equal signature across two requests proves
+  an equal resolution. The refs trees contribute their directory entries only
+  (see :func:`_walk_refs_dirs`); packed-refs carries every packed entry's
+  content in its own (mtime_ns, size).
   """
   git_dir, common_dir = _git_dirs(repo_path)
   sig: list[tuple[str, int, int]] = []
@@ -211,9 +220,9 @@ def _refs_signature(repo_path: Path) -> _RefSignature:
   for name in ("packed-refs", "shallow"):
     _stat_or_skip(common_dir / name, sig)
   _stat_or_skip(common_dir / "info" / "grafts", sig)
-  _walk_refs_tree(common_dir / "refs", sig)
+  _walk_refs_dirs(common_dir / "refs", sig)
   if git_dir != common_dir:
-    _walk_refs_tree(git_dir / "refs", sig)
+    _walk_refs_dirs(git_dir / "refs", sig)
   return tuple(sorted(sig))
 
 

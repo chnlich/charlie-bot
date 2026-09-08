@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    FABLE_MODEL,
+    POOLED_FABLE_ID,
     fresh_state_fixture,
     make_transcript,
     make_work_item,
@@ -32,7 +34,6 @@ from src.core.models import (
 from src.core.sessions import SessionManager
 
 NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
-FABLE = "claude-fable-5-1"
 SONNET = "claude-sonnet-5"
 
 _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
@@ -40,7 +41,8 @@ _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 def _options(pinned_dir: Path) -> list[BackendOption]:
   return [
-      BackendOption(id="claude-fable-5", label="Fable", type="cc-claude", model=FABLE, aliases=["claude-fable-5-ext1"]),
+      BackendOption(
+          id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL, aliases=["claude-fable-5-ext1"]),
       BackendOption(id="claude-sonnet-5", label="Sonnet", type="cc-claude", model=SONNET),
       BackendOption(
           id="pinned-opus", label="Pinned", type="cc-claude", model="claude-opus-5", claude_config_dir=str(pinned_dir)),
@@ -70,7 +72,7 @@ def _legacy_cfg(tmp_path: Path) -> CharlieBotConfig:
 def test_is_pooled_only_for_dirless_cc_claude_entries_when_pool_declared(tmp_path: Path) -> None:
   pooled_cfg = _pool_cfg(tmp_path)
   legacy_cfg = _legacy_cfg(tmp_path)
-  fable = pooled_cfg.get_backend_option("claude-fable-5")
+  fable = pooled_cfg.get_backend_option(POOLED_FABLE_ID)
   pinned = pooled_cfg.get_backend_option("pinned-opus")
   codex = pooled_cfg.get_backend_option("codex-o3")
 
@@ -95,7 +97,7 @@ def test_get_backend_option_resolves_aliases_after_exact_ids(tmp_path: Path) -> 
   cfg = _pool_cfg(tmp_path)
 
   assert cfg.get_backend_option("claude-fable-5-ext1").id == "claude-fable-5"
-  assert cfg.get_backend_option("claude-fable-5").id == "claude-fable-5"
+  assert cfg.get_backend_option(POOLED_FABLE_ID).id == "claude-fable-5"
   assert cfg.get_backend_option("claude-fable-sub") is None
 
 
@@ -198,7 +200,7 @@ def test_observe_rate_limit_folds_the_binding_windows_only() -> None:
   assert reading is not None
   assert reading.utilization == pytest.approx(0.92)  # the overage window (0.99) is not a limit
   assert reading.rejected_until is None
-  assert claude_accounts.headroom("ext-1", FABLE, now=NOW) == pytest.approx(0.08)
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW) == pytest.approx(0.08)
   assert claude_accounts.observe_rate_limit("ext-1", {"status": "allowed"}, now=NOW) is None
 
 
@@ -206,12 +208,12 @@ def test_rejected_reading_zeroes_headroom_until_its_reset() -> None:
   resets_at = (NOW + timedelta(minutes=30)).timestamp()
   claude_accounts.observe_rate_limit("ext-1", _event("rejected", 0.99, 0.40, resets_at), now=NOW)
 
-  assert claude_accounts.headroom("ext-1", FABLE, now=NOW) == 0.0
-  assert claude_accounts.headroom("ext-1", FABLE, now=NOW + timedelta(minutes=31)) == pytest.approx(0.01)
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW) == 0.0
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW + timedelta(minutes=31)) == pytest.approx(0.01)
 
 
 def test_unread_account_has_full_headroom() -> None:
-  assert claude_accounts.headroom("never-read", FABLE, now=NOW) == 1.0
+  assert claude_accounts.headroom("never-read", FABLE_MODEL, now=NOW) == 1.0
 
 
 def test_headroom_takes_the_newer_of_event_and_panel_readings() -> None:
@@ -227,10 +229,10 @@ def test_headroom_takes_the_newer_of_event_and_panel_readings() -> None:
           }],
           "fetched_at": (NOW + timedelta(minutes=5)).isoformat(),
       })
-  assert claude_accounts.headroom("ext-1", FABLE, now=NOW + timedelta(minutes=6)) == pytest.approx(0.30)
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW + timedelta(minutes=6)) == pytest.approx(0.30)
 
   claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.50, 0.10), now=NOW + timedelta(minutes=10))
-  assert claude_accounts.headroom("ext-1", FABLE, now=NOW + timedelta(minutes=11)) == pytest.approx(0.50)
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW + timedelta(minutes=11)) == pytest.approx(0.50)
 
 
 def test_panel_scoped_window_counts_only_for_its_model_family() -> None:
@@ -251,7 +253,7 @@ def test_panel_scoped_window_counts_only_for_its_model_family() -> None:
           "fetched_at": NOW.isoformat(),
       })
 
-  assert claude_accounts.headroom("ext-1", FABLE, now=NOW) == pytest.approx(0.40)
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW) == pytest.approx(0.40)
   assert claude_accounts.headroom("ext-1", SONNET, now=NOW) == pytest.approx(0.90)
 
 
@@ -266,9 +268,9 @@ def test_select_prefers_most_headroom_and_keeps_current_on_a_tie(tmp_path: Path)
   claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.10, 0.05), now=NOW)
   claude_accounts.observe_rate_limit("ext-2", _event("allowed", 0.10, 0.05), now=NOW)
 
-  assert claude_accounts.select(cfg, FABLE, current="ext-2", now=NOW).label == "ext-2"
-  assert claude_accounts.select(cfg, FABLE, current="ext-1", now=NOW).label == "ext-1"
-  assert claude_accounts.select(cfg, FABLE, current="main", now=NOW).label in {"ext-1", "ext-2"}
+  assert claude_accounts.select(cfg, FABLE_MODEL, current="ext-2", now=NOW).label == "ext-2"
+  assert claude_accounts.select(cfg, FABLE_MODEL, current="ext-1", now=NOW).label == "ext-1"
+  assert claude_accounts.select(cfg, FABLE_MODEL, current="main", now=NOW).label in {"ext-1", "ext-2"}
 
 
 def test_select_skips_excluded_rejected_and_unhealthy_accounts(tmp_path: Path) -> None:
@@ -278,8 +280,8 @@ def test_select_skips_excluded_rejected_and_unhealthy_accounts(tmp_path: Path) -
       "ext-1", _event("rejected", 1.0, 0.10, (NOW + timedelta(hours=1)).timestamp()), now=NOW)
   write_pool_credentials(tmp_path / "claude-ext-2", access_token="")  # emptied credential store
 
-  assert claude_accounts.select(cfg, FABLE, current="main", exclude={"main"}, now=NOW) is None
-  assert claude_accounts.select(cfg, FABLE, current="ext-1", now=NOW).label == "main"
+  assert claude_accounts.select(cfg, FABLE_MODEL, current="main", exclude={"main"}, now=NOW) is None
+  assert claude_accounts.select(cfg, FABLE_MODEL, current="ext-1", now=NOW).label == "main"
   assert claude_accounts.earliest_reset(cfg, now=NOW) == NOW + timedelta(hours=1)
 
 
@@ -325,26 +327,25 @@ def test_find_transcript_account_scans_the_pool(tmp_path: Path) -> None:
 
 def test_resolve_resume_id_prefers_own_account_then_searches_pool_and_writes_back(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
-  fable = cfg.get_backend_option("claude-fable-5")
+  fable = cfg.get_backend_option(POOLED_FABLE_ID)
   make_transcript(tmp_path / "claude-ext-2", "uuid-3")
 
-  meta = SessionMetadata(id="s1", name="t", backend="claude-fable-5", cc_session_id="uuid-3")
+  meta = SessionMetadata(id="s1", name="t", backend=POOLED_FABLE_ID, cc_session_id="uuid-3")
   assert master_cc_run._resolve_resume_id(fable, meta, cfg=cfg) == "uuid-3"
   assert meta.claude_account == "ext-2"
 
   # A transcript present under the recorded account is taken from there, even when
   # another login also holds a copy (the source copy left behind by a relay).
   make_transcript(tmp_path / "claude-main", "uuid-3")
-  meta_main = SessionMetadata(
-      id="s1", name="t", backend="claude-fable-5", cc_session_id="uuid-3", claude_account="main")
+  meta_main = SessionMetadata(id="s1", name="t", backend=POOLED_FABLE_ID, cc_session_id="uuid-3", claude_account="main")
   assert master_cc_run._resolve_resume_id(fable, meta_main, cfg=cfg) == "uuid-3"
   assert meta_main.claude_account == "main"
 
 
 def test_resolve_resume_id_pool_miss_returns_none_and_keeps_account(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
-  fable = cfg.get_backend_option("claude-fable-5")
-  meta = SessionMetadata(id="s1", name="t", backend="claude-fable-5", cc_session_id="uuid-4", claude_account="ext-1")
+  fable = cfg.get_backend_option(POOLED_FABLE_ID)
+  meta = SessionMetadata(id="s1", name="t", backend=POOLED_FABLE_ID, cc_session_id="uuid-4", claude_account="ext-1")
 
   assert master_cc_run._resolve_resume_id(fable, meta, cfg=cfg) is None
   assert meta.claude_account == "ext-1"
@@ -371,12 +372,12 @@ def test_resolve_resume_id_without_pool_keeps_the_pinned_directory_rule(tmp_path
 def test_pooled_entries_share_one_switch_domain_and_pinned_entries_keep_theirs(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
 
-  assert _backend_domain(cfg.get_backend_option("claude-fable-5"), cfg) == claude_accounts.POOL_DOMAIN
+  assert _backend_domain(cfg.get_backend_option(POOLED_FABLE_ID), cfg) == claude_accounts.POOL_DOMAIN
   assert _backend_domain(cfg.get_backend_option("claude-sonnet-5"), cfg) == claude_accounts.POOL_DOMAIN
   assert _backend_domain(cfg.get_backend_option("pinned-opus"), cfg) == str(tmp_path / "pinned")
   assert _backend_domain(cfg.get_backend_option("codex-o3"), cfg) is None
 
-  pooled = _active_backend_payload(SessionMetadata(id="a", name="t", backend="claude-fable-5"), cfg)
+  pooled = _active_backend_payload(SessionMetadata(id="a", name="t", backend=POOLED_FABLE_ID), cfg)
   assert pooled["switchable_backends"] == ["claude-fable-5", "claude-sonnet-5"]
   pinned = _active_backend_payload(SessionMetadata(id="b", name="t", backend="pinned-opus"), cfg)
   assert pinned["switchable_backends"] == ["pinned-opus"]
@@ -421,7 +422,7 @@ def test_token_tally_and_cold_storage_include_pool_directories(tmp_path: Path, m
 async def test_persist_claude_account_round_trips_without_touching_other_fields(tmp_path: Path) -> None:
   cfg = _legacy_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend="claude-fable-5")
+  meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend=POOLED_FABLE_ID)
   await session_mgr.persist_cc_session_id(meta.id, "uuid-7")
 
   assert await session_mgr.persist_claude_account(meta.id, "ext-1") == "ext-1"
@@ -434,7 +435,7 @@ async def test_persist_claude_account_round_trips_without_touching_other_fields(
 @pytest.mark.asyncio
 async def test_consumer_persists_the_account_the_run_settled_on(tmp_path: Path) -> None:
   cfg = _legacy_cfg(tmp_path)
-  session_meta = SessionMetadata(id="consumer-account", name="t", backend="claude-fable-5")
+  session_meta = SessionMetadata(id="consumer-account", name="t", backend=POOLED_FABLE_ID)
   callbacks = mock_session_callbacks()
   callbacks.persist_claude_account.side_effect = lambda sid, label: "other"
   item = make_work_item(cfg, session_meta, cfg.backend_options[0], callbacks=callbacks)
@@ -457,7 +458,7 @@ async def test_consumer_persists_the_account_the_run_settled_on(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_consumer_skips_account_persistence_when_no_account_was_assigned(tmp_path: Path) -> None:
   cfg = _legacy_cfg(tmp_path)
-  session_meta = SessionMetadata(id="consumer-none", name="t", backend="claude-fable-5")
+  session_meta = SessionMetadata(id="consumer-none", name="t", backend=POOLED_FABLE_ID)
   callbacks = mock_session_callbacks()
   item = make_work_item(cfg, session_meta, cfg.backend_options[0], callbacks=callbacks)
 

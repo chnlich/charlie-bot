@@ -8,14 +8,16 @@ from unittest.mock import AsyncMock
 import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
+    FABLE_MODEL,
+    POOLED_FABLE_ID,
     ScriptedRelayBackend,
+    fable_pool_cfg,
     fresh_state_fixture,
     install_scripted_backends,
     make_transcript,
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
-    pool_cfg,
     rate_limit_event,
     write_pool_credentials,
 )
@@ -30,24 +32,9 @@ from src.core.message_aggregator import MessageAggregator
 from src.core.models import BackendOption, SessionMetadata
 
 NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
-FABLE = "claude-fable-5-1"
 UUID = "uuid-relay-1"
 
 _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
-
-
-def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
-  return pool_cfg(
-      tmp_path,
-      [
-          BackendOption(id="claude-fable-5", label="Fable", type="cc-claude", model=FABLE),
-          BackendOption(
-              id="pinned", label="Pinned", type="cc-claude", model=FABLE, claude_config_dir=str(tmp_path / "pinned")),
-      ],
-      home=tmp_path / ".charliebot",
-      worktree_dir=tmp_path / "worktrees",
-      labels=labels,
-  )
 
 
 def _tool_result() -> dict:
@@ -68,7 +55,7 @@ def _install_backends(monkeypatch, backends: list[ScriptedRelayBackend]) -> list
 
 
 def _session_on(label: str | None, cc_session_id: str | None = UUID) -> SessionMetadata:
-  return SessionMetadata(id="s1", name="t", backend="claude-fable-5", cc_session_id=cc_session_id, claude_account=label)
+  return SessionMetadata(id="s1", name="t", backend=POOLED_FABLE_ID, cc_session_id=cc_session_id, claude_account=label)
 
 
 def _events_of(callbacks, event_type: str) -> list[dict]:
@@ -83,39 +70,39 @@ def _events_of(callbacks, event_type: str) -> list[dict]:
 
 
 def test_choose_turn_account_keeps_a_warm_healthy_account_under_the_warning_line(tmp_path: Path) -> None:
-  cfg = _pool_cfg(tmp_path)
+  cfg = fable_pool_cfg(tmp_path)
   claude_accounts.observe_rate_limit("main", rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
   meta = _session_on("main")
 
-  chosen, cold = master_cc_relay.choose_turn_account(cfg, meta, FABLE, NOW - timedelta(minutes=10), now=NOW)
+  chosen, cold = master_cc_relay.choose_turn_account(cfg, meta, FABLE_MODEL, NOW - timedelta(minutes=10), now=NOW)
 
   assert (chosen.label, cold) == ("main", False)
 
 
 def test_choose_turn_account_reselects_on_a_cold_cache_or_at_the_warning_line(tmp_path: Path) -> None:
-  cfg = _pool_cfg(tmp_path)
+  cfg = fable_pool_cfg(tmp_path)
   claude_accounts.observe_rate_limit("main", rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
   claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.10)["rate_limit_info"], now=NOW)
   claude_accounts.observe_rate_limit("ext-2", rate_limit_event("allowed", 0.20)["rate_limit_info"], now=NOW)
 
   cold_pick, cold = master_cc_relay.choose_turn_account(
-      cfg, _session_on("main"), FABLE, NOW - timedelta(minutes=61), NOW)
+      cfg, _session_on("main"), FABLE_MODEL, NOW - timedelta(minutes=61), NOW)
   assert (cold_pick.label, cold) == ("ext-1", True)
 
   claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.91)["rate_limit_info"], now=NOW)
   warm_pick, warm = master_cc_relay.choose_turn_account(
-      cfg, _session_on("main"), FABLE, NOW - timedelta(minutes=5), NOW)
+      cfg, _session_on("main"), FABLE_MODEL, NOW - timedelta(minutes=5), NOW)
   assert (warm_pick.label, warm) == ("ext-1", False)
 
-  fresh_pick, _ = master_cc_relay.choose_turn_account(cfg, _session_on(None, None), FABLE, None, NOW)
+  fresh_pick, _ = master_cc_relay.choose_turn_account(cfg, _session_on(None, None), FABLE_MODEL, None, NOW)
   assert fresh_pick.label == "ext-1"
 
 
 def test_choose_turn_account_returns_none_when_the_pool_is_exhausted(tmp_path: Path) -> None:
-  cfg = _pool_cfg(tmp_path, labels=("main",))
+  cfg = fable_pool_cfg(tmp_path, labels=("main",))
   claude_accounts.observe_rate_limit("main", rate_limit_event("rejected", 1.0)["rate_limit_info"], now=NOW)
 
-  chosen, _cold = master_cc_relay.choose_turn_account(cfg, _session_on("main"), FABLE, NOW, NOW)
+  chosen, _cold = master_cc_relay.choose_turn_account(cfg, _session_on("main"), FABLE_MODEL, NOW, NOW)
 
   assert chosen is None
   assert "no available account" in claude_relay.pool_exhausted_message(cfg, NOW)
@@ -124,7 +111,7 @@ def test_choose_turn_account_returns_none_when_the_pool_is_exhausted(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_place_turn_moves_the_transcript_when_the_account_changes(tmp_path: Path) -> None:
-  cfg = _pool_cfg(tmp_path)
+  cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
   meta = _session_on("main")
@@ -146,15 +133,15 @@ async def test_place_turn_moves_the_transcript_when_the_account_changes(tmp_path
 
 
 def test_relay_watch_rejection_relays_without_waiting_for_a_safe_point() -> None:
-  watch = claude_relay.RelayWatch("main", FABLE)
+  watch = claude_relay.RelayWatch("main", FABLE_MODEL)
   assert watch.observe(rate_limit_event("rejected", 1.0)) is False
   assert watch.observe(_tool_result()) is False
   assert watch.decision(1, "") == claude_relay.RELAY_REJECTED
-  assert claude_accounts.headroom("main", FABLE) == 0.0
+  assert claude_accounts.headroom("main", FABLE_MODEL) == 0.0
 
 
 def test_relay_watch_arms_on_a_far_warning_and_fires_at_the_next_tool_result() -> None:
-  watch = claude_relay.RelayWatch("main", FABLE)
+  watch = claude_relay.RelayWatch("main", FABLE_MODEL)
   assert watch.observe(rate_limit_event("allowed_warning", 0.92)) is False
   assert watch.observe(_assistant("working")) is False
   assert watch.observe(_tool_result()) is True
@@ -163,22 +150,22 @@ def test_relay_watch_arms_on_a_far_warning_and_fires_at_the_next_tool_result() -
 
 
 def test_relay_watch_ignores_a_warning_whose_reset_is_near_or_under_the_line() -> None:
-  near = claude_relay.RelayWatch("main", FABLE)
+  near = claude_relay.RelayWatch("main", FABLE_MODEL)
   near.observe(rate_limit_event("allowed_warning", 0.95, resets_in=timedelta(minutes=20)))
   assert near.observe(_tool_result()) is False
   assert near.decision(0, "") is None
 
-  low = claude_relay.RelayWatch("main", FABLE)
+  low = claude_relay.RelayWatch("main", FABLE_MODEL)
   low.observe(rate_limit_event("allowed_warning", 0.85))
   assert low.observe(_tool_result()) is False
 
 
 def test_relay_watch_reports_a_login_failure_from_text_or_stderr() -> None:
-  watch = claude_relay.RelayWatch("main", FABLE)
+  watch = claude_relay.RelayWatch("main", FABLE_MODEL)
   watch.observe(_assistant("Failed to authenticate: OAuth session expired and could not be refreshed"))
   assert watch.decision(1, "") == claude_relay.LOGIN_FAILED
   assert watch.decision(0, "") is None, "a run that still exited 0 is not a login failure"
-  assert claude_relay.RelayWatch("main", FABLE).decision(1, "Failed to authenticate") == claude_relay.LOGIN_FAILED
+  assert claude_relay.RelayWatch("main", FABLE_MODEL).decision(1, "Failed to authenticate") == claude_relay.LOGIN_FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +175,7 @@ def test_relay_watch_reports_a_login_failure_from_text_or_stderr() -> None:
 
 @pytest.mark.asyncio
 async def test_run_cc_relays_a_rejected_turn_onto_another_account(tmp_path: Path, monkeypatch) -> None:
-  cfg = _pool_cfg(tmp_path)
+  cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
@@ -213,7 +200,7 @@ async def test_run_cc_relays_a_rejected_turn_onto_another_account(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(tmp_path: Path, monkeypatch) -> None:
-  cfg = _pool_cfg(tmp_path)
+  cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   first = ScriptedRelayBackend(
@@ -236,7 +223,7 @@ async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(tm
 
 @pytest.mark.asyncio
 async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, monkeypatch) -> None:
-  cfg = _pool_cfg(tmp_path)
+  cfg = fable_pool_cfg(tmp_path)
   write_pool_credentials(tmp_path / "claude-ext-1", access_token="")
   write_pool_credentials(tmp_path / "claude-ext-2", access_token="")
   make_transcript(tmp_path / "claude-main", UUID)
@@ -260,7 +247,7 @@ async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, mon
 
 @pytest.mark.asyncio
 async def test_run_cc_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -> None:
-  cfg = _pool_cfg(tmp_path, labels=("main", "a", "b", "c", "d"))
+  cfg = fable_pool_cfg(tmp_path, labels=("main", "a", "b", "c", "d"))
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   backends = [
@@ -280,7 +267,7 @@ async def test_run_cc_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -
 
 @pytest.mark.asyncio
 async def test_run_cc_marks_a_login_failure_and_relays(tmp_path: Path, monkeypatch) -> None:
-  cfg = _pool_cfg(tmp_path)
+  cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   first = ScriptedRelayBackend(
@@ -316,7 +303,7 @@ async def test_run_cc_marks_a_login_failure_and_relays(tmp_path: Path, monkeypat
 @pytest.mark.asyncio
 async def test_run_cc_compacts_with_sonnet_before_spawning_on_an_expired_cache(
     tmp_path: Path, monkeypatch, context_tokens: int, minutes_since: int, compacted: bool) -> None:
-  cfg = _pool_cfg(tmp_path)
+  cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   order: list[str] = []
@@ -353,7 +340,7 @@ async def test_run_cc_compacts_with_sonnet_before_spawning_on_an_expired_cache(
 
 @pytest.mark.asyncio
 async def test_run_cc_relay_compacts_a_large_fable_context_on_the_new_account(tmp_path: Path, monkeypatch) -> None:
-  cfg = _pool_cfg(tmp_path)
+  cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   compactions: list[tuple[str, int | None]] = []
@@ -383,7 +370,11 @@ async def test_run_cc_without_a_pool_spawns_the_option_unchanged(tmp_path: Path,
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
           BackendOption(
-              id="pinned", label="Pinned", type="cc-claude", model=FABLE, claude_config_dir=str(tmp_path / "pinned"))
+              id="pinned",
+              label="Pinned",
+              type="cc-claude",
+              model=FABLE_MODEL,
+              claude_config_dir=str(tmp_path / "pinned"))
       ],
   )
   make_transcript(tmp_path / "pinned", UUID)
@@ -424,7 +415,7 @@ def test_login_required_renders_account_free_in_chat() -> None:
 
 
 def test_usage_panel_entry_carries_the_login_directory_while_unhealthy(tmp_path: Path, monkeypatch) -> None:
-  cfg = _pool_cfg(tmp_path)
+  cfg = fable_pool_cfg(tmp_path)
   monkeypatch.setattr(ext_usage_mod, "get_config", lambda: cfg)
   monkeypatch.setattr(ext_usage_mod, "_cached_usage", {"claude:ext-1": {"provider": "claude", "account": "ext-1"}})
 

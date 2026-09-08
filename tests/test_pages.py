@@ -4,6 +4,7 @@ import asyncio
 import shutil
 import subprocess
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -268,7 +269,7 @@ class PendingTriggerSessionManager(FakeSessionManager):
     return self._session.model_copy()
 
 
-def _bootstrap_stub(session: SessionMetadata):
+def _bootstrap_stub(session: SessionMetadata) -> Callable[..., Awaitable[SimpleNamespace]]:
   """Stand-in for build_session_bootstrap_data serving one fixed session, no messages."""
 
   async def fake_build_session_bootstrap_data(*args, **kwargs) -> SimpleNamespace:

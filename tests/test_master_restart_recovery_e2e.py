@@ -442,8 +442,8 @@ def _assert_drain_matches_projection(transported: list[dict], projected: list[di
     return
   assert any(
       transported[:k] == projected[:k] and transported[k:] == projected[k - 1:]
-      for k in range(1, len(projected) + 1)
-  ), f"drain not lossless\ntransported: {transported}\nprojected: {projected}"
+      for k in range(1,
+                     len(projected) + 1)), f"drain not lossless\ntransported: {transported}\nprojected: {projected}"
 
 
 def _full_projection(home: Path, session_id: str, cfg: CharlieBotConfig) -> list[dict]:
@@ -499,8 +499,7 @@ async def _assert_drain_lossless_and_idempotent(
   ends at file size, and the round is operable — and re-running recovery over
   the same on-disk state appends nothing."""
   _assert_drain_matches_projection(
-      _round_transported_events(events, skip_user_event=skip_user_event),
-      _full_projection(home, session_id, cfg))
+      _round_transported_events(events, skip_user_event=skip_user_event), _full_projection(home, session_id, cfg))
   raw = _raw_logs(home, session_id)[0]
   assert runs.read_raw_cursor(raw.parent / runs.CURSOR_NAME) == raw.stat().st_size
   _assert_round_operable(events)

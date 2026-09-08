@@ -1063,6 +1063,24 @@ def build_chain_cfg(*options: models.BackendOption) -> CharlieBotConfig:
   return CharlieBotConfig(backend_options=list(options), model_preference=[option.id for option in options])
 
 
+PUBLISH_BASE_URL = "https://pub.example.test/charliebot_pub"
+
+
+def build_publish_cfg(
+    tmp_path: Path, *, publish_dir: Path | None = None, public_base_url: str | None = None) -> CharlieBotConfig:
+  """CharlieBotConfig with the publish lane deployed under tmp_path: publish_dir (default
+  ``tmp_path / "publish"``) created the way the host's deployment step leaves it, public_base_url
+  (default ``PUBLISH_BASE_URL``) set; each argument overridable.
+  """
+  resolved_dir = publish_dir if publish_dir is not None else tmp_path / "publish"
+  resolved_dir.mkdir(parents=True, exist_ok=True)
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / "home",
+      publish_dir=resolved_dir,
+      public_base_url=public_base_url if public_base_url is not None else PUBLISH_BASE_URL,
+  )
+
+
 def write_artifact(tmp_path: Path, name: str = "page.html", body: str = "<p>hello</p>") -> Path:
   """Write one fake artifact source file under tmp_path/artifacts and return its path; publish and
   slack publish-lane tests stage here the file a published URL points at."""

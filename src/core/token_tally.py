@@ -78,14 +78,14 @@ The merged Claude+Codex buckets are themselves incremental per file (source part
   partial     one file's contribution to the merged buckets: the bucket deltas its records
               added (post dedupe), the (source, model) span they covered, its record and
               within-file-dupe counts, and per replay key the copy count its records carry
-  key counts  corpus-wide per-key copy counts plus, per key, the contributing file, the
-              record values that contributed (first fold wins) and the copy holders. A file
-              that contributed a key and moves while a copy survives elsewhere hands the
-              contribution to an orphan pool anchored at the earliest-walked surviving holder
-              — verbatim replays carry identical token values (the dedupe's own premise), so
-              only the account label changes. Every round releases the moved, relabelled,
-              failed and vanished files' partials and key copies and re-folds only those
-              files, so the partial sums always equal a fresh fold of the current corpus.
+  key counts  corpus-wide per-key copy counts plus, per key, the contributing file, its
+              record values (first fold wins; an earlier-walked newcomer takes the credit, as
+              a fresh fold credits the first carrier) and the copy holders. A contributing
+              file that moves while a copy survives elsewhere hands the contribution to an
+              orphan pool anchored at the earliest-walked surviving holder — verbatim replays
+              carry identical token values, so only the account label changes. Each round
+              releases the dead partials and key copies, re-folds only those files, and the
+              partial sums always equal a fresh fold of the current corpus.
  """
 
 from __future__ import annotations
@@ -557,9 +557,9 @@ class _FilePartial(NamedTuple):
   keys: dict | None
 
 
-# Per-file partials keyed (source, account, path); the Claude replay-key state shared by every
-# partial; and the orphan pool of contributions whose contributing file moved while a copy
-# survives elsewhere (key -> [record values] — the anchor resolves at merge time).
+# Per-file partials keyed (source, account, path); the shared Claude replay-key state; and the
+# orphan pool of contributions whose file moved while a copy survives elsewhere (key -> [record
+# values] — the anchor resolves at merge time).
 _source_partials: dict[tuple[str, str, str], _FilePartial] = {}
 _claude_key_counts: dict[str, int] = {}
 _claude_key_records: dict[str, list] = {}
@@ -569,10 +569,34 @@ _claude_orphan: dict[str, list] = {}
 _ORPHAN = ("", "")  # _claude_key_loc sentinel: the contribution lives in _claude_orphan
 
 
-def _fold_file_partial(source: str, account: str, path_key: tuple, entry: dict) -> _FilePartial:
+def _add_record(t: _Tally, source: str, account: str, rec: list) -> None:
+  t.add(source, rec[1], account, rec[2], in_fresh=rec[3], cache_write=rec[4], cache_read=rec[5], output=rec[6])
+
+
+def _transfer_credit(key: str, old_loc: tuple, new_loc: tuple, new_account: str, fold: _Tally) -> None:
+  """Move a replay key's contribution to an earlier-walked carrier — a fresh fold credits the
+  first carrier in walk order, so a file appearing before the credited one takes the credit."""
+  source, old_account, _ = old_loc
+  rec = _claude_key_records[key]
+  old = _source_partials[old_loc]
+  vals = {"in_fresh": rec[3], "cache_write": rec[4], "cache_read": rec[5], "output": rec[6]}
+  for map_key in ((source, rec[1], old_account), (source, rec[1])):
+    buckets = old.by_account if len(map_key) == 3 else old.by_model
+    bucket = buckets[map_key]
+    for f, v in vals.items():
+      bucket[f] -= v
+    bucket["calls"] -= 1
+    if not any(bucket.values()):
+      del buckets[map_key]
+  _add_record(fold, source, new_account, rec)
+  _claude_key_loc[key] = new_loc
+  _claude_key_holders[key].discard(new_loc)
+  _claude_key_holders[key].add(old_loc)
+
+
+def _fold_file_partial(source: str, account: str, path_key: tuple, entry: dict, order: dict) -> _FilePartial:
   """Fold one file's records into a fresh partial, registering every replay-key copy with the
-  corpus counts. Claude records dedupe corpus-wide (first fold wins and keeps its values);
-  Codex records have no replay identity and always contribute."""
+  corpus counts; Claude dedupes corpus-wide (first fold wins), Codex always contributes."""
   fold = _Tally()
   keys = None
   if source == "Claude Code":
@@ -584,21 +608,22 @@ def _fold_file_partial(source: str, account: str, path_key: tuple, entry: dict) 
       _claude_key_counts[key] = prev + 1
       if prev:
         _claude_key_holders.setdefault(key, set()).add(path_key)
+        loc = _claude_key_loc[key]
+        if loc != _ORPHAN and order[path_key] < order[loc]:
+          _transfer_credit(key, loc, path_key, account, fold)
       else:
         _claude_key_records[key] = rec
         _claude_key_loc[key] = path_key
-        fold.add(source, rec[1], account, rec[2], in_fresh=rec[3], cache_write=rec[4],
-                 cache_read=rec[5], output=rec[6])
+        _add_record(fold, source, account, rec)
   else:
     for model, ts, in_fresh, cache_read, output in entry["records"]:
       fold.add(source, model, account, ts, in_fresh=in_fresh, cache_read=cache_read, output=output)
-  return _FilePartial(fold.by_model, fold.by_account, fold.span, len(entry["records"]),
-                      entry.get("dupes", 0), keys)
+  return _FilePartial(fold.by_model, fold.by_account, fold.span, len(entry["records"]), entry.get("dupes", 0), keys)
 
 
 def _release_partial(path_key: tuple, partial: _FilePartial) -> None:
-  """Retract one file's replay-key copies from the corpus counts. A contribution whose file
-  moves survives through a surviving copy (the orphan pool); the last copy drops it."""
+  """Retract one file's replay-key copies from the corpus counts; a contribution whose file
+  moves survives via a surviving copy (the orphan pool), the last copy drops it."""
   if partial.keys is None:
     return
   for key, copies in partial.keys.items():
@@ -636,20 +661,11 @@ def _apply_partial(t: _Tally, partial: _FilePartial) -> None:
     span[1] = hi if span[1] is None or hi > span[1] else span[1]
 
 
-def _reconcile_partials(
-    t: _Tally,
-    source: str,
-    walked: list[tuple[str, str, dict | None, bool]],
-    order: dict,
-) -> None:
-  """Rebuild the source's merged buckets from the per-file partial state.
-
-  A partial is kept only for a cache hit whose account is unchanged; every other state
-  partial releases (moved, re-parsed, relabelled, failed, vanished), and only the re-parsed,
-  relabelled and brand-new files re-fold their records. The tally then sums the surviving
-  partials and the orphan pool — exactly what a fresh fold of the current corpus computes
-  (module docstring).
-  """
+def _reconcile_partials(t: _Tally, source: str, walked: list[tuple[str, str, dict | None, bool]], order: dict) -> None:
+  """Rebuild the source's merged buckets from the per-file partial state: a partial survives
+  only its cache hit with an unchanged account; the rest release, the re-parsed, relabelled
+  and brand-new files re-fold, and the tally sums the survivors plus the orphan pool —
+  exactly what a fresh fold of the current corpus computes (module docstring)."""
   seen = {w[0]: w for w in walked if w[3] and w[2] is not None}
   for state_key in [k for k in _source_partials if k[0] == source]:
     entry_row = seen.get(state_key[2])
@@ -660,7 +676,7 @@ def _reconcile_partials(
     if entry is None or (source, account, path_str) in _source_partials:
       continue
     state_key = (source, account, path_str)
-    _source_partials[state_key] = _fold_file_partial(source, account, state_key, entry)
+    _source_partials[state_key] = _fold_file_partial(source, account, state_key, entry, order)
   for state_key, partial in _source_partials.items():
     if state_key[0] == source:
       _apply_partial(t, partial)
@@ -671,8 +687,7 @@ def _reconcile_partials(
         raise AssertionError(f"orphaned replay key {key!r} with no surviving holder")
       # The earliest-walked surviving holder is the account a fresh scan would credit.
       anchor = min(holders, key=order.__getitem__)
-      t.add(source, record[1], anchor[1], record[2], in_fresh=record[3], cache_write=record[4],
-            cache_read=record[5], output=record[6])
+      _add_record(t, source, anchor[1], record)
 
 
 def _walk_source(
@@ -684,9 +699,8 @@ def _walk_source(
     cache: TallyCache | None,
     parse: Callable,
 ) -> tuple[list[tuple[str, str, dict | None, bool]], dict]:
-  """Walk every log file, serving cache hits and parsing misses. Returns one row per file —
-  (path, account, entry or None on a failed parse, cache-hit flag) — plus the walk order the
-  orphan anchors read."""
+  """Walk every log file, serving cache hits and parsing misses; returns one row per file —
+  (path, account, entry or None on a failed parse, cache-hit flag) — plus the walk order."""
   walked: list[tuple[str, str, dict | None, bool]] = []
   order: dict[tuple, int] = {}
   for account, home in homes.items():
@@ -710,8 +724,7 @@ def _walk_source(
 
 
 def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
-  walked, order = _walk_source(t, "Claude Code", "claude", "projects", homes, cache,
-                               _claude_file_contribution)
+  walked, order = _walk_source(t, "Claude Code", "claude", "projects", homes, cache, _claude_file_contribution)
   _reconcile_partials(t, "Claude Code", walked, order)
   n_records = sum(p.n_records for k, p in _source_partials.items() if k[0] == "Claude Code")
   entry_dupes = sum(p.entry_dupes for k, p in _source_partials.items() if k[0] == "Claude Code")
@@ -762,11 +775,7 @@ def _codex_file_contribution(path: Path) -> tuple[dict, int]:
 def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
   walked, order = _walk_source(t, "Codex", "codex", "sessions", homes, cache, _codex_file_contribution)
   _reconcile_partials(t, "Codex", walked, order)
-  check = [
-      tuple(entry["check"])
-      for _, _, entry, _ in walked
-      if entry is not None and entry["check"] is not None
-  ]
+  check = [tuple(entry["check"]) for _, _, entry, _ in walked if entry is not None and entry["check"] is not None]
   if check:
     w = sum(x for x, _ in check)
     f = sum(y for _, y in check)

@@ -842,7 +842,6 @@ const API = {
   createSession,
   renderNoActiveSessionView,
 };
-Object.assign(Sidebar, API);
-Sidebar.expose(Object.keys(API));
+Sidebar.wire(API);
 
 })();

@@ -434,7 +434,6 @@ const API = {
   updateThinkingTime,
   cancelMaster,
 };
-Object.assign(Sidebar, API);
-Sidebar.expose(Object.keys(API));
+Sidebar.wire(API);
 
 })();

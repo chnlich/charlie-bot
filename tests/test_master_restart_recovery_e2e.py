@@ -426,6 +426,26 @@ def _round_transported_events(events: list[dict], *, skip_user_event: bool) -> l
   return [{k: v for k, v in e.items() if k not in ("id", "timestamp", "event_index")} for e in events[start:done_idx]]
 
 
+def _assert_drain_matches_projection(transported: list[dict], projected: list[dict]) -> None:
+  """The drained record carries the raw log's events in stream order — nothing
+  lost, nothing invented.
+
+  Exact equality is the norm. One deviation is the crash ordering
+  ``tail_follow_events`` accepts (src/agents/backends/base.py): the cursor
+  advances only after the consumer persisted the line's events, so a kill in
+  that gap makes recovery replay the straddling line — the record then
+  carries one duplicated event. The shim emits one flat event per line, so
+  the replayed suffix is exactly the one straddling event; a loss, an
+  invented event, a reorder, or a second duplicate still fails.
+  """
+  if transported == projected:
+    return
+  assert any(
+      transported[:k] == projected[:k] and transported[k:] == projected[k - 1:]
+      for k in range(1, len(projected) + 1)
+  ), f"drain not lossless\ntransported: {transported}\nprojected: {projected}"
+
+
 def _full_projection(home: Path, session_id: str, cfg: CharlieBotConfig) -> list[dict]:
   """Project the recorded turn's whole raw log from offset 0, fresh translate."""
   raw = _raw_logs(home, session_id)[0]
@@ -473,11 +493,14 @@ async def _completed_turn_downtime_rig(
 
 async def _assert_drain_lossless_and_idempotent(
     home: Path, session_id: str, cfg: CharlieBotConfig, events: list[dict], *, skip_user_event: bool) -> None:
-  """A drained COMPLETED row is lossless — the transported events equal a fresh
-  full projection of the raw log, the cursor ends at file size, and the round
-  is operable — and re-running recovery over the same on-disk state appends
-  nothing."""
-  assert _round_transported_events(events, skip_user_event=skip_user_event) == _full_projection(home, session_id, cfg)
+  """A drained COMPLETED row is lossless — the transported events match a fresh
+  full projection of the raw log modulo the one straddling event a kill in the
+  persist->cursor gap replays (_assert_drain_matches_projection), the cursor
+  ends at file size, and the round is operable — and re-running recovery over
+  the same on-disk state appends nothing."""
+  _assert_drain_matches_projection(
+      _round_transported_events(events, skip_user_event=skip_user_event),
+      _full_projection(home, session_id, cfg))
   raw = _raw_logs(home, session_id)[0]
   assert runs.read_raw_cursor(raw.parent / runs.CURSOR_NAME) == raw.stat().st_size
   _assert_round_operable(events)

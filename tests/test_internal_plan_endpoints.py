@@ -41,9 +41,7 @@ def _build_app(
   return app
 
 
-async def _presented_rig(
-    tmp_path: Path,
-) -> tuple[FastAPI, CharlieBotConfig, PlanRegistryManager, SessionMetadata]:
+async def _presented_rig(tmp_path: Path,) -> tuple[FastAPI, CharlieBotConfig, PlanRegistryManager, SessionMetadata]:
   """Plan-endpoints app over a fresh registry with plan 1 already presented from plan_01.html.
 
   Returns (app, cfg, plan_mgr, meta); amend tests need cfg to stage a second artifact, and
@@ -117,8 +115,7 @@ async def test_plan_amend_rejects_422(tmp_path: Path, amend_fields: dict[str, An
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
   with TestClient(app) as client:
     resp = client.post(
-        "/api/internal/plan/amend",
-        json={
+        "/api/internal/plan/amend", json={
             "session_id": meta.id,
             "file": f2,
             "plan_id": 1,

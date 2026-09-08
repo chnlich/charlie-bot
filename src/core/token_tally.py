@@ -1016,9 +1016,7 @@ def collect_token_usage(
       # logs) drop out with it. A failed save leaves the previous memo: its per-file
       # signatures gate every lookup, so moved files re-scan and correctness never rides
       # the document.
-      _tally_cache_docs[str(cache_path)] = {
-          source: dict(files) for source, files in cache._next.items()
-      }
+      _tally_cache_docs[str(cache_path)] = {source: dict(files) for source, files in cache._next.items()}
     except OSError as exc:
       t.notes.append(f"Tally cache: save failed: {exc}")
   rows = _build(t)

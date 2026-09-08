@@ -781,14 +781,70 @@ def test_stable_history_preserves_deferred_user_metadata_without_mutating_events
 
 def _mixed_event_sequence() -> list[dict]:
   return [
-      {"type": ET.USER, "message": {"content": [{"type": "text", "text": "run it"}]}, "timestamp": "t0"},
-      {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": "working "}]}, "timestamp": "t1"},
-      {"type": ET.THINKING, "content": "considering", "timestamp": "t2"},
-      {"type": ET.TOOL_USE, "name": "Bash", "input": {"cmd": "ls"}, "timestamp": "t3"},
-      {"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "file.txt", "timestamp": "t4"},
-      {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": "done"}]}, "timestamp": "t5"},
-      {"type": ET.MASTER_DONE, "thinking_seconds": 1, "timestamp": "t6"},
-      {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": "tail draft"}]}, "timestamp": "t7"},
+      {
+          "type": ET.USER,
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "run it"
+              }]
+          },
+          "timestamp": "t0"
+      },
+      {
+          "type": ET.ASSISTANT,
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "working "
+              }]
+          },
+          "timestamp": "t1"
+      },
+      {
+          "type": ET.THINKING,
+          "content": "considering",
+          "timestamp": "t2"
+      },
+      {
+          "type": ET.TOOL_USE,
+          "name": "Bash",
+          "input": {
+              "cmd": "ls"
+          },
+          "timestamp": "t3"
+      },
+      {
+          "type": ET.TOOL_RESULT,
+          "tool_name": "Bash",
+          "content": "file.txt",
+          "timestamp": "t4"
+      },
+      {
+          "type": ET.ASSISTANT,
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "done"
+              }]
+          },
+          "timestamp": "t5"
+      },
+      {
+          "type": ET.MASTER_DONE,
+          "thinking_seconds": 1,
+          "timestamp": "t6"
+      },
+      {
+          "type": ET.ASSISTANT,
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "tail draft"
+              }]
+          },
+          "timestamp": "t7"
+      },
   ]
 
 

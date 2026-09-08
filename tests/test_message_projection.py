@@ -950,10 +950,14 @@ async def test_events_route_repeat_page_serves_cached_bytes(tmp_path: Path) -> N
   assert json.loads(first.body) == _page_payload(projection, before, limit)
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
+    await mgr.persist_and_broadcast(session.id, {"id": "u9", "type": ET.USER, "content": "q9", "timestamp": "t9-u"})
     await mgr.persist_and_broadcast(
-        session.id, {"id": "u9", "type": ET.USER, "content": "q9", "timestamp": "t9-u"})
-    await mgr.persist_and_broadcast(
-        session.id, {"id": "done9", "type": ET.MASTER_DONE, "thinking_seconds": 1, "timestamp": "t9-done"})
+        session.id, {
+            "id": "done9",
+            "type": ET.MASTER_DONE,
+            "thinking_seconds": 1,
+            "timestamp": "t9-done"
+        })
   grown = await asyncio.to_thread(mgr.get_message_projection, session.id)
   assert grown is not None and grown is not projection
   new_before = len(grown.committed)

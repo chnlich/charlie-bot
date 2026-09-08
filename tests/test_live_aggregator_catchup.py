@@ -12,26 +12,38 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from conftest import BROADCAST_PATCH_TARGET
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
-from conftest import BROADCAST_PATCH_TARGET
 
 
 async def _seed_session(mgr: SessionManager) -> str:
   session = await mgr.create_session(CreateSessionRequest(name="catchup"))
-  await mgr.save_chat_event(session.id, {
-      "type": ET.USER,
-      "message": {"content": [{"type": "text", "text": "seed question"}]},
-      "timestamp": "2026-09-07T00:00:00Z",
-  })
-  await mgr.save_chat_event(session.id, {
-      "type": ET.ASSISTANT,
-      "message": {"content": [{"type": "text", "text": "seed answer"}]},
-      "timestamp": "2026-09-07T00:00:01Z",
-  })
+  await mgr.save_chat_event(
+      session.id, {
+          "type": ET.USER,
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "seed question"
+              }]
+          },
+          "timestamp": "2026-09-07T00:00:00Z",
+      })
+  await mgr.save_chat_event(
+      session.id, {
+          "type": ET.ASSISTANT,
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "seed answer"
+              }]
+          },
+          "timestamp": "2026-09-07T00:00:01Z",
+      })
   return session.id
 
 
@@ -46,11 +58,17 @@ async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path)
   assert mgr._aggregators[sid] is aggregator
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as broadcast:
-    await mgr.persist_and_broadcast(sid, {
-        "type": ET.ASSISTANT,
-        "message": {"content": [{"type": "text", "text": "live tail"}]},
-        "timestamp": "2026-09-07T00:00:02Z",
-    })
+    await mgr.persist_and_broadcast(
+        sid, {
+            "type": ET.ASSISTANT,
+            "message": {
+                "content": [{
+                    "type": "text",
+                    "text": "live tail"
+                }]
+            },
+            "timestamp": "2026-09-07T00:00:02Z",
+        })
 
   delta_types = [call.args[1]["type"] for call in broadcast.await_args_list]
   assert "stream" in delta_types

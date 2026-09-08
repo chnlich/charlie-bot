@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 import numpy as np
+import orjson
 import structlog
 
 from src.core.memo import BoundedMemo, StatSignatureMemo
@@ -66,17 +67,21 @@ def iter_ndjson_events(lines: Iterable[str | bytes], *, log_event: str, log_fiel
   """Yield the JSON objects parsed from *lines*, skipping blank and malformed lines.
 
   The one definition of the NDJSON reader skip contract: a line that strips to
-  empty is invisible, and a line json.loads rejects logs *log_event* (plus
+  empty is invisible, and a line the parser rejects logs *log_event* (plus
   *log_fields* and the parse error) at debug level and yields nothing. Lazy, so
   first-match and early-stop readers terminate without reading the rest.
+  The parser is orjson, ~2x stdlib json.loads per line measured on the live
+  corpora; orjson rejects the stdlib json NaN/Infinity extensions and float
+  literals that overflow a double (those lines skip as malformed), and ints at
+  or beyond 2**64 parse as float where stdlib keeps exact precision.
   """
   for raw_line in lines:
     line = raw_line.strip()
     if not line:
       continue
     try:
-      yield json.loads(line)
-    except json.JSONDecodeError as e:
+      yield orjson.loads(line)
+    except ValueError as e:
       log.debug(log_event, error=str(e), **log_fields)
 
 

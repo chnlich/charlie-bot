@@ -265,9 +265,10 @@ def parse_raw_lines(raw_bytes: bytes) -> list[dict]:
   its offset stays un-consumed semantics make re-reading it produce at most a
   duplicate, never a loss.
   """
-  # decode with errors="replace" first: json.loads on bytes raises
-  # UnicodeDecodeError on a torn multi-byte char, and the shared skip
-  # contract catches JSONDecodeError only
+  # decode with errors="replace" first: a torn multi-byte char inside a string
+  # then parses as U+FFFD instead of the line skipping as malformed, which is
+  # what feeding the strict parser the raw bytes would do (the skip contract
+  # catches ValueError, UnicodeDecodeError included)
   lines = (raw.decode("utf-8", errors="replace") for raw in raw_bytes.split(b"\n"))
   return list(iter_ndjson_events(lines, log_event="raw_line_not_json", log_fields={}))
 

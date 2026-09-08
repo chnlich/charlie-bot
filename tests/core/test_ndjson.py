@@ -17,6 +17,7 @@ from src.core.ndjson import (
     _COUNT_MEMO_LIMIT,
     append_ndjson,
     count_ndjson_lines,
+    iter_ndjson_events,
     parse_ndjson_file,
     parse_ndjson_tail,
     parse_ndjson_tail_parseable,
@@ -32,6 +33,70 @@ def _write_ndjson(path: Path, payloads: list[dict], trailing_newline: bool = Tru
 
 def test_count_ndjson_lines_missing_file(tmp_path: Path) -> None:
   assert count_ndjson_lines(tmp_path / "absent.jsonl") == 0
+
+
+def test_iter_ndjson_events_matches_stdlib_parse_over_event_shapes() -> None:
+  # The parser swap must be output-identical to stdlib json.loads for every
+  # value shape the writers emit: nesting, CJK, escapes, floats (exponents,
+  # in-range extremes), duplicate keys, empty containers.
+  # The dup line is a raw string: a Python dict literal collapses duplicate
+  # keys before json.dumps ever runs.
+  lines = [
+      json.dumps(p)
+      for p in [
+          {"i": 1, "nested": {"a": [1, {"b": None}], "c": []}, "d": {}},
+          {"text": "引数 'вектор' — ✅ \U0001f680 \\n \"quoted\" \\"},
+          {"f": [0.5, -3.25e-8, 1e308, -0.0, 1.0]},
+          {"big": 2**31, "neg": -2**31, "zero": 0},
+          {"b": True, "n": None},
+      ]
+  ] + ["  " + json.dumps({"padded": True}) + "  ", '{"dup": 1, "dup": 2}']
+  assert list(iter_ndjson_events(lines, log_event="t", log_fields={})) == [json.loads(raw_line) for raw_line in lines]
+
+
+def test_iter_ndjson_events_accepts_bytes_lines_with_cjk() -> None:
+  line = json.dumps({"text": "引数"}).encode("utf-8")
+  assert list(iter_ndjson_events([line, b'  {"i": 1}  '], log_event="t", log_fields={})) == [
+      {"text": "引数"},
+      {"i": 1},
+  ]
+
+
+@pytest.mark.parametrize(
+    "bad_line",
+    [
+        "{not json",
+        '{"a": NaN}',
+        '{"a": Infinity}',
+        '{"a": -Infinity}',
+        '{"a": 1e400}',
+    ],
+    ids=["malformed", "nan", "infinity", "neg-infinity", "double-overflow"],
+)
+def test_iter_ndjson_events_skips_rejected_lines_without_raising(bad_line: str) -> None:
+  # The skip contract covers orjson's stricter boundary: the stdlib NaN/Infinity
+  # extensions and double-overflow floats are malformed lines, invisible like
+  # any other.
+  assert list(iter_ndjson_events([bad_line, '{"ok": 1}'], log_event="t", log_fields={})) == [{"ok": 1}]
+
+
+def test_iter_ndjson_events_coerces_64bit_ints_to_float() -> None:
+  # orjson's int boundary: exact through 2**64-1, float past it — the one
+  # value-level difference from stdlib, documented in the reader contract.
+  exact = list(iter_ndjson_events(['{"a": 18446744073709551615}'], log_event="t", log_fields={}))
+  coerced = list(iter_ndjson_events(['{"a": 18446744073709551616}'], log_event="t", log_fields={}))
+  assert exact == [{"a": 18446744073709551615}]
+  assert coerced == [{"a": 1.8446744073709552e19}]
+  assert isinstance(coerced[0]["a"], float)
+
+
+def test_parse_ndjson_file_applies_the_skip_contract(tmp_path: Path) -> None:
+  target = tmp_path / "events.jsonl"
+  target.write_text(
+      '{"i": 1}\n\n{"i": 2}\n{not json}\n{"i": 3, "x": NaN}\n{"i": 4}', encoding="utf-8")
+  # The NaN-bearing line sits inside the skip contract's boundary and is
+  # invisible like the malformed one.
+  assert parse_ndjson_file(target) == [{"i": 1}, {"i": 2}, {"i": 4}]
 
 
 def test_count_ndjson_lines_empty_file(tmp_path: Path) -> None:

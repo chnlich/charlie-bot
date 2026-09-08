@@ -13,6 +13,7 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    TerminateFlagBackend,
     compact_boundary_event,
     drain_session_consumer,
     fresh_master_state,
@@ -413,15 +414,11 @@ async def test_stamp_recovers_after_unrelated_save_resets_cached_object(
 # ---------------------------------------------------------------------------
 
 
-class _NoopBackend:
+class _NoopBackend(TerminateFlagBackend):
   """Minimal backend double: yields no events, exits cleanly."""
 
   exit_code = 0
   stderr_text = ""
-  terminated = False
-
-  async def terminate(self) -> None:
-    self.terminated = True
 
   async def run(self, prompt: str, cwd: str, env: dict):
     if False:
@@ -573,18 +570,13 @@ async def test_resume_reattach_uses_persisted_interval_start(tmp_path: Path, mon
 # ---------------------------------------------------------------------------
 
 
-class _EventsBackend:
+class _EventsBackend(TerminateFlagBackend):
   """Backend double that yields a fixed event stream, then exits with the given code."""
-
-  terminated = False
 
   def __init__(self, events: list[dict], *, exit_code: int = 0, stderr_text: str = "") -> None:
     self.events = events
     self.exit_code = exit_code
     self.stderr_text = stderr_text
-
-  async def terminate(self) -> None:
-    self.terminated = True
 
   async def run(self, prompt: str, cwd: str, env: dict):
     for event in self.events:

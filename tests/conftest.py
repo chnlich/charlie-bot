@@ -1659,22 +1659,31 @@ def install_scripted_backends(
   return builds
 
 
-class FakeBackend:
-  """AgentBackend double whose run() yields one canned result event.
+class TerminateFlagBackend:
+  """terminate() surface for plain backend doubles: record the signal, touch no process.
 
-  Callers install it through a patched build_backend on the master-cc run path
-  and rely on the exit_code/stderr_text attributes that path reads after the
-  event stream ends; terminated and terminate() mirror AgentBackend's surface
-  so the terminate-on-failure path runs against the double unchanged. The
-  cancel let-go path is not covered: detach() and pid_start are absent.
+  The master-cc cancel and terminate-on-failure paths call terminate() and read
+  terminated; a double with no child process keeps that surface with no other
+  effect. Real signalling lives on AgentBackend.terminate.
   """
 
-  exit_code = 0
-  stderr_text = ""
   terminated = False
 
   async def terminate(self) -> None:
     self.terminated = True
+
+
+class FakeBackend(TerminateFlagBackend):
+  """AgentBackend double whose run() yields one canned result event.
+
+  Callers install it through a patched build_backend on the master-cc run path
+  and rely on the exit_code/stderr_text attributes that path reads after the
+  event stream ends. The cancel let-go path is not covered: detach() and
+  pid_start are absent.
+  """
+
+  exit_code = 0
+  stderr_text = ""
 
   async def run(self, prompt: str, cwd: str, env: dict):
     yield backend_base.make_result_event()

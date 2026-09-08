@@ -20,6 +20,7 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    TerminateFlagBackend,
     drain_session_consumer,
     fresh_master_state,
     make_work_item,
@@ -290,11 +291,10 @@ def test_fallback_notice_text_names_every_served_model() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _RawLogBackend:
+class _RawLogBackend(TerminateFlagBackend):
   """Backend double mirroring the real transport: pins this turn's events to
   the per-turn raw NDJSON log the turn-end detector re-reads, then yields them."""
 
-  terminated = False
   exit_code = 0
   stderr_text = ""
 
@@ -304,9 +304,6 @@ class _RawLogBackend:
 
   def translate_event(self, event: dict) -> list[dict]:
     return [event]
-
-  async def terminate(self) -> None:
-    self.terminated = True
 
   async def run(self, prompt: str, cwd: str, env: dict):
     if self._log_dir is not None:

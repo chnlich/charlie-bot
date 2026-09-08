@@ -199,7 +199,7 @@ async def test_improve_worktree_creation_failure_lands_in_successor(
   parent_id = await _make_parent(mgr)
   child_id = await _elone(mgr, parent_id)
 
-  async def fake_fail_create_worktree(repo_path: Path, base_branch: str, branch_name: str, wt_path: Path):
+  async def fake_fail_create_worktree(repo_path: Path, base_branch: str, branch_name: str, wt_path: Path) -> None:
     del repo_path, base_branch, branch_name, wt_path
     raise RuntimeError("no such repo")
 

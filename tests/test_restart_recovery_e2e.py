@@ -737,7 +737,7 @@ async def test_graceful_shutdown_in_setup_phase_reaches_never_started_row(
 
   setup_entered = asyncio.Event()
 
-  async def hang_in_setup(*args, **kwargs):
+  async def hang_in_setup(*args, **kwargs) -> None:
     setup_entered.set()
     await asyncio.Event().wait()
 

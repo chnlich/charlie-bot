@@ -389,7 +389,7 @@ async def test_codex_provider_fetch_returns_quota_when_spend_aggregations_raises
 
   _write_live_quota_rollout(rollout_dir, now)
 
-  def _broken_compute(self, rollout_paths):
+  def _broken_compute(self, rollout_paths) -> None:
     raise RuntimeError("simulated spend failure")
 
   monkeypatch.setattr(CodexUsageProvider, "_compute_spend", _broken_compute)
@@ -916,12 +916,12 @@ def _run_poll_cycles(monkeypatch, *, accounts_fn, create_provider, n: int) -> di
   """
   state: dict = {"sleeps": 0, "broadcasts": 0, "payloads": []}
 
-  async def _fake_sleep(_):
+  async def _fake_sleep(_) -> None:
     state["sleeps"] += 1
     if state["sleeps"] >= n:
       raise _StopAfter
 
-  async def _track_broadcast(_channel, event):
+  async def _track_broadcast(_channel, event) -> None:
     state["broadcasts"] += 1
     state["payloads"].append(event)
 

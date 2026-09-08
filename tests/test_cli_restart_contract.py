@@ -87,7 +87,7 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
 
   call_count = 0
 
-  def fake_post(*args, **kwargs):
+  def fake_post(*args, **kwargs) -> None:
     nonlocal call_count
     call_count += 1
     raise _connect_refused()

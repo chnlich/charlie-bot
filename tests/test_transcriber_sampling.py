@@ -13,7 +13,7 @@ class _LengthOnlySamples:
   def __len__(self) -> int:
     return self._length
 
-  def __array__(self, *args, **kwargs):
+  def __array__(self, *args, **kwargs) -> None:
     raise AssertionError("segment.samples must not be decoded")
 
 

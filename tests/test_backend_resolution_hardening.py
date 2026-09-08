@@ -67,12 +67,12 @@ def test_registry_scopes_opencode_proxy_to_opencode_constructor(monkeypatch) -> 
 
   class _FakeOpenCodeBackend:
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
       captured["opencode"] = kwargs
 
   class _FakeClaudeBackend:
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
       captured["claude"] = kwargs
 
   monkeypatch.setattr(registry, "OpenCodeBackend", _FakeOpenCodeBackend)

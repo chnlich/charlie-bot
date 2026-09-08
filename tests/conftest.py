@@ -664,6 +664,10 @@ OPUS_BACKEND_ID = "claude-opus-4.6"
 OPUS_BACKEND_OPTION = models.BackendOption(id=OPUS_BACKEND_ID, label="Opus", type="cc-claude", model="claude-opus-4-6")
 CODEX_BACKEND_OPTION = models.BackendOption(id="codex-o3", label="Codex", type="codex", model="o3")
 
+# Antigravity option as the antigravity-routing tests register it: model-less, so the
+# model-is-required rejection and the resume-id routing keep their fixture shape.
+AGY_BACKEND_OPTION = models.BackendOption(id="agy", label="Antigravity", type="antigravity")
+
 THREE_BACKEND_OPTIONS = [
     OPUS_BACKEND_OPTION,
     CODEX_BACKEND_OPTION,
@@ -1014,6 +1018,16 @@ def cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
     memory_dir = repo_root / "memory"
 
   return _Cfg()  # type: ignore[return-value]
+
+
+def build_antigravity_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig for antigravity-routing tests: the .charliebot home lives under tmp_path so each
+  test owns its own tree, and the backend list registers the model-less antigravity option the
+  resume-id routing resolves against."""
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backend_options=[AGY_BACKEND_OPTION],
+  )
 
 
 def build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:

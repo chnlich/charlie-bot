@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import (
+    AGY_BACKEND_OPTION,
     BUILD_BACKEND_PATCH_TARGET,
     FakeBackend,
     make_instruction_cfg,
@@ -29,7 +30,7 @@ from pydantic import ValidationError
 from structlog.testing import capture_logs
 
 from src.agents import master_cc
-from src.core.models import PROJECT_ROLE, BackendOption, SessionMetadata
+from src.core.models import PROJECT_ROLE, SessionMetadata
 from src.core.project_config import (
     ProjectConfig,
     ProjectInstructionError,
@@ -573,7 +574,7 @@ async def test_run_cc_fails_turn_on_project_error(
       })
   cfg.sessions_dir.mkdir()
   session_meta = SessionMetadata(id="s1", name="Researcher", group="proj")
-  option = BackendOption(id="agy", label="Antigravity", type="antigravity", prompt_overlay="none")
+  option = AGY_BACKEND_OPTION.model_copy(update={"prompt_overlay": "none"})
 
   built: dict[str, bool] = {"called": False}
 
@@ -608,7 +609,7 @@ async def test_run_cc_success_with_enabled_project(tmp_path: Path, monkeypatch: 
   cfg = SimpleNamespace(**{**vars(cfg), "sessions_dir": tmp_path / "sessions", "subprocess_buffer_limit": 1024})
   cfg.sessions_dir.mkdir()
   session_meta = SessionMetadata(id="s1", name="Researcher", group="proj")
-  option = BackendOption(id="agy", label="Antigravity", type="antigravity", prompt_overlay="none")
+  option = AGY_BACKEND_OPTION.model_copy(update={"prompt_overlay": "none"})
 
   def fake_build_backend(*args: object, **kwargs: object):
     return FakeBackend()

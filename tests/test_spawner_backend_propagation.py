@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 from conftest import (
+    AGY_BACKEND_OPTION,
     CLEAN_EXIT_OUTCOME,
     CODEX_BACKEND_OPTION,
     OPUS_BACKEND_ID,
@@ -78,7 +79,7 @@ def test_resolve_backend_option_allows_antigravity_missing_model() -> None:
       charliebot_home=Path("/tmp/charliebot-test"),
       worktree_dir="/tmp/worktrees",
       backend_options=[
-          BackendOption(id="agy", label="Antigravity", type="antigravity"),
+          AGY_BACKEND_OPTION,
       ],
   )
 
@@ -300,7 +301,7 @@ async def test_resolve_requested_subagent_backend_model_allows_antigravity_missi
       charliebot_home=Path("/tmp/charliebot-test"),
       worktree_dir="/tmp/worktrees",
       backend_options=[
-          BackendOption(id="agy", label="Antigravity", type="antigravity"),
+          AGY_BACKEND_OPTION,
       ],
   )
 
@@ -510,7 +511,7 @@ async def test_create_repoless_non_verify_profiles_propagate_antigravity_and_kee
     monkeypatch: pytest.MonkeyPatch,
     task_type: TaskType,
 ) -> None:
-  cfg = _build_tmp_cfg(tmp_path, BackendOption(id="agy", label="Antigravity", type="antigravity"))
+  cfg = _build_tmp_cfg(tmp_path, AGY_BACKEND_OPTION)
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",

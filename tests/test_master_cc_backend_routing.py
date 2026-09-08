@@ -6,6 +6,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     FakeBackend,
+    build_antigravity_cfg,
     make_work_item,
     patch_instructions_content,
 )
@@ -64,12 +65,7 @@ async def test_run_cc_routes_antigravity_native_resume_id(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          models.BackendOption(id="agy", label="Antigravity", type="antigravity"),
-      ],
-  )
+  cfg = build_antigravity_cfg(tmp_path)
   session_meta = models.SessionMetadata(
       id="session-id",
       name="Antigravity",
@@ -124,12 +120,7 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          models.BackendOption(id="agy", label="Antigravity", type="antigravity"),
-      ],
-  )
+  cfg = build_antigravity_cfg(tmp_path)
   patch_instructions_content(monkeypatch)
 
   # Run 1: a fresh antigravity backend emits a bare session_id event, which the
@@ -166,12 +157,7 @@ async def test_run_cc_guard_round_fails_with_guard_reason(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          models.BackendOption(id="agy", label="Antigravity", type="antigravity"),
-      ],
-  )
+  cfg = build_antigravity_cfg(tmp_path)
   session_meta = models.SessionMetadata(id="session-id", name="Antigravity", backend="agy", cc_session_id="anchor-id")
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **kw: _AnchorMismatchBackend())

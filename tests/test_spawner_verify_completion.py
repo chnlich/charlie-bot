@@ -120,6 +120,37 @@ def _install_worker_fakes(
   monkeypatch.setattr(spawner_finalize, "_stream_worker_events", fake_stream_worker_events)
 
 
+async def _spawn_thread(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    thread: ThreadMetadata,
+    outcome: spawner._WorkerRunOutcome,
+    *,
+    task_type: TaskType,
+) -> tuple[FakeSessionManager, list[tuple[str, str]]]:
+  """Install the worker fakes and run spawn_worker for thread; returns (session_mgr, worker_runs)."""
+  cfg = _build_cfg(tmp_path)
+  thread_mgr = FakeThreadManager(thread, tmp_path / "events.jsonl")
+  session_mgr = FakeSessionManager(thread.session_id)
+  worker_runs: list[tuple[str, str]] = []
+  _install_worker_fakes(monkeypatch, worker_runs, outcome)
+
+  await spawner.spawn_worker(
+      thread.session_id,
+      thread.description,
+      thread.id,
+      cfg,
+      session_mgr,
+      thread_mgr,
+      request=SpawnRequest(
+          resolved_backend="codex-o3",
+          resolved_model="o3",
+          task_type=task_type,
+      ),
+  )
+  return session_mgr, worker_runs
+
+
 @pytest.mark.asyncio
 async def test_verify_completion_uses_untruncated_result_without_task_spec_prefix(tmp_path: Path) -> None:
   report = "confirmed | claim | /tmp/source.py:1 | " + "x" * 1200 + "\nRESULT: clean"
@@ -211,29 +242,16 @@ async def test_verify_result_trailer_controls_completion_without_retry(
     expected_status: ThreadStatus,
     expected_exit_code: int,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
   events_path = tmp_path / "events.jsonl"
   append_events(events_path, [{"type": ET.RESULT, "result": report}])
   thread = ThreadMetadata(id="verify-thread-id", session_id="session-id", description="## Verify plan")
-  thread_mgr = FakeThreadManager(thread, events_path)
-  session_mgr = FakeSessionManager(thread.session_id)
-  worker_runs: list[tuple[str, str]] = []
-  _install_worker_fakes(
-      monkeypatch, worker_runs, spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=worker_error))
   monkeypatch.setattr(review, "maybe_spawn_reviewer", _ignore)
-
-  await spawner.spawn_worker(
-      thread.session_id,
-      thread.description,
-      thread.id,
-      cfg,
-      session_mgr,
-      thread_mgr,
-      request=SpawnRequest(
-          resolved_backend="codex-o3",
-          resolved_model="o3",
-          task_type=TaskType.VERIFY,
-      ),
+  session_mgr, worker_runs = await _spawn_thread(
+      monkeypatch,
+      tmp_path,
+      thread,
+      spawner._WorkerRunOutcome(exit_code=0, quota_exhausted=False, error=worker_error),
+      task_type=TaskType.VERIFY,
   )
 
   assert worker_runs == [("verify-thread-id", "codex-o3")]
@@ -258,14 +276,8 @@ async def test_verify_quota_exhaustion_retries_once_with_next_backend_in_same_th
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _build_cfg(tmp_path)
   thread = ThreadMetadata(id="verify-thread-id", session_id="session-id", description="Verify")
-  thread_mgr = FakeThreadManager(thread, tmp_path / "events.jsonl")
-  session_mgr = FakeSessionManager(thread.session_id)
-  worker_runs: list[tuple[str, str]] = []
   finalized: dict[str, Any] = {}
-  _install_worker_fakes(
-      monkeypatch, worker_runs, spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error=""))
 
   async def fake_finalize_worker_safely(
       ctx: spawner_finalize._FinalizeCtx,
@@ -283,19 +295,12 @@ async def test_verify_quota_exhaustion_retries_once_with_next_backend_in_same_th
     )
 
   monkeypatch.setattr(spawner_finalize, "_finalize_worker_safely", fake_finalize_worker_safely)
-
-  await spawner.spawn_worker(
-      thread.session_id,
-      thread.description,
-      thread.id,
-      cfg,
-      session_mgr,
-      thread_mgr,
-      request=SpawnRequest(
-          resolved_backend="codex-o3",
-          resolved_model="o3",
-          task_type=TaskType.VERIFY,
-      ),
+  _, worker_runs = await _spawn_thread(
+      monkeypatch,
+      tmp_path,
+      thread,
+      spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error=""),
+      task_type=TaskType.VERIFY,
   )
 
   assert worker_runs == [(thread.id, "codex-o3"), (thread.id, "kimi-k2.5")]
@@ -308,27 +313,14 @@ async def test_verify_quota_exhaustion_retries_once_with_next_backend_in_same_th
 
 @pytest.mark.asyncio
 async def test_implement_quota_exhaustion_does_not_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _build_cfg(tmp_path)
   thread = ThreadMetadata(id="implement-thread-id", session_id="session-id", description="Implement")
-  thread_mgr = FakeThreadManager(thread, tmp_path / "events.jsonl")
-  session_mgr = FakeSessionManager(thread.session_id)
-  worker_runs: list[tuple[str, str]] = []
-  _install_worker_fakes(
-      monkeypatch, worker_runs, spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error=""))
   monkeypatch.setattr(spawner_finalize, "_finalize_worker_safely", _ignore)
-
-  await spawner.spawn_worker(
-      thread.session_id,
-      thread.description,
-      thread.id,
-      cfg,
-      session_mgr,
-      thread_mgr,
-      request=SpawnRequest(
-          resolved_backend="codex-o3",
-          resolved_model="o3",
-          task_type=TaskType.IMPLEMENT,
-      ),
+  _, worker_runs = await _spawn_thread(
+      monkeypatch,
+      tmp_path,
+      thread,
+      spawner._WorkerRunOutcome(exit_code=-1, quota_exhausted=True, error=""),
+      task_type=TaskType.IMPLEMENT,
   )
 
   assert worker_runs == [("implement-thread-id", "codex-o3")]

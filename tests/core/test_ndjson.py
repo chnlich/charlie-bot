@@ -42,13 +42,32 @@ def test_iter_ndjson_events_matches_stdlib_parse_over_event_shapes() -> None:
   # The dup line is a raw string: a Python dict literal collapses duplicate
   # keys before json.dumps ever runs.
   lines = [
-      json.dumps(p)
-      for p in [
-          {"i": 1, "nested": {"a": [1, {"b": None}], "c": []}, "d": {}},
-          {"text": "引数 'вектор' — ✅ \U0001f680 \\n \"quoted\" \\"},
-          {"f": [0.5, -3.25e-8, 1e308, -0.0, 1.0]},
-          {"big": 2**31, "neg": -2**31, "zero": 0},
-          {"b": True, "n": None},
+      json.dumps(p) for p in [
+          {
+              "i": 1,
+              "nested": {
+                  "a": [1, {
+                      "b": None
+                  }],
+                  "c": []
+              },
+              "d": {}
+          },
+          {
+              "text": "引数 'вектор' — ✅ \U0001f680 \\n \"quoted\" \\"
+          },
+          {
+              "f": [0.5, -3.25e-8, 1e308, -0.0, 1.0]
+          },
+          {
+              "big": 2**31,
+              "neg": -2**31,
+              "zero": 0
+          },
+          {
+              "b": True,
+              "n": None
+          },
       ]
   ] + ["  " + json.dumps({"padded": True}) + "  ", '{"dup": 1, "dup": 2}']
   assert list(iter_ndjson_events(lines, log_event="t", log_fields={})) == [json.loads(raw_line) for raw_line in lines]
@@ -57,8 +76,12 @@ def test_iter_ndjson_events_matches_stdlib_parse_over_event_shapes() -> None:
 def test_iter_ndjson_events_accepts_bytes_lines_with_cjk() -> None:
   line = json.dumps({"text": "引数"}).encode("utf-8")
   assert list(iter_ndjson_events([line, b'  {"i": 1}  '], log_event="t", log_fields={})) == [
-      {"text": "引数"},
-      {"i": 1},
+      {
+          "text": "引数"
+      },
+      {
+          "i": 1
+      },
   ]
 
 
@@ -92,8 +115,7 @@ def test_iter_ndjson_events_coerces_64bit_ints_to_float() -> None:
 
 def test_parse_ndjson_file_applies_the_skip_contract(tmp_path: Path) -> None:
   target = tmp_path / "events.jsonl"
-  target.write_text(
-      '{"i": 1}\n\n{"i": 2}\n{not json}\n{"i": 3, "x": NaN}\n{"i": 4}', encoding="utf-8")
+  target.write_text('{"i": 1}\n\n{"i": 2}\n{not json}\n{"i": 3, "x": NaN}\n{"i": 4}', encoding="utf-8")
   # The NaN-bearing line sits inside the skip contract's boundary and is
   # invisible like the malformed one.
   assert parse_ndjson_file(target) == [{"i": 1}, {"i": 2}, {"i": 4}]

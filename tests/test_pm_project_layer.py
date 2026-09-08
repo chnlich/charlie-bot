@@ -177,7 +177,7 @@ async def test_master_task_fire_reuses_live_session_across_fires(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
+  cfg, _session_mgr, scheduler = make_scheduler_setup(tmp_path)
   task_cfg = _master_task()
 
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)

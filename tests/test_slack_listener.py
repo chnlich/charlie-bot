@@ -469,7 +469,7 @@ async def test_set_group_failure_does_not_break_handle_app_mention(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_ensure_slack_group_skips_sessions_without_slack_origin(tmp_path: Path) -> None:
   """The label form of ensure_slack_group writes nothing when the session has no slack_origin."""
-  cfg, session_mgr, _ = _rig(tmp_path)
+  _cfg, session_mgr, _ = _rig(tmp_path)
   meta = await session_mgr.create_session(CreateSessionRequest(name="web-session"))
 
   with patch.object(session_mgr, "set_group", new=AsyncMock()) as set_group:

@@ -318,7 +318,7 @@ def test_serve_file_diff_base_non_html_is_400(sessions_root: Path) -> None:
 
 
 def test_serve_file_diff_non_artifact_target_is_400(sessions_root: Path) -> None:
-  _, new = _write_pages(sessions_root)
+  _, _new = _write_pages(sessions_root)
   notes_page = _write(sessions_root / "S" / "notes" / "page.html")
   (sessions_root / "S" / "artifacts" / "directory.html").mkdir()
   text_file = sessions_root / "S" / "artifacts" / "file.txt"
@@ -339,7 +339,7 @@ def test_serve_file_diff_non_artifact_target_is_400(sessions_root: Path) -> None
 def test_serve_file_diff_repeat_view_reannotates_nothing(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An annotate is a pure function of the two files' bytes, so a repeat view of an
   unchanged pair must serve the stored page with zero annotate calls."""
-  base, new = _write_pages(sessions_root)
+  _base, new = _write_pages(sessions_root)
   client = _build_client("secret")
   url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
   first = client.get(url)
@@ -357,7 +357,7 @@ def test_serve_file_diff_repeat_view_reannotates_nothing(sessions_root: Path, mo
 def test_serve_file_diff_reannotates_when_target_is_rewritten(sessions_root: Path) -> None:
   """An artifact page is only ever written whole, so a rewrite always moves the
   (mtime_ns, size) signature the memo keys on — the new bytes must be served."""
-  base, new = _write_pages(sessions_root)
+  _base, new = _write_pages(sessions_root)
   client = _build_client("secret")
   url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
   before = client.get(url)
@@ -388,7 +388,7 @@ def test_serve_file_diff_reannotates_when_base_is_rewritten(sessions_root: Path)
 def test_serve_file_diff_credential_and_anonymous_variants_are_served_separately(sessions_root: Path) -> None:
   """The injection rides the memo key: an anonymous reader must never receive the
   credentialed variant's comment layer, and neither view may poison the other."""
-  base, new = _write_pages(sessions_root)
+  _base, new = _write_pages(sessions_root)
   url = "/files" + str(new) + "?diff=artifacts/plan_01.html"
 
   credentialed = _build_client("secret").get(url)

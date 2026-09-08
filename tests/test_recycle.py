@@ -225,7 +225,7 @@ async def test_archive_range_multi_file_matches_full_concatenation(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_archive_files_memo_picks_up_new_archive_file(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
+  cutoff, _live_path = await recycle_archive_cutoff_events(mgr, session.id)
 
   first, _ = mgr.load_chat_events_range(session.id, 0, 5)
   assert [e["content"] for e in first] == [f"e{i}" for i in range(5)]

@@ -1,6 +1,7 @@
 """Focused tests for handle_compaction_events."""
 
 import pytest
+from conftest import compact_boundary_event
 
 from src.core import event_types as ET
 from src.core.streaming import handle_compaction_events
@@ -13,14 +14,7 @@ async def _record(persisted: list[dict], event: dict) -> None:
 @pytest.mark.asyncio
 async def test_compact_boundary_still_emits_context_compacted_unchanged() -> None:
   persisted: list[dict] = []
-  event = {
-      "type": "system",
-      "subtype": "compact_boundary",
-      "compact_metadata": {
-          "trigger": "manual",
-          "pre_tokens": 239_708
-      },
-  }
+  event = compact_boundary_event(pre_tokens=239_708)
 
   await handle_compaction_events(event, lambda ev: _record(persisted, ev), {"session": "s1"})
 

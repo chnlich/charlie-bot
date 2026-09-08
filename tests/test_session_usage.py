@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from conftest import OPUS_BACKEND_ID, SYNTHETIC_MODEL
+from conftest import compact_boundary_event as _compact_boundary_event
 
 from src.agents.backends.base import make_context_reading_event
 from src.agents.backends.claude_code import (
@@ -212,16 +213,6 @@ async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp
 # adjusts the reading only when it follows the selected assistant event and
 # carries post_tokens; otherwise the reading stays the assistant sum.
 # ---------------------------------------------------------------------------
-
-
-def _compact_boundary_event(trigger: str = "manual", pre_tokens=None, post_tokens=None) -> dict:
-  meta: dict = {"trigger": trigger}
-  if pre_tokens is not None:
-    meta["pre_tokens"] = pre_tokens
-  if post_tokens is not None:
-    meta["post_tokens"] = post_tokens
-  return {"type": "system", "subtype": "compact_boundary", "compact_metadata": meta}
-
 
 # One row per boundary position/shape around the selected assistant event: the
 # events between the shared result event and the reading, and the
@@ -1275,13 +1266,7 @@ def test_usage_fold_of_appended_suffixes_matches_full_scan() -> None:
           "contextWindow": 200_000
       }}, input_tokens=1000),
       _assistant_event("claude-opus-4-6", input_tokens=10_000),
-      {
-          "type": "system",
-          "subtype": "compact_boundary",
-          "compact_metadata": {
-              "post_tokens": 4_000
-          },
-      },
+      _compact_boundary_event(trigger=None, post_tokens=4_000),
       _result_event(None, input_tokens=100),
       _result_event(0.05, {"claude-opus-4-6": {
           "contextWindow": 180_000

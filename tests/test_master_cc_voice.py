@@ -9,6 +9,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    TerminateFlagBackend,
     drain_session_consumer,
     make_work_item,
     mock_session_callbacks,
@@ -31,16 +32,12 @@ def _make_cfg(tmp_path: Path) -> core_config.CharlieBotConfig:
   )
 
 
-class _PromptCapturingBackend:
+class _PromptCapturingBackend(TerminateFlagBackend):
   exit_code = 0
   stderr_text = ""
-  terminated = False
 
   def __init__(self) -> None:
     self.prompt = None
-
-  async def terminate(self) -> None:
-    self.terminated = True
 
   async def run(self, prompt: str, cwd: str, env: dict):
     self.prompt = prompt

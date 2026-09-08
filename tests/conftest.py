@@ -2367,7 +2367,7 @@ async def _recover(monkeypatch: pytest.MonkeyPatch,
   master_wakes: list[str] = []
   outcomes: list[runs.RunOutcome] = []
 
-  async def spy_resume(*args, **kwargs):
+  async def spy_resume(*args, **kwargs) -> None:
     alive_at_reattach.append(bool(kwargs["is_alive"]()))
     await _real_resume_worker(*args, **kwargs)
 

@@ -518,13 +518,13 @@ async def test_identity_judgment_runs_before_any_new_turn_door(tmp_path: Path, m
     calls.append("identity")
     return {}
 
-  async def fake_recovery(cfg, boot_time, identity=None):
+  async def fake_recovery(cfg, boot_time, identity=None) -> None:
     calls.append("crash_recovery")
 
-  async def fake_scheduler_start(self):
+  async def fake_scheduler_start(self) -> None:
     calls.append("scheduler.start")
 
-  async def fake_recover_pending(self):
+  async def fake_recover_pending(self) -> None:
     calls.append("trigger.recover_pending")
 
   monkeypatch.setattr(server, "reconcile_master_identity", fake_identity)

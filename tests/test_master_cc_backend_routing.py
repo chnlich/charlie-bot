@@ -100,7 +100,7 @@ async def test_run_cc_routes_antigravity_native_resume_id(
 
 class _SessionIdBackend(FakeBackend):
 
-  def __init__(self, session_id: str):
+  def __init__(self, session_id: str) -> None:
     self._session_id = session_id
 
   async def run(self, prompt: str, cwd: str, env: dict):

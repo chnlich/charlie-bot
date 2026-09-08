@@ -251,7 +251,7 @@ async def test_diff_viewer_versions_local_static_assets(monkeypatch: pytest.Monk
 
 class PendingTriggerSessionManager(FakeSessionManager):
 
-  def __init__(self, session: SessionMetadata):
+  def __init__(self, session: SessionMetadata) -> None:
     self._session = session
 
   async def list_sessions(

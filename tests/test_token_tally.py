@@ -39,7 +39,7 @@ def _claude_record(record_id: str, model: str, ts: str, usage: dict) -> dict:
 
 class Claude:
 
-  def __init__(self, tmp_path: Path):
+  def __init__(self, tmp_path: Path) -> None:
     self.work = tmp_path / ".claude"
     self.ext = tmp_path / ".claude-ext-1"
     self.dirs = {"work (default)": self.work, "ext-1": self.ext}
@@ -61,7 +61,7 @@ class Claude:
 
 class Codex:
 
-  def __init__(self, tmp_path: Path):
+  def __init__(self, tmp_path: Path) -> None:
     self.home = tmp_path / ".codex"
     self.homes = {"work (default)": self.home}
 

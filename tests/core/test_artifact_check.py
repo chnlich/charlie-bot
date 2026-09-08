@@ -684,7 +684,7 @@ def test_cli_two_open_forks_without_explainer_report_two_locations_and_skip_the_
   artifact = _write(tmp_path, make_doc())
   factory_called: list = []
 
-  def factory(option, cfg):
+  def factory(option, cfg) -> None:
     factory_called.append(option.id)
     raise AssertionError("the probe must never run when an assertion failed")
 

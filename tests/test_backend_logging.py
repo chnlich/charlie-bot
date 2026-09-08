@@ -13,7 +13,7 @@ from src.agents.backends.base import AgentBackend
 class _ScriptedBackend(AgentBackend):
   """Minimal AgentBackend that runs an arbitrary bash -c script as the subprocess."""
 
-  def __init__(self, script: str, **kwargs):
+  def __init__(self, script: str, **kwargs) -> None:
     super().__init__(**kwargs)
     self._script = script
 

@@ -42,20 +42,20 @@ def test_env_resolves_the_home_dir(monkeypatch, tmp_path, env_value: str | None,
   assert core_config.charliebot_home_dir() == tmp_path / expected_name
 
 
-def test_tilde_expanded(monkeypatch, tmp_path):
+def test_tilde_expanded(monkeypatch, tmp_path) -> None:
   monkeypatch.setenv("HOME", str(tmp_path))
   monkeypatch.setenv("CHARLIEBOT_HOME", "~/dbg")
   assert core_config.charliebot_home_dir() == (tmp_path / "dbg").resolve()
 
 
-def test_relative_path_rejected(monkeypatch):
+def test_relative_path_rejected(monkeypatch) -> None:
   """A relative value would resolve against each process's own cwd."""
   monkeypatch.setenv("CHARLIEBOT_HOME", "dbg-home")
   with pytest.raises(ValueError, match="absolute path"):
     core_config.charliebot_home_dir()
 
 
-def test_same_env_value_resolves_once(monkeypatch, tmp_path):
+def test_same_env_value_resolves_once(monkeypatch, tmp_path) -> None:
   """The resolve walk runs once per raw env value; a new value re-resolves."""
   profile = tmp_path / "profile"
   profile.mkdir()
@@ -69,7 +69,7 @@ def test_same_env_value_resolves_once(monkeypatch, tmp_path):
   assert core_config.charliebot_home_dir() == other
 
 
-def test_config_yaml_may_not_set_the_home(monkeypatch, tmp_path):
+def test_config_yaml_may_not_set_the_home(monkeypatch, tmp_path) -> None:
   profile = tmp_path / "profile"
   profile.mkdir()
   (profile / "config.yaml").write_text(f"charliebot_home: {tmp_path}/elsewhere\n", encoding="utf-8")
@@ -78,7 +78,7 @@ def test_config_yaml_may_not_set_the_home(monkeypatch, tmp_path):
     core_config.load_config()
 
 
-def test_config_loads_from_the_selected_profile(monkeypatch, tmp_path):
+def test_config_loads_from_the_selected_profile(monkeypatch, tmp_path) -> None:
   profile = tmp_path / "profile"
   profile.mkdir()
   (profile / "config.yaml").write_text("server_port: 19999\n", encoding="utf-8")
@@ -89,7 +89,7 @@ def test_config_loads_from_the_selected_profile(monkeypatch, tmp_path):
   assert cfg.sessions_dir == profile / "sessions"
 
 
-def test_profile_leaves_the_default_home_untouched(monkeypatch, tmp_path):
+def test_profile_leaves_the_default_home_untouched(monkeypatch, tmp_path) -> None:
   """The property the whole feature exists for.
 
   Exercise every entry point that owns a path inside the state directory, then
@@ -141,7 +141,7 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch, tmp_path):
   assert core_backup.backup_dir() == profile.with_name(profile.name + "_backup")
 
 
-def test_default_home_backup_dir_is_unchanged(monkeypatch, tmp_path):
+def test_default_home_backup_dir_is_unchanged(monkeypatch, tmp_path) -> None:
   """The no-env path keeps the historical ~/.charliebot_backup."""
   monkeypatch.delenv("CHARLIEBOT_HOME", raising=False)
   monkeypatch.setenv("HOME", str(tmp_path))
@@ -149,7 +149,7 @@ def test_default_home_backup_dir_is_unchanged(monkeypatch, tmp_path):
   assert core_backup.backup_dir() == tmp_path / ".charliebot_backup"
 
 
-def test_no_new_hardcoded_state_paths():
+def test_no_new_hardcoded_state_paths() -> None:
   """Regression guard for code the isolation test above does not execute.
 
   The isolation test catches any spelling but only on paths it reaches; this catches
@@ -181,7 +181,7 @@ def test_no_new_hardcoded_state_paths():
       "state paths must come from CharlieBotConfig, not from the user's home directory:\n" + "\n".join(offenders))
 
 
-def test_terminal_session_name_separates_profiles(monkeypatch, tmp_path):
+def test_terminal_session_name_separates_profiles(monkeypatch, tmp_path) -> None:
   """The tmux server is shared, so the session name is what separates profiles."""
   from src.agents.backends import terminal
 

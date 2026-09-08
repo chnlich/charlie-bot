@@ -34,7 +34,7 @@ def _improve_argv(session_id: str | None, repo: str, goal_file: Path, *extra: st
   return argv + list(extra)
 
 
-def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """main() reads --goal-file and posts its content to /api/internal/improve."""
   cfg = _mock_config(tmp_path)
   cfg.sessions_dir = tmp_path / "fake_sessions"
@@ -64,7 +64,7 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
   assert "plan" not in payload
 
 
-def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """main() reads optional --plan-file and includes it in the improve payload."""
   cfg = _mock_config(tmp_path)
   cfg.sessions_dir = tmp_path / "fake_sessions"
@@ -87,7 +87,7 @@ def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.
   assert payload["plan"] == "1. largest lever"
 
 
-def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """main() exits with code 1 on request failure."""
   cfg = _mock_config(tmp_path)
   cfg.sessions_dir = tmp_path / "fake_sessions"
@@ -152,7 +152,7 @@ def test_main_rejects_bad_file_before_any_request(
 # ---------------------------------------------------------------------------
 
 
-def test_improve_request_rejects_branch_prefix():
+def test_improve_request_rejects_branch_prefix() -> None:
   """ImproveRequest fails fast on the removed branch_prefix field."""
   with pytest.raises(ValidationError):
     ImproveRequest(
@@ -233,7 +233,7 @@ async def test_improve_endpoint_creates_background_task(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_improve_endpoint_returns_404_for_missing_session():
+async def test_improve_endpoint_returns_404_for_missing_session() -> None:
   """POST /api/internal/improve returns 404 when session doesn't exist."""
   from fastapi import HTTPException
 
@@ -252,7 +252,7 @@ async def test_improve_endpoint_returns_404_for_missing_session():
 
 
 @pytest.mark.asyncio
-async def test_improve_endpoint_returns_400_for_invalid_backend():
+async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
   """POST /api/internal/improve returns 400 when backend resolution fails."""
   from fastapi import HTTPException
 
@@ -279,7 +279,7 @@ async def test_improve_endpoint_returns_400_for_invalid_backend():
 
 
 @pytest.mark.asyncio
-async def test_improve_endpoint_returns_409_for_running_loop():
+async def test_improve_endpoint_returns_409_for_running_loop() -> None:
   """POST /api/internal/improve returns 409 when another loop is already running."""
   from fastapi import HTTPException
 

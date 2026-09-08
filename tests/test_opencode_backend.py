@@ -84,7 +84,7 @@ class _FakeOneShotStdout:
   def __aiter__(self):
     return self
 
-  async def __anext__(self):
+  async def __anext__(self) -> None:
     raise StopAsyncIteration
 
 

@@ -479,7 +479,7 @@ def test_cli_remote_dead_exits_with_code_2(monkeypatch) -> None:
   def _fake_post(url, json=None, params=None, headers=None, timeout=None, verify=None):
     return _FakeResp()
 
-  def _offline_get(url, **kwargs):  # best-effort version hint must not reach a real server
+  def _offline_get(url, **kwargs) -> None:  # best-effort version hint must not reach a real server
     raise requests.ConnectionError("offline")
 
   monkeypatch.setattr(CLI_COMMON_REQUESTS_POST_PATCH_TARGET, _fake_post)

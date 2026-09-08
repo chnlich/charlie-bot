@@ -30,7 +30,7 @@ def test_default_engine_builds_sherpa_bundle(monkeypatch: pytest.MonkeyPatch) ->
   sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   calls: list[str] = []
 
-  def fail_gpu(*_args):
+  def fail_gpu(*_args) -> None:
     raise AssertionError("create_qwen3_hf_bundle must not run for the default engine")
 
   monkeypatch.setattr(transcriber, "create_sherpa_bundle", lambda paths: calls.append("sherpa") or sherpa)
@@ -71,7 +71,7 @@ def test_gpu_engine_failure_falls_back_to_sherpa_with_warning(monkeypatch: pytes
   sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   ensured: list[CharlieBotConfig] = []
 
-  def fail_gpu(*_args):
+  def fail_gpu(*_args) -> None:
     raise RuntimeError("no CUDA GPU is available")
 
   monkeypatch.setattr(transcriber, "create_qwen3_hf_bundle", fail_gpu)
@@ -101,7 +101,7 @@ def test_gpu_fallback_result_is_cached_under_the_requested_engine(monkeypatch: p
   gpu_calls: list[int] = []
   sherpa_calls: list[int] = []
 
-  def fail_gpu(*_args):
+  def fail_gpu(*_args) -> None:
     gpu_calls.append(1)
     raise RuntimeError("missing CUDA driver")
 

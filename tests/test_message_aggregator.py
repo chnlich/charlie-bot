@@ -777,3 +777,34 @@ def test_stable_history_preserves_deferred_user_metadata_without_mutating_events
   expected[VOICE_KEY] = True
   assert user == expected
   assert events == original
+
+
+def _mixed_event_sequence() -> list[dict]:
+  return [
+      {"type": ET.USER, "message": {"content": [{"type": "text", "text": "run it"}]}, "timestamp": "t0"},
+      {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": "working "}]}, "timestamp": "t1"},
+      {"type": ET.THINKING, "content": "considering", "timestamp": "t2"},
+      {"type": ET.TOOL_USE, "name": "Bash", "input": {"cmd": "ls"}, "timestamp": "t3"},
+      {"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "file.txt", "timestamp": "t4"},
+      {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": "done"}]}, "timestamp": "t5"},
+      {"type": ET.MASTER_DONE, "thinking_seconds": 1, "timestamp": "t6"},
+      {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": "tail draft"}]}, "timestamp": "t7"},
+  ]
+
+
+def test_emit_stream_deltas_false_keeps_message_deltas_and_pending_identical() -> None:
+  events = _mixed_event_sequence()
+
+  live = MessageAggregator()
+  live_deltas = [delta for ev in events for delta in live.feed(ev)]
+  quiet = MessageAggregator(emit_stream_deltas=False)
+  quiet_deltas = [delta for ev in events for delta in quiet.feed(ev)]
+
+  assert [d for d in quiet_deltas if d["type"] == "stream"] == []
+  assert [d for d in live_deltas if d["type"] == "message"] == [d for d in quiet_deltas if d["type"] == "message"]
+  assert live.pending_draft_message() == quiet.pending_draft_message()
+
+
+def test_clone_preserves_emit_stream_deltas() -> None:
+  assert MessageAggregator().clone().emit_stream_deltas is True
+  assert MessageAggregator(emit_stream_deltas=False).clone().emit_stream_deltas is False

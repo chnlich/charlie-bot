@@ -274,7 +274,7 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
 class MessageAggregator:
   """Convert raw chat events into a stream of message + stream deltas."""
 
-  def __init__(self, event_index_offset: int = 0) -> None:
+  def __init__(self, event_index_offset: int = 0, emit_stream_deltas: bool = True) -> None:
     self._idx_offset = event_index_offset
     self._processed = 0
     self._assistant_buf = ""
@@ -283,6 +283,11 @@ class MessageAggregator:
     self._last_event_idx = 0
     self._last_event_id: str | None = None
     self._tools_buf: list[dict] = []
+    # The stream delta is the draft snapshot the live broadcast consumes; a
+    # snapshot costs one tool-dict copy per buffered tool, so feeds that
+    # discard stream deltas (history projection, catch-up replay) construct
+    # with emit_stream_deltas=False and their message deltas are unchanged.
+    self.emit_stream_deltas = emit_stream_deltas
 
   def feed(self, event: dict) -> Iterator[dict]:
     """Process a single event, yield zero or more deltas."""
@@ -310,7 +315,7 @@ class MessageAggregator:
     the next ingest. ``_tools_buf`` dicts are copied because USER events
     carrying tool_result blocks mutate them in place.
     """
-    copied = MessageAggregator(self._idx_offset)
+    copied = MessageAggregator(self._idx_offset, emit_stream_deltas=self.emit_stream_deltas)
     copied._processed = self._processed
     copied._assistant_buf = self._assistant_buf
     copied._thinking_buf = self._thinking_buf
@@ -362,6 +367,8 @@ class MessageAggregator:
       yield {"type": "message", "message": msg}
 
   def _stream_delta(self) -> dict | None:
+    if not self.emit_stream_deltas:
+      return None
     msg = self.pending_draft_message()
     if msg is None:
       return None

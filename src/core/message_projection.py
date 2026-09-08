@@ -68,7 +68,7 @@ class MessageProjection:
 
   def __init__(self, events: list[dict], event_index_offset: int = 0) -> None:
     self._offset = event_index_offset
-    self._agg = MessageAggregator(event_index_offset=event_index_offset)
+    self._agg = MessageAggregator(event_index_offset=event_index_offset, emit_stream_deltas=False)
     self._committed_final: list[dict] = []
     self._seps_final: list[int] = []
     self._region_events: list[dict] = []

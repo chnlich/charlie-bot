@@ -18,8 +18,8 @@ from conftest import (
     fresh_state_fixture,
     install_scripted_backends,
     make_transcript,
+    pool_cfg,
     rate_limit_event,
-    write_pool_credentials,
 )
 
 from src.agents.worker import QuotaExhaustedException, Worker
@@ -33,13 +33,7 @@ from src.core import (
 )
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import (
-    BackendOption,
-    ClaudeAccount,
-    SpawnRequest,
-    ThreadMetadata,
-    ThreadStatus,
-)
+from src.core.models import BackendOption, SpawnRequest, ThreadMetadata, ThreadStatus
 
 FABLE = "claude-fable-5-1"
 POOLED_ID = "claude-fable-5"
@@ -49,18 +43,16 @@ _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
 def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
-  accounts = [ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
-  for account in accounts:
-    write_pool_credentials(Path(account.config_dir))
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      worktree_dir=str(tmp_path / "worktrees"),
-      claude_accounts=accounts,
-      backend_options=[
+  return pool_cfg(
+      tmp_path,
+      [
           BackendOption(id=POOLED_ID, label="Fable", type="cc-claude", model=FABLE),
           BackendOption(
               id="pinned", label="Pinned", type="cc-claude", model=FABLE, claude_config_dir=str(tmp_path / "pinned")),
       ],
+      home=tmp_path / ".charliebot",
+      worktree_dir=tmp_path / "worktrees",
+      labels=labels,
   )
 
 

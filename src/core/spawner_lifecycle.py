@@ -1,6 +1,7 @@
 """Worker run entry points — spawn and resume, from process setup through the finalize chain."""
 
 import asyncio
+import functools
 import signal
 import traceback
 from collections.abc import Awaitable, Callable
@@ -17,7 +18,7 @@ from src.core import (
     spawner_launch,
 )
 from src.core.config import CharlieBotConfig
-from src.core.models import SpawnRequest, TaskType
+from src.core.models import SpawnRequest, TaskType, ThreadMetadata
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
@@ -39,26 +40,40 @@ async def spawn_worker(
   worker = None
   outcome = spawner_finalize._WorkerRunOutcome(exit_code=-1, quota_exhausted=False, error="")
   cancelled = False
+
+  async def spawn_and_stream(
+      thread: ThreadMetadata,
+      create: Callable[[ThreadMetadata], Awaitable[Worker]],
+  ) -> spawner_finalize._WorkerRunOutcome:
+    """Create the worker process, then stream its events into the terminal outcome.
+
+    A PoolExhaustedError from the creation call takes the mid-run quota
+    disposition — no Claude login can take the run, so a VERIFY still moves on
+    to the next preference backend — instead of failing the spawn. The worker
+    lands in the enclosing ``worker`` binding the moment creation returns, so
+    the cancellation handler below sees the process that is actually running.
+    """
+    nonlocal worker
+    try:
+      worker = await create(thread)
+    except claude_relay.PoolExhaustedError as exc:
+      return spawner_finalize._pool_exhausted_outcome(exc)
+    return await spawner_finalize._stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
+
+  async def create_run_worker(thread: ThreadMetadata) -> Worker:
+    if request.repo_path is None:
+      return await spawner_launch._create_repoless_process(session_id, thread, description, cfg, thread_mgr, request)
+    resolved_repo = Path(request.repo_path).resolve()
+    return await spawner_launch._create_worktree_and_process(
+        session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, request)
+
   try:
     thread = await thread_mgr.get_thread(session_id, thread_id)
     if not thread:
       log.error("spawn_worker_thread_missing", session=session_id, thread_id=thread_id)
       return
 
-    try:
-      if request.repo_path is None:
-        worker = await spawner_launch._create_repoless_process(
-            session_id, thread, description, cfg, thread_mgr, request)
-      else:
-        resolved_repo = Path(request.repo_path).resolve()
-        worker = await spawner_launch._create_worktree_and_process(
-            session_id, thread, description, cfg, session_mgr, thread_mgr, resolved_repo, request)
-    except claude_relay.PoolExhaustedError as exc:
-      # No Claude login can take the run: the same disposition as a mid-run
-      # rejection, so a VERIFY still moves on to the next preference backend.
-      outcome = spawner_finalize._pool_exhausted_outcome(exc)
-    else:
-      outcome = await spawner_finalize._stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
+    outcome = await spawn_and_stream(thread, create_run_worker)
 
     # Re-run an exhausted VERIFY once on the next untried checking-role backend;
     # with none remaining (selection empty, or looped back to the exhausted
@@ -86,13 +101,15 @@ async def spawn_worker(
         request.resolved_backend = resolved_backend
         request.resolved_model = resolved_model
         thread.tried_backends = tried_backends
-        try:
-          worker = await spawner_launch._create_repoless_process(
-              session_id, thread, description, cfg, thread_mgr, request)
-        except claude_relay.PoolExhaustedError as exc:
-          outcome = spawner_finalize._pool_exhausted_outcome(exc)
-        else:
-          outcome = await spawner_finalize._stream_worker_events(worker, session_id, thread, thread_mgr, session_mgr)
+        outcome = await spawn_and_stream(
+            thread,
+            functools.partial(
+                spawner_launch._create_repoless_process,
+                session_id,
+                description=description,
+                cfg=cfg,
+                thread_mgr=thread_mgr,
+                request=request))
 
     if outcome.failed and not outcome.error:
       outcome = outcome._replace(

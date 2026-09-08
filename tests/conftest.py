@@ -989,7 +989,8 @@ def make_instruction_cfg(tmp_path: Path, *, manager_contract: str | None) -> Sim
   """Fake instruction inputs for the master-instruction builder: a repo whose prompts/master.md
   reads "BASE PROMPT", plus prompts/project_manager.md carrying the manager_contract text when
   given. claude_md_file and memory_dir name paths that do not exist, so the built instructions
-  carry neither host override nor memory block."""
+  carry neither host override nor memory block; tests that need memory content seed the returned
+  memory_dir (write_memory_topics / write_memory_entry)."""
   home = tmp_path / "home"
   repo = tmp_path / "repo"
   (repo / "prompts").mkdir(parents=True)

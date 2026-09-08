@@ -54,6 +54,33 @@ from src.core.spawner import resume_worker as _real_resume_worker  # noqa: E402
 from src.core.threads import ThreadManager  # noqa: E402
 from src.core.triggers import TriggerManager  # noqa: E402
 
+import src.core.headless_render as headless_render  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _stub_headless_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Route the page-height drive through the dump-dom subprocess shape, happy path only: the
+  suite's renderer is the write_stub_chrome shell script, which only answers --dump-dom."""
+
+  def dump_dom_drive(chrome_bin: Path, probe_uri: str) -> int:
+    proc = subprocess.run(
+        [str(chrome_bin), "--headless", "--dump-dom", probe_uri],
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    if proc.returncode != 0:
+      stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+      raise ValueError(
+          f"headless renderer exited {proc.returncode} while measuring the plan page height: "
+          f"{stderr[-400:] if stderr else 'no stderr output'}")
+    match = re.search(r'<pre id="page-height">(\d+)</pre>', proc.stdout.decode("utf-8", errors="replace"))
+    if match is None:
+      raise ValueError("headless renderer output carried no page-height marker; cannot measure the plan page")
+    return int(match.group(1))
+
+  monkeypatch.setattr(headless_render, "render_height", dump_dom_drive)
+
 
 def mock_session_callbacks() -> models.SessionCallbacks:
   """SessionCallbacks with every field mocked; a test needing one real field constructs its own."""

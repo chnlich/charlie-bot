@@ -86,6 +86,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M74 master turn-end raw-log rescan | M74 collector below | seconds of loop lag + wall per fallback-notice projection (whole read+parse+project of the turn's raw log), worst on-disk master-run raw log, fresh cc-claude translate (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.015 s | — (introduced with its first history row) |
 | M75 live-aggregator catch-up, first streamed event | M75 collector below | seconds of loop lag + wall per first-`persist_and_broadcast` catch-up (whole read+feed of the live corpus), worst on-disk live chat corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.020 s | — (introduced with its first history row) |
 | M76 finalize-judgment reads, warm chain | M76 collector below | seconds of loop lag + wall per judgment pair (summary-present then master-woke — the two full-history scans the finalize chain runs per worker/reviewer completion), worst on-disk live-events corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.0005 s | — (introduced with its first history row) |
+| M77 session-switch projection reuse, rotating tabs | M77 collector below | seconds per `get_message_projection` re-entry over a 12-active-session rotation (3 rounds), worst live corpora; the rebuilt count is the eviction shape (a warm re-entry is a dict read + len compare, a rebuild parses the corpus) | re-entry median < 0.5 ms; 0 rebuilt re-entries in a 12-session rotation | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -4575,10 +4576,74 @@ shutil.rmtree(home)
 EOF
 ```
 
+M77 — session-switch projection reuse, rotating tabs. Every SPA switch re-reads the
+session through the message projection (view, bootstrap, events page), whose per-session
+LRU window must cover the tabs' rotation breadth: a re-entry past the window re-pays the
+M26 cold build. The collector resolves the 12 active live sessions carrying the most
+events (the rotation is wider than the pre-fix window of 8), warms every projection once
+as the tabs' first visits do, then times 3 rounds of re-entries over the rotation,
+counting the re-entries that re-built (a rebuild parses the corpus; a warm hit is a dict
+read + len compare, so the 1 ms split is unambiguous). Live home read-only; from the
+checkout under test:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import json, os, sys, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+from pathlib import Path
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+# Worst rotation corpus: the ACTIVE live sessions carrying the most events —
+# the tabs the switch diagnostic rotates among; 12 exceeds the pre-fix LRU
+# window of 8, so steady-state re-entries land past the window and re-build.
+root = Path.home() / ".charliebot" / "sessions"
+sizes = []
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if not p.is_file():
+        continue
+    meta = d / "metadata.json"
+    try:
+        status = json.loads(meta.read_text()).get("status") if meta.is_file() else None
+    except (OSError, ValueError):
+        status = None
+    if status == "archived":
+        continue
+    with open(p, errors="replace") as f:
+        n = sum(1 for _ in f)
+    sizes.append((n, d.name))
+sizes.sort(reverse=True)
+ROTATION = [sid for _, sid in sizes[:12]]
+print(f"rotation: {len(ROTATION)} active sessions, largest {sizes[0][0]} events")
+
+cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
+mgr = SessionManager(cfg)
+for sid in ROTATION:  # first visits, as the tabs' initial renders do; not timed
+    mgr.get_message_projection(sid)
+
+times = []
+rebuilt = 0
+for _ in range(3):
+    for sid in ROTATION:
+        t0 = time.perf_counter()
+        mgr.get_message_projection(sid)
+        dt = time.perf_counter() - t0
+        times.append(dt)
+        if dt > 0.001:  # a warm hit is a dict read + len compare; a rebuild parses the corpus
+            rebuilt += 1
+times.sort()
+n = len(times)
+print(f"re-entry median {times[n // 2] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms over {n}; "
+      f"{rebuilt}/{n} re-entries re-built the projection")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-08 | this PR | M77 re-entry median 5.16/5.21/4.87 ms → 0.06/0.06/0.06 ms, maxima 75.18/71.27/71.31 → 0.22/0.23/0.20 ms; rebuilt re-entries 33/36 → 0/36 (three interleaved rounds of the new rotation collector, 12 active live sessions, largest 12483 events, live home read-only, main checkout before vs branch worktree after back-to-back at load 1.5-1.7, every paired round faster; no-regression re-measures on the branch: M26 advance 0.17 ms parity True digest e94c56635194, M34 full 0.0055 s / after=total 0.0017 s (40 B), M63 /view handler 1.16 ms / 277206 B, M56 /status 2.05 ms digest 4f25da4dcc7f identical; 4835-passed suite, the two projection eviction tests parameterized on the constant) | the projection LRU window (8) sat under the tabs' rotation breadth — the live switch diagnostic rotated among 21 distinct sessions in the 16.37 h sample, so most re-entries landed past the window and re-paid the M26 cold build (4-36 ms measured across the live corpus, 84.40 ms worst re-entry); the window rises to 64, covering the observed rotation with headroom; retained projections share the events cache's strings (~0.3-0.6 MB per big session, tracemalloc current-size delta), so the window's memory rides the unbounded events cache's profile; M77 definition and healthy range introduced with this PR |
 | 2026-09-08 | this PR | M41 repeat-view median 0.0037/0.0035/0.0036 s → 0.0014/0.0012/0.0014 s, maxima 0.0054/0.0048/0.0045 s → 0.0017/0.0018/0.0017 s; M43 repeat-expand median 0.0041/0.0037/0.0036 s → 0.0014/0.0014/0.0014 s, maxima 0.0043/0.0045/0.0044 s → 0.0015/0.0017/0.0018 s (three interleaved rounds of the verbatim collectors, 192-file charlie-bot root..HEAD manifest, main checkout before vs branch worktree after back-to-back at load 0.9-1.6, every paired round faster; first views unchanged within subprocess noise — M41 0.0724-0.0743 → 0.0696-0.0713 s, M43 0.0212-0.0218 → 0.0177-0.0190 s; served bodies repeat-identical both arms; component attribution: the ref-state signature walk over the live repo measured standalone 718 entries / 2.90 ms before → 29 entries / 0.86 ms after — the repo carries 2569 refs, 706 of them loose ref files, 1538 accumulated charliebot/latency-perf branch refs; M14 loop-lag re-measured unchanged 0.0054 s at the 5 ms ticker floor, no regression; 4835-passed suite plus 2 new signature tests) | the ref-state signature walked every loose ref file under refs/ per repeat view, and the loose tree grows one file per branch the workflow leaves behind — the walk's 2.90 ms had tripled the standing M41/M43 repeat readings as the branch count grew, an unbounded trend; git publishes every ref mutation through a lockfile rename into the containing directory, and a rename that creates, replaces, or removes an entry moves the directory's own mtime_ns, so the signature now carries the refs trees' directory entries (one stat per namespace directory, bounded as branches accumulate) while packed-refs keeps its own (mtime_ns, size) over every packed entry — the same rename ground the M24/M67 directory verdicts stand on |
 | 2026-09-07 | #1045 | M17 fork median 0.0753/0.0762/0.0757 s → 0.0560/0.0551/0.0551 s, −26% to −28%, maxima 0.0756-0.0829 s → 0.0560-0.0588 s (three interleaved verbatim-collector rounds, 36.3 MB / 5519-event worst fork corpus of session aa196b47, scratch CHARLIEBOT_HOME, main checkout 828adbce before vs branch worktree after back-to-back at load 1.4-1.9, every paired round faster; component attribution on the same corpus: whole-file decode 26.3 ms, read 25.7 ms, frame check 10.4 ms, write 11.4 ms, and isascii() 4.1 ms — the measured −20.6 ms median matches the removed decode minus the new scan; 4831-passed suite plus one new utf8-parity test pinning both branches: a non-ASCII valid line forks byte-identically, undecodable bytes still raise UnicodeDecodeError at fork time with no reference written) | the fork reference's byte-stream write kept a whole-file `data.decode("utf-8")` per source purely for UnicodeDecodeError parity with the text-mode read it replaced — the decoded str is discarded, and the pass was the fork's single biggest component on the worst corpus; ASCII bytes are always valid UTF-8, so a `bytes.isascii()` scan proves validity and only a non-ASCII corpus pays the full decode, keeping the error contract byte-for-byte (undecodable bytes still raise at fork time, corrupt lines still raise the not-a-serialized-event ValueError); row recorded in this docs-only follow-up per the #976 precedent, the landing PR shipped without it |
 | 2026-09-07 | this PR | M55 first view 0.2783/0.2864/0.2735 s → 0.2050/0.1998/0.2016 s, −26% to −30% (three interleaved verbatim-collector rounds, 1.5 MB worst artifact pair understanding_packed-batch-cost-balance_v10.html vs _v9.html, scratch CHARLIEBOT_HOME, main checkout before vs branch worktree after back-to-back at load 0.86-1.16, every paired round faster; repeat view unchanged 0.0025 s both arms — the M55 memo path, no regression; served bodies byte-identical across arms except the per-checkout cache-bust version query the injection embeds — main HEAD 63f291f9 vs worktree HEAD 5fee2a3b, the M70-documented exception; component corroboration: in-process annotate wall median 0.2216 → 0.1950 s over 5 timed calls; 4832-passed suite plus 2 new anchor-parity tests, one a 1500-document seeded fuzz) | the style/header splice re-parsed the whole spliced page through the full DOM builder just to find where head ends and body starts — the third parse cost ~43 ms of the warm annotate's ~212 ms and more on a cold first view, the parser's tree build (per-character text ranges, per-node objects) being the cost; the anchor-only parser rides the same tokenizer walk — convert_charrefs off, the same line-offset math, the same innermost-open-tag end matching (the record rides the stack slot that opened it, so a nested same-tag element takes the end tag exactly as the tree's node would, leaving the first element end-less the same way) — and drops the tree build nothing downstream reads; anchor parity pinned against the full parse on a 1500-document seeded randomized corpus plus the real fixture pair and its spliced output |

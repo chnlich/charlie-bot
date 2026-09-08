@@ -30,6 +30,7 @@ from src.core.config import CharlieBotConfig
 from src.core.message_projection import MessageProjection
 from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
+from src.core.sessions import _PROJECTION_LRU_LIMIT
 
 # ---------------------------------------------------------------------------
 # Fixture event builders
@@ -669,12 +670,12 @@ async def test_archive_fallback_serves_from_old_path(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_lru_eviction_drops_oldest_projection(tmp_path: Path) -> None:
-  """LRU cap of 8 evicts the least-recently-used projection."""
+  """The LRU cap evicts the least-recently-used projection."""
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)
 
   session_ids: list[str] = []
-  for i in range(10):
+  for i in range(_PROJECTION_LRU_LIMIT + 2):
     session = await mgr.create_session(CreateSessionRequest(name=f"t{i}"))
     session_ids.append(session.id)
     _append_events(
@@ -686,13 +687,13 @@ async def test_lru_eviction_drops_oldest_projection(tmp_path: Path) -> None:
         }],
     )
 
-  # Build projections for all 10 sessions.
+  # Build projections for every session.
   for sid in session_ids:
     proj = mgr.get_message_projection(sid)
     assert proj is not None
 
-  # Only 8 should be cached (LRU cap).
-  assert len(mgr._projection_cache) == 8
+  # Only the cap's worth should be cached.
+  assert len(mgr._projection_cache) == _PROJECTION_LRU_LIMIT
   # The first 2 (least recently used) should have been evicted.
   assert session_ids[0] not in mgr._projection_cache
   assert session_ids[1] not in mgr._projection_cache
@@ -711,7 +712,7 @@ async def test_lru_eviction_drops_oldest_projection(tmp_path: Path) -> None:
       }],
   )
   mgr.get_message_projection(new_session.id)
-  assert len(mgr._projection_cache) == 8
+  assert len(mgr._projection_cache) == _PROJECTION_LRU_LIMIT
   assert session_ids[3] not in mgr._projection_cache
   assert session_ids[2] in mgr._projection_cache
 
@@ -746,7 +747,7 @@ async def test_lru_eviction_cannot_serve_stale_after_dirty_mark(tmp_path: Path) 
     await mgr.persist_and_broadcast(session.id, {"type": "master_done", "thinking_seconds": 1, "timestamp": "t3"})
 
   # Evict by filling the cache with other sessions.
-  for i in range(8):
+  for i in range(_PROJECTION_LRU_LIMIT):
     other = await mgr.create_session(CreateSessionRequest(name=f"other{i}"))
     _append_events(
         mgr.get_chat_events_path(other.id),

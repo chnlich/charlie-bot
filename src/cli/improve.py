@@ -107,8 +107,6 @@ def main() -> None:
   }
   if plan is not None:
     payload["plan"] = plan
-  if args.backend is not None:
-    payload["backend"] = args.backend
 
   def _readback() -> dict | None:
     # Sent-but-lost: the loop's live goal file plus an iteration-1 thread that

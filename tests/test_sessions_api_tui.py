@@ -14,6 +14,17 @@ from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 
 
+def _install_kill_tmux_double(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+  """Patch kill_tmux_session to record calls; returns the list it records into."""
+  killed: list[str] = []
+
+  async def fake_kill_tmux_session(session_id: str) -> None:
+    killed.append(session_id)
+
+  monkeypatch.setattr(TUI_KILL_TMUX_SESSION_PATCH_TARGET, fake_kill_tmux_session)
+  return killed
+
+
 @pytest.mark.asyncio
 async def test_stop_tui_kills_tmux_for_tui_session(
     monkeypatch: pytest.MonkeyPatch,
@@ -23,12 +34,7 @@ async def test_stop_tui_kills_tmux_for_tui_session(
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(name="TUI", backend="claude-tui")
   await session_mgr.save_metadata(meta)
-  killed = []
-
-  async def fake_kill_tmux_session(session_id: str) -> None:
-    killed.append(session_id)
-
-  monkeypatch.setattr(TUI_KILL_TMUX_SESSION_PATCH_TARGET, fake_kill_tmux_session)
+  killed = _install_kill_tmux_double(monkeypatch)
 
   with _build_client(cfg, session_mgr) as client:
     response = client.post(f"/api/sessions/{meta.id}/tui/stop")
@@ -60,12 +66,7 @@ async def test_archive_tui_session_does_not_kill_tmux(
   session_mgr = SessionManager(cfg)
   meta = SessionMetadata(name="TUI", backend="claude-tui")
   await session_mgr.save_metadata(meta)
-  killed = []
-
-  async def fake_kill_tmux_session(session_id: str) -> None:
-    killed.append(session_id)
-
-  monkeypatch.setattr(TUI_KILL_TMUX_SESSION_PATCH_TARGET, fake_kill_tmux_session)
+  killed = _install_kill_tmux_double(monkeypatch)
   await session_mgr.save_chat_event(meta.id, {"type": "user", "content": "hello"})
 
   with _build_client(cfg, session_mgr) as client:

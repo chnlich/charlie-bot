@@ -20,7 +20,7 @@ from src.core.artifact_check import run_assertions
 from src.core.config import CharlieBotConfig
 from src.core.json_utils import write_json_atomically
 from src.core.memo import StatSignatureMemo
-from src.core.models import utc_now
+from src.core.models import PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES, utc_now
 from src.core.sessions import SessionManager
 from src.core.sidebar_state import mark_sidebar_dirty
 
@@ -394,8 +394,8 @@ class PlanRegistryManager:
       base: dict | None = None,
       note: str | None = None,
   ) -> dict:
-    if trigger not in ("auto_amend", "feedback"):
-      raise ValueError(f"trigger must be one of auto_amend|feedback, got {trigger!r}")
+    if trigger not in PLAN_AMEND_TRIGGERS:
+      raise ValueError(f"trigger must be one of {'|'.join(PLAN_AMEND_TRIGGERS)}, got {trigger!r}")
     if not isinstance(note, str) or not note.strip():
       raise ValueError("amend requires a non-empty --note stating why this version differs from its predecessor")
     async with self._lock_for(session_id):
@@ -453,8 +453,8 @@ class PlanRegistryManager:
     return candidates[0]
 
   async def close(self, session_id: str, plan_id: int, close_as: str) -> dict:
-    if close_as not in ("superseded", "abandoned", "completed"):
-      raise ValueError(f"--as must be superseded|abandoned|completed, got {close_as!r}")
+    if close_as not in PLAN_CLOSE_MODES:
+      raise ValueError(f"--as must be {'|'.join(PLAN_CLOSE_MODES)}, got {close_as!r}")
     async with self._lock_for(session_id):
       data = await self._load(session_id)
       plan = self._get_plan(data, plan_id)

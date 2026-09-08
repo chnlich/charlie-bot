@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
@@ -531,6 +531,12 @@ class PlanPresentRequest(BaseModel):
   base_sha: str | None = None
 
 
+PlanAmendTrigger = Literal["auto_amend", "feedback"]
+PLAN_AMEND_TRIGGERS: tuple[str, ...] = get_args(PlanAmendTrigger)
+PlanCloseMode = Literal["superseded", "abandoned", "completed"]
+PLAN_CLOSE_MODES: tuple[str, ...] = get_args(PlanCloseMode)
+
+
 class PlanAmendRequest(BaseModel):
   """Request body for the internal plan/amend endpoint."""
   model_config = ConfigDict(extra="forbid")
@@ -538,7 +544,7 @@ class PlanAmendRequest(BaseModel):
   session_id: str
   file: str
   plan_id: int | None = None
-  trigger: Literal["auto_amend", "feedback"] = "feedback"
+  trigger: PlanAmendTrigger = "feedback"
   # Why this version differs from its predecessor; rides on the version record,
   # never in the page body. Required: the author is an agent absent at read time.
   note: str
@@ -561,7 +567,7 @@ class PlanCloseRequest(BaseModel):
 
   session_id: str
   plan_id: int
-  close_as: Literal["superseded", "abandoned", "completed"]
+  close_as: PlanCloseMode
 
 
 # ---------------------------------------------------------------------------

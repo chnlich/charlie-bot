@@ -2482,7 +2482,6 @@ class SessionManager:
     global _sidebar_sweep_task
     if _sidebar_sweep_task is not None and not _sidebar_sweep_task.done():
       return
-    ids = [meta.id for meta in sessions]
     specs_template = [
         (meta.id, self._threads_dir(meta.id), self._session_dir(meta.id) / "triggers",
          self._session_dir(meta.id) / "plans.json") for meta in sessions

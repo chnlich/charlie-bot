@@ -451,8 +451,8 @@ def _assert_round_closed_once(events: list[dict], home: Path, session_id: str, e
 
 
 async def _completed_turn_downtime_rig(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transport: str, *, started_what: str
-) -> tuple[Path, Path, CharlieBotConfig, str]:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transport: str, *,
+    started_what: str) -> tuple[Path, Path, CharlieBotConfig, str]:
   """Launch a ``sleep_first`` turn, kill the server, wait for the result event
   to land on disk, and run recovery. The final bytes arrive while nobody
   consumes, so recovery must resolve a COMPLETED row, never re-attach.

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -1251,3 +1252,80 @@ def test_reset_drops_the_probe_and_document_memos(tmp_path: Path, monkeypatch: p
   _collect(None, None, db, cache)
   assert scans == [1]  # empty row memo: the cold scan ran
   assert loads == [cache]  # empty document memo: the document re-parsed
+
+
+def _cold_reference(collect: Callable[[], tt.TokenTally]) -> tt.TokenTally:
+  """Run one collect on reset state, then restore the caller sequence's partial state."""
+  saved = (
+      dict(tt._source_partials), dict(tt._claude_key_counts), dict(tt._claude_key_records), dict(tt._claude_key_loc), {
+          k: set(v) for k, v in tt._claude_key_holders.items()
+      }, dict(tt._claude_orphan), tt._aggregate_memo, tt._tally_memo)
+  tt._reset_aggregate_memo()
+  try:
+    return collect()
+  finally:
+    (
+        tt._source_partials, tt._claude_key_counts, tt._claude_key_records, tt._claude_key_loc, tt._claude_key_holders,
+        tt._claude_orphan, tt._aggregate_memo, tt._tally_memo) = saved
+
+
+def _tally_snapshot(tally: tt.TokenTally) -> tuple[list, list]:
+  rows = sorted(
+      (
+          r.source, r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output, r.first, r.last,
+          tuple(sorted((a.name, a.calls, a.total) for a in r.accounts))) for r in tally.rows)
+  return rows, sorted(tally.notes)
+
+
+def test_incremental_partials_match_a_fresh_fold(tmp_path: Path) -> None:
+  """Every reconcile round serves what a cold parse+fold of the current corpus serves: appends,
+  an earlier-walked newcomer taking a replayed key's credit, a contributor dropping a key
+  (orphan transfer), the last copy dropping, a deletion, a relabel and a cacheless round."""
+  work, ext = tmp_path / ".claude", tmp_path / ".claude-ext-1"
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+
+  def write(home: Path, session: str, records: list[dict]) -> None:
+    d = home / "projects" / "rel" / session
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{session}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+
+  def collect(label: str, homes: dict, with_cache: bool = True) -> None:
+    args = {"claude_homes": homes, "codex_homes": {}, "opencode_db": db, "cache_path": cache if with_cache else None}
+    inc = collect_token_usage(**args)
+    ref = _cold_reference(lambda: collect_token_usage(**{**args, "cache_path": tmp_path / "ref-cache.json"}))
+    assert _tally_snapshot(inc) == _tally_snapshot(ref), label
+
+  def rec(rid: str, ts: str, input_: int) -> dict:
+    return {
+        "message":
+            {
+                "id": rid,
+                "model": NAME,
+                "usage":
+                    {
+                        "input_tokens": input_,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "output_tokens": 1
+                    }
+            },
+        "timestamp": ts
+    }
+
+  both = {"work (default)": work, "ext-1": ext}
+  write(work, "s1", [rec("k1", "t1", 100)])
+  write(ext, "s2", [rec("k1", "t1", 100), rec("k2", "t2", 200)])
+  collect("cold corpus", both)
+  write(work, "s1", [rec("k1", "t1", 100), rec("k3", "t3", 300)])
+  collect("append to the contributor", both)
+  write(work, "s1", [rec("k1", "t1", 100), rec("k3", "t3", 300), rec("k2", "t2", 200)])
+  collect("earlier home replays a key the later home holds (credit transfer)", both)
+  write(work, "s1", [rec("k3", "t3", 300)])
+  collect("contributor drops a replayed key (orphan transfer)", both)
+  write(ext, "s2", [rec("k2", "t2", 200)])
+  collect("last copy of the key drops", both)
+  (ext / "projects" / "rel" / "s2" / "s2.jsonl").unlink()
+  collect("file deleted", both)
+  collect("account relabel", {"main": work})
+  collect("cacheless round", both, with_cache=False)
+  collect("cached again", both)

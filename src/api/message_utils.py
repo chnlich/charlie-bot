@@ -404,7 +404,7 @@ def events_to_messages(events: list[dict], event_index_offset: int = 0) -> list[
   Final-flushes any in-progress assistant draft; suitable for stable history
   (paginated older events). For the live-render entrypoint, see ``events_to_view``.
   """
-  agg = MessageAggregator(event_index_offset=event_index_offset)
+  agg = MessageAggregator(event_index_offset=event_index_offset, emit_stream_deltas=False)
   messages = _committed_messages(agg, events)
   for delta in agg.flush_pending():
     messages.append(delta["message"])
@@ -419,5 +419,5 @@ def events_to_view(events: list[dict], event_index_offset: int = 0) -> tuple[lis
   This matches the per-session live aggregator's state so subsequent live
   events extend the draft rather than producing a duplicate bubble.
   """
-  agg = MessageAggregator(event_index_offset=event_index_offset)
+  agg = MessageAggregator(event_index_offset=event_index_offset, emit_stream_deltas=False)
   return _committed_messages(agg, events), agg.pending_draft_message()

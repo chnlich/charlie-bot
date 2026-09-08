@@ -403,8 +403,6 @@ async function cancelMaster() {
 }
 
 
-// One name list: Object.assign puts each export on Sidebar, and the same keys
-// become bare globals. Adding a function here is enough for both.
 const API = {
   recordRenderedSessionStatus,
   sidebarSessionIds,

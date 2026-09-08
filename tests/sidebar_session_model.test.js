@@ -21,11 +21,7 @@ const BACKEND_ALIASES = {
 // groups.js is an IIFE over globals defined by the other sidebar modules; the
 // sandbox supplies the ones renderSessionItem reaches for.
 function loadGroups() {
-  const Sidebar = {
-    expose() {},
-    wire(globals, sidebarOnly) { Object.assign(this, globals, sidebarOnly || {}); },
-    state: {},
-  };
+  const Sidebar = {expose() {}, state: {}};
   const context = {
     Sidebar,
     globalThis: null,

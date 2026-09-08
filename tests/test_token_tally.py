@@ -1029,6 +1029,48 @@ def test_source_walk_round_persists_moved_opencode_rows(tmp_path: Path) -> None:
   con.close()
 
 
+def test_entry_served_changed_round_adopts_the_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The changed round whose db never moved: the walk ran fresh and the document entry still
+  # matches the file, so the merge serves the entry. A served entry's rows are provably the
+  # rows the partial sums (a row move would have moved the signature), so the buckets adopt
+  # in place of the per-record fold; a process's first entry-served round replays once to
+  # build the partial.
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 4, "write": 2}}, "oc-m", "prov")])
+  cold = _collect(claude, None, db, cache)
+
+  replays: list[int] = []
+  orig_replay = tt._replay_opencode_records
+
+  def spy_replay(t: tt._Tally, records: list) -> None:
+    replays.append(len(records))
+    orig_replay(t, records)
+
+  monkeypatch.setattr(tt, "_replay_opencode_records", spy_replay)
+
+  tt._aggregate_memo = None  # the changed round: the walk memo is gone, nothing moved
+  tt._tally_memo = None
+  adopted = _collect(claude, None, db, cache)
+  assert replays == []  # the scan-path merge built the partial: the buckets adopt
+  assert adopted.scanned_bytes == 0
+  assert _row(adopted, "opencode", "oc-m").total == _row(cold, "opencode", "oc-m").total
+  assert [n for n in adopted.notes if n.startswith("opencode")] == \
+      [n for n in cold.notes if n.startswith("opencode")]
+
+  tt._opencode_partials.clear()  # a process start: no partial yet, the entry still serves
+  tt._aggregate_memo = None
+  tt._tally_memo = None
+  rebuilt = _collect(claude, None, db, cache)
+  assert replays == [1]  # one replay builds the partial
+  tt._aggregate_memo = None
+  tt._tally_memo = None
+  after_rebuild = _collect(claude, None, db, cache)
+  assert replays == [1]  # the rebuilt partial serves every later entry-served round
+  assert _row(after_rebuild, "opencode", "oc-m").total == _row(rebuilt, "opencode", "oc-m").total
+
+
 def test_wal_move_with_new_row_still_counts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # A real message row under a moved WAL bumps the epoch, so the proof misses and the
   # collect replays — re-reading only the new row's blob.

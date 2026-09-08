@@ -139,6 +139,12 @@ class ChatEventStore:
     # append-only within their week and frozen after, so an unchanged
     # (mtime_ns, size) means unchanged bytes; an append re-parses one file.
     self._archive_events_memo: BoundedMemo[Path, tuple[int, int, list[dict]]] = BoundedMemo(_ARCHIVE_MEMO_LIMIT)
+    # Archive file-list memo: archives dir -> (mtime_ns, size, sorted paths).
+    # Membership changes only by creating or removing a directory entry, and
+    # either moves the directory's own mtime_ns, so an unchanged signature
+    # proves the name list current; a same-week append moves only the file's
+    # own signature.
+    self._archive_files_memo: BoundedMemo[Path, tuple[int, int, list[Path]]] = BoundedMemo(_ARCHIVE_MEMO_LIMIT)
     # Live-file range memo: path -> (mtime_ns, size, inode, per-physical-line
     # events with None holes for blank/malformed lines, covered byte size,
     # ends on a line boundary). Gated to archive_offset > 0 sessions:
@@ -279,16 +285,42 @@ class ChatEventStore:
 
     Archives live in ``<session>/data/archives/chat_events.<YYYY>-W<WW>.jsonl``.
     Files are walked in chronological order (filename sort happens to match).
+    Only files overlapping the range are concatenated: each file's parsed list
+    is memoized, so its length is known without a copy and a page turn pays one
+    sub-slice extend instead of extending every file's whole list.
     """
     if end <= start:
       return []
-    archives_dir = self._session_dir(session_id) / "data" / "archives"
-    if not archives_dir.exists():
-      return []
     events: list[dict] = []
-    for path in sorted(archives_dir.glob("chat_events.*.jsonl")):
-      events.extend(self._archive_file_events(path, session_id))
-    return events[start:end]
+    pos = 0
+    for path in self._archive_files(session_id):
+      file_events = self._archive_file_events(path, session_id)
+      file_end = pos + len(file_events)
+      if pos < end and file_end > start:
+        events.extend(file_events[max(start, pos) - pos:min(end, file_end) - pos])
+      pos = file_end
+      if pos >= end:
+        break
+    return events
+
+  def _archive_files(self, session_id: str) -> list[Path]:
+    """Return the session's archive files in chronological order, memoized on the dir's stat.
+
+    The signature is taken before the glob, so a rotation racing this read keys
+    its entry to the older directory state and the next call re-scans.
+    """
+    archives_dir = self._session_dir(session_id) / "data" / "archives"
+    try:
+      st = archives_dir.stat()
+    except OSError as e:
+      log.debug("archive_dir_stat_failed", path=str(archives_dir), error=str(e))
+      return []
+    memo = self._archive_files_memo.get(archives_dir)
+    if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
+      return memo[2]
+    paths = sorted(archives_dir.glob("chat_events.*.jsonl"))
+    self._archive_files_memo.store(archives_dir, (st.st_mtime_ns, st.st_size, paths))
+    return paths
 
   def _archive_file_events(self, path: Path, session_id: str) -> list[dict]:
     """Return one archive file's parsed events, memoized on (mtime_ns, size).

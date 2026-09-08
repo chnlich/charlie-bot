@@ -8,8 +8,9 @@ from unittest.mock import AsyncMock
 import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
-    FakeBackend,
+    ScriptedRelayBackend,
     fresh_state_fixture,
+    install_scripted_backends,
     make_transcript,
     make_work_item,
     mock_session_callbacks,
@@ -57,40 +58,11 @@ def _assistant(text: str) -> dict:
   return {"type": ET.ASSISTANT, "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
 
 
-class _ScriptedBackend(FakeBackend):
-  """Yields a script of events; terminate() ends the stream and records the kill."""
-
-  def __init__(self, events: list[dict], exit_code: int, stderr_text: str = "") -> None:
-    self._events = events
-    self.exit_code = exit_code
-    self.stderr_text = stderr_text
-    self.terminated = False
-    self.prompt: str | None = None
-    self.env: dict | None = None
-
-  async def terminate(self) -> None:
-    self.terminated = True
-    self.exit_code = -15
-
-  async def run(self, prompt: str, cwd: str, env: dict):
-    self.prompt = prompt
-    self.env = env
-    for event in self._events:
-      if self.terminated:
-        return
-      yield event
-
-
-def _install_backends(monkeypatch, backends: list[_ScriptedBackend]) -> list[dict]:
-  builds: list[dict] = []
-  queue = list(backends)
-
-  def fake_build_backend(option, cfg, **kwargs):
-    backend = queue.pop(0)
-    builds.append({"option": option, "kwargs": kwargs, "backend": backend})
-    return backend
-
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
+def _install_backends(monkeypatch, backends: list[ScriptedRelayBackend]) -> list[dict]:
+  # The master-cc run path re-imports build_backend through the registry on
+  # every call, so the patch lands there; the instructions builder is stubbed
+  # with it because _run_cc builds instructions before the first backend build.
+  builds = install_scripted_backends(monkeypatch, backends, BUILD_BACKEND_PATCH_TARGET)
   patch_instructions_content(monkeypatch)
   return builds
 
@@ -219,8 +191,8 @@ async def test_run_cc_relays_a_rejected_turn_onto_another_account(tmp_path: Path
   cfg = _pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
-  first = _ScriptedBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
-  second = _ScriptedBackend([backend_base.make_result_event()], exit_code=0)
+  first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
+  second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
   item = make_work_item(cfg, meta, cfg.backend_options[0])
 
@@ -244,13 +216,13 @@ async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(tm
   cfg = _pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
-  first = _ScriptedBackend(
+  first = ScriptedRelayBackend(
       [rate_limit_event("allowed_warning", 0.92),
        _assistant("step 1"),
        _tool_result(),
        _assistant("never streamed")],
       exit_code=0)
-  second = _ScriptedBackend([backend_base.make_result_event()], exit_code=0)
+  second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
   item = make_work_item(cfg, meta, cfg.backend_options[0])
 
@@ -269,7 +241,7 @@ async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, mon
   write_pool_credentials(tmp_path / "claude-ext-2", access_token="")
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
-  first = _ScriptedBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
+  first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   builds = _install_backends(monkeypatch, [first])
   item = make_work_item(cfg, meta, cfg.backend_options[0])
 
@@ -292,7 +264,7 @@ async def test_run_cc_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
   backends = [
-      _ScriptedBackend(
+      ScriptedRelayBackend(
           [rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1) for _ in range(5)
   ]
   builds = _install_backends(monkeypatch, backends)
@@ -311,9 +283,9 @@ async def test_run_cc_marks_a_login_failure_and_relays(tmp_path: Path, monkeypat
   cfg = _pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", UUID)
   meta = _session_on("main")
-  first = _ScriptedBackend(
+  first = ScriptedRelayBackend(
       [_assistant("Failed to authenticate: OAuth session expired and could not be refreshed")], exit_code=1)
-  second = _ScriptedBackend([backend_base.make_result_event()], exit_code=0)
+  second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
   item = make_work_item(cfg, meta, cfg.backend_options[0])
 
@@ -354,7 +326,7 @@ async def test_run_cc_compacts_with_sonnet_before_spawning_on_an_expired_cache(
     return True
 
   monkeypatch.setattr(master_cc_relay.claude_compaction, "compact_with_sonnet", fake_compact)
-  backend = _ScriptedBackend([backend_base.make_result_event()], exit_code=0)
+  backend = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds: list[dict] = []
 
   def fake_build_backend(option, cfg_, **kwargs):
@@ -391,8 +363,8 @@ async def test_run_cc_relay_compacts_a_large_fable_context_on_the_new_account(tm
     return True
 
   monkeypatch.setattr(master_cc_relay.claude_compaction, "compact_with_sonnet", fake_compact)
-  first = _ScriptedBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
-  second = _ScriptedBackend([backend_base.make_result_event()], exit_code=0)
+  first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
+  second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   _install_backends(monkeypatch, [first, second])
   callbacks = dataclasses.replace(
       mock_session_callbacks(),
@@ -416,7 +388,7 @@ async def test_run_cc_without_a_pool_spawns_the_option_unchanged(tmp_path: Path,
   )
   make_transcript(tmp_path / "pinned", UUID)
   meta = SessionMetadata(id="s1", name="t", backend="pinned", cc_session_id=UUID)
-  backend = _ScriptedBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
+  backend = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   builds = _install_backends(monkeypatch, [backend])
   item = make_work_item(cfg, meta, cfg.backend_options[0])
 

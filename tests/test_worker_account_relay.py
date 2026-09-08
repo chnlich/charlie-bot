@@ -11,9 +11,17 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import JudgmentShim, fresh_state_fixture, make_transcript, rate_limit_event, write_pool_credentials
+from conftest import (
+    WORKER_BUILD_BACKEND_PATCH_TARGET,
+    JudgmentShim,
+    ScriptedRelayBackend,
+    fresh_state_fixture,
+    install_scripted_backends,
+    make_transcript,
+    rate_limit_event,
+    write_pool_credentials,
+)
 
-from src.agents import worker as worker_mod
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import (
     claude_accounts,
@@ -75,48 +83,8 @@ def _result() -> dict:
   return {"type": ET.RESULT, "subtype": "success", "is_error": False, "result": "done"}
 
 
-class _ScriptedBackend:
-  """Yields a script of events; terminate() ends the stream and records the kill."""
-
-  def __init__(self, events: list[dict], exit_code: int, stderr_text: str = "") -> None:
-    self._events = events
-    self.exit_code = exit_code
-    self.stderr_text = stderr_text
-    self.terminated = False
-    self.hang_diagnostics = None
-    self.pid_start = "1-1"
-    self.prompt: str | None = None
-    self.env: dict | None = None
-    self.cwd: str | None = None
-
-  async def terminate(self) -> None:
-    self.terminated = True
-    self.exit_code = -15
-
-  def detach(self) -> None:
-    pass
-
-  async def run(self, prompt: str, cwd: str, env: dict):
-    self.prompt = prompt
-    self.cwd = cwd
-    self.env = env
-    for event in self._events:
-      if self.terminated:
-        return
-      yield event
-
-
-def _install_backends(monkeypatch: pytest.MonkeyPatch, backends: list[_ScriptedBackend]) -> list[dict]:
-  builds: list[dict] = []
-  queue = list(backends)
-
-  def fake_build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -> _ScriptedBackend:
-    backend = queue.pop(0)
-    builds.append({"option": option, "kwargs": kwargs, "backend": backend})
-    return backend
-
-  monkeypatch.setattr(worker_mod, "build_backend", fake_build_backend)
-  return builds
+def _install_backends(monkeypatch: pytest.MonkeyPatch, backends: list[ScriptedRelayBackend]) -> list[dict]:
+  return install_scripted_backends(monkeypatch, backends, WORKER_BUILD_BACKEND_PATCH_TARGET)
 
 
 def _thread() -> ThreadMetadata:
@@ -213,8 +181,8 @@ async def test_construct_worker_pins_the_pool_account_onto_the_worker_only(tmp_p
 async def test_worker_relays_a_rejected_run_onto_another_account(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
   source_transcript = make_transcript(tmp_path / "claude-main", CC_ID)
-  first = _ScriptedBackend([_assistant("working"), rate_limit_event("rejected", 1.0)], exit_code=1)
-  second = _ScriptedBackend([_assistant("done"), _result()], exit_code=0)
+  first = ScriptedRelayBackend([_assistant("working"), rate_limit_event("rejected", 1.0)], exit_code=1)
+  second = ScriptedRelayBackend([_assistant("done"), _result()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
   worker = _worker(tmp_path, cfg, "main")
 
@@ -237,10 +205,10 @@ async def test_worker_relays_a_rejected_run_onto_another_account(tmp_path: Path,
 async def test_worker_terminates_at_the_safe_point_after_a_far_warning_and_relays(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", CC_ID)
-  first = _ScriptedBackend(
+  first = ScriptedRelayBackend(
       [rate_limit_event("allowed_warning", 0.92),
        _tool_result(), _assistant("never streamed")], exit_code=0)
-  second = _ScriptedBackend([_result()], exit_code=0)
+  second = ScriptedRelayBackend([_result()], exit_code=0)
   _install_backends(monkeypatch, [first, second])
   worker = _worker(tmp_path, cfg, "main")
 
@@ -259,7 +227,7 @@ async def test_worker_outside_the_pool_still_raises_on_rejection(tmp_path: Path,
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[BackendOption(id=POOLED_ID, label="Fable", type="cc-claude", model=FABLE)],
   )
-  _install_backends(monkeypatch, [_ScriptedBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
+  _install_backends(monkeypatch, [ScriptedRelayBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
   worker = _worker(tmp_path, cfg, None)
 
   with pytest.raises(QuotaExhaustedException, match="Rate limited"):
@@ -271,7 +239,7 @@ async def test_worker_raises_pool_exhausted_when_no_account_is_left(tmp_path: Pa
   cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
   make_transcript(tmp_path / "claude-main", CC_ID)
   _reject("ext-1")
-  _install_backends(monkeypatch, [_ScriptedBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
+  _install_backends(monkeypatch, [ScriptedRelayBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
   worker = _worker(tmp_path, cfg, "main")
 
   with pytest.raises(claude_relay.PoolExhaustedError, match="earliest reset"):
@@ -282,7 +250,7 @@ async def test_worker_raises_pool_exhausted_when_no_account_is_left(tmp_path: Pa
 async def test_worker_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path, labels=("main", "a", "b", "c"))
   make_transcript(tmp_path / "claude-main", CC_ID)
-  backends = [_ScriptedBackend([rate_limit_event("rejected", 1.0)], exit_code=1) for _ in range(4)]
+  backends = [ScriptedRelayBackend([rate_limit_event("rejected", 1.0)], exit_code=1) for _ in range(4)]
   builds = _install_backends(monkeypatch, backends)
   worker = _worker(tmp_path, cfg, "main")
 
@@ -297,8 +265,8 @@ async def test_worker_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -
 async def test_worker_login_failure_marks_the_account_and_notifies_the_session(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", CC_ID)
-  first = _ScriptedBackend([_assistant("Failed to authenticate. Please run /login")], exit_code=1)
-  second = _ScriptedBackend([_result()], exit_code=0)
+  first = ScriptedRelayBackend([_assistant("Failed to authenticate. Please run /login")], exit_code=1)
+  second = ScriptedRelayBackend([_result()], exit_code=0)
   _install_backends(monkeypatch, [first, second])
   worker = _worker(tmp_path, cfg, "main")
   worker.on_session_event = AsyncMock()
@@ -322,10 +290,10 @@ async def test_worker_relay_compacts_a_large_fable_context_on_the_new_account(
   make_transcript(tmp_path / "claude-main", CC_ID)
   compact = AsyncMock()
   monkeypatch.setattr(claude_compaction, "compact_with_sonnet", compact)
-  first = _ScriptedBackend(
+  first = ScriptedRelayBackend(
       [_assistant("big", prompt_tokens=prompt_tokens),
        rate_limit_event("rejected", 1.0)], exit_code=1)
-  second = _ScriptedBackend([_result()], exit_code=0)
+  second = ScriptedRelayBackend([_result()], exit_code=0)
   _install_backends(monkeypatch, [first, second])
   worker = _worker(tmp_path, cfg, "main")
 
@@ -383,7 +351,7 @@ async def test_stream_worker_events_reports_an_exhausted_pool_as_quota_with_the_
   cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
   make_transcript(tmp_path / "claude-main", CC_ID)
   _reject("ext-1")
-  _install_backends(monkeypatch, [_ScriptedBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
+  _install_backends(monkeypatch, [ScriptedRelayBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
   worker = _worker(tmp_path, cfg, "main")
   thread = _thread()
   session_mgr = _SessionManager()

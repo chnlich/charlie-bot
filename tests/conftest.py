@@ -1138,6 +1138,15 @@ def write_trigger(path: Path, trigger: models.PendingTrigger) -> None:
   path.write_text(trigger.model_dump_json(indent=2), encoding="utf-8")
 
 
+def publish_via_tmp_rename(path: Path, text: str, tmp_name: str) -> None:
+  """Publish *text* at *path* through a tmp sibling and os.replace — the rename move every
+  metadata/trigger writer performs, so the memo scans see mtime_ns move. *tmp_name* is a fixed
+  sibling name (not atomic_write_text's uuid shape) so failure output stays greppable."""
+  tmp = path.with_name(tmp_name)
+  tmp.write_text(text, encoding="utf-8")
+  os.replace(tmp, path)
+
+
 def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, Scheduler]:
   """Real cfg/session_mgr/scheduler trio for scheduler and cron-task tests; the scheduler holds the
   process-wide SessionManager because a private instance keeps its own chat-event cache and its

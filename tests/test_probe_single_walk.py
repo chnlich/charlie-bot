@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import count_path_read_text, make_home_config, write_thread_meta
+from conftest import count_path_read_text, make_home_config, publish_via_tmp_rename, write_thread_meta
 
 from src.core import init as init_module
 from src.core import sidebar_state
@@ -121,9 +121,7 @@ def test_post_write_probe_parses_only_the_moved_file(tmp_path: Path, monkeypatch
 
   # One writer publish: the tmp-file rename every thread-metadata writer performs.
   victim = threads_dir / "t0" / "metadata.json"
-  tmp = victim.with_name("metadata.json.probe-test")
-  tmp.write_text(json.dumps({"id": "t0", "status": "running"}), encoding="utf-8")
-  os.replace(tmp, victim)
+  publish_via_tmp_rename(victim, json.dumps({"id": "t0", "status": "running"}), "metadata.json.probe-test")
 
   reads = count_path_read_text(monkeypatch, lambda path: path.name == "metadata.json")
   entries, _ = selective_probe_sidebar_state([spec], deep=False)

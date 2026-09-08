@@ -12,7 +12,13 @@ import threading
 from pathlib import Path
 
 import pytest
-from conftest import count_path_read_text, fresh_state_fixture, make_home_config, write_thread_meta
+from conftest import (
+    count_path_read_text,
+    fresh_state_fixture,
+    make_home_config,
+    publish_via_tmp_rename,
+    write_thread_meta,
+)
 
 import src.core.init_worker_recovery as worker_recovery_module
 from src.core.init_worker_recovery import (
@@ -22,13 +28,6 @@ from src.core.init_worker_recovery import (
 from src.core.models import utc_now
 
 _clean_memo = fresh_state_fixture(_reset_thread_meta_memo_for_tests)
-
-
-def _rewrite_atomically(path: Path, meta: dict) -> None:
-  """Publish meta through the same tmp-file rename the real metadata writers use."""
-  tmp = path.with_name("metadata.json.memo-test")
-  tmp.write_text(json.dumps(meta), encoding="utf-8")
-  os.replace(tmp, path)
 
 
 def _scan(threads_dir: Path) -> list[dict]:
@@ -56,7 +55,7 @@ def test_rereads_after_atomic_rewrite(tmp_path: Path) -> None:
   path = write_thread_meta(cfg, "s1", {"id": "t1", "status": "running"})
   assert [m["status"] for m in _scan(threads_dir)] == ["running"]
 
-  _rewrite_atomically(path, {"id": "t1", "status": "completed"})
+  publish_via_tmp_rename(path, json.dumps({"id": "t1", "status": "completed"}), "metadata.json.memo-test")
   assert [m["status"] for m in _scan(threads_dir)] == ["completed"]
 
 
@@ -72,7 +71,8 @@ def test_rereads_after_same_size_rewrite(tmp_path: Path) -> None:
   path = write_thread_meta(cfg, "s1", {"id": "t1", "status": "completed", "note": "aaaa"})
   assert [m["note"] for m in _scan(threads_dir)] == ["aaaa"]
 
-  _rewrite_atomically(path, {"id": "t1", "status": "completed", "note": "bbbb"})
+  payload = json.dumps({"id": "t1", "status": "completed", "note": "bbbb"})
+  publish_via_tmp_rename(path, payload, "metadata.json.memo-test")
   st = path.stat()
   os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
   assert [m["note"] for m in _scan(threads_dir)] == ["bbbb"]

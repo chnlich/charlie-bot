@@ -30,7 +30,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M17 session fork (clone) latency | M17 collector below | seconds per fork of the heaviest real session, scratch home | median < 2 s | — (introduced with its first history row) |
 | M18 hidden-tab periodic poll fetches | M18 collector below | poll fetches per simulated 10 hidden minutes | 0 fetches | — (introduced with its first history row) |
 | M19 SSE framing, chunked large-frame stream | M19 collector below | seconds per 16 MB payload (16 KB chunks, ~1 MB frames) | median < 0.2 s | — (introduced with its first history row) |
-| M20 recap extract, repeat divider | M20 collector below | seconds per extract at one divider, worst on-disk extract corpus | median < 0.05 s | — (introduced with its first history row) |
+| M20 recap extract, repeat divider | M20 collector below | seconds per extract at one divider, worst on-disk extract corpus; the cold per-divider repeat (the first extract at each unseen divider a recap scroll-back opens — events cache warm, scratch home) | median < 0.05 s; cold per-divider median < 0.02 s | — (introduced with its first history row) |
 | M21 sidebar probe sweep, steady state | M21 collector below | seconds per 10th-poll sweep over all active sessions | median < 0.05 s | — (introduced with its first history row) |
 | M22 ext-usage unknown-limit-shape warning stream, steady state | M22 collector below | warnings per 60 steady-state transform rounds | 0 warnings after the first sighting per process | — (introduced with its first history row) |
 | M23 archive-range chat-event rescan, steady state | M23 collector below | seconds per 8-page backwards scroll over the biggest archived corpus | median < 0.005 s | — (introduced with its first history row) |
@@ -1026,6 +1026,62 @@ times.sort()
 digest = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()[:12]
 print(f"{count} events, {len(result['asks'])} asks, digest {digest}; "
       f"repeat-divider extract median {times[2]:.4f} s, max {times[-1]:.4f} s")
+shutil.rmtree(home)
+EOF
+```
+
+M20 cold per-divider — the first extract at each unseen divider, the shape a recap
+scroll-back produces. The standing collector's five back-to-back repeats never leave
+one divider, so the per-divider cold cost needs its own timing: the harness copies the
+worst extract corpus into a scratch `CHARLIEBOT_HOME` under /tmp (live home read once
+for the copy, never written), warms the events cache as the viewed session's polls do,
+then times the first extract at six unseen dividers (0.70-0.95 of the corpus) — each
+divider a distinct memo key, so every timed round is a genuine cold extract:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core import recap
+
+# Worst extract corpus: the session whose chat events (live file plus archives)
+# carry the most bytes; the recap's per-divider extract projects events[0:end].
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    data = d / "data"
+    corpus = [data / "chat_events.jsonl", *sorted((data / "archives").glob("chat_events.*.jsonl"))]
+    n = sum(p.stat().st_size for p in corpus if p.is_file())
+    if n > best_n:
+        best, best_n = d, n
+SID = best.name
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
+# session's metadata.json and data/; live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m20cold-home-", dir="/tmp"))
+dst = home / "sessions" / SID
+dst.mkdir(parents=True)
+shutil.copy2(best / "metadata.json", dst / "metadata.json")
+shutil.copytree(best / "data", dst / "data")
+
+cfg = CharlieBotConfig(charliebot_home=home)
+mgr = SessionManager(cfg)
+count = mgr.get_chat_event_count_sync(SID)
+mgr.load_chat_events_sync(SID)  # warm the events cache, as the viewed session's polls do
+
+DIVIDERS = [int(count * f) for f in (0.95, 0.9, 0.85, 0.8, 0.75, 0.7)]
+times = []
+for end in DIVIDERS:
+    t0 = time.perf_counter()
+    result = recap.extract_recap(mgr, SID, end)
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {count} events, 6 unseen dividers "
+      f"(0.70-0.95 of corpus), events cache warm; cold per-divider extract median {times[3]*1000:.1f} ms, "
+      f"max {times[-1]*1000:.1f} ms, asks {len(result['asks'])}")
 shutil.rmtree(home)
 EOF
 ```
@@ -4645,6 +4701,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-08 | this PR | M20 cold per-divider extract median 88.1/88.6/91.3 ms → 6.8/7.2/7.2 ms, maxima 122.2-125.2 → 10.4-10.6 ms (three interleaved rounds of the new collector, 5519-event / 36.3 MB worst extract corpus of session aa196b47, 6 unseen dividers 0.70-0.95 of the corpus, events cache warm, scratch CHARLIEBOT_HOME, main checkout before vs branch worktree after back-to-back at load 1.4-1.8, every paired round faster; asks 19 identical across all arms and the standing repeat digest bb99828aa5b6 identical; no-regression re-measures on the branch: M23 8-page scroll 0.0003 s, M30 live-half 0.0002 s / append-round 0.0003 s, M26 advance 0.18 ms parity True digest e94c56635194, M6 append-round 0.06 ms parity True, M17 fork 0.0556 s; 4845-passed suite plus 3 new range-reader tests) | the recap's per-divider extract re-entered load_chat_events_range, whose unarchived half re-read and re-parsed the whole live prefix per divider — 88 of the 92 ms per-divider wall on the worst corpus — while the events cache held the same parsed events; the unarchived range read now serves a warm events cache as a slice (the cache is the parsed truth load_chat_events_sync's consumers already trust: save_chat_event is the single append funnel and every whole-file rewrite — archive rotation, fork, delete — drops the cache in the same flow), which also removes the physical-line/parsed-event index skew a malformed line injected between the warm count and the disk read; cold per-divider sub-metric added to the M20 definition and collector in this PR |
 | 2026-09-08 | this PR | M56 /status request median 2.18/2.07/2.04 ms → 2.01/2.18/2.09 ms, maxima 10.12/10.36/10.10 → 9.68/9.63/9.89 ms (three interleaved rounds of the verbatim collector, 46 sidebar ids, live corpus read-only, main checkout before vs branch worktree after back-to-back at load 1.2-1.7, body 10141 B and parsed-body digest ab06240028f8 identical across all six arms; the poll-10 wall no longer contains the self-heal sweep — single-portal shape, one TestClient context as the server's one-loop shape, 30-request runs: max 8.88/8.15 ms → 2.30/2.38 ms, requests paying > 4 ms 3/30 → 0/30, p50 1.17/1.14 → 1.36/1.45 ms, the detached task's scheduling and its background overlap spread across the run; no-regression re-measures interleaved ×2: M21 sweep 0.0041-0.0046 s median both arms (46 active sessions), M51 post-write deep probe 2.11-2.17 ms both arms (339-file corpus), M40 starred 0.16-0.19 → 0.14-0.17 ms and groups 0.14 → 0.11-0.12 ms, M44 scheduled 2.13/2.11 → 2.16/2.10 ms with maxima 6.00/6.11 → 6.07/6.02 ms and digest 81fafe421f19 identical, M71 capped search 6.35/6.26 → 6.27/6.19 ms with digest 0eab5cddcdf2 identical; 4842-passed suite) | the every-10th-poll self-heal sweep ran inline inside the poll's request wall — the poll awaited a 46-session signature sweep while its answer needed only the snapshot and the dirty set; the sweep now runs detached (single-flight through create_logged_task): the poll answers from the snapshot plus its dirty/cold probes and the sweep's results land for the polls that follow it, so a missed mark still heals one poll later inside the same window; dirty-marked sessions stay with the synchronous polls (a mark must be consumed only by a probe whose result lands in a response), force=1 keeps its synchronous full probe, a failed sweep re-marks its selected sessions, and a loop-teardown cancellation re-raises — create_logged_task treats a cancelled task as clean, which keeps the per-request-portal collectors whose 10th request schedules the sweep (M56/M44/M71) free of the ~290 ms CancelledError-traceback render the first draft logged as a sweep failure |
 | 2026-09-08 | this PR | M7 changed-round collect, entry-served regime (db WAL quiet): median 239.5/240.6 ms → 99.5/107.2 ms, every paired round faster (235.3-246.2 → 97.8-100.0 ms and 239.8-242.8 → 106.1-114.2 ms over the two 5-round sets; three interleaved rounds of the verbatim changed-round harness, main checkout before vs branch worktree after back-to-back at load 1.2-2.3; round 3's WAL-moving regime unchanged 137.0 → 128.1 ms median — the scan path is untouched; row-landing maxima 364.1 → 402.0 ms, the scan+rewrite still runs when rows land by design; mechanism probe: the before arm's one entry-served round replayed 87,357 records, the after arm replayed 0 records over 3 rounds; no-regression re-measures interleaved ×2: whole-tally warm hit 16.3/16.0 → 16.2/15.9 ms with rows 15 / notes 3 identical; 4841-passed suite plus the adoption contract test) | the entry-served changed round replayed the document entry through the per-record fold — 84 % of the round (201 of 239 ms profiled, 111,743 `t.add` calls at the morning measurement) — although a served entry's rows are provably the rows the partial sums: the entry is served only while its stored signature still matches the db, and a row move writes the db or its WAL sidecar, moving that signature; the buckets now adopt through the partial's empty-delta adjust and a process's first entry-served round replays once to build the partial, so the steady-state entry-served round pays the walk and the serve, zero record folds; #1059's rewrite skip (landed earlier today) left this replay regime untouched — its evidence measured the WAL-moving regime, where the scan's probe already served the partial |
 | 2026-09-08 | this PR | M63 /view body 277206 B → 179222 B, −35 %, handler medians within noise 1.20/1.12/1.11 ms → 1.24/0.90/0.85 ms (three interleaved rounds of the verbatim collector, 339-file worst threads corpus of session 3b91d606, scratch CHARLIEBOT_HOME, main checkout before vs branch worktree after back-to-back at load 0.66-1.12; M35 no-regression set: events page 2.71/2.63/2.60 → 2.82/2.65/2.77 ms, body 633236 → 624733 B, digest 46d1d509a0d6 → 68668edc2776 — the dropped fields' bytes — while view and bootstrap bodies stayed byte-identical 183003/137271 B with identical digests, that corpus's served window carrying none of the dropped fields; component attribution on the M63 corpus: the 339-row threads array carries none of the dropped fields — the 98 KB sits in 12 projected messages, `full_content` ~68.7 KB over 8 worker summaries (~8.6 KB each) plus `description` ~28.7 KB over 4 task_delegated rows; no-regression re-measures on the branch: M26 advance 0.19 ms parity True digest e94c56635194, M6 append-round 0.08 ms parity True, M75 catch-up loop-lag 0.0109 s, M45 loop-lag 0.0065 s digest 314dfbe9fd89; 4837-passed suite plus the frontend renderer slice, 2 contract tests updated) | the message projection carried the worker summary's full text (``full_content``) and the delegation's task-spec-length ``description`` on every view/bootstrap/events page and every websocket message delta, while no reader of the projection reads either: the worker_summary bubble renders content alone (the renderer contract test pins the full body absent even when carried), the delegation card reads ``delegate_invocation``, the recap asks read role/content, and the review-context scan reads raw events; the fields stay on the persisted chat event — the fork reference and the review scan's data source — and the projection and its wire deltas stop carrying them |

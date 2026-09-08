@@ -235,7 +235,9 @@ class ChatEventStore:
 
     Indices are global (archive_offset + line_in_live_file). When the requested
     range starts before the live file, archived chat_events files under
-    ``data/archives/`` are read in chronological order to fill the gap.
+    ``data/archives/`` are read in chronological order to fill the gap. The
+    archived halves serve from their (mtime_ns, size) memos; an unarchived
+    session's warm events cache serves its half as a slice.
     """
     if end <= start:
       return [], start > 0
@@ -249,6 +251,18 @@ class ChatEventStore:
       if archive_offset > 0:
         lines = self._live_range_lines(live_path, session_id)
         return [e for e in lines[rel_start:rel_end] if e is not None], start > 0
+      cached = self._events_cache.get(session_id)
+      if cached is not None:
+        # Unarchived: the global index is the cache's own parsed-event index.
+        # save_chat_event is the single append funnel and every whole-file
+        # rewrite (archive rotation, fork, delete) drops the cache in the same
+        # flow, so a warm cache is the file's parsed truth — the same trust
+        # load_chat_events_sync's consumers (projection, usage, finalize
+        # folds) already place in it. parse_ndjson_range's islice counts
+        # physical lines instead, so the disk read both re-parses the whole
+        # prefix per call (the recap's per-divider cost) and skews its window
+        # by any malformed lines the cached count never charged.
+        return cached[rel_start:rel_end], start > 0
       events, _ = parse_ndjson_range(live_path, rel_start, rel_end)
       return events, start > 0
     archive_events = self._load_archive_range(session_id, start, archive_offset)

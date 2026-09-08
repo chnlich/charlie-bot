@@ -416,6 +416,67 @@ async def test_live_range_counts_physical_lines(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_unarchived_range_serves_warm_events_cache_without_disk_read(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  live_path = mgr.get_chat_events_path(session.id)
+  _append_events(live_path, [{"type": "user", "content": f"c{i}", "timestamp": _archive_cutoff_events()[0].isoformat()}
+                             for i in range(4)])
+
+  cold, _ = mgr.load_chat_events_range(session.id, 0, 4)
+  warm = mgr.load_chat_events_sync(session.id)
+  assert len(cold) == 4
+
+  real_open = open
+  live_opens = []
+
+  def counting_open(file, *args, **kwargs):
+    if str(file) == str(live_path):
+      live_opens.append(str(file))
+    return real_open(file, *args, **kwargs)
+
+  with patch("builtins.open", counting_open):
+    got, has_more = mgr.load_chat_events_range(session.id, 1, 4)
+
+  assert live_opens == [], "a warm events cache must serve the unarchived range without re-reading the file"
+  assert [e["content"] for e in got] == [e["content"] for e in warm[1:4]] == ["c1", "c2", "c3"]
+  assert has_more is True
+
+
+@pytest.mark.asyncio
+async def test_unarchived_range_cache_slice_sees_funnel_appends(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  ts = _archive_cutoff_events()[0].isoformat()
+  mgr.load_chat_events_sync(session.id)  # warm the cache on an empty live file
+
+  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
+    for i in range(3):
+      await mgr.save_chat_event(session.id, {"type": "user", "content": f"c{i}", "timestamp": ts})
+
+  got, _ = mgr.load_chat_events_range(session.id, 0, 3)
+  assert [e["content"] for e in got] == ["c0", "c1", "c2"]
+
+
+@pytest.mark.asyncio
+async def test_unarchived_range_cache_slice_keeps_parsed_event_domain(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  live_path = mgr.get_chat_events_path(session.id)
+  # A malformed line between good ones: the disk range read (physical-line
+  # islice) would drop the tail event from a count-sized window; the cache's
+  # parsed-event index must not.
+  live_path.write_text(
+      '{"type": "user", "content": "c0"}\n{bad json\n{"type": "user", "content": "c1"}\n{"type": "user", "content": "c2"}\n',
+      encoding="utf-8")
+
+  warm = mgr.load_chat_events_sync(session.id)
+  assert len(warm) == 3
+  count = mgr.get_chat_event_count_sync(session.id)
+  assert count == 3, "the warm count is the cache's parsed-event count"
+
+  got, _ = mgr.load_chat_events_range(session.id, 0, count)
+  assert [e["content"] for e in got] == ["c0", "c1", "c2"]
+
+
+@pytest.mark.asyncio
 async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   await recycle_archive_cutoff_events(mgr, session.id)

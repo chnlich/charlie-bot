@@ -95,7 +95,8 @@ def reset_for_tests() -> None:
   _login_notified.clear()
 
 
-def _now(now: datetime | None) -> datetime:
+def now_or(now: datetime | None) -> datetime:
+  """The injected clock, or the wall clock when the caller passed none."""
   return now if now is not None else datetime.now(UTC)
 
 
@@ -157,12 +158,12 @@ def credentials_present(account: ClaudeAccount) -> bool:
 
 def record_auth_failure(label: str, now: datetime | None = None) -> None:
   """Remember that a process on *label* failed to authenticate at *now*."""
-  _auth_failures[label] = _now(now)
+  _auth_failures[label] = now_or(now)
 
 
 def auth_failed_recently(label: str, now: datetime | None = None) -> bool:
   failed_at = _auth_failures.get(label)
-  return failed_at is not None and _now(now) - failed_at < AUTH_FAILURE_COOLDOWN
+  return failed_at is not None and now_or(now) - failed_at < AUTH_FAILURE_COOLDOWN
 
 
 def login_notice_due(label: str, *, unhealthy: bool) -> bool:
@@ -201,7 +202,7 @@ def observe_rate_limit(label: str, info: dict, now: datetime | None = None) -> R
   Returns the reading stored, or None when the payload carries neither a
   utilization nor a rejection (nothing to learn from it).
   """
-  moment = _now(now)
+  moment = now_or(now)
   windows = info.get("unifiedWindows") if isinstance(info, dict) else None
   values: list[float] = []
   if isinstance(windows, dict):
@@ -236,9 +237,9 @@ def observe_usage_panel(label: str, usage: dict, now: datetime | None = None) ->
     return
   fetched_at = usage.get("fetched_at")
   try:
-    at = datetime.fromisoformat(fetched_at) if isinstance(fetched_at, str) else _now(now)
+    at = datetime.fromisoformat(fetched_at) if isinstance(fetched_at, str) else now_or(now)
   except ValueError:
-    at = _now(now)
+    at = now_or(now)
   if at.tzinfo is None:
     at = at.replace(tzinfo=UTC)
   _panel_readings[label] = {"at": at, "windows": [w for w in windows if isinstance(w, dict)]}
@@ -281,7 +282,7 @@ def headroom(label: str, model: str | None, now: datetime | None = None) -> floa
   reading = latest_reading(label, model)
   if reading is None:
     return 1.0
-  if reading.rejected_until is not None and reading.rejected_until > _now(now):
+  if reading.rejected_until is not None and reading.rejected_until > now_or(now):
     return 0.0
   return max(0.0, 1.0 - reading.utilization)
 
@@ -314,7 +315,7 @@ def select(
 
 def earliest_reset(cfg: CharlieBotConfig, now: datetime | None = None) -> datetime | None:
   """The nearest rejection reset among pool accounts, for the pool-exhausted error."""
-  moment = _now(now)
+  moment = now_or(now)
   resets = [
       reading.rejected_until for account in pool(cfg) if (reading := _event_readings.get(account.label)) is not None and
       reading.rejected_until is not None and reading.rejected_until > moment

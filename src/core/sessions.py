@@ -569,6 +569,14 @@ def _sidebar_signature_fresh(session_id: str, signature: tuple, now_ts: float) -
   return stored == signature and now_ts < signature[3]
 
 
+def _store_probe_results(probed: dict[str, dict], probe_sigs: dict[str, tuple]) -> None:
+  """Persist one probe round's outputs into :mod:`src.core.sidebar_state`: snapshot entries, then signatures."""
+  for session_id, entry in probed.items():
+    sidebar_state.store_snapshot_entry(session_id, entry)
+  for session_id, sig in probe_sigs.items():
+    sidebar_state.store_probe_signature(session_id, sig)
+
+
 def selective_probe_sidebar_state(
     specs: list[tuple[str, Path, Path, Path]],
     *,
@@ -2343,6 +2351,12 @@ class SessionManager:
     """
     return await asyncio.to_thread(has_running_tasks_sync, self._threads_dir(session_id))
 
+  def _probe_spec(self, session_id: str) -> tuple[str, Path, Path, Path]:
+    """The probe-input tuple :func:`selective_probe_sidebar_state` consumes."""
+    return (
+        session_id, self._threads_dir(session_id), self._session_dir(session_id) / "triggers",
+        self._session_dir(session_id) / "plans.json")
+
   async def _enrich_and_sort(
       self,
       sessions: list[SessionMetadata],
@@ -2441,11 +2455,7 @@ class SessionManager:
     sidebar_state.discard_dirty(probe_ids)
 
     if probe_ids:
-      specs = [
-          (
-              session_id, self._threads_dir(session_id), self._session_dir(session_id) / "triggers",
-              self._session_dir(session_id) / "plans.json") for session_id in probe_ids
-      ]
+      specs = [self._probe_spec(session_id) for session_id in probe_ids]
       try:
         # Explicit force keeps its teeth as the escape hatch: it deep-probes
         # every selected session. Narrowed sweeps (the every-10th self-heal)
@@ -2456,10 +2466,7 @@ class SessionManager:
         for session_id in probe_ids:
           sidebar_state.mark_sidebar_dirty(session_id)
         raise
-      for session_id, entry in probed.items():
-        sidebar_state.store_snapshot_entry(session_id, entry)
-      for session_id, sig in probe_sigs.items():
-        sidebar_state.store_probe_signature(session_id, sig)
+      _store_probe_results(probed, probe_sigs)
 
     for meta in active_sessions:
       probed = sidebar_state.required_snapshot_entry(meta.id)
@@ -2487,11 +2494,7 @@ class SessionManager:
     global _sidebar_sweep_task
     if _sidebar_sweep_task is not None and not _sidebar_sweep_task.done():
       return
-    specs_template = [
-        (
-            meta.id, self._threads_dir(meta.id), self._session_dir(meta.id) / "triggers",
-            self._session_dir(meta.id) / "plans.json") for meta in sessions
-    ]
+    specs_template = [self._probe_spec(meta.id) for meta in sessions]
 
     async def _run() -> None:
       specs = [
@@ -2517,10 +2520,7 @@ class SessionManager:
         for session_id, _threads_dir, _triggers_dir, _plans_path in specs:
           sidebar_state.mark_sidebar_dirty(session_id)
         return
-      for session_id, entry in probed.items():
-        sidebar_state.store_snapshot_entry(session_id, entry)
-      for session_id, sig in probe_sigs.items():
-        sidebar_state.store_probe_signature(session_id, sig)
+      _store_probe_results(probed, probe_sigs)
 
     _sidebar_sweep_task = create_logged_task(_run(), name="sidebar-self-heal-sweep")
 

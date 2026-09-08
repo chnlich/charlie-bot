@@ -140,11 +140,11 @@ async def test_bad_cursor_fails_loudly(tmp_path: Path) -> None:
   mgr = make_session_mgr(tmp_path)
   await _add_session(mgr, "s0")
 
-  with pytest.raises(ValueError):
+  with pytest.raises(ValueError, match="not-a-timestamp"):
     await mgr.list_archived_page(before="not-a-timestamp", before_id="x")
-  with pytest.raises(ValueError):
+  with pytest.raises(ValueError, match="timezone-aware"):
     await mgr.list_archived_page(before="2026-08-01T12:00:00", before_id="x")  # naive timestamp
-  with pytest.raises(ValueError):
+  with pytest.raises(ValueError, match="pass both or neither"):
     await mgr.list_archived_page(before=_BASE_TIME.isoformat(), before_id=None)  # half a cursor
 
 

@@ -192,7 +192,9 @@ def test_load_cron_file_rejects_empty_steps(tmp_path: Path) -> None:
   cfg = build_scheduler_cfg(tmp_path)
   yaml_path = cron_dir / "chained.yaml"
   yaml_path.write_text(yaml.safe_dump({"cron": "0 3 * * *", "steps": []}), encoding="utf-8")
-  with pytest.raises(ValueError):
+  # bool([]) is False, so an empty steps list fails the exactly-one-source check
+  # before the non-empty check can name it.
+  with pytest.raises(ValueError, match="task must have exactly one of"):
     _load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
 
 

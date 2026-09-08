@@ -618,7 +618,9 @@ def pool_cfg(
 
 
 # Resolved model and option id the account-pool suites pin for the pooled Fable backend.
-# One home so a rename stays a one-line change across the master-turn, worker, and ledger suites.
+# One home so a rename stays a one-line change across the master-turn, worker, and ledger
+# suites; wire-payload assertions and yaml text keep the raw strings (same rule as
+# OPUS_BACKEND_ID above).
 FABLE_MODEL = "claude-fable-5-1"
 POOLED_FABLE_ID = "claude-fable-5"
 

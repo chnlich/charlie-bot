@@ -596,6 +596,26 @@ def write_pool_credentials(config_dir: Path, access_token: str = "token") -> Non
       }}), encoding="utf-8")
 
 
+def pool_cfg(
+    tmp_path: Path,
+    backend_options: list[models.BackendOption],
+    *,
+    home: Path,
+    worktree_dir: Path,
+    labels: tuple[str, ...] = ("main", "ext-1", "ext-2"),
+) -> CharlieBotConfig:
+  """A pooled CharlieBotConfig: one ClaudeAccount per label, pool credentials planted in each config dir."""
+  accounts = [models.ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
+  for account in accounts:
+    write_pool_credentials(Path(account.config_dir))
+  return CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(worktree_dir),
+      claude_accounts=accounts,
+      backend_options=backend_options,
+  )
+
+
 def session_dir_names(cfg: CharlieBotConfig) -> set[str]:
   """Snapshot the names of session directories on disk (existence, not content)."""
   if not cfg.sessions_dir.exists():

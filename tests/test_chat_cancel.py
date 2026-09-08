@@ -1,5 +1,6 @@
 """Regression tests for master cancel endpoint behavior."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -38,25 +39,21 @@ class _StderrOnlyBackend(AgentBackend):
       yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine
 
 
-async def _run_cc_with_stderr_backend(
-    tmp_path,
+async def _run_cc_with_backend(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    terminate_before_stderr: bool,
-):
+    backend: AgentBackend,
+    session_meta: models.SessionMetadata,
+    user_content: str,
+) -> tuple[models.SessionCallbacks, tuple[str | None, int, str | None, dict]]:
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
           models.BackendOption(id="fake", label="Fake", type="codex", prompt_overlay="none"),
       ],
   )
-  session_meta = models.SessionMetadata(
-      id=f"session-terminated-{terminate_before_stderr}",
-      name="Cancel",
-      backend="fake",
-  )
   callbacks = mock_session_callbacks()
-  backend = _StderrOnlyBackend(terminate_before_stderr=terminate_before_stderr)
 
   def fake_build_backend(option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs):
     return backend
@@ -64,10 +61,28 @@ async def _run_cc_with_stderr_backend(
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
   patch_instructions_content(monkeypatch)
 
-  item = make_work_item(cfg, session_meta, cfg.backend_options[0], user_content="stop", callbacks=callbacks)
-
+  item = make_work_item(cfg, session_meta, cfg.backend_options[0], user_content=user_content, callbacks=callbacks)
   result = await master_cc._run_cc(item)
   return callbacks, result
+
+
+async def _run_cc_with_stderr_backend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    terminate_before_stderr: bool,
+):
+  return await _run_cc_with_backend(
+      tmp_path,
+      monkeypatch,
+      backend=_StderrOnlyBackend(terminate_before_stderr=terminate_before_stderr),
+      session_meta=models.SessionMetadata(
+          id=f"session-terminated-{terminate_before_stderr}",
+          name="Cancel",
+          backend="fake",
+      ),
+      user_content="stop",
+  )
 
 
 @pytest.mark.asyncio
@@ -157,30 +172,18 @@ class _ScriptedBackend(AgentBackend):
 
 
 async def _run_cc_with_scripted_events(
-    tmp_path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
     events: list[dict],
 ) -> models.SessionCallbacks:
-  cfg = core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          models.BackendOption(id="fake", label="Fake", type="codex", prompt_overlay="none"),
-      ],
+  callbacks, _result = await _run_cc_with_backend(
+      tmp_path,
+      monkeypatch,
+      backend=_ScriptedBackend(events),
+      session_meta=models.SessionMetadata(id="session-salvage", name="Salvage", backend="fake"),
+      user_content="hi",
   )
-  session_meta = models.SessionMetadata(id="session-salvage", name="Salvage", backend="fake")
-  callbacks = mock_session_callbacks()
-  backend = _ScriptedBackend(events)
-
-  def fake_build_backend(option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs):
-    return backend
-
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
-  patch_instructions_content(monkeypatch)
-
-  item = make_work_item(cfg, session_meta, cfg.backend_options[0], user_content="hi", callbacks=callbacks)
-
-  await master_cc._run_cc(item)
   return callbacks
 
 

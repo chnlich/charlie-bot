@@ -13,6 +13,7 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    compact_boundary_event,
     drain_session_consumer,
     fresh_master_state,
     make_work_item,
@@ -710,15 +711,7 @@ async def test_zero_output_guard_exempts_manual_compact(tmp_path: Path, monkeypa
   """
   cb = await _run_stream_consumer(
       tmp_path, monkeypatch, "zero-neg-compact-manual", [
-          {
-              "type": "system",
-              "subtype": "compact_boundary",
-              "compact_metadata": {
-                  "trigger": "manual",
-                  "pre_tokens": 10,
-                  "post_tokens": 2
-              }
-          },
+          compact_boundary_event(trigger="manual", pre_tokens=10, post_tokens=2),
           make_result_event(),
       ])
 
@@ -735,15 +728,7 @@ async def test_zero_output_guard_fires_on_auto_compact(tmp_path: Path, monkeypat
   silent turn after it is exactly the failure the guard exists for."""
   cb = await _run_stream_consumer(
       tmp_path, monkeypatch, "zero-pos-compact-auto", [
-          {
-              "type": "system",
-              "subtype": "compact_boundary",
-              "compact_metadata": {
-                  "trigger": "auto",
-                  "pre_tokens": 10,
-                  "post_tokens": 2
-              }
-          },
+          compact_boundary_event(trigger="auto", pre_tokens=10, post_tokens=2),
           make_result_event(),
       ])
 
@@ -773,16 +758,7 @@ async def test_zero_output_guard_resume_exempts_manual_compact(tmp_path: Path, m
   log_dir = tmp_path / "run"
   log_dir.mkdir(parents=True)
   raw_path = log_dir / runs.RAW_LOG_NAME
-  boundary_line = json.dumps(
-      {
-          "type": "system",
-          "subtype": "compact_boundary",
-          "compact_metadata": {
-              "trigger": "manual",
-              "pre_tokens": 10,
-              "post_tokens": 2
-          }
-      }) + "\n"
+  boundary_line = json.dumps(compact_boundary_event(trigger="manual", pre_tokens=10, post_tokens=2)) + "\n"
   result_line = json.dumps(make_result_event()) + "\n"
   raw_path.write_text(boundary_line + result_line, encoding="utf-8")
   cursor_path = log_dir / runs.CURSOR_NAME
@@ -831,15 +807,7 @@ async def test_zero_output_guard_passes_through_independent_error(
       monkeypatch,
       "zero-passthrough",
       [
-          {
-              "type": "system",
-              "subtype": "compact_boundary",
-              "compact_metadata": {
-                  "trigger": "manual",
-                  "pre_tokens": 10,
-                  "post_tokens": 2
-              }
-          },
+          compact_boundary_event(trigger="manual", pre_tokens=10, post_tokens=2),
           make_result_event(),
       ],
       exit_code=2,

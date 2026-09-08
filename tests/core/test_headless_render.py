@@ -1,8 +1,4 @@
-"""Headless render — the warm Chrome pool behind the page-height assertion.
-
-The lifecycle seams run under fakes; the real-drive test is local_only (host Chrome) and
-asserts the warm reuse the fix promises.
-"""
+"""Headless render tests: warm-pool lifecycle under fakes, plus a local_only real-Chrome drive check."""
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,14 +19,12 @@ def _fresh_renderer_singleton():
 
 
 def test_render_height_launches_once_and_serves_warm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The first call launches the browser; a warm second call must not relaunch it."""
   renderer = headless_render._WarmRenderer(tmp_path / "chrome")
   launches = []
 
   def fake_launch(self):
     launches.append(1)
-    self._proc = SimpleNamespace(poll=lambda: None)
-    self._ws = SimpleNamespace()
+    self._proc, self._ws = SimpleNamespace(poll=lambda: None), SimpleNamespace()
 
   monkeypatch.setattr(headless_render._WarmRenderer, "_launch", fake_launch)
   monkeypatch.setattr(headless_render._WarmRenderer, "_render_once", lambda self, uri: 800)
@@ -57,9 +51,7 @@ def test_warm_renderer_measures_real_page_height(tmp_path: Path) -> None:
       encoding="utf-8")
   renderer = headless_render._WarmRenderer(Path(chrome))
   try:
-    first = renderer.render_height(probe.as_uri())
-    second = renderer.render_height(probe.as_uri())
+    first, second = renderer.render_height(probe.as_uri()), renderer.render_height(probe.as_uri())
   finally:
     renderer.close()
-  assert isinstance(first, int) and first > 0
-  assert first == second, "the warm render must be deterministic for identical bytes"
+  assert first > 0 and first == second, "the warm render must be deterministic for identical bytes"

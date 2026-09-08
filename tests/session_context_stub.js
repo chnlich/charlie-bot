@@ -107,8 +107,10 @@ function createChatSidebarContext(context) {
 // to (reportSwitchEvent); an endpoint move on either side breaks the pin.
 const SWITCH_TELEMETRY_URL = '/api/diag/switch-events';
 
-// One sidebar row as the harnesses mount it: '.session-name' is the only
-// selector the sidebar code resolves against a row node.
+// One sidebar row as the harnesses mount it: querySelector answers only
+// '.session-name' (the selector the row rendering resolves); sidebar callers
+// resolving other selectors against a row (archived.js's group move)
+// null-guard the miss.
 function makeSidebarRow(sessionId, name) {
   const nameEl = createElement({textContent: name});
   return createElement({

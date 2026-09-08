@@ -124,6 +124,37 @@ async def test_fork_session_full_reference_rejects_corrupt_line(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_fork_reference_keeps_utf8_parity_on_non_ascii_and_undecodable_bytes(tmp_path: Path) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend=OPUS_BACKEND_ID)
+  events_path = mgr.get_chat_events_path(parent.id)
+  _append_events(events_path, [{"type": "user", "content": "ok"}])
+  # A non-ASCII but valid line rides the decode branch (the isascii() proof
+  # answers only for ASCII corpora); the reference copies its raw bytes.
+  non_ascii = json.dumps({"type": "user", "content": "中文"}, ensure_ascii=False)
+  with open(events_path, "a", encoding="utf-8") as f:
+    f.write(non_ascii + "\n")
+
+  child = await mgr.fork_session(parent.id)
+  expected = json.dumps({"type": "user", "content": "ok"}) + "\n" + non_ascii + "\n"
+  assert _reference_path(mgr, child.id).read_text(encoding="utf-8") == expected
+
+  # Undecodable bytes raise at fork time, as the text-mode read did, and the
+  # failed fork writes no reference.
+  other = await mgr.create_session(CreateSessionRequest(name="Other"), backend=OPUS_BACKEND_ID)
+  _append_events(mgr.get_chat_events_path(other.id), [{"type": "user", "content": "ok"}])
+  with open(mgr.get_chat_events_path(other.id), "ab") as f:
+    f.write(b"\xff\xfe\n")
+  references_before = set(cfg.sessions_dir.glob("*/data/parent_reference.jsonl"))
+
+  with pytest.raises(UnicodeDecodeError):
+    await mgr.fork_session(other.id)
+
+  assert set(cfg.sessions_dir.glob("*/data/parent_reference.jsonl")) == references_before
+
+
+@pytest.mark.asyncio
 async def test_reference_handoff_errors_write_no_reference(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   mgr = SessionManager(cfg)

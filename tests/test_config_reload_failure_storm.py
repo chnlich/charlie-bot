@@ -143,7 +143,7 @@ def test_startup_with_broken_config_still_raises(profile_home, reload_log) -> No
   core_config._config = None
   core_config._config_mtime = 0.0
   core_config._config_failed_mtime = None
-  with pytest.raises(Exception):
+  with pytest.raises(ValueError, match="unknown config key"):
     core_config.get_config()
 
 

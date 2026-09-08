@@ -25,6 +25,7 @@ from conftest import (
     make_work_item,
     mock_session_callbacks,
 )
+from pydantic import ValidationError
 from structlog.testing import capture_logs
 
 from src.agents import master_cc
@@ -114,11 +115,11 @@ def test_yaml_explicit_null_manager_prompt_file_fails_every_session(tmp_path: Pa
 
 
 def test_unknown_keys_and_wrong_types_are_invalid() -> None:
-  with pytest.raises(Exception, match="worker_prompt_file"):
+  with pytest.raises(ValidationError, match="worker_prompt_file"):
     ProjectConfig(prompt_file="project.md", worker_prompt_file="w.md")
-  with pytest.raises(Exception):
+  with pytest.raises(ValidationError, match="prompt_file"):
     ProjectConfig(prompt_file=123)
-  with pytest.raises(Exception):
+  with pytest.raises(ValidationError, match="manager_prompt_file"):
     ProjectConfig(prompt_file="project.md", manager_prompt_file=["manager.md"])
 
 

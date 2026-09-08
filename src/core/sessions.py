@@ -754,6 +754,14 @@ class SessionManager:
     # in memory across calls so consecutive assistant chunks accumulate into
     # a single bubble and tool-only events attach to the prior text bubble.
     self._aggregators: dict[str, MessageAggregator] = {}
+    # Serializes the lazy disk catch-up behind _get_or_init_aggregator: the
+    # init reads and feeds the whole live corpus in a thread, so two events
+    # arriving back-to-back for the same session must not double-init.
+    self._aggregator_init_locks: dict[str, asyncio.Lock] = {}
+    # Bumped by every _drop_session_runtime_state so an in-flight threaded
+    # catch-up can detect that the corpus it read is no longer current and
+    # discard its result instead of resurrecting dropped runtime state.
+    self._aggregator_epoch: dict[str, int] = {}
     # Per-session MessageProjection cache (LRU, cap _PROJECTION_LRU_LIMIT). A
     # hit requires the cached event_count to equal the live event count
     # (get_message_projection, projection_memo_hit), so a stale projection is
@@ -1852,7 +1860,7 @@ class SessionManager:
     # injection works on the very first call after server start (and so the
     # aggregator state matches what SSR/SPA-switch produced for the same
     # events).
-    aggregator = self._get_or_init_aggregator(session_id)
+    aggregator = await self._get_or_init_aggregator(session_id)
     meta = await self.get_session(session_id)
     archive_offset = meta.archive_offset if meta else 0
     await self.save_chat_event(session_id, event)
@@ -1885,25 +1893,57 @@ class SessionManager:
     channel = _session_channel(session_id)
     await streaming_manager.broadcast(channel, event)
 
-  def _get_or_init_aggregator(self, session_id: str) -> MessageAggregator:
+  async def _get_or_init_aggregator(self, session_id: str) -> MessageAggregator:
     """Return the live aggregator for *session_id*, lazy-initialized from disk.
 
     On first use after server start, the aggregator catches up to the current
     on-disk state by silently consuming all persisted events. Their deltas are
     discarded -- subscribed clients have already rendered them via SSR or
-    SPA-switch which both use the same aggregator logic.
+    SPA-switch which both use the same aggregator logic. The catch-up reads
+    and feeds the whole live corpus (~150 ms parse + feed on the worst on-disk
+    corpus), so it runs in a thread; its deltas are stream-snapshot builds the
+    caller drops, and the init feed constructs with emit_stream_deltas=False.
+
+    A drop landing while the threaded catch-up runs must win: the corpus the
+    read saw can be mid-drop (archived, recycled, deleted), so the finished
+    init is discarded whenever `_drop_session_runtime_state` bumped the
+    session's epoch during the hop, the events cache it re-primed is cleared,
+    and the init reruns against the new state.
     """
     aggregator = self._aggregators.get(session_id)
     if aggregator is not None:
       return aggregator
+    while True:
+      epoch = self._aggregator_epoch.get(session_id, 0)
+      lock = self._aggregator_init_locks.setdefault(session_id, asyncio.Lock())
+      async with lock:
+        # A concurrent first event for the same session may have finished the
+        # init while this caller waited on the lock.
+        aggregator = self._aggregators.get(session_id)
+        if aggregator is not None:
+          return aggregator
+        aggregator = await asyncio.to_thread(self._init_live_aggregator, session_id)
+        if self._aggregator_epoch.get(session_id, 0) != epoch:
+          self._chat_events.clear_cache(session_id)
+          continue
+        self._aggregators[session_id] = aggregator
+        return aggregator
+
+  def _init_live_aggregator(self, session_id: str) -> MessageAggregator:
+    """Build and catch up the live aggregator off the event loop (see above)."""
     # Live file only holds events from index archive_offset onward; seed the
     # aggregator's offset so the deltas it emits carry the same GLOBAL
     # event_index that persist_and_broadcast stamps on the raw event.
-    aggregator = MessageAggregator(event_index_offset=self._chat_events.read_archive_offset_sync(session_id))
+    aggregator = MessageAggregator(
+        event_index_offset=self._chat_events.read_archive_offset_sync(session_id),
+        emit_stream_deltas=False,
+    )
     for ev in self.load_chat_events_sync(session_id):
       for _ in aggregator.feed(ev):
         pass
-    self._aggregators[session_id] = aggregator
+    # The same instance carries the live feed after the catch-up, so the
+    # stream-delta suppression above must not survive publication.
+    aggregator.emit_stream_deltas = True
     return aggregator
 
   def callbacks(self) -> SessionCallbacks:
@@ -1994,6 +2034,8 @@ class SessionManager:
     """Drop a session's live runtime state: chat-event cache, aggregator, projection, recap memo."""
     self._chat_events.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
+    self._aggregator_init_locks.pop(session_id, None)
+    self._aggregator_epoch[session_id] = self._aggregator_epoch.get(session_id, 0) + 1
     self._projection_cache.drop(session_id)
     from src.core import recap  # lazy: recap imports SessionManager from this module
 

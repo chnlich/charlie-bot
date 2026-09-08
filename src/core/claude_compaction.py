@@ -28,7 +28,7 @@ import json
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import structlog
@@ -39,7 +39,7 @@ from src.agents.backends.claude_code import (
     headless_claude_env,
 )
 from src.core import event_types as ET
-from src.core.claude_accounts import model_family, transcript_path
+from src.core.claude_accounts import model_family, now_or, transcript_path
 from src.core.config import CharlieBotConfig
 from src.core.process import kill_process_group
 
@@ -70,11 +70,6 @@ COMPACT_PROMPT = "/compact\n"
 
 _BOUNDARY_MARKER = '"compact_boundary"'
 
-
-def _now(now: datetime | None) -> datetime:
-  return now if now is not None else datetime.now(UTC)
-
-
 # ---------------------------------------------------------------------------
 # Trigger decisions (pure)
 # ---------------------------------------------------------------------------
@@ -86,7 +81,7 @@ def is_fable(model: str | None) -> bool:
 
 def cache_expired(last_request_at: datetime | None, now: datetime | None = None) -> bool:
   """True when the previous request is more than CACHE_TTL old; None (no request yet) is not expired."""
-  return last_request_at is not None and _now(now) - last_request_at > CACHE_TTL
+  return last_request_at is not None and now_or(now) - last_request_at > CACHE_TTL
 
 
 def expired_cache_compaction_wanted(

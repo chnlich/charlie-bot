@@ -32,8 +32,6 @@ from src.core.models import BackendOption, ClaudeAccount, SessionMetadata
 
 log = structlog.get_logger()
 
-_now = claude_accounts._now
-
 
 def _persist(item: master_cc_state._WorkItem):
   session_id = item.session_meta.id
@@ -62,7 +60,7 @@ def choose_turn_account(
   newest reading sits under the warning line with no rejection pending; every
   other case re-selects (a tie keeps the current account).
   """
-  moment = _now(now)
+  moment = claude_accounts.now_or(now)
   current = claude_accounts.account_by_label(cfg, session_meta.claude_account)
   cold = claude_compaction.cache_expired(last_request_at, moment)
   if current is not None and not cold and claude_accounts.healthy(current, moment):

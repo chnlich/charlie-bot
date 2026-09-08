@@ -11,8 +11,8 @@ from conftest import (
     CODEX_RESOLVE_BINARY_PATCH_TARGET,
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
     SYNTHETIC_MODEL,
-    FakeStdout,
     build_light_cc_cfg,
+    fake_one_shot_proc,
     make_one_shot_backend,
 )
 
@@ -654,13 +654,7 @@ async def test_codex_one_shot_text_accumulates_agent_message(monkeypatch) -> Non
       b'{"type":"item.completed","item":{"type":"agent_message","id":"a1","text":"OK title"}}\n',
       b'{"type":"turn.completed","usage":{}}\n',
   ]
-  proc = MagicMock()
-  proc.stdout = FakeStdout(lines)
-  proc.stderr = MagicMock()
-  proc.stderr.read = AsyncMock(return_value=b"")
-  proc.wait = AsyncMock(return_value=0)
-  proc.pid = 9999
-  proc.returncode = 0
+  proc = fake_one_shot_proc(lines, pid=9999)
 
   with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
     backend = CodexBackend(model="gpt-x", model_reasoning_effort="high")
@@ -688,13 +682,7 @@ async def test_codex_one_shot_text_returns_empty_when_no_agent_message(monkeypat
       b'{"type":"thread.started","thread_id":"t1"}\n',
       b'{"type":"turn.completed","usage":{}}\n',
   ]
-  proc = MagicMock()
-  proc.stdout = FakeStdout(lines)
-  proc.stderr = MagicMock()
-  proc.stderr.read = AsyncMock(return_value=b"")
-  proc.wait = AsyncMock(return_value=0)
-  proc.pid = 9998
-  proc.returncode = 0
+  proc = fake_one_shot_proc(lines, pid=9998)
 
   with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = CodexBackend(model="gpt-x")
@@ -717,12 +705,7 @@ async def test_opencode_one_shot_text_extracts_text_from_flat_part_event(monkeyp
       b'{"type":"text","timestamp":2,"sessionID":"s1","part":{"id":"prt_b","messageID":"m1","sessionID":"s1","type":"text","text":"OK title","time":{"start":1,"end":2}}}\n',
       b'{"type":"step_finish","timestamp":3,"sessionID":"s1","part":{"id":"prt_c","reason":"stop","messageID":"m1","sessionID":"s1","type":"step-finish","tokens":{"total":1,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}\n',
   ]
-  proc = MagicMock()
-  proc.stdout = FakeStdout(lines)
-  proc.stderr = MagicMock()
-  proc.stderr.read = AsyncMock(return_value=b"")
-  proc.wait = AsyncMock(return_value=0)
-  proc.pid = 7777
+  proc = fake_one_shot_proc(lines, pid=7777)
 
   with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)) as mock_exec:
     backend = OpenCodeBackend(model=SYNTHETIC_MODEL)
@@ -750,12 +733,7 @@ async def test_opencode_one_shot_text_returns_empty_when_no_text_part(monkeypatc
       b'{"type":"step_start","timestamp":1,"sessionID":"s1","part":{"id":"prt_a","messageID":"m1","sessionID":"s1","type":"step-start"}}\n',
       b'{"type":"step_finish","timestamp":3,"sessionID":"s1","part":{"id":"prt_c","reason":"stop","messageID":"m1","sessionID":"s1","type":"step-finish","tokens":{"total":1,"input":1,"output":1,"reasoning":0,"cache":{"write":0,"read":0}},"cost":0}}\n',
   ]
-  proc = MagicMock()
-  proc.stdout = FakeStdout(lines)
-  proc.stderr = MagicMock()
-  proc.stderr.read = AsyncMock(return_value=b"")
-  proc.wait = AsyncMock(return_value=0)
-  proc.pid = 7776
+  proc = fake_one_shot_proc(lines, pid=7776)
 
   with patch(ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=AsyncMock(return_value=proc)):
     backend = OpenCodeBackend(model=SYNTHETIC_MODEL)

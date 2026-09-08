@@ -1571,6 +1571,33 @@ class FakeStdout:
     return self._lines.pop(0)
 
 
+def fake_one_shot_proc(
+    lines: list[bytes],
+    *,
+    stderr: bytes = b"",
+    returncode: int = 0,
+    pid: int = 9000) -> MagicMock:
+  """Process double for one-shot backend subprocess tests.
+
+  stdout replays *lines* then ends (a FakeStdout). stderr.read() yields *stderr*
+  once and b"" after; an empty *stderr* (the default) reads b"" on every call,
+  matching the read-to-empty loop the one-shot paths drive. wait() resolves
+  *returncode*, which returncode also holds. Callers assert on proc.pid where
+  the production kill path uses it.
+  """
+  proc = MagicMock()
+  proc.stdout = FakeStdout(lines)
+  proc.stderr = MagicMock()
+  if stderr:
+    proc.stderr.read = AsyncMock(side_effect=[stderr, b""])
+  else:
+    proc.stderr.read = AsyncMock(return_value=b"")
+  proc.wait = AsyncMock(return_value=returncode)
+  proc.returncode = returncode
+  proc.pid = pid
+  return proc
+
+
 class FakeChunkedResponse:
   """httpx streaming-response double replaying the constructor's byte chunks from aiter_bytes().
 

@@ -1,10 +1,11 @@
 """Streaming merge support for Chrome-format JSON traces."""
 
 import gzip
-import json
 import re
 from pathlib import Path
-from typing import TextIO
+from typing import BinaryIO
+
+import orjson
 
 # Compression level for the merged gzip output. Measured on a 191.2 MB /
 # 496,099-event input: level 1 builds in 0.57 s / 15.5 MB against level 6's
@@ -12,7 +13,7 @@ from typing import TextIO
 # the user-visible cost; big-payload transport gzip is level 1 for the same reason.
 _MERGE_COMPRESSLEVEL = 1
 
-# Events per json.dumps call on the merge output. The C encoder's per-element text
+# Events per json.dumps call on the merge output. The encoder's per-element text
 # is context-free, so a batch's bracket-stripped rendering is byte-identical to the
 # per-event form; batching cut the serializer pass from 3.0 s to 1.7 s on the input
 # above. The batch is the only buffering beyond the gzip stream.
@@ -33,7 +34,7 @@ class _EventBatcher:
   rendering minus its outer brackets is exactly that fragment.
   """
 
-  def __init__(self, output: TextIO) -> None:
+  def __init__(self, output: BinaryIO) -> None:
     self._output = output
     self._pending: list[dict] = []
     self._emitted_any = False
@@ -47,12 +48,13 @@ class _EventBatcher:
     if not self._pending:
       return
     if self._emitted_any:
-      self._output.write(",")
+      self._output.write(b",")
     self._emitted_any = True
-    # ensure_ascii=True: the C encoder is ~3x faster on CJK-bearing payloads and
-    # never slower on ASCII-only ones; both renderings parse to the same trace.
-    text = json.dumps(self._pending, ensure_ascii=True, separators=(",", ":"))
-    self._output.write(text[1:-1])
+    # orjson's compact rendering parses to the same trace the stdlib encoder
+    # produced; non-ASCII rides raw UTF-8 where the stdlib form emitted \uXXXX.
+    # orjson.dumps raises on NaN/Infinity (which json.load accepts): a trace
+    # carrying them fails the build instead of shipping Perfetto-invalid JSON.
+    self._output.write(orjson.dumps(self._pending)[1:-1])
     self._pending.clear()
 
 
@@ -88,8 +90,7 @@ def _merge_one_trace(
     flow_seq: _IdSequencer,
     slim: bool,
 ) -> None:
-  with path.open("r", encoding="utf-8") as input_file:
-    trace = json.load(input_file)
+  trace = orjson.loads(path.read_bytes())
   if isinstance(trace, dict):
     events = trace.get("traceEvents") or []
   elif isinstance(trace, list):
@@ -174,10 +175,10 @@ def merge_traces(paths: list[Path], out_path: Path, slim: bool) -> None:
   """Merge Chrome JSON traces into one gzip-compressed Chrome trace."""
   tid_seq = _IdSequencer()
   flow_seq = _IdSequencer()
-  with gzip.open(out_path, "wt", encoding="utf-8", compresslevel=_MERGE_COMPRESSLEVEL) as output:
-    output.write('{"traceEvents":[')
+  with gzip.open(out_path, "wb", compresslevel=_MERGE_COMPRESSLEVEL) as output:
+    output.write(b'{"traceEvents":[')
     batcher = _EventBatcher(output)
     for file_index, path in enumerate(paths):
       _merge_one_trace(path, file_index, batcher, tid_seq, flow_seq, slim)
     batcher.flush()
-    output.write("]}")
+    output.write(b"]}")

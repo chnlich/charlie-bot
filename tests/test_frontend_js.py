@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from conftest import run_node_js_test
 
-# This list's set must stay disjoint from the suites still wrapped by tests/test_*_frontend.py files, or a suite runs twice.
+# Keep this set disjoint from the suites still wrapped by tests/test_*_frontend.py, or a suite runs twice.
 _NODE_TESTS = [
     "artifact_comment_drafts.test.js",
     "artifact_comments.test.js",

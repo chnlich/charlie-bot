@@ -73,7 +73,20 @@ Vocabulary:
               assistant message with token counts
 Cross-file replay dedupe happens at merge (first record wins in walk order), which composed
 with within-file first-wins gives exactly the global first-wins a cacheless scan computes.
-"""
+
+The merged Claude+Codex buckets are themselves incremental per file (source partials):
+  partial     one file's contribution to the merged buckets: the bucket deltas its records
+              added (post dedupe), the (source, model) span they covered, its record and
+              within-file-dupe counts, and per replay key the copy count its records carry
+  key counts  corpus-wide per-key copy counts plus, per key, the contributing file, the
+              record values that contributed (first fold wins) and the copy holders. A file
+              that contributed a key and moves while a copy survives elsewhere hands the
+              contribution to an orphan pool anchored at the earliest-walked surviving holder
+              — verbatim replays carry identical token values (the dedupe's own premise), so
+              only the account label changes. Every round releases the moved, relabelled,
+              failed and vanished files' partials and key copies and re-folds only those
+              files, so the partial sums always equal a fresh fold of the current corpus.
+ """
 
 from __future__ import annotations
 
@@ -470,6 +483,12 @@ def _reset_aggregate_memo() -> None:
   _opencode_probes.clear()
   _tally_cache_docs.clear()
   _opencode_doc_synced.clear()
+  _source_partials.clear()
+  _claude_key_counts.clear()
+  _claude_key_records.clear()
+  _claude_key_loc.clear()
+  _claude_key_holders.clear()
+  _claude_orphan.clear()
 
 
 def _prefiltered_jsonl(path: Path, markers: tuple[str, ...]) -> tuple[list, list[dict], int]:
@@ -525,39 +544,181 @@ def _claude_file_contribution(path: Path) -> tuple[dict, int]:
   return {"sig": sig, "records": records, "dupes": dupes}, nbytes
 
 
-def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
-  seen: set[str] = set()
-  dupes = 0
+class _FilePartial(NamedTuple):
+  """One log file's contribution to the merged source buckets (see the module docstring).
+  ``keys`` (Claude only) counts, per replay key, every copy the file's records carry, so a
+  release can decrement the corpus counts exactly."""
+
+  by_model: dict
+  by_account: dict
+  spans: dict
+  n_records: int
+  entry_dupes: int
+  keys: dict | None
+
+
+# Per-file partials keyed (source, account, path); the Claude replay-key state shared by every
+# partial; and the orphan pool of contributions whose contributing file moved while a copy
+# survives elsewhere (key -> [record values] — the anchor resolves at merge time).
+_source_partials: dict[tuple[str, str, str], _FilePartial] = {}
+_claude_key_counts: dict[str, int] = {}
+_claude_key_records: dict[str, list] = {}
+_claude_key_loc: dict[str, tuple] = {}
+_claude_key_holders: dict[str, set] = {}
+_claude_orphan: dict[str, list] = {}
+_ORPHAN = ("", "")  # _claude_key_loc sentinel: the contribution lives in _claude_orphan
+
+
+def _fold_file_partial(source: str, account: str, path_key: tuple, entry: dict) -> _FilePartial:
+  """Fold one file's records into a fresh partial, registering every replay-key copy with the
+  corpus counts. Claude records dedupe corpus-wide (first fold wins and keeps its values);
+  Codex records have no replay identity and always contribute."""
+  fold = _Tally()
+  keys = None
+  if source == "Claude Code":
+    keys = {}
+    for rec in entry["records"]:
+      key = rec[0]
+      keys[key] = keys.get(key, 0) + 1
+      prev = _claude_key_counts.get(key, 0)
+      _claude_key_counts[key] = prev + 1
+      if prev:
+        _claude_key_holders.setdefault(key, set()).add(path_key)
+      else:
+        _claude_key_records[key] = rec
+        _claude_key_loc[key] = path_key
+        fold.add(source, rec[1], account, rec[2], in_fresh=rec[3], cache_write=rec[4],
+                 cache_read=rec[5], output=rec[6])
+  else:
+    for model, ts, in_fresh, cache_read, output in entry["records"]:
+      fold.add(source, model, account, ts, in_fresh=in_fresh, cache_read=cache_read, output=output)
+  return _FilePartial(fold.by_model, fold.by_account, fold.span, len(entry["records"]),
+                      entry.get("dupes", 0), keys)
+
+
+def _release_partial(path_key: tuple, partial: _FilePartial) -> None:
+  """Retract one file's replay-key copies from the corpus counts. A contribution whose file
+  moves survives through a surviving copy (the orphan pool); the last copy drops it."""
+  if partial.keys is None:
+    return
+  for key, copies in partial.keys.items():
+    remaining = _claude_key_counts[key] - copies
+    if remaining:
+      _claude_key_counts[key] = remaining
+      holders = _claude_key_holders.get(key)
+      if holders is not None:
+        holders.discard(path_key)
+        if not holders:
+          del _claude_key_holders[key]
+      if _claude_key_loc[key] == path_key:
+        if not holders:
+          raise AssertionError(f"released replay key {key!r} with copies but no surviving holder")
+        _claude_key_loc[key] = _ORPHAN
+        _claude_orphan[key] = _claude_key_records[key]
+    else:
+      loc = _claude_key_loc.pop(key)
+      del _claude_key_counts[key], _claude_key_records[key]
+      _claude_key_holders.pop(key, None)
+      if loc == _ORPHAN:
+        del _claude_orphan[key]
+
+
+def _apply_partial(t: _Tally, partial: _FilePartial) -> None:
+  """Merge one surviving partial's buckets and span into the in-flight tally."""
+  for src, tgt_map in ((partial.by_model, t.by_model), (partial.by_account, t.by_account)):
+    for key, vals in src.items():
+      tgt = tgt_map[key]
+      for name in FIELDS:
+        tgt[name] += vals[name]
+  for key, (lo, hi) in partial.spans.items():
+    span = t.span[key]
+    span[0] = lo if span[0] is None or lo < span[0] else span[0]
+    span[1] = hi if span[1] is None or hi > span[1] else span[1]
+
+
+def _reconcile_partials(
+    t: _Tally,
+    source: str,
+    walked: list[tuple[str, str, dict | None, bool]],
+    order: dict,
+) -> None:
+  """Rebuild the source's merged buckets from the per-file partial state.
+
+  A partial is kept only for a cache hit whose account is unchanged; every other state
+  partial releases (moved, re-parsed, relabelled, failed, vanished), and only the re-parsed,
+  relabelled and brand-new files re-fold their records. The tally then sums the surviving
+  partials and the orphan pool — exactly what a fresh fold of the current corpus computes
+  (module docstring).
+  """
+  seen = {w[0]: w for w in walked if w[3] and w[2] is not None}
+  for state_key in [k for k in _source_partials if k[0] == source]:
+    entry_row = seen.get(state_key[2])
+    if entry_row is not None and entry_row[1] == state_key[1]:
+      continue
+    _release_partial(state_key, _source_partials.pop(state_key))
+  for path_str, account, entry, _ in walked:
+    if entry is None or (source, account, path_str) in _source_partials:
+      continue
+    state_key = (source, account, path_str)
+    _source_partials[state_key] = _fold_file_partial(source, account, state_key, entry)
+  for state_key, partial in _source_partials.items():
+    if state_key[0] == source:
+      _apply_partial(t, partial)
+  if source == "Claude Code":
+    for key, record in _claude_orphan.items():
+      holders = _claude_key_holders.get(key)
+      if not holders:
+        raise AssertionError(f"orphaned replay key {key!r} with no surviving holder")
+      # The earliest-walked surviving holder is the account a fresh scan would credit.
+      anchor = min(holders, key=order.__getitem__)
+      t.add(source, record[1], anchor[1], record[2], in_fresh=record[3], cache_write=record[4],
+            cache_read=record[5], output=record[6])
+
+
+def _walk_source(
+    t: _Tally,
+    source: str,
+    cache_key: str,
+    sub: str,
+    homes: dict[str, Path],
+    cache: TallyCache | None,
+    parse: Callable,
+) -> tuple[list[tuple[str, str, dict | None, bool]], dict]:
+  """Walk every log file, serving cache hits and parsing misses. Returns one row per file —
+  (path, account, entry or None on a failed parse, cache-hit flag) — plus the walk order the
+  orphan anchors read."""
+  walked: list[tuple[str, str, dict | None, bool]] = []
+  order: dict[tuple, int] = {}
   for account, home in homes.items():
-    for path in _iter_jsonl(home / "projects", t, "Claude Code", account):
-      entry = cache.lookup("claude", path) if cache is not None else None
+    for path in _iter_jsonl(home / sub, t, source, account):
+      entry = cache.lookup(cache_key, path) if cache is not None else None
+      hit = entry is not None
       if entry is None:
         try:
-          entry, nbytes = _claude_file_contribution(path)
+          entry, nbytes = parse(path)
         except OSError as exc:
-          t.notes.append(f"Claude Code: unreadable {account}/{path.name}: {exc}")
+          t.notes.append(f"{source}: unreadable {account}/{path.name}: {exc}")
+          walked.append((str(path), account, None, False))
           continue
         t.scanned_bytes += nbytes
         if cache is not None:
-          cache.store("claude", path, entry)
-      dupes += entry["dupes"]
-      for key, model, ts, in_fresh, cache_write, cache_read, output in entry["records"]:
-        if key in seen:
-          dupes += 1
-          continue
-        seen.add(key)
-        t.add(
-            "Claude Code",
-            model,
-            account,
-            ts,
-            in_fresh=in_fresh,
-            cache_write=cache_write,
-            cache_read=cache_read,
-            output=output)
+          cache.store(cache_key, path, entry)
+      state_key = (source, account, str(path))
+      order[state_key] = len(order)
+      walked.append((str(path), account, entry, hit))
+  return walked, order
+
+
+def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
+  walked, order = _walk_source(t, "Claude Code", "claude", "projects", homes, cache,
+                               _claude_file_contribution)
+  _reconcile_partials(t, "Claude Code", walked, order)
+  n_records = sum(p.n_records for k, p in _source_partials.items() if k[0] == "Claude Code")
+  entry_dupes = sum(p.entry_dupes for k, p in _source_partials.items() if k[0] == "Claude Code")
+  distinct = len(_claude_key_counts)
   t.notes.append(
-      f"Claude Code: {len(seen):,} unique API responses over {len(homes)} config dirs, "
-      f"{dupes:,} replayed lines skipped")
+      f"Claude Code: {distinct:,} unique API responses over {len(homes)} config dirs, "
+      f"{entry_dupes + n_records - distinct:,} replayed lines skipped")
 
 
 def _codex_file_contribution(path: Path) -> tuple[dict, int]:
@@ -599,23 +760,13 @@ def _codex_file_contribution(path: Path) -> tuple[dict, int]:
 
 
 def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:
-  check: list[tuple[int, int]] = []
-  for account, home in homes.items():
-    for path in _iter_jsonl(home / "sessions", t, "Codex", account):
-      entry = cache.lookup("codex", path) if cache is not None else None
-      if entry is None:
-        try:
-          entry, nbytes = _codex_file_contribution(path)
-        except OSError as exc:
-          t.notes.append(f"Codex: unreadable {account}/{path.name}: {exc}")
-          continue
-        t.scanned_bytes += nbytes
-        if cache is not None:
-          cache.store("codex", path, entry)
-      for model, ts, fresh, cached, out in entry["records"]:
-        t.add("Codex", model, account, ts, in_fresh=fresh, cache_read=cached, output=out)
-      if entry["check"] is not None:
-        check.append(tuple(entry["check"]))
+  walked, order = _walk_source(t, "Codex", "codex", "sessions", homes, cache, _codex_file_contribution)
+  _reconcile_partials(t, "Codex", walked, order)
+  check = [
+      tuple(entry["check"])
+      for _, _, entry, _ in walked
+      if entry is not None and entry["check"] is not None
+  ]
   if check:
     w = sum(x for x, _ in check)
     f = sum(y for _, y in check)

@@ -28,6 +28,7 @@ from src.core import models
 
 _SHIM_TEMPLATE = """#!/bin/sh
 env > '{dump}'
+cat > /dev/null
 echo '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"SHIM"}}]}}}}'
 echo '{{"type":"result","subtype":"success","is_error":false,"result":"SHIM","usage":{{"input_tokens":1,"output_tokens":1}}}}'
 exit 0
@@ -35,7 +36,13 @@ exit 0
 
 
 def _install_env_dump_shim(tmp_path: Path) -> tuple[Path, Path]:
-  """Write a claude-shaped shim that dumps its own environment; returns (shim, dump path)."""
+  """Write a claude-shaped shim that dumps its own environment; returns (shim, dump path).
+
+  The shim drains stdin (`cat > /dev/null`) before echoing: the backend writes
+  the headless prompt on the pipe and its drain raises ConnectionResetError
+  when the write lands after a child that already exited, a race the CI
+  runner loses. Reading stdin pins the ordering to the parent's close.
+  """
   shim_dir = tmp_path / "shim"
   shim_dir.mkdir()
   shim = shim_dir / "claude"

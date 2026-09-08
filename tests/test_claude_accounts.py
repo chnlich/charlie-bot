@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    FABLE_MODEL,
     fresh_state_fixture,
     make_transcript,
     make_work_item,
@@ -32,7 +33,6 @@ from src.core.models import (
 from src.core.sessions import SessionManager
 
 NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
-FABLE = "claude-fable-5-1"
 SONNET = "claude-sonnet-5"
 
 _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
@@ -40,7 +40,8 @@ _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 def _options(pinned_dir: Path) -> list[BackendOption]:
   return [
-      BackendOption(id="claude-fable-5", label="Fable", type="cc-claude", model=FABLE, aliases=["claude-fable-5-ext1"]),
+      BackendOption(
+          id="claude-fable-5", label="Fable", type="cc-claude", model=FABLE_MODEL, aliases=["claude-fable-5-ext1"]),
       BackendOption(id="claude-sonnet-5", label="Sonnet", type="cc-claude", model=SONNET),
       BackendOption(
           id="pinned-opus", label="Pinned", type="cc-claude", model="claude-opus-5", claude_config_dir=str(pinned_dir)),
@@ -198,7 +199,7 @@ def test_observe_rate_limit_folds_the_binding_windows_only() -> None:
   assert reading is not None
   assert reading.utilization == pytest.approx(0.92)  # the overage window (0.99) is not a limit
   assert reading.rejected_until is None
-  assert claude_accounts.headroom("ext-1", FABLE, now=NOW) == pytest.approx(0.08)
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW) == pytest.approx(0.08)
   assert claude_accounts.observe_rate_limit("ext-1", {"status": "allowed"}, now=NOW) is None
 
 
@@ -206,12 +207,12 @@ def test_rejected_reading_zeroes_headroom_until_its_reset() -> None:
   resets_at = (NOW + timedelta(minutes=30)).timestamp()
   claude_accounts.observe_rate_limit("ext-1", _event("rejected", 0.99, 0.40, resets_at), now=NOW)
 
-  assert claude_accounts.headroom("ext-1", FABLE, now=NOW) == 0.0
-  assert claude_accounts.headroom("ext-1", FABLE, now=NOW + timedelta(minutes=31)) == pytest.approx(0.01)
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW) == 0.0
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW + timedelta(minutes=31)) == pytest.approx(0.01)
 
 
 def test_unread_account_has_full_headroom() -> None:
-  assert claude_accounts.headroom("never-read", FABLE, now=NOW) == 1.0
+  assert claude_accounts.headroom("never-read", FABLE_MODEL, now=NOW) == 1.0
 
 
 def test_headroom_takes_the_newer_of_event_and_panel_readings() -> None:
@@ -227,10 +228,10 @@ def test_headroom_takes_the_newer_of_event_and_panel_readings() -> None:
           }],
           "fetched_at": (NOW + timedelta(minutes=5)).isoformat(),
       })
-  assert claude_accounts.headroom("ext-1", FABLE, now=NOW + timedelta(minutes=6)) == pytest.approx(0.30)
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW + timedelta(minutes=6)) == pytest.approx(0.30)
 
   claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.50, 0.10), now=NOW + timedelta(minutes=10))
-  assert claude_accounts.headroom("ext-1", FABLE, now=NOW + timedelta(minutes=11)) == pytest.approx(0.50)
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW + timedelta(minutes=11)) == pytest.approx(0.50)
 
 
 def test_panel_scoped_window_counts_only_for_its_model_family() -> None:
@@ -251,7 +252,7 @@ def test_panel_scoped_window_counts_only_for_its_model_family() -> None:
           "fetched_at": NOW.isoformat(),
       })
 
-  assert claude_accounts.headroom("ext-1", FABLE, now=NOW) == pytest.approx(0.40)
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW) == pytest.approx(0.40)
   assert claude_accounts.headroom("ext-1", SONNET, now=NOW) == pytest.approx(0.90)
 
 
@@ -266,9 +267,9 @@ def test_select_prefers_most_headroom_and_keeps_current_on_a_tie(tmp_path: Path)
   claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.10, 0.05), now=NOW)
   claude_accounts.observe_rate_limit("ext-2", _event("allowed", 0.10, 0.05), now=NOW)
 
-  assert claude_accounts.select(cfg, FABLE, current="ext-2", now=NOW).label == "ext-2"
-  assert claude_accounts.select(cfg, FABLE, current="ext-1", now=NOW).label == "ext-1"
-  assert claude_accounts.select(cfg, FABLE, current="main", now=NOW).label in {"ext-1", "ext-2"}
+  assert claude_accounts.select(cfg, FABLE_MODEL, current="ext-2", now=NOW).label == "ext-2"
+  assert claude_accounts.select(cfg, FABLE_MODEL, current="ext-1", now=NOW).label == "ext-1"
+  assert claude_accounts.select(cfg, FABLE_MODEL, current="main", now=NOW).label in {"ext-1", "ext-2"}
 
 
 def test_select_skips_excluded_rejected_and_unhealthy_accounts(tmp_path: Path) -> None:
@@ -278,8 +279,8 @@ def test_select_skips_excluded_rejected_and_unhealthy_accounts(tmp_path: Path) -
       "ext-1", _event("rejected", 1.0, 0.10, (NOW + timedelta(hours=1)).timestamp()), now=NOW)
   write_pool_credentials(tmp_path / "claude-ext-2", access_token="")  # emptied credential store
 
-  assert claude_accounts.select(cfg, FABLE, current="main", exclude={"main"}, now=NOW) is None
-  assert claude_accounts.select(cfg, FABLE, current="ext-1", now=NOW).label == "main"
+  assert claude_accounts.select(cfg, FABLE_MODEL, current="main", exclude={"main"}, now=NOW) is None
+  assert claude_accounts.select(cfg, FABLE_MODEL, current="ext-1", now=NOW).label == "main"
   assert claude_accounts.earliest_reset(cfg, now=NOW) == NOW + timedelta(hours=1)
 
 

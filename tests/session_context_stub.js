@@ -103,6 +103,69 @@ function createChatSidebarContext(context) {
   runStaticModules(context, sidebarModules());
 }
 
+// The wire path web/static/js/sidebar/session-view.js posts switch telemetry
+// to (reportSwitchEvent); an endpoint move on either side breaks the pin.
+const SWITCH_TELEMETRY_URL = '/api/diag/switch-events';
+
+// One sidebar row as the harnesses mount it: querySelector answers only
+// '.session-name' (the selector the row rendering resolves); sidebar callers
+// resolving other selectors against a row (archived.js's group move)
+// null-guard the miss.
+function makeSidebarRow(sessionId, name) {
+  const nameEl = createElement({textContent: name});
+  return createElement({
+    id: 'session-' + sessionId,
+    querySelector: (sel) => (sel === '.session-name' ? nameEl : null),
+  });
+}
+
+// The bootstrap body switchSession renders. oldestMessageOrdinal and hasMore
+// are the two fields the pagination tests vary; everything else is the fixed
+// one-turn shape the switch flow reads.
+function bootstrapPayload(sessionId, oldestMessageOrdinal, hasMore) {
+  return {
+    session: {id: sessionId, name: 'Session ' + sessionId, backend: 'claude-opus-4.6', round_ratings: {}},
+    messages: [{role: 'assistant', content: 'hello from ' + sessionId, event_index: 5}],
+    pending_draft: null,
+    event_count: 6,
+    oldest_message_ordinal: oldestMessageOrdinal,
+    active_backend: 'claude-opus-4.6',
+    active_backend_type: '',
+    switchable_backends: [],
+    has_more: hasMore,
+    threads: [],
+    triggers: [],
+  };
+}
+
+// The document lookups the switch harnesses share: static ids answer from
+// `elements`, and the nodes the loaded modules create at runtime under
+// `messages` (placeholder rows, rendered bubbles) answer from its children —
+// they never enter the static map. Call before createChatSidebarContext: the
+// loaded modules bind the lookups at load time. `messages` is null when the
+// harness mounts no chat container (usage-only harnesses).
+function installSessionDocumentLookups(context, elements, messages, rows) {
+  context.document.getElementById = (id) => {
+    const fromMap = elements.get(id);
+    if (fromMap) return fromMap;
+    for (const child of messages ? messages.children : []) {
+      if (child.id === id) return child;
+    }
+    return null;
+  };
+  context.document.querySelectorAll = (sel) => (sel === '[id^="session-"]' ? rows : []);
+  context.document.querySelector = () => null;
+}
+
+// The page timers never fire under test: status polls and reconnects must not
+// race the assertions.
+function stubPageTimers(context) {
+  context.setInterval = () => 1;
+  context.setTimeout = () => 1;
+  context.clearInterval = () => {};
+  context.clearTimeout = () => {};
+}
+
 // Map keys are the element ids web/static/js/sidebar/filters.js reaches:
 // getElementById('filter-' + name) over the registered filter names plus
 // getElementById('cron-add-btn'), and the 'filter-pill' class filterPillClass
@@ -129,4 +192,14 @@ function buildUsageElements() {
   ]);
 }
 
-module.exports = {baseSessionContext, createChatSidebarContext, buildSidebarFilterElements, buildUsageElements};
+module.exports = {
+  baseSessionContext,
+  createChatSidebarContext,
+  buildSidebarFilterElements,
+  buildUsageElements,
+  SWITCH_TELEMETRY_URL,
+  makeSidebarRow,
+  bootstrapPayload,
+  installSessionDocumentLookups,
+  stubPageTimers,
+};

@@ -46,8 +46,7 @@ async def _trigger_master_judged(
   trigger call therefore still wakes (summary alone is not the key), and a
   rerun after a successful wake skips.
   """
-  chat_events = session_mgr.load_chat_events_sync(session_id)
-  if finalize_effects.master_woke_after_summary(chat_events, thread_id):
+  if await session_mgr.finalize_master_woke(session_id, thread_id):
     log.info("master_wake_skip_already_woke", session=session_id, thread=thread_id)
     return
   await trigger_master(session_id, summary, cfg, session_mgr)

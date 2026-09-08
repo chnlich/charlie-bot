@@ -1874,6 +1874,12 @@ class JudgmentShim:
   def load_chat_events_sync(self, session_id: str) -> list[dict[str, Any]]:
     return []
 
+  async def finalize_summary_present(self, session_id: str, thread_id: str) -> bool:
+    return False
+
+  async def finalize_master_woke(self, session_id: str, thread_id: str) -> bool:
+    return False
+
   async def deliver_to_successor(self, session_id: str, event: dict[str, Any]) -> str:
     """Default succession-aware delivery for test fakes: no successor, write into itself.
 

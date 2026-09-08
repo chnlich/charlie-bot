@@ -887,27 +887,13 @@ def test_opencode_cache_invalidates_on_wal_write(tmp_path: Path) -> None:
   con = sqlite3.connect(db)
   con.execute("pragma journal_mode=WAL")
   _create_message_table(con)
-  msg = {
-      "role": "assistant",
-      "modelID": "oc-m",
-      "providerID": "prov",
-      "tokens": {
-          "input": 5,
-          "output": 1,
-          "cache": {
-              "read": 0,
-              "write": 0
-          }
-      }
-  }
-  _insert_opencode_raw(con, [(msg, (None, "", ""))])
+  _insert_opencode_raw(con, [({}, ({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov"))])
   con.commit()
   assert (db.parent / "db.sqlite-wal").exists()
   before = _row(_collect(None, None, db, cache), "opencode", "oc-m")
 
-  msg["tokens"] = {"input": 100, "output": 2, "cache": {"read": 0, "write": 0}}
   main_sig = (db.stat().st_mtime_ns, db.stat().st_size)
-  _insert_opencode_raw(con, [(msg, (None, "", ""))])
+  _insert_opencode_raw(con, [({}, ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}}, "oc-m", "prov"))])
   con.commit()
   assert (db.stat().st_mtime_ns, db.stat().st_size) == main_sig
 
@@ -925,20 +911,7 @@ def _wal_db_with_noise_table(tmp_path: Path) -> tuple[Path, Path, sqlite3.Connec
   con.execute("pragma journal_mode=WAL")
   _create_message_table(con)
   con.execute("create table other (id text primary key, data text not null)")
-  msg = {
-      "role": "assistant",
-      "modelID": "oc-m",
-      "providerID": "prov",
-      "tokens": {
-          "input": 5,
-          "output": 1,
-          "cache": {
-              "read": 0,
-              "write": 0
-          }
-      }
-  }
-  _insert_opencode_raw(con, [(msg, (None, "", ""))])
+  _insert_opencode_raw(con, [({}, ({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov"))])
   con.commit()
   return db, cache, con
 

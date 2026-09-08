@@ -565,6 +565,17 @@ def _group_rows_into_sections(rows: list[dict]) -> dict[int, list[dict]]:
   return {idx: by_id[action_id] for idx, action_id in enumerate(order)}
 
 
+def _run_ncu_csv_import(abspath: str) -> subprocess.CompletedProcess[str]:
+  """Run the ncu CSV details import shared by both CSV readers.
+
+  FileNotFoundError (no ncu binary) and subprocess.TimeoutExpired propagate:
+  the section supplement degrades to a note, the fallback parser raises
+  NcuParseError, and each caller translates the failures its own way.
+  """
+  cmd = ["ncu", "--import", abspath, "--csv", "--page", "details"]
+  return subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT)
+
+
 def _sections_from_csv(abspath: str) -> dict[int, list[dict]] | None:
   """Best-effort section grouping via `ncu --import ... --csv --page details`.
 
@@ -573,9 +584,8 @@ def _sections_from_csv(abspath: str) -> dict[int, list[dict]] | None:
   the import fails, in which case the Details tab degrades to a note pointing at
   the Raw metrics tab rather than erroring.
   """
-  cmd = ["ncu", "--import", abspath, "--csv", "--page", "details"]
   try:
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT)
+    proc = _run_ncu_csv_import(abspath)
   except (FileNotFoundError, subprocess.TimeoutExpired):
     log.warning("ncu_sections_csv_unavailable")
     return None
@@ -587,15 +597,8 @@ def _sections_from_csv(abspath: str) -> dict[int, list[dict]] | None:
 
 def _parse_with_csv(abspath: str) -> dict:
   """Fallback parser: drive `ncu --import ... --csv --page details`."""
-  cmd = ["ncu", "--import", abspath, "--csv", "--page", "details"]
   try:
-    proc = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT,
-    )
+    proc = _run_ncu_csv_import(abspath)
   except FileNotFoundError as exc:
     raise NcuParseError("ncu_report module unavailable and the `ncu` binary was not found.") from exc
   except subprocess.TimeoutExpired as exc:

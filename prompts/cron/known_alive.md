@@ -398,3 +398,8 @@ Known-alive symbols:
   exactly zero whole-repo matches outside their definitions, so vulture flags them as unused
   methods. Same framework-registered class as the `check_prompt_or_handler_or_loop` /
   `migrate_and_expand` entry above.
+- `inline_merge_executor` (`tests/test_perfetto_pages.py`) — pytest fixture (monkeypatches
+  `pages._merge_executor` to yield None so the merge runs inline), requested by name in four
+  tests' parameter lists; the bodies never reference the parameter, so vulture flags it as an
+  unused variable at each request site. Same fixture-name-discovery class as the autouse block
+  above.

@@ -364,6 +364,11 @@ def has_pending_plan_approval_sync(plans_path: Path, session_id: str) -> bool:
 # (session, error) pair carries information.
 _SEARCH_READ_FAILURES_SEEN = WarnOnceRegistry()
 
+# The detached every-10th-poll self-heal sweep (single-flight holder). The
+# snapshot it serves is process-global, so the task is module state, not
+# per-manager state.
+_sidebar_sweep_task: asyncio.Task | None = None
+
 
 def _log_search_read_failed_once(session_id: str, error: OSError) -> None:
   """Log one search_read_failed per (session, error) per process.
@@ -2373,11 +2378,15 @@ class SessionManager:
     ONE ``asyncio.to_thread`` task, serial over sessions, via the pure probe
     cores above — only the dirty sessions, or every active session on every
     10th call and whenever *force* is set (the ``/status?force=1`` escape
-    hatch). A selected probe first checks the stat-only probe-input
-    signature: unchanged inputs (never-probed excepted) skip the deep read in
-    every case except an explicit *force*. A session with no snapshot entry
-    (cold boot, new session) is probed like a dirty one, so an empty snapshot
-    is a full probe. Archived sessions keep the constant-False shortcut.
+    hatch). The every-10th self-heal sweep runs detached (single-flight): the
+    calling poll answers from the snapshot and dirty-set probes, and the
+    sweep's results land for the polls that follow it, so a missed mark heals
+    one poll later inside the same window. A selected probe first checks the
+    stat-only probe-input signature: unchanged inputs (never-probed excepted)
+    skip the deep read in every case except an explicit *force*. A session
+    with no snapshot entry (cold boot, new session) is probed like a dirty
+    one, so an empty snapshot is a full probe. Archived sessions keep the
+    constant-False shortcut.
     """
     if not sessions:
       return {}
@@ -2406,6 +2415,13 @@ class SessionManager:
       return derived
 
     force_full = sidebar_state.register_poll(force)
+    if force_full and not force:
+      # The self-heal sweep serves the polls that follow it, not this request:
+      # it runs detached (single-flight), so the poll's wall stays at the
+      # dirty-set cost and a missed mark heals one poll later, inside the same
+      # every-10th window. force=1 keeps its synchronous full probe.
+      self._schedule_sidebar_sweep(active_sessions)
+      force_full = False
     if force_full:
       probe_ids = [meta.id for meta in active_sessions]
     else:
@@ -2453,6 +2469,55 @@ class SessionManager:
         entry["has_pending_plan_approval"] = bool(probed["has_pending_plan_approval"])
       derived[meta.id] = entry
     return derived
+
+  def _schedule_sidebar_sweep(self, sessions: list[SessionMetadata]) -> None:
+    """Run the every-10th-poll self-heal sweep detached from the caller's request.
+
+    Single-flight: a sweep still running covers the window, so a poll landing
+    inside it schedules nothing and the next sweep slot tries again. Sessions
+    carrying a dirty mark are left to the synchronous polls — a mark must be
+    consumed only by a probe whose result lands in a response, so its
+    freshness contract stays one poll.
+    """
+    global _sidebar_sweep_task
+    if _sidebar_sweep_task is not None and not _sidebar_sweep_task.done():
+      return
+    ids = [meta.id for meta in sessions]
+    specs_template = [
+        (meta.id, self._threads_dir(meta.id), self._session_dir(meta.id) / "triggers",
+         self._session_dir(meta.id) / "plans.json") for meta in sessions
+    ]
+
+    async def _run() -> None:
+      specs = [
+          (session_id, threads_dir, triggers_dir, plans_path)
+          for (session_id, threads_dir, triggers_dir, plans_path) in specs_template
+          if not sidebar_state.is_dirty(session_id)
+      ]
+      if not specs:
+        return
+      try:
+        probed, probe_sigs = await asyncio.to_thread(selective_probe_sidebar_state, specs, deep=False)
+      except asyncio.CancelledError:
+        # Loop-teardown cancellation is not a sweep failure: the caller that
+        # would consume the results is gone and the probe thread's outcome is
+        # discardable by design. Re-raise so the task ends cancelled — which
+        # create_logged_task treats as clean — instead of logging a teardown
+        # traceback as a failure.
+        raise
+      except BaseException:
+        # A failed sweep must not lose the state it was serving: re-mark every
+        # selected session so the next poll re-probes it.
+        log.exception("sidebar_self_heal_sweep_failed")
+        for session_id, _threads_dir, _triggers_dir, _plans_path in specs:
+          sidebar_state.mark_sidebar_dirty(session_id)
+        return
+      for session_id, entry in probed.items():
+        sidebar_state.store_snapshot_entry(session_id, entry)
+      for session_id, sig in probe_sigs.items():
+        sidebar_state.store_probe_signature(session_id, sig)
+
+    _sidebar_sweep_task = create_logged_task(_run(), name="sidebar-self-heal-sweep")
 
   async def populate_sidebar_state(
       self,

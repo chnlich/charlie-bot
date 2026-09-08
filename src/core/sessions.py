@@ -29,7 +29,7 @@ from src.core.json_utils import (
     write_json_atomically,
 )
 from src.core.log_once import WarnOnceRegistry
-from src.core.memo import BoundedMemo
+from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection
 from src.core.models import (
@@ -225,13 +225,11 @@ def has_running_tasks_sync(threads_dir: Path, walked: list | None = None) -> boo
 # scan pays one scandir + stat per file and reads only files whose signature
 # moved. Every trigger-file write (_save_trigger, recover_pending's schema
 # migration) publishes through the atomic tmp-file rename, so any content change
-# moves mtime_ns and an unchanged (mtime_ns, size) proves the content current.
-# The signature is taken before the read, so an
-# entry recorded while a write raced the scan keys the older signature and can
-# never be served for the newer bytes. Stored dicts are shared across calls —
-# consumers must treat them as read-only.
+# moves mtime_ns and an unchanged (mtime_ns, size) proves the content current
+# (the stat-before-read race contract is StatSignatureMemo's). Stored dicts are
+# shared across calls — consumers must treat them as read-only.
 _TRIGGER_META_MEMO_LIMIT = 1024
-_trigger_meta_memo: BoundedMemo[str, tuple[int, int, dict]] = BoundedMemo(_TRIGGER_META_MEMO_LIMIT)
+_trigger_meta_memo: StatSignatureMemo[str, dict] = StatSignatureMemo(_TRIGGER_META_MEMO_LIMIT)
 
 # The trigger scan's directory verdict: dir path -> (dir (mtime_ns, size),
 # pending count, earliest fire). Every trigger-file write publishes through the
@@ -312,10 +310,8 @@ def pending_trigger_state_sync(
       continue
     # entry.path is the str join scandir already built; the memo keys on it
     # directly, the same string-path pattern the thread-metadata memo uses.
-    cached = _trigger_meta_memo.get(trigger_path)
-    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-      trigger: dict | None = cached[2]
-    else:
+    trigger = _trigger_meta_memo.fresh(trigger_path, st)
+    if trigger is None:
       trigger = load_json_meta(
           Path(trigger_path),
           "trigger_meta_read_failed",
@@ -323,7 +319,7 @@ def pending_trigger_state_sync(
       )
       if trigger is None:
         continue
-      _trigger_meta_memo.store(trigger_path, (st.st_mtime_ns, st.st_size, trigger))
+      _trigger_meta_memo.record(trigger_path, st, trigger)
     if trigger.get("status") != "pending":
       continue
 

@@ -7,6 +7,7 @@ eviction must not pop a key between a hit's dict lookup and its
 move_to_end.
 """
 
+import os
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
@@ -14,6 +15,7 @@ from typing import Generic, Hashable, TypeVar
 
 K = TypeVar("K", bound=Hashable)
 V = TypeVar("V")
+S = TypeVar("S")
 
 
 class BoundedMemo(Generic[K, V]):
@@ -82,3 +84,28 @@ class BoundedMemo(Generic[K, V]):
     """Return the number of resident entries."""
     with self._lock:
       return len(self._entries)
+
+
+class StatSignatureMemo(BoundedMemo[K, tuple[int, int, S]], Generic[K, S]):
+  """A bounded memo whose entries carry a file's ``(mtime_ns, size)`` signature.
+
+  ``fresh`` serves the value stored for *key* while that signature still
+  matches the stat the caller holds, and None otherwise (absent or stale);
+  ``record`` stores a value under the signature of the same stat. Both take
+  the stat the caller took before its read, which is what keeps an entry
+  from ever being served for bytes it did not parse: a write landing between
+  that stat and the read keys the new entry to the older signature, and the
+  next stat mismatches it. As in BoundedMemo, a stored value must not be
+  None — fresh cannot distinguish it from a miss.
+  """
+
+  def fresh(self, key: K, st: os.stat_result) -> S | None:
+    """Return the value stored for *key* whose signature still matches *st*."""
+    entry = self.get(key)
+    if entry is not None and entry[0] == st.st_mtime_ns and entry[1] == st.st_size:
+      return entry[2]
+    return None
+
+  def record(self, key: K, st: os.stat_result, value: S) -> None:
+    """Store *value* for *key* under the signature of *st*."""
+    self.store(key, (st.st_mtime_ns, st.st_size, value))

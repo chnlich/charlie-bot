@@ -239,7 +239,7 @@ class Worker:
       ):
         await self._process_event(event, log_file)
 
-    _, result, exit_code = runs.scan_result_exit(raw_path, self._build_backend(None).translate_event)
+    _, _, exit_code = runs.scan_result_exit(raw_path, self._build_backend(None).translate_event)
 
     # The loop ended on the post-result timeout while the process is still
     # alive: same contract as the live path's cleanup — capture diagnostics,

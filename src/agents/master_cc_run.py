@@ -1087,8 +1087,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
       tracker.on_event(event)
       cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)
 
-    events, result, exit_code = await asyncio.to_thread(
-        runs.scan_result_exit, raw_path, _build_fresh_translate(cfg, option))
+    events, _, exit_code = await asyncio.to_thread(runs.scan_result_exit, raw_path, _build_fresh_translate(cfg, option))
     # Recover the manual-compaction observation from the same whole-file
     # projection the result summary uses (zero new I/O): the persisted cursor
     # may already sit past the boundary line, so the cursor-forward tail above

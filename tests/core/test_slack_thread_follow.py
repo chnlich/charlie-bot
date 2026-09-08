@@ -184,7 +184,7 @@ async def _handle_mention(cfg, session_mgr, trigger_mgr, client, ts: str) -> str
 
 @pytest.mark.asyncio
 async def test_watermark_persists_through_metadata_json(tmp_path: Path) -> None:
-  cfg, session_mgr, trigger_mgr, _client = _rig(tmp_path)
+  cfg, session_mgr, _trigger_mgr, _client = _rig(tmp_path)
   meta = await _make_session(session_mgr)
   assert meta.slack_watermark_ts == _MENTION_ERA_WATERMARK
   reloaded = await SessionManager(cfg).get_session(meta.id)
@@ -253,7 +253,7 @@ async def test_eligible_thread_message_arms_the_follow_trigger(tmp_path: Path, w
 async def test_arm_follow_trigger_on_archived_session_returns_without_a_record(tmp_path: Path) -> None:
   """The create-time rejection stops the thread-follow when its session is archived:
   the re-arm logs the refusal and returns without a new trigger record."""
-  cfg, session_mgr, trigger_mgr, _client = _rig(tmp_path)
+  _cfg, session_mgr, trigger_mgr, _client = _rig(tmp_path)
   meta = await _make_session(session_mgr, watermark=None)
   await session_mgr.archive_session(meta.id)
 
@@ -397,7 +397,7 @@ def _seed_gate_thread(client: _FakeSlackClient) -> None:
 
 @pytest.mark.asyncio
 async def test_reply_gate_refuses_the_stale_thread_and_persists_nothing(tmp_path: Path) -> None:
-  cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
+  cfg, session_mgr, _trigger_mgr, client = _rig(tmp_path)
   meta = await _make_session(session_mgr)
   _seed_gate_thread(client)
 
@@ -419,7 +419,7 @@ async def test_reply_gate_refuses_the_stale_thread_and_persists_nothing(tmp_path
 
 @pytest.mark.asyncio
 async def test_ack_completeness_advance_and_idempotence(tmp_path: Path) -> None:
-  cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
+  cfg, session_mgr, _trigger_mgr, client = _rig(tmp_path)
   meta = await _make_session(session_mgr)
   _seed_gate_thread(client)
 
@@ -455,7 +455,7 @@ async def test_ack_completeness_advance_and_idempotence(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: Path) -> None:
-  cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
+  cfg, session_mgr, _trigger_mgr, client = _rig(tmp_path)
   meta = await _make_session(session_mgr)
   _seed_gate_thread(client)
 
@@ -484,7 +484,7 @@ async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_ack_route_maps_refusals(tmp_path: Path) -> None:
-  cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
+  cfg, session_mgr, _trigger_mgr, client = _rig(tmp_path)
   meta = await _make_session(session_mgr)
   plain = await session_mgr.create_session(CreateSessionRequest(name="browser session"))
   _seed_gate_thread(client)

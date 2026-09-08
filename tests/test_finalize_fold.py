@@ -121,7 +121,7 @@ def test_fold_unit_answers_match_pure_functions() -> None:
   events: list[dict] = []
   rng = random.Random(7)
   threads = ("t1", "t2")
-  for i in range(300):
+  for _ in range(300):
     kind = rng.choice(_MASTER_OUTPUT_TYPES + (ET.WORKER_SUMMARY, ET.USER))
     if kind == ET.WORKER_SUMMARY:
       event = _summary(rng.choice(threads), status=rng.choice(["completed", "running"]))

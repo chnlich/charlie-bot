@@ -89,7 +89,7 @@ async def test_save_metadata_marks_session_dirty(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_thread_create_marks_session_dirty(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="ThreadCreate")
+  _cfg, _mgr, session = await make_home_session(tmp_path, name="ThreadCreate")
   thread_mgr = ThreadManager(_cfg)
   sidebar_state.reset_for_tests()
 
@@ -100,7 +100,7 @@ async def test_thread_create_marks_session_dirty(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_thread_update_status_marks_session_dirty(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="ThreadStatus")
+  _cfg, _mgr, session = await make_home_session(tmp_path, name="ThreadStatus")
   thread_mgr = ThreadManager(_cfg)
   thread = await thread_mgr.create_thread(session, "work")
   sidebar_state.reset_for_tests()
@@ -112,7 +112,7 @@ async def test_thread_update_status_marks_session_dirty(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_thread_save_metadata_marks_session_dirty(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="ThreadSave")
+  _cfg, _mgr, session = await make_home_session(tmp_path, name="ThreadSave")
   thread_mgr = ThreadManager(_cfg)
   thread = await thread_mgr.create_thread(session, "work")
   sidebar_state.reset_for_tests()
@@ -164,7 +164,7 @@ def test_thinking_clear_busy_marks_session_dirty() -> None:
 
 @pytest.mark.asyncio
 async def test_fork_marks_child_session_dirty(tmp_path: Path) -> None:
-  cfg, mgr, parent = await make_home_session(tmp_path, name="Parent")
+  _cfg, mgr, parent = await make_home_session(tmp_path, name="Parent")
   append_events(mgr.get_chat_events_path(parent.id), [{"type": "user", "content": "e0"}])
   sidebar_state.reset_for_tests()
 
@@ -385,7 +385,7 @@ async def test_scan_window_rollover_reprobes_without_file_change(
 
 @pytest.mark.asyncio
 async def test_status_poll_leaves_cached_metadata_unmutated(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="Busy")
+  _cfg, mgr, session = await make_home_session(tmp_path, name="Busy")
   mark_busy(session.id)
   cached = mgr._metadata_cache[session.id][0]
   assert cached.has_running_tasks is False

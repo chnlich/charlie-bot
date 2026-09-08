@@ -325,7 +325,7 @@ async def _completion_rig(
 
 @pytest.mark.asyncio
 async def test_fire_spawns_first_step_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
+  cfg, _session_mgr, scheduler = make_scheduler_setup(tmp_path)
   spawns: list[dict[str, Any]] = []
   _patch_chain_pipes(monkeypatch, spawns)
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
@@ -413,7 +413,7 @@ async def test_last_step_completion_wakes_master_once_with_block_per_step(
 ) -> None:
   cfg, session_mgr, thread_mgr, session, threads, spawns, master = await _completion_rig(
       tmp_path, monkeypatch, [SELECTOR_RESULT, REVIEWER_RESULT])
-  step0, step1 = threads
+  _step0, step1 = threads
 
   owned = await task_chain.handle_step_completion(session.id, step1, 0, thread_mgr, session_mgr, cfg)
 

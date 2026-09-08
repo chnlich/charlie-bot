@@ -3,6 +3,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 const { readStatic } = require('./read_static');
 const { hljsStub } = require('./hljs_stub');
+const { buildRendererContext } = require('./renderer_vm_context');
 
 // Fake marked counts parse calls; the Renderer/use surface is what
 // markdown-renderer.js touches at load.
@@ -28,12 +29,7 @@ globalThis.marked = {
 };`;
 
 function loadRenderer() {
-  const context = {
-    console: { error() {}, warn() {}, log() {} },
-    hljs: hljsStub,
-    document: { querySelectorAll: () => [] },
-    platform: {},
-  };
+  const context = buildRendererContext();
   vm.createContext(context);
   vm.runInContext(FAKE_MARKED_SRC, context, { filename: 'marked-fake.js' });
   vm.runInContext(readStatic('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
@@ -41,18 +37,7 @@ function loadRenderer() {
 }
 
 function loadCodeRenderer() {
-  const timers = [];
-  const context = {
-    console: { error() {}, warn() {}, log() {} },
-    hljs: hljsStub,
-    document: { querySelectorAll: () => [] },
-    platform: {},
-    performance,
-    setTimeout: (fn) => timers.push(fn),
-    requestAnimationFrame: undefined,
-    __timerCount: () => timers.length,
-    __runTimers: () => { while (timers.length) timers.shift()(); },
-  };
+  const context = buildRendererContext({ withTimers: true });
   vm.createContext(context);
   vm.runInContext(FAKE_MARKED_CODE_SRC, context, { filename: 'marked-code-fake.js' });
   vm.runInContext(readStatic('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });

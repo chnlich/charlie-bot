@@ -18,7 +18,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const { fetchUrl } = require('./stream_collector_common');
-const { hljsStub } = require('./hljs_stub');
+const { buildRendererContext } = require('./renderer_vm_context');
 
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
 const MARKED_URL = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
@@ -77,20 +77,7 @@ function pageCorpus() {
 }
 
 async function loadContext(hljsSource) {
-  const timers = [];
-  const context = {
-    console: { error() {}, warn() {}, log() {} },
-    hljs: hljsStub,
-    document: { querySelectorAll: () => [] },
-    platform: {},
-    performance,
-    setTimeout: (fn) => timers.push(fn),
-    requestAnimationFrame: undefined,
-    __timerCount: () => timers.length,
-    __runTimers: () => {
-      while (timers.length) timers.shift()();
-    },
-  };
+  const context = buildRendererContext({ withTimers: true });
   vm.createContext(context);
   vm.runInContext(hljsSource, context, { filename: 'highlight.min.js' });
   vm.runInContext(await fetchUrl(MARKED_URL), context, { filename: 'marked.min.js' });

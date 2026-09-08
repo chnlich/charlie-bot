@@ -923,8 +923,11 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         # Fail open with a warning — the notice is advisory.
         log.warning("master_cc_fallback_notice_raw_log_missing", session=session_meta.id, raw_log=raw_log)
       else:
-        turn_events = runs.project_raw_events(
-            runs.parse_raw_lines(raw_path.read_bytes()), _build_fresh_translate(cfg, option))
+        # The projection is a full read+parse of the turn's raw log (tens of ms
+        # on a multi-MB turn) — off the loop it stops freezing every concurrent
+        # request and WebSocket at turn end, the same shape as the git-diff hop.
+        turn_events = await asyncio.to_thread(runs.project_raw_file, raw_path,
+                                              _build_fresh_translate(cfg, option))
         await _emit_model_fallback_notice(item.callbacks, session_meta, option, turn_events)
 
   except asyncio.CancelledError:
@@ -1085,7 +1088,8 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
       tracker.on_event(event)
       cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)
 
-    events, result, exit_code = runs.scan_result_exit(raw_path, _build_fresh_translate(cfg, option))
+    events, result, exit_code = await asyncio.to_thread(
+        runs.scan_result_exit, raw_path, _build_fresh_translate(cfg, option))
     # Recover the manual-compaction observation from the same whole-file
     # projection the result summary uses (zero new I/O): the persisted cursor
     # may already sit past the boundary line, so the cursor-forward tail above

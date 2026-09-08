@@ -9,6 +9,7 @@ writing into itself with no origin stamp.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -79,6 +80,34 @@ async def test_spawner_worker_summary_no_successor_writes_into_itself_without_or
   summary = next(ev for ev in own_events if ev.get("type") == ET.WORKER_SUMMARY)
   assert summary["thread_id"] == thread.id
   assert "origin_session_id" not in summary
+
+
+@pytest.mark.asyncio
+async def test_concurrent_summary_chains_send_exactly_once(tmp_path: Path) -> None:
+  """Two concurrent finalize chains for one thread — the reviewer's own
+  completion chain and a reconcile round's re-completion — must send one
+  summary: the presence check's awaits yield the loop between the check and
+  the append, so an unlocked check-then-act sends twice."""
+  mgr = SessionManager(build_worktree_cfg(tmp_path))
+  session_id = await _make_parent(mgr)
+
+  thread = ThreadMetadata(session_id=session_id, id="thread-1", description="delegate", backend=OPUS_BACKEND_ID)
+  event = _thread_worker_event(thread, "completed", full_content="done", content="locator")
+
+  real_deliver = mgr.deliver_to_successor
+
+  async def yielding_deliver(sid: str, evt: dict) -> None:
+    await asyncio.sleep(0)  # the interleave point between the presence check and the append
+    await real_deliver(sid, evt)
+
+  with _broadcast_patch(), patch.object(mgr, "deliver_to_successor", yielding_deliver):
+    await asyncio.gather(
+        _persist_worker_summary_once(session_id, thread.id, event, mgr, fallback=False),
+        _persist_worker_summary_once(session_id, thread.id, event, mgr, fallback=False),
+    )
+
+  summaries = [e for e in mgr.load_chat_events_sync(session_id) if e.get("type") == ET.WORKER_SUMMARY]
+  assert len(summaries) == 1
 
 
 # ---------------------------------------------------------------------------

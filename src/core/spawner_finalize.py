@@ -1,5 +1,6 @@
 """Run outcome and the finalize chain — status write, worktree cleanup, completion notify."""
 
+import asyncio
 import functools
 import traceback
 from datetime import UTC, datetime
@@ -342,13 +343,31 @@ async def _persist_worker_summary_once(
   Idempotency judgment: a rerun of the finalize chain (e.g. startup reconcile
   completing a crashed finalize) never duplicates the summary. ``fallback`` marks
   the degraded summary written when the notify chain itself failed.
+
+  The presence check and the send are one critical section per (session,
+  thread): the reviewer's own completion chain and a reconcile round's
+  re-completion can interleave between the check and the append (the check's
+  await points yield the loop), and both would send. The lock is held only
+  across this judgment, never across any work the chain does outside it.
   """
-  if finalize_effects.terminal_summary_present(session_mgr.load_chat_events_sync(session_id), thread_id):
-    log.info("worker_summary_skip_duplicate", session=session_id, thread=thread_id, fallback=fallback)
-    return
-  await session_mgr.mark_unread(session_id)
-  await session_mgr.deliver_to_successor(session_id, event)
-  log.info("worker_summary_sent", session=session_id, thread=thread_id, fallback=fallback)
+  async with _summary_send_lock((session_id, thread_id)):
+    if finalize_effects.terminal_summary_present(session_mgr.load_chat_events_sync(session_id), thread_id):
+      log.info("worker_summary_skip_duplicate", session=session_id, thread=thread_id, fallback=fallback)
+      return
+    await session_mgr.mark_unread(session_id)
+    await session_mgr.deliver_to_successor(session_id, event)
+    log.info("worker_summary_sent", session=session_id, thread=thread_id, fallback=fallback)
+
+
+_summary_send_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+def _summary_send_lock(key: tuple[str, str]) -> asyncio.Lock:
+  """The per-(session, thread) lock guarding the summary presence judgment."""
+  lock = _summary_send_locks.get(key)
+  if lock is None:
+    lock = _summary_send_locks.setdefault(key, asyncio.Lock())
+  return lock
 
 
 async def _broadcast_completion(

@@ -85,6 +85,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M73 plan-verb validation event-loop lag | M73 collector below | seconds of loop lag + wall per amend validation (the registration gate: the DOM assertion set plus the headless-Chrome page-height render), scratch home, copied passing plan page (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 1.0 s | — (introduced with its first history row) |
 | M74 master turn-end raw-log rescan | M74 collector below | seconds of loop lag + wall per fallback-notice projection (whole read+parse+project of the turn's raw log), worst on-disk master-run raw log, fresh cc-claude translate (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.015 s | — (introduced with its first history row) |
 | M75 live-aggregator catch-up, first streamed event | M75 collector below | seconds of loop lag + wall per first-`persist_and_broadcast` catch-up (whole read+feed of the live corpus), worst on-disk live chat corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.020 s | — (introduced with its first history row) |
+| M76 finalize-judgment reads, warm chain | M76 collector below | seconds of loop lag + wall per judgment pair (summary-present then master-woke — the two full-history scans the finalize chain runs per worker/reviewer completion), worst on-disk live-events corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.0005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -4466,10 +4467,103 @@ asyncio.run(main())
 EOF
 ```
 
+M76 — finalize-judgment reads, warm chain. Every worker and reviewer completion runs the
+finalize chain's two idempotency judgments over the delegating session's whole chat history —
+the duplicate-summary check (`terminal_summary_present` behind `_persist_worker_summary_once`)
+and the wake judgment (`master_woke_after_summary` behind `_trigger_master_judged`) — and the
+pre-fix forms ran both scans plus the event-list load inline on the event loop. The fixed form
+serves both answers from the chat-event store's per-session finalize fold in O(1) (glossary on
+`_FinalizeFold`; rules imported from finalize_effects' own predicates, parity pinned by test),
+with a cold cache paying one threaded whole-file load. The cost is per-completion loop time
+invisible to the standing HTTP probes, so the collector copies the session whose live chat file
+carries the most events into a scratch `CHARLIEBOT_HOME` under /tmp (metadata.json and data/
+only; live home read once for the copy, never written), warms the cache as the chain's first
+judgment does, and times both judgments back to back with a concurrent 5 ms ticker, from the
+checkout under test — one cold pass, as at the first finalize after a server start, then five
+timed rounds. The collector dispatches on the fold methods' presence: a checkout without them
+runs the pre-fix inline load+scan shapes. Evidence while the live server runs older code points
+the same collector at the branch checkout (`CHECKOUT` at the worktree root), the same shape as
+the M75 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core import finalize_effects
+
+# Worst judgment corpus: the session whose LIVE chat file carries the most
+# events; every delegation's finalize chain scans exactly this session's
+# history (the delegating master session is the busiest chat file).
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        with open(p, errors="replace") as f:
+            n = sum(1 for _ in f)
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
+# session's metadata.json and data/; live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m76-fold-home-", dir="/tmp"))
+dst = home / "sessions" / SID
+dst.mkdir(parents=True)
+shutil.copy2(best / "metadata.json", dst / "metadata.json")
+shutil.copytree(best / "data", dst / "data")
+cfg = CharlieBotConfig(charliebot_home=home)
+mgr = SessionManager(cfg)
+TID = "m76-probe-thread"  # an absent thread id: the prove-absence-over-history shape every first finalize runs
+
+async def run_once():
+    gaps = []
+    stop = False
+    async def ticker():
+        prev = time.perf_counter()
+        while not stop:
+            await asyncio.sleep(0.005)
+            now = time.perf_counter()
+            gaps.append(now - prev)
+            prev = now
+    t = asyncio.create_task(ticker())
+    t0 = time.perf_counter()
+    if hasattr(mgr, "finalize_summary_present"):
+        present = await mgr.finalize_summary_present(SID, TID)
+        woke = await mgr.finalize_master_woke(SID, TID)
+    else:
+        events = mgr.load_chat_events_sync(SID)
+        present = finalize_effects.terminal_summary_present(events, TID)
+        woke = finalize_effects.master_woke_after_summary(events, TID)
+    wall = time.perf_counter() - t0
+    stop = True
+    await t
+    return present, woke, (max(gaps) if gaps else wall), wall
+
+async def main():
+    await run_once()  # cold pass, as at the first finalize after a server start; not timed
+    results = []
+    for _ in range(5):
+        results.append(await run_once())
+    lags = sorted(r[2] for r in results)
+    walls = sorted(r[3] for r in results)
+    print(f"{best_n}-event corpus, present={results[0][0]} woke={results[0][1]}; "
+          f"judgment-pair loop-lag median {lags[2]:.5f} s, max {lags[-1]:.5f} s; "
+          f"wall median {walls[2] * 1000:.3f} ms, max {walls[-1] * 1000:.3f} ms over 5")
+
+asyncio.run(main())
+shutil.rmtree(home)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-07 | this PR | M76 finalize-judgment pair loop-lag median 0.0053/0.0076/0.0039 s → 0.0000 s all rounds, maxima 0.0073-0.0078 s → ≤ 0.00001 s; wall median 5.33/7.59/3.93 ms → 0.002/0.002/0.001 ms (three interleaved rounds of the collector, 20534-event worst live chat file of session d321b9ad, scratch CHARLIEBOT_HOME, main checkout before — the pre-fix inline call shapes `finalize_effects.terminal_summary_present(mgr.load_chat_events_sync(SID), TID)` + `master_woke_after_summary` — vs branch worktree after back-to-back at load 2.85/1.85/1.27, every paired round faster; cold-corpus component: inline load+scan loop-lag 139.2 ms → fold-method 9.6 ms, the whole-file parse now in the load thread (wall 134.1 → 163.1 ms, the fold build's one pass riding the load); no-regression re-measures: M52 append 2951 µs parity True, M26 advance 0.16 ms parity True digest e94c56635194, M6 append-round 0.06 ms parity True; 4822-passed suite plus 5 new fold-parity tests) | every worker and reviewer completion ran the finalize chain's two idempotency judgments — the duplicate-summary check and the master-wake judgment — as full O(history) scans of the delegating session's chat events inline on the event loop (~47 finalize chains in the 9.4 h live server log), and the pair's event-list load could pay a whole-file parse on the loop when the cache was cold (139 ms on the worst corpus); the chat-event store now derives both answers into a per-session finalize fold — built in the loading thread, advanced O(1) per append through the save funnel, dropped with the cache entry, rules imported from finalize_effects' own predicates so the fold and the pure scans cannot drift — and the two call sites read it through new SessionManager methods that pay one threaded whole-file load on a cold cache; the startup reconcile pass keeps the pure scans over its threaded load; M76 definition and healthy range introduced with this PR |
 | 2026-09-07 | this PR | M75 first-event catch-up loop-lag median 0.1600/0.1611/0.1616 s → 0.0157/0.0108/0.0153 s, maxima 0.2423-0.2486 → 0.1008-0.1067 s (three interleaved rounds of the collector, 20534-event worst live chat file of session d321b9ad, scratch CHARLIEBOT_HOME, main checkout before — the pre-fix inline call shape `mgr._get_or_init_aggregator(SID)` — vs branch worktree after back-to-back at load 0.82-1.56, every paired round faster; an earlier interleaved trio under the full test suite's load read 0.2259/0.1595/0.1594 → 0.0108/0.0123/0.0105 s, same shape; wall median 0.1600-0.1616 → 0.1618-0.1750 s — the catch-up's own CPU, now off-loop, unchanged as expected; after maxima ~0.10 s are the whole-corpus thread run's GIL-handoff surcharge the M45 history documented, medians at the ~11 ms M74 post-hop shape) | the first persist_and_broadcast for a session after server start caught the live aggregator up to the whole on-disk corpus inline on the event loop — parse plus feed of every persisted event including a per-event draft-snapshot build whose delta the catch-up discards — freezing every concurrent request and WebSocket at the session's first persisted event after every server restart (the M14 pathology on the streamed-turn funnel); the catch-up hops to a thread behind a per-session init lock (the same instance then carries the live feed with stream-delta emission restored), and the feeds that discard stream deltas (catch-up, history projection, events_to_messages/events_to_view) construct with emit_stream_deltas=False; rider measured within noise: cold projection build 186.4/183.0 → 182.0/183.6 ms on the d321b9ad corpus and 167.2/173.1 → 175.8/159.3 ms on a481fbde's 12452-event corpus (interleaved pairs of the cold-build harness); no-regression re-measures: M26 advance 0.18 ms parity True digest e94c56635194, M6 append-round 0.07 ms parity True, M35 events/view/bootstrap digests 46d1d509a0d6 / ea2d0c6b27c3 / 8e4653af40df identical, M70 repeat view 0.0028 s; review round: a drop landing mid-catch-up now bumps a per-session epoch the finished init checks, discarding the possibly-mid-drop corpus read (and the events cache it re-primed) instead of resurrecting dropped runtime state, and the healthy range is calibrated at < 0.020 s (round 1's 0.0157 s after-median exceeds M74's 0.015 s pin — the catch-up's parse+feed holds the GIL longer than M74's scan); M75 definition and healthy range introduced with this PR |
 | 2026-09-07 | this PR | M74 turn-end rescan loop-lag median 0.0302/0.0262 s → 0.0110/0.0104 s, maxima 0.0377/0.0353 s → 0.0115/0.0109 s (two interleaved rounds of the collector, 9.9 MB / 391-event worst on-disk raw log of session 4fcd4c43, live home read-only, main checkout before — the pre-fix inline call shape `runs.project_raw_events(runs.parse_raw_lines(...))` — vs branch worktree after back-to-back at load 1.54/1.18/0.82, every paired round faster; earlier same-conditions pair 0.0203 → 0.0110 s at load 1.45; wall median 0.0211-0.0251 → 0.0205-0.0215 s — the scan's own CPU, now off-loop, unchanged as expected; typical recent turns 0.02-0.55 MB read the 5.4 ms ticker floor in both shapes) | every claude-family master turn ended with the model-attribution rescan inline on the event loop — a whole read+parse+project of the turn's raw log through a fresh translate, freezing every concurrent request and WebSocket at turn end (the M14 pathology on the turn-end path); the live turn-end projection hops to a thread via `runs.project_raw_file` (new whole-file helper, also single-homing `scan_result_exit` and `resolve_run`'s inline scans), and the re-attach path's whole-file result scan hops the same way; M74 definition and healthy range introduced with this PR |
 | 2026-09-07 | this PR | M7 changed-round collect median 0.453/0.463/0.461 s → 0.231/0.273/0.254 s (three interleaved rounds of the new changed-round harness, main checkout before vs branch worktree after back-to-back at load 1.52-2.08, 15 rows and 0.0 MB re-read both arms; pre-fix profile on the same round: 10.5 MB document json.loads ~80 ms + db key scan ~106 ms + document re-dump ~89 ms + record replay ~138 ms + walk ~40 ms); warm row-memo advance median 0.1058/0.1058/0.1064 s → 0.0264/0.0279/0.0271 s (interleaved ×3 against the live 15.28 GB db, 85k message rows; branch maxima 0.133-0.139 s are rounds where live rows landed between calls — the probe misses and the full scan runs, correct); HTTP-level paired interleaved rounds: WAL-noise rounds (sidecar moved, no message row) live-before 0.1404/0.1419/0.1435/0.1456 s → scratch-after (branch server, scratch CHARLIEBOT_HOME, verbatim M7 curls) 0.0377/0.0382/0.0392/0.0399 s, row-landing rounds unchanged (live 0.1328-0.1576 s ≈ scratch 0.1445-0.1606 s — the scan still runs when rows land, by design); fast-hit floor unchanged (live 0.022 s ≈ scratch 0.011 s) | the changed round paid three fixed costs: the 10.5 MB cache document's json re-parse (~80 ms) on every fresh walk, the opencode row memo's full-table key re-read (`select id, time_updated` over 85k rows, ~106 ms) on every WAL-sidecar move, and the proof-less rescan's downstream serve; the row-memo advance now checks proof aggregates first — (row count, sum of time_updated) read under the same snapshot as the scan it may gate; every single-row move changes the pair, so equal aggregates skip the per-row key read (a strictly weaker proof than the key scan's per-id diff: a same-millisecond delete+insert coincidence whose count and sum both net to zero dodges the probe until the next proof miss re-scans, and a data-only rewrite with an unchanged time_updated is invisible to the key scan itself); the parsed document memoizes per cache path and each save adopts the round's next-document state, so a changed round re-parses zero document bytes and entries this round stopped seeing drop out with the save; changed-round sub-metric, healthy range, and harness added to the M7 row in this PR |

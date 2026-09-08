@@ -12,7 +12,6 @@ import structlog
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import (
     claude_relay,
-    finalize_effects,
     review,
     runs,
     spawner_events,
@@ -351,7 +350,7 @@ async def _persist_worker_summary_once(
   across this judgment, never across any work the chain does outside it.
   """
   async with _summary_send_lock((session_id, thread_id)):
-    if finalize_effects.terminal_summary_present(session_mgr.load_chat_events_sync(session_id), thread_id):
+    if await session_mgr.finalize_summary_present(session_id, thread_id):
       log.info("worker_summary_skip_duplicate", session=session_id, thread=thread_id, fallback=fallback)
       return
     await session_mgr.mark_unread(session_id)

@@ -237,32 +237,32 @@ def test_appends_are_visible(tmp_path: Path) -> None:
   assert after.calls == before.calls + 1
 
 
-def test_replays_are_not_double_counted(tmp_path: Path) -> None:
+# Rows are the two stores the replay dedup must hold across: the sqlite row
+# store alone, and the row store with the json cache written beside it by the
+# first collect.
+_REPLAY_STORE_ROWS = [
+    pytest.param(False, id="row-store-only"),
+    pytest.param(True, id="row-store-plus-cache"),
+]
+
+
+@pytest.mark.parametrize("with_cache", _REPLAY_STORE_ROWS)
+def test_replays_are_not_double_counted(tmp_path: Path, with_cache: bool) -> None:
   claude = Claude(tmp_path)
-  claude.write(
-      claude.work, "sess1", [
-          _claude_record(
-              "m1", NAME, "2024-01-01T00:00:00Z", {
-                  "input_tokens": 100,
-                  "cache_creation_input_tokens": 0,
-                  "cache_read_input_tokens": 0,
-                  "output_tokens": 10
-              }),
-      ])
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(100, 10))])
   db = tmp_path / "db.sqlite"
-  before = _row(_collect(claude, None, db), "Claude Code", NAME)
-  before_total, before_calls = before.total, before.calls
+  cache = tmp_path / "cache.json" if with_cache else None
+  before = _row(_collect(claude, None, db, cache), "Claude Code", NAME)
 
   # Copy the session file verbatim to a new session id (resume/fork behaviour).
   src = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
-  text = src.read_text()
   dst = claude.work / "projects" / "rel" / "sess2"
   dst.mkdir(parents=True, exist_ok=True)
-  (dst / "sess2.jsonl").write_text(text)
+  (dst / "sess2.jsonl").write_text(src.read_text())
 
-  after = _row(_collect(claude, None, db), "Claude Code", NAME)
-  assert after.total == before_total
-  assert after.calls == before_calls
+  after = _row(_collect(claude, None, db, cache), "Claude Code", NAME)
+  assert after.total == before.total
+  assert after.calls == before.calls
 
 
 def test_subagent_files_are_counted(tmp_path: Path) -> None:
@@ -440,23 +440,6 @@ def test_cache_serves_unchanged_files(tmp_path: Path) -> None:
   # Every log file came from the cache: nothing re-read, same tally.
   assert second.scanned_bytes == 0
   assert _row(second, "Claude Code", NAME).total == _row(first, "Claude Code", NAME).total
-
-
-def test_cache_replays_are_not_double_counted(tmp_path: Path) -> None:
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(100, 10))])
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
-  before = _row(_collect(claude, None, db, cache), "Claude Code", NAME)
-
-  # A verbatim copy under a new session id (resume/fork) lands after the cache was written.
-  src = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
-  dst = claude.work / "projects" / "rel" / "sess2"
-  dst.mkdir(parents=True, exist_ok=True)
-  (dst / "sess2.jsonl").write_text(src.read_text())
-
-  after = _row(_collect(claude, None, db, cache), "Claude Code", NAME)
-  assert after.total == before.total
-  assert after.calls == before.calls
 
 
 def test_cache_invalidates_on_append(tmp_path: Path) -> None:

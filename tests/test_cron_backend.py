@@ -26,6 +26,7 @@ from conftest import (
 
 from src.api import cron as cron_api
 from src.core.config import (
+    CharlieBotConfig,
     ScheduledTaskConfig,
     _load_cron_file,
 )
@@ -36,6 +37,7 @@ from src.core.models import (
     SpawnRequest,
 )
 from src.core.scheduler import Scheduler
+from src.core.sessions import SessionManager
 from src.core.thinking_state import clear_busy, mark_busy
 from src.core.threads import ThreadManager
 
@@ -49,6 +51,41 @@ def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: Path) -> None:
   """
   monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
   monkeypatch.setattr(cron_api, "cron_path", lambda name: cron_dir / f"{name}.yaml")
+
+
+_NIGHTLY_PROMPT_MD = "run nightly\n"
+
+
+def _write_nightly_prompt_source(tmp_path: Path) -> Path:
+  """Write the nightly job's prompt source that host files point at."""
+  md_path = tmp_path / "prompts" / "nightly.md"
+  md_path.parent.mkdir(parents=True, exist_ok=True)
+  md_path.write_text(_NIGHTLY_PROMPT_MD, encoding="utf-8")
+  return md_path
+
+
+def _cron_api_rig(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    preseed_backend: str | None = None,
+) -> tuple[Path, CharlieBotConfig, SessionManager, Path]:
+  """Stage the cron API world: a cron.d dir, the nightly prompt source, the
+  patched cron-dir bindings, and the real scheduler trio.
+
+  ``preseed_backend`` also seeds nightly.yaml carrying that backend; without
+  it the host file is absent, as before the task's first create. Returns
+  (cron_dir, cfg, session_mgr, md_path).
+  """
+  cron_dir = tmp_path / "cron.d"
+  cron_dir.mkdir(parents=True, exist_ok=True)
+  if preseed_backend is None:
+    md_path = _write_nightly_prompt_source(tmp_path)
+  else:
+    _yaml_path, md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path, backend=preseed_backend)
+  _patch_cron_d(monkeypatch, cron_dir)
+  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
+  return cron_dir, cfg, session_mgr, md_path
 
 
 @pytest.mark.asyncio
@@ -253,14 +290,8 @@ def test_cron_api_persists_and_clears_backend(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cron_dir = tmp_path / "cron.d"
-  cron_dir.mkdir(parents=True, exist_ok=True)
-  _patch_cron_d(monkeypatch, cron_dir)
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
+  cron_dir, cfg, session_mgr, md_path = _cron_api_rig(tmp_path, monkeypatch)
   nightly_path = cron_dir / "nightly.yaml"
-  prompt_path = tmp_path / "prompts" / "nightly.md"
-  prompt_path.parent.mkdir(parents=True, exist_ok=True)
-  prompt_path.write_text("run nightly", encoding="utf-8")
 
   def _read_backend() -> str:
     return yaml.safe_load(nightly_path.read_text(encoding="utf-8")).get("backend")
@@ -271,7 +302,7 @@ def test_cron_api_persists_and_clears_backend(
         json={
             "name": "nightly",
             "cron": "0 2 * * *",
-            "prompt_file": str(prompt_path),
+            "prompt_file": str(md_path),
             "backend": "codex-o3",
         },
     )
@@ -297,13 +328,7 @@ def test_cron_api_rejects_invalid_backend_on_create(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cron_dir = tmp_path / "cron.d"
-  cron_dir.mkdir(parents=True, exist_ok=True)
-  _patch_cron_d(monkeypatch, cron_dir)
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
-  prompt_path = tmp_path / "prompts" / "nightly.md"
-  prompt_path.parent.mkdir(parents=True, exist_ok=True)
-  prompt_path.write_text("run nightly", encoding="utf-8")
+  cron_dir, cfg, session_mgr, md_path = _cron_api_rig(tmp_path, monkeypatch)
 
   with make_cron_client(cfg, session_mgr) as client:
     response = client.post(
@@ -311,7 +336,7 @@ def test_cron_api_rejects_invalid_backend_on_create(
         json={
             "name": "nightly",
             "cron": "0 2 * * *",
-            "prompt_file": str(prompt_path),
+            "prompt_file": str(md_path),
             "backend": "missing-backend",
         },
     )
@@ -325,19 +350,7 @@ def test_cron_api_rejects_invalid_backend_on_update(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cron_dir = tmp_path / "cron.d"
-  cron_dir.mkdir(parents=True, exist_ok=True)
-  prompt_path = tmp_path / "prompts" / "nightly.md"
-  prompt_path.parent.mkdir(parents=True, exist_ok=True)
-  prompt_path.write_text("run nightly", encoding="utf-8")
-  (cron_dir / "nightly.yaml").write_text(
-      yaml.safe_dump({
-          "cron": "0 2 * * *",
-          "prompt_file": str(prompt_path),
-          "backend": "codex-o3"
-      }), encoding="utf-8")
-  _patch_cron_d(monkeypatch, cron_dir)
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
+  cron_dir, cfg, session_mgr, _md_path = _cron_api_rig(tmp_path, monkeypatch, preseed_backend="codex-o3")
 
   with make_cron_client(cfg, session_mgr) as client:
     response = client.put("/api/cron/tasks/nightly", json={"backend": "missing-backend"})
@@ -352,20 +365,7 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cron_dir = tmp_path / "cron.d"
-  cron_dir.mkdir(parents=True, exist_ok=True)
-  prompt_path = tmp_path / "prompts" / "nightly.md"
-  prompt_path.parent.mkdir(parents=True, exist_ok=True)
-  prompt_path.write_text("run nightly", encoding="utf-8")
-  (cron_dir / "nightly.yaml").write_text(
-      yaml.safe_dump({
-          "cron": "0 2 * * *",
-          "prompt_file": str(prompt_path),
-          "backend": OPUS_BACKEND_ID
-      }),
-      encoding="utf-8")
-  _patch_cron_d(monkeypatch, cron_dir)
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
+  cron_dir, cfg, session_mgr, _md_path = _cron_api_rig(tmp_path, monkeypatch, preseed_backend=OPUS_BACKEND_ID)
   session = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
       backend=OPUS_BACKEND_ID,
@@ -383,28 +383,25 @@ async def test_cron_api_rejects_backend_update_when_current_session_is_busy(
     clear_busy(session.id)
 
 
-def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path) -> tuple[Path, Path, str]:
+def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path, *, backend: str | None = None) -> tuple[Path, Path, str]:
   """Write a prompt_file-backed 'nightly' job; returns (yaml_path, md_path, md_content).
 
   The host file carries the path to its prompt source under ``prompt_file`` and
   the pointed file owns the body, exactly as production host files look.
+  ``backend`` adds the backend key to the host file.
   """
-  md_path = tmp_path / "prompts" / "nightly.md"
-  md_path.parent.mkdir(parents=True, exist_ok=True)
-  md_content = "Rebase omni main and report status.\n"
-  md_path.write_text(md_content, encoding="utf-8")
+  md_path = _write_nightly_prompt_source(tmp_path)
+  body: dict[str, Any] = {
+      "cron": "0 3 * * *",
+      "prompt_file": str(md_path),  # absolute path, as production files use
+      "timezone": "America/Los_Angeles",
+      "enabled": True,
+  }
+  if backend is not None:
+    body["backend"] = backend
   yaml_path = cron_dir / "nightly.yaml"
-  yaml_path.write_text(
-      yaml.safe_dump(
-          {
-              "cron": "0 3 * * *",
-              "prompt_file": str(md_path),  # absolute path, as production files use
-              "timezone": "America/Los_Angeles",
-              "enabled": True,
-          },
-          sort_keys=False),
-      encoding="utf-8")
-  return yaml_path, md_path, md_content
+  yaml_path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
+  return yaml_path, md_path, _NIGHTLY_PROMPT_MD
 
 
 def test_load_cron_file_loads_prompt_file(

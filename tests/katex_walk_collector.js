@@ -98,9 +98,6 @@ function pageCorpus() {
   w.eval(hljsSrc);
   w.eval(markedSrc);
   const rawWalk = w.renderMathInElement;
-  const stage = (id, html) => {
-    w.document.getElementById(id).innerHTML = html;
-  };
 
   // Page shape: the checkout's renderer, then its postProcess step
   // (querySelectorAll('.prose-msg') -> renderChatMath).
@@ -124,7 +121,8 @@ function pageCorpus() {
   // renderMessage's mdDiv attribute: escapeHtml's serializer (& < >) plus the
   // quote escape; the HTML parser decodes it back.
   const dataRaw = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  stage('c', page.map((t) => `<div class="prose-msg" data-raw="${dataRaw(t)}">${w.renderProseMarkdown(t)}</div>`).join(''));
+  w.document.getElementById('c').innerHTML =
+    page.map((t) => `<div class="prose-msg" data-raw="${dataRaw(t)}">${w.renderProseMarkdown(t)}</div>`).join('');
   const pageRoot = w.document.getElementById('c');
   const before = pageRoot.innerHTML;
   const proseMsgs = pageRoot.querySelectorAll('.prose-msg');
@@ -143,7 +141,7 @@ function pageCorpus() {
   let walkMs = 0;
   let walkCalls = 0;
   h.context.renderMathInElement = (el, opts) => {
-    stage('s', el.innerHTML);
+    w.document.getElementById('s').innerHTML = el.innerHTML;
     const tw = performance.now();
     rawWalk(w.document.getElementById('s'), opts);
     walkMs += performance.now() - tw;

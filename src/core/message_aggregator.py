@@ -197,9 +197,9 @@ def _task_delegated_msg(ev: dict) -> dict:
 # skip the event.  The aggregator adds event_index and a default timestamp.
 _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
     ET.MASTER_DONE:
-        lambda ev: None if ev.get('still_thinking') else {
+        lambda ev: None if ev.get(ET.STILL_THINKING) else {
             'role': 'separator',
-            'thinking_seconds': ev.get('thinking_seconds'),
+            ET.THINKING_SECONDS: ev.get(ET.THINKING_SECONDS),
         },
     ET.ASSISTANT_ERROR:
         lambda ev: {

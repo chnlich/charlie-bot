@@ -20,6 +20,19 @@ TOOL_RESULT = "tool_result"
 # -- Master lifecycle --------------------------------------------------------
 MASTER_DONE = "master_done"
 ASSISTANT_ERROR = "assistant_error"
+# Payload keys of a MASTER_DONE event, all persisted wire values re-read from
+# chat_events.jsonl. still_thinking marks a round end that left another queued
+# item running (no separator is rendered for it); the live panel reads it too
+# (web/static/js/websocket.js). thinking_seconds is the length of the round's
+# continuous busy interval, copied verbatim onto the rendered separator
+# message whose name the chat JS reads (src/core/message_aggregator.py,
+# web/static/js/chat/rendering.js). input_event_id names the user event the
+# round answers: the Slack round audit re-reads it, and the slack_notice and
+# slack_backfill payloads carry the same name with the same value
+# (src/core/slack_listener.py).
+STILL_THINKING = "still_thinking"
+THINKING_SECONDS = "thinking_seconds"
+INPUT_EVENT_ID = "input_event_id"
 
 # -- Worker / delegation -----------------------------------------------------
 TASK_DELEGATED = "task_delegated"

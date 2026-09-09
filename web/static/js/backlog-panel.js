@@ -277,11 +277,7 @@ const backlogPanel = (() => {
     await updateStatus(id, 'approved', source, repo);
   }
 
-  function init() {
-    // Resize handle init happens in app.js via initBacklogResize()
-  }
-
-  return {init, refresh, render, updateStatus, rejectWithReason, requestRevision, retryItem, switchRepo};
+  return {refresh, render, updateStatus, rejectWithReason, requestRevision, retryItem, switchRepo};
 })();
 
 // ---------------------------------------------------------------------------

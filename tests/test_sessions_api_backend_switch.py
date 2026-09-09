@@ -143,6 +143,14 @@ async def _seed_role(session_mgr: SessionManager, *, backend: str, role: str = "
   return await session_mgr.create_session(CreateSessionRequest(name="Role session", role=role), backend=backend)
 
 
+def _capture_persisted_events(monkeypatch: pytest.MonkeyPatch, session_mgr: SessionManager) -> list[dict]:
+  """Swap in a capturing AsyncMock for ``persist_and_broadcast``; return the events it captured."""
+  captured: list[dict] = []
+  monkeypatch.setattr(
+      session_mgr, "persist_and_broadcast", AsyncMock(side_effect=lambda _sid, event: captured.append(event) or None))
+  return captured
+
+
 @pytest.mark.asyncio
 async def test_switch_same_domain_returns_updated_meta_and_persists_audit(
     tmp_path: Path,
@@ -152,9 +160,7 @@ async def test_switch_same_domain_returns_updated_meta_and_persists_audit(
   session_mgr = SessionManager(cfg)
   sid = await _seed(session_mgr, backend="claude-opus-5")
 
-  captured: list[dict] = []
-  fake = AsyncMock(side_effect=lambda _sid, event: captured.append(event) or None)
-  monkeypatch.setattr(session_mgr, "persist_and_broadcast", fake)
+  captured = _capture_persisted_events(monkeypatch, session_mgr)
 
   with _build_client(cfg, session_mgr) as client:
     response = client.post(f"/api/sessions/{sid}/backend", json={"backend": "claude-fable-5"})
@@ -194,9 +200,7 @@ async def test_switch_cross_domain_refuses_and_guides_clone(tmp_path: Path, monk
   session_mgr = SessionManager(cfg)
   sid = await _seed(session_mgr, backend="claude-opus-5")
 
-  captured: list[dict] = []
-  monkeypatch.setattr(
-      session_mgr, "persist_and_broadcast", AsyncMock(side_effect=lambda _sid, event: captured.append(event) or None))
+  captured = _capture_persisted_events(monkeypatch, session_mgr)
 
   with _build_client(cfg, session_mgr) as client:
     for target, reason in [
@@ -270,9 +274,7 @@ async def test_switch_unknown_backend_is_400(tmp_path: Path, monkeypatch: pytest
   cfg, _config_a, _config_b = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   sid = await _seed(session_mgr, backend="claude-opus-5")
-  captured: list[dict] = []
-  monkeypatch.setattr(
-      session_mgr, "persist_and_broadcast", AsyncMock(side_effect=lambda _sid, event: captured.append(event) or None))
+  captured = _capture_persisted_events(monkeypatch, session_mgr)
 
   with _build_client(cfg, session_mgr) as client:
     response = client.post(f"/api/sessions/{sid}/backend", json={"backend": "missing-backend"})
@@ -285,9 +287,7 @@ async def test_switch_unknown_backend_is_400(tmp_path: Path, monkeypatch: pytest
 async def test_switch_missing_session_returns_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, _config_a, _config_b = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  captured: list[dict] = []
-  monkeypatch.setattr(
-      session_mgr, "persist_and_broadcast", AsyncMock(side_effect=lambda _sid, event: captured.append(event) or None))
+  captured = _capture_persisted_events(monkeypatch, session_mgr)
   with _build_client(cfg, session_mgr) as client:
     response = client.post("/api/sessions/does-not-exist/backend", json={"backend": "claude-fable-5"})
   assert response.status_code == 404

@@ -89,6 +89,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M77 session-switch projection reuse, rotating tabs | M77 collector below | seconds per `get_message_projection` re-entry over a 12-active-session rotation (3 rounds), worst live corpora; the rebuilt count is the eviction shape (a warm re-entry is a dict read + len compare, a rebuild parses the corpus) | re-entry median < 0.5 ms; 0 rebuilt re-entries in a 12-session rotation | — (introduced with its first history row) |
 | M78 ndjson event parse, cold whole-file | M78 collector below | seconds per `parse_ndjson_file` call, worst on-disk live chat file and worst on-disk worker log | chat file median < 0.08 s; worker log median < 0.02 s | — (introduced with its first history row) |
 | M79 git branches list, steady state | M79 collector below | seconds per `GET /api/git/branches` handler call over the charlie-bot checkout | repeat-view median < 0.010 s | — (introduced with its first history row) |
+| M80 token-tally changed round under append churn | M80 collector below | seconds per changed-round collect after one 1 MB-class append to each of the two worst copied transcripts (the busy-turn shape: an active master turn appends MBs between /token-usage loads; the 40 h live log sampled 2026-09-09 shows the page's p90 at 219 ms, max 2.35 s, against a 20 ms warm median), scratch corpus + cache | median < 0.020 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -4816,10 +4817,71 @@ asyncio.run(main())
 EOF
 ```
 
+M80 — token-tally changed round under append churn. The tally's cached parse re-read a moved
+log file whole, so the /token-usage page paid a whole-transcript re-read for every file an
+active turn appended to since the last collect — the production p90 the M80 definition row
+quotes, invisible to the standing M7 probes (the warm page and the quiet changed round read 0
+moved files). The fixed parse proves the unchanged prefix from a guard hash of its final
+window plus the boundary newline and parses only the appended tail. The cost is the
+busy-turn page load, so the collector copies the worst claude transcript and the worst codex
+rollout into a scratch corpus (live home read once for the copy, never written), cold-collects
+to build the cache, appends the corpus's own final ~1 MB (line-aligned, verbatim replay lines)
+to both files, and times the changed-round collect, from the checkout under test: one round per
+invocation; evidence pairs the before and after checkouts back-to-back. Rows digest across arms
+so a corpus difference cannot masquerade as a payload difference:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import hashlib, json, os, shutil, sys, tempfile, time
+from pathlib import Path
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core import token_tally as tt
+
+# Worst churn corpus: the largest claude transcript and the largest codex rollout.
+best_claude = max(((p.stat().st_size, p) for p in (Path.home() / ".claude/projects").rglob("*.jsonl")))[1]
+best_codex = max(((p.stat().st_size, p) for p in (Path.home() / ".codex/sessions").rglob("*.jsonl")))[1]
+
+scratch = Path(tempfile.mkdtemp(prefix="m80-churn-"))
+claude_home = scratch / "claude"
+codex_home = scratch / "codex"
+(sess_dir := claude_home / "projects" / "rel" / "big").mkdir(parents=True)
+(roll_dir := codex_home / "sessions" / "big").mkdir(parents=True)
+claude_log, codex_log = sess_dir / "big.jsonl", roll_dir / "rollout.jsonl"
+shutil.copy2(best_claude, claude_log)
+shutil.copy2(best_codex, codex_log)
+
+
+def collect():
+    return tt.collect_token_usage(claude_homes={"scratch": claude_home}, codex_homes={"scratch": codex_home},
+                                  opencode_db=scratch / "absent.db", cache_path=scratch / "cache.json")
+
+
+collect()  # cold pass builds the cache; not timed
+
+for log in (claude_log, codex_log):  # one busy-turn append per file: its own final ~1 MB, line-aligned
+    with log.open("rb") as fh:
+        fh.seek(max(0, log.stat().st_size - 1024 * 1024))
+        data = fh.read()
+    with log.open("ab") as fh:
+        fh.write(data[data.find(b"\n") + 1:])
+
+t0 = time.perf_counter()
+changed = collect()
+wall = time.perf_counter() - t0
+rows = [[r.source, r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output] for r in changed.rows]
+digest = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:12]
+print(f"checkout {Path(os.environ['CHECKOUT']).rsplit('/', 1)[-1]}: changed round after ~1 MB appends to both "
+      f"transcripts: wall {wall:.4f} s, scanned {changed.scanned_bytes / 1e6:.2f} MB, rows digest {digest}")
+shutil.rmtree(scratch)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-09 | this PR | M80 churn changed-round wall median 0.0566/0.0544/0.0565 s → 0.0064/0.0065/0.0064 s, −88 %, maxima 0.0570-0.0575 → 0.0065 s, scanned 24.16 → 2.93 MB per round (three interleaved rounds of the new collector, the 6.7 MB worst claude transcript and the 15.1 MB worst codex rollout copied to a scratch corpus with one ~1 MB line-aligned self-append per file per round, live home read once for the copy, main checkout before vs branch worktree after back-to-back at load 1.58-2.96, every paired round faster, rows digest 84adb4d24b91 identical across all six arms); live-churn corroboration on the real corpus before the fix: a changed round 3 s into an active turn scanned 16.7 MB in 0.430 s (the 40 h server log's /token-usage p90 219 ms, max 2354 ms, n=220, against the 20 ms warm median); no-regression re-measures on the branch: M7 warm page 0.020 s = main's 0.021 s, M7 quiet changed round 0.039 vs 0.041 s (0.0 MB re-read both), whole-corpus cold pass 3.87-4.00 → 3.63-3.65 s (the marker-line find scan rides C level) with rows digest d97bb6fb4fc8 and notes digest 60c1b1a01c4c identical across back-to-back main/branch rounds ×2 and scanned 636.6 MB main / 650.3 MB branch — the bytes count is now the true byte total where the text-mode read counted decoded chars, M26 advance 0.18 ms parity True digest e94c56635194, M56 /status 2.08 ms; 4878-passed suite plus 5 new tests (tail parity for both sources, completed-partial-line, replaced-or-shrunk guard rejection, pre-tail-schema entry) | the tally's cached parse re-read every moved log file whole per changed round, so the /token-usage page paid a whole-transcript re-read for each file an active turn appended to since the last collect; the parse now tracks the consumed byte offset (the last complete line's end, which a mid-read append pushes past the signature's size — the offset the tail continues from, so an over-read line can never double-count) and proves the unchanged prefix from a guard hash of its final 8 KB plus the boundary newline before parsing only the appended tail, Claude records deduping against the cached keys and Codex carrying the model context, rootness and self-check state forward; a replaced, truncated or mid-line prefix fails the guard and re-parses whole, and the jsonl logs' append-only write shape is the ground the window proof stands on; M80 definition and healthy range introduced with this PR |
 | 2026-09-08 | this PR | M71 capped search request median 6.30/6.42/6.57 ms → 4.71/4.48/4.39 ms, −25 % to −33 %, maxima 6.91-7.34 → 5.50-8.43 ms (three interleaved rounds of the verbatim collector, 200 rows / 207540 B body, shared snapshot of 1090 metas + 178.2 MB active live chat files + triggers dirs, parsed-body digest ea61f509e6d7 identical across all six arms, main checkout before vs branch worktree after back-to-back at load 1.63-1.66, every paired round faster; route-body wall 5.6 → 2.4 ms per call in-process; no-regression re-measures interleaved ×2: absent-needle search_sessions_readonly 1.09/0.97 → 1.09/1.02 ms median and M56 /status 2.02/2.12 → 2.03/2.09 ms with digest c45ec651955b identical; 4873-passed suite plus 3 new tests — byte parity against the merged-render reference, write-funnel rename invalidation, and the memo cap) | the capped search's per-row render paid 200 pydantic model_dump(mode="json") calls (~1.4 ms profiled) plus one 207 KB encode per request; the static fields now render once per metadata object into segment bytes memoized on the object's identity (the value pins the object, so an id reuse can never serve another object's bytes; the metadata cache replaces the object whenever its file provably changes — every writer publishes through the atomic tmp rename and the re-parse is a fresh instance — the same ground the read-only search's shared-reference contract stands on), and the five overlay fields (dict-assignment updates on keys the model already declares, so they sit at their model-definition positions) render per request as scalar bytes — the spliced body is byte-identical to the FastJsonResponse render of the merged dicts, pinned by a test against the merged-render reference; the manager's name-match pass lowered every session name twice (match test + content-candidate split) and now lowers once; healthy range recalibrated median < 0.010 s → < 0.006 s with this PR |
 | 2026-09-08 | #1131 | M55 first view 0.2082/0.2191/0.2184 s → 0.1488/0.1499/0.1469 s, −28 % to −33 %, maxima 0.2184-0.2349 → 0.1493-0.1531 s (three interleaved rounds of the verbatim collector, 1.5 MB worst artifact pair understanding_packed-batch-cost-balance_v10.html vs _v9.html, scratch CHARLIEBOT_HOME, main checkout before vs branch worktree after back-to-back at load 0.28-0.89, every paired round faster; served bodies 150829 B both arms, same-process byte-identical, the per-checkout cache-bust digest gap the M70 row documents; repeat view 0.0025 → 0.0024 s, the M55 memo path, no regression; component corroboration: in-process annotate wall median 0.1724/0.1798/0.1730 → 0.1283/0.1331/0.1270 s, −25 % to −27 %; 4870-passed suite plus 3 new parity tests) | the annotate's tokenizer walked every text character in Python — per-char isspace/isascii/isalnum plus a 4-range CJK membership call, ~28k characters per side — and every parsed text node carried a per-character raw-range tuple list (~1.4M tuples per compare-view pair) consumed only to map token offsets back to source spans; the tokenizer is one compiled-regex finditer whose alternation reproduces the walk exactly (whitespace runs skipped, `[A-Za-z0-9_]` word runs, every remaining character its own token — the per-character granularity the CJK alignment relies on, pinned by a 500-document randomized parity test against the reference walk), and the text part carries a text_is_raw flag plus raw_span() — parsed data maps raw offset = start + logical (handle_data already proves source[start:end] == text), an entity reference maps every logical range to its whole raw span — so _leaf_tokens, _raw_bounds and _wrapping_removes_direct_text compute spans arithmetically and the flat per-character map is gone; annotate output byte-identical across the fixture pair, the 1.5 MB worst pair, diff_text, and 500 randomized CJK-bearing pairs; recorded in this docs-only follow-up per the #1046 precedent, the landing PR #1131 shipped without it |
 | 2026-09-08 | this PR | M72 listing request median 9.92/10.99/10.17 ms → 5.99/5.99/5.96 ms, −39 % to −45 %, maxima 10.85-12.12 → 6.69-7.04 ms (three interleaved rounds of the verbatim collector, 1091-entry sessions root, live state read-only, main checkout before vs branch worktree after back-to-back at load 0.58-0.61, every paired round faster; served body byte-identical across all six arms — 239486 B, sha1 7e724dd3aff9; builder-level repeat median 6.06 → 3.66 ms over 15 interleaved calls; no-regression re-measures interleaved ×2: M70 repeat view 2.7/2.9 → 2.8/2.6 ms with the per-checkout cache-bust digest the M55 row documents, M55 repeat 2.6/2.5 → 2.4/2.5 ms and first views 0.21-0.23 → 0.21-0.22 s; 4867-passed suite plus the new formatter fuzz) | the repeat listing re-paid the sort (~0.8 ms) and the per-entry row build (~2.8 ms: f-strings, the escape fast-path check, the size text, and a gmtime+strftime pair per entry) on top of the stat walk no listing can skip; the served page now memoizes on the walk's own entry snapshot ((name, is_dir, size, mtime) per entry, resolved dir and URL prefix around it) — the HTML is a pure function of the walked state, so equal walked state proves the stored page equals what this walk would build, an invalidation-free ground that leans on no rename-atomicity assumption the sibling (mtime_ns, size) memos require, and a repeat view pays the walk plus one memo lookup; the mtime text renders through an integer civil-from-days formatter floored the way gmtime floors a fractional epoch, pinned byte-identical to strftime(gmtime()) by a 24k-epoch fuzz plus a 67k-mtime live-corpus check; the route's resolve/exists/listing executor hops collapsed into one (a vanished path answers 404 from the scandir's own FileNotFoundError, and only the ambiguous not-a-directory case keeps its explicit exists); healthy range recalibrated median < 0.013 s → < 0.008 s with this PR |

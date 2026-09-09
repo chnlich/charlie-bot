@@ -114,8 +114,7 @@ def walk_thread_meta_stats(threads_dir: Path, log_event: str) -> list[tuple[str,
   """``(thread_dir, metadata.json path, stat)`` for every thread dir under *threads_dir*.
 
   The scandir+stat phase the sidebar probe's signature walk takes once and
-  hands to ``iter_recent_thread_metas``' walked branch, which previously
-  re-took it per probe.
+  hands to ``iter_recent_thread_metas``' walked branch.
   """
   return list(_iter_thread_meta_stats(threads_dir, log_event))
 

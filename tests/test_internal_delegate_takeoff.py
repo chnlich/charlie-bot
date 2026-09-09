@@ -122,12 +122,9 @@ def test_takeoff_gate_scheduled_trigger_excluded_by_type_regardless_of_content()
     check_takeoff_gate("session-id", session_mgr)
 
 
-def test_takeoff_gate_real_user_literal_banner_now_mints_takeoff() -> None:
-  """Forward fix: a real human typing the literal banner text now mints a takeoff window.
-
-  Previously the prefix check silently ignored a real ET.USER message whose content
-  started with the scheduled-trigger banner; the type-based gate no longer does.
-  """
+def test_takeoff_gate_real_user_literal_banner_mints_takeoff() -> None:
+  """A real user message whose text carries the takeoff phrase mints a takeoff
+  window, banner prefix included: the gate excludes by event type only."""
   session_mgr = FakeSessionManager([user_event("[Scheduled trigger fired] take off")])
 
   check_takeoff_gate("session-id", session_mgr)

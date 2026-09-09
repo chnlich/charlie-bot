@@ -524,7 +524,7 @@ def _sidebar_probe_walk(threads_dir: Path, triggers_dir: Path, plans_path: Path)
   os.stat on joined strs measures ~2x faster over the active-session corpus.
 
   The walked pairs ride along for the deep probe (:func:`probe_sidebar_state_sync`
-  with *walked*), which previously re-took this phase per probed session.
+  with *walked*).
   """
   thread_sig = []
   rollovers = []

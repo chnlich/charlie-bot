@@ -1,11 +1,10 @@
 """Pin the plan-release contract wording in its current homes.
 
-The plan-registration block used to be quoted verbatim from prompts/master.md.
-The contract moved: master.md now routes plan approval through
-skills/plan-approval/SKILL.md, which carries the registration, approval, and
-verify-step wording, while the verifier's read-only network envelope lives in
-the verify worker prompt (prompts/verify.md). These tests pin the current
-wording so contract changes stay deliberate.
+The registration, approval, and verify-step wording lives in
+skills/plan-approval/SKILL.md, which prompts/master.md routes plan approval
+through; the verifier's read-only network envelope lives in the verify worker
+prompt (prompts/verify.md). These tests pin the wording so contract changes
+stay deliberate.
 """
 
 from pathlib import Path

@@ -41,8 +41,8 @@ async function loadMarkedSrc() {
 // Load the REAL markdown-renderer.js against the REAL marked in a shared vm
 // context, mirroring the browser page order: marked.min.js defines the global
 // marked first, then markdown-renderer.js registers its renderer + tokenizer
-// via marked.use. Stubs cover only the non-marked globals (hljs, document,
-// platform) that the file touches; a caller-passed hljs replaces the stub so
+// via marked.use. Stubs cover only the non-marked globals (hljs, document)
+// that the file touches; a caller-passed hljs replaces the stub so
 // tests can count or shape highlight calls.
 async function loadRenderer(hljs) {
   const markedSrc = await loadMarkedSrc();
@@ -50,7 +50,6 @@ async function loadRenderer(hljs) {
     console,
     hljs: hljs || hljsStub,
     document: { querySelectorAll: () => [] },
-    platform: {},
   };
   vm.createContext(context);
   vm.runInContext(markedSrc, context, { filename: 'marked.min.js' });
@@ -68,7 +67,6 @@ async function loadRendererContext(hljs) {
     console,
     hljs: hljs || hljsStub,
     document: { querySelectorAll: () => [] },
-    platform: {},
   };
   vm.createContext(context);
   vm.runInContext(markedSrc, context, { filename: 'marked.min.js' });

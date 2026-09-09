@@ -153,3 +153,31 @@ document.addEventListener('click', function(e) {
     hideSlashPopup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Sidebar chrome (mobile drawer: hamburger toggle + close on navigation)
+// ---------------------------------------------------------------------------
+function toggleMobileSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  const isOpen = sidebar.classList.contains('open');
+  if (isOpen) {
+    sidebar.classList.remove('open');
+    overlay.classList.remove('active');
+  } else {
+    sidebar.classList.add('open');
+    overlay.classList.add('active');
+  }
+}
+
+// Close sidebar on navigation (mobile)
+document.querySelectorAll('#sidebar a[href]').forEach(function(a) {
+  a.addEventListener('click', function() {
+    if (platform.isMobile) {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.getElementById('sidebar-overlay');
+      sidebar.classList.remove('open');
+      overlay.classList.remove('active');
+    }
+  });
+});

@@ -213,8 +213,7 @@ class SessionBootstrapData:
 
 @dataclass
 class SessionViewData:
-  """Data produced by the load-events → messages → usage → mark-read pipeline."""
-  raw_events: list[dict]
+  """Data produced by the messages → usage → mark-read pipeline."""
   messages: list[dict]
   threads: list[dict]
   usage: dict | None
@@ -251,19 +250,19 @@ async def _tail_events_page(
     session_id: str,
     archive_offset: int,
     message_limit: int,
-) -> tuple[list[dict], list[dict], dict | None, int, int, bool]:
+) -> tuple[list[dict], dict | None, int, int, bool]:
   """Load the last *message_limit* events and view them with global ordinals.
 
-  Returns (tail_events, messages, pending_draft, total_event_count,
-  oldest_message_ordinal, has_more). Indices are global (archive_offset +
-  line-in-live-file), matching ``load_chat_events_range``; ``has_more`` is
-  set when the tail window is full or archived events precede it.
+  Returns (messages, pending_draft, total_event_count, oldest_message_ordinal,
+  has_more). Indices are global (archive_offset + line-in-live-file), matching
+  ``load_chat_events_range``; ``has_more`` is set when the tail window is full
+  or archived events precede it.
   """
   tail_events, total_count, has_more = await asyncio.to_thread(
       session_mgr.load_chat_events_tail, session_id, message_limit)
   offset = archive_offset + total_count - len(tail_events)
   messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
-  return (tail_events, messages, pending_draft, archive_offset + total_count, offset, has_more or archive_offset > 0)
+  return (messages, pending_draft, archive_offset + total_count, offset, has_more or archive_offset > 0)
 
 
 async def _mark_read_best_effort(session_mgr: 'SessionManager', session_id: str) -> 'SessionMetadata | None':
@@ -301,7 +300,7 @@ async def build_session_bootstrap_data(
   if session_meta.archive_offset == 0:
     page = await _projection_page(session_mgr, session_id, message_limit)
   if page is None:
-    (_, messages, pending_draft, total_event_count, oldest_ordinal,
+    (messages, pending_draft, total_event_count, oldest_ordinal,
      has_more) = await _tail_events_page(session_mgr, session_id, session_meta.archive_offset, message_limit)
   else:
     messages, pending_draft, total_event_count, oldest_ordinal, has_more = page
@@ -327,15 +326,15 @@ async def build_session_view_data(
     *,
     message_limit: int | None = 40,
 ) -> SessionViewData:
-  """Load events, derive messages and usage, and mark read.
+  """Build the view's messages and usage, and mark read.
 
   *thread_rows* are the session view's thread rows (``view_thread_rows``'s
   shape), resolved by the caller so the view's row proof is shared with the
   workers-panel list. When *message_limit* is None, loads all events. When
   set, loads the last *message_limit* messages — served from the message
   projection when ``archive_offset == 0`` (turn-aligned page of at least
-  *message_limit* messages, O(page) cost), or from the legacy tail-events path
-  otherwise.
+  *message_limit* messages, O(page) cost and zero corpus reads), or from the
+  legacy tail-events path otherwise.
 
   Returns committed messages plus an optional pending_draft (the in-progress
   assistant draft that has not yet been flushed). Live render paths show the
@@ -351,11 +350,9 @@ async def build_session_view_data(
     result = await _projection_page(session_mgr, session_id, message_limit)
     if result is not None:
       messages, pending_draft, total_event_count, oldest_ordinal, has_more = result
-      events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
       usage = await session_mgr.resolve_session_usage(session_id, session_meta)
       await _mark_read_best_effort(session_mgr, session_id)
       return SessionViewData(
-          raw_events=events,
           messages=messages,
           threads=thread_rows,
           usage=usage,
@@ -366,7 +363,7 @@ async def build_session_view_data(
       )
 
   if message_limit is not None:
-    (raw_events, messages, pending_draft, total_event_count, oldest_message_ordinal,
+    (messages, pending_draft, total_event_count, oldest_message_ordinal,
      has_more) = await _tail_events_page(session_mgr, session_id, session_meta.archive_offset, message_limit)
     usage = await session_mgr.resolve_session_usage(session_id, session_meta)
   else:
@@ -380,7 +377,6 @@ async def build_session_view_data(
   await _mark_read_best_effort(session_mgr, session_id)
 
   return SessionViewData(
-      raw_events=raw_events,
       messages=messages,
       threads=thread_rows,
       usage=usage,

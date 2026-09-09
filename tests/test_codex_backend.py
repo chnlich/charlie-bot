@@ -8,6 +8,7 @@ from conftest import (
     ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
     CODEX_RESOLVE_BINARY_PATCH_TARGET,
     FLAG_LIKE_PROMPT,
+    assistant_text_event,
     build_cli_backend,
     fake_one_shot_proc,
 )
@@ -271,15 +272,7 @@ def test_translate_todo_list_renders_one_text_delta(
 
   translated = backend.translate_event({"type": event_type, "item": {"type": "todo_list", "items": items}})
 
-  assert translated == [{
-      "type": "assistant",
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": expected_text,
-          }],
-      },
-  }]
+  assert translated == [assistant_text_event(expected_text)]
 
 
 def _todo_list_event(event_type: str, inspect_completed: bool) -> dict[str, object]:
@@ -304,29 +297,9 @@ def test_translate_todo_list_suppresses_duplicate_snapshots(monkeypatch) -> None
   completed_without_changes = backend.translate_event(_todo_list_event("item.completed", inspect_completed=False))
   updated = backend.translate_event(_todo_list_event("item.updated", inspect_completed=True))
 
-  assert started == [
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "- [ ] Inspect the code\n- [ ] Patch the bug",
-              }],
-          },
-      }
-  ]
+  assert started == [assistant_text_event("- [ ] Inspect the code\n- [ ] Patch the bug")]
   assert not completed_without_changes
-  assert updated == [
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "- [x] Inspect the code\n- [ ] Patch the bug",
-              }],
-          },
-      }
-  ]
+  assert updated == [assistant_text_event("- [x] Inspect the code\n- [ ] Patch the bug")]
 
 
 def test_reasoning_item_emits_thinking_deltas(monkeypatch) -> None:

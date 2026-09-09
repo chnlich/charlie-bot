@@ -97,6 +97,53 @@ async def test_tail_follow_events_replays_from_offset() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tail_follow_events_carries_partial_line_across_chunks() -> None:
+  """A line straddling the 64 KB read boundary yields exactly once: the
+  trailing partial is carried into the next chunk, never processed half."""
+  import tempfile
+  from pathlib import Path
+
+  with tempfile.TemporaryDirectory() as work:
+    raw = Path(work) / "agent.raw.ndjson"
+    payload = b'{"type": "assistant", "seq": 9, "pad": "' + b"x" * 2000 + b'"}\n'
+    raw.write_bytes(b"\n" * 65530 + payload)
+    seen: list[dict] = []
+
+    async for event in tail_follow_events(
+        raw,
+        translate=lambda event: [event],
+        is_alive=lambda: False,
+        post_result_timeout=60.0,
+    ):
+      seen.append(event)
+
+  assert [event["seq"] for event in seen] == [9]
+
+
+@pytest.mark.asyncio
+async def test_tail_follow_events_drops_torn_final_line() -> None:
+  """A final line the producer never finished stays unprocessed (the torn
+  final write replays as at most a duplicate — never a loss)."""
+  import tempfile
+  from pathlib import Path
+
+  with tempfile.TemporaryDirectory() as work:
+    raw = Path(work) / "agent.raw.ndjson"
+    raw.write_bytes(b'{"type": "assistant", "seq": 1}\n{"type": "assistant", "seq": 2')
+    seen: list[dict] = []
+
+    async for event in tail_follow_events(
+        raw,
+        translate=lambda event: [event],
+        is_alive=lambda: False,
+        post_result_timeout=60.0,
+    ):
+      seen.append(event)
+
+  assert [event["seq"] for event in seen] == [1]
+
+
+@pytest.mark.asyncio
 async def test_opencode_sse_events_rejects_nan_boundary(monkeypatch) -> None:
   """The stdlib parser accepted NaN literals; orjson fails the frame loudly
   (the boundary the stream funnels deliberately adopt, as the file readers

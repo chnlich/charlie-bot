@@ -339,10 +339,17 @@ async def tail_follow_events(
         # The producer's last write, anchored to the monotonic clock (the
         # file's mtime — reading pre-mount backlog must not count as output).
         last_output_at = last_growth - max(0.0, time.time() - os.fstat(f.fileno()).st_mtime)
-        buf += chunk
-        lines = buf.split(b"\n")
-        buf = lines.pop()  # trailing partial line; re-read once completed
-        for raw_line in lines:
+        if buf:
+          chunk = buf + chunk
+          buf = b""
+        start = 0
+        while True:
+          nl = chunk.find(b"\n", start)
+          if nl < 0:
+            buf = chunk[start:]  # trailing partial line; re-read once completed
+            break
+          raw_line = chunk[start:nl]
+          start = nl + 1
           offset += len(raw_line) + 1
           line = raw_line.decode("utf-8", errors="replace").strip()
           if not line:

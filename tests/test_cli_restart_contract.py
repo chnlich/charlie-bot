@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 import requests
@@ -70,6 +71,20 @@ def _reset_after_send() -> requests.exceptions.ConnectionError:
   """A connection that completed its handshake before dying: sent-but-lost, never a retry class."""
   return requests.exceptions.ConnectionError(
       "('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))")
+
+
+def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cli_module: ModuleType) -> CharlieBotConfig:
+  """Point ``common`` and one CLI module's ``get_config`` at a fresh config, make every POST a
+  sent-but-lost reset, and return the config.
+
+  Each CLI module calls the ``get_config`` name it captured at import, so both that name and
+  ``common``'s must be patched or the readback would read the host's profile.
+  """
+  cfg = _cfg(tmp_path)
+  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(cli_module, "get_config", lambda: cfg)
+  monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
+  return cfg
 
 
 # ---------------------------------------------------------------------------
@@ -218,10 +233,7 @@ def test_server_rejection_exit_code_override_keeps_code_and_effect(
 
 def test_improve_readback_resolves_to_seeded_loop_on_sent_but_lost(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(improve_module, "get_config", lambda: cfg)
-  monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
+  cfg = _patch_readback_env(monkeypatch, tmp_path, improve_module)
 
   session_id = "sess-improve"
   goal_text = "Improve the widget end to end"
@@ -252,10 +264,7 @@ def test_improve_readback_resolves_to_seeded_loop_on_sent_but_lost(
 
 def test_improve_readback_reports_outcome_unknown_when_nothing_matches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(improve_module, "get_config", lambda: cfg)
-  monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
+  _patch_readback_env(monkeypatch, tmp_path, improve_module)
 
   session_id = "sess-improve-miss"
   goal_file = tmp_path / "goal.md"
@@ -281,10 +290,7 @@ def test_improve_readback_reports_outcome_unknown_when_nothing_matches(
 
 def test_schedule_trigger_readback_resolves_to_seeded_trigger_on_sent_but_lost(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(schedule_trigger_module, "get_config", lambda: cfg)
-  monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
+  cfg = _patch_readback_env(monkeypatch, tmp_path, schedule_trigger_module)
 
   session_id = "sess-trigger"
   write_trigger(
@@ -309,10 +315,7 @@ def test_schedule_trigger_readback_resolves_to_seeded_trigger_on_sent_but_lost(
 
 def test_schedule_trigger_readback_reports_outcome_unknown_when_nothing_matches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(schedule_trigger_module, "get_config", lambda: cfg)
-  monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
+  _patch_readback_env(monkeypatch, tmp_path, schedule_trigger_module)
 
   session_id = "sess-trigger-miss"
   monkeypatch.setattr(
@@ -333,10 +336,7 @@ def test_schedule_trigger_readback_ignores_fired_trigger_reports_outcome_unknown
   """A self-renewing watch reuses the identical message on every renewal, so a
   previous leg's fired-but-not-deleted trigger file can match on message +
   watch targets. It must not count as proof the new call landed."""
-  cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(schedule_trigger_module, "get_config", lambda: cfg)
-  monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
+  cfg = _patch_readback_env(monkeypatch, tmp_path, schedule_trigger_module)
 
   session_id = "sess-trigger-fired-only"
   write_trigger(
@@ -368,10 +368,7 @@ def test_schedule_trigger_readback_picks_pending_over_fired_historical_leg(
   """A previous (fired) leg and the newly-armed (pending) leg of the same
   self-renewing watch share the identical message + targets; readback must
   bind to the pending one, never the historical fired file."""
-  cfg = _cfg(tmp_path)
-  monkeypatch.setattr(common, "get_config", lambda: cfg)
-  monkeypatch.setattr(schedule_trigger_module, "get_config", lambda: cfg)
-  monkeypatch.setattr(common.requests, "post", lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
+  cfg = _patch_readback_env(monkeypatch, tmp_path, schedule_trigger_module)
 
   session_id = "sess-trigger-fired-plus-pending"
   write_trigger(

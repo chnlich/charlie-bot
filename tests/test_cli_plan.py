@@ -1,6 +1,7 @@
 """Tests for src/cli/plan.py — argument validation, session resolution, stdout/stderr shape."""
 
 import json
+from contextlib import AbstractContextManager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -24,17 +25,23 @@ from src.cli.plan import _PLAN_REMINDER, main
 from src.core import plan_diff
 
 
-def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _present_post(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *extra_args: str,
+) -> AbstractContextManager[MagicMock]:
+  """Run `plan present --file artifacts/plan_01.html --title P1 [*extra_args]` under the patched POST.
+
+  The POST returns the awaiting-approval plan-1 response; the context manager yields the post mock.
+  """
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
-  with patched_cli_post(cfg, [
-      "plan",
-      "present",
-      "--file",
-      "artifacts/plan_01.html",
-      "--title",
-      "P1",
-  ], return_value=resp) as post_mock:
+  argv = ["plan", "present", "--file", "artifacts/plan_01.html", "--title", "P1", *extra_args]
+  return patched_cli_post(cfg, argv, return_value=resp)
+
+
+def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  with _present_post(tmp_path, monkeypatch) as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -48,22 +55,7 @@ def test_plan_present_posts_to_present_endpoint(tmp_path: Path, monkeypatch: pyt
 
 
 def test_plan_present_passes_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
-  with patched_cli_post(cfg, [
-      "plan",
-      "present",
-      "--file",
-      "artifacts/plan_01.html",
-      "--title",
-      "P1",
-      "--base-repo",
-      "r",
-      "--base-branch",
-      "b",
-      "--base-sha",
-      "s",
-  ], return_value=resp) as post_mock:
+  with _present_post(tmp_path, monkeypatch, "--base-repo", "r", "--base-branch", "b", "--base-sha", "s") as post_mock:
     main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -193,16 +185,7 @@ def test_plan_list_corrupt_registry_prints_errors_and_exits_0(
 
 def test_plan_present_stdout_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  resp = make_json_response({"plan": 1, "v": 1, "state": "awaiting approval"})
-  with patched_cli_post(cfg, [
-      "plan",
-      "present",
-      "--file",
-      "artifacts/plan_01.html",
-      "--title",
-      "P1",
-  ], return_value=resp):
+  with _present_post(tmp_path, monkeypatch):
     main()
 
   out = capsys.readouterr().out

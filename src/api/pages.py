@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.templating import Jinja2Templates
 
 from src.api.code_server import is_code_server_available
-from src.api.deps import get_session_manager
+from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload
 from src.core.config import CharlieBotConfig, get_config
@@ -169,13 +169,13 @@ async def events_viewer(
   try:
     session = await session_mgr.get_session(session_id)
   except (KeyError, FileNotFoundError) as e:
-    raise HTTPException(status_code=404, detail="Session not found") from e
+    raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
   except Exception as e:
     log.exception("get_session_failed", session_id=session_id)
     raise HTTPException(status_code=500, detail="Failed to load session") from e
 
   if not session:
-    raise HTTPException(status_code=404, detail="Session not found")
+    raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
 
   return templates.TemplateResponse(
       request,

@@ -91,6 +91,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M79 git branches list, steady state | M79 collector below | seconds per `GET /api/git/branches` handler call over the charlie-bot checkout | repeat-view median < 0.010 s | — (introduced with its first history row) |
 | M80 token-tally changed round under append churn | M80 collector below | seconds per changed-round collect after one 1 MB-class append to each of the two worst copied transcripts (the busy-turn shape: an active master turn appends MBs between /token-usage loads; the 40 h live log sampled 2026-09-09 shows the page's p90 at 219 ms, max 2.35 s, against a 20 ms warm median), scratch corpus + cache | median < 0.020 s | — (introduced with its first history row) |
 | M81 chat math-walk, delimiter gate | M81 collector below | seconds of KaTeX auto-render walk per message-page re-render (the M60 corpus) and per streamed math-free draft replay; the walks the gate skips count 0 | page re-render median < 0.020 s; streamed replay walk median < 0.010 s | — (introduced with its first history row) |
+| M82 worker events-log append, per event | M82 collector below | seconds per append of one probe event to a scratch worker log, the run's held-handle shape | median < 0.0002 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -4897,6 +4898,64 @@ as the M33 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node tests/katex_walk_collector.js
+```
+
+M82 — worker events-log append, per event. Every worker event (text delta, tool use, tool result,
+thinking) lands through the streamed-turn loop's per-event append before its broadcast, so the
+append's executor-hop count rides the same path the chat-event append (M52) rides. The collector
+copies no state: it appends one probe event to a scratch worker log under /tmp through the
+checkout's real append shape — the run holds one append handle for its whole life, so the timed
+shape is the per-event append exactly as the streamed-turn loop issues it (the checkout decides
+between the pre-fix aiofiles write+flush pair and the one-hop helper; the dispatch reads the
+module). One warm pass, as a run's first events, then 50 timed appends. Evidence points the same
+collector at the before and after checkouts (``CHECKOUT`` at each root), the same shape as the
+M76 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, json, os, sys, tempfile, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.agents import worker as worker_mod
+
+# Scratch worker log under /tmp; the live home is never touched.
+path = os.path.join(tempfile.mkdtemp(prefix="m82-append-"), "events.jsonl")
+line = json.dumps({"type": "assistant", "message": {"content": "m82 probe " + "y" * 200}}) + "\n"
+
+append = getattr(worker_mod, "_append_event_line", None)
+
+
+async def main():
+    if append is not None:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+
+        async def one():
+            await append(fd, line)
+    else:
+        f = await aiofiles_open_append(path)
+
+        async def one():
+            await f.write(line)
+            await f.flush()
+
+    for _ in range(5):
+        await one()  # warm, as a run's first events; not timed
+    times = []
+    for _ in range(50):
+        t0 = time.perf_counter()
+        await one()
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: worker events-log append "
+          f"median {times[24] * 1e6:.0f} us, max {times[-1] * 1e6:.0f} us over 50")
+
+
+async def aiofiles_open_append(path):
+    import aiofiles
+    return await aiofiles.open(path, "a", encoding="utf-8")
+
+
+asyncio.run(main())
+EOF
 ```
 
 ## Sampling history

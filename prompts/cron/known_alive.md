@@ -411,3 +411,12 @@ Known-alive symbols:
   tests' parameter lists; the bodies never reference the parameter, so vulture flags it as an
   unused variable at each request site. Same fixture-name-discovery class as the autouse block
   above.
+- `_Node` (`tests/test_plan_diff.py`, imported inside `_anchors_from_full_parse`) — reached by
+  string: the helper's `quad` parameter is annotated `"_Node | None"`, so the name appears only
+  inside a string literal and vulture flags the import as unused (90% confidence).
+- `uri` (`tests/core/test_headless_render.py`, the lambda stubbed for `_WarmRenderer._render_once`)
+  — the real `_render_once(self, probe_uri)` (src/core/headless_render.py) is called with one
+  positional argument from `render_height`, so the stub's replaced two-parameter signature fixes
+  the arity and `uri` must stay; deleting it makes the stub raise TypeError. Vulture flags it at
+  100% confidence as an unused variable. Same arity-fixed stub-parameter class as the
+  `chrome`/`art` entry above.

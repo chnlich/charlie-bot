@@ -345,9 +345,7 @@ class OpenAIChatStreamToAnthropic:
   def finish_events(self) -> list[tuple[str, dict]]:
     events: list[tuple[str, dict]] = []
     events.extend(self._close_text_block())
-    for call_index in list(self._tool_indexes):
-      block_index = self._tool_indexes.pop(call_index)
-      events.append(("content_block_stop", {"type": "content_block_stop", "index": block_index}))
+    events.extend(self._close_tool_blocks())
     usage = _usage_from_openai(self._usage)
     events.append(
         (

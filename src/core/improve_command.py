@@ -30,6 +30,7 @@ from src.core.git import (
 )
 from src.core.master_trigger import trigger_master
 from src.core.models import SpawnRequest, TaskType, ThreadStatus, utc_now
+from src.core.runs import IMPROVE_ITERATION_PREFIX
 from src.core.tasks import create_logged_task
 from src.core.timeouts import SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
 
@@ -518,7 +519,7 @@ async def _run_single_iteration(
   plan = await read_loop_plan(loop_dir)
 
   # Build iteration description
-  desc_parts = [f"Iterative improvement — iteration {i}/{iterations}", f"Goal: {goal}"]
+  desc_parts = [f"{IMPROVE_ITERATION_PREFIX} {i}/{iterations}", f"Goal: {goal}"]
   if plan is not None:
     desc_parts.append(f"Plan:\n{plan}")
   if previous_summaries:

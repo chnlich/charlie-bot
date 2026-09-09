@@ -783,7 +783,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   env = _build_master_env(cfg, session_meta.id)
   if pooled:
     # The pool chose the login directory; an inherited CLAUDE_CONFIG_DIR must
-    # never shadow it (LESSONS 2026-08-05).
+    # never shadow it.
     env.pop(CLAUDE_CONFIG_DIR_ENV_VAR, None)
 
   prompt = _build_prompt(item.user_content, item.is_voice)

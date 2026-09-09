@@ -15,8 +15,8 @@ from pydantic import ValidationError
 
 from src.core.config import CharlieBotConfig, load_config
 
-# A read-only derived property (the incident's trap) and a fabricated name; both
-# must be rejected by name on both construction entry points.
+# A read-only derived property a hand-redirect could target, and a fabricated
+# name; both must be rejected by name on both construction entry points.
 _UNKNOWN_KWARGS = ["sessions_dir", "totally_unknown_field"]
 
 

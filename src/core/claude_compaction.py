@@ -168,8 +168,7 @@ def compaction_env(config_dir: str | Path) -> dict[str, str]:
   """Headless Claude Code environment pinned to one login directory.
 
   The host's own CLAUDE_CONFIG_DIR never reaches the child: the pool chose the
-  directory and an inherited value would silently pick another account
-  (LESSONS 2026-08-05).
+  directory and an inherited value would silently pick another account.
   """
   env = {**claude_supervisor_env(os.environ), **headless_claude_env()}
   env.pop(CLAUDE_CONFIG_DIR_ENV_VAR, None)

@@ -465,9 +465,9 @@ class CharlieBotConfig(BaseModel):
 
     pydantic 2.12.5's ``model_construct`` silently drops kwargs that match no
     field — even with ``extra='forbid'`` — so a caller redirecting a non-field
-    name got a silently unredirected copy (the 2026-08-29 probe incident).
-    Names outside the fields and their aliases raise :class:`TypeError` listing
-    them; everything else delegates to ``super().model_construct()``.
+    name gets a silently unredirected copy. Names outside the fields and their
+    aliases raise :class:`TypeError` listing them; everything else delegates to
+    ``super().model_construct()``.
     """
     known: set[str] = set(cls.model_fields)
     for field in cls.model_fields.values():
@@ -487,11 +487,8 @@ class CharlieBotConfig(BaseModel):
     are preserved by reference, and the original instance is untouched. Instance
     fields have no setters, so in-place redirection was never possible anyway.
 
-    Added after the 2026-08-29 probe incident: a probe passed a derived-path
-    name to ``model_construct`` for isolation and pydantic silently dropped the
-    unknown kwarg, so the probe ran against the real home and wrote into live
-    state. Redirect through this method instead of constructing or copying by
-    hand — the unknown-kwarg gates above make any miss raise at the call site.
+    Redirect through this method instead of constructing or copying by hand —
+    the unknown-kwarg gates above make any miss raise at the call site.
     """
     home = Path(path).expanduser()
     if not home.is_absolute():

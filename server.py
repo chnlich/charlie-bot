@@ -3,6 +3,7 @@
 import asyncio
 import json
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
@@ -229,7 +230,7 @@ async def _run_slack_backfill(cfg: CharlieBotConfig, session_mgr: SessionManager
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   """Application lifespan: startup and shutdown tasks."""
   cfg = get_config()
   boot_time = utc_now()
@@ -359,7 +360,7 @@ app.include_router(files.router, prefix="/absolute_filepath", tags=["files"])
 
 
 @app.websocket("/ws/sessions/{session_id}")
-async def session_websocket(websocket: WebSocket, session_id: str):
+async def session_websocket(websocket: WebSocket, session_id: str) -> None:
   """Push session-level events (master CC output, worker summaries) to the browser."""
   # Auth + accept happen inline here because cursor negotiation (unique to this
   # endpoint) must read a message from the accepted socket before subscribing.
@@ -414,7 +415,7 @@ async def session_websocket(websocket: WebSocket, session_id: str):
 
 
 @app.websocket("/ws/voice/{session_id}")
-async def voice_websocket(websocket: WebSocket, session_id: str):
+async def voice_websocket(websocket: WebSocket, session_id: str) -> None:
   """Receive PCM audio and stream local transcription updates to the browser."""
   if not await _check_ws_auth(websocket):
     return
@@ -569,7 +570,7 @@ async def _replay_aggregated_catchup(
 
 
 @app.websocket("/ws/terminal")
-async def terminal_websocket(websocket: WebSocket):
+async def terminal_websocket(websocket: WebSocket) -> None:
   """Attach the browser to the host-global tmux terminal."""
   if not await _check_ws_auth(websocket):
     return

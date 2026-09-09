@@ -70,7 +70,7 @@ async def send_message(
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> JSONResponse:
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
   backend_option = cfg.get_backend_option(meta.backend) if meta.backend else None
   if backend_option is not None and backend_option.type == BackendType.TUI_CLI:

@@ -398,7 +398,7 @@ async def get_thread(
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     attach: bool = Query(default=False),
-):
+) -> FastJsonResponse:
   """Return a thread's metadata plus the derived attach pair.
 
   With ``attach`` the response is only ``{"attach_command", "attach_available"}``
@@ -552,7 +552,7 @@ async def get_thread_events(
     thread_id: str,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     after: int | None = Query(default=None, ge=0),
-):
+) -> list[WorkerEvent] | FastJsonResponse:
   """Return historical Worker events from the on-disk events.jsonl log.
 
   Without ``after`` the response is the full projected list. With ``after``

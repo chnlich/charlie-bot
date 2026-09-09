@@ -21,6 +21,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from starlette.responses import Response
 
 from src.api.code_server import is_code_server_available
 from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_session_manager
@@ -214,7 +215,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent.parent.parent / 
 
 
 @router.get("/api/auth/status")
-async def auth_status(cfg: CharlieBotConfig = Depends(get_config)):
+async def auth_status(cfg: CharlieBotConfig = Depends(get_config)) -> JSONResponse:
   """Return whether access-key authentication is enabled."""
   return JSONResponse({"auth_enabled": bool(cfg.charliebot_access_key)})
 
@@ -224,7 +225,7 @@ async def events_viewer(
     request: Request,
     session_id: str,
     session_mgr: SessionManager = Depends(get_session_manager),
-):
+) -> HTMLResponse:
   """Render the JSONL events viewer page for a session."""
   try:
     session = await session_mgr.get_session(session_id)
@@ -257,7 +258,7 @@ async def perfetto_viewer(
     pattern: str = "*.json",
     title: str | None = None,
     slim: bool | None = None,
-):
+) -> HTMLResponse:
   """Render the Perfetto trace viewer page.
 
   Supports single trace, multiple traces, and directory auto-discovery.
@@ -500,7 +501,7 @@ def _ncu_error_page(request: Request, message: str, status_code: int) -> HTMLRes
 async def ncu_viewer(
     request: Request,
     file: list[str] = Query(default=[]),
-):
+) -> Response:
   """Render the Nsight Compute (.ncu-rep) report viewer page.
 
   `file` is a repeatable list of absolute paths. v1 renders the first report;
@@ -643,7 +644,7 @@ def _token_usage_context(tally: TokenTally) -> dict:
 
 
 @router.get("/token-usage", response_class=HTMLResponse)
-async def token_usage_viewer(request: Request):
+async def token_usage_viewer(request: Request) -> HTMLResponse:
   """Render the per-model token usage tally page.
 
   Runs the collection in a thread pool (never on the event loop) and, when a collection is
@@ -667,7 +668,7 @@ async def token_usage_viewer(request: Request):
 
 
 @router.get("/diff", response_class=HTMLResponse)
-async def diff_viewer(request: Request, cfg: CharlieBotConfig = Depends(get_config)):
+async def diff_viewer(request: Request, cfg: CharlieBotConfig = Depends(get_config)) -> HTMLResponse:
   """Render the GitHub-style diff viewer page."""
   return templates.TemplateResponse(
       request,
@@ -680,7 +681,7 @@ async def diff_viewer(request: Request, cfg: CharlieBotConfig = Depends(get_conf
 
 
 @router.get("/home", response_class=HTMLResponse)
-async def home_page(request: Request, cfg: CharlieBotConfig = Depends(get_config)):
+async def home_page(request: Request, cfg: CharlieBotConfig = Depends(get_config)) -> HTMLResponse:
   """Render the home page: this server's destinations plus the per-host external services.
 
   Each external service is probed by TCP-connecting to the host and port parsed out of
@@ -713,7 +714,7 @@ async def index(
     session: str | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> Response:
   """Render the full page with only critical active-session data."""
   load_errors: list[str] = []
   try:

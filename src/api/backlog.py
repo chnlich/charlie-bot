@@ -81,7 +81,7 @@ def _find_item_file(repo_path: Path, item_id: str, source: str | None = None) ->
 
 
 @router.get('/repos')
-async def get_repos():
+async def get_repos() -> JSONResponse:
   """Return configured backlog repos [{label, path}]."""
   from src.core.config import get_config
   cfg = get_config()
@@ -89,7 +89,7 @@ async def get_repos():
 
 
 @router.get('')
-async def get_backlog(repo: str | None = None):
+async def get_backlog(repo: str | None = None) -> JSONResponse:
   """Return backlog items from backlog/backlogs/*.yaml or fallback backlog/backlog.yaml."""
   repo_path = _repo_path(repo)
   if repo_path is None:
@@ -101,7 +101,7 @@ async def get_backlog(repo: str | None = None):
 
 
 @router.get('/history')
-async def get_history(repo: str | None = None):
+async def get_history(repo: str | None = None) -> JSONResponse:
   """Return history entries from {repo}/backlog/history-*.yaml files, sorted by timestamp descending."""
   repo_path = _repo_path(repo)
   if repo_path is None:
@@ -167,7 +167,8 @@ def _apply_status_transition(item: dict, patch: BacklogPatch) -> None:
 
 
 @router.patch('/{item_id}')
-async def patch_backlog(item_id: str, patch: BacklogPatch, repo: str | None = None, source: str | None = None):
+async def patch_backlog(
+    item_id: str, patch: BacklogPatch, repo: str | None = None, source: str | None = None) -> JSONResponse:
   """Update status/priority of a backlog item, then git commit+push."""
   repo_path = _repo_path(repo)
   if repo_path is None:

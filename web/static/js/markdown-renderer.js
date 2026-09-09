@@ -519,31 +519,6 @@ function renderChatMath(el, sourceText) {
   });
 }
 
-function toggleMobileSidebar() {
-  const sidebar = document.getElementById('sidebar');
-  const overlay = document.getElementById('sidebar-overlay');
-  const isOpen = sidebar.classList.contains('open');
-  if (isOpen) {
-    sidebar.classList.remove('open');
-    overlay.classList.remove('active');
-  } else {
-    sidebar.classList.add('open');
-    overlay.classList.add('active');
-  }
-}
-
-// Close sidebar on navigation (mobile)
-document.querySelectorAll('#sidebar a[href]').forEach(function(a) {
-  a.addEventListener('click', function() {
-    if (platform.isMobile) {
-      const sidebar = document.getElementById('sidebar');
-      const overlay = document.getElementById('sidebar-overlay');
-      sidebar.classList.remove('open');
-      overlay.classList.remove('active');
-    }
-  });
-});
-
 function renderMarkdown(btn) {
   // Try to get full content from raw text stored before marked.parse()
   const proseMsgEl = btn.closest('[data-raw]');

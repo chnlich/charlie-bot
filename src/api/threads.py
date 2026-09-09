@@ -24,7 +24,7 @@ from src.api.message_utils import extract_text_from_message, extract_tool_result
 from src.api.responses import FastJsonResponse
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.memo import BoundedMemo
+from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import (
     BackendType,
     ThreadMetadata,
@@ -49,11 +49,10 @@ _LIST_DESCRIPTION_CAP = 240
 # meta without mutating it, so the memoized instance is shared read-only
 # (mutating callers go through ThreadManager.get_thread, which re-reads). Every
 # writer publishes metadata.json through the atomic tmp rename, so a content
-# change always moves (mtime_ns, size); the signature is taken before the read,
-# so an entry recorded mid-rewrite keys the older signature and can never be
-# served for the newer bytes.
+# change always moves (mtime_ns, size). Stat-before-read is StatSignatureMemo's
+# contract.
 _DETAIL_META_MEMO_LIMIT = 32
-_detail_meta_memo: BoundedMemo[str, tuple[tuple[int, int], ThreadMetadata]] = BoundedMemo(_DETAIL_META_MEMO_LIMIT)
+_detail_meta_memo: StatSignatureMemo[str, ThreadMetadata] = StatSignatureMemo(_DETAIL_META_MEMO_LIMIT)
 
 
 async def _detail_thread_meta(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> ThreadMetadata | None:
@@ -64,14 +63,13 @@ async def _detail_thread_meta(thread_mgr: ThreadManager, session_id: str, thread
   except OSError:
     _detail_meta_memo.drop(key)
     return None
-  sig = (st.st_mtime_ns, st.st_size)
-  hit = _detail_meta_memo.get(key)
-  if hit is not None and hit[0] == sig:
-    return hit[1]
+  meta = _detail_meta_memo.fresh(key, st)
+  if meta is not None:
+    return meta
   meta = await thread_mgr.get_thread(session_id, thread_id)
   if meta is None:
     return None
-  _detail_meta_memo.store(key, (sig, meta))
+  _detail_meta_memo.record(key, st, meta)
   return meta
 
 

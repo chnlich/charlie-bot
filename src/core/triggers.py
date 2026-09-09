@@ -18,7 +18,7 @@ from src.api.message_utils import build_scheduled_trigger_event
 from src.core.config import CharlieBotConfig, get_config
 from src.core.json_utils import write_model_json_atomically
 from src.core.master_trigger import trigger_master
-from src.core.memo import BoundedMemo
+from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import (
     LocalPid,
     PendingTrigger,
@@ -424,14 +424,15 @@ class TriggerManager:
     # list_triggers memo: session id -> {file name: (mtime_ns, size, parsed record)}.
     self._list_memo: BoundedMemo[str, dict[str, tuple[int, int,
                                                       PendingTrigger]]] = BoundedMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
-    # list_triggers' directory verdict: session id -> (dir (mtime_ns, size), sorted list).
-    # Every trigger-file write publishes through the atomic rename INTO the triggers
-    # directory, and a rename that creates, replaces, or removes a directory entry moves
-    # the directory's own mtime_ns — so an unchanged directory signature proves no file
-    # appeared, vanished, or was replaced, and the steady-state poll serves without the
-    # per-file stat walk or its executor round-trip.
-    self._list_verdicts: BoundedMemo[str, tuple[tuple[int, int],
-                                                list[PendingTrigger]]] = BoundedMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
+    # list_triggers' directory verdict: session id -> sorted list, signed on the
+    # directory's (mtime_ns, size) (StatSignatureMemo). Every trigger-file write
+    # publishes through the atomic rename INTO the triggers directory, and a rename
+    # that creates, replaces, or removes a directory entry moves the directory's own
+    # mtime_ns — so an unchanged directory signature proves no file appeared, vanished,
+    # or was replaced, and the steady-state poll serves without the per-file stat walk
+    # or its executor round-trip.
+    self._list_verdicts: StatSignatureMemo[str,
+                                           list[PendingTrigger]] = StatSignatureMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
 
   async def create_trigger(
       self,
@@ -558,15 +559,13 @@ class TriggerManager:
     ``write_model_json_atomically``, whose rename into the triggers directory moves the
     directory's own mtime_ns whether it creates, replaces, or removes an entry, so an
     unchanged (mtime_ns, size) of the directory proves the stored sorted list current and
-    serves it without the per-file stat walk or its executor round-trip. The signature is
-    taken before the walk, so a write landing mid-walk moves the directory past the stored
-    signature and the next call re-walks. Within one proved directory state, a file whose
-    (mtime_ns, size) matches its memo entry reuses the parsed record; a file edited in
-    place (no rename) would move only its own mtime and evade the directory proof — every
-    writer here publishes through the atomic rename, the same ground the per-file memo's
-    key already stands on. Files that fail to parse stay out of the memo: within one proved
-    directory state the verdict carries their single warning, and a directory-state change
-    re-reads and re-warns once for that state.
+    serves it without the per-file stat walk or its executor round-trip. Within one proved
+    directory state, a file whose (mtime_ns, size) matches its memo entry reuses the parsed
+    record; a file edited in place (no rename) would move only its own mtime and evade the
+    directory proof — every writer here publishes through the atomic rename, the same ground
+    the per-file memo's key already stands on. Files that fail to parse stay out of the
+    memo: within one proved directory state the verdict carries their single warning, and a
+    directory-state change re-reads and re-warns once for that state.
     """
     triggers_dir = self._triggers_dir(session_id)
     try:
@@ -575,10 +574,9 @@ class TriggerManager:
       self._list_memo.drop(session_id)
       self._list_verdicts.drop(session_id)
       return []
-    dir_sig = (st.st_mtime_ns, st.st_size)
-    verdict = self._list_verdicts.get(session_id)
-    if verdict is not None and verdict[0] == dir_sig:
-      return list(verdict[1])
+    verdict = self._list_verdicts.fresh(session_id, st)
+    if verdict is not None:
+      return list(verdict)
     stats = await asyncio.to_thread(self._stat_trigger_files, triggers_dir)
 
     memo = self._list_memo.get(session_id)
@@ -617,7 +615,7 @@ class TriggerManager:
         triggers.append(trigger)
 
     triggers.sort(key=lambda t: t.created_at, reverse=True)
-    self._list_verdicts.store(session_id, (dir_sig, triggers))
+    self._list_verdicts.record(session_id, st, triggers)
     return list(triggers)
 
   async def cancel_trigger(self, session_id: str, trigger_id: str) -> None:

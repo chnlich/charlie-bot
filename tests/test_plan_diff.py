@@ -293,9 +293,9 @@ def test_tokeniser_matches_the_per_character_reference_on_a_randomized_corpus() 
 
 
 def test_leaf_token_raw_spans_match_the_per_character_range_reference() -> None:
-  from src.core.plan_diff import _collect_leaves, _document_root, _leaf_tokens, _parse
+  from src.core.plan_diff import _collect_leaves, _document_root, _Leaf, _leaf_tokens, _parse
 
-  def reference(leaf) -> list[tuple[str, int, int, int, int]]:
+  def reference(leaf: _Leaf) -> list[tuple[str, int, int, int, int]]:
     result: list[tuple[str, int, int, int, int]] = []
     offset = 0
     for part in leaf.parts:

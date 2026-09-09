@@ -487,8 +487,16 @@ function flushDeferredCodeHighlights() {
 // marked never synthesizes and escapeHtml never adds or removes. A source
 // carrying none of the three renders byte-identically without the walk, which
 // scans every prose text node per paint and per message re-render.
+// Character references decode when the browser parses the rendered HTML, so an
+// entity-encoded delimiter initial also reaches the walk's text nodes: any
+// numeric reference, or a named reference of the four delimiter characters
+// (dollar/bsol/lpar/lparen/lsqb/lbrack), forces the walk — a false walk is the
+// safe direction.
+const MATH_ENTITY_RE = /&(?:#[0-9]|#[xX][0-9a-fA-F]|dollar|bsol|lparen|lpar|lsqb|lbrack)/;
+
 function hasMathDelimiter(text) {
-  return text.indexOf('$') !== -1 || text.indexOf('\\(') !== -1 || text.indexOf('\\[') !== -1;
+  return text.indexOf('$') !== -1 || text.indexOf('\\(') !== -1 || text.indexOf('\\[') !== -1
+    || MATH_ENTITY_RE.test(text);
 }
 
 function renderChatMath(el, sourceText) {

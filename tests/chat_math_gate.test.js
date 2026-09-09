@@ -28,6 +28,14 @@ test('hasMathDelimiter matches every configured delimiter family', () => {
   assert.equal(h.context.hasMathDelimiter('bracket \\[x\\] / paren \\(y\\)'), true);
 });
 
+test('character references that decode to a delimiter initial force the walk', () => {
+  const { h } = loadRenderer();
+  assert.equal(h.context.hasMathDelimiter('costs &#36;5'), true);
+  assert.equal(h.context.hasMathDelimiter('&#x24; and &#X5C;('), true);
+  assert.equal(h.context.hasMathDelimiter('&dollar; &bsol; &lpar; &lsqb;'), true);
+  assert.equal(h.context.hasMathDelimiter('&amp; &lt; &#65;'), true);
+});
+
 test('renderChatMath skips the walk when the source carries no math delimiter', () => {
   const { h, calls } = loadRenderer();
   h.context.renderChatMath(elWithRaw('a *b* c\n\n```js\nvar x = 1;\n```'));

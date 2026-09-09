@@ -3,14 +3,12 @@
 // scans every prose text node for the four delimiters on every message
 // re-render and every coalesced streamed paint even when the message carries
 // no math — the walk M33's replay and M60's repeat-page metric stub away. This
-// collector wall-clocks the walk through the checkout's real
-// markdown-renderer.js/usage.js and the page's CDN-pinned katex 0.16.21 build
-// over a jsdom DOM (the browser's own DOM walk is native; jsdom only supplies
-// one), over the worst message page (the M60 corpus) and the largest math-free
-// streamed draft, live corpora read-only. CHECKOUT picks the code under test.
-//
-// jsdom stays off the repo's dependency tree: one-time scratch install, resolved
-// through JSDOM_HOME (default /tmp/node_modules) with a loud preflight failure.
+// collector wall-clocks the walk through the checkout's real renderer code and
+// the page's CDN-pinned katex 0.16.21 build over a jsdom DOM, over the worst
+// message page (the M60 corpus) and the largest math-free streamed draft,
+// live corpora read-only; CHECKOUT picks the code under test. jsdom stays off
+// the repo's dependency tree: one-time scratch install, resolved through
+// JSDOM_HOME (default /tmp/node_modules) with a loud preflight failure.
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -89,7 +87,7 @@ function pageCorpus() {
   ]);
   // One jsdom window carries the page's builds; two containers isolate the
   // page and streamed shapes. stage() parses a fragment (untimed harness
-  // floor — the browser's innerHTML parse is native), runWalk wall-clocks
+  // floor — the browser's innerHTML parse is native), the walk walls cover
   // only the renderMathInElement call the page code makes.
   const dom = new JSDOM('<!doctype html><body><div id="c"></div><div id="s"></div></body>', {
     runScripts: 'outside-only',
@@ -103,6 +101,7 @@ function pageCorpus() {
   const stage = (id, html) => {
     w.document.getElementById(id).innerHTML = html;
   };
+
   // Page shape: the checkout's renderer, then its postProcess step
   // (querySelectorAll('.prose-msg') -> renderChatMath).
   w.platform = {};
@@ -116,10 +115,14 @@ function pageCorpus() {
   const { file, fileSize, page } = pageCorpus();
   const pageBytes = page.reduce((sum, t) => sum + t.length, 0);
   const digest = crypto.createHash('sha1').update(page.join('\u0000')).digest('hex').slice(0, 12);
-  const mathFree = (t) => !t.includes('$') && !t.includes('\\(') && !t.includes('\\[');
+  // The corpus filter rides the checkout's own gate predicate when it exists,
+  // so the A/B's math-free corpus is the gate's own math-free definition.
+  const mathFree = typeof w.hasMathDelimiter === 'function'
+    ? (t) => !w.hasMathDelimiter(t)
+    : (t) => !t.includes('$') && !t.includes('\\(') && !t.includes('\\[');
   const nFree = page.filter(mathFree).length;
-  // renderMessage's mdDiv attribute: escapeHtml's textContent serializer
-  // (& < >) plus the quote escape; the HTML parser decodes it back.
+  // renderMessage's mdDiv attribute: escapeHtml's serializer (& < >) plus the
+  // quote escape; the HTML parser decodes it back.
   const dataRaw = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   stage('c', page.map((t) => `<div class="prose-msg" data-raw="${dataRaw(t)}">${w.renderProseMarkdown(t)}</div>`).join(''));
   const pageRoot = w.document.getElementById('c');
@@ -132,16 +135,13 @@ function pageCorpus() {
   if (!pageParity) throw new Error('page walk changed a math-free page');
 
   // Streamed shape: the largest math-free draft through the checkout's real
-  // paint path; the wrapper walks each painted frame (the gate-less arm) and
-  // the hasMathDelimiter wrapper times the gated arm's per-paint scans.
+  // paint path; the wrapper walks each painted frame (the gate-less arm).
   const text = largestAssistantDraft(mathFree);
   if (!text) throw new Error('no math-free assistant draft on disk');
   const draftDigest = crypto.createHash('sha1').update(text).digest('hex').slice(0, 12);
   const h = buildStreamHarness(markedSrc);
   let walkMs = 0;
   let walkCalls = 0;
-  let gateMs = 0;
-  let gateCalls = 0;
   h.context.renderMathInElement = (el, opts) => {
     stage('s', el.innerHTML);
     const tw = performance.now();
@@ -149,16 +149,6 @@ function pageCorpus() {
     walkMs += performance.now() - tw;
     walkCalls += 1;
   };
-  if (typeof h.context.hasMathDelimiter === 'function') {
-    const gate = h.context.hasMathDelimiter;
-    h.context.hasMathDelimiter = (t) => {
-      const t1 = performance.now();
-      const r = gate(t);
-      gateMs += performance.now() - t1;
-      gateCalls += 1;
-      return r;
-    };
-  }
   const deltas = Math.ceil(text.length / 200);
   for (let i = 1; i <= deltas; i++) {
     h.showStreaming({ content: text.slice(0, i * 200) });
@@ -171,7 +161,7 @@ function pageCorpus() {
     `of a ${(fileSize / 1e6).toFixed(1)} MB live chat file, katex 0.16.21 walk over jsdom; ` +
     `page re-render wall ${pageWall.toFixed(2)} ms, ${pageWalks} walks, parity ${pageParity}; ` +
     `${(text.length / 1024).toFixed(1)} KB math-free draft (sha1 ${draftDigest}), ${h.stats().frames.length} paints: ` +
-    `walk wall ${walkMs.toFixed(2)} ms (${walkCalls} walks), gate scans ${gateMs.toFixed(2)} ms (${gateCalls} calls)`
+    `walk wall ${walkMs.toFixed(2)} ms (${walkCalls} walks)`
   );
 })().catch((err) => {
   console.error(err);

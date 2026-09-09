@@ -40,8 +40,7 @@ function paintStreamDraft(draft) {
   inner.innerHTML = html;
   // The draft text is the walk's source; renderChatMath skips its full-text
   // KaTeX scan when it carries no math delimiter. Concatenation can only
-  // create a delimiter across the seam, never remove one, so the gate stays
-  // conservative.
+  // create a delimiter across the seam, never remove one.
   renderChatMath(inner, content + thinking);
   if (wasAtBottom) {
     container.scrollTop = container.scrollHeight;

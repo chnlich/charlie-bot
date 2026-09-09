@@ -15,9 +15,11 @@ import pytest
 
 from src.core.ndjson import (
     _COUNT_MEMO_LIMIT,
+    _TAIL_WINDOW_SIZE,
     append_ndjson,
     count_ndjson_lines,
     iter_ndjson_events,
+    iter_ndjson_events_from_end,
     parse_ndjson_file,
     parse_ndjson_tail,
     parse_ndjson_tail_parseable,
@@ -241,6 +243,63 @@ def test_parse_ndjson_tail_parseable_crosses_window_boundary(tmp_path: Path) -> 
   _write_mixed(target, chunks)
   assert parse_ndjson_tail_parseable(target, 200) == parse_ndjson_file(target)[-200:]
   assert [e["i"] for e in parse_ndjson_tail_parseable(target, 200)] == list(range(100, 300))
+
+
+def test_iter_ndjson_events_from_end_yields_newest_first_and_stops_early(tmp_path: Path) -> None:
+  # Newest-first order with the skip contract, and a consumer that stops after
+  # the first event never sees the earlier ones.
+  target = tmp_path / "events.jsonl"
+  _write_ndjson(target, [{"i": i} for i in range(10)])
+  walk = iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={})
+  assert next(walk) == {"i": 9}
+  walk.close()
+  assert [e["i"] for e in iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={})
+         ] == list(range(9, -1, -1))
+  assert list(iter_ndjson_events_from_end(tmp_path / "absent.jsonl", log_event="test_skip", log_fields={})) == []
+
+
+def test_iter_ndjson_events_from_end_reads_only_the_tail_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The early-stop contract the from-the-end readers rest on: a consumer that
+  # resolves in the newest segment must not read the older bytes at all.
+  target = tmp_path / "events.jsonl"
+  with target.open("wb") as f:
+    for i in range(2000):  # ~14 KB per event: the early corpus spans several windows
+      f.write((json.dumps({"i": i, "blob": "x" * 14000}) + "\n").encode())
+    f.write((json.dumps({"i": "answer"}) + "\n").encode())
+
+  read_bytes = 0
+  real_open = open
+
+  def counting_open(file, mode="r", *args, **kwargs):
+    real = real_open(file, mode, *args, **kwargs)
+    if mode != "rb":
+      return real
+
+    class CountingReader:
+
+      def __getattr__(self, name):
+        return getattr(real, name)
+
+      def __enter__(self):
+        return self
+
+      def __exit__(self, *exc):
+        return real.__exit__(*exc)
+
+      def read(self, size=-1):
+        nonlocal read_bytes
+        data = real.read(size)
+        read_bytes += len(data)
+        return data
+
+    return CountingReader()
+
+  monkeypatch.setattr("builtins.open", counting_open)
+  walk = iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={})
+  assert next(walk) == {"i": "answer"}
+  walk.close()
+  assert 0 < read_bytes <= _TAIL_WINDOW_SIZE
 
 
 def _spy_opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:

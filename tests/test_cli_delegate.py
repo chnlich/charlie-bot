@@ -68,9 +68,9 @@ def test_main_routes_by_session_env_from_another_session_dir(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-  """Replays the incident: a master whose shell sits in an archived session's dir delegates, and the
-  task lands in the session the server started it for. The warning names both ids, so the misplaced
-  cwd stays visible."""
+  """A master whose shell sits in an archived session's dir delegates, and the
+  task lands in the session the server started it for. The warning names both
+  ids, so the misplaced cwd stays visible."""
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "archived-session")
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "live-session")
   task_spec_file = _write_task_spec(tmp_path)
@@ -90,7 +90,7 @@ def test_main_rejects_explicit_session_against_session_env(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-  """The other incident shape, a copied --session literal, stays a rejection that names both ids."""
+  """A copied --session literal stays a rejection that names both ids."""
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "live-session")
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "live-session")
   task_spec_file = _write_task_spec(tmp_path)

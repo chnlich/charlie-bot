@@ -11,6 +11,7 @@ import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
 from src.core.http import get_http_client
 from src.core.models import BackendType
@@ -231,10 +232,10 @@ def _stop_reason(finish_reason: str | None) -> str:
 def _usage_from_openai(usage: dict | None) -> dict:
   usage = usage or {}
   return {
-      "input_tokens": usage.get("prompt_tokens", 0),
-      "output_tokens": usage.get("completion_tokens", 0),
-      "cache_creation_input_tokens": 0,
-      "cache_read_input_tokens": 0,
+      ET.USAGE_INPUT_TOKENS: usage.get("prompt_tokens", 0),
+      ET.USAGE_OUTPUT_TOKENS: usage.get("completion_tokens", 0),
+      ET.USAGE_CACHE_CREATION_INPUT_TOKENS: 0,
+      ET.USAGE_CACHE_READ_INPUT_TOKENS: 0,
   }
 
 

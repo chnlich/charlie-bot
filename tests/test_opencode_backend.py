@@ -12,6 +12,7 @@ from conftest import (
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
     SYNTHETIC_MODEL,
     FakeChunkedResponse,
+    assistant_text_event,
     build_cli_backend,
     fake_one_shot_proc,
 )
@@ -174,15 +175,7 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
   error_events = [event for event in events if event.get("type") == ET.ERROR]
   assert not error_events
   text_events = [event for event in events if event.get("type") == ET.ASSISTANT]
-  assert text_events == [{
-      "type": ET.ASSISTANT,
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": part_text,
-          }]
-      },
-  }]
+  assert text_events == [assistant_text_event(part_text)]
   assert backend.exit_code == 0
 
 
@@ -194,26 +187,7 @@ def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch) 
 
   translated = backend._translate_sse_event(_message_updated({"id": "message-1", "role": "assistant"}))
 
-  assert translated == [
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "Hello"
-              }]
-          }
-      },
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": " world"
-              }]
-          }
-      },
-  ]
+  assert translated == [assistant_text_event("Hello"), assistant_text_event(" world")]
 
 
 def test_translate_sse_event_discards_buffered_non_assistant_parts(monkeypatch) -> None:
@@ -502,18 +476,7 @@ async def test_consume_sse_events_normal_parent_turn(monkeypatch) -> None:
               },
           ])))
 
-  assert events == [
-      {
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "Hello"
-              }]
-          }
-      },
-      backend._make_accumulated_result(),
-  ]
+  assert events == [assistant_text_event("Hello"), backend._make_accumulated_result()]
   assert backend._failed is False
 
 

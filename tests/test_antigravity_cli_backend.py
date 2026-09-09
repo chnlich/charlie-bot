@@ -1,7 +1,12 @@
 from pathlib import Path
 
 import pytest
-from conftest import AGY_BACKEND_OPTION, ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, build_cli_backend
+from conftest import (
+    AGY_BACKEND_OPTION,
+    ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
+    assistant_text_event,
+    build_cli_backend,
+)
 
 from src.agents.backends.antigravity_cli import AntigravityCliBackend
 from src.agents.backends.registry import build_backend
@@ -152,15 +157,7 @@ JSON
 
   assert await _handle_event(events[0], "session-id", None, fake_persist) == "conv-abc"
   assert adopted_events == [events[0]]
-  assert events[1] == {
-      "type": "assistant",
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": "the answer",
-          }]
-      },
-  }
+  assert events[1] == assistant_text_event("the answer")
   assert events[2]["type"] == "result"
   assert events[2]["usage"]["input_tokens"] == 10
   assert events[2]["usage"]["output_tokens"] == 23

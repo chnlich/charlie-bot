@@ -1,4 +1,4 @@
-from conftest import GEMINI_RESOLVE_BINARY_PATCH_TARGET, build_cli_backend
+from conftest import GEMINI_RESOLVE_BINARY_PATCH_TARGET, assistant_text_event, build_cli_backend
 
 from src.agents.backends.gemini_cli import GeminiCliBackend
 
@@ -84,15 +84,7 @@ def test_translate_event_mappings(monkeypatch) -> None:
       "type": "message",
       "role": "assistant",
       "content": "hello"
-  }) == [{
-      "type": "assistant",
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": "hello"
-          }]
-      },
-  }]
+  }) == [assistant_text_event("hello")]
   assert backend.translate_event({
       "type": "tool_use",
       "tool_name": "Bash",

@@ -12,7 +12,7 @@ import numpy as np
 import orjson
 import structlog
 
-from src.core.memo import BoundedMemo, StatSignatureMemo
+from src.core.memo import StatSignatureMemo
 
 log = structlog.get_logger()
 
@@ -26,25 +26,17 @@ _TAIL_WINDOW_SIZE = 512 * 1024
 # small cap covers every concurrently viewed session.
 _COUNT_MEMO_LIMIT = 64
 
-# path -> (mtime_ns, size, line_count) and (path, limit) -> (mtime_ns, size,
-# events, total, has_more). The count entry's signature is the pre-scan stat:
-# an append during the scan keys the count under the older signature, which no
-# later stat can match, so the entry is never served stale — the next call
-# re-stats, misses, and recounts; a post-scan signature could instead key a
-# stale count under bytes the scan never reached, and that entry would serve
-# until the file changed again. Chat event files only append; their atomic
-# archive rewrites replace the whole file. Tail entries share their event
-# dicts with every caller; consumers must treat them as read-only.
+# path -> line count, and (path, limit) -> (events, total, has_more). The
+# count entry's signature is the pre-scan stat: an append during the scan keys
+# the count under the older signature, which no later stat can match, so the
+# entry is never served stale — the next call re-stats, misses, and recounts;
+# a post-scan signature could instead key a stale count under bytes the scan
+# never reached, and that entry would serve until the file changed again.
+# Chat event files only append; their atomic archive rewrites replace the
+# whole file. Tail entries share their event dicts with every caller;
+# consumers must treat them as read-only.
 _count_memo: StatSignatureMemo[Path, int] = StatSignatureMemo(_COUNT_MEMO_LIMIT)
-_tail_memo: BoundedMemo[tuple[Path, int], tuple[int, int, list[dict], int, bool]] = BoundedMemo(_COUNT_MEMO_LIMIT)
-
-
-def _tail_memo_get(path: Path, limit: int, mtime_ns: int, size: int) -> tuple[list[dict], int, bool] | None:
-  """Return the memoized tail page when the file's signature is unchanged."""
-  hit = _tail_memo.get((path, limit))
-  if hit is not None and hit[0] == mtime_ns and hit[1] == size:
-    return hit[2], hit[3], hit[4]
-  return None
+_tail_memo: StatSignatureMemo[tuple[Path, int], tuple[list[dict], int, bool]] = StatSignatureMemo(_COUNT_MEMO_LIMIT)
 
 
 def _count_lines(f: BinaryIO) -> int:
@@ -124,7 +116,7 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
   if not path.exists():
     return [], 0, False
   st = path.stat()
-  memoized = _tail_memo_get(path, limit, st.st_mtime_ns, st.st_size)
+  memoized = _tail_memo.fresh((path, limit), st)
   if memoized is not None:
     return memoized
 
@@ -162,7 +154,7 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
 
   events = list(iter_ndjson_events(tail_lines, log_event="ndjson_tail_parse_skip", log_fields={}))
 
-  _tail_memo.store((path, limit), (st.st_mtime_ns, st.st_size, events, total, has_more))
+  _tail_memo.record((path, limit), st, (events, total, has_more))
   return events, total, has_more
 
 

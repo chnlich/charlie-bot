@@ -33,6 +33,7 @@ from src.core.config import (
 from src.core.models import (
     PROJECT_ROLE,
     CreateSessionRequest,
+    LastRunStatus,
     SessionMetadata,
     SessionStatus,
     TriggerStatus,
@@ -183,7 +184,7 @@ async def test_elone_of_scheduler_owned_session_succeeds_with_full_inheritance(
   parent = await _make_scheduled_parent(mgr, role=PROJECT_ROLE, group="proj-a")
   parent.last_scheduled_run = "2026-08-20T02:00:00-07:00"
   parent.last_scheduled_cron = "0 2 * * *"
-  parent.last_run_status = "success"
+  parent.last_run_status = LastRunStatus.SUCCESS
   await mgr.save_metadata(parent)
   yaml_before = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
 
@@ -728,7 +729,7 @@ async def _make_recently_run_cadence_parent(mgr: SessionManager) -> SessionMetad
   parent = await _make_scheduled_parent(mgr)
   parent.last_scheduled_run = datetime.now(ZoneInfo("America/Los_Angeles")).isoformat()
   parent.last_scheduled_cron = _CADENCE_CRON
-  parent.last_run_status = "success"
+  parent.last_run_status = LastRunStatus.SUCCESS
   await mgr.save_metadata(parent)
   return parent
 

@@ -96,10 +96,8 @@ async def test_wake_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monke
 
 @pytest.mark.asyncio
 async def test_unresolvable_codex_pin_lands_on_none_of_several_codex_options(tmp_path: Path, monkeypatch) -> None:
-  """Discriminates the deleted `next(... type == "codex" ...)` substitution:
-  with several codex-type entries configured, an unresolvable codex-prefixed
-  pin must still hard-fail rather than land on any of them (the arbitrary
-  first match `next()` used to pick)."""
+  """With several codex-type entries configured, an unresolvable codex-prefixed
+  pin must hard-fail rather than land on any of them."""
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[

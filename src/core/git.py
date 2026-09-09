@@ -59,7 +59,7 @@ class BaseBranchResolutionError(RuntimeError):
 
   The strict resolution matrix (resolve_base_branch) deliberately fails loudly
   instead of silently picking a base: a stale local ref as a worktree base is a
-  correctness hazard that used to pass unnoticed.
+  correctness hazard.
   """
 
 

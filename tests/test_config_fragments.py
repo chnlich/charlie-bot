@@ -294,7 +294,7 @@ def test_fingerprint_fragment_set_matches_the_loader_set(profile_home: Path) -> 
 
   Both read the same walker, so a drift would mean the reload check and the
   load see different fragment sets; the tricky entries pin the exclusions on
-  the scan side (pathlib glob used to answer them per entry).
+  the scan side.
   """
   save_yaml(profile_home / "config.yaml", {"server_port": 18498})
   config_d = profile_home / "config.d"

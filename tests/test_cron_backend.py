@@ -88,31 +88,34 @@ def _cron_api_rig(
   return cron_dir, cfg, session_mgr, md_path
 
 
-@pytest.mark.asyncio
-async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
+async def _spawn_scheduled_worker_rig(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    *,
+    task_cfg: ScheduledTaskConfig,
+    resolved: tuple[str, str],
+) -> tuple[dict, CharlieBotConfig, AsyncMock, AsyncMock, list[SpawnRequest]]:
+  """Run ``Scheduler._spawn_scheduled_worker`` for the nightly session under the scheduler's spawn seams.
+
+  Builds the ``session-1`` scheduled session, patches the scheduler's four
+  spawn seams (thread manager, subagent-backend resolution, spawn worker,
+  create-logged-task), records every spawned request into ``spawns``, and
+  fires the task with ``require_review=False``. ``resolved`` is the
+  (backend, model) pair backend resolution returns. Returns
+  (result, cfg, session_mgr, resolve_backend, spawns).
+  """
   cfg = build_scheduler_cfg(tmp_path)
   session_mgr = AsyncMock()
   scheduler = Scheduler(cfg, session_mgr)
   session = SessionMetadata(id="session-1", name="Scheduled: nightly", backend=OPUS_BACKEND_ID)
-  task_cfg = ScheduledTaskConfig(
-      name="nightly",
-      cron="* * * * *",
-      prompt="nightly prompt",
-      backend="codex-o3",
-  )
-  fake_thread_mgr = FakeThreadManager()
-  resolve_backend = AsyncMock(return_value=("codex-o3", "o3"))
-  spawn_request: SpawnRequest | None = None
+  resolve_backend = AsyncMock(return_value=resolved)
+  spawns: list[SpawnRequest] = []
 
   def fake_spawn_worker(**kwargs: Any) -> Coroutine[Any, Any, None]:
-    nonlocal spawn_request
-    spawn_request = kwargs["request"]
+    spawns.append(kwargs["request"])
     return _noop()
 
-  monkeypatch.setattr(SCHEDULER_THREAD_MANAGER_PATCH_TARGET, lambda _cfg: fake_thread_mgr)
+  monkeypatch.setattr(SCHEDULER_THREAD_MANAGER_PATCH_TARGET, lambda _cfg: FakeThreadManager())
   monkeypatch.setattr(SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, resolve_backend)
   monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)
   monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
@@ -126,12 +129,22 @@ async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
       cfg,
       session_mgr,
       require_review=False)
+  return result, cfg, session_mgr, resolve_backend, spawns
+
+
+@pytest.mark.asyncio
+async def test_scheduler_uses_task_backend_override_for_scheduled_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt", backend="codex-o3")
+  result, cfg, session_mgr, resolve_backend, spawns = await _spawn_scheduled_worker_rig(
+      tmp_path, monkeypatch, task_cfg=task_cfg, resolved=("codex-o3", "o3"))
 
   assert result == {"session_id": "session-1", "thread_id": "thread-1"}
   resolve_backend.assert_awaited_once_with("session-1", cfg, session_mgr, requested_backend="codex-o3")
-  assert spawn_request is not None
-  assert spawn_request.resolved_backend == "codex-o3"
-  assert spawn_request.resolved_model == "o3"
+  assert [spawn.resolved_backend for spawn in spawns] == ["codex-o3"]
+  assert [spawn.resolved_model for spawn in spawns] == ["o3"]
   session_mgr.persist_and_broadcast.assert_awaited_once()
   event = session_mgr.persist_and_broadcast.await_args.args[1]
   assert event["backend"] == "codex-o3"
@@ -143,31 +156,9 @@ async def test_scheduler_uses_default_backend_when_task_backend_unset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = AsyncMock()
-  scheduler = Scheduler(cfg, session_mgr)
-  session = SessionMetadata(id="session-1", name="Scheduled: nightly", backend=OPUS_BACKEND_ID)
   task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", prompt="nightly prompt")
-  fake_thread_mgr = FakeThreadManager()
-  resolve_backend = AsyncMock(return_value=(OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model))
-
-  def fake_spawn_worker(**_kwargs: Any) -> Coroutine[Any, Any, None]:
-    return _noop()
-
-  monkeypatch.setattr(SCHEDULER_THREAD_MANAGER_PATCH_TARGET, lambda _cfg: fake_thread_mgr)
-  monkeypatch.setattr(SCHEDULER_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, resolve_backend)
-  monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, fake_spawn_worker)
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, close_create_logged_task)
-
-  await scheduler._spawn_scheduled_worker(
-      session,
-      task_cfg,
-      "nightly prompt",
-      "nightly prompt",
-      "scheduled_task_fired",
-      cfg,
-      session_mgr,
-      require_review=False)
+  _result, cfg, session_mgr, resolve_backend, _spawns = await _spawn_scheduled_worker_rig(
+      tmp_path, monkeypatch, task_cfg=task_cfg, resolved=(OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model))
 
   resolve_backend.assert_awaited_once_with("session-1", cfg, session_mgr, requested_backend=OPUS_BACKEND_ID)
 

@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import assert_cli_reject, make_json_response, patched_cli_post
+from conftest import assert_cli_reject, capture_create_logged_task, make_json_response, patched_cli_post
 from conftest import setup_session_cwd as _setup_session_cwd
 from pydantic import ValidationError
 
@@ -198,13 +198,6 @@ async def test_improve_endpoint_creates_background_task(tmp_path: Path):
     assert requested_backend == "codex-o3"
     return "codex-o3", "o3"
 
-  def fake_create_logged_task(coro: object, *, name: str | None = None) -> object:
-    del name
-    if getattr(coro, "cr_frame", None) is not None:
-      captured.update(coro.cr_frame.f_locals)
-    coro.close()
-    return object()
-
   cfg = MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"
 
@@ -216,7 +209,8 @@ async def test_improve_endpoint_creates_background_task(tmp_path: Path):
        patch(
            _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET,
            return_value=MagicMock(loop_id=11)) as mock_reserve, \
-       patch("src.api.internal.create_logged_task", side_effect=fake_create_logged_task) as mock_create_task:
+       patch("src.api.internal.create_logged_task",
+             side_effect=capture_create_logged_task(captured)) as mock_create_task:
     mock_cfg.return_value = cfg
     result = await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 

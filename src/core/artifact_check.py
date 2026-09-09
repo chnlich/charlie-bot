@@ -26,7 +26,7 @@ import dataclasses
 import html
 import re
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -315,20 +315,6 @@ def _check_sections_numbered(ctx: _Context) -> list[AssertionOutcome]:
   return [_ok(name)]
 
 
-def _check_foot_present(ctx: _Context) -> list[AssertionOutcome]:
-  name = "foot-present"
-  if _find(ctx.root, "div", ("foot",)):
-    return [_ok(name)]
-  return [_fail(name, "no div.foot on the page")]
-
-
-def _check_explain_triad(ctx: _Context) -> list[AssertionOutcome]:
-  name = "explain-triad"
-  if _find(ctx.root, "div", ("triad",)):
-    return [_ok(name)]
-  return [_fail(name, "no div.triad on the page")]
-
-
 def _open_forks(root: _Element) -> list[tuple[int, _Element]]:
   """(1-based document index, div.fork) pairs for forks with no p.resolved descendant."""
   return [(i, f) for i, f in enumerate(_find(root, "div", ("fork",)), 1) if not _find(f, "p", ("resolved",))]
@@ -375,13 +361,6 @@ def _check_fact_anchored(ctx: _Context) -> list[AssertionOutcome]:
     elif not _find(block, "span", ("src",)):
       failures.append(_fail(name, f"fact label #{i} (section {heading!r}) sits in a {block.tag} with no span.src"))
   return failures or [_ok(name)]
-
-
-def _check_req_chips(ctx: _Context) -> list[AssertionOutcome]:
-  name = "req-chips"
-  if _find(ctx.root, "span", ("req",)):
-    return [_ok(name)]
-  return [_fail(name, "no span.req requirement chips on the page")]
 
 
 def _check_goal_budget(ctx: _Context) -> list[AssertionOutcome]:
@@ -625,15 +604,31 @@ def _check_ordinal_named(ctx: _Context) -> list[AssertionOutcome]:
   return failures
 
 
+def _presence_check(
+    name: str,
+    tag: str,
+    classes: tuple[str, ...],
+    absent_detail: str,
+) -> Callable[[_Context], list[AssertionOutcome]]:
+  """Assertion that the page carries a ``tag`` with ``classes``; ``absent_detail`` is the miss message."""
+
+  def check(ctx: _Context) -> list[AssertionOutcome]:
+    if _find(ctx.root, tag, classes):
+      return [_ok(name)]
+    return [_fail(name, absent_detail)]
+
+  return check
+
+
 _ASSERTION_RUNNERS = {
     "style-verbatim": _check_style_verbatim,
     "sections-numbered": _check_sections_numbered,
-    "foot-present": _check_foot_present,
-    "explain-triad": _check_explain_triad,
+    "foot-present": _presence_check("foot-present", "div", ("foot",), "no div.foot on the page"),
+    "explain-triad": _presence_check("explain-triad", "div", ("triad",), "no div.triad on the page"),
     "fork-open-shape": _check_fork_open_shape,
     "fork-explainer": _check_fork_explainer,
     "fact-anchored": _check_fact_anchored,
-    "req-chips": _check_req_chips,
+    "req-chips": _presence_check("req-chips", "span", ("req",), "no span.req requirement chips on the page"),
     "goal-budget": _check_goal_budget,
     "page-height": _check_page_height,
     "ordinal-named": _check_ordinal_named,

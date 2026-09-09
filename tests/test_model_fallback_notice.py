@@ -8,27 +8,23 @@ projection reuse).
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
-    BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
-    SESSIONS_SESSION_MANAGER_PATCH_TARGET,
     TerminateFlagBackend,
-    drain_session_consumer,
-    fresh_master_state,
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
+    patch_resume_seams,
+    run_resume_round,
 )
 
-from src.agents import master_cc, master_cc_queue, master_cc_run
+from src.agents import master_cc
 from src.agents.backends import claude_code
 from src.agents.backends.claude_code import (
     _family_membership,
@@ -392,14 +388,6 @@ async def test_live_non_cc_backend_emits_nothing(
 # ---------------------------------------------------------------------------
 
 
-def _resume_patch_setup(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(master_cc_run, "_build_fresh_translate", lambda *a, **k: (lambda event: [event]))
-  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr(
-      SESSIONS_SESSION_MANAGER_PATCH_TARGET,
-      lambda *a, **k: MagicMock(_has_running_tasks=AsyncMock(return_value=False)))
-
-
 @pytest.mark.asyncio
 async def test_resume_round_emits_identical_notice_from_projection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -423,11 +411,8 @@ async def test_resume_round_emits_identical_notice_from_projection(
   meta = SessionMetadata(id=session_id, name="t", backend=FABLE_OPTION.id)
   cb = mock_session_callbacks()
 
-  _resume_patch_setup(monkeypatch)
-  async with fresh_master_state(session_id):
-    future = await master_cc.enqueue_master_resume(cfg, meta, record, cb, is_alive=lambda: False)
-    await asyncio.wait_for(future, timeout=5)
-    await drain_session_consumer(session_id, timeout=5)
+  patch_resume_seams(monkeypatch)
+  await run_resume_round(cfg, meta, record, cb, is_alive=lambda: False)
 
   persisted = [c.args[1] for c in cb.persist_and_broadcast.await_args_list]
   notices = [e for e in persisted if e.get("type") == ET.MODEL_FALLBACK_NOTICE]
@@ -448,7 +433,6 @@ async def test_resume_notice_persists_exactly_once_with_full_fields(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(d) Through the real persistence layer, the round gains exactly one
   model_fallback_notice line carrying every schema field."""
-  session_id = "fb-notice-persist"
   log_dir = tmp_path / "run"
   log_dir.mkdir(parents=True)
   raw_path = log_dir / runs.RAW_LOG_NAME
@@ -470,12 +454,8 @@ async def test_resume_notice_persists_exactly_once_with_full_fields(
   meta = await mgr.get_session(session.id)
   assert meta is not None
 
-  monkeypatch.setattr(BROADCAST_PATCH_TARGET, AsyncMock())
-  _resume_patch_setup(monkeypatch)
-  async with fresh_master_state(session_id):
-    future = await master_cc.enqueue_master_resume(cfg, meta, record, mgr.callbacks(), is_alive=lambda: False)
-    await asyncio.wait_for(future, timeout=5)
-    await drain_session_consumer(session_id, timeout=5)
+  patch_resume_seams(monkeypatch)
+  await run_resume_round(cfg, meta, record, mgr.callbacks(), is_alive=lambda: False)
 
   events = mgr.load_chat_events_sync(session.id)
   notices = [e for e in events if e.get("type") == ET.MODEL_FALLBACK_NOTICE]

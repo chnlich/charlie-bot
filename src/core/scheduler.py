@@ -23,6 +23,7 @@ from src.core.config import (
 from src.core.master_trigger import trigger_master
 from src.core.models import (
     PROJECT_ROLE,
+    LastRunStatus,
     SessionMetadata,
     SpawnRequest,
     TaskType,
@@ -259,7 +260,7 @@ class Scheduler:
       handle = self._handles.get(task_cfg.name)
       if handle is not None and not handle.done():
         session.last_scheduled_run = now.isoformat()
-        session.last_run_status = "skipped"
+        session.last_run_status = LastRunStatus.SKIPPED
         session.updated_at = datetime.now(UTC)
         await session_mgr.save_metadata(session)
         event = {
@@ -286,7 +287,7 @@ class Scheduler:
   async def _prepare_task_execution(
       self,
       task_cfg: ScheduledTaskConfig,
-      initial_status: str | None = None,
+      initial_status: LastRunStatus | None = None,
   ) -> tuple[CharlieBotConfig, SessionManager, SessionMetadata]:
     """Shared preamble: reload config, get/create session, persist bookkeeping fields."""
     cfg = self._reload_config()
@@ -345,7 +346,7 @@ class Scheduler:
     )
     if record_handle:
       self._handles[task_cfg.name] = handle
-    session.last_run_status = "success"
+    session.last_run_status = LastRunStatus.SUCCESS
     session.updated_at = datetime.now(UTC)
     await session_mgr.save_metadata(session)
     log.info("master_task_fired", task=task_cfg.name, session=session.id)
@@ -356,7 +357,7 @@ class Scheduler:
     handler = TASK_HANDLERS.get(task_cfg.handler)
     if handler is None:
       raise ValueError(f"Unknown handler: {task_cfg.handler!r}")
-    _, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")
+    _, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status=LastRunStatus.RUNNING)
     log.info('handler_task_firing', task=task_cfg.name, handler=task_cfg.handler)
     try:
       result = await handler()
@@ -366,7 +367,7 @@ class Scheduler:
           'status': 'ok',
           'message': str(result) if result is not None else 'done',
       }
-      session.last_run_status = "success"
+      session.last_run_status = LastRunStatus.SUCCESS
     except Exception as e:
       log.warning('handler_task_error', task=task_cfg.name, error=str(e), traceback=traceback.format_exc())
       event = {
@@ -375,7 +376,7 @@ class Scheduler:
           'status': 'error',
           'message': str(e),
       }
-      session.last_run_status = "failed"
+      session.last_run_status = LastRunStatus.FAILED
     session.updated_at = datetime.now(UTC)
     await session_mgr.save_metadata(session)
     await session_mgr.persist_and_broadcast(session.id, event)
@@ -383,7 +384,7 @@ class Scheduler:
 
   async def _execute_prompt_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
     """Find-or-create session, create thread, fire-and-forget worker."""
-    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")
+    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status=LastRunStatus.RUNNING)
     return await self._spawn_scheduled_worker(
         session,
         task_cfg,
@@ -397,7 +398,7 @@ class Scheduler:
 
   async def _execute_steps_task(self, task_cfg: ScheduledTaskConfig, record_handle: bool = False) -> dict:
     """Fire step 0 of a steps task; later steps advance from the finalize chain."""
-    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status="running")
+    cfg, session_mgr, session = await self._prepare_task_execution(task_cfg, initial_status=LastRunStatus.RUNNING)
     thread_mgr = ThreadManager(cfg)
     result = await task_chain.spawn_step(session, task_cfg, 0, cfg, session_mgr, thread_mgr)
     if record_handle:
@@ -416,12 +417,12 @@ class Scheduler:
     action_type, prompt = await determine_action(backlog_path, task_cfg.loop, repo_path)
 
     if action_type in ('noop', 'stale_reset'):
-      session.last_run_status = "success"
+      session.last_run_status = LastRunStatus.SUCCESS
       await session_mgr.save_metadata(session)
       log.info("loop_task_noop", task=task_cfg.name, action=action_type)
       return {"session_id": session.id, "thread_id": None}
 
-    session.last_run_status = "running"
+    session.last_run_status = LastRunStatus.RUNNING
     await session_mgr.save_metadata(session)
     return await self._spawn_scheduled_worker(
         session,

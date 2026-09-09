@@ -20,7 +20,7 @@ from src.core import (
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_scheduled_tasks
 from src.core.git import git_worktree_remove_reporting
-from src.core.models import TaskType, ThreadMetadata, ThreadStatus
+from src.core.models import LastRunStatus, TaskType, ThreadMetadata, ThreadStatus
 from src.core.notifications import send_telegram
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
@@ -431,7 +431,7 @@ async def _notify_completion(
     scheduled_task_name = None
     session_meta = await session_mgr.get_session(session_id)
     if session_meta is not None and session_meta.scheduled_task:
-      session_meta.last_run_status = "success" if outcome.exit_code == 0 else "failed"
+      session_meta.last_run_status = LastRunStatus.SUCCESS if outcome.exit_code == 0 else LastRunStatus.FAILED
       session_meta.updated_at = datetime.now(UTC)
       await session_mgr.save_metadata(session_meta)
       scheduled_task_name = session_meta.scheduled_task

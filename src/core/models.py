@@ -81,6 +81,14 @@ class WatchKind(StrEnum):
   SLURM_JOB = "slurm_job"
 
 
+class LastRunStatus(StrEnum):
+  """Outcome of a scheduled task's most recent run; every ``SessionMetadata.last_run_status`` is one of these."""
+  RUNNING = "running"
+  SUCCESS = "success"
+  FAILED = "failed"
+  SKIPPED = "skipped"
+
+
 # ---------------------------------------------------------------------------
 # Thread Models
 # ---------------------------------------------------------------------------
@@ -316,7 +324,7 @@ class SessionMetadata(BaseModel):
   scheduled_task: str | None = None  # task name; None = regular session
   role: str | None = None  # role ("project" from the scheduler; arbitrary via create API); None = regular session
   last_scheduled_run: str | None = None  # ISO datetime of last scheduler execution
-  last_run_status: str | None = None  # "running" / "success" / "failed" / "skipped"
+  last_run_status: LastRunStatus | None = None
   last_scheduled_cron: str | None = None  # cron expr at last run; detects changes
   # Transient fields, populated by API layer for scheduled sessions only
   schedule_cron: str | None = None

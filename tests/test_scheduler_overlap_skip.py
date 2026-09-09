@@ -23,6 +23,7 @@ from src.core import scheduler as scheduler_module
 from src.core.config import ScheduledTaskConfig
 from src.core.models import (
     CreateSessionRequest,
+    LastRunStatus,
     SessionMetadata,
     ThreadStatus,
     parse_utc_datetime,
@@ -290,7 +291,7 @@ async def test_fire_ignores_stuck_running_disk_state(
   await thread_mgr.update_status(session.id, thread.id, ThreadStatus.RUNNING, pid=999999)
   # The session bookkeeping is also stuck at running.
   session.last_scheduled_run = clock.now().isoformat()  # 00:00
-  session.last_run_status = "running"
+  session.last_run_status = LastRunStatus.RUNNING
   await session_mgr.save_metadata(session)
 
   monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))

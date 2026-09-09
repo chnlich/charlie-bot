@@ -596,8 +596,8 @@ const planPanel = (() => {
 
   function onActiveSessionChanged() {
     // Sole owner of clearing the cached selection / loaded viewer key and
-    // blanking the iframe on a session change. onReconnect() no longer handles
-    // session mismatches — it only marks stale on a WS reconnect.
+    // blanking the iframe on a session change; onReconnect() only marks stale
+    // on a WS reconnect and leaves session state alone.
     _selectedPlanId = null;
     _selectedVersion = null;
     _loadedViewerKey = null;

@@ -19,7 +19,7 @@ def charliebot_dir() -> Path:
 def backup_dir() -> Path:
   """Where this profile's archives are written, a sibling of its home.
 
-  The default home yields ``~/.charliebot_backup``, unchanged from before.
+  The default home yields ``~/.charliebot_backup``.
   """
   home = charliebot_home_dir()
   return home.with_name(home.name + '_backup')

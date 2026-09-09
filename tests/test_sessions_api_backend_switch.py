@@ -256,7 +256,7 @@ async def test_switch_cross_domain_role_session_gets_clone_fork_400(tmp_path: Pa
 
 
 def test_manager_resolve_route_is_gone(tmp_path: Path) -> None:
-  """GET /api/sessions/manager no longer routes; "manager" can only match /{session_id} → 404."""
+  """GET /api/sessions/manager does not route; "manager" can only match /{session_id} → 404."""
   cfg, _config_a, _config_b = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   with _build_client(cfg, session_mgr) as client:

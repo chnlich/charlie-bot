@@ -150,9 +150,9 @@ class CharlieCodeBackend(AgentBackend):
       return [
           make_context_reading_event(
               model=event.get("model") or "",
-              context_tokens=_context_reading_int("context_tokens", event.get("prompt_tokens")),
-              context_full=_context_reading_int("context_full", event.get("context_window")),
-              context_compact_at=_context_reading_int("context_compact_at", event.get("compact_threshold")),
+              context_tokens=_context_reading_int(ET.CONTEXT_TOKENS, event.get("prompt_tokens")),
+              context_full=_context_reading_int(ET.CONTEXT_FULL, event.get("context_window")),
+              context_compact_at=_context_reading_int(ET.CONTEXT_COMPACT_AT, event.get("compact_threshold")),
           )
       ]
 

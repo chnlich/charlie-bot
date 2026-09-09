@@ -11,6 +11,7 @@ from typing import Any
 
 import structlog
 
+from src.core import event_types as ET
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendType
@@ -47,11 +48,13 @@ def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, Any] 
       # Codex reports the active prompt window in last_token_usage.input_tokens.
       # total_token_usage is cumulative for the whole session and cached_input_tokens
       # is an informational subset, not an additive context-window component.
-      "context_tokens": input_tokens,
+      ET.CONTEXT_TOKENS:
+          input_tokens,
       # The bar's full scale is the model's context window (the longest context the
       # prompt can reach); the compaction line comes from the backend option and is
       # merged in by the resolver.
-      "context_full": model_context_window,
+      ET.CONTEXT_FULL:
+          model_context_window,
   }
   total_token_usage = info.get("total_token_usage")
   if isinstance(total_token_usage, dict):
@@ -177,10 +180,11 @@ class CodexUsageResolver:
     model = native_usage.get("model") or ""
     total_token_usage = native_usage.get("total_token_usage")
     merged_usage: dict[str, Any] = {
-        "context_tokens": native_usage["context_tokens"],
-        "context_full": native_usage["context_full"],
-        "context_compact_at": context_compact_at,
-        "total_cost_usd": (calculate_codex_usage_cost_usd(model, total_token_usage) if total_token_usage else None),
+        ET.CONTEXT_TOKENS: native_usage[ET.CONTEXT_TOKENS],
+        ET.CONTEXT_FULL: native_usage[ET.CONTEXT_FULL],
+        ET.CONTEXT_COMPACT_AT: context_compact_at,
+        ET.RESULT_TOTAL_COST_USD:
+            (calculate_codex_usage_cost_usd(model, total_token_usage) if total_token_usage else None),
         "model": model,
     }
     return merged_usage

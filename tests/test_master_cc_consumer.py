@@ -20,6 +20,8 @@ from conftest import (
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
+    patch_resume_seams,
+    run_resume_round,
     run_session_consumer,
 )
 from fastapi import FastAPI
@@ -535,13 +537,7 @@ async def test_resume_reattach_uses_persisted_interval_start(tmp_path: Path, mon
     await release.wait()
     return "cc-id", 0, None, {}
 
-  broadcast = AsyncMock()
-  workers_mock = MagicMock()
-  workers_mock._has_running_tasks = AsyncMock(return_value=False)
-
-  monkeypatch.setattr(master_cc_run, "_resume_cc", fake_resume_cc)
-  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", broadcast)
-  monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: workers_mock)
+  broadcast = patch_resume_seams(monkeypatch, resume_cc=fake_resume_cc)
 
   cfg = _make_consumer_cfg(tmp_path)
   meta = _make_meta(session_id)
@@ -674,16 +670,8 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
   async def fake_resume_cc(item: master_cc._WorkItem) -> tuple:
     return "cc-resumed-id", 0, None, {"zero_output": True}
 
-  monkeypatch.setattr(master_cc_run, "_resume_cc", fake_resume_cc)
-  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr(
-      SESSIONS_SESSION_MANAGER_PATCH_TARGET,
-      lambda *a, **k: MagicMock(_has_running_tasks=AsyncMock(return_value=False)))
-
-  async with fresh_master_state(session_id):
-    future = await master_cc.enqueue_master_resume(cfg, meta, record, cb, is_alive=lambda: True)
-    await asyncio.wait_for(future, timeout=5)
-    await drain_session_consumer(session_id, timeout=5)
+  patch_resume_seams(monkeypatch, resume_cc=fake_resume_cc)
+  await run_resume_round(cfg, meta, record, cb, is_alive=lambda: True)
 
   errors, dones = _guard_events(cb)
   assert len(errors) == 1
@@ -768,16 +756,8 @@ async def test_zero_output_guard_resume_exempts_manual_compact(tmp_path: Path, m
   meta = _make_meta(session_id)
   cb = mock_session_callbacks()
 
-  monkeypatch.setattr(master_cc_run, "_build_fresh_translate", lambda *a, **k: (lambda event: [event]))
-  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr(
-      SESSIONS_SESSION_MANAGER_PATCH_TARGET,
-      lambda *a, **k: MagicMock(_has_running_tasks=AsyncMock(return_value=False)))
-
-  async with fresh_master_state(session_id):
-    future = await master_cc.enqueue_master_resume(cfg, meta, record, cb, is_alive=lambda: False)
-    await asyncio.wait_for(future, timeout=5)
-    await drain_session_consumer(session_id, timeout=5)
+  patch_resume_seams(monkeypatch)
+  await run_resume_round(cfg, meta, record, cb, is_alive=lambda: False)
 
   errors, dones = _guard_events(cb)
   assert not errors

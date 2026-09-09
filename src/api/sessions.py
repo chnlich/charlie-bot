@@ -30,7 +30,7 @@ from src.api.message_utils import (
 )
 from src.api.responses import FastJsonResponse, PreencodedJSONResponse, fast_json_bytes
 from src.api.threads import view_thread_rows
-from src.core import claude_accounts, thinking_state
+from src.core import claude_accounts, sidebar_state, thinking_state
 from src.core.chat_events import chat_events_path
 from src.core.config import (
     CharlieBotConfig,
@@ -386,14 +386,15 @@ async def all_sessions_status(
   for meta in sessions:
     busy = thinking_state.busy_since(meta.id)
     entry = derived[meta.id]
+    next_trigger_at = entry[sidebar_state.NEXT_TRIGGER_AT]
     result[meta.id] = {
         "has_unread": bool(meta.has_unread),
-        "has_running_tasks": entry["has_running_tasks"],
+        sidebar_state.HAS_RUNNING_TASKS: entry[sidebar_state.HAS_RUNNING_TASKS],
         "thinking_since": busy.isoformat() if busy else None,
-        "has_pending_trigger": entry["has_pending_trigger"],
-        "pending_trigger_count": entry["pending_trigger_count"],
-        "next_trigger_at": entry["next_trigger_at"].isoformat() if entry["next_trigger_at"] else None,
-        "has_pending_plan_approval": entry["has_pending_plan_approval"],
+        sidebar_state.HAS_PENDING_TRIGGER: entry[sidebar_state.HAS_PENDING_TRIGGER],
+        sidebar_state.PENDING_TRIGGER_COUNT: entry[sidebar_state.PENDING_TRIGGER_COUNT],
+        sidebar_state.NEXT_TRIGGER_AT: next_trigger_at.isoformat() if next_trigger_at else None,
+        sidebar_state.HAS_PENDING_PLAN_APPROVAL: entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL],
     }
   # The sidebar's 3 s poll is this host's second-busiest route; FastJsonResponse
   # skips the jsonable_encoder pass FastAPI runs on mapped returns (the
@@ -454,10 +455,10 @@ _SEARCH_ROW_FRAGMENT_CAP = 512
 _SEARCH_DERIVED_KEYS = frozenset(
     {
         "thinking_since",
-        "has_running_tasks",
-        "has_pending_trigger",
-        "pending_trigger_count",
-        "next_trigger_at",
+        sidebar_state.HAS_RUNNING_TASKS,
+        sidebar_state.HAS_PENDING_TRIGGER,
+        sidebar_state.PENDING_TRIGGER_COUNT,
+        sidebar_state.NEXT_TRIGGER_AT,
     })
 _search_row_fragments: OrderedDict[int, tuple[SessionMetadata, tuple[bytes | str, ...]]] = OrderedDict()
 
@@ -550,12 +551,13 @@ async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get
   parts: list[bytes] = []
   for meta in rows:
     entry = derived[meta.id]
+    next_trigger_at = _UTC_DATETIME_JSON.dump_python(entry[sidebar_state.NEXT_TRIGGER_AT], mode="json")
     values = {
         "thinking_since": _UTC_DATETIME_JSON.dump_python(thinking_state.busy_since(meta.id), mode="json"),
-        "has_running_tasks": entry["has_running_tasks"],
-        "has_pending_trigger": entry["has_pending_trigger"],
-        "pending_trigger_count": entry["pending_trigger_count"],
-        "next_trigger_at": _UTC_DATETIME_JSON.dump_python(entry["next_trigger_at"], mode="json"),
+        sidebar_state.HAS_RUNNING_TASKS: entry[sidebar_state.HAS_RUNNING_TASKS],
+        sidebar_state.HAS_PENDING_TRIGGER: entry[sidebar_state.HAS_PENDING_TRIGGER],
+        sidebar_state.PENDING_TRIGGER_COUNT: entry[sidebar_state.PENDING_TRIGGER_COUNT],
+        sidebar_state.NEXT_TRIGGER_AT: next_trigger_at,
     }
     rendered: list[bytes] = []
     for segment in _search_row_static_segments(meta):

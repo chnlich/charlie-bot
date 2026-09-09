@@ -10,7 +10,7 @@ import structlog
 from src.agents import master_cc_run, master_cc_state
 from src.agents.backends.base import make_error_event
 from src.core import event_types as ET
-from src.core import runs
+from src.core import runs, sidebar_state
 from src.core.config import CharlieBotConfig
 from src.core.latex import get_tex_path, snapshot_tex
 from src.core.models import (
@@ -70,7 +70,7 @@ async def _broadcast_running_changed(
       {
           "type": ET.RUNNING_CHANGED,
           "session_id": session_id,
-          "has_running_tasks": has_running_tasks,
+          sidebar_state.HAS_RUNNING_TASKS: has_running_tasks,
           "thinking_since": thinking_since.isoformat() if thinking_since else None,
           "auto_trigger": auto_trigger,
       },

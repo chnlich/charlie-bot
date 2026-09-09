@@ -1781,7 +1781,7 @@ class SessionManager:
     the moment the prompt cache was last renewed. Either is None when unknown.
     """
     usage = await self.resolve_session_usage(session_id, session_meta)
-    context_tokens = usage.get("context_tokens") if isinstance(usage, dict) else None
+    context_tokens = usage.get(ET.CONTEXT_TOKENS) if isinstance(usage, dict) else None
 
     def newest_request() -> datetime | None:
       for ev in reversed(self.load_chat_events_sync(session_id)):

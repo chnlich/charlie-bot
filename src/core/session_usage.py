@@ -178,7 +178,7 @@ class _UsageFold:
         if isinstance(candidate_snapshot, dict):
           self.snapshot = candidate_snapshot
           self.reading_kind = _READING_SNAPSHOT
-        event_cost = ev.get("total_cost_usd", 0.0)
+        event_cost = ev.get(ET.RESULT_TOTAL_COST_USD, 0.0)
         if event_cost is None:
           self.unknown_cost = True
         else:
@@ -241,10 +241,10 @@ def _usage_dict(
   is the shared scan's sum over result events.
   """
   return {
-      "context_tokens": context_tokens,
-      "context_full": context_full,
-      "context_compact_at": context_compact_at,
-      "total_cost_usd": cost,
+      ET.CONTEXT_TOKENS: context_tokens,
+      ET.CONTEXT_FULL: context_full,
+      ET.CONTEXT_COMPACT_AT: context_compact_at,
+      ET.RESULT_TOTAL_COST_USD: cost,
       "model": model,
   }
 
@@ -340,9 +340,9 @@ def _resolve_reading_tier(facts: _UsageFacts) -> dict:
   assert facts.reading is not None
   reading = facts.reading
   return _usage_dict(
-      context_tokens=_int_field(reading.get("context_tokens")),
-      context_full=_int_field(reading.get("context_full")),
-      context_compact_at=_int_field(reading.get("context_compact_at")),
+      context_tokens=_int_field(reading.get(ET.CONTEXT_TOKENS)),
+      context_full=_int_field(reading.get(ET.CONTEXT_FULL)),
+      context_compact_at=_int_field(reading.get(ET.CONTEXT_COMPACT_AT)),
       model=reading.get("model") or "",
       cost=facts.cost,
   )

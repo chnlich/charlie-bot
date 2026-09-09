@@ -671,7 +671,7 @@ def _result_event(session_id: str, candidate: str, duration_ms: int) -> dict[str
       "result": candidate,
       "stop_reason": "end_turn",
       "session_id": session_id,
-      "total_cost_usd": None,
+      ET.RESULT_TOTAL_COST_USD: None,
       "usage": {},
       "permission_denials": [],
       "terminal_reason": "completed",

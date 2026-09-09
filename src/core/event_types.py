@@ -65,6 +65,15 @@ COMPACT_METADATA = "compact_metadata"
 # persisted wire values re-read from chat_events.jsonl by
 # src/core/session_usage.py, so producer and consumers share one definition.
 CONTEXT_READING = "context_reading"
+# Inner keys of a ``context_reading`` payload and of the usage dict the usage
+# resolver serves to the panel (src/core/session_usage.py documents the shape;
+# src/core/codex_usage.py builds the Codex variant). Persisted wire values:
+# the resolver re-reads the payload keys from chat_events.jsonl, and the panel
+# JS (web/static/js/sidebar/session-view.js) reads the usage-dict names, so
+# producer and consumers share one definition per name.
+CONTEXT_TOKENS = "context_tokens"
+CONTEXT_FULL = "context_full"
+CONTEXT_COMPACT_AT = "context_compact_at"
 
 # -- Clone / fork ------------------------------------------------------------
 CLONE_START = "clone_start"
@@ -147,3 +156,8 @@ USAGE_INPUT_TOKENS = "input_tokens"
 USAGE_OUTPUT_TOKENS = "output_tokens"
 USAGE_CACHE_READ_INPUT_TOKENS = "cache_read_input_tokens"
 USAGE_CACHE_CREATION_INPUT_TOKENS = "cache_creation_input_tokens"
+# Top-level cost field of a result event (the same CC-compatible envelope
+# make_result_event builds; src/cli/claude_sub.py emits the same shape). A
+# persisted wire value the cost fold re-reads (src/core/session_usage.py);
+# the resolver's usage dict reuses the name for the panel.
+RESULT_TOTAL_COST_USD = "total_cost_usd"

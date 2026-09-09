@@ -35,6 +35,7 @@ import structlog
 
 from src.agents.backends.claude_code import (
     BASE_COMMAND,
+    HEADLESS_DISALLOWED_TOOLS,
     claude_supervisor_env,
     headless_claude_env,
 )
@@ -61,7 +62,7 @@ COMPACTION_TIMEOUT_SECONDS = 900.0
 # run can only read the transcript and write the summary.
 COMPACTION_DISALLOWED_TOOLS = ",".join(
     (
-        BASE_COMMAND[BASE_COMMAND.index("--disallowed-tools") + 1],
+        HEADLESS_DISALLOWED_TOOLS,
         "Bash,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,WebSearch,WebFetch,TodoWrite,Skill,ToolSearch",
         "KillShell,BashOutput,AskUserQuestion,ExitPlanMode,Task",
     ))

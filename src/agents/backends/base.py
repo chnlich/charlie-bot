@@ -196,7 +196,7 @@ def make_result_event(
               ET.USAGE_CACHE_READ_INPUT_TOKENS: cache_read,
               ET.USAGE_CACHE_CREATION_INPUT_TOKENS: cache_creation,
           },
-      "total_cost_usd": cost,
+      ET.RESULT_TOTAL_COST_USD: cost,
   }
   if context_snapshot is not None:
     event["context_snapshot"] = context_snapshot
@@ -231,9 +231,9 @@ def make_context_reading_event(
       ET.CONTEXT_READING:
           {
               "model": model,
-              "context_tokens": context_tokens,
-              "context_full": context_full,
-              "context_compact_at": context_compact_at,
+              ET.CONTEXT_TOKENS: context_tokens,
+              ET.CONTEXT_FULL: context_full,
+              ET.CONTEXT_COMPACT_AT: context_compact_at,
           },
   }
 

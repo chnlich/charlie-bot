@@ -23,6 +23,11 @@ from src.core.sidebar_state import mark_sidebar_dirty
 
 log = structlog.get_logger()
 
+# The JSON metadata file every session directory and each of its thread
+# directories carries. Readers stat it by name and writers publish it through
+# the atomic tmp rename, so both sides must agree on this one name.
+METADATA_NAME = "metadata.json"
+
 
 def thread_events_log_path(session_dir: Path, thread_id: str) -> Path:
   """Return the path to a thread's events.jsonl under its session directory."""
@@ -43,7 +48,7 @@ def iter_thread_meta_stats(threads_dir: str | Path) -> Iterator[tuple[str, os.st
     for entry in entries:
       if not entry.is_dir():
         continue
-      meta_path = entry.path + "/metadata.json"
+      meta_path = entry.path + "/" + METADATA_NAME
       try:
         yield meta_path, os.stat(meta_path)
       except OSError:
@@ -206,4 +211,4 @@ class ThreadManager:
     mark_sidebar_dirty(meta.session_id)
 
   def _metadata_path(self, session_id: str, thread_id: str) -> Path:
-    return self.thread_dir(session_id, thread_id) / "metadata.json"
+    return self.thread_dir(session_id, thread_id) / METADATA_NAME

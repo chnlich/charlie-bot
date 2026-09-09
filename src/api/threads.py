@@ -34,7 +34,7 @@ from src.core.models import (
 from src.core.ndjson import iter_ndjson_events
 from src.core.process import kill_process_group
 from src.core.sidebar_state import session_revision
-from src.core.threads import ThreadManager, iter_thread_meta_stats
+from src.core.threads import METADATA_NAME, ThreadManager, iter_thread_meta_stats
 from src.core.triggers import TriggerManager
 
 log = structlog.get_logger()
@@ -56,7 +56,7 @@ _detail_meta_memo: StatSignatureMemo[str, ThreadMetadata] = StatSignatureMemo(_D
 
 
 async def _detail_thread_meta(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> ThreadMetadata | None:
-  path = thread_mgr.thread_dir(session_id, thread_id) / "metadata.json"
+  path = thread_mgr.thread_dir(session_id, thread_id) / METADATA_NAME
   key = str(path)
   try:
     st = os.stat(path)

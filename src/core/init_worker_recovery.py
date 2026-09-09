@@ -34,6 +34,7 @@ from src.core.models import (
 )
 from src.core.process import kill_process_group
 from src.core.tasks import create_logged_task
+from src.core.threads import METADATA_NAME
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 from src.core.worktree_trash import dir_size_bytes, format_size, trash_dir
 
@@ -97,9 +98,9 @@ def _iter_thread_meta_stats(threads_dir: Path, log_event: str) -> Iterator[tuple
     for entry in entries:
       if not entry.is_dir():
         continue
-      # entry.path is the str join scandir already built; appending "/metadata.json"
-      # directly yields the same string Path(entry.path) / "metadata.json" would.
-      meta_path = f"{entry.path}/metadata.json"
+      # entry.path is the str join scandir already built; appending "/{METADATA_NAME}"
+      # directly yields the same string Path(entry.path) / METADATA_NAME would.
+      meta_path = f"{entry.path}/{METADATA_NAME}"
       try:
         st = os.stat(meta_path)
       except FileNotFoundError:
@@ -186,7 +187,7 @@ def _session_archived(session_dir: Path) -> bool:
   inside ``RUNNING_SCAN_WINDOW``. A session with no readable metadata is treated as
   not archived — the recovery path stays the default.
   """
-  meta = load_json_meta(session_dir / "metadata.json", "session_meta_unreadable")
+  meta = load_json_meta(session_dir / METADATA_NAME, "session_meta_unreadable")
   return meta is not None and meta.get("status") == SessionStatus.ARCHIVED
 
 

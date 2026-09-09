@@ -221,7 +221,7 @@ def _resolve_requested_backend(
 
 
 @router.get("/", response_model=list[SessionMetadata])
-async def list_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
+async def list_sessions(session_mgr: SessionManager = Depends(get_session_manager)) -> list[SessionMetadata]:
   return await session_mgr.list_sessions(
       status=SessionStatus.ACTIVE,
       scheduled=False,
@@ -236,7 +236,7 @@ async def create_session(
     req: CreateSessionRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> SessionMetadata:
   backend = _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
   log.info("creating_session", backend=backend, name=req.name)
   return await session_mgr.create_session(req, backend=backend)
@@ -269,7 +269,7 @@ async def list_archived_sessions(
     before: str | None = None,
     before_id: str | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
-):
+) -> ArchivedSessionsPage:
   """One keyset page of archived sessions, newest first, with group aggregates for the filter strip."""
   try:
     return await session_mgr.list_archived_page(group=group, limit=limit, before=before, before_id=before_id)
@@ -278,7 +278,7 @@ async def list_archived_sessions(
 
 
 @router.get("/starred", response_model=list[SessionMetadata])
-async def list_starred_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
+async def list_starred_sessions(session_mgr: SessionManager = Depends(get_session_manager)) -> list[SessionMetadata]:
   """List starred sessions, newest first."""
   return await session_mgr.list_sessions(
       starred=True,
@@ -308,7 +308,7 @@ async def delete_group(req: DeleteGroupRequest, session_mgr: SessionManager = De
 
 
 @router.get("/scheduled", response_model=list[SessionMetadata])
-async def list_scheduled_sessions(session_mgr: SessionManager = Depends(get_session_manager)):
+async def list_scheduled_sessions(session_mgr: SessionManager = Depends(get_session_manager)) -> list[SessionMetadata]:
   """List sessions with a scheduled task, newest first."""
   sessions = await session_mgr.list_sessions(
       status=SessionStatus.ACTIVE,
@@ -525,7 +525,10 @@ def _json_scalar_bytes(value: object) -> bytes:
 
 
 @router.get('/search', response_model=list[SessionMetadata])
-async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get_session_manager)):
+async def search_sessions(
+    q: str = '',
+    session_mgr: SessionManager = Depends(get_session_manager),
+) -> list[SessionMetadata] | PreencodedJSONResponse:
   """Full-text search across session names and chat content."""
   if not q.strip():
     return await session_mgr.list_sessions(
@@ -576,7 +579,7 @@ async def get_session_view(
     session_mgr: SessionManager = Depends(get_session_manager),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
-):
+) -> FastJsonResponse:
   """Return data needed to render a session chat panel (SPA switch).
 
   Uses tail-loading: only the last 40 messages are parsed and returned.
@@ -624,7 +627,7 @@ async def get_session_bootstrap(
     _meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
-):
+) -> FastJsonResponse:
   """Return the minimal data needed to make one chat session usable."""
   bootstrap = await build_session_bootstrap_data(session_id, session_mgr)
   # FastJsonResponse for the message-page cost reason in get_session_events_page.
@@ -637,7 +640,7 @@ async def get_session_usage(
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
-):
+) -> FastJsonResponse:
   """Return lazy session status and usage data for the active header."""
   usage = await session_mgr.resolve_session_usage(session_id, meta)
   payload = {
@@ -656,7 +659,7 @@ async def get_session_events_page(
     limit: int = 40,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-):
+) -> Response:
   """Paginate backwards through session messages by message ordinal.
 
   ``before`` is a message ordinal (exclusive upper bound). ``limit`` is the
@@ -704,7 +707,7 @@ async def get_session_recap(
     upto: int | None = None,
     _meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-):
+) -> FastJsonResponse:
   """Pure-extraction recap (no LLM) plus any cached Haiku summary for a divider.
 
   ``upto`` is a global event_index (default: latest). Returns ordered asks, the
@@ -776,7 +779,7 @@ async def fork_session(
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> SessionMetadata:
   """Clone a session. Optional body supports event_index and backend override."""
   backend = _resolve_requested_backend(
       body.backend if body else None,
@@ -812,7 +815,7 @@ async def elone_session(
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> SessionMetadata:
   """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
   backend = _resolve_requested_backend(body.backend, cfg, fallback_backend=parent.backend)
   try:
@@ -847,7 +850,7 @@ async def switch_session_backend(
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> SessionMetadata:
   """Switch a session's backend, in place or via write-through rotation.
 
   ``meta.backend`` is an effective current backend: the raw field when set,
@@ -912,7 +915,7 @@ async def switch_session_backend(
 
 
 @router.get("/{session_id}", response_model=SessionMetadata)
-async def get_session(meta: SessionMetadata = Depends(require_session)):
+async def get_session(meta: SessionMetadata = Depends(require_session)) -> SessionMetadata:
   return meta
 
 
@@ -921,7 +924,7 @@ async def archive_session(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-):
+) -> SessionMetadata:
   event_count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id, meta)
   if event_count == 0:
     await session_mgr.delete_session_permanently(session_id)
@@ -931,7 +934,8 @@ async def archive_session(
 
 
 @router.delete("/{session_id}/permanent", status_code=204)
-async def delete_session_permanently(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
+async def delete_session_permanently(
+    session_id: str, session_mgr: SessionManager = Depends(get_session_manager)) -> Response:
   result = await session_mgr.delete_session_permanently(session_id)
   if not result:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
@@ -943,19 +947,20 @@ async def unarchive_session(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-):
+) -> SessionMetadata:
   if meta.status != SessionStatus.ARCHIVED:
     raise HTTPException(status_code=409, detail="Session is not archived")
   return await session_mgr.unarchive_session(session_id)
 
 
 @router.post("/{session_id}/star", response_model=SessionMetadata)
-async def star_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
+async def star_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)) -> SessionMetadata:
   return require_found(await session_mgr.star_session(session_id))
 
 
 @router.post("/{session_id}/unstar", response_model=SessionMetadata)
-async def unstar_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
+async def unstar_session(
+    session_id: str, session_mgr: SessionManager = Depends(get_session_manager)) -> SessionMetadata:
   return require_found(await session_mgr.unstar_session(session_id))
 
 
@@ -966,7 +971,7 @@ async def rate_round(
     req: RateRoundRequest,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-):
+) -> SessionMetadata:
   if req.rating is None:
     meta.round_ratings.pop(round_id, None)
   else:
@@ -982,7 +987,7 @@ async def rename_session(
     session_id: str,
     req: RenameSessionRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-):
+) -> SessionMetadata:
   return require_found(await session_mgr.rename_session(session_id, req.name))
 
 
@@ -991,12 +996,12 @@ async def set_session_group(
     session_id: str,
     req: SetGroupRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-):
+) -> SessionMetadata:
   return require_found(await session_mgr.set_group(session_id, req.group))
 
 
 @router.get("/{session_id}/events.jsonl")
-async def get_events_jsonl(session_id: str):
+async def get_events_jsonl(session_id: str) -> FileResponse:
   """Serve the raw chat_events.jsonl file for a session."""
   cfg = get_config()
   path = chat_events_path(cfg.sessions_dir / session_id)
@@ -1006,7 +1011,8 @@ async def get_events_jsonl(session_id: str):
 
 
 @router.get("/{session_id}/threads", response_model=list[ThreadMetadata])
-async def list_threads(session_id: str, thread_mgr: ThreadManager = Depends(get_thread_manager)):
+async def list_threads(
+    session_id: str, thread_mgr: ThreadManager = Depends(get_thread_manager)) -> list[ThreadMetadata]:
   return await thread_mgr.list_threads(session_id)
 
 
@@ -1015,7 +1021,7 @@ async def list_plans(
     session_id: str,
     _meta: SessionMetadata = Depends(require_session),
     plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
-):
+) -> FastJsonResponse:
   """Return the plan registry for a session with derived states and read errors.
 
   Unknown session → 404. Known session → always 200 with ``{"plans": [...], "errors": [...]}``;

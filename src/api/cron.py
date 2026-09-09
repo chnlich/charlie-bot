@@ -144,7 +144,7 @@ class TaskCreate(ScheduledTaskFields):
 
 
 @router.get('/tasks')
-async def list_cron_tasks():
+async def list_cron_tasks() -> FastJsonResponse:
   """Return all scheduled tasks plus one error entry per broken file, never 500.
 
   Valid jobs are sorted by name, followed by one entry per error record shaped

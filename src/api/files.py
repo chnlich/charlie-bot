@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from src.api.auth import request_has_access_key
 from src.api.pages import _static_asset_version
@@ -330,7 +330,7 @@ def _resolve_and_list(path: str, url_prefix: str, diff_param: str | None) -> tup
 
 
 @router.api_route("/{path:path}", methods=["GET", "HEAD"])
-async def serve_file(path: str, request: Request):
+async def serve_file(path: str, request: Request) -> Response:
   """Serve a file or directory listing from the filesystem.
 
   HEAD answers the same status as GET, which is how the chat asks whether a linked path is

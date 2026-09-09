@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from src.core.config import CharlieBotConfig, get_config
 from src.core.http import get_http_client
@@ -493,7 +493,7 @@ async def openai_compatible_messages(
     backend_id: str,
     request: Request,
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> Response:
   """Serve Anthropic Messages API requests through a per-backend OpenAI-compatible endpoint."""
   option = cfg.get_backend_option(backend_id)
   if option is None:

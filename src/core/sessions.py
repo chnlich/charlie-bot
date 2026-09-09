@@ -54,6 +54,7 @@ from src.core.session_usage import SessionUsageResolver
 from src.core.streaming import streaming_manager
 from src.core.tasks import create_logged_task
 from src.core.thinking_state import busy_since
+from src.core.threads import METADATA_NAME
 
 # Raw event types whose render content is produced by the per-session
 # MessageAggregator as `message`/`stream` deltas. We persist these events but
@@ -1671,7 +1672,7 @@ class SessionManager:
       try:
         if not thread_dir.is_dir():
           continue
-        meta = load_json_meta(thread_dir / "metadata.json", "thread_meta_read_failed_during_recycle")
+        meta = load_json_meta(thread_dir / METADATA_NAME, "thread_meta_read_failed_during_recycle")
         if meta is None:
           continue
         if meta.get("status") not in TERMINAL_THREAD_STATUSES:
@@ -2632,4 +2633,4 @@ class SessionManager:
     return self._session_dir(session_id) / "threads"
 
   def _metadata_path(self, session_id: str) -> Path:
-    return self._session_dir(session_id) / "metadata.json"
+    return self._session_dir(session_id) / METADATA_NAME

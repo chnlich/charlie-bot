@@ -52,6 +52,7 @@ from src.core.config import (
 )
 from src.core.json_utils import load_json_meta
 from src.core.models import BackendType, SessionStatus, parse_utc_datetime
+from src.core.threads import METADATA_NAME
 from src.core.timeouts import SQLITE_LOCK_WAIT_MS, SQLITE_LOCK_WAIT_SECONDS
 from src.core.token_tally import DEFAULT_OPENCODE_DB
 
@@ -184,7 +185,7 @@ def _scan_sessions(cfg: CharlieBotConfig, now: datetime, min_idle_days: int) -> 
   for session_dir in sorted(sessions_dir.iterdir()):
     if not session_dir.is_dir():
       continue
-    meta = load_json_meta(session_dir / "metadata.json", "storage_cool_meta_read_failed")
+    meta = load_json_meta(session_dir / METADATA_NAME, "storage_cool_meta_read_failed")
     if meta is None:
       continue
     facts[session_dir.name] = _SessionFacts(
@@ -210,7 +211,7 @@ def _scan_references(cfg: CharlieBotConfig, facts: dict[str, _SessionFacts]) -> 
   for thread_dir in sorted(cfg.sessions_dir.glob("*/threads/*")):
     if not thread_dir.is_dir():
       continue
-    meta = load_json_meta(thread_dir / "metadata.json", "storage_cool_thread_meta_read_failed")
+    meta = load_json_meta(thread_dir / METADATA_NAME, "storage_cool_thread_meta_read_failed")
     referenced_id = _optional_str((meta or {}).get("cc_session_id"))
     if referenced_id is None:
       continue

@@ -497,33 +497,52 @@ def _reset_aggregate_memo() -> None:
 _TAIL_WINDOW = 8192
 
 
-def _parse_lines(fh, markers: tuple[str, ...]) -> tuple[list[dict], int, int]:
-  """Parse complete newline-terminated lines from *fh*'s current position to EOF.
+_TAIL_WINDOW = 8192
 
-  Returns (objects, decoded-char bytes read, consumed byte offset), objects in file order.
-  Only complete lines parse: a trailing fragment without its newline is left for the round
-  whose read covers it whole. Decoding is errors="replace" per line, so an undecodable byte
-  drops its line instead of the file.
+# Read size per chunk the line splitter consumes. One C-level find scan per marker hands the
+# fold only marker lines; a per-line Python membership test would pay every line instead.
+_PARSE_CHUNK = 1 << 22
+
+
+def _parse_lines(fh, markers: tuple[bytes, ...]) -> tuple[list[dict], int, int]:
+  """Parse the marker lines from *fh*'s current position to EOF.
+
+  Returns (objects, bytes read, consumed byte offset), objects in file order. Only complete
+  lines parse: a trailing fragment without its newline is left for the round whose read
+  covers it whole, and the bytes count is the consumed offset — every complete line's bytes,
+  which is what the read paid. A marker hit in the trailing fragment waits in the remainder
+  for the next chunk; an unparseable marker line is dropped.
   """
   objects: list[dict] = []
-  nbytes = 0
   consumed = 0
-  for raw_line in fh:
-    if not raw_line.endswith(b"\n"):
+  remainder = b""
+  while True:
+    chunk = fh.read(_PARSE_CHUNK)
+    if not chunk:
       break
-    consumed += len(raw_line)
-    line = raw_line.decode("utf-8", errors="replace")
-    nbytes += len(line)
-    if not any(m in line for m in markers):
+    data = remainder + chunk
+    cut = data.rfind(b"\n")
+    if cut == -1:
+      remainder = data
       continue
-    try:
-      objects.append(json.loads(line))
-    except ValueError:
-      continue
-  return objects, nbytes, consumed
+    remainder = data[cut + 1:]
+    consumed += cut + 1
+    starts = set()
+    for marker in markers:
+      i = data.find(marker)
+      while i != -1:
+        if i <= cut:
+          starts.add(data.rfind(b"\n", 0, i) + 1)
+        i = data.find(marker, i + 1)
+    for start in sorted(starts):
+      try:
+        objects.append(json.loads(data[start:data.find(b"\n", start) + 1].decode("utf-8", errors="replace")))
+      except ValueError:
+        continue
+  return objects, consumed, consumed
 
 
-def _prefiltered_jsonl(path: str, markers: tuple[str, ...]) -> tuple[list, list[dict], int, int]:
+def _prefiltered_jsonl(path: str, markers: tuple[bytes, ...]) -> tuple[list, list[dict], int, int]:
   """Parse one jsonl into the objects whose raw line carries any *markers* substring.
 
   Returns (signature, objects, bytes read, consumed byte offset), objects in file order. The
@@ -558,7 +577,7 @@ def _boundary_guard(path: str, end: int) -> list | None:
   return [window, hashlib.sha256(raw).hexdigest()]
 
 
-def _tail_parse(path: str, entry: dict, markers: tuple[str, ...]) -> tuple[list[dict], int, list, int] | None:
+def _tail_parse(path: str, entry: dict, markers: tuple[bytes, ...]) -> tuple[list[dict], int, list, int] | None:
   """Parse the lines appended since *entry*'s parse, or None when the prefix is unproven.
 
   Returns (objects, bytes read, signature, new consumed offset). The prefix proof is the
@@ -618,7 +637,7 @@ def _claude_records(recs: list[dict], seen: set) -> tuple[list[list], int]:
   return records, dupes
 
 
-_CLAUDE_MARKERS = ('"usage"',)
+_CLAUDE_MARKERS = (b'"usage"',)
 
 
 def _claude_file_contribution(path: str, prev: dict | None = None) -> tuple[dict, int]:
@@ -847,7 +866,7 @@ def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) 
 # Every record the tally reads (session_meta, turn_context, token_count) serializes
 # its type as a quoted literal in the raw line, so the substring filter cannot skip a
 # record the full parse would see; it only skips parsing irrelevant lines.
-_CODEX_MARKERS = ('"session_meta"', '"turn_context"', '"token_count"')
+_CODEX_MARKERS = (b'"session_meta"', b'"turn_context"', b'"token_count"')
 
 
 def _codex_records(recs: list[dict], model: str | None, records: list[list]) -> tuple[int, int, str | None]:

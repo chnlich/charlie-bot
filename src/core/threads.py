@@ -28,10 +28,15 @@ log = structlog.get_logger()
 # the atomic tmp rename, so both sides must agree on this one name.
 METADATA_NAME = "metadata.json"
 
+# The sessions-tree directory holding a session's thread directories. The
+# creation skeleton lays it down and every scanner (sidebar probe, storage-cool
+# scan, boot recovery) walks it by name, so all sides must agree on this name.
+THREADS_DIR_NAME = "threads"
+
 
 def thread_events_log_path(session_dir: Path, thread_id: str) -> Path:
   """Return the path to a thread's events.jsonl under its session directory."""
-  return session_dir / "threads" / thread_id / "data" / "events.jsonl"
+  return session_dir / THREADS_DIR_NAME / thread_id / "data" / "events.jsonl"
 
 
 def iter_thread_meta_stats(threads_dir: str | Path) -> Iterator[tuple[str, os.stat_result]]:
@@ -106,7 +111,7 @@ class ThreadManager:
     return ThreadMetadata.model_validate_json(raw)
 
   async def list_threads(self, session_id: str) -> list[ThreadMetadata]:
-    threads_dir = self._cfg.sessions_dir / session_id / "threads"
+    threads_dir = self._cfg.sessions_dir / session_id / THREADS_DIR_NAME
 
     def load_all() -> list[ThreadMetadata | None]:
       # One executor hop for the whole scan: a per-file aiofiles read costs
@@ -188,7 +193,7 @@ class ThreadManager:
 
   def thread_dir(self, session_id: str, thread_id: str) -> Path:
     """A thread's canonical on-disk directory (metadata.json and data/)."""
-    return self._cfg.sessions_dir / session_id / "threads" / thread_id
+    return self._cfg.sessions_dir / session_id / THREADS_DIR_NAME / thread_id
 
   async def get_events_log_path(self, session_id: str, thread_id: str) -> Path:
     return thread_events_log_path(self._cfg.sessions_dir / session_id, thread_id)

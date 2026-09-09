@@ -54,7 +54,7 @@ from src.core.session_usage import SessionUsageResolver
 from src.core.streaming import streaming_manager
 from src.core.tasks import create_logged_task
 from src.core.thinking_state import busy_since
-from src.core.threads import METADATA_NAME
+from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 
 # Raw event types whose render content is produced by the per-session
 # MessageAggregator as `message`/`stream` deltas. We persist these events but
@@ -1532,7 +1532,7 @@ class SessionManager:
   def _create_session_dirs(session_dir: Path) -> None:
     # Every session-creation path (create_session, _spawn_with_reference) lays
     # down the identical skeleton; the single helper is what keeps them agreeing.
-    for subdir in ("data", "threads"):
+    for subdir in ("data", THREADS_DIR_NAME):
       (session_dir / subdir).mkdir(parents=True, exist_ok=True)
 
   @staticmethod
@@ -2630,7 +2630,7 @@ class SessionManager:
 
   def _threads_dir(self, session_id: str) -> Path:
     """Return the absolute path to a session's threads dir."""
-    return self._session_dir(session_id) / "threads"
+    return self._session_dir(session_id) / THREADS_DIR_NAME
 
   def _metadata_path(self, session_id: str) -> Path:
     return self._session_dir(session_id) / METADATA_NAME

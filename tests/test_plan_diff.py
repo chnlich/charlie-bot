@@ -241,6 +241,81 @@ def test_token_never_spans_a_text_node_boundary() -> None:
   assert [kind for kind, _ in _marks(annotated)] == ["del"]
 
 
+def test_cjk_tokens_stay_per_character_and_restore_the_base_text() -> None:
+  base = '<html><body><p>中文 旧 文本</p><p>kept</p></body></html>'
+  new = '<html><body><p>中文 新 文本</p><p>kept</p></body></html>'
+  annotated = _assert_invariants(base, new)
+  assert 'data-del="旧"' in annotated
+  assert '<ins class="cbd-ins">新</ins>' in annotated
+
+
+_CJK_REFERENCE_RANGES = ((0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF), (0x20000, 0x2FA1F))
+_TOKEN_FUZZ_PIECES = [
+    " ", "\n", "\t", "\u3000", "\xa0", "word", "x_1", "2", "中文", "ＣＫ", "！", "é", "-", "--", "...", "a&b", "😀"
+]
+
+
+def _reference_tokenise(text: str) -> list[tuple[str, int, int]]:
+  tokens: list[tuple[str, int, int]] = []
+  index = 0
+  while index < len(text):
+    char = text[index]
+    if char.isspace():
+      end = index + 1
+      while end < len(text) and text[end].isspace():
+        end += 1
+      index = end
+      continue
+    value = ord(char)
+    if any(start <= value <= end for start, end in _CJK_REFERENCE_RANGES):
+      tokens.append((char, index, index + 1))
+      index += 1
+      continue
+    if char.isascii() and (char.isalnum() or char == "_"):
+      end = index + 1
+      while end < len(text) and text[end].isascii() and (text[end].isalnum() or text[end] == "_"):
+        end += 1
+      tokens.append((text[index:end], index, end))
+      index = end
+      continue
+    tokens.append((char, index, index + 1))
+    index += 1
+  return tokens
+
+
+def test_tokeniser_matches_the_per_character_reference_on_a_randomized_corpus() -> None:
+  from src.core.plan_diff import _tokenise
+
+  rng = random.Random(20260908)
+  for _ in range(500):
+    text = "".join(rng.choice(_TOKEN_FUZZ_PIECES) for _ in range(rng.randint(0, 40)))
+    assert _tokenise(text) == _reference_tokenise(text), f"token drift on {text!r}"
+
+
+def test_leaf_token_raw_spans_match_the_per_character_range_reference() -> None:
+  from src.core.plan_diff import _collect_leaves, _document_root, _Leaf, _leaf_tokens, _parse
+
+  def reference(leaf: _Leaf) -> list[tuple[str, int, int, int, int]]:
+    result: list[tuple[str, int, int, int, int]] = []
+    offset = 0
+    for part in leaf.parts:
+      if part.text_is_raw:
+        ranges = [(part.start + i, part.start + i + 1) for i in range(len(part.text))]
+      else:
+        ranges = [(part.start, part.end)] * len(part.text)
+      for value, start, end in _reference_tokenise(part.text):
+        result.append((value, offset + start, offset + end, ranges[start][0], ranges[end - 1][1]))
+      offset += len(part.text)
+    return result
+
+  source = '<html><body><p>alpha &amp; beta</p><p>中文 text</p></body></html>'
+  leaves = _collect_leaves(_document_root(_parse(source)))
+  assert len(leaves) == 2
+  for leaf in leaves:
+    got = [(t.value, t.logical_start, t.logical_end, t.raw_start, t.raw_end) for t in _leaf_tokens(leaf)]
+    assert got == reference(leaf), f"raw-span drift on leaf {leaf.text!r}"
+
+
 def test_pure_inline_markup_move_with_unchanged_text_produces_no_marks() -> None:
   base = '<html><body><p>alpha beta<b>gamma</b></p></body></html>'
   new = '<html><body><p>alpha <b>beta</b>gamma</p></body></html>'

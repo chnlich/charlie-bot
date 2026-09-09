@@ -2168,8 +2168,8 @@ class WorktreeSpawnRig(NamedTuple):
   """The staged inputs the worktree spawn_worker e2e tests share.
 
   stage_worktree_spawn installs the three spawn-flow fakes (git_create_worktree, Worker,
-  _notify_completion) and builds the thread/cfg/repo/event-log stage; the test drives
-  spawner.spawn_worker itself and asserts on the rig's fields.
+  _notify_completion) and builds the thread/cfg/repo/event-log stage; run_worktree_spawn
+  drives the shared spawn_worker invocation and the test asserts on the rig's fields.
   """
 
   cfg: CharlieBotConfig
@@ -2206,6 +2206,25 @@ def stage_worktree_spawn(
   thread_mgr = CapturingThreadManager(thread, captures, events_log)
   return WorktreeSpawnRig(
       cfg=cfg, repo_path=repo_path, thread=thread, captures=captures, thread_mgr=thread_mgr, description=description)
+
+
+async def run_worktree_spawn(rig: WorktreeSpawnRig, *, resolved_model: str, keep_worktree: bool) -> None:
+  """The one spawn_worker invocation both worktree-spawn e2e tests drive; the rig stages its fakes."""
+  await spawner.spawn_worker(
+      session_id="session-id",
+      description=rig.description,
+      thread_id="thread-1",
+      cfg=rig.cfg,
+      session_mgr=SpawnFlowSessionManager(),
+      thread_mgr=rig.thread_mgr,
+      request=models.SpawnRequest(
+          repo_path=str(rig.repo_path),
+          base_branch="main",
+          resolved_backend="codex-o3",
+          resolved_model=resolved_model,
+          keep_worktree=keep_worktree,
+      ),
+  )
 
 
 class ReviewSpawnThreadManager(JudgmentShim):

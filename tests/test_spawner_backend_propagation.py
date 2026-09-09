@@ -18,6 +18,7 @@ from conftest import (
     make_fake_git_create_worktree,
     patch_review_spawn_path,
     recording_notify_completion,
+    run_worktree_spawn,
     stage_worktree_spawn,
 )
 
@@ -323,20 +324,7 @@ async def test_spawn_worker_creates_worktree_and_uses_worktree_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   rig = stage_worktree_spawn(tmp_path, monkeypatch, description="Do work")
 
-  await spawner.spawn_worker(
-      session_id="session-id",
-      description=rig.description,
-      thread_id="thread-1",
-      cfg=rig.cfg,
-      session_mgr=SpawnFlowSessionManager(),
-      thread_mgr=rig.thread_mgr,
-      request=SpawnRequest(
-          repo_path=str(rig.repo_path),
-          base_branch="main",
-          resolved_backend="codex-o3",
-          resolved_model="o3-pro",
-      ),
-  )
+  await run_worktree_spawn(rig, resolved_model="o3-pro", keep_worktree=False)
   monkeypatch.undo()
 
   assert "git_create_worktree" in rig.captures

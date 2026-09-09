@@ -12,18 +12,17 @@ import pytest
 from conftest import (
     CLEAN_EXIT_OUTCOME,
     CapturingThreadManager,
-    SpawnFlowSessionManager,
     build_codex_worktree_cfg,
     build_finalize_ctx,
     build_worker_prompt,
     recording_notify_completion,
+    run_worktree_spawn,
     stage_worktree_spawn,
 )
 
 from src.core import git as git_module
 from src.core import review, spawner, spawner_finalize
 from src.core.models import (
-    SpawnRequest,
     TaskType,
     ThreadMetadata,
     ThreadStatus,
@@ -165,21 +164,7 @@ async def test_spawn_worker_persists_keep_worktree_on_thread(tmp_path: Path, mon
   """End-to-end-ish: SpawnRequest(keep_worktree=True) propagates to ThreadMetadata."""
   rig = stage_worktree_spawn(tmp_path, monkeypatch, description="Run SLURM benchmark", git_fake_mkdir=True)
 
-  await spawner.spawn_worker(
-      session_id="session-id",
-      description=rig.description,
-      thread_id="thread-1",
-      cfg=rig.cfg,
-      session_mgr=SpawnFlowSessionManager(),
-      thread_mgr=rig.thread_mgr,
-      request=SpawnRequest(
-          repo_path=str(rig.repo_path),
-          base_branch="main",
-          resolved_backend="codex-o3",
-          resolved_model="o3",
-          keep_worktree=True,
-      ),
-  )
+  await run_worktree_spawn(rig, resolved_model="o3", keep_worktree=True)
   monkeypatch.undo()
 
   assert rig.thread.keep_worktree is True

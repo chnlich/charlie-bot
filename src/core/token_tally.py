@@ -697,8 +697,7 @@ def _walk_source(
         t.notes.append(f"{source}: unreadable {account}/{os.path.basename(path)}: {error}")
         walked.append((path, account, None, False))
         continue
-      entry = (cache.lookup_sig(cache_key, path, [st.st_mtime_ns, st.st_size])
-               if cache is not None else None)
+      entry = (cache.lookup_sig(cache_key, path, [st.st_mtime_ns, st.st_size]) if cache is not None else None)
       hit = entry is not None
       if entry is None:
         try:

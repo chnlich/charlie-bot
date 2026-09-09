@@ -45,14 +45,24 @@ function parseLinkUrl(href) {
   }
 }
 
-// A link naming this page's hostname with a different scheme or port names this same server:
-// the base URL is written from memory, and a wrong scheme or port there is still unambiguous,
-// so the link is pulled back to the page origin. Another hostname is another server, and is
-// returned as written.
+// A link naming this page's hostname with a different scheme or port is pulled back to the
+// page origin only when its path sits under a file-server prefix: those are routes the page
+// origin itself serves (server.py mounts one files router under both FILE_SERVER_PREFIXES),
+// so a link there whose scheme or port was written from memory is still unambiguous. Any
+// other path names another frontend on this host (the publish lane and each neighboring
+// port serve their own server), and is left exactly as written. Another hostname is another
+// server, and is returned as written.
+function isFileServerPath(pathname) {
+  for (var i = 0; i < FILE_SERVER_PREFIXES.length; i++) {
+    if (pathname === FILE_SERVER_PREFIXES[i] || pathname.indexOf(FILE_SERVER_PREFIXES[i] + '/') === 0) return true;
+  }
+  return false;
+}
+
 function normalizedToPageOrigin(url) {
   var page = new URL(window.location.href);
   if (url.hostname !== page.hostname || url.origin === page.origin) return url;
-  return new URL(url.pathname + url.search + url.hash, page.origin);
+  return isFileServerPath(url.pathname || '') ? new URL(url.pathname + url.search + url.hash, page.origin) : url;
 }
 
 function resolveFileServerUrl(href) {
@@ -380,7 +390,11 @@ function fileServerOccurrence(href, node, kind, end) {
 // Every artifact-page link keeps its /artifacts/<file> tail however its prefix was composed, so
 // a same-host URL carrying an /artifacts/ path segment that channel 1 could not resolve is
 // probed at its normalized literal URL. Same-host application routes (/diff, /perfetto) carry
-// no such segment and never enter; another hostname is another server and is left as written.
+// no such segment and never enter. Only links that already name the page origin reach the
+// origin check below: normalizedToPageOrigin now rewrites file-server paths alone, so a
+// same-host link composed for another scheme or port is left as written and returns null here
+// — probing it at this server would answer for a server that never had the path. Another
+// hostname is another server and is left as written.
 function unrecognizedArtifactOccurrence(url, node, kind, end) {
   var page = new URL(window.location.href);
   if (url.origin !== page.origin) return null;

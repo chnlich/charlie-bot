@@ -648,8 +648,7 @@ def _claude_file_contribution(path: str, prev: dict | None = None) -> tuple[dict
     if tail is not None:
       recs, nbytes, sig, end = tail
       records, dupes = _claude_records(recs, {rec[0] for rec in prev["records"]})
-      entry = {"sig": sig, "records": prev["records"] + records, "dupes": prev.get("dupes", 0) + dupes,
-               "end": end}
+      entry = {"sig": sig, "records": prev["records"] + records, "dupes": prev.get("dupes", 0) + dupes, "end": end}
       entry["guard"] = _boundary_guard(path, end)
       return entry, nbytes
   sig, recs, nbytes, end = _prefiltered_jsonl(path, _CLAUDE_MARKERS)
@@ -910,10 +909,16 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
       total_walked = prev.get("walked", 0) + walked
       total_final = max(prev.get("final_total", 0), final_total)
       is_root = prev.get("is_root", False)
-      entry = {"sig": sig, "records": prev["records"] + records,
-               "check": [total_walked, total_final] if total_final and is_root else None,
-               "model_ctx": model, "is_root": is_root, "final_total": total_final,
-               "walked": total_walked, "end": end}
+      entry = {
+          "sig": sig,
+          "records": prev["records"] + records,
+          "check": [total_walked, total_final] if total_final and is_root else None,
+          "model_ctx": model,
+          "is_root": is_root,
+          "final_total": total_final,
+          "walked": total_walked,
+          "end": end
+      }
       entry["guard"] = _boundary_guard(path, end)
       return entry, nbytes
   sig, recs, nbytes, end = _prefiltered_jsonl(path, _CODEX_MARKERS)
@@ -932,10 +937,16 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
   )
   records = []
   walked, final_total, model = _codex_records(recs, model, records)
-  entry = {"sig": sig, "records": records,
-           "check": [walked, final_total] if final_total and is_root else None,
-           "model_ctx": model, "is_root": is_root, "final_total": final_total, "walked": walked,
-           "end": end}
+  entry = {
+      "sig": sig,
+      "records": records,
+      "check": [walked, final_total] if final_total and is_root else None,
+      "model_ctx": model,
+      "is_root": is_root,
+      "final_total": final_total,
+      "walked": walked,
+      "end": end
+  }
   entry["guard"] = _boundary_guard(path, end)
   return entry, nbytes
 

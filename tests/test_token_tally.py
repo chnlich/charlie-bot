@@ -1347,7 +1347,9 @@ def test_append_tail_codex_parity(tmp_path: Path) -> None:
   """The tail round carries the model context, rootness and self-check state forward."""
   codex = Codex(tmp_path)
   codex.write(
-      "rollout", [_codex_meta(), _codex_turn("gpt-a"), _codex_count({"input_tokens": 10}, {"total_tokens": 11})])
+      "rollout",
+      [_codex_meta(), _codex_turn("gpt-a"),
+       _codex_count({"input_tokens": 10}, {"total_tokens": 11})])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   _collect(None, codex, db, cache)
   log_file = codex.home / "sessions" / "rollout" / "rollout.jsonl"

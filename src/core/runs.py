@@ -290,9 +290,7 @@ def parse_raw_lines(raw_bytes: bytes) -> list[dict]:
       # funnel owns the skip contract — blank lines stay invisible there, and
       # only the lines reaching this fallback can log.
       events.extend(
-          iter_ndjson_events([piece.decode("utf-8", errors="replace")],
-                             log_event="raw_line_not_json",
-                             log_fields={}))
+          iter_ndjson_events([piece.decode("utf-8", errors="replace")], log_event="raw_line_not_json", log_fields={}))
   return events
 
 

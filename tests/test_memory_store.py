@@ -535,10 +535,16 @@ def _fake_cfg(tmp_path: Path) -> SimpleNamespace:
   return SimpleNamespace(memory_dir=mem, sessions_dir=home / "sessions")
 
 
-def test_cli_add_creates_one_staging_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Flag-less invocation writes exactly one staging file whose content is the body verbatim."""
+def _patch_cli_cfg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
+  """Point the memory CLI's get_config at a fresh fake store and return that config."""
   cfg = _fake_cfg(tmp_path)
   monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  return cfg
+
+
+def test_cli_add_creates_one_staging_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Flag-less invocation writes exactly one staging file whose content is the body verbatim."""
+  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
   body = "# Prefers Dark Mode\n\nThe user prefers dark themes across all UIs.\n"
   monkeypatch.setattr("sys.stdin", io.StringIO(body))
   import src.cli.memory as cli
@@ -558,8 +564,7 @@ def test_cli_add_creates_one_staging_file(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_cli_add_cjk_title_uses_capture_segment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A title with no slug-charset character (pure CJK) falls back to the fixed 'capture' slug."""
-  cfg = _fake_cfg(tmp_path)
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
   body = "# 本地渲染环境\n\n渲染机约束逐条列出。\n"
   monkeypatch.setattr("sys.stdin", io.StringIO(body))
   import src.cli.memory as cli
@@ -586,8 +591,7 @@ def test_cli_add_rejects_bad_invocation(
   The removed-flag case exits 2 from argparse before the capture is read; the title cases exit 1 from the
   capture grammar.
   """
-  cfg = _fake_cfg(tmp_path)
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
   monkeypatch.setattr("sys.stdin", io.StringIO(stdin_text))
   import src.cli.memory as cli
   monkeypatch.setattr("sys.argv", ["charliebot memory", "add", *extra_argv])
@@ -626,8 +630,7 @@ def test_cli_query_unknown_topic_lines_and_hints(
 
   A value whose pre-slash segment is a real topic gains the corrective hint; the others print the plain line.
   """
-  cfg = _fake_cfg(tmp_path)
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  _patch_cli_cfg(monkeypatch, tmp_path)
   import src.cli.memory as cli
   argv = ["charliebot memory", "query"]
   for value in topic_values:
@@ -643,9 +646,8 @@ def test_cli_query_unknown_topic_lines_and_hints(
 
 def test_cli_query_index_prints_lines_full_prints_body(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-  cfg = _fake_cfg(tmp_path)
+  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
   _write_entry(cfg.memory_dir, "profile", "dark-mode", title="Dark Mode", body="body\n")
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   import src.cli.memory as cli
   # --index: prints index lines only
   monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile", "--index"])
@@ -661,9 +663,8 @@ def test_cli_query_index_prints_lines_full_prints_body(
 
 def test_cli_query_full_no_duplicate_heading_for_legacy_body(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-  cfg = _fake_cfg(tmp_path)
+  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
   _write_entry(cfg.memory_dir, "profile", "dark-mode", legacy=True)
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   import src.cli.memory as cli
   monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile"])
   cli.main()
@@ -673,10 +674,9 @@ def test_cli_query_full_no_duplicate_heading_for_legacy_body(
 
 def test_cli_query_audience_filter_is_membership(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-  cfg = _fake_cfg(tmp_path)
+  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
   _write_entry(cfg.memory_dir, "profile", "for-master", audience="master", body="mbody\n")
   _write_entry(cfg.memory_dir, "profile", "for-both", audience="master, worker", body="bbody\n")
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   import src.cli.memory as cli
   monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile", "--audience", "worker"])
   cli.main()
@@ -687,9 +687,8 @@ def test_cli_query_audience_filter_is_membership(
 
 def test_cli_lint_nonzero_on_violations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-  cfg = _fake_cfg(tmp_path)
+  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
   _write_entry(cfg.memory_dir, "profile", "bad", revises="old")  # revises forbidden in entries
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   import src.cli.memory as cli
   monkeypatch.setattr("sys.argv", ["charliebot memory", "lint"])
   with pytest.raises(SystemExit) as exc:
@@ -700,9 +699,8 @@ def test_cli_lint_nonzero_on_violations(
 
 
 def test_cli_lint_clean_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _fake_cfg(tmp_path)
+  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
   _write_entry(cfg.memory_dir, "profile", "good")
-  monkeypatch.setattr(_CLI_MEMORY_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   import src.cli.memory as cli
   monkeypatch.setattr("sys.argv", ["charliebot memory", "lint"])
   cli.main()  # exits 0

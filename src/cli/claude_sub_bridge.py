@@ -343,13 +343,13 @@ class HookTurnState:
     event: dict[str, Any] = {
         "type": ET.CONTEXT_COMPACTED,
         "trigger": trigger,
-        "pre_tokens": payload.get("pre_tokens"),
+        ET.COMPACT_PRE_TOKENS: payload.get("pre_tokens"),
     }
     if "pre_tokens" in payload:
       pre_tokens = payload["pre_tokens"]
       if not isinstance(pre_tokens, (int, float)):
         raise HookProtocolError("PostCompact pre_tokens must be numeric when present")
-      event["pre_tokens"] = pre_tokens
+      event[ET.COMPACT_PRE_TOKENS] = pre_tokens
     return [event]
 
   def _handle_stop(self, payload: dict[str, Any]) -> list[dict[str, Any]]:

@@ -161,7 +161,7 @@ class _UsageFold:
         subtype = ev.get("subtype")
         if subtype == ET.COMPACT_BOUNDARY:
           if self.reading_kind == _READING_CLAUDE:
-            candidate = (ev.get(ET.COMPACT_METADATA) or {}).get("post_tokens")
+            candidate = (ev.get(ET.COMPACT_METADATA) or {}).get(ET.COMPACT_POST_TOKENS)
             if isinstance(candidate, int):
               self.post_compact_tokens = candidate
         elif subtype == ET.CONTEXT_READING:

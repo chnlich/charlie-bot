@@ -141,7 +141,7 @@ class CharlieCodeBackend(AgentBackend):
               "subtype": ET.COMPACT_BOUNDARY,
               ET.COMPACT_METADATA: {
                   "trigger": event["trigger"],
-                  "pre_tokens": event["pre_tokens"],
+                  ET.COMPACT_PRE_TOKENS: event["pre_tokens"],
               },
           }
       ]

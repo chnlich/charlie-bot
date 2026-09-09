@@ -73,7 +73,7 @@ def _compacting_model_note(ev: dict) -> str:
 
 def _context_compacted_msg(ev: dict) -> dict:
   trigger = ev.get('trigger', 'auto')
-  pre_tokens = ev.get('pre_tokens')
+  pre_tokens = ev.get(ET.COMPACT_PRE_TOKENS)
   msg = 'Context compacted'
   qualifiers = [part for part in (trigger, _compacting_model_note(ev)) if part]
   if qualifiers:

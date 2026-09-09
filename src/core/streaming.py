@@ -148,12 +148,12 @@ async def handle_compaction_events(
   if subtype == ET.COMPACT_BOUNDARY:
     meta = event.get(ET.COMPACT_METADATA, {})
     trigger = meta.get("trigger", "unknown")
-    pre_tokens = meta.get("pre_tokens")
+    pre_tokens = meta.get(ET.COMPACT_PRE_TOKENS)
     log.info("cc_context_compacted", trigger=trigger, pre_tokens=pre_tokens, **log_context)
     compact_event: dict[str, Any] = {
         "type": ET.CONTEXT_COMPACTED,
         "trigger": trigger,
-        "pre_tokens": pre_tokens,
+        ET.COMPACT_PRE_TOKENS: pre_tokens,
     }
     await persist_and_broadcast(compact_event)
     return

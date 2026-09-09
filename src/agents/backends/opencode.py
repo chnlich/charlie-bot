@@ -544,7 +544,7 @@ class OpenCodeBackend(AgentBackend):
                 "subtype": ET.COMPACT_BOUNDARY,
                 ET.COMPACT_METADATA: {
                     "trigger": "auto",
-                    "pre_tokens": pre_tokens
+                    ET.COMPACT_PRE_TOKENS: pre_tokens
                 },
             }
         ]

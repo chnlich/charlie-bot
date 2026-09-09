@@ -34,7 +34,7 @@ _STREAM_COALESCE_INTERVAL = 0.2  # seconds
 # websocket.js hideStreaming reach: _commitMessage on committed bubbles (its
 # comments pin the commit-supersedes-preview rule) plus the ``assistant_error``
 # and ``error`` arms of the event switch.
-_PREVIEW_HIDING_TYPES = frozenset({"message", "assistant_error", "error"})
+_PREVIEW_HIDING_TYPES = frozenset({"message", ET.ASSISTANT_ERROR, ET.ERROR})
 
 
 class StreamingManager:

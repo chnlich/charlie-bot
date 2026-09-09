@@ -80,7 +80,7 @@ def _context_compacted_msg(ev: dict) -> dict:
     msg += f' ({", ".join(qualifiers)})'
   if pre_tokens:
     msg += f' — was {round(pre_tokens / 1000)}k tokens'
-  return {'role': 'system', 'content': msg, 'kind': 'context_compacted'}
+  return {'role': 'system', 'content': msg, 'kind': ET.CONTEXT_COMPACTED}
 
 
 def _context_compact_failed_msg(ev: dict) -> dict:
@@ -88,7 +88,7 @@ def _context_compact_failed_msg(ev: dict) -> dict:
   note = _compacting_model_note(ev)
   head = f'Compaction {note} failed' if note else 'Compaction failed'
   content = head if not error else f'{head} — {error}'
-  return {'role': 'system', 'kind': 'context_compact_failed', 'content': content}
+  return {'role': 'system', 'kind': ET.CONTEXT_COMPACT_FAILED, 'content': content}
 
 
 def _claude_account_login_required_msg(ev: dict) -> dict:
@@ -96,7 +96,7 @@ def _claude_account_login_required_msg(ev: dict) -> dict:
   del ev
   return {
       'role': 'system',
-      'kind': 'claude_account_login_required',
+      'kind': ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
       'content': 'One account in the Claude pool needs a new login; see the usage panel.',
   }
 
@@ -182,7 +182,7 @@ def _task_delegated_msg(ev: dict) -> dict:
   # persisted event (the review scan and fork reference read raw events); no
   # projection reader -- client bubble or server recap -- reads them here.
   return {
-      "role": "task_delegated",
+      "role": ET.TASK_DELEGATED,
       "content": "Task delegated",
       "thread_id": ev.get("thread_id", ""),
       "delegate_invocation": ev.get("delegate_invocation"),
@@ -215,7 +215,7 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         _task_delegated_msg,
     ET.WORKER_SUMMARY:
         lambda ev: {
-            'role': 'worker_summary',
+            'role': ET.WORKER_SUMMARY,
             'content': ev.get('content', ''),
             'thread_id': ev.get('thread_id'),
             **({
@@ -236,18 +236,18 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         _system_msg,
     ET.CLONE_START:
         lambda ev: {
-            "role": "clone_start",
+            "role": ET.CLONE_START,
             "content": ev.get("parent_session_name", "Unknown session"),
             "parent_session_id": ev.get("parent_session_id", ""),
         },
     ET.SCHEDULED_TRIGGER:
         lambda ev: {
-            "role": "scheduled_trigger",
+            "role": ET.SCHEDULED_TRIGGER,
             "content": ev.get("content", ""),
         },
     ET.AGENT_MESSAGE:
         lambda ev: {
-            "role": "agent_message",
+            "role": ET.AGENT_MESSAGE,
             "content": ev.get("content", ""),
             "from_session": ev.get("from_session", ""),
             "from_session_name": ev.get("from_session_name", ""),

@@ -127,17 +127,65 @@ def test_merge_core_id_contract(tmp_path: Path) -> None:
   original tid per trace, dense tids and flow ids counting across ranks, and a label event's
   str pid form covering events that carry the same pid as an int."""
   first, second = tmp_path / "rank0.json", tmp_path / "rank1.json"
-  first.write_text(json.dumps({"traceEvents": [
-      {"ph": "M", "pid": "7", "name": "process_labels", "args": {"labels": "GPU 0"}},
-      {"ph": "M", "pid": 7, "name": "thread_name", "args": {"name": "t0"}},
-      {"ph": "X", "pid": 7, "tid": 1, "name": "a"},
-      {"ph": "X", "pid": "7", "tid": 1, "name": "gpu"},
-      {"ph": "s", "pid": 7, "tid": 1, "id": "f1"},
-  ]}), encoding="utf-8")
-  second.write_text(json.dumps({"traceEvents": [
-      {"ph": "X", "pid": 7, "tid": 1, "name": "b"},
-      {"ph": "f", "pid": 7, "tid": 1, "id": "f1"},
-  ]}), encoding="utf-8")
+  first.write_text(
+      json.dumps(
+          {
+              "traceEvents":
+                  [
+                      {
+                          "ph": "M",
+                          "pid": "7",
+                          "name": "process_labels",
+                          "args": {
+                              "labels": "GPU 0"
+                          }
+                      },
+                      {
+                          "ph": "M",
+                          "pid": 7,
+                          "name": "thread_name",
+                          "args": {
+                              "name": "t0"
+                          }
+                      },
+                      {
+                          "ph": "X",
+                          "pid": 7,
+                          "tid": 1,
+                          "name": "a"
+                      },
+                      {
+                          "ph": "X",
+                          "pid": "7",
+                          "tid": 1,
+                          "name": "gpu"
+                      },
+                      {
+                          "ph": "s",
+                          "pid": 7,
+                          "tid": 1,
+                          "id": "f1"
+                      },
+                  ]
+          }),
+      encoding="utf-8")
+  second.write_text(
+      json.dumps(
+          {"traceEvents": [
+              {
+                  "ph": "X",
+                  "pid": 7,
+                  "tid": 1,
+                  "name": "b"
+              },
+              {
+                  "ph": "f",
+                  "pid": 7,
+                  "tid": 1,
+                  "id": "f1"
+              },
+          ]}),
+      encoding="utf-8")
   out = tmp_path / "merged.json.gz"
   real_merge_traces([first, second], out, False)
   with gzip.open(out) as merged_file:
@@ -150,7 +198,8 @@ def test_merge_core_id_contract(tmp_path: Path) -> None:
   # The walk emits one thread_name per distinct original tid per trace — the
   # input's own thread_name M event passes through beside them.
   walk_named = sorted(
-      e["args"]["name"] for e in events
+      e["args"]["name"]
+      for e in events
       if e.get("ph") == "M" and e.get("name") == "thread_name" and e.get("args", {}).get("name") != "t0")
   assert walk_named == ["rank0/1", "rank1/1"]
   # Both pid forms of rank0 remap to the one labeled synthetic pid; rank1

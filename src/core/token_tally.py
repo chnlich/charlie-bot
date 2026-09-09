@@ -243,9 +243,9 @@ def _account_label(path: Path, stem: str) -> str:
 class TallyCache:
   """Per-file tally contributions keyed by file signature, persisted as one JSON document.
 
-  ``lookup`` serves an entry only while the file's signature matches and copies the hit into
-  the next document; ``store`` adds fresh scans there. The saved document therefore holds only
-  files seen this run — deleted logs drop out without a separate sweep.
+  ``lookup_sig`` serves an entry only while the caller's signature matches and copies the hit
+  into the next document; ``store``/``store_sig`` add fresh scans there. The saved document
+  therefore holds only files seen this run — deleted logs drop out without a separate sweep.
   """
 
   SCHEMA_VERSION = 1
@@ -275,25 +275,11 @@ class TallyCache:
     path.parent.mkdir(parents=True, exist_ok=True)
     write_json_atomically(path, {"version": self.SCHEMA_VERSION, "sources": self._next})
 
-  def lookup(self, source: str, path: Path) -> dict | None:
-    """The cached entry for *path* when its signature still matches, else None."""
-    entry = self._sources.get(source, {}).get(str(path))
-    if entry is None:
-      return None
-    try:
-      st = path.stat()
-    except OSError:
-      return None
-    if entry.get("sig") != [st.st_mtime_ns, st.st_size]:
-      return None
-    self._next[source][str(path)] = entry
-    return entry
-
   def lookup_sig(self, source: str, key: str, sig: list) -> dict | None:
     """The cached entry for *key* when its stored signature equals *sig*, else None.
 
-    Sibling of ``lookup`` for sources whose signature is not one file's stat: the
-    caller computes *sig*.
+    *sig* is the caller's own proof — one file's stat pair from the walk that
+    produced *key*, or a source-level signature like the opencode db's.
     """
     entry = self._sources.get(source, {}).get(key)
     if entry is None:
@@ -307,6 +293,10 @@ class TallyCache:
     """Record one freshly scanned contribution for the next document."""
     self._next[source][str(path)] = entry
 
+  def store_sig(self, source: str, key: str, entry: dict) -> None:
+    """``store``'s sibling for a caller that already carries the str key (``lookup_sig``)."""
+    self._next[source][key] = entry
+
 
 def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str) -> Callable[[OSError], None]:
   """The os.walk onerror hook turning an unreadable directory into a per-account note."""
@@ -318,26 +308,18 @@ def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str) -> Call
   return _onerror
 
 
-def _iter_jsonl(root: Path, t: _Tally, source: str, label: str) -> Iterator[Path]:
-  """Yield ``*.jsonl`` under *root*, recording a note when a directory is unreadable.
+def _iter_jsonl_stats(root: Path, t: _Tally, source: str,
+                      label: str) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
+  """Yield ``(path, stat, error)`` for every ``*.jsonl`` under *root*, recording a note when a
+  directory is unreadable.
 
   ``Path.rglob`` swallows ``PermissionError`` while walking (shell-glob semantics), so an
   unreadable directory would vanish silently instead of surfacing. ``os.walk``'s ``onerror`` hook
   gets the error instead, which becomes a per-account note; a missing directory is not an error
-  here (``discover_homes`` already filters those out for the real on-disk layout).
+  here (``discover_homes`` already filters those out for the real on-disk layout). Paths are
+  plain strings carrying each file's stat, so both consumers — the corpus signature and the
+  per-file serve walk — pay one syscall per file and never build a Path per entry.
   """
-  for dirpath, _, filenames in os.walk(root, onerror=_walk_error_hook(t, source, label, root.name)):
-    for name in filenames:
-      if name.endswith(".jsonl"):
-        yield Path(dirpath) / name
-
-
-def _iter_jsonl_stats(root: Path, t: _Tally, source: str,
-                      label: str) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
-  """Yield ``(path, stat, error)`` for every ``*.jsonl`` under *root* — the ``_iter_jsonl``
-  walk contract with each file's stat attached, so the signature walk pays one syscall per
-  file instead of one per file plus a re-stat. Like ``os.walk``: symlinked directories are
-  neither descended nor listed; a stat failure yields ``(path, None, repr(exc))``."""
   hook = _walk_error_hook(t, source, label, root.name)
   stack = [str(root)]
   while stack:
@@ -491,7 +473,7 @@ def _reset_aggregate_memo() -> None:
   _claude_orphan.clear()
 
 
-def _prefiltered_jsonl(path: Path, markers: tuple[str, ...]) -> tuple[list, list[dict], int]:
+def _prefiltered_jsonl(path: str, markers: tuple[str, ...]) -> tuple[list, list[dict], int]:
   """Parse one jsonl into the objects whose raw line carries any *markers* substring.
 
   Returns (signature, objects, bytes read), objects in file order. The signature is taken
@@ -501,8 +483,8 @@ def _prefiltered_jsonl(path: Path, markers: tuple[str, ...]) -> tuple[list, list
   """
   objects: list[dict] = []
   nbytes = 0
-  st = path.stat()
-  with path.open(errors="replace") as fh:
+  st = os.stat(path)
+  with open(path, errors="replace") as fh:
     for line in fh:
       nbytes += len(line)
       if not any(m in line for m in markers):
@@ -514,7 +496,7 @@ def _prefiltered_jsonl(path: Path, markers: tuple[str, ...]) -> tuple[list, list
   return [st.st_mtime_ns, st.st_size], objects, nbytes
 
 
-def _claude_file_contribution(path: Path) -> tuple[dict, int]:
+def _claude_file_contribution(path: str) -> tuple[dict, int]:
   """Parse one Claude Code jsonl into its cache entry; return (entry, bytes read)."""
   seen: set[str] = set()
   dupes = 0
@@ -700,26 +682,37 @@ def _walk_source(
     parse: Callable,
 ) -> tuple[list[tuple[str, str, dict | None, bool]], dict]:
   """Walk every log file, serving cache hits and parsing misses; returns one row per file —
-  (path, account, entry or None on a failed parse, cache-hit flag) — plus the walk order."""
+  (path, account, entry or None on a failed parse, cache-hit flag) — plus the walk order.
+
+  The walk is ``_iter_jsonl_stats``: each file arrives as its str path plus the stat the
+  walker took before yielding, so a serve pays one syscall per file and no Path build — the
+  same stat pair both proves the cached entry and keys its store. Only a cache miss builds
+  anything heavier than dict lookups.
+  """
   walked: list[tuple[str, str, dict | None, bool]] = []
   order: dict[tuple, int] = {}
   for account, home in homes.items():
-    for path in _iter_jsonl(home / sub, t, source, account):
-      entry = cache.lookup(cache_key, path) if cache is not None else None
+    for path, st, error in _iter_jsonl_stats(home / sub, t, source, account):
+      if st is None:
+        t.notes.append(f"{source}: unreadable {account}/{os.path.basename(path)}: {error}")
+        walked.append((path, account, None, False))
+        continue
+      entry = (cache.lookup_sig(cache_key, path, [st.st_mtime_ns, st.st_size])
+               if cache is not None else None)
       hit = entry is not None
       if entry is None:
         try:
           entry, nbytes = parse(path)
         except OSError as exc:
-          t.notes.append(f"{source}: unreadable {account}/{path.name}: {exc}")
-          walked.append((str(path), account, None, False))
+          t.notes.append(f"{source}: unreadable {account}/{os.path.basename(path)}: {exc}")
+          walked.append((path, account, None, False))
           continue
         t.scanned_bytes += nbytes
         if cache is not None:
-          cache.store(cache_key, path, entry)
-      state_key = (source, account, str(path))
+          cache.store_sig(cache_key, path, entry)
+      state_key = (source, account, path)
       order[state_key] = len(order)
-      walked.append((str(path), account, entry, hit))
+      walked.append((path, account, entry, hit))
   return walked, order
 
 
@@ -734,7 +727,7 @@ def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) 
       f"{entry_dupes + n_records - distinct:,} replayed lines skipped")
 
 
-def _codex_file_contribution(path: Path) -> tuple[dict, int]:
+def _codex_file_contribution(path: str) -> tuple[dict, int]:
   """Parse one Codex rollout jsonl into its cache entry; return (entry, bytes read)."""
   # Every record the tally reads (session_meta, turn_context, token_count) serializes
   # its type as a quoted literal in the raw line, so the substring filter cannot skip a

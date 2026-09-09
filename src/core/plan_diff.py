@@ -476,6 +476,17 @@ def _first_descendant(node: _Node, tag: str) -> _Node | None:
   return None
 
 
+def _first_class_descendant(node: _Node, class_name: str) -> _Node | None:
+  for child in node.children:
+    if isinstance(child, _Node):
+      if class_name in (child.attrs.get("class") or "").split():
+        return child
+      found = _first_class_descendant(child, class_name)
+      if found is not None:
+        return found
+  return None
+
+
 def _add_insertion(insertions: dict[int, list[str]], offset: int, value: str) -> None:
   insertions.setdefault(offset, []).append(value)
 
@@ -798,7 +809,11 @@ def _append_style_and_header(source: str) -> str:
     offset = body.start if body is not None and body.start is not None else 0
     _add_insertion(insertions, offset, style_tag)
   if body is not None and body.start_end is not None:
-    offset = body.start_end
+    # Artifact genres share the body{padding} + .wrap{max-width;margin:auto} chrome, so a
+    # header outside the wrapper spans full width while the column does not.
+    root = _document_root(_parse(source))
+    target = _first_class_descendant(root, "wrap") or _first_descendant(root, "main")
+    offset = target.start_end if target is not None else body.start_end
   else:
     offset = len(source)
   header = f'<div class="cbd-header" data-cbd-header="{_html.escape(_HEADER_TEXT, quote=True)}"></div>'

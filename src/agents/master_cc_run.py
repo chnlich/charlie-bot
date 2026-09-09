@@ -120,8 +120,8 @@ class _RunTimingTracker:
       self._saw_result = True
       usage = event.get("usage")
       if isinstance(usage, dict) and all(
-          usage.get(k, 0) == 0
-          for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")):
+          usage.get(k, 0) == 0 for k in (ET.USAGE_INPUT_TOKENS, ET.USAGE_OUTPUT_TOKENS,
+                                         ET.USAGE_CACHE_READ_INPUT_TOKENS, ET.USAGE_CACHE_CREATION_INPUT_TOKENS)):
         self._saw_zero_usage = True
 
     # Fresh-path evidence channel for the manual-compaction observation (the

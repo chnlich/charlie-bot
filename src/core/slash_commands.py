@@ -3,6 +3,7 @@
 import asyncio
 import signal
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 import structlog
@@ -110,10 +111,18 @@ async def execute_shell_command(
   }
 
 
+class SlashDispatchKind(StrEnum):
+  """Dispatch outcome of a slash command; every ``SlashDispatchResult.kind`` is one of these."""
+  NOT_FOUND = 'not_found'
+  SHELL_RESULT = 'shell_result'
+  PROMPT = 'prompt'
+  ERROR = 'error'
+
+
 @dataclass
 class SlashDispatchResult:
   """Result of dispatching a slash command."""
-  kind: str  # 'not_found', 'shell_result', 'prompt', 'error'
+  kind: SlashDispatchKind
   command: SlashCommand | None = None
   shell_result: dict | None = None  # {stdout, stderr, exit_code}
   substituted_prompt: str | None = None
@@ -130,28 +139,34 @@ async def dispatch_slash_command(
 
   For shell commands: runs the command and returns the result.
   For prompt commands: substitutes args and returns the prompt text.
-  Returns kind='not_found' if the command doesn't exist in the registry.
+  Returns ``SlashDispatchKind.NOT_FOUND`` if the command doesn't exist in the registry.
   """
   commands = {c.name: c for c in await asyncio.to_thread(load_slash_commands)}
   cmd = commands.get(name)
   if cmd is None:
-    return SlashDispatchResult(kind='not_found')
+    return SlashDispatchResult(kind=SlashDispatchKind.NOT_FOUND)
 
   if cmd.scope == 'shell':
     if not cmd.command:
       log.warning('slash_shell_missing_command_template', name=name)
-      return SlashDispatchResult(kind='error', command=cmd, error=f'Command /{name} has no command template configured')
+      return SlashDispatchResult(
+          kind=SlashDispatchKind.ERROR, command=cmd, error=f'Command /{name} has no command template configured')
     result = await execute_shell_command(
         cmd_template=cmd.command, args=args, session_dir=session_dir, timeout=cmd.timeout, cwd=cmd.cwd)
-    return SlashDispatchResult(kind='shell_result', command=cmd, shell_result=result)
+    return SlashDispatchResult(kind=SlashDispatchKind.SHELL_RESULT, command=cmd, shell_result=result)
 
   if cmd.scope == 'prompt':
     if not cmd.prompt:
       log.warning('slash_prompt_missing_template', name=name)
-      return SlashDispatchResult(kind='error', command=cmd, error=f'Command /{name} has no prompt template configured')
+      return SlashDispatchResult(
+          kind=SlashDispatchKind.ERROR, command=cmd, error=f'Command /{name} has no prompt template configured')
     substituted = cmd.prompt.replace('{args}', args)
     return SlashDispatchResult(
-        kind='prompt', command=cmd, substituted_prompt=substituted, claude_code_flags=cmd.claude_code_flags or None)
+        kind=SlashDispatchKind.PROMPT,
+        command=cmd,
+        substituted_prompt=substituted,
+        claude_code_flags=cmd.claude_code_flags or None)
 
   log.warning('slash_unknown_scope', name=name, scope=cmd.scope)
-  return SlashDispatchResult(kind='error', command=cmd, error=f'Unknown scope for command /{name}: {cmd.scope}')
+  return SlashDispatchResult(
+      kind=SlashDispatchKind.ERROR, command=cmd, error=f'Unknown scope for command /{name}: {cmd.scope}')

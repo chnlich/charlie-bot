@@ -63,7 +63,7 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
 
   channel, broadcast_event = mock_broadcast.await_args.args
   assert channel == f"session:{session.id}"
-  # Raw user events are no longer broadcast; the per-session aggregator emits a
+  # Raw user events are not broadcast; the per-session aggregator emits a
   # `message` delta carrying the same payload, which is what the client renders.
   assert broadcast_event == {"type": "message", "message": expected_message}
 

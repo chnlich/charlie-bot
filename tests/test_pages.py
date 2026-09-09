@@ -145,9 +145,9 @@ async def test_token_usage_viewer_clears_inflight_task_after_render(monkeypatch:
 async def test_token_usage_inline_script_parses(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """The page's inline script must be valid JavaScript.
 
-  A bare `window_str` interpolation (a string containing spaces and a non-ASCII arrow) used to
-  be emitted unquoted, breaking script parse and leaving charts and table empty on every load.
-  This asserts the script parses under `node --check`, not that a literal string is present.
+  A bare `window_str` interpolation (a string containing spaces and a non-ASCII arrow) emitted
+  unquoted breaks script parse and leaves charts and the table empty on every load. This asserts
+  the script parses under `node --check`, not that a literal string is present.
   """
   # Window string deliberately carries spaces and a `→` so an unquoted interpolation breaks.
   tally = TokenTally(

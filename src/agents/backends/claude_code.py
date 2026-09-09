@@ -17,6 +17,16 @@ from src.core.process import kill_process_group
 
 log = structlog.get_logger()
 
+# Disable Claude Code tools that are unsafe in CharlieBot headless one-shot mode.
+# Besides scheduling/monitoring (scheduling tools are no-ops in -p mode, and Monitor
+# can create false recall expectations after external waits), this also blocks Claude
+# Code's subagent dispatch (Agent), workflow (Workflow), task system (Task*), and agent
+# comms (SendMessage/ListAgents) so the model routes async/background work through
+# CharlieBot's schedule-trigger / delegate mechanism instead.
+HEADLESS_DISALLOWED_TOOLS = (
+    "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,"
+    "TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents")
+
 BASE_COMMAND: list[str] = [
     "claude",
     "-p",
@@ -24,14 +34,8 @@ BASE_COMMAND: list[str] = [
     "stream-json",
     "--verbose",
     SKIP_PERMISSIONS_FLAG,
-    # Disable Claude Code tools that are unsafe in CharlieBot headless one-shot mode.
-    # Besides scheduling/monitoring (scheduling tools are no-ops in -p mode, and Monitor
-    # can create false recall expectations after external waits), this also blocks Claude
-    # Code's subagent dispatch (Agent), workflow (Workflow), task system (Task*), and agent
-    # comms (SendMessage/ListAgents) so the model routes async/background work through
-    # CharlieBot's schedule-trigger / delegate mechanism instead.
     "--disallowed-tools",
-    "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents",
+    HEADLESS_DISALLOWED_TOOLS,
 ]
 
 # Subscription mode (cli_binary='claude-sub') drives an interactive `claude` TUI in

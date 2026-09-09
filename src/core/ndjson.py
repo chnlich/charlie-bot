@@ -158,27 +158,23 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
   return events, total, has_more
 
 
-def parse_ndjson_tail_parseable(path: Path, limit: int) -> list[dict]:
-  """Return the last *limit* parseable events of an NDJSON file, in file order.
+def iter_ndjson_events_from_end(path: Path, *, log_event: str, log_fields: dict[str, Any]) -> Iterator[dict]:
+  """Yield the JSON objects parsed from *path*, newest line first.
 
-  Same result as ``parse_ndjson_file(path)[-limit:]`` — blank and malformed
-  lines are skipped and never count toward *limit* — but reads only as many
-  trailing bytes as the limit needs: 512 KiB segments from the end walk lines
-  backwards, the segment's left-truncated first line carried into the next
-  older segment, stopping once they collect *limit* events or cover the whole
-  file. Callers that must see every line (exact prefixes, global ordinals)
-  keep ``parse_ndjson_file``; this reader is for the "last N of whatever
-  parsed" budget the worker-summary readers carry. A missing file returns
-  ``[]`` and *limit* <= 0 returns ``[]``.
+  Same skip contract as :func:`iter_ndjson_events` (a line that strips to
+  empty is invisible, a line the parser rejects logs and yields nothing).
+  512 KiB segments from the end walk lines backwards, the segment's
+  left-truncated first line carried into the next older segment, so a consumer
+  that stops early never reads the bytes past its answer. A missing file
+  yields nothing.
   """
-  collected: list[dict] = []
-  if limit <= 0 or not path.exists():
-    return collected
+  if not path.exists():
+    return
   with open(path, "rb") as f:
     f.seek(0, 2)
     pos = f.tell()
     carry = b""  # the current segment's left-truncated first line, completed by the next older segment
-    while pos > 0 and len(collected) < limit:
+    while pos > 0:
       start = max(0, pos - _TAIL_WINDOW_SIZE)
       f.seek(start)
       lines = (f.read(pos - start) + carry).split(b"\n")
@@ -188,11 +184,26 @@ def parse_ndjson_tail_parseable(path: Path, limit: int) -> list[dict]:
         lines = lines[1:]
       if lines and lines[-1] == b"":
         lines = lines[:-1]
-      for event in iter_ndjson_events(reversed(lines), log_event="ndjson_tail_parseable_skip", log_fields={}):
-        collected.append(event)
-        if len(collected) >= limit:
-          break
+      yield from iter_ndjson_events(reversed(lines), log_event=log_event, log_fields=log_fields)
       pos = start
+
+
+def parse_ndjson_tail_parseable(path: Path, limit: int) -> list[dict]:
+  """Return the last *limit* parseable events of an NDJSON file, in file order.
+
+  Same result as ``parse_ndjson_file(path)[-limit:]`` — blank and malformed
+  lines are skipped and never count toward *limit* — but reads only as many
+  trailing bytes as the limit needs (the from-the-end walk of
+  :func:`iter_ndjson_events_from_end`, stopped by *limit*). Callers that must
+  see every line (exact prefixes, global ordinals) keep ``parse_ndjson_file``;
+  this reader is for the "last N of whatever parsed" budget the worker-summary
+  readers carry. A missing file returns ``[]`` and *limit* <= 0 returns
+  ``[]``.
+  """
+  if limit <= 0:
+    return []
+  collected = list(
+      islice(iter_ndjson_events_from_end(path, log_event="ndjson_tail_parseable_skip", log_fields={}), limit))
   collected.reverse()
   return collected
 

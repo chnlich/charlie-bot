@@ -497,22 +497,22 @@ def _reset_aggregate_memo() -> None:
 _TAIL_WINDOW = 8192
 
 
-def _parse_lines(raw: bytes, markers: tuple[str, ...]) -> tuple[list[dict], int]:
-  """Parse complete newline-terminated lines out of *raw*, the way the file iteration does.
+def _parse_lines(fh, markers: tuple[str, ...]) -> tuple[list[dict], int, int]:
+  """Parse complete newline-terminated lines from *fh*'s current position to EOF.
 
-  Returns (objects, decoded-char bytes read). Only complete lines parse: a trailing fragment
-  without its newline is left for the round whose tail covers it whole. Decoding is
-  errors="replace" per line, so an undecodable byte drops its line instead of the file.
+  Returns (objects, decoded-char bytes read, consumed byte offset), objects in file order.
+  Only complete lines parse: a trailing fragment without its newline is left for the round
+  whose read covers it whole. Decoding is errors="replace" per line, so an undecodable byte
+  drops its line instead of the file.
   """
   objects: list[dict] = []
   nbytes = 0
-  pos = 0
-  while True:
-    nl = raw.find(b"\n", pos)
-    if nl == -1:
+  consumed = 0
+  for raw_line in fh:
+    if not raw_line.endswith(b"\n"):
       break
-    line = raw[pos:nl + 1].decode("utf-8", errors="replace")
-    pos = nl + 1
+    consumed += len(raw_line)
+    line = raw_line.decode("utf-8", errors="replace")
     nbytes += len(line)
     if not any(m in line for m in markers):
       continue
@@ -520,7 +520,7 @@ def _parse_lines(raw: bytes, markers: tuple[str, ...]) -> tuple[list[dict], int]
       objects.append(json.loads(line))
     except ValueError:
       continue
-  return objects, nbytes
+  return objects, nbytes, consumed
 
 
 def _prefiltered_jsonl(path: str, markers: tuple[str, ...]) -> tuple[list, list[dict], int, int]:
@@ -536,9 +536,8 @@ def _prefiltered_jsonl(path: str, markers: tuple[str, ...]) -> tuple[list, list[
   """
   st = os.stat(path)
   with open(path, "rb") as fh:
-    raw = fh.read()
-  objects, nbytes = _parse_lines(raw, markers)
-  return [st.st_mtime_ns, st.st_size], objects, nbytes, raw.rfind(b"\n") + 1
+    objects, nbytes, consumed = _parse_lines(fh, markers)
+  return [st.st_mtime_ns, st.st_size], objects, nbytes, consumed
 
 
 def _boundary_guard(path: str, end: int) -> list | None:
@@ -583,9 +582,8 @@ def _tail_parse(path: str, entry: dict, markers: tuple[str, ...]) -> tuple[list[
     if len(prefix) != window or prefix[-1:] != b"\n" or hashlib.sha256(prefix).hexdigest() != guard[1]:
       return None
     fh.seek(end)
-    raw = fh.read()
-  objects, nbytes = _parse_lines(raw, markers)
-  return objects, nbytes, [st.st_mtime_ns, st.st_size], end + raw.rfind(b"\n") + 1
+    objects, nbytes, consumed = _parse_lines(fh, markers)
+  return objects, nbytes, [st.st_mtime_ns, st.st_size], end + consumed
 
 
 def _claude_records(recs: list[dict], seen: set) -> tuple[list[list], int]:

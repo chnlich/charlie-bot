@@ -1386,8 +1386,8 @@ def test_append_tail_parses_a_completed_partial_line_once(tmp_path: Path) -> Non
   assert _row(after, "Claude Code", NAME).total == 117
 
 
-def test_append_tail_rejects_a_replaced_prefix(tmp_path: Path) -> None:
-  """A rewritten file whose suffix is preserved fails the guard and re-parses whole."""
+def test_append_tail_rejects_a_replaced_or_shrunk_file(tmp_path: Path) -> None:
+  """A rewrite the guard cannot prove — replaced prefix or shrink — re-parses whole."""
   claude = Claude(tmp_path)
   claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
@@ -1401,14 +1401,6 @@ def test_append_tail_rejects_a_replaced_prefix(tmp_path: Path) -> None:
   reference = _collect(claude, None, db)
   assert after.rows == reference.rows
   assert _row(after, "Claude Code", NAME).total == 29
-
-
-def test_append_tail_rejects_a_shrunk_file(tmp_path: Path) -> None:
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
-  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
-  _collect(claude, None, db, cache)
-  log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
   claude.write(claude.work, "sess1", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(3, 3))])
   after = _collect(claude, None, db, cache)
   reference = _collect(claude, None, db)

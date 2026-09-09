@@ -360,7 +360,7 @@ async def test_switch_pm_dedicated_session_writes_through_to_yaml_and_rotates(
   assert rotated["group"] == "the-group"
   assert rotated["scheduled_task"] == "pm_x"
 
-  # The yaml is the single control point: the backend key is now persisted.
+  # The yaml is the single control point, so the assertion reads it directly.
   assert _read_yaml(yaml_path)["backend"] == "claude-fable-5"
 
   # The old session is archived, the new one is the sole active dedicated one.

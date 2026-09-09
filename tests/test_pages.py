@@ -231,10 +231,13 @@ async def test_index_versions_local_static_assets(monkeypatch: pytest.MonkeyPatc
   )
 
   body = response.body.decode("utf-8")
-  assert response.context["static_asset_version"] == "abc1234-03-24"
-  assert 'href="/static/css/styles.css?v=abc1234-03-24"' in body
-  assert 'src="/static/js/sidebar/namespace.js?v=abc1234-03-24"' in body
-  assert 'src="/static/js/app.js?v=abc1234-03-24"' in body
+  version = pages._static_asset_version()
+  assert version.startswith("abc1234-03-24-")  # the git part, then the served tree's content digest
+  assert response.context["static_asset_version"] == version
+  assert f'href="/static/css/styles.css?v={version}"' in body
+  assert f'href="/static/css/tailwind.css?v={version}"' in body
+  assert f'src="/static/js/sidebar/namespace.js?v={version}"' in body
+  assert f'src="/static/js/app.js?v={version}"' in body
 
 
 @pytest.mark.asyncio
@@ -245,8 +248,9 @@ async def test_diff_viewer_versions_local_static_assets(monkeypatch: pytest.Monk
   response = await pages.diff_viewer(request=make_page_request("/diff"), cfg=cfg)
 
   body = response.body.decode("utf-8")
-  assert 'src="/static/js/diff_page.js?v=abc1234-03-24"' in body
-  assert 'src="/static/js/diff_comments.js?v=abc1234-03-24"' in body
+  version = pages._static_asset_version()
+  assert f'src="/static/js/diff_page.js?v={version}"' in body
+  assert f'src="/static/js/diff_comments.js?v={version}"' in body
 
 
 class PendingTriggerSessionManager(FakeSessionManager):

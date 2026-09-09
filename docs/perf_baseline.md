@@ -4879,21 +4879,21 @@ EOF
 ```
 
 M81 — chat math-walk, delimiter gate. `renderChatMath` runs the KaTeX auto-render walk over every
-`.prose-msg` on every message re-render (each session switch and page re-render) and the streamed
-paint runs it over the whole draft on every coalesced paint; the walk scans every prose text node
-for the four delimiters even when the message carries no math — M60's repeat-page metric and
-M33's replay stubbed exactly this walk, so neither standing number saw it. The gate skips the
-walk when the message's own source (the streamed draft text, else the `.prose-msg[data-raw]`
-source) carries none of the three delimiter initials (`$`, `\(`, `\[`), and any character
-reference (which the browser decodes into the walk's text nodes) forces it, so the skip is
-byte-identical. The cost is client-side, invisible to every HTTP probe, so the collector loads
-the checkout's real renderer code with the page's CDN-pinned katex 0.16.21 build over a jsdom DOM
-(one-time scratch install `npm i --prefix /tmp jsdom@24`, resolved through `JSDOM_HOME`,
-default /tmp/node_modules) and times the walk through the page's own call shapes over the live
-corpora (read-only): the worst message page (the M60 corpus — the 40 largest assistant bodies of
-the live chat file carrying the most bytes) and the largest math-free streamed draft at the
-coalesced paint cadence. Evidence points the collector at the before and after checkouts
-(`CHECKOUT` at each root), the same shape as the M33 protocol:
+`.prose-msg` on every message re-render and the streamed paint runs it over the whole draft on
+every coalesced paint; the walk scans every prose text node for the four delimiters even when the
+message carries no math — M60's repeat-page metric and M33's replay stubbed exactly this walk, so
+neither standing number saw it. The gate skips the walk when the message's own source (the
+streamed draft text, else the `.prose-msg[data-raw]` source) carries none of the three delimiter
+initials (`$`, `\(`, `\[`), and any character reference (which the browser decodes into the
+walk's text nodes) forces it, so the skip is byte-identical. The cost is client-side, invisible
+to every HTTP probe, so the collector loads the checkout's real renderer code with the page's
+CDN-pinned katex 0.16.21 build over a jsdom DOM (one-time scratch install
+`npm i --prefix /tmp jsdom@24`, resolved through `JSDOM_HOME`, default /tmp/node_modules) and
+times the walk through the page's own call shapes over the live corpora (read-only): the worst
+message page (the M60 corpus — the 40 largest assistant bodies of the live chat file carrying
+the most bytes) and the largest math-free streamed draft at the coalesced paint cadence. Evidence
+points the collector at the before and after checkouts (`CHECKOUT` at each root), the same shape
+as the M33 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node tests/katex_walk_collector.js

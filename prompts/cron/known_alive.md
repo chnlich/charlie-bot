@@ -284,8 +284,10 @@ Known-alive symbols:
   `skills/google-docs/SKILL.md`, `skills/linear/SKILL.md`, `skills/slack/SKILL.md`); the
   other eleven — `aigw_api_key`, `gemini_api_key`, `gemini_model`, `google_docs_client_id`,
   `google_docs_client_secret`, `google_docs_refresh_token`, the four `twitter_*` keys, and
-  `public_base_url` — have no in-repo script consumer (`gemini_api_key` surfaces only in
-  README/setup/template prose, `aigw_api_key` only in its own field comment). The four
+  `public_base_url` — have no in-repo script consumer (`gemini_api_key`'s remaining prose
+  surface is the token-usage page's coverage note, plus the config template's design note
+  through the `gemini_/` prefix set; `aigw_api_key` surfaces only in its own field
+  comment). The four
   `twitter_*` keys are read by the host-only `x-posting` skill, which is not mirrored into
   `skills/`, so no in-repo grep can reach it; they were deleted on zero-match evidence in
   PR #455 and that broke startup for every command going through `load_config()`. For this

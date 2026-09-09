@@ -113,7 +113,7 @@ for t in tasks:
         backend = f"unresolved: {e}"
     print(f"    - {t.name} | cron={t.cron} | tz={t.timezone} | backend={backend}")
 PY
-echo "  Reminder: fill in secret keys gemini_api_key and charliebot_access_key before first start."
+echo "  Reminder: fill in the secret key charliebot_access_key before first start."
 
 # Smoke-check the Claude Code backend command for headless-unsafe tools.
 echo "==> Checking Claude Code backend tools"

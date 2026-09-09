@@ -68,7 +68,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 ```bash
 ./scripts/setup.sh   # sync skills, provision ~/.charliebot/, seed repo-default cron tasks
-# fill in secrets in ~/.charliebot/config.yaml: gemini_api_key, charliebot_access_key
+# fill in the secret in ~/.charliebot/config.yaml: charliebot_access_key
 ./scripts/start-server.sh
 ```
 

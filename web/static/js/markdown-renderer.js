@@ -482,7 +482,21 @@ function flushDeferredCodeHighlights() {
   }
 }
 
-function renderChatMath(el) {
+// KaTeX auto-render can only transform text around its four configured
+// delimiters, and every one of them starts with '$', '\(' or '\[' — characters
+// marked never synthesizes and escapeHtml never adds or removes. A source
+// carrying none of the three renders byte-identically without the walk, which
+// scans every prose text node per paint and per message re-render.
+function hasMathDelimiter(text) {
+  return text.indexOf('$') !== -1 || text.indexOf('\\(') !== -1 || text.indexOf('\\[') !== -1;
+}
+
+function renderChatMath(el, sourceText) {
+  // The walk's source: the streamed paint passes the draft text; message
+  // renders fall to data-raw, the message's own source. An element with
+  // neither (raw backend output) keeps the unconditional walk.
+  const raw = typeof sourceText === 'string' ? sourceText : el.dataset && el.dataset.raw;
+  if (typeof raw === 'string' && !hasMathDelimiter(raw)) return;
   // throwOnError:false keeps stray dollar amounts ("$5 ... $10") from
   // breaking the whole bubble — invalid math renders as red inline text.
   renderMathInElement(el, {

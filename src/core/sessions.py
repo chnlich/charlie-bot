@@ -185,13 +185,13 @@ def _apply_sidebar_state(
   for meta in sessions:
     entry = derived[meta.id]
     if include_running_status:
-      meta.has_running_tasks = entry["has_running_tasks"]
+      meta.has_running_tasks = entry[sidebar_state.HAS_RUNNING_TASKS]
     if include_pending_trigger_status:
-      meta.has_pending_trigger = entry["has_pending_trigger"]
-      meta.pending_trigger_count = entry["pending_trigger_count"]
-      meta.next_trigger_at = entry["next_trigger_at"]
+      meta.has_pending_trigger = entry[sidebar_state.HAS_PENDING_TRIGGER]
+      meta.pending_trigger_count = entry[sidebar_state.PENDING_TRIGGER_COUNT]
+      meta.next_trigger_at = entry[sidebar_state.NEXT_TRIGGER_AT]
     if include_pending_plan_approval:
-      meta.has_pending_plan_approval = entry["has_pending_plan_approval"]
+      meta.has_pending_plan_approval = entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL]
 
 
 # ---------------------------------------------------------------------------
@@ -497,10 +497,10 @@ def probe_sidebar_state_sync(
         dir_sig=inputs.trigger_dir_sig if inputs else None,
     )
     results[session_id] = {
-        "thread_running": running,
-        "pending_trigger_count": pending_count,
-        "next_trigger_at": next_trigger_at,
-        "has_pending_plan_approval": has_pending_plan_approval_sync(plans_path, session_id),
+        sidebar_state.THREAD_RUNNING: running,
+        sidebar_state.PENDING_TRIGGER_COUNT: pending_count,
+        sidebar_state.NEXT_TRIGGER_AT: next_trigger_at,
+        sidebar_state.HAS_PENDING_PLAN_APPROVAL: has_pending_plan_approval_sync(plans_path, session_id),
     }
   return results
 
@@ -2426,13 +2426,13 @@ class SessionManager:
     for meta in archived_sessions:
       entry: dict = {}
       if include_running_status:
-        entry["has_running_tasks"] = False
+        entry[sidebar_state.HAS_RUNNING_TASKS] = False
       if include_pending_trigger_status:
-        entry["has_pending_trigger"] = False
-        entry["pending_trigger_count"] = 0
-        entry["next_trigger_at"] = None
+        entry[sidebar_state.HAS_PENDING_TRIGGER] = False
+        entry[sidebar_state.PENDING_TRIGGER_COUNT] = 0
+        entry[sidebar_state.NEXT_TRIGGER_AT] = None
       if include_pending_plan_approval:
-        entry["has_pending_plan_approval"] = False
+        entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL] = False
       derived[meta.id] = entry
 
     if not active_sessions:
@@ -2477,13 +2477,13 @@ class SessionManager:
       probed = sidebar_state.required_snapshot_entry(meta.id)
       entry = {}
       if include_running_status:
-        entry["has_running_tasks"] = bool(busy_since(meta.id)) or bool(probed["thread_running"])
+        entry[sidebar_state.HAS_RUNNING_TASKS] = bool(busy_since(meta.id)) or bool(probed[sidebar_state.THREAD_RUNNING])
       if include_pending_trigger_status:
-        entry["has_pending_trigger"] = probed["pending_trigger_count"] > 0
-        entry["pending_trigger_count"] = probed["pending_trigger_count"]
-        entry["next_trigger_at"] = probed["next_trigger_at"]
+        entry[sidebar_state.HAS_PENDING_TRIGGER] = probed[sidebar_state.PENDING_TRIGGER_COUNT] > 0
+        entry[sidebar_state.PENDING_TRIGGER_COUNT] = probed[sidebar_state.PENDING_TRIGGER_COUNT]
+        entry[sidebar_state.NEXT_TRIGGER_AT] = probed[sidebar_state.NEXT_TRIGGER_AT]
       if include_pending_plan_approval:
-        entry["has_pending_plan_approval"] = bool(probed["has_pending_plan_approval"])
+        entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL] = bool(probed[sidebar_state.HAS_PENDING_PLAN_APPROVAL])
       derived[meta.id] = entry
     return derived
 

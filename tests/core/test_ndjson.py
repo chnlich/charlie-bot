@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from core.byte_count_open import install_byte_counting_open
 from src.core.ndjson import (
     _COUNT_MEMO_LIMIT,
     _TAIL_WINDOW_SIZE,
@@ -268,38 +269,11 @@ def test_iter_ndjson_events_from_end_reads_only_the_tail_window(
       f.write((json.dumps({"i": i, "blob": "x" * 14000}) + "\n").encode())
     f.write((json.dumps({"i": "answer"}) + "\n").encode())
 
-  read_bytes = 0
-  real_open = open
-
-  def counting_open(file, mode="r", *args, **kwargs):
-    real = real_open(file, mode, *args, **kwargs)
-    if mode != "rb":
-      return real
-
-    class CountingReader:
-
-      def __getattr__(self, name):
-        return getattr(real, name)
-
-      def __enter__(self):
-        return self
-
-      def __exit__(self, *exc):
-        return real.__exit__(*exc)
-
-      def read(self, size=-1):
-        nonlocal read_bytes
-        data = real.read(size)
-        read_bytes += len(data)
-        return data
-
-    return CountingReader()
-
-  monkeypatch.setattr("builtins.open", counting_open)
+  read_bytes = install_byte_counting_open(monkeypatch)
   walk = iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={})
   assert next(walk) == {"i": "answer"}
   walk.close()
-  assert 0 < read_bytes <= _TAIL_WINDOW_SIZE
+  assert 0 < sum(read_bytes) <= _TAIL_WINDOW_SIZE
 
 
 def _spy_opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:

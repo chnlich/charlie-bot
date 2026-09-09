@@ -144,12 +144,14 @@ def test_merge_core_id_contract(tmp_path: Path) -> None:
     events = json.load(merged_file)["traceEvents"]
 
   assert [e["name"] for e in events if e.get("ph") == "X"] == ["a", "gpu", "b"]
-  # process_labels is dropped; the non-process M event and the walk's thread_name stay.
-  metas = [e["name"] for e in events if e.get("ph") == "M" and "name" in e]
+  # The input's process_labels is dropped: no M event carries a raw input pid
+  # (the walk's own synthetic meta M events carry the synthetic pid instead).
+  assert not [e for e in events if e.get("ph") == "M" and e.get("pid") in (7, "7")]
   # The walk emits one thread_name per distinct original tid per trace — the
   # input's own thread_name M event passes through beside them.
-  walk_named = sorted(e["args"]["name"] for e in events
-                      if e.get("ph") == "M" and e.get("name") == "thread_name" and e.get("args", {}).get("name") != "t0")
+  walk_named = sorted(
+      e["args"]["name"] for e in events
+      if e.get("ph") == "M" and e.get("name") == "thread_name" and e.get("args", {}).get("name") != "t0")
   assert walk_named == ["rank0/1", "rank1/1"]
   # Both pid forms of rank0 remap to the one labeled synthetic pid; rank1
   # carries no label event, so its events take the bare rank label.

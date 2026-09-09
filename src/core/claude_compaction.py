@@ -118,7 +118,7 @@ def _boundary_rows(transcript: Path) -> list[dict]:
         row = json.loads(line)
       except ValueError:
         continue
-      if isinstance(row, dict) and row.get("subtype") == "compact_boundary":
+      if isinstance(row, dict) and row.get("subtype") == ET.COMPACT_BOUNDARY:
         rows.append(row)
   return rows
 

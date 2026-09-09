@@ -125,7 +125,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .latex-toggle-active { background: rgba(37, 99, 235, 0.2); color: #93c5fd; }
 /* HTML artifact iframe cards */
 .html-artifact { margin: 0.5rem 0; }
-.html-artifact-toolbar {
+/* One toolbar shape for the inline card and the fullscreen modal. */
+.html-artifact-toolbar,
+.html-artifact-modal-toolbar {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -133,6 +135,10 @@ body.resizing { cursor: col-resize; user-select: none; }
   font-size: 0.75rem;
   color: #94a3b8;
   background: rgba(15, 23, 42, 0.5);
+}
+/* Only the card toolbar frames the iframe below it; the modal toolbar floats
+   over the overlay, so no border and no max-width cap. */
+.html-artifact-toolbar {
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-bottom: none;
   border-radius: 0.5rem 0.5rem 0 0;
@@ -143,9 +149,11 @@ body.resizing { cursor: col-resize; user-select: none; }
   border-bottom: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 0.5rem;
 }
-.html-artifact-toolbar .filename { font-weight: 500; color: #cbd5e1; }
+.html-artifact-toolbar .filename,
+.html-artifact-modal-toolbar .filename { font-weight: 500; color: #cbd5e1; }
 .html-artifact-toolbar a,
-.html-artifact-toolbar button {
+.html-artifact-toolbar button,
+.html-artifact-modal-toolbar button {
   color: #60a5fa;
   cursor: pointer;
   background: none;
@@ -154,7 +162,8 @@ body.resizing { cursor: col-resize; user-select: none; }
   font-size: inherit;
 }
 .html-artifact-toolbar a:hover,
-.html-artifact-toolbar button:hover { text-decoration: underline; }
+.html-artifact-toolbar button:hover,
+.html-artifact-modal-toolbar button:hover { text-decoration: underline; }
 .html-artifact-frame { display: block; width: 100%; }
 .html-artifact-frame-wrap {
   display: grid;
@@ -263,26 +272,9 @@ body.resizing { cursor: col-resize; user-select: none; }
   flex-direction: column;
   overflow: hidden;
 }
-.html-artifact-modal-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
-  color: #94a3b8;
-  background: rgba(15, 23, 42, 0.5);
-}
-.html-artifact-modal-toolbar .filename { font-weight: 500; color: #cbd5e1; }
-.html-artifact-modal-toolbar button {
-  margin-left: auto;
-  color: #60a5fa;
-  cursor: pointer;
-  background: none;
-  border: none;
-  padding: 0;
-  font-size: inherit;
-}
-.html-artifact-modal-toolbar button:hover { text-decoration: underline; }
+/* The modal's single Close button right-aligns; the card toolbar's controls
+   keep natural order. */
+.html-artifact-modal-toolbar button { margin-left: auto; }
 .html-artifact-modal-content > iframe {
   flex: 1;
   width: 100%;

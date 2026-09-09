@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-from src.core.verify_trailer import verify_result_trailer_error
+from src.api.message_utils import extract_text_from_message
+from src.core.verify_trailer import _resolve_final_report, verify_result_trailer_error
 
 EMPTY_ERROR = "Verifier final report is empty; expected a final `RESULT: (?:clean|[1-9][0-9]* mismatch(?:es)? \\([0-9]+ approval\\))` line."
 MALFORMED_ERROR = (
@@ -35,3 +39,96 @@ def test_valid_report_passes(report: str) -> None:
     ])
 def test_invalid_report_reports_the_error(report: str, error: str) -> None:
   assert verify_result_trailer_error(report) == error
+
+
+# ---------------------------------------------------------------------------
+# read_verify_final_report's from-the-end resolve walk
+# ---------------------------------------------------------------------------
+
+
+def _reference_report(events_path: Path) -> str:
+  """The whole-list walk the from-the-end resolve must reproduce verbatim."""
+  events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+  for ev in reversed(events):
+    if ev.get("type") != "result":
+      continue
+    result = ev.get("result")
+    if isinstance(result, str) and result.strip():
+      return result
+    break
+  for ev in reversed(events):
+    if ev.get("type") != "assistant":
+      continue
+    message = ev.get("message") if isinstance(ev.get("message"), dict) else None
+    text = extract_text_from_message(message)
+    if text.strip():
+      return text
+  return ""
+
+
+def _assistant_event(text: str) -> dict:
+  return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def _corpus_cases() -> dict[str, list[dict]]:
+  assistant = _assistant_event
+  return {
+      "result_payload_at_tail": [assistant("checked"), {
+          "type": "result",
+          "result": "done\nRESULT: clean"
+      }],
+      "empty_payload_falls_back_newer_assistant":
+          [
+              assistant("older"),
+              {
+                  "type": "result",
+                  "result": ""
+              },
+              assistant("newer"),
+          ],
+      "non_string_payload_falls_back": [assistant("the text"), {
+          "type": "result",
+          "result": {
+              "code": 0
+          }
+      }],
+      "no_result_event": [assistant("first"), {
+          "type": "tool_result",
+          "content": "x"
+      }, assistant("second")],
+      "assistant_after_result": [
+          assistant("before"),
+          {
+              "type": "result",
+              "result": "kept"
+          },
+          assistant("after"),
+      ],
+      "empty_assistant_between": [
+          assistant(""),
+          {
+              "type": "result",
+              "result": ""
+          },
+          assistant("  "),
+          assistant("real"),
+      ],
+      "neither_shape": [{
+          "type": "tool_result",
+          "content": "x"
+      }],
+  }
+
+
+@pytest.mark.parametrize("case", sorted(_corpus_cases()))
+def test_resolve_final_report_matches_whole_list_walk(tmp_path: Path, case: str) -> None:
+  events_path = tmp_path / "events.jsonl"
+  events_path.write_text("".join(json.dumps(e) + "\n" for e in _corpus_cases()[case]), encoding="utf-8")
+  assert _resolve_final_report(events_path) == _reference_report(events_path)
+
+
+def test_resolve_final_report_missing_file_and_empty_log(tmp_path: Path) -> None:
+  assert _resolve_final_report(tmp_path / "absent.jsonl") == ""
+  events_path = tmp_path / "events.jsonl"
+  events_path.write_text("", encoding="utf-8")
+  assert _resolve_final_report(events_path) == ""

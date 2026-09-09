@@ -7,10 +7,11 @@ about the plan registry; the dependency direction is spawner -> verify_trailer.
 
 import asyncio
 import re
+from pathlib import Path
 
 from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
-from src.core.ndjson import parse_ndjson_file
+from src.core.ndjson import iter_ndjson_events_from_end
 from src.core.threads import ThreadManager
 
 # ---------------------------------------------------------------------------
@@ -22,26 +23,46 @@ VERIFY_RESULT_TRAILER_EXPECTED = f"`{VERIFY_RESULT_TRAILER_RE.pattern}`"
 
 
 async def read_verify_final_report(session_id: str, thread_id: str, thread_mgr: ThreadManager) -> str:
-  """Read the verifier's complete final result, falling back to its last assistant text."""
+  """Read the verifier's complete final result, falling back to its last assistant text.
+
+  The report is the log's last ``result`` event's payload when it carries
+  non-empty text; every other shape (no result event, an empty payload) falls
+  back to the last assistant event with non-empty text, and a log with neither
+  reads as empty. Both judgments are one from-the-end walk
+  (:func:`src.core.ndjson.iter_ndjson_events_from_end`) resolved in one thread
+  hop, so a verify finalize reads only the trailing bytes its answer needs —
+  the RESULT event sits at the log tail — instead of parsing the whole file.
+  """
   events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  events = await asyncio.to_thread(parse_ndjson_file, events_path)
+  return await asyncio.to_thread(_resolve_final_report, events_path)
 
-  for ev in reversed(events):
-    if ev.get("type") != ET.RESULT:
-      continue
-    result = ev.get("result")
-    if isinstance(result, str) and result.strip():
-      return result
-    break
 
-  for ev in reversed(events):
-    if ev.get("type") != ET.ASSISTANT:
-      continue
-    message = ev.get("message") if isinstance(ev.get("message"), dict) else None
-    text = extract_text_from_message(message)
-    if text.strip():
-      return text
-  return ""
+def _resolve_final_report(events_path: Path) -> str:
+  """One from-the-end pass deciding the report: the last result event's payload, else the last assistant text.
+
+  ``result`` judgment: the first result event from the end decides — a usable
+  payload returns, an empty one hands the answer to the assistant fallback,
+  exactly the whole-list walk's first-hit-then-break rule. The assistant
+  fallback tracks the first non-empty assistant text from the end
+  opportunistically, so the walk stops the moment either judgment resolves.
+  """
+  assistant_text: str | None = None
+  seen_result = False
+  for event in iter_ndjson_events_from_end(events_path, log_event="ndjson_parse_skip", log_fields={}):
+    event_type = event.get("type")
+    if assistant_text is None and event_type == ET.ASSISTANT:
+      message = event.get("message") if isinstance(event.get("message"), dict) else None
+      text = extract_text_from_message(message)
+      if text.strip():
+        assistant_text = text
+    if not seen_result and event_type == ET.RESULT:
+      seen_result = True
+      result = event.get("result")
+      if isinstance(result, str) and result.strip():
+        return result
+      if assistant_text is not None:
+        return assistant_text
+  return assistant_text or ""
 
 
 def _normalize_line(line: str) -> str:

@@ -94,6 +94,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M82 worker events-log append, per event | M82 collector below | seconds per append of one probe event to a scratch worker log, the run's held-handle shape | median < 0.0002 s | — (introduced with its first history row) |
 | M83 versioned static-asset revalidation, warm page load | M83 collector below | seconds per revalidation request (If-None-Match) per asset over the dashboard's template-referenced asset set; the warm-cache revalidation-request count the page load issues | revalidate median < 0.002 s per asset; 0 revalidation requests per warm page load | — (introduced with its first history row) |
 | M84 backend stream-line parse, worst on-disk raw log | M84 collector below | seconds per full replay of the raw-log tail-follow loop and the stdout-stream NDJSON funnel over the worst on-disk raw agent log (scratch copy, live home read-only) | tail-follow median < 0.060 s; stdout-stream median < 0.010 s | — (introduced with its first history row) |
+| M85 verify-finalize report read, steady state | M85 collector below | seconds per `read_verify_final_report` call, worst on-disk worker log | median < 0.005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -5198,10 +5199,61 @@ asyncio.run(main())
 EOF
 ```
 
+M85 — verify-finalize report read, steady state. Every verify worker's finalize chain
+(`spawner_finalize._verify_report_for_task`, on the worker finalize and again on the
+startup-reconcile replay) runs `read_verify_final_report` over the verify thread's events
+log, and the pre-fix reader full-parsed the whole log (`parse_ndjson_file`) to scan its
+last events — ~13.5 ms on the 6.7 MB worst on-disk log — although the RESULT event the
+report quotes sits at the log tail on every on-disk verify thread. The fixed reader walks
+512 KiB segments from the end through `iter_ndjson_events_from_end` (the M31
+`parse_ndjson_tail_parseable` mechanics, now the shared generator under it), resolving the
+report the moment the last result event's payload or the first non-empty assistant text
+from the end appears — identical output, blank and malformed lines never counting in
+either form. The cost is finalize-path thread time invisible to HTTP probes, so the
+collector times the function the finalize chain awaits over the largest on-disk worker
+log (read-only), from the checkout under test: one cold pass, as at first finalize after
+a server start, then five timed calls. Evidence while the live server runs older code
+points the same collector at the branch checkout (`CHECKOUT` at the worktree root), the
+same shape as the M7 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.threads import ThreadManager
+from src.core.verify_trailer import read_verify_final_report
+
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for p in root.glob("*/threads/*/data/events.jsonl"):
+    n = p.stat().st_size
+    if n > best_n:
+        best, best_n = p, n
+SID, TID = best.parts[-5], best.parts[-3]
+
+async def main():
+    thread_mgr = ThreadManager(CharlieBotConfig(charliebot_home=Path.home() / ".charliebot"))
+    report = await read_verify_final_report(SID, TID, thread_mgr)  # cold pass, as at first finalize after a server start; not timed
+    times = []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        report = await read_verify_final_report(SID, TID, thread_mgr)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    print(f"{best_n / 1e6:.1f} MB worker log, report {len(report)} chars; "
+          f"read_verify_final_report median {times[2]*1000:.1f} ms, max {times[-1]*1000:.1f} ms over 5")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-09 | this PR | M85 verify-finalize report read median 14.4/13.5 → 0.4/0.4 ms, −97 %, maxima 29.6-31.8 → 0.6-0.7 ms (three interleaved rounds of the new collector — one sequential then two back-to-back interleaved main-before/branch-after, 6.7 MB / 2315-event worst on-disk worker log of session 47ff1e6c thread c8eb0a1e, live home read-only, every paired round faster at load 2.0-3.3; report output identical 2487 chars in all arms; no-regression re-measures interleaved ×2: M31 events-summary read 0.0006/0.0007 → 0.0006/0.0006 s median, maxima 0.0009-0.0010 both arms; 4915-passed suite plus 10 new from-the-end walk and resolve-parity tests) | the verify finalize chain's report read full-parsed the thread's whole events log (`parse_ndjson_file`) to scan its last events — the M31 pathology's one uncovered sibling — although the RESULT event the report quotes sits at the log tail on every on-disk verify thread; the read now resolves through `iter_ndjson_events_from_end`, a new from-the-end generator sharing the M31 segment mechanics (512 KiB segments walked backward, the left-truncated first line carried into the next older segment), and `parse_ndjson_tail_parseable` re-homes on the same generator — one home for the from-the-end walk, its last-N consumer unchanged and pinned by its standing tests; the walk stops the moment the last result event's payload or the first non-empty assistant text from the end resolves, so a whole-file walk survives only for a log that carries neither shape; M85 definition and healthy range introduced with this PR |
 | 2026-09-09 | this PR | M84 tail-follow replay median 39.1/36.5/38.3 → 29.9/29.8/29.6 ms, −18 % to −24 %, maxima 40.1/37.0/39.4 → 32.8/30.0/29.9 ms; stdout-stream replay median 14.8/14.7/14.7 → 5.1/5.0/5.3 ms, −64 % to −66 %, maxima 15.0-17.6 → 5.2-5.4 ms (five interleaved rounds of the new collector — three sequential then two back-to-back interleaved main-before/branch-after, 9.9 MB / 391-line worst on-disk raw agent log of session 4fcd4c43, scratch copy per round, live home read-only, every paired round faster at load 1.0-3.2; parser parity 0 divergences over all 391 lines in every round — stdlib json and orjson agree on the whole corpus; 4889-passed suite plus 4 new stream-funnel contract tests) | the backend stream funnels — the raw-log tail-follow loop (the live and re-attach read side of every covered backend's streamed turn), the spawned-stdout NDJSON reader, the opencode SSE payload reader, and the anthropic proxy's upstream chunk reader — parsed every stream line with stdlib json.loads while orjson parses the same lines ~2x faster (the M78 file-read funnel's measured ratio; this corpus: stdout-stream −65 %); the swap covers the four funnels with the skip contract unchanged (a malformed line yields nothing in the tail/stdout readers, raises in the SSE/proxy readers where it always raised), and the boundary follows the M78 file readers' deliberate precedent: the stdlib NaN/Infinity extensions and double-overflow floats now skip as malformed in the tail/stdout funnels and fail the frame loudly in the SSE/proxy readers — machine-written upstream JSON carries none of those literals, pinned by the NaN contract test and the collector's corpus parity check; M84 definition and healthy range introduced with this PR |
 | 2026-09-09 | this PR | M82 worker events-log append median 140/140/146 us → 71/72/90 us, −49 % to −51 %, maxima 183-384 us → 96-123 us (three interleaved rounds of the new collector, 50 timed appends after 5 warm on a scratch worker log under /tmp, live home untouched, main checkout before vs branch worktree after back-to-back at load 2.66/2.58/2.38, every paired round faster; component check: one to_thread no-op round-trip is ~67-104 us on this host, the M34/M52 rows' figure, so the pair's second hop was the whole gap); 4880-passed suite | the worker's per-event events-log append rode aiofiles' write+flush pair — two executor round-trips per streamed event (text delta, tool use, tool result, thinking) on the default pool every poll read, chat append, and probe shares; the run now holds one raw O_APPEND fd and each event lands through one asyncio.to_thread hop around a write-all loop (the same short-write contract as append_ndjson), with no durability change — the events log is a diagnostic stream and carried no fdatasync (aiofiles flush is not fsync); the fd is held for the run because a worker's events log is append-only and nothing rewrites or replaces it mid-run (only chat files archive); M82 definition and healthy range introduced with this PR |
 | 2026-09-09 | this PR | M81 page re-render wall 33.13/33.64/31.08 → 0.87/1.20/0.95 ms, −97 %, 40 → 0 walks (three interleaved rounds of the new collector, 40 math-free bodies / 57.6 KB / corpus sha1 7409bcd20e4c of the 36.3 MB worst live chat file, katex 0.16.21 over jsdom, main checkout before vs branch worktree after back-to-back at load 3.0-3.4, every paired round faster, page innerHTML parity true every round); streamed math-free draft (11.4 KB, sha1 b155f860788f — the M54 corpus) 13 paints: walk wall 4.29/4.52/5.08 → 0.00/0.00/0.00 ms; 4877-passed suite plus the 7-case gate suite registered in _NODE_TESTS | the chat's KaTeX auto-render walk scanned every prose text node for the four delimiters on every message re-render (each session switch and page re-render) and on every coalesced streamed paint even when the message carries no math — the walk M33's replay and M60's repeat-page metric both stub away, so no standing number saw it; renderChatMath now skips the walk when the message's own source carries none of the three delimiter initials ($, \(, \[) — the streamed paint passes the draft text, message renders fall to the existing `.prose-msg[data-raw]`, elements with neither (raw backend output) keep the unconditional walk, and the predicate also forces the walk on character references (any numeric reference or a named reference of the four delimiter characters), which the browser decodes into the walk's text nodes — the review's entity finding; a $-bearing draft keeps the full walk — the worst on-disk draft (100 KB, $ inside) is unchanged by design |

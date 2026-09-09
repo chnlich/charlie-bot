@@ -143,10 +143,68 @@ def _get_git_version() -> str:
 
 _RUNTIME_GIT_VERSION = _get_git_version()
 
+# Content half of the ?v= asset token, keyed on the walk-instant signature
+# tuple: a file that moves after the walk keys the older digest and the next
+# render's walk re-hashes it, the same pre-read rule the file memos keep.
+# ``digests`` carries each file's own sha1 so a change re-reads only the moved
+# files; ``digest`` is the combined hex the token appends.
+_ASSET_DIGEST_STATE: dict[str, tuple | dict[str, bytes] | str] = {
+    "sig": (), "digests": {}, "digest": "",
+}
+
+
+def _asset_tree_digest() -> str:
+  """Content digest over the served static tree, refreshed per call.
+
+  The ?v= token names the bytes the URL serves, and a working-tree edit can
+  land between restarts, so the digest walks the tree (one stat pass over the
+  static files) and re-hashes only files whose (mtime_ns, size) signature
+  moved; an unchanged walk serves the memoized digest. The walk scans with
+  os.scandir so each entry answers is_file from the directory record and
+  stats once, the M44/M72 conversion of the pathlib double-stat pattern.
+  """
+  static_root = _REPO_ROOT / "web" / "static"
+  if not static_root.is_dir():
+    return ""
+  pairs: list[tuple[str, int, int]] = []
+
+  def walk(dir_path: Path, prefix: str) -> None:
+    with os.scandir(dir_path) as entries:
+      for entry in entries:
+        rel = f"{prefix}{entry.name}"
+        if entry.is_dir():
+          walk(Path(entry.path), f"{rel}/")
+        elif entry.is_file():
+          st = entry.stat()
+          pairs.append((rel, st.st_mtime_ns, st.st_size))
+
+  walk(static_root, "")
+  pairs.sort()
+  sig = tuple(pairs)
+  if _ASSET_DIGEST_STATE["sig"] == sig:
+    return str(_ASSET_DIGEST_STATE["digest"])
+  old_stats = {rel: (mtime, size) for rel, mtime, size in _ASSET_DIGEST_STATE["sig"]}
+  digests: dict[str, bytes] = dict(_ASSET_DIGEST_STATE["digests"])
+  for rel, mtime, size in pairs:
+    if rel in digests and old_stats.get(rel) == (mtime, size):
+      continue
+    digests[rel] = hashlib.sha1((static_root / rel).read_bytes()).digest()
+  combined = hashlib.sha1()
+  for rel, _, _ in pairs:
+    combined.update(rel.encode())
+    combined.update(b"\0")
+    combined.update(digests[rel])
+  value = combined.hexdigest()[:12]
+  _ASSET_DIGEST_STATE["sig"] = sig
+  _ASSET_DIGEST_STATE["digests"] = digests
+  _ASSET_DIGEST_STATE["digest"] = value
+  return value
+
 
 def _static_asset_version() -> str:
-  """Cache-bust token for static assets, derived from the pinned runtime git version."""
-  return _RUNTIME_GIT_VERSION.replace(" · ", "-").replace(" ", "-")
+  """Cache-bust token for static assets: the runtime git version plus the served tree's content digest."""
+  git_part = _RUNTIME_GIT_VERSION.replace(" · ", "-").replace(" ", "-")
+  return f"{git_part}-{_asset_tree_digest()}"
 
 
 router = APIRouter()

@@ -243,9 +243,9 @@ def _account_label(path: Path, stem: str) -> str:
 class TallyCache:
   """Per-file tally contributions keyed by file signature, persisted as one JSON document.
 
-  ``lookup`` serves an entry only while the file's signature matches and copies the hit into
-  the next document; ``store`` adds fresh scans there. The saved document therefore holds only
-  files seen this run — deleted logs drop out without a separate sweep.
+  ``lookup_sig`` serves an entry only while the caller's signature matches and copies the hit
+  into the next document; ``store``/``store_sig`` add fresh scans there. The saved document
+  therefore holds only files seen this run — deleted logs drop out without a separate sweep.
   """
 
   SCHEMA_VERSION = 1
@@ -278,8 +278,8 @@ class TallyCache:
   def lookup_sig(self, source: str, key: str, sig: list) -> dict | None:
     """The cached entry for *key* when its stored signature equals *sig*, else None.
 
-    Sibling of ``lookup`` for sources whose signature is not one file's stat: the
-    caller computes *sig*.
+    *sig* is the caller's own proof — one file's stat pair from the walk that
+    produced *key*, or a source-level signature like the opencode db's.
     """
     entry = self._sources.get(source, {}).get(key)
     if entry is None:

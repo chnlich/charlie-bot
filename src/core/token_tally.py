@@ -62,10 +62,19 @@ Vocabulary:
               moves. The opencode db signs as ``[mtime_ns, size, wal_sig]`` with ``wal_sig`` the
               ``-wal`` sidecar's ``[mtime_ns, size]`` or None — a WAL-mode write grows the
               sidecar without touching the main file, so the main file pair alone cannot see it
-  entry       a source's parsed contribution: ``{"sig", "records", "dupes"}`` for a Claude file
-              (dupes is the within-file replay count), ``{"sig", "records", "check"}`` for a
-              Codex file (check is the root-session self-check pair ``[walked, final_total]`` or
-              None), ``{"sig", "records"}`` for the opencode db
+  end         the byte offset a file's parse actually stopped at — after its last complete
+              line, which can sit past the signature's size when the writer appended mid-read
+  guard       the append-tail fast path's prefix proof: the sha256 of the file's final
+              ``_TAIL_WINDOW`` bytes at the parsed offset. These jsonl logs only grow by
+              appends, so a tail round re-hashes that window (and requires the boundary
+              newline) before parsing only the appended lines; a replaced, truncated or
+              mid-line prefix fails the check and re-parses whole
+  entry       a source's parsed contribution: ``{"sig", "records", "dupes", "end", "guard"}``
+              for a Claude file (dupes is the within-file replay count), ``{"sig", "records",
+              "check", "model_ctx", "is_root", "final_total", "walked", "end", "guard"}`` for a
+              Codex file (check is the root-session self-check pair ``[walked, final_total]``
+              or None; the tail round carries the model context, rootness and self-check state
+              the prefix settled), ``{"sig", "records"}`` for the opencode db
   records     Claude: ``[key, model, ts, in_fresh, cache_write, cache_read, output]`` per
               response, replay-deduped within the file; Codex: ``[model, ts, in_fresh,
               cache_read, output]`` per token_count event, model resolved by file position;
@@ -91,6 +100,7 @@ The merged Claude+Codex buckets are themselves incremental per file (source part
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -289,6 +299,15 @@ class TallyCache:
     self._next[source][key] = entry
     return entry
 
+  def prev(self, source: str, key: str) -> dict | None:
+    """The persisted entry for *key* under whatever signature it last parsed.
+
+    The append-tail fast path's prefix candidate: the file moved, or ``lookup_sig`` would
+    have served it. The tail parse proves the prefix from the entry's own guard before
+    trusting any of it.
+    """
+    return self._sources.get(source, {}).get(key)
+
   def store(self, source: str, path: Path, entry: dict) -> None:
     """Record one freshly scanned contribution for the next document."""
     self._next[source][str(path)] = entry
@@ -473,35 +492,110 @@ def _reset_aggregate_memo() -> None:
   _claude_orphan.clear()
 
 
-def _prefiltered_jsonl(path: str, markers: tuple[str, ...]) -> tuple[list, list[dict], int]:
-  """Parse one jsonl into the objects whose raw line carries any *markers* substring.
+# The append-tail fast path's prefix proof window: the guard hashes this many final
+# prefix bytes, and a tail round re-hashes the same window before trusting the prefix.
+_TAIL_WINDOW = 8192
 
-  Returns (signature, objects, bytes read), objects in file order. The signature is taken
-  before the read: a concurrent append mid-read then necessarily outdates the stored sig and
-  the next lookup re-scans, so a partial or extended read can never be served later as if
-  complete. Every line counts toward the bytes; an unparseable line is dropped.
+
+def _parse_lines(raw: bytes, markers: tuple[str, ...]) -> tuple[list[dict], int]:
+  """Parse complete newline-terminated lines out of *raw*, the way the file iteration does.
+
+  Returns (objects, decoded-char bytes read). Only complete lines parse: a trailing fragment
+  without its newline is left for the round whose tail covers it whole. Decoding is
+  errors="replace" per line, so an undecodable byte drops its line instead of the file.
   """
   objects: list[dict] = []
   nbytes = 0
+  pos = 0
+  while True:
+    nl = raw.find(b"\n", pos)
+    if nl == -1:
+      break
+    line = raw[pos:nl + 1].decode("utf-8", errors="replace")
+    pos = nl + 1
+    nbytes += len(line)
+    if not any(m in line for m in markers):
+      continue
+    try:
+      objects.append(json.loads(line))
+    except ValueError:
+      continue
+  return objects, nbytes
+
+
+def _prefiltered_jsonl(path: str, markers: tuple[str, ...]) -> tuple[list, list[dict], int, int]:
+  """Parse one jsonl into the objects whose raw line carries any *markers* substring.
+
+  Returns (signature, objects, bytes read, consumed byte offset), objects in file order. The
+  signature is taken before the read: a concurrent append mid-read then necessarily outdates
+  the stored sig and the next lookup re-scans, so a partial or extended read can never be
+  served later as if complete. *consumed* is the offset the parse actually stopped at — the
+  end of the last complete line — which the append-tail fast path continues from; it can sit
+  past the signature's size when the writer appended mid-read. Every line counts toward the
+  bytes; an unparseable line is dropped.
+  """
   st = os.stat(path)
-  with open(path, errors="replace") as fh:
-    for line in fh:
-      nbytes += len(line)
-      if not any(m in line for m in markers):
-        continue
-      try:
-        objects.append(json.loads(line))
-      except ValueError:
-        continue
-  return [st.st_mtime_ns, st.st_size], objects, nbytes
+  with open(path, "rb") as fh:
+    raw = fh.read()
+  objects, nbytes = _parse_lines(raw, markers)
+  return [st.st_mtime_ns, st.st_size], objects, nbytes, raw.rfind(b"\n") + 1
 
 
-def _claude_file_contribution(path: str) -> tuple[dict, int]:
-  """Parse one Claude Code jsonl into its cache entry; return (entry, bytes read)."""
-  seen: set[str] = set()
-  dupes = 0
+def _boundary_guard(path: str, end: int) -> list | None:
+  """Hash the file's final *end*-bounded window, the append-tail fast path's prefix proof.
+
+  Returns [window, hexdigest] or None when the window cannot be read (a file truncated below
+  its own parsed end): a None guard sends every later round down the full parse.
+  """
+  window = min(_TAIL_WINDOW, end)
+  try:
+    with open(path, "rb") as fh:
+      fh.seek(end - window)
+      raw = fh.read(window)
+  except OSError:
+    return None
+  if len(raw) != window:
+    return None
+  return [window, hashlib.sha256(raw).hexdigest()]
+
+
+def _tail_parse(path: str, entry: dict, markers: tuple[str, ...]) -> tuple[list[dict], int, list, int] | None:
+  """Parse the lines appended since *entry*'s parse, or None when the prefix is unproven.
+
+  Returns (objects, bytes read, signature, new consumed offset). The prefix proof is the
+  entry's own guard: the stored window must re-hash equal and end on a newline (the stored
+  offset only ever follows a complete line, so a mid-line boundary — a replaced or truncated
+  prefix — fails the check), and the file must have grown past the parsed offset with no
+  mtime rewind. The signature is taken before the read, the same contract
+  _prefiltered_jsonl runs under. The trailing partial line stays unparsed; the round whose
+  tail covers it whole parses it.
+  """
+  sig, guard, end = entry.get("sig"), entry.get("guard"), entry.get("end")
+  if not sig or not guard or not isinstance(end, int):
+    return None
+  st = os.stat(path)
+  if st.st_size <= end or st.st_mtime_ns < sig[0]:
+    return None
+  window = guard[0]
+  with open(path, "rb") as fh:
+    fh.seek(end - window)
+    prefix = fh.read(window)
+    if len(prefix) != window or prefix[-1:] != b"\n" or hashlib.sha256(prefix).hexdigest() != guard[1]:
+      return None
+    fh.seek(end)
+    raw = fh.read()
+  objects, nbytes = _parse_lines(raw, markers)
+  return objects, nbytes, [st.st_mtime_ns, st.st_size], end + raw.rfind(b"\n") + 1
+
+
+def _claude_records(recs: list[dict], seen: set) -> tuple[list[list], int]:
+  """Fold prefiltered Claude records into tally rows, deduped against *seen*.
+
+  Returns (records, within-file dupe count). *seen* carries the keys already counted —
+  the empty set on a full parse, the cached records' keys on an append-tail round.
+  """
   records: list[list] = []
-  sig, recs, nbytes = _prefiltered_jsonl(path, ('"usage"',))
+  dupes = 0
   for rec in recs:
     msg = rec.get("message")
     if not isinstance(msg, dict):
@@ -523,7 +617,32 @@ def _claude_file_contribution(path: str) -> tuple[dict, int]:
             usage.get("cache_read_input_tokens", 0) or 0,
             usage.get("output_tokens", 0) or 0
         ])
-  return {"sig": sig, "records": records, "dupes": dupes}, nbytes
+  return records, dupes
+
+
+_CLAUDE_MARKERS = ('"usage"',)
+
+
+def _claude_file_contribution(path: str, prev: dict | None = None) -> tuple[dict, int]:
+  """Parse one Claude Code jsonl into its cache entry; return (entry, bytes read).
+
+  *prev* is the file's cached entry under an older signature; when the guard proves the
+  prefix unchanged, only the appended tail parses and the cached records ride forward.
+  """
+  if prev is not None:
+    tail = _tail_parse(path, prev, _CLAUDE_MARKERS)
+    if tail is not None:
+      recs, nbytes, sig, end = tail
+      records, dupes = _claude_records(recs, {rec[0] for rec in prev["records"]})
+      entry = {"sig": sig, "records": prev["records"] + records, "dupes": prev.get("dupes", 0) + dupes,
+               "end": end}
+      entry["guard"] = _boundary_guard(path, end)
+      return entry, nbytes
+  sig, recs, nbytes, end = _prefiltered_jsonl(path, _CLAUDE_MARKERS)
+  records, dupes = _claude_records(recs, set())
+  entry = {"sig": sig, "records": records, "dupes": dupes, "end": end}
+  entry["guard"] = _boundary_guard(path, end)
+  return entry, nbytes
 
 
 class _FilePartial(NamedTuple):
@@ -700,8 +819,9 @@ def _walk_source(
       entry = (cache.lookup_sig(cache_key, path, [st.st_mtime_ns, st.st_size]) if cache is not None else None)
       hit = entry is not None
       if entry is None:
+        prev = cache.prev(cache_key, path) if cache is not None else None
         try:
-          entry, nbytes = parse(path)
+          entry, nbytes = parse(path, prev)
         except OSError as exc:
           t.notes.append(f"{source}: unreadable {account}/{os.path.basename(path)}: {exc}")
           walked.append((path, account, None, False))
@@ -726,25 +846,22 @@ def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) 
       f"{entry_dupes + n_records - distinct:,} replayed lines skipped")
 
 
-def _codex_file_contribution(path: str) -> tuple[dict, int]:
-  """Parse one Codex rollout jsonl into its cache entry; return (entry, bytes read)."""
-  # Every record the tally reads (session_meta, turn_context, token_count) serializes
-  # its type as a quoted literal in the raw line, so the substring filter cannot skip a
-  # record the full parse would see; it only skips parsing irrelevant lines.
-  sig, recs, nbytes = _prefiltered_jsonl(path, ('"session_meta"', '"turn_context"', '"token_count"'))
-  meta = next((rec for rec in recs if rec.get("type") == "session_meta"), None)
-  mp = (meta or {}).get("payload") or {}
-  source = json.dumps(mp.get("source") or {})
-  is_root = not (mp.get("forked_from_id") or mp.get("parent_thread_id") or "subagent" in source)
-  model = next(
-      (
-          (rec.get("payload") or {}).get("model")
-          for rec in recs
-          if rec.get("type") in ("session_meta", "turn_context") and (rec.get("payload") or {}).get("model")),
-      None,
-  )
-  walked, final_total = 0, 0
-  records: list[list] = []
+# Every record the tally reads (session_meta, turn_context, token_count) serializes
+# its type as a quoted literal in the raw line, so the substring filter cannot skip a
+# record the full parse would see; it only skips parsing irrelevant lines.
+_CODEX_MARKERS = ('"session_meta"', '"turn_context"', '"token_count"')
+
+
+def _codex_records(recs: list[dict], model: str | None, records: list[list]) -> tuple[int, int, str | None]:
+  """Fold prefiltered Codex records into token_count rows, appending to *records*.
+
+  Returns (walked sum, final_total high-water, trailing model context). *model* is the
+  context in force at the first record — None on a full parse, the cached entry's trailing
+  context on an append-tail round; session_meta and turn_context records update it in file
+  order, and every token_count row resolves against the context at its own line.
+  """
+  walked = 0
+  final_total = 0
   for rec in recs:
     payload = rec.get("payload") or {}
     if rec.get("type") in ("session_meta", "turn_context"):
@@ -760,8 +877,53 @@ def _codex_file_contribution(path: str) -> tuple[dict, int]:
     out = last.get("output_tokens", 0) or 0
     walked += cached + fresh + out
     records.append([model or "unknown", rec.get("timestamp"), fresh, cached, out])
-  check = [walked, final_total] if final_total and is_root else None
-  return {"sig": sig, "records": records, "check": check}, nbytes
+  return walked, final_total, model
+
+
+def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict, int]:
+  """Parse one Codex rollout jsonl into its cache entry; return (entry, bytes read).
+
+  *prev* is the file's cached entry under an older signature; when the guard proves the
+  prefix unchanged, only the appended tail parses and the cached records ride forward with
+  the model context, is_root and self-check state the prefix settled.
+  """
+  if prev is not None:
+    tail = _tail_parse(path, prev, _CODEX_MARKERS)
+    if tail is not None:
+      recs, nbytes, sig, end = tail
+      records: list[list] = []
+      walked, final_total, model = _codex_records(recs, prev.get("model_ctx"), records)
+      total_walked = prev.get("walked", 0) + walked
+      total_final = max(prev.get("final_total", 0), final_total)
+      is_root = prev.get("is_root", False)
+      entry = {"sig": sig, "records": prev["records"] + records,
+               "check": [total_walked, total_final] if total_final and is_root else None,
+               "model_ctx": model, "is_root": is_root, "final_total": total_final,
+               "walked": total_walked, "end": end}
+      entry["guard"] = _boundary_guard(path, end)
+      return entry, nbytes
+  sig, recs, nbytes, end = _prefiltered_jsonl(path, _CODEX_MARKERS)
+  meta = next((rec for rec in recs if rec.get("type") == "session_meta"), None)
+  mp = (meta or {}).get("payload") or {}
+  source = json.dumps(mp.get("source") or {})
+  is_root = not (mp.get("forked_from_id") or mp.get("parent_thread_id") or "subagent" in source)
+  # The model context opens at the file's first declared model, so a token_count
+  # preceding the first turn_context still carries it.
+  model = next(
+      (
+          (rec.get("payload") or {}).get("model")
+          for rec in recs
+          if rec.get("type") in ("session_meta", "turn_context") and (rec.get("payload") or {}).get("model")),
+      None,
+  )
+  records = []
+  walked, final_total, model = _codex_records(recs, model, records)
+  entry = {"sig": sig, "records": records,
+           "check": [walked, final_total] if final_total and is_root else None,
+           "model_ctx": model, "is_root": is_root, "final_total": final_total, "walked": walked,
+           "end": end}
+  entry["guard"] = _boundary_guard(path, end)
+  return entry, nbytes
 
 
 def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:

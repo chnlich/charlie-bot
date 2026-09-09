@@ -530,7 +530,7 @@ def test_aggregate_memo_serves_unchanged_walk(tmp_path: Path, monkeypatch: pytes
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   first = _collect(claude, None, db, cache)
 
-  def boom(path: Path) -> None:
+  def boom(path: Path, prev: dict | None = None) -> None:
     raise AssertionError("log re-parsed on an aggregate-memo hit")
 
   monkeypatch.setattr(tt, "_claude_file_contribution", boom)
@@ -550,10 +550,10 @@ def test_aggregate_memo_invalidates_on_append(tmp_path: Path, monkeypatch: pytes
   calls = 0
   real = tt._claude_file_contribution
 
-  def spy(path: Path) -> tuple[dict, int]:
+  def spy(path: Path, prev: dict | None = None) -> tuple[dict, int]:
     nonlocal calls
     calls += 1
-    return real(path)
+    return real(path, prev)
 
   monkeypatch.setattr(tt, "_claude_file_contribution", spy)
   log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
@@ -574,7 +574,7 @@ def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, m
   _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
   first = _collect(claude, None, db, cache)
 
-  def boom(path: Path) -> None:
+  def boom(path: Path, prev: dict | None = None) -> None:
     raise AssertionError("claude log re-parsed when only the opencode db moved")
 
   monkeypatch.setattr(tt, "_claude_file_contribution", boom)
@@ -1319,3 +1319,119 @@ def test_incremental_partials_match_a_fresh_fold(tmp_path: Path) -> None:
   collect("account relabel", {"main": work})
   collect("cacheless round", both, with_cache=False)
   collect("cached again", both)
+
+
+def test_append_tail_claude_parity(tmp_path: Path) -> None:
+  """An appended tail parses only the tail: rows, dupes and the entry match a full re-parse."""
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _collect(claude, None, db, cache)
+  log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
+  with log_file.open("a") as fh:
+    fh.write(json.dumps(_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(100, 2))) + "\n")
+    fh.write(json.dumps(_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))) + "\n")
+  after = _collect(claude, None, db, cache)
+  reference = _collect(claude, None, db)  # cacheless full re-parse of the same corpus
+  assert after.rows == reference.rows
+  assert after.scanned_bytes < log_file.stat().st_size  # the tail round read only the appended lines
+  entry = json.loads(cache.read_text())["sources"]["claude"][str(log_file)]
+  full = tt._claude_file_contribution(str(log_file))[0]
+  assert entry["records"] == full["records"]
+  assert entry["dupes"] == full["dupes"] == 1  # the appended replay of the prefix's key
+  assert entry["end"] == full["end"] == log_file.stat().st_size
+  assert entry["guard"] == full["guard"]
+
+
+def test_append_tail_codex_parity(tmp_path: Path) -> None:
+  """The tail round carries the model context, rootness and self-check state forward."""
+  codex = Codex(tmp_path)
+  codex.write("rollout", [_codex_meta(), _codex_turn("gpt-a"), _codex_count({"input_tokens": 10}, {"total_tokens": 11})])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _collect(None, codex, db, cache)
+  log_file = codex.home / "sessions" / "rollout" / "rollout.jsonl"
+  with log_file.open("a") as fh:
+    fh.write(json.dumps(_codex_turn("gpt-b")) + "\n")
+    fh.write(json.dumps(_codex_count({"input_tokens": 20}, {"total_tokens": 31})) + "\n")
+  after = _collect(None, codex, db, cache)
+  reference = _collect(None, codex, db)
+  assert after.rows == reference.rows
+  assert _row(after, "Codex", "gpt-b").total == 20  # the appended count resolves to the new context
+  entry = json.loads(cache.read_text())["sources"]["codex"][str(log_file)]
+  full = tt._codex_file_contribution(str(log_file))[0]
+  assert entry["records"] == full["records"]
+  assert entry["check"] == full["check"] == [30, 31]
+  assert entry["model_ctx"] == full["model_ctx"] == "gpt-b"
+  assert entry["is_root"] == full["is_root"] is True
+
+
+def test_append_tail_parses_a_completed_partial_line_once(tmp_path: Path) -> None:
+  """A trailing fragment stays unparsed; the round whose tail covers it whole counts it once."""
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _collect(claude, None, db, cache)
+  log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
+  record = json.dumps(_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(100, 2)))
+  with log_file.open("a") as fh:
+    fh.write(record[:len(record) // 2])  # a mid-write fragment, no newline yet
+  mid = _collect(claude, None, db, cache)
+  assert len([r for r in mid.rows if r.source == "Claude Code"]) == 1
+  assert _row(mid, "Claude Code", NAME).total == 15  # the fragment dropped, prefix served
+  with log_file.open("a") as fh:
+    fh.write(record[len(record) // 2:] + "\n")
+  after = _collect(claude, None, db, cache)
+  reference = _collect(claude, None, db)
+  assert after.rows == reference.rows
+  assert _row(after, "Claude Code", NAME).total == 117
+
+
+def test_append_tail_rejects_a_replaced_prefix(tmp_path: Path) -> None:
+  """A rewritten file whose suffix is preserved fails the guard and re-parses whole."""
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _collect(claude, None, db, cache)
+  log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
+  claude.write(  # whole-file rewrite: early content replaced, last line preserved
+      claude.work, "sess1",
+      [_claude_record("m9", NAME, "2024-01-03T00:00:00Z", _usage(7, 7)),
+       _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  after = _collect(claude, None, db, cache)
+  reference = _collect(claude, None, db)
+  assert after.rows == reference.rows
+  assert _row(after, "Claude Code", NAME).total == 29
+
+
+def test_append_tail_rejects_a_shrunk_file(tmp_path: Path) -> None:
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _collect(claude, None, db, cache)
+  log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
+  claude.write(claude.work, "sess1", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(3, 3))])
+  after = _collect(claude, None, db, cache)
+  reference = _collect(claude, None, db)
+  assert after.rows == reference.rows
+  assert _row(after, "Claude Code", NAME).total == 6
+
+
+def test_append_tail_skips_entries_without_a_guard(tmp_path: Path) -> None:
+  """A pre-tail-schema entry (no guard/end) re-parses whole instead of crashing."""
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _collect(claude, None, db, cache)
+  doc = json.loads(cache.read_text())
+  log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
+  old_entry = doc["sources"]["claude"][str(log_file)]
+  for key in ("guard", "end"):
+    del old_entry[key]
+  doc["sources"]["claude"][str(log_file)] = old_entry
+  cache.write_text(json.dumps(doc))
+  with log_file.open("a") as fh:
+    fh.write(json.dumps(_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(100, 2))) + "\n")
+  after = _collect(claude, None, db, cache)
+  reference = _collect(claude, None, db)
+  assert after.rows == reference.rows
+  assert _row(after, "Claude Code", NAME).total == 117

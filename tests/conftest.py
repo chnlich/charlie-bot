@@ -182,6 +182,51 @@ async def drain_session_consumer(session_id: str, timeout: float) -> None:
     await asyncio.wait_for(consumer, timeout=timeout)
 
 
+def patch_resume_seams(
+    monkeypatch: pytest.MonkeyPatch,
+    resume_cc: Callable[[master_cc_state._WorkItem], Awaitable[tuple]] | None = None,
+) -> AsyncMock:
+  """Install the three seams every re-attach round needs, and return the broadcast stub.
+
+  The re-attach path (enqueue_master_resume) otherwise reads the SessionManager,
+  broadcasts deltas, and builds a fresh event translator: the SessionManager
+  double answers _has_running_tasks=False, and the broadcast stub silences the
+  streaming-manager singleton (the same attribute BROADCAST_PATCH_TARGET names).
+  resume_cc=None keeps the real _resume_cc over the test's raw log and installs
+  the identity _build_fresh_translate instead; a callable replaces _resume_cc.
+  """
+  if resume_cc is not None:
+    monkeypatch.setattr(master_cc_run, "_resume_cc", resume_cc)
+  else:
+    monkeypatch.setattr(master_cc_run, "_build_fresh_translate", lambda *a, **k: (lambda event: [event]))
+  broadcast = AsyncMock()
+  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", broadcast)
+  workers_mock = MagicMock()
+  workers_mock._has_running_tasks = AsyncMock(return_value=False)
+  monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: workers_mock)
+  return broadcast
+
+
+async def run_resume_round(
+    cfg: CharlieBotConfig,
+    meta: models.SessionMetadata,
+    record: models.MasterRunRecord,
+    callbacks: models.SessionCallbacks,
+    *,
+    is_alive: Callable[[], bool],
+) -> None:
+  """Enqueue one re-attach round and wait until it settles.
+
+  Resolves the round future and drains the session consumer, so a following
+  assertion reads the persisted and broadcast state. fresh_master_state
+  brackets the round, so a failing test cannot leak queue or consumer state.
+  """
+  async with fresh_master_state(meta.id):
+    future = await master_cc_queue.enqueue_master_resume(cfg, meta, record, callbacks, is_alive=is_alive)
+    await asyncio.wait_for(future, timeout=5)
+    await drain_session_consumer(meta.id, timeout=5)
+
+
 def stall_before_call(delay: float, real: Callable[..., Any]) -> Callable[..., Any]:
   """A drop-in stand-in that blocks *delay* seconds, then delegates to *real*.
 

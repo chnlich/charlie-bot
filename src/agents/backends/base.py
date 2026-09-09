@@ -191,10 +191,10 @@ def make_result_event(
       "result": "",
       "usage":
           {
-              "input_tokens": input_tokens,
-              "output_tokens": output_tokens,
-              "cache_read_input_tokens": cache_read,
-              "cache_creation_input_tokens": cache_creation,
+              ET.USAGE_INPUT_TOKENS: input_tokens,
+              ET.USAGE_OUTPUT_TOKENS: output_tokens,
+              ET.USAGE_CACHE_READ_INPUT_TOKENS: cache_read,
+              ET.USAGE_CACHE_CREATION_INPUT_TOKENS: cache_creation,
           },
       "total_cost_usd": cost,
   }

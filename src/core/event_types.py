@@ -133,3 +133,17 @@ BACKEND_OVERLAY_INACTIVE = "backend_overlay_inactive"
 # Legacy render-only constant: history events carry no reason field and render
 # as undeclared. New code never emits it.
 BACKEND_OVERLAY_UNDECLARED = "backend_overlay_undeclared"
+
+# -- Usage block -------------------------------------------------------------
+# Keys of a result event's ``usage`` dict (``make_result_event`` in
+# src/agents/backends/base.py builds it). The names are the Anthropic Messages
+# API's usage-block names, and they are persisted wire values: the token tally
+# re-reads them from Claude Code transcripts (src/core/token_tally.py) and the
+# proxy answers carry the same shape (src/api/anthropic_proxy.py). The Codex
+# rollout wire carries same-named ``input_tokens``/``output_tokens`` from a
+# different upstream (src/core/codex_usage.py, src/core/codex_pricing.py);
+# those readers keep their literals.
+USAGE_INPUT_TOKENS = "input_tokens"
+USAGE_OUTPUT_TOKENS = "output_tokens"
+USAGE_CACHE_READ_INPUT_TOKENS = "cache_read_input_tokens"
+USAGE_CACHE_CREATION_INPUT_TOKENS = "cache_creation_input_tokens"

@@ -60,8 +60,8 @@ from src.core.models import SessionMetadata
 def _prompt_token_sum(usage: dict) -> int:
   """input + cache_creation + cache_read from a Claude Code usage block."""
   return (
-      usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) +
-      usage.get("cache_read_input_tokens", 0))
+      usage.get(ET.USAGE_INPUT_TOKENS, 0) + usage.get(ET.USAGE_CACHE_CREATION_INPUT_TOKENS, 0) +
+      usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0))
 
 
 # Kinds of the latest-reading slot: which tier resolves the readout. Set by the

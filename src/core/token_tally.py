@@ -112,6 +112,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, NamedTuple
 
+from src.core import event_types as ET
 from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_SESSION_META, CODEX_TOKEN_COUNT, CODEX_TURN_CONTEXT
 from src.core.config import get_config
 from src.core.json_utils import write_json_atomically
@@ -627,10 +628,10 @@ def _claude_records(recs: list[dict], seen: set) -> tuple[list[list], int]:
         [
             key, model,
             rec.get("timestamp"),
-            usage.get("input_tokens", 0) or 0,
-            usage.get("cache_creation_input_tokens", 0) or 0,
-            usage.get("cache_read_input_tokens", 0) or 0,
-            usage.get("output_tokens", 0) or 0
+            usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0,
+            usage.get(ET.USAGE_CACHE_CREATION_INPUT_TOKENS, 0) or 0,
+            usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0,
+            usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0
         ])
   return records, dupes
 

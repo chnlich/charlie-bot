@@ -265,6 +265,87 @@ test('renderExtUsage shows business/unlimited Codex state with no quota bars', (
   assert.equal(_field(codexRow, '7d-bar'), null, 'no invented 7d bar');
 });
 
+// Metered credits: the payload's credits reading (unlimited=false + balance)
+// replaces the no-cap marker on an empty-windows row and reports itself in the
+// collapsed summary as "cr <balance>". The real wire balance is a fractional
+// decimal; the UI rounds to the unit and groups thousands.
+test('renderExtUsage shows the credits balance in place of no-cap for a metered account', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'codex:main': _codexPayload({
+        windows: [],
+        credits: { unlimited: false, balance: 29779.358283042908 },
+      }),
+    },
+  });
+
+  const row = _rowByKey(strip, 'codex:main');
+  assert.ok(_field(row, 'credits'), 'credits segment rendered');
+  assert.equal(_field(row, 'credits-value').textContent, '29,779');
+  assert.equal(_field(row, 'no-cap'), null, 'metered credits replaces the no-cap marker');
+  assert.equal(_field(row, 'state'), null, 'a metered account carries no unlimited badge');
+
+  const summarySeg = _walk(strip.children[0], _byAttr('data-summary-account', 'codex:main'));
+  assert.equal(_field(summarySeg, 'summary-pct').textContent, 'cr 29,779');
+});
+
+test('renderExtUsage shows a dash for metered credits without a balance', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'codex:main': _codexPayload({
+        windows: [],
+        credits: { unlimited: false },
+      }),
+    },
+  });
+
+  const row = _rowByKey(strip, 'codex:main');
+  assert.equal(_field(row, 'credits-value').textContent, '\u2014');
+
+  const summarySeg = _walk(strip.children[0], _byAttr('data-summary-account', 'codex:main'));
+  assert.equal(_field(summarySeg, 'summary-pct').textContent, 'cr \u2014');
+});
+
+test('renderExtUsage keeps the unlimited badge and no-cap marker for unlimited credits', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'codex:main': _codexPayload({
+        windows: [],
+        credits: { unlimited: true },
+        rate_limits_state: 'business-unlimited',
+      }),
+    },
+  });
+
+  const row = _rowByKey(strip, 'codex:main');
+  assert.equal(_field(row, 'state').textContent, 'business / unlimited');
+  assert.equal(_field(row, 'credits'), null, 'unlimited credits renders no credits segment');
+  assert.equal(_field(row, 'no-cap').textContent, 'plan \u00b7 no cap');
+});
+
+test('renderExtUsage appends the credits segment after the window buckets', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  context.renderExtUsage({
+    providers: {
+      'codex:main': _codexPayload({ credits: { unlimited: false, balance: 1234.5 } }),
+    },
+  });
+
+  const row = _rowByKey(strip, 'codex:main');
+  assert.equal(_field(row, 'credits-value').textContent, '1,235');
+  const bucketIndex = row.children.findIndex((c) => _field(c, '7d-pct'));
+  const creditsIndex = row.children.findIndex((c) => c.getAttribute('data-field') === 'credits');
+  assert.ok(bucketIndex >= 0, 'window bucket rendered');
+  assert.equal(creditsIndex, bucketIndex + 1, 'credits group directly follows the window buckets');
+});
+
 test('renderExtUsage renders only the windows the provider reported', () => {
   const { context, strip } = loadExtUsageScript();
 

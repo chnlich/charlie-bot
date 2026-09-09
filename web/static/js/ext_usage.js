@@ -272,6 +272,27 @@ function _buildNoCapMarker(row) {
   row.appendChild(marker);
 }
 
+function _formatCreditsBalance(balance) {
+  if (typeof balance !== 'number' || !Number.isFinite(balance)) return '—';
+  return Math.round(balance).toLocaleString('en-US');
+}
+
+// The metered-credits segment: label + rounded, thousands-grouped remaining
+// balance. Empty windows give it the no-cap marker's place; windows present
+// put it after the buckets and before the state badge.
+function _buildCreditsGroup(row, credits) {
+  const group = _el('div', 'flex items-center gap-1.5 text-slate-400');
+  group.setAttribute('data-field', 'credits');
+  const label = _el('span', '');
+  label.textContent = 'credits';
+  group.appendChild(label);
+  const value = _el('span', '');
+  value.setAttribute('data-field', 'credits-value');
+  value.textContent = _formatCreditsBalance(credits.balance);
+  group.appendChild(value);
+  row.appendChild(group);
+}
+
 // A row that names an account without reporting a quota: not yet read, or read
 // and failed. Both must short-circuit the quota path, where an empty windows list
 // renders as "plan · no cap" — an uncapped-plan claim about an unknown quota.
@@ -309,13 +330,17 @@ function _buildRow(key, providerData) {
   }
 
   const windows = Array.isArray(providerData.windows) ? providerData.windows : [];
+  const creditsMetered = !!providerData.credits && providerData.credits.unlimited === false;
   const buckets = [];
   if (windows.length === 0) {
-    _buildNoCapMarker(row);
+    if (!creditsMetered) _buildNoCapMarker(row);
   } else {
     for (const win of windows) {
       buckets.push({win: win, refs: _buildBucket(row, win, providerData)});
     }
+  }
+  if (creditsMetered) {
+    _buildCreditsGroup(row, providerData.credits);
   }
 
   let asOfEl = null;
@@ -369,7 +394,12 @@ function _summaryReading(providerData) {
   if (providerData.pending) return { text: 'loading', pct: null };
   if (providerData.error) return { text: 'error', pct: null };
   const windows = Array.isArray(providerData.windows) ? providerData.windows : [];
-  if (windows.length === 0) return { text: 'no cap', pct: null };
+  if (windows.length === 0) {
+    if (providerData.credits && providerData.credits.unlimited === false) {
+      return { text: 'cr ' + _formatCreditsBalance(providerData.credits.balance), pct: null };
+    }
+    return { text: 'no cap', pct: null };
+  }
   let worst = null;
   for (const win of windows) {
     if (_isExpiredReading(providerData, win)) continue;

@@ -213,7 +213,10 @@ def test_codex_usage_transform_uses_the_latest_token_count_event() -> None:
 # carry, and the usage dict the transform must report for it: business
 # metadata states the unlimited state, metadata-less null buckets stay
 # unstated, an unidentifiable slot is dropped rather than guessed at from
-# slot order, and a window with no reported usage is unknown, not zero.
+# slot order, and a window with no reported usage is unknown, not zero. The
+# credits rows pin the metered balance reading: forwarded as a JSON number,
+# stateless, and shaped strictly (an unreadable credits object is dropped
+# with a warning, never guessed at).
 _CODEX_RATE_LIMIT_SHAPE_ROWS = [
     pytest.param(
         {
@@ -225,6 +228,9 @@ _CODEX_RATE_LIMIT_SHAPE_ROWS = [
             "plan_type": "business",
         }, {
             "windows": [],
+            "credits": {
+                "unlimited": True,
+            },
             "fetched_at": "2026-03-27T18:40:00+00:00",
             "provider": "codex",
             "rate_limits_state": "business-unlimited",
@@ -242,6 +248,85 @@ _CODEX_RATE_LIMIT_SHAPE_ROWS = [
             "token_count_observed_at": "2026-03-27T18:39:35.694Z",
         },
         id="null-buckets-without-metadata-no-state"),
+    pytest.param(
+        {
+            "primary": None,
+            "secondary": None,
+            "plan_type": "business",
+        }, {
+            "windows": [],
+            "fetched_at": "2026-03-27T18:40:00+00:00",
+            "provider": "codex",
+            "rate_limits_state": "business-unlimited",
+            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
+        },
+        id="null-buckets-plan-type-fallback-without-credits"),
+    pytest.param(
+        {
+            "primary": None,
+            "secondary": None,
+            "credits": {
+                "has_credits": True,
+                "unlimited": False,
+                "balance": "29779.358283042908",
+            },
+            "plan_type": "business",
+        }, {
+            "windows": [],
+            "credits": {
+                "unlimited": False,
+                "balance": pytest.approx(29779.358),
+            },
+            "fetched_at": "2026-03-27T18:40:00+00:00",
+            "provider": "codex",
+            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
+        },
+        id="metered-credits-balance"),
+    pytest.param(
+        {
+            "primary": None,
+            "secondary": None,
+            "credits": {
+                "unlimited": False,
+            },
+        }, {
+            "windows": [],
+            "credits": {
+                "unlimited": False,
+            },
+            "fetched_at": "2026-03-27T18:40:00+00:00",
+            "provider": "codex",
+            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
+        },
+        id="metered-credits-without-balance"),
+    pytest.param(
+        {
+            "primary": None,
+            "secondary": None,
+            "credits": "yes",
+            "plan_type": "business",
+        }, {
+            "windows": [],
+            "fetched_at": "2026-03-27T18:40:00+00:00",
+            "provider": "codex",
+            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
+        },
+        id="credits-not-an-object-dropped"),
+    pytest.param(
+        {
+            "primary": None,
+            "secondary": None,
+            "credits": {
+                "unlimited": "false",
+            },
+            "plan_type": "business",
+        }, {
+            "windows": [],
+            "fetched_at": "2026-03-27T18:40:00+00:00",
+            "provider": "codex",
+            "token_count_observed_at": "2026-03-27T18:39:35.694Z",
+        },
+        id="credits-unlimited-not-a-bool-dropped"),
     pytest.param(
         {
             "primary": {
@@ -289,6 +374,33 @@ def test_codex_usage_transform_raw_rate_limit_shapes(rate_limits: dict, expected
   usage = _transform_codex_response(event, fetched_at="2026-03-27T18:40:00+00:00")
 
   assert usage == expected_usage
+
+
+def test_codex_usage_transform_drops_unreadable_credits_and_warns(monkeypatch) -> None:
+  """An unreadable credits shape emits no payload and no state, and warns instead.
+
+  ``plan_type == "business"`` rides along in every case to prove a present
+  credits key blocks the unlimited fallback even when the credits object
+  itself cannot be read.
+  """
+  warns: list[dict] = []
+  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+
+  def transform(credits: Any) -> dict:
+    rate_limits = {"primary": None, "secondary": None, "plan_type": "business", "credits": credits}
+    event = codex_token_count_event("2026-03-27T18:39:35.694Z", rate_limits=rate_limits)
+    return _transform_codex_response(event, fetched_at="2026-03-27T18:40:00+00:00")
+
+  for unreadable in ("yes", {"unlimited": "false"}):
+    usage = transform(unreadable)
+    assert "credits" not in usage
+    assert "rate_limits_state" not in usage
+  metered = transform({"unlimited": False, "balance": "n/a"})
+  assert metered["credits"] == {"unlimited": False}
+  assert "rate_limits_state" not in metered
+
+  reasons = [w["reason"] for w in warns if w["event"] == "ext_usage_unknown_limit_shape"]
+  assert reasons == ["credits is not an object", "unlimited is not a bool", "missing or unparseable balance"]
 
 
 def test_spend_aggregation_prices_recent_turns_by_model(tmp_path) -> None:

@@ -7,10 +7,10 @@ recorded byte total.
 
 from typing import IO, Any
 
-from pytest import MonkeyPatch
+import pytest
 
 
-def install_byte_counting_open(monkeypatch: MonkeyPatch) -> list[int]:
+def install_byte_counting_open(monkeypatch: pytest.MonkeyPatch) -> list[int]:
   """Patch ``builtins.open`` to record the length of every ``rb`` read.
 
   Returns the per-read byte counts in read order; text-mode opens pass

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from core.byte_count_open import install_byte_counting_open
+from core import byte_count_open
 from src.core.ndjson import (
     _COUNT_MEMO_LIMIT,
     _TAIL_WINDOW_SIZE,
@@ -269,7 +269,7 @@ def test_iter_ndjson_events_from_end_reads_only_the_tail_window(
       f.write((json.dumps({"i": i, "blob": "x" * 14000}) + "\n").encode())
     f.write((json.dumps({"i": "answer"}) + "\n").encode())
 
-  read_bytes = install_byte_counting_open(monkeypatch)
+  read_bytes = byte_count_open.install_byte_counting_open(monkeypatch)
   walk = iter_ndjson_events_from_end(target, log_event="test_skip", log_fields={})
   assert next(walk) == {"i": "answer"}
   walk.close()

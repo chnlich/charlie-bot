@@ -10,7 +10,6 @@ at the recorded cursor without the agent noticing anything.
 
 import asyncio
 import contextlib
-import json
 import os
 import shutil
 import signal
@@ -22,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import aiofiles
+import orjson
 import structlog
 
 from src.core import event_types as ET
@@ -242,15 +242,18 @@ async def iter_ndjson_events(stdout: asyncio.StreamReader) -> AsyncIterator[dict
   """Yield the JSON objects of an NDJSON stream.
 
   Lines decode as UTF-8 with replacement; blank lines and lines that do not
-  parse as JSON are skipped.
+  parse as JSON are skipped. The parser is orjson (the ndjson reader skip
+  contract's boundary: NaN/Infinity literals and double-overflow floats skip
+  as malformed, ints at or beyond 2**64 parse as float); the stream funnels
+  parse machine-written JSON, which carries none of those literals.
   """
   async for raw_line in stdout:
     line = raw_line.decode("utf-8", errors="replace").strip()
     if not line:
       continue
     try:
-      yield json.loads(line)
-    except json.JSONDecodeError:
+      yield orjson.loads(line)
+    except ValueError:
       continue
 
 
@@ -345,8 +348,8 @@ async def tail_follow_events(
           if not line:
             continue
           try:
-            event = json.loads(line)
-          except json.JSONDecodeError as e:
+            event = orjson.loads(line)
+          except ValueError as e:
             log.debug("backend_line_not_json", error=str(e))
             continue
           mtime = os.fstat(f.fileno()).st_mtime

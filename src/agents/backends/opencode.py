@@ -9,6 +9,7 @@ from pathlib import Path
 
 import aiofiles
 import httpx
+import orjson
 import structlog
 
 from src.agents.backends.base import (
@@ -462,7 +463,7 @@ class OpenCodeBackend(AgentBackend):
           continue
         payload = "\n".join(data_lines)
         data_lines = []
-        yield json.loads(payload)
+        yield orjson.loads(payload)
         continue
       if line.startswith("data:"):
         data_lines.append(line[len("data:"):].lstrip())
@@ -474,7 +475,7 @@ class OpenCodeBackend(AgentBackend):
         continue
       log.debug("opencode_sse_line_ignored", line=line)
     if data_lines:
-      yield json.loads("\n".join(data_lines))
+      yield orjson.loads("\n".join(data_lines))
 
   async def _with_sse_progress_watchdog(self, sse_events: AsyncIterator[dict]) -> AsyncIterator[dict]:
     """Fail the turn when no session progress arrives within OPENCODE_SSE_PROGRESS_TIMEOUT.

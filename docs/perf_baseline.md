@@ -93,6 +93,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M81 chat math-walk, delimiter gate | M81 collector below | seconds of KaTeX auto-render walk per message-page re-render (the M60 corpus) and per streamed math-free draft replay; the walks the gate skips count 0 | page re-render median < 0.020 s; streamed replay walk median < 0.010 s | — (introduced with its first history row) |
 | M82 worker events-log append, per event | M82 collector below | seconds per append of one probe event to a scratch worker log, the run's held-handle shape | median < 0.0002 s | — (introduced with its first history row) |
 | M83 versioned static-asset revalidation, warm page load | M83 collector below | seconds per revalidation request (If-None-Match) per asset over the dashboard's template-referenced asset set; the warm-cache revalidation-request count the page load issues | revalidate median < 0.002 s per asset; 0 revalidation requests per warm page load | — (introduced with its first history row) |
+| M84 backend stream-line parse, worst on-disk raw log | M84 collector below | seconds per full replay of the raw-log tail-follow loop and the stdout-stream NDJSON funnel over the worst on-disk raw agent log (scratch copy, live home read-only) | tail-follow median < 0.060 s; stdout-stream median < 0.010 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -5065,10 +5066,143 @@ asyncio.run(main())
 PYEOF2
 ```
 
+M84 — backend stream-line parse, worst on-disk raw log. The backend stream
+funnels parse every streamed line of every covered backend's turn: the raw-log
+tail-follow loop (the live and re-attach read side of the claude-family
+backends) and the spawned-stdout NDJSON reader (the codex/opencode run loops)
+in ``src/agents/backends/base.py``, the opencode SSE payload reader, and the
+anthropic proxy's upstream chunk reader. The funnels' parser cost is invisible
+to the standing HTTP probes (it rides the stream loop, not a request), so the
+collector resolves the largest ``agent.raw.ndjson`` under the sessions root,
+copies it to a scratch directory (live home read once for the copy, never
+written), and replays it through the real funnel functions — the tail-follow
+loop with a counting translate and a dead producer, the stdout reader over the
+same lines — one cold pass then seven timed replays per funnel; the cursor
+advance is disabled, so the replay writes nothing anywhere. A pre-pass asserts
+parser parity: stdlib json and the funnels' parser must agree on every line of
+the corpus (0 divergences), which is also the boundary claim's standing
+evidence. Evidence while a change is under review points the same collector at
+the branch checkout (``CHECKOUT`` at the worktree root), the same shape as the
+M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, json, os, shutil, sys, tempfile, time
+from pathlib import Path
+import orjson
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.agents.backends.base import iter_ndjson_events, tail_follow_events
+
+# Worst stream-parse corpus: the largest agent.raw.ndjson under the sessions
+# root (master runs and thread transports) — the bytes every covered backend's
+# streamed turn parses line by line, live through the tail-follow loop.
+root = Path.home() / ".charliebot" / "sessions"
+cands = [*root.glob("*/data/master_runs/*/agent.raw.ndjson"),
+         *root.glob("*/threads/*/data/agent.raw.ndjson")]
+best, best_n = None, -1
+for p in cands:
+    n = p.stat().st_size
+    if n > best_n:
+        best, best_n = p, n
+
+# Isolation: scratch copy of the raw log; live home read once for the copy,
+# never written. cursor=None disables the cursor advance, so the replay
+# writes nothing anywhere.
+work = Path(tempfile.mkdtemp(prefix="m84-raw-", dir="/tmp"))
+raw = work / best.name
+shutil.copy2(best, raw)
+
+# Parser parity over the whole corpus: the stream funnels may swap the parser
+# only while every live line keeps its parsed value.
+diverged = 0
+lines = []
+with open(raw, "rb") as f:
+    for raw_line in f:
+        line = raw_line.decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        lines.append(raw_line)
+        try:
+            a = json.loads(line)
+        except json.JSONDecodeError:
+            a = None
+        try:
+            b = orjson.loads(line)
+        except orjson.JSONDecodeError:
+            b = None
+        if a != b:
+            diverged += 1
+
+async def tail_replay():
+    count = 0
+
+    def translate(event):
+        nonlocal count
+        count += 1
+        return [event]
+
+    async for _ in tail_follow_events(
+        raw, translate=translate, is_alive=lambda: False,
+        cursor=None, start_offset=0, post_result_timeout=60.0,
+    ):
+        pass
+    return count
+
+class _LineReader:
+    def __init__(self, lines):
+        self._lines = lines
+        self._i = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._i >= len(self._lines):
+            raise StopAsyncIteration
+        line = self._lines[self._i]
+        self._i += 1
+        return line
+
+async def stdout_replay():
+    count = 0
+    async for _ in iter_ndjson_events(_LineReader(lines)):
+        count += 1
+    return count
+
+async def main():
+    await tail_replay()  # cold pass, as at first mount after a server start; not timed
+    times = []
+    total = 0
+    for _ in range(7):
+        t0 = time.perf_counter()
+        total = await tail_replay()
+        times.append(time.perf_counter() - t0)
+    times.sort()
+
+    await stdout_replay()  # cold pass; not timed
+    stimes = []
+    s_total = 0
+    for _ in range(7):
+        t0 = time.perf_counter()
+        s_total = await stdout_replay()
+        stimes.append(time.perf_counter() - t0)
+    stimes.sort()
+    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {best_n / 1e6:.1f} MB raw log, "
+          f"{len(lines)} lines, parity divergences {diverged}; "
+          f"tail-follow replay median {times[3] * 1000:.1f} ms, max {times[-1] * 1000:.1f} ms; "
+          f"stdout-stream replay median {stimes[3] * 1000:.1f} ms, max {stimes[-1] * 1000:.1f} ms "
+          f"({total}/{s_total} events) over 7")
+    shutil.rmtree(work)
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-09 | this PR | M84 tail-follow replay median 39.1/36.5/38.3 → 29.9/29.8/29.6 ms, −18 % to −24 %, maxima 40.1/37.0/39.4 → 32.8/30.0/29.9 ms; stdout-stream replay median 14.8/14.7/14.7 → 5.1/5.0/5.3 ms, −64 % to −66 %, maxima 15.0-17.6 → 5.2-5.4 ms (five interleaved rounds of the new collector — three sequential then two back-to-back interleaved main-before/branch-after, 9.9 MB / 391-line worst on-disk raw agent log of session 4fcd4c43, scratch copy per round, live home read-only, every paired round faster at load 1.0-3.2; parser parity 0 divergences over all 391 lines in every round — stdlib json and orjson agree on the whole corpus; 4889-passed suite plus 4 new stream-funnel contract tests) | the backend stream funnels — the raw-log tail-follow loop (the live and re-attach read side of every covered backend's streamed turn), the spawned-stdout NDJSON reader, the opencode SSE payload reader, and the anthropic proxy's upstream chunk reader — parsed every stream line with stdlib json.loads while orjson parses the same lines ~2x faster (the M78 file-read funnel's measured ratio; this corpus: stdout-stream −65 %); the swap covers the four funnels with the skip contract unchanged (a malformed line yields nothing in the tail/stdout readers, raises in the SSE/proxy readers where it always raised), and the boundary follows the M78 file readers' deliberate precedent: the stdlib NaN/Infinity extensions and double-overflow floats now skip as malformed in the tail/stdout funnels and fail the frame loudly in the SSE/proxy readers — machine-written upstream JSON carries none of those literals, pinned by the NaN contract test and the collector's corpus parity check; M84 definition and healthy range introduced with this PR |
 | 2026-09-09 | this PR | M82 worker events-log append median 140/140/146 us → 71/72/90 us, −49 % to −51 %, maxima 183-384 us → 96-123 us (three interleaved rounds of the new collector, 50 timed appends after 5 warm on a scratch worker log under /tmp, live home untouched, main checkout before vs branch worktree after back-to-back at load 2.66/2.58/2.38, every paired round faster; component check: one to_thread no-op round-trip is ~67-104 us on this host, the M34/M52 rows' figure, so the pair's second hop was the whole gap); 4880-passed suite | the worker's per-event events-log append rode aiofiles' write+flush pair — two executor round-trips per streamed event (text delta, tool use, tool result, thinking) on the default pool every poll read, chat append, and probe shares; the run now holds one raw O_APPEND fd and each event lands through one asyncio.to_thread hop around a write-all loop (the same short-write contract as append_ndjson), with no durability change — the events log is a diagnostic stream and carried no fdatasync (aiofiles flush is not fsync); the fd is held for the run because a worker's events log is append-only and nothing rewrites or replaces it mid-run (only chat files archive); M82 definition and healthy range introduced with this PR |
 | 2026-09-09 | this PR | M81 page re-render wall 33.13/33.64/31.08 → 0.87/1.20/0.95 ms, −97 %, 40 → 0 walks (three interleaved rounds of the new collector, 40 math-free bodies / 57.6 KB / corpus sha1 7409bcd20e4c of the 36.3 MB worst live chat file, katex 0.16.21 over jsdom, main checkout before vs branch worktree after back-to-back at load 3.0-3.4, every paired round faster, page innerHTML parity true every round); streamed math-free draft (11.4 KB, sha1 b155f860788f — the M54 corpus) 13 paints: walk wall 4.29/4.52/5.08 → 0.00/0.00/0.00 ms; 4877-passed suite plus the 7-case gate suite registered in _NODE_TESTS | the chat's KaTeX auto-render walk scanned every prose text node for the four delimiters on every message re-render (each session switch and page re-render) and on every coalesced streamed paint even when the message carries no math — the walk M33's replay and M60's repeat-page metric both stub away, so no standing number saw it; renderChatMath now skips the walk when the message's own source carries none of the three delimiter initials ($, \(, \[) — the streamed paint passes the draft text, message renders fall to the existing `.prose-msg[data-raw]`, elements with neither (raw backend output) keep the unconditional walk, and the predicate also forces the walk on character references (any numeric reference or a named reference of the four delimiter characters), which the browser decodes into the walk's text nodes — the review's entity finding; a $-bearing draft keeps the full walk — the worst on-disk draft (100 KB, $ inside) is unchanged by design |
 | 2026-09-09 | this PR | M63 /view handler median 0.93/0.90/1.00 → 0.86/0.89/0.88 ms, maxima 1.22/1.02/1.20 → 1.18/1.14/1.16 ms (three interleaved rounds of the verbatim collector, 339-thread worst corpus of session 3b91d606, scratch CHARLIEBOT_HOME, main checkout before vs branch worktree after back-to-back at load 1.15-1.69, every paired round faster; body 179222 B identical across arms); M35 view request median 4.40/3.78/3.88 → 3.45/3.60/3.41 ms, maxima 5.09/4.50/4.72 → 4.48/4.34/4.16 ms (three interleaved rounds of the view slice on the shared 20534-event snapshot of session d321b9ad, body 183003 B and digest ea2d0c6b27c3 identical across all six arms; events and bootstrap digests 68668edc2776 / 8e4653af40df unchanged); component attribution: build_session_view_data warm wall 0.152/0.145/0.136 → 0.036/0.043/0.032 ms on the 20534-event corpus, −73 % to −77 %, every paired round faster (three interleaved rounds, scratch home per run); no-regression re-measures on the branch: M26 advance 0.12 ms parity True digest e94c56635194, M6 append-round 0.05 ms parity True; 4879-passed suite | the session view's warm-projection path loaded the session's whole chat-event corpus through a threaded `load_chat_events_sync` call purely to fill `SessionViewData.raw_events` — a field no consumer reads (the route payload, the tests, and the frontend never touch it; the usage resolution that follows reuses the same events cache, so the load warmed nothing the next read needed) — the poll-during-a-turn and every SPA switch paid the executor round-trip for a dead list; the field and the `_tail_events_page` return element that fed it are gone, the full-history branch (message_limit=None) keeps its local list for `events_to_view` |

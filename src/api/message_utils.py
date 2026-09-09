@@ -346,10 +346,15 @@ async def build_session_view_data(
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during view build")
 
+  # A projection miss (the session can be archived between the metadata read
+  # above and the threaded projection read, so get_message_projection returns
+  # None) must still take the legacy tail-events fallback, like
+  # build_session_bootstrap_data's `page is None` branch does.
+  result = None
   if message_limit is not None and session_meta.archive_offset == 0:
     result = await _projection_page(session_mgr, session_id, message_limit)
-    if result is not None:
-      messages, pending_draft, total_event_count, oldest_message_ordinal, has_more = result
+  if result is not None:
+    messages, pending_draft, total_event_count, oldest_message_ordinal, has_more = result
   elif message_limit is not None:
     (messages, pending_draft, total_event_count, oldest_message_ordinal,
      has_more) = await _tail_events_page(session_mgr, session_id, session_meta.archive_offset, message_limit)

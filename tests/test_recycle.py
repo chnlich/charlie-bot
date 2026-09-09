@@ -501,6 +501,27 @@ async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_session_view_projection_miss_falls_back_to_tail_events(tmp_path: Path) -> None:
+  """A projection miss must still serve the legacy tail-events page.
+
+  get_message_projection re-reads archive_offset from disk and returns None
+  when the session is archived between the metadata snapshot the view build
+  holds and the threaded projection read; the view build must then take the
+  tail-events path instead of serving an unbound payload.
+  """
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  events = [{"type": ET.USER, "content": f"e{i}", "timestamp": f"2026-05-10T00:0{i}:00Z"} for i in range(4)]
+  _append_events(mgr.get_chat_events_path(session.id), events)
+
+  with patch.object(mgr, "get_message_projection", return_value=None):
+    view = await build_session_view_data(session.id, mgr, [], message_limit=2)
+
+  assert [m["content"] for m in view.messages] == ["e2", "e3"]
+  assert view.total_event_count == 4
+  assert view.has_more is True
+
+
+@pytest.mark.asyncio
 async def test_session_bootstrap_uses_tail_without_thread_or_usage_load(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   # Turns of (user, separator) so tail(2) returns exactly the last turn.

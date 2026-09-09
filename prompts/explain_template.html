@@ -94,6 +94,10 @@
       Opening triad (unnumbered, first screen): "You know X" (the reader's stated model, in
       their words) / "You observe Y" (the contradicting observation, labeled) / "The missing
       link is Z" (one sentence). The contradiction is on screen before anything else.
+      Wrap each triad row's post-label content in a &lt;div&gt;: .triad .row is a flex
+      container, and bare text interleaved with inline elements (&lt;code&gt;, &lt;b&gt;,
+      &lt;span class="tag"&gt;) splits into multiple anonymous flex items that shrink into
+      broken narrow columns.
 
       1 affirm: where the reader's model is right and the exact step where it stops. Affirm
         with evidence, and teaching begins at that step. When the reader points out a
@@ -120,9 +124,9 @@
 
     <section class="plan-section">
       <div class="triad">
-        <div class="row"><span class="k">You know</span>The farm buckets the tone radius into sixteen bins before the shader compiles, so the 47-minute run should have built at most sixteen compiled variants.</div>
-        <div class="row"><span class="k">You observe</span>The ramp job drew ~47 minutes of wall time, 68% of it in a compile stall, and recompiles never converged. <span class="tag fact">Fact</span></div>
-        <div class="row"><span class="k">Missing link</span>The compile cache keys on the joint value of every host quantity the frame depends on, not on the radius bin alone; binning collapses each dimension, not the product of dimensions.</div>
+        <div class="row"><span class="k">You know</span><div>The farm buckets the tone radius into sixteen bins before the shader compiles, so the 47-minute run should have built at most sixteen compiled variants.</div></div>
+        <div class="row"><span class="k">You observe</span><div>The ramp job drew ~47 minutes of wall time, 68% of it in a compile stall, and recompiles never converged. <span class="tag fact">Fact</span></div></div>
+        <div class="row"><span class="k">Missing link</span><div>The compile cache keys on the joint value of every host quantity the frame depends on, not on the radius bin alone; binning collapses each dimension, not the product of dimensions.</div></div>
       </div>
     </section>
 

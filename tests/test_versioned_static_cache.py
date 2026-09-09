@@ -24,7 +24,10 @@ def _drive(url: str) -> dict[str, str]:
   headers: dict[str, str] = {}
   scope: dict[str, Any] = {
       "type": "http",
-      "asgi": {"version": "3.0", "spec_version": "2.3"},
+      "asgi": {
+          "version": "3.0",
+          "spec_version": "2.3"
+      },
       "http_version": "1.1",
       "method": "GET",
       "scheme": "http",

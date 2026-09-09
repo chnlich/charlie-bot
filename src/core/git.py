@@ -179,10 +179,11 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
 
   *remote_tip* is a caller's own fresh `git ls-remote` answer for
   ``refs/heads/<branch>`` (None = the caller did not probe). Supplying it skips
-  this function's duplicate ls-remote; the fetch still runs unless the probe
-  showed the local remote-tracking ref already holds exactly the tip origin
-  advertises — the probe is read straight from the remote, so a fetch could not
-  change that ref and the start point keeps the freshly-resolved guarantee.
+  this function's duplicate ls-remote and origin-configured probe; the fetch
+  still runs unless the probe showed the local remote-tracking ref already
+  holds exactly the tip origin advertises — the probe is read straight from
+  the remote, so a fetch could not change that ref and the start point keeps
+  the freshly-resolved guarantee.
   """
   raw = (base_branch or "").strip()
   if not raw:
@@ -207,16 +208,22 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
   if not branch or ".." in branch or any(c.isspace() for c in branch):
     raise BaseBranchResolutionError(f"invalid branch name in --base-branch: {raw!r}")
 
-  # Probe origin state: configured? reachable? branch published?
-  ok, _, _ = await _git_stdout(
-      repo_path,
-      "remote",
-      "get-url",
-      "origin",
-      timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
-      timeout_label="git remote get-url",
-  )
-  origin_configured = ok
+  # Probe origin state: configured? reachable? branch published? A supplied
+  # remote_tip is a caller's own successful ls-remote, which already proves
+  # origin configured and reachable, so the get-url probe stays on the
+  # self-probing path only.
+  if remote_tip is None:
+    ok, _, _ = await _git_stdout(
+        repo_path,
+        "remote",
+        "get-url",
+        "origin",
+        timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+        timeout_label="git remote get-url",
+    )
+    origin_configured = ok
+  else:
+    origin_configured = True
   if origin_configured and remote_tip is None:
     ok, out, ls_err = await _git_stdout(
         repo_path,
@@ -239,16 +246,23 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
       fetched, fetch_err = await git_fetch(repo_path, "origin", branch)
       if not fetched:
         raise BaseBranchResolutionError(f"git fetch origin {branch} failed: {fetch_err}")
-    remote_sha = await _git_rev_parse(repo_path, f"refs/remotes/origin/{branch}")
-    if remote_sha is None:
-      raise BaseBranchResolutionError(f"origin/{branch} listed by ls-remote but missing after fetch in {repo_path}")
-    local_sha = await _git_rev_parse(repo_path, f"refs/heads/{branch}")
-    if not explicit_remote and local_sha is not None and local_sha != remote_sha:
-      raise BaseBranchResolutionError(
-          f"local {branch} ({local_sha[:12]}) differs from origin/{branch} ({remote_sha[:12]}). "
-          "A local base must match its remote exactly: push the local commits, fast-forward the "
-          f"local branch, pass origin/{branch} to use the remote explicitly, "
-          "or pass a full commit SHA to pin the base.")
+      remote_sha = await _git_rev_parse(repo_path, f"refs/remotes/origin/{branch}")
+      if remote_sha is None:
+        raise BaseBranchResolutionError(f"origin/{branch} listed by ls-remote but missing after fetch in {repo_path}")
+    else:
+      # No fetch ran between the two reads, so the tracking ref still holds
+      # exactly the probed tip; re-reading it would return the same SHA.
+      remote_sha = local_remote_sha
+    if not explicit_remote:
+      # The local-vs-remote divergence check exists only for the bare-branch
+      # form; an explicit origin/<b> request never reads the local branch.
+      local_sha = await _git_rev_parse(repo_path, f"refs/heads/{branch}")
+      if local_sha is not None and local_sha != remote_sha:
+        raise BaseBranchResolutionError(
+            f"local {branch} ({local_sha[:12]}) differs from origin/{branch} ({remote_sha[:12]}). "
+            "A local base must match its remote exactly: push the local commits, fast-forward the "
+            f"local branch, pass origin/{branch} to use the remote explicitly, "
+            "or pass a full commit SHA to pin the base.")
     return BaseResolution(
         canonical=branch, start_point=f"origin/{branch}", detail=f"branch {branch} at origin tip {remote_sha[:12]}")
 

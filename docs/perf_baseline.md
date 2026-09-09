@@ -92,6 +92,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M80 token-tally changed round under append churn | M80 collector below | seconds per changed-round collect after one 1 MB-class append to each of the two worst copied transcripts (the busy-turn shape: an active master turn appends MBs between /token-usage loads; the 40 h live log sampled 2026-09-09 shows the page's p90 at 219 ms, max 2.35 s, against a 20 ms warm median), scratch corpus + cache | median < 0.020 s | — (introduced with its first history row) |
 | M81 chat math-walk, delimiter gate | M81 collector below | seconds of KaTeX auto-render walk per message-page re-render (the M60 corpus) and per streamed math-free draft replay; the walks the gate skips count 0 | page re-render median < 0.020 s; streamed replay walk median < 0.010 s | — (introduced with its first history row) |
 | M82 worker events-log append, per event | M82 collector below | seconds per append of one probe event to a scratch worker log, the run's held-handle shape | median < 0.0002 s | — (introduced with its first history row) |
+| M83 versioned static-asset revalidation, warm page load | M83 collector below | seconds per revalidation request (If-None-Match) per asset over the dashboard's template-referenced asset set; the warm-cache revalidation-request count the page load issues | revalidate median < 0.002 s per asset; 0 revalidation requests per warm page load | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -4958,6 +4959,112 @@ asyncio.run(main())
 EOF
 ```
 
+M83 — versioned static-asset revalidation, warm page load. Every template-referenced asset URL
+carries ``?v=<static_asset_version>`` (the runtime git version plus the served tree's content
+digest, refreshed per page render, so the token tracks the bytes the URL serves even when a
+working-tree edit lands between restarts), but the static mount served default caching, so the
+browser revalidated all of them on every page load — one If-None-Match round trip plus ~0.5 ms
+of serve work per asset (46 assets, ~21 ms of serve work per page load measured), on exactly the
+files the latency loop edits most often. The fixed mount marks a 200 response whose request
+named a version ``public, max-age=31536000, immutable`` — a response that named its version
+names its content — so a warm-cache page load issues zero asset requests; a request without a
+version parameter keeps default caching because its URL can outlive its content, and a 304
+keeps the cached 200's own headers. The cost is per-page-load latency and serve CPU
+invisible to the standing HTTP probes, so the collector resolves the dashboard's template asset
+set from the checkout and drives each asset through the real app stack (gzip + auth middleware)
+raw-ASGI: one cold pass (first load, 200), then five revalidation-shaped requests per asset,
+reporting the per-asset wall and the page-load serve work the pre-fix shape multiplied into;
+the warm-cache revalidation-request count reads off the header's presence. Evidence points the
+collector at the branch checkout (``CHECKOUT`` at the worktree root), the same shape as the M18
+protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'PYEOF2'
+import asyncio
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+
+import server  # the real app stack: gzip + auth middleware
+
+CHECKOUT = Path(os.environ["CHECKOUT"])
+ASSETS = sorted(set(re.findall(r'/(?:static/[\w/.\-]+\.(?:js|css))',
+                               "\n".join(p.read_text(encoding="utf-8", errors="replace")
+                                         for p in (CHECKOUT / "web" / "templates").rglob("*.html")))))
+VERSION = "collector-v1"
+
+
+async def drive(asset: str, extra_headers: list[tuple[bytes, bytes]]):
+    url = f"{asset}?v={VERSION}"
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1", "method": "GET", "scheme": "http",
+        "path": asset, "raw_path": url.encode(), "query_string": f"v={VERSION}".encode(),
+        "root_path": "", "headers": [(b"host", b"test")] + extra_headers,
+        "client": ("test", 123), "server": ("test", 80),
+    }
+    status = 0
+    headers = {}
+    chunks = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        nonlocal status
+        if msg["type"] == "http.response.start":
+            status = msg["status"]
+            for k, v in msg["headers"]:
+                headers[k.decode().lower()] = v.decode()
+        elif msg["type"] == "http.response.body":
+            chunks.append(msg.get("body", b""))
+
+    await server.app(scope, receive, send)
+    return status, headers, b"".join(chunks)
+
+
+async def main():
+    immutable_all = True
+    revalidate_ms = []
+    cold_ms = []
+    for asset in ASSETS:
+        status, headers, body = await drive(asset, [])  # cold first load; not timed
+        assert status == 200, (asset, status)
+        etag = headers.get("etag", "")
+        cc = headers.get("cache-control", "")
+        if cc != "public, max-age=31536000, immutable":
+            immutable_all = False
+        times = []
+        for _ in range(5):
+            t0 = time.perf_counter()
+            status, _, _ = await drive(asset, [(b"if-none-match", etag.encode())])
+            times.append(time.perf_counter() - t0)
+            assert status == 304, (asset, status)
+        times.sort()
+        revalidate_ms.append(times[2])
+        t0 = time.perf_counter()
+        await drive(asset, [])
+        cold_ms.append(time.perf_counter() - t0)
+    revalidate_ms.sort()
+    cold_ms.sort()
+    mid = revalidate_ms[len(revalidate_ms) // 2]
+    mid_cold = cold_ms[len(cold_ms) // 2]
+    total = sum(revalidate_ms)
+    print(f"{len(ASSETS)} versioned assets; revalidate-request median {mid * 1000:.2f} ms/asset, "
+          f"max {revalidate_ms[-1] * 1000:.2f} ms; cold 200 median {mid_cold * 1000:.2f} ms; "
+          f"page-load serve work at the pre-fix one-request-per-asset shape {total * 1000:.1f} ms; "
+          f"immutable header on every versioned response: {immutable_all} "
+          f"(warm-cache revalidation requests per page load: {0 if immutable_all else len(ASSETS)})")
+
+
+asyncio.run(main())
+PYEOF2
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
@@ -5117,3 +5224,4 @@ EOF
 | 2026-09-07 | this PR | M72 listing request median 10.94/10.94/11.77 ms → 9.60/9.52/9.89 ms, maxima 12.14/11.95/12.89 → 10.81/11.12/11.05 ms (three interleaved rounds of the verbatim collector, 1088-entry sessions root, live state read-only, main checkout before vs branch worktree after back-to-back at load 1.35-1.42; served body byte-identical across all six arms — 238829 B, sha1 f9afb0828dde; builder alone 7.04 → 6.62 ms median over 9 calls; component microbench: per-1088-entry escape+quote 1.13 ms against the fast path's fullmatch check 0.23 ms; 4806-passed suite) | the per-entry rendering paid two html.escape calls (five str.replace invocations each) plus a urllib.parse.quote per entry while session ids (UUIDs) and artifact names draw from characters where both are the identity transform — a name over [A-Za-z0-9_.~-] renders by interpolation and only the rest pay the escaping calls (the byte-identity ground, pinned by the reference-walk test's mixed corpus); the per-entry stat walk (3.2 ms per 1088) is the remaining floor |
 | 2026-09-07 | this PR | M4 hung 1 → 0 (collector verbatim against the live home at load 0.67/0.30/0.46: old form "1 running sessions with last event older than 1h", new form 0 with the turn stats unchanged — 27 turns, median 220 s, max 1540 s); scratch-home shape check: an ACTIVE session with a running thread and a 2 h-old chat file still reports 1 hung, the same shape archived reports 0 | docs-only calibration: the collector counted an archived session's stale "running" thread marker as a hung session — session 80507dda (memory-reviewer-dryrun-gemini, archived 2026-09-04 23:43) flagged hung for ~3 days of rounds while its only "running" thread is the marker `_scan_interrupted_runs` deliberately leaves alone (archived sessions' threads are not work to resume, `_session_archived`); the collector now reads the session metadata's status only when a thread claims running and applies the same archived rule, so the watch keeps catching genuine active-session hangs at zero extra scan cost; healthy range unchanged (hung = 0) |
 | 2026-09-07 | this PR | M23 8-page scroll steady-state median 0.0007/0.0007/0.0007 s → 0.0003/0.0003/0.0003 s, max 0.0007 → 0.0003 s (three interleaved verbatim-collector rounds, 8.2 MB / 2-file worst archive corpus of session 92db85f7, archive_offset 2799, scratch CHARLIEBOT_HOME, main checkout before vs branch worktree after back-to-back at load 1.4-2.7, every paired round faster; profile attribution: the per-call archives-dir glob's pathlib machinery ~75 µs of the ~84 µs page turn); no-regression re-measures interleaved ×2: M20 repeat-divider extract 0.0000 s both arms with digest bb99828aa5b6 identical, M30 steady-state 0.0002 s / append-round 0.0003 s both arms, M26 advance 0.17-0.21 ms parity True digest e94c56635194, M6 append-round 0.05-0.06 ms; 4830-passed suite plus 2 new multi-file range tests | every archived-session page turn re-ran the archives dir's pathlib glob — scandir plus per-entry Path construction and fnmatch per call — and extended every archive file's whole parsed list only to slice the 200-event page; the file list now memoizes on the archives dir's own (mtime_ns, size) — a membership change creates or removes a directory entry and either moves the dir's mtime_ns, while a same-week append moves only the file's own signature and never invalidates the list — and the range concatenates only files overlapping the requested span, each file's length read off its parsed-list memo |
+| 2026-09-09 | this PR | M83 warm-cache revalidation requests per page load 46 → 0 (46 versioned assets; three interleaved verbatim-collector rounds, main checkout before vs branch worktree after back-to-back at load 0.64-1.12; before arm: immutable header on every versioned response False, revalidate-request median 0.45-0.47 ms/asset, cold 200 median 0.80-0.86 ms, page-load serve work at the pre-fix one-request-per-asset shape 20.9-22.1 ms; after arm: header True on all 46, revalidate median 0.45-0.46 ms/asset, cold 200 median 0.83-0.86 ms — the serve path's walls unchanged, the count is the win); live-instance corroboration: revalidation-shaped curl against the running server (which predates this change) median 1.5 ms/asset over 5, ~68 ms of serve work + 46 round trips per dashboard page load at the served asset set; M83 definition and healthy range introduced with this PR | the static mount served default caching, so the browser revalidated every template-referenced asset (?v=<runtime git version>) on every page load — the per-asset stat+etag round trip lands on exactly the files the latency loop edits most often, whose fresh Last-Modified keeps the heuristic cache from ever covering them; the mount now marks a 200 whose request named a version `public, max-age=31536000, immutable` (a response that named its version names its content — the token is the runtime git version plus the served tree's content digest, refreshed per page render, so a working-tree edit between restarts changes the token on the next render), so a warm-cache page load issues zero asset requests; a request without a version parameter keeps default caching because its URL can outlive its content, and a 304 keeps the cached 200's own headers |

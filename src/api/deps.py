@@ -86,10 +86,12 @@ async def get_config_on_loop() -> CharlieBotConfig:
   return get_config()
 
 
-# Client-visible 404 detail for an unresolvable session id: every route that
-# refuses a request on a missing session (HTTPException and, via
-# SlackReplyError, the Slack reply path) serves this exact string, and tests
-# pin it. One spelling everywhere.
+# Client-visible 404 detail for an unresolvable session id: the sites that
+# serve it (require_found and the fork/elone/delete raisers, the events
+# viewer, and the Slack reply path via SlackReplyError) share this one
+# spelling, and tests pin it. Distinct deliberate wordings exist elsewhere
+# (e.g. internal.py's "Target session not found" for a wake's cross-session
+# target); this constant homes only the unqualified one.
 SESSION_NOT_FOUND_DETAIL = "Session not found"
 
 

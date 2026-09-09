@@ -52,7 +52,7 @@ from src.core.config import (
 )
 from src.core.json_utils import load_json_meta
 from src.core.models import BackendType, SessionStatus, parse_utc_datetime
-from src.core.threads import METADATA_NAME
+from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 from src.core.timeouts import SQLITE_LOCK_WAIT_MS, SQLITE_LOCK_WAIT_SECONDS
 from src.core.token_tally import DEFAULT_OPENCODE_DB
 
@@ -255,7 +255,7 @@ def _managed_transport_dirs(session_dir: Path) -> list[Path]:
       log.warning("storage_cool_dir_scan_failed", dir=str(master_runs), error=str(e))
     else:
       managed.extend(child for child in run_dirs if child.is_dir() and not child.is_symlink())
-  threads_dir = session_dir / "threads"
+  threads_dir = session_dir / THREADS_DIR_NAME
   if threads_dir.is_dir() and not threads_dir.is_symlink():
     try:
       thread_dirs = sorted(threads_dir.iterdir())

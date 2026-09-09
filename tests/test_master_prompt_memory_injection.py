@@ -10,7 +10,7 @@ frontmatter, comma-list audience, heading-free body).
 from pathlib import Path
 from types import SimpleNamespace
 
-from conftest import write_memory_entry, write_memory_topics
+from conftest import make_instruction_cfg, write_memory_entry, write_memory_topics
 
 from src.agents import master_cc
 from src.core import memory
@@ -31,19 +31,9 @@ def _make_store(memory_dir: Path) -> None:
 
 
 def _cfg(tmp_path: Path) -> SimpleNamespace:
-  home = tmp_path / "home"
-  home.mkdir()
-  repo = tmp_path / "repo"
-  (repo / "prompts").mkdir(parents=True)
-  (repo / "prompts" / "master.md").write_text("BASE PROMPT", encoding="utf-8")
-  memory_dir = home / "memory"
-  _make_store(memory_dir)
-  return SimpleNamespace(
-      charlie_bot_repo=repo,
-      claude_md_file=home / "MASTER_AGENT_PROMPT.md",
-      memory_dir=memory_dir,
-      charliebot_home=home,
-  )
+  cfg = make_instruction_cfg(tmp_path, manager_contract=None)
+  _make_store(cfg.memory_dir)
+  return cfg
 
 
 def test_resident_body_present_non_resident_index_only(tmp_path: Path) -> None:
@@ -72,17 +62,7 @@ def test_staging_content_absent(tmp_path: Path) -> None:
 
 def test_missing_memory_dir_still_builds(tmp_path: Path) -> None:
   """A missing memory_dir is the one tolerated degradation: prompt still builds."""
-  home = tmp_path / "home"
-  home.mkdir()
-  repo = tmp_path / "repo"
-  (repo / "prompts").mkdir(parents=True)
-  (repo / "prompts" / "master.md").write_text("BASE PROMPT", encoding="utf-8")
-  cfg = SimpleNamespace(
-      charlie_bot_repo=repo,
-      claude_md_file=home / "MASTER_AGENT_PROMPT.md",
-      memory_dir=home / "memory",  # does not exist
-      charliebot_home=home,
-  )
+  cfg = make_instruction_cfg(tmp_path, manager_contract=None)  # memory_dir left unpopulated
   out = master_cc._build_instructions_content(SimpleNamespace(id="session-1", role=None, group=None), cfg, None)
   assert out is not None
   assert "BASE PROMPT" in out

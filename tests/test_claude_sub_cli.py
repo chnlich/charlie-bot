@@ -424,20 +424,10 @@ def test_session_config_overlay_sets_idle_threshold_without_touching_sources(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  source_global = tmp_path / "source-claude.json"
-  source_settings = tmp_path / "source-settings.json"
-  source_credentials = tmp_path / "source-credentials.json"
-  source_remote = tmp_path / "source-remote-settings.json"
-  source_global.write_text(json.dumps({"projects": {"/project": {}}}), encoding="utf-8")
-  source_settings.write_text(json.dumps({"hooks": {"Stop": []}}), encoding="utf-8")
-  source_credentials.write_text("credentials", encoding="utf-8")
-  source_remote.write_text("{}", encoding="utf-8")
-  monkeypatch.setattr(
-      claude_sub,
-      "_claude_user_config_paths",
-      lambda: (source_global, source_settings, source_credentials, source_remote),
-  )
-  monkeypatch.setattr(claude_sub, "_session_marker_dir", lambda: tmp_path / "markers")
+  source_global, source_settings, _, _ = _install_config_paths(
+      monkeypatch, tmp_path, global_content={"projects": {
+          "/project": {}
+      }})
 
   config_dir = claude_sub._prepare_session_config(SESSION_ID, Path(WORKING_DIRECTORY))
 

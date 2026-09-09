@@ -269,7 +269,7 @@ async def list_archived_sessions(
     before: str | None = None,
     before_id: str | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
-) -> ArchivedSessionsPage:
+) -> dict:
   """One keyset page of archived sessions, newest first, with group aggregates for the filter strip."""
   try:
     return await session_mgr.list_archived_page(group=group, limit=limit, before=before, before_id=before_id)

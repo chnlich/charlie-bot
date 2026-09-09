@@ -40,11 +40,12 @@ async def read_verify_final_report(session_id: str, thread_id: str, thread_mgr: 
 def _resolve_final_report(events_path: Path) -> str:
   """One from-the-end pass deciding the report: the last result event's payload, else the last assistant text.
 
-  ``result`` judgment: the first result event from the end decides — a usable
-  payload returns, an empty one hands the answer to the assistant fallback,
-  exactly the whole-list walk's first-hit-then-break rule. The assistant
-  fallback tracks the first non-empty assistant text from the end
-  opportunistically, so the walk stops the moment either judgment resolves.
+  The result judgment settles at the first result event from the end — a usable
+  payload returns, an empty one hands the answer to the assistant fallback, the
+  whole-list walk's first-hit-then-break rule. The assistant judgment settles at
+  the first non-empty assistant text from the end. The walk returns once both
+  judgments have settled and keeps walking only while one of them is still open
+  (no result event seen yet, or the fallback text not yet found).
   """
   assistant_text: str | None = None
   seen_result = False
@@ -60,8 +61,10 @@ def _resolve_final_report(events_path: Path) -> str:
       result = event.get("result")
       if isinstance(result, str) and result.strip():
         return result
-      if assistant_text is not None:
-        return assistant_text
+    elif seen_result and assistant_text is not None:
+      # Both judgments settled: the empty result handed the answer to the
+      # fallback, and the fallback text is older-ward from here.
+      return assistant_text
   return assistant_text or ""
 
 

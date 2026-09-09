@@ -132,3 +132,67 @@ def test_resolve_final_report_missing_file_and_empty_log(tmp_path: Path) -> None
   events_path = tmp_path / "events.jsonl"
   events_path.write_text("", encoding="utf-8")
   assert _resolve_final_report(events_path) == ""
+
+
+def test_resolve_final_report_reads_only_the_tail_window_on_the_fallback_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The empty-payload fallback shape — the reviewer's finding: the newest
+  # non-empty assistant sits behind the tail result event, so both judgments
+  # settle inside one window and the walk must not read the older bytes.
+  target = tmp_path / "events.jsonl"
+  with target.open("wb") as f:
+    for i in range(2000):  # ~14 KB per event: the early corpus spans several windows
+      f.write(
+          (json.dumps({
+              "type": "assistant",
+              "message": {
+                  "content": [{
+                      "type": "text",
+                      "text": f"early {i}"
+                  }]
+              }
+          }) + "\n").encode())
+    f.write(
+        (
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [{
+                            "type": "text",
+                            "text": "the report\nRESULT: clean"
+                        }]
+                    }
+                }) + "\n").encode())
+    f.write((json.dumps({"type": "result", "result": ""}) + "\n").encode())
+
+  read_bytes = 0
+  real_open = open
+
+  def counting_open(file, mode="r", *args, **kwargs):
+    real = real_open(file, mode, *args, **kwargs)
+    if mode != "rb":
+      return real
+
+    class CountingReader:
+
+      def __getattr__(self, name):
+        return getattr(real, name)
+
+      def __enter__(self):
+        return self
+
+      def __exit__(self, *exc):
+        return real.__exit__(*exc)
+
+      def read(self, size=-1):
+        nonlocal read_bytes
+        data = real.read(size)
+        read_bytes += len(data)
+        return data
+
+    return CountingReader()
+
+  monkeypatch.setattr("builtins.open", counting_open)
+  assert _resolve_final_report(target) == "the report\nRESULT: clean"
+  assert 0 < read_bytes <= 2 * 512 * 1024  # the newest window plus the fallback's one older window

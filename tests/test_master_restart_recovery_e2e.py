@@ -266,6 +266,19 @@ def _cfg(home: Path, shim: Path) -> CharlieBotConfig:
   )
 
 
+def _uncovered_transport_cfg(home: Path, shim: Path) -> CharlieBotConfig:
+  """The uncovered-transport pair's config: the covered fake shim plus the oc
+  backend the pinned session rides."""
+  return CharlieBotConfig(
+      charliebot_home=home,
+      worktree_dir=str(home / "worktrees"),
+      backend_options=[
+          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=str(shim)),
+          BackendOption(id="oc", label="OC", type="opencode", model="oc-model", prompt_overlay="none"),
+      ],
+  )
+
+
 def _session_meta(home: Path, session_id: str) -> dict:
   return json.loads((home / "sessions" / session_id / "metadata.json").read_text(encoding="utf-8"))
 
@@ -381,6 +394,22 @@ async def _recover(
   await init_module.run_crash_recovery(cfg, datetime.now(UTC))
   await _await_recovery_tasks()
   return cfg
+
+
+def _capture_replays(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+  """Record the replay pass instead of spawning the uncovered backend.
+
+  The marker application lives in ``replay_user_message``, which stays real.
+  Returns the list each replay lands in.
+  """
+  replays: list[dict] = []
+
+  async def _capture_run_message(cfg, session_meta, user_content, callbacks, **kwargs) -> None:
+    replays.append({"content": user_content, "user_event_id": kwargs.get("user_event_id")})
+
+  monkeypatch.setattr(master_cc_queue, "run_message", _capture_run_message)
+  patch_instructions_content(monkeypatch)
+  return replays
 
 
 def _master_pid(home: Path, session_id: str) -> int:
@@ -899,14 +928,7 @@ async def test_uncovered_transport_turn_cleared_not_drained(
   message, nothing to answer: the round simply closes."""
   home = tmp_path / "home"
   shim, state = _install_shim(tmp_path)
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[
-          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=str(shim)),
-          BackendOption(id="oc", label="OC", type="opencode", model="oc-model", prompt_overlay="none"),
-      ],
-  )
+  cfg = _uncovered_transport_cfg(home, shim)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend="oc")
   user_event_id = None
@@ -923,15 +945,7 @@ async def test_uncovered_transport_turn_cleared_not_drained(
   )
   await session_mgr.persist_master_run(meta.id, record)
 
-  # Capture the replay instead of spawning the uncovered backend: the marker
-  # application lives in replay_user_message, which stays real.
-  replays: list[dict] = []
-
-  async def _capture_run_message(cfg, session_meta, user_content, callbacks, **kwargs) -> None:
-    replays.append({"content": user_content, "user_event_id": kwargs.get("user_event_id")})
-
-  monkeypatch.setattr(master_cc_queue, "run_message", _capture_run_message)
-  patch_instructions_content(monkeypatch)
+  replays = _capture_replays(monkeypatch)
 
   with capture_logs() as logs:
     await init_module.run_crash_recovery(cfg, datetime.now(UTC))
@@ -967,14 +981,7 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(
   excluded from replay and judged again on the next restart."""
   home = tmp_path / "home"
   shim, state = _install_shim(tmp_path)
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[
-          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=str(shim)),
-          BackendOption(id="oc", label="OC", type="opencode", model="oc-model", prompt_overlay="none"),
-      ],
-  )
+  cfg = _uncovered_transport_cfg(home, shim)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend="oc")
   user_event = {"type": "user", "content": "message A"}
@@ -995,13 +1002,7 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(
     )
     await session_mgr.persist_master_run(meta.id, record)
 
-    replays: list[dict] = []
-
-    async def _capture_run_message(cfg, session_meta, user_content, callbacks, **kwargs) -> None:
-      replays.append({"content": user_content, "user_event_id": kwargs.get("user_event_id")})
-
-    monkeypatch.setattr(master_cc_queue, "run_message", _capture_run_message)
-    patch_instructions_content(monkeypatch)
+    replays = _capture_replays(monkeypatch)
 
     await init_module.run_crash_recovery(cfg, datetime.now(UTC))
     await _await_recovery_tasks()

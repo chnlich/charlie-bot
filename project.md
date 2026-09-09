@@ -61,7 +61,6 @@ thread branch — the directory name is the branch name with `/` replaced by `-`
 
 **Notes:**
 - Individual Worker logs are in `threads/{uuid}/data/` (`stdout.log`, `stderr.log`, `events.jsonl`).
-- `CLAUDE.md`: Written into each thread's worktree (so Claude Code finds it via cwd).
 - `workspace_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The `GET /api/sessions/projects` endpoint returns discovered projects for the UI project picker.
 
 ### 3.2 Repository Code Structure (Stateless)
@@ -174,7 +173,7 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 
 ### 6.2 Context Management Strategies
 - **Master Layer**: Conversation summarization (compress early history, keep last ~10 turns); hierarchical context (System > Session Summary > Recent Dialogue > Retrieved snippets)
-- **Worker Layer**: Task decomposition; file scoping via `CLAUDE.md` (explicitly limit focus to relevant modules)
+- **Worker Layer**: Task decomposition; file scoping via the task spec (explicitly limit focus to relevant modules)
 
 ---
 
@@ -246,11 +245,14 @@ Master parses this to distinguish "thinking" from "stuck" and track progress pre
   `yapf --diff`, so the config file is load-bearing: without it YAPF falls back to
   pep8 defaults and reformats the tree to 4-space indent.
 
-### 10.2 Worker Instructions (CLAUDE.md)
-Each Thread's `CLAUDE.md` contains:
-1. Default shared instructions from `~/.charliebot/SUBAGENT_PROMPT.md` (coding standards, YOLO mode, git conventions)
-2. Specific task description and objectives
-3. Session-specific context/constraints
+### 10.2 Worker Instructions
+Worker and reviewer directives (role, skills discovery, worktree workflow, coding standards) ride in the prompt
+itself: `prompts/worker.md` sections assembled by `_build_worker_prompt` (`src/core/spawner_prompt.py`) for
+workers, `build_review_prompt` (`src/core/review.py`) for reviewers. No instruction file is written into a
+worker's worktree, so the checked-out repo's own AGENTS.md/CLAUDE.md stays in effect. Master sessions are the
+only path that writes one: `_build_instructions_content` (`src/agents/master_cc_run.py`) assembles the
+git-shared base prompt, the per-host override, the memory block, and the project layer, and the backend writes
+it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backends).
 
 ---
 

@@ -100,7 +100,7 @@ def _extract_event_content(ev: dict, ev_type: str) -> str:
     return " ".join(parts)[:300]
 
   if ev_type == ET.RATE_LIMIT_EVENT:
-    rli = ev.get("rate_limit_info", {})
+    rli = ev.get(ET.RATE_LIMIT_INFO, {})
     status = rli.get("status", "unknown")
     rate_type = rli.get("rateLimitType", "unknown")
     return f"Rate limit {status} ({rate_type})"

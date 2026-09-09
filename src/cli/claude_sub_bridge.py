@@ -395,7 +395,7 @@ class HookTurnState:
       events.append(
           {
               "type": ET.RATE_LIMIT_EVENT,
-              "rate_limit_info": {
+              ET.RATE_LIMIT_INFO: {
                   "status": "rejected",
                   "rateLimitType": "unknown",
                   "resetsAt": "unknown",

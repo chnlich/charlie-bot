@@ -178,7 +178,7 @@ async def delegate_task(
       "timestamp": thread.created_at.isoformat(),
       "backend": resolved_backend or "",
       "model": resolved_model or "",
-      "delegate_invocation": _delegate_invocation_event_payload(req),
+      ET.DELEGATE_INVOCATION: _delegate_invocation_event_payload(req),
   }
   await session_mgr.persist_and_broadcast(req.session_id, task_event)
 

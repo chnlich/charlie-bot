@@ -978,7 +978,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
       session_id, {
           "type": ET.SLACK_REPLY,
           "content": text,
-          "slack_reply": {
+          ET.SLACK_REPLY: {
               "answers": answers,
               "chars": len(text),
               "chunks": len(bodies)
@@ -1015,7 +1015,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
 
 def _replied(events: list[dict], summon_id: str) -> bool:
   return any(
-      ev.get("type") == ET.SLACK_REPLY and (ev.get("slack_reply") or {}).get("answers") == summon_id for ev in events)
+      ev.get("type") == ET.SLACK_REPLY and (ev.get(ET.SLACK_REPLY) or {}).get("answers") == summon_id for ev in events)
 
 
 def _nudged(events: list[dict], summon_id: str) -> bool:

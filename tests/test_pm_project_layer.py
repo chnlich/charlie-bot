@@ -44,6 +44,7 @@ from src.core.config import (
 from src.core.models import (
     PROJECT_ROLE,
     CreateSessionRequest,
+    LastRunStatus,
     SessionStatus,
 )
 
@@ -167,7 +168,7 @@ async def test_master_task_fire_wakes_master_with_prompt_plus_group_line(
   assert session.scheduled_task == "pm_bp_eval"
   assert session.role == PROJECT_ROLE
   assert session.group == "bp-eval"
-  assert session.last_run_status == "success"
+  assert session.last_run_status == LastRunStatus.SUCCESS
 
 
 @pytest.mark.asyncio

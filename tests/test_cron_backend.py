@@ -32,6 +32,7 @@ from src.core.config import (
 )
 from src.core.models import (
     CreateSessionRequest,
+    LastRunStatus,
     SessionMetadata,
     SessionStatus,
     SpawnRequest,
@@ -172,7 +173,7 @@ async def test_scheduler_rotates_scheduled_session_backend_and_copies_bookkeepin
   )
   old_session.last_scheduled_run = "2026-06-07T02:00:00-07:00"
   old_session.last_scheduled_cron = "0 2 * * *"
-  old_session.last_run_status = "success"
+  old_session.last_run_status = LastRunStatus.SUCCESS
   old_session.cc_session_id = "old-backend-conversation"
   old_session.cc_session_started_at = datetime(2026, 6, 7, 9, 0, tzinfo=UTC)
   await session_mgr.save_metadata(old_session)
@@ -217,7 +218,7 @@ async def test_scheduler_backend_rotation_preserves_last_run_to_avoid_duplicate_
   now = datetime.now(ZoneInfo("America/Los_Angeles"))
   old_session.last_scheduled_run = now.isoformat()
   old_session.last_scheduled_cron = "* * * * *"
-  old_session.last_run_status = "success"
+  old_session.last_run_status = LastRunStatus.SUCCESS
   await session_mgr.save_metadata(old_session)
   task_cfg = ScheduledTaskConfig(
       name="nightly",

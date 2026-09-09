@@ -818,9 +818,10 @@ TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
 # Import-path patch target for the wake's inner run. Every wake fires through trigger_master,
 # whose body reads run_message_with_resume_recovery as a module global of its defining module,
 # so mock setattrs the stand-in there and the run is intercepted no matter which outer seam
-# fired the wake; the *TRIGGER_MASTER_PATCH_TARGET constants above name the outer seam, not
-# this inner one.
-MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET = "src.core.master_trigger.run_message_with_resume_recovery"
+# fired the wake; the other *TRIGGER_MASTER_PATCH_TARGET constants in this block name the
+# outer seam, not this inner one.
+MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET = (
+    "src.core.master_trigger.run_message_with_resume_recovery")
 
 # Import-path patch target for the config re-read a firing trigger passes to the master wake.
 # src/core/triggers.py binds the name at import scope (`from src.core.config import get_config`),
@@ -856,7 +857,7 @@ TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.core.triggers._SACCT_AVAILABLE"
 CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
 
 # Import-path patch target for the version-skew hint the CLI error paths append. src/cli/common.py
-# defines _maybe_version_skew_hint and _request_with_contract reads it as a module global at call
+# defines _maybe_version_skew_hint and _exit_server_rejection reads it as a module global at call
 # time, so mock setattrs the stand-in on the src.cli.common module attribute.
 CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.cli.common._maybe_version_skew_hint"
 

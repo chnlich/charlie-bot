@@ -13,9 +13,9 @@ from typing import ClassVar
 
 import pytest
 from conftest import (
-  SERVER_CHECK_WS_AUTH_PATCH_TARGET,
-  TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET,
-  make_fake_run_tmux,
+    SERVER_CHECK_WS_AUTH_PATCH_TARGET,
+    TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET,
+    make_fake_run_tmux,
 )
 from fastapi import WebSocketDisconnect
 

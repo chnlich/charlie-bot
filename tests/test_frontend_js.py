@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from conftest import run_node_js_test
 
-# Keep this set disjoint from the suites still wrapped by the tests/test_*_runner.py shims, or a suite runs twice.
+# One entry per node suite under tests/: an omitted suite silently stops running, a duplicate entry runs twice.
 _NODE_TESTS = [
     "artifact_comment_drafts.test.js",
     "artifact_comments.test.js",
@@ -32,19 +32,26 @@ _NODE_TESTS = [
     "plan_panel.test.js",
     "prose_markdown_memo.test.js",
     "rendering_worker_summary_origin.test.js",
+    "session_switch_stale_pagination.test.js",
+    "session_view_sentinel.test.js",
     "show_more_toggle.test.js",
     "sidebar_session_model.test.js",
+    "sidebar_usage_poll.test.js",
     "stream_tail_skip.test.js",
     "tailwind_class_coverage.test.js",
     "terminal_b64.test.js",
     "terminal_mount.test.js",
     "test_archived_view.test.js",
+    "test_switch_session_telemetry.test.js",
     "thinking_toggle.test.js",
     "tui_status_scope.test.js",
     "usage_stream_render.test.js",
+    "voice_input_run.test.js",
     "worker_description_prefix.test.js",
     "worker_events_incremental.test.js",
     "workers_list_conditional_poll.test.js",
+    "websocket_catchup_split_invariance.test.js",
+    "websocket_session_isolation.test.js",
 ]
 
 

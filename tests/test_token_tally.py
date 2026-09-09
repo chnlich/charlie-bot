@@ -119,6 +119,11 @@ def _write_opencode(path: Path, rows: list[tuple[dict, str, str]]) -> None:
   con.close()
 
 
+def _oc_row() -> tuple[dict, str, str]:
+  """The file's default opencode row: one assistant message carrying input 5 / output 1."""
+  return ({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")
+
+
 def _padded_opencode_row(pad: int) -> tuple[dict, str, str]:
   """An appended row whose bulk grows the db file, so the signature moves on size
   even when mtime_ns repeats; the tokens stay input 100 / output 2 (total 102)."""
@@ -399,7 +404,7 @@ def test_source_failure_isolation(tmp_path: Path) -> None:
           }, {"total_tokens": 2}),
       ])
   db = tmp_path / "db.sqlite"
-  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _write_opencode(db, [_oc_row()])
   claude.ext.chmod(0o000)  # one config dir unreadable
   try:
     tally = _collect(claude, codex, db)
@@ -420,9 +425,15 @@ def _usage(input_: int, output: int) -> dict:
   }
 
 
-def test_cache_serves_unchanged_files(tmp_path: Path) -> None:
+def _claude_rig(tmp_path: Path) -> Claude:
+  """A Claude home carrying one m1 record in sess1 (usage 10/5): the state most tests start from."""
   claude = Claude(tmp_path)
   claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  return claude
+
+
+def test_cache_serves_unchanged_files(tmp_path: Path) -> None:
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   first = _collect(claude, None, db, cache)
   assert first.scanned_bytes > 0
@@ -434,8 +445,7 @@ def test_cache_serves_unchanged_files(tmp_path: Path) -> None:
 
 
 def test_cache_invalidates_on_append(tmp_path: Path) -> None:
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   before = _row(_collect(claude, None, db, cache), "Claude Code", NAME)
 
@@ -449,8 +459,7 @@ def test_cache_invalidates_on_append(tmp_path: Path) -> None:
 
 
 def test_corrupt_cache_is_rebuilt_with_note(tmp_path: Path) -> None:
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   cache.write_text("{ not json")
 
@@ -525,8 +534,7 @@ def test_codex_cache_invalidates_on_append(tmp_path: Path) -> None:
 
 
 def test_aggregate_memo_serves_unchanged_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   first = _collect(claude, None, db, cache)
 
@@ -542,8 +550,7 @@ def test_aggregate_memo_serves_unchanged_walk(tmp_path: Path, monkeypatch: pytes
 
 
 def test_aggregate_memo_invalidates_on_append(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db = tmp_path / "db.sqlite"
   before = _row(_collect(claude, None, db), "Claude Code", NAME)
 
@@ -568,10 +575,9 @@ def test_aggregate_memo_invalidates_on_append(tmp_path: Path, monkeypatch: pytes
 def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The host pattern behind the memo: the opencode db's WAL moves under plain serve traffic
   # while the Claude/Codex logs sit unchanged, so the expensive partial must survive.
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
-  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _write_opencode(db, [_oc_row()])
   first = _collect(claude, None, db, cache)
 
   def boom(path: Path, prev: dict | None = None) -> None:
@@ -586,10 +592,9 @@ def test_aggregate_memo_keeps_sources_when_only_opencode_moves(tmp_path: Path, m
 
 
 def test_opencode_only_change_is_not_persisted(tmp_path: Path) -> None:
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
-  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _write_opencode(db, [_oc_row()])
   _collect(claude, None, db, cache)
   first_doc = json.loads(cache.read_text())
   assert set(first_doc["sources"]) == {"claude", "opencode"}
@@ -604,10 +609,9 @@ def test_opencode_only_change_is_not_persisted(tmp_path: Path) -> None:
 
 
 def test_non_opencode_change_still_persists(tmp_path: Path) -> None:
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
-  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _write_opencode(db, [_oc_row()])
   _collect(claude, None, db, cache)
 
   claude.write(claude.work, "sess2", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))])
@@ -626,10 +630,9 @@ def _append_opencode(path: Path, rows: list[tuple[dict, str, str]]) -> None:
 
 
 def test_tally_memo_serves_unchanged_collect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
-  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _write_opencode(db, [_oc_row()])
   first = _collect(claude, None, db, cache)
 
   def boom(*args, **kwargs) -> None:
@@ -804,7 +807,7 @@ def test_opencode_row_data_matches_the_scan_projection() -> None:
 
 def test_opencode_cache_invalidates_on_insert(tmp_path: Path) -> None:
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
-  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _write_opencode(db, [_oc_row()])
   before = _row(_collect(None, None, db, cache), "opencode", "oc-m")
 
   _append_opencode(db, [_padded_opencode_row(5000)])
@@ -818,7 +821,7 @@ def test_opencode_row_memo_rereads_only_moved_rows(tmp_path: Path, monkeypatch: 
   # Steady state: an append invalidates the file signature, but the row memo re-reads only
   # the new row's blob — the untouched rows' data must not re-enter the parser.
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
-  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _write_opencode(db, [_oc_row()])
   first = _collect(None, None, db, cache)
   assert first.scanned_bytes > 0
 
@@ -843,7 +846,7 @@ def test_opencode_row_memo_tracks_in_place_update(tmp_path: Path) -> None:
   # The production write path: assistant rows land with zero tokens and step-finish upserts
   # rewrite data in place with a bumped time_updated; the memo re-reads exactly those rows.
   db = tmp_path / "db.sqlite"
-  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _write_opencode(db, [_oc_row()])
   before = _row(_collect(None, None, db), "opencode", "oc-m")
 
   con = sqlite3.connect(db)
@@ -878,7 +881,7 @@ def test_opencode_cache_invalidates_on_wal_write(tmp_path: Path) -> None:
   con = sqlite3.connect(db)
   con.execute("pragma journal_mode=WAL")
   _create_message_table(con)
-  _insert_opencode_raw(con, [({}, ({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov"))])
+  _insert_opencode_raw(con, [({}, _oc_row())])
   con.commit()
   assert (db.parent / "db.sqlite-wal").exists()
   before = _row(_collect(None, None, db, cache), "opencode", "oc-m")
@@ -902,7 +905,7 @@ def _wal_db_with_noise_table(tmp_path: Path) -> tuple[Path, Path, sqlite3.Connec
   con.execute("pragma journal_mode=WAL")
   _create_message_table(con)
   con.execute("create table other (id text primary key, data text not null)")
-  _insert_opencode_raw(con, [({}, ({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov"))])
+  _insert_opencode_raw(con, [({}, _oc_row())])
   con.commit()
   return db, cache, con
 
@@ -957,8 +960,7 @@ def test_wal_only_source_walk_round_skips_the_document_rewrite(tmp_path: Path) -
   # The changed round's shape (the hourly cron's): the walk ran fresh, the db's WAL moved,
   # no message row did. The stored opencode entry keeps its signature and the document
   # skips the multi-MB rewrite its re-sign would force.
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache, con = _wal_db_with_noise_table(tmp_path)
   _collect(claude, None, db, cache)
   doc_before = cache.read_bytes()
@@ -976,8 +978,7 @@ def test_wal_only_source_walk_round_skips_the_document_rewrite(tmp_path: Path) -
 def test_source_walk_round_persists_moved_opencode_rows(tmp_path: Path) -> None:
   # The counterpart: rows that moved reach the persisted document on the next source-walk
   # round with a fresh signature, so a fresh process serves them without a cold rescan.
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache, con = _wal_db_with_noise_table(tmp_path)
   _collect(claude, None, db, cache)
   sig_before = json.loads(cache.read_text())["sources"]["opencode"][str(db)]["sig"]
@@ -999,8 +1000,7 @@ def test_entry_served_changed_round_adopts_the_partial(tmp_path: Path, monkeypat
   # rows the partial sums (a row move would have moved the signature), so the buckets adopt
   # in place of the per-record fold; a process's first entry-served round replays once to
   # build the partial.
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 4, "write": 2}}, "oc-m", "prov")])
   cold = _collect(claude, None, db, cache)
@@ -1194,10 +1194,9 @@ def test_row_memo_probe_skips_the_key_scan_on_wal_noise(tmp_path: Path, monkeypa
 def test_cache_document_parses_once_per_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # The parsed document memoizes per cache path: a changed round re-parses zero document
   # bytes; the per-file signature still forces the moved file's own re-read.
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
-  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _write_opencode(db, [_oc_row()])
   _collect(claude, None, db, cache)
 
   loads = []
@@ -1218,7 +1217,7 @@ def test_reset_drops_the_probe_and_document_memos(tmp_path: Path, monkeypatch: p
   # _reset_aggregate_memo owns every process-wide memo the collection adds; after it, a
   # fresh round re-parses the document and re-runs the row scan from an empty memo.
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
-  _write_opencode(db, [({"input": 5, "output": 1, "cache": {"read": 0, "write": 0}}, "oc-m", "prov")])
+  _write_opencode(db, [_oc_row()])
   _collect(None, None, db, cache)
 
   tt._reset_aggregate_memo()
@@ -1323,8 +1322,7 @@ def test_incremental_partials_match_a_fresh_fold(tmp_path: Path) -> None:
 
 def test_append_tail_claude_parity(tmp_path: Path) -> None:
   """An appended tail parses only the tail: rows, dupes and the entry match a full re-parse."""
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   _collect(claude, None, db, cache)
   log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
@@ -1370,8 +1368,7 @@ def test_append_tail_codex_parity(tmp_path: Path) -> None:
 
 def test_append_tail_parses_a_completed_partial_line_once(tmp_path: Path) -> None:
   """A trailing fragment stays unparsed; the round whose tail covers it whole counts it once."""
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   _collect(claude, None, db, cache)
   log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
@@ -1391,8 +1388,7 @@ def test_append_tail_parses_a_completed_partial_line_once(tmp_path: Path) -> Non
 
 def test_append_tail_rejects_a_replaced_or_shrunk_file(tmp_path: Path) -> None:
   """A rewrite the guard cannot prove — replaced prefix or shrink — re-parses whole."""
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   _collect(claude, None, db, cache)
   claude.write(  # whole-file rewrite: early content replaced, last line preserved
@@ -1412,8 +1408,7 @@ def test_append_tail_rejects_a_replaced_or_shrunk_file(tmp_path: Path) -> None:
 
 def test_append_tail_skips_entries_without_a_guard(tmp_path: Path) -> None:
   """A pre-tail-schema entry (no guard/end) re-parses whole instead of crashing."""
-  claude = Claude(tmp_path)
-  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  claude = _claude_rig(tmp_path)
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   _collect(claude, None, db, cache)
   doc = json.loads(cache.read_text())

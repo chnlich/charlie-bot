@@ -38,6 +38,7 @@ from src.cli.claude_sub_bridge import (
     HookTurnState,
     PromptDelivery,
 )
+from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, charliebot_home_dir
 from src.core.json_utils import write_json_atomically
 from src.core.process import kill_process_group
@@ -650,7 +651,7 @@ def _emit(event: dict[str, Any]) -> None:
 
 def _error_event(message: str) -> dict[str, Any]:
   return {
-      "type": "error",
+      "type": ET.ERROR,
       "message": message,
       "content": message,
       "is_error": True,
@@ -660,7 +661,7 @@ def _error_event(message: str) -> dict[str, Any]:
 
 def _result_event(session_id: str, candidate: str, duration_ms: int) -> dict[str, Any]:
   return {
-      "type": "result",
+      "type": ET.RESULT,
       "subtype": "success",
       "is_error": False,
       "api_error_status": None,

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from core import byte_count_open
 from src.api.message_utils import extract_text_from_message
 from src.core.verify_trailer import _resolve_final_report, verify_result_trailer_error
 
@@ -166,33 +167,6 @@ def test_resolve_final_report_reads_only_the_tail_window_on_the_fallback_path(
                 }) + "\n").encode())
     f.write((json.dumps({"type": "result", "result": ""}) + "\n").encode())
 
-  read_bytes = 0
-  real_open = open
-
-  def counting_open(file, mode="r", *args, **kwargs):
-    real = real_open(file, mode, *args, **kwargs)
-    if mode != "rb":
-      return real
-
-    class CountingReader:
-
-      def __getattr__(self, name):
-        return getattr(real, name)
-
-      def __enter__(self):
-        return self
-
-      def __exit__(self, *exc):
-        return real.__exit__(*exc)
-
-      def read(self, size=-1):
-        nonlocal read_bytes
-        data = real.read(size)
-        read_bytes += len(data)
-        return data
-
-    return CountingReader()
-
-  monkeypatch.setattr("builtins.open", counting_open)
+  read_bytes = byte_count_open.install_byte_counting_open(monkeypatch)
   assert _resolve_final_report(target) == "the report\nRESULT: clean"
-  assert 0 < read_bytes <= 2 * 512 * 1024  # the newest window plus the fallback's one older window
+  assert 0 < sum(read_bytes) <= 2 * 512 * 1024  # the newest window plus the fallback's one older window

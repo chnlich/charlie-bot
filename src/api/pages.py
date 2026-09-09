@@ -149,7 +149,9 @@ _RUNTIME_GIT_VERSION = _get_git_version()
 # ``digests`` carries each file's own sha1 so a change re-reads only the moved
 # files; ``digest`` is the combined hex the token appends.
 _ASSET_DIGEST_STATE: dict[str, tuple | dict[str, bytes] | str] = {
-    "sig": (), "digests": {}, "digest": "",
+    "sig": (),
+    "digests": {},
+    "digest": "",
 }
 
 

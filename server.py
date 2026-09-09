@@ -601,6 +601,7 @@ _IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 
 class _VersionedStaticFiles(StaticFiles):
+
   async def get_response(self, path: str, scope: Scope) -> Response:
     response = await super().get_response(path, scope)
     if response.status_code == 200 and QueryParams(scope.get("query_string", b"")).get("v"):

@@ -14,7 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from conftest import fresh_state_fixture
+from conftest import codex_token_count_event, fresh_state_fixture
 
 from src.core import token_tally as tt
 from src.core.token_tally import collect_token_usage
@@ -82,17 +82,7 @@ def _codex_turn(model: str) -> dict:
 
 
 def _codex_count(last: dict, total: dict, ts: str = "ts") -> dict:
-  return {
-      "type": "event_msg",
-      "timestamp": ts,
-      "payload": {
-          "type": "token_count",
-          "info": {
-              "last_token_usage": last,
-              "total_token_usage": total
-          }
-      },
-  }
+  return codex_token_count_event(ts, info={"last_token_usage": last, "total_token_usage": total})
 
 
 def _create_message_table(con: sqlite3.Connection) -> None:

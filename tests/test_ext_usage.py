@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import fresh_state_fixture
+from conftest import codex_token_count_event, fresh_state_fixture
 
 from src.api import ext_usage as ext_usage_mod
 from src.api.ext_usage import (
@@ -44,29 +44,21 @@ def _build_token_count_event(
     secondary_resets_at: int,
 ) -> dict:
   """A legacy two-window Codex payload: a 5h primary plus a 7d secondary."""
-  return {
-      "timestamp": timestamp,
-      "type": "event_msg",
-      "payload":
-          {
-              "type": "token_count",
-              "rate_limits":
-                  {
-                      "primary":
-                          {
-                              "used_percent": primary_used_percent,
-                              "window_minutes": 300,
-                              "resets_at": primary_resets_at,
-                          },
-                      "secondary":
-                          {
-                              "used_percent": secondary_used_percent,
-                              "window_minutes": 10080,
-                              "resets_at": secondary_resets_at,
-                          },
-                  },
+  return codex_token_count_event(
+      timestamp,
+      rate_limits={
+          "primary": {
+              "used_percent": primary_used_percent,
+              "window_minutes": 300,
+              "resets_at": primary_resets_at,
           },
-  }
+          "secondary":
+              {
+                  "used_percent": secondary_used_percent,
+                  "window_minutes": 10080,
+                  "resets_at": secondary_resets_at,
+              },
+      })
 
 
 def _build_weekly_token_count_event(
@@ -76,23 +68,16 @@ def _build_weekly_token_count_event(
     resets_at: int,
 ) -> dict:
   """The shape Codex reports today: one weekly window in the primary slot."""
-  return {
-      "timestamp": timestamp,
-      "type": "event_msg",
-      "payload":
-          {
-              "type": "token_count",
-              "rate_limits":
-                  {
-                      "primary": {
-                          "used_percent": used_percent,
-                          "window_minutes": 10080,
-                          "resets_at": resets_at,
-                      },
-                      "secondary": None,
-                  },
+  return codex_token_count_event(
+      timestamp,
+      rate_limits={
+          "primary": {
+              "used_percent": used_percent,
+              "window_minutes": 10080,
+              "resets_at": resets_at,
           },
-  }
+          "secondary": None,
+      })
 
 
 def _build_turn_context_event(model: str) -> dict:
@@ -113,23 +98,16 @@ def _build_spend_token_count_event(
   prices. Every field is ``Any`` so malformed-row probes pass bad values
   through verbatim.
   """
-  return {
-      "timestamp": timestamp,
-      "type": "event_msg",
-      "payload":
-          {
-              "type": "token_count",
-              "info":
-                  {
-                      "last_token_usage":
-                          {
-                              "input_tokens": input_tokens,
-                              "cached_input_tokens": cached_input_tokens,
-                              "output_tokens": output_tokens,
-                          },
-                  },
-          },
-  }
+  return codex_token_count_event(
+      timestamp,
+      info={
+          "last_token_usage":
+              {
+                  "input_tokens": input_tokens,
+                  "cached_input_tokens": cached_input_tokens,
+                  "output_tokens": output_tokens,
+              }
+      })
 
 
 def _token_count_line(now: datetime, primary_used_percent: float) -> str:
@@ -304,17 +282,7 @@ _CODEX_RATE_LIMIT_SHAPE_ROWS = [
 
 @pytest.mark.parametrize(("rate_limits", "expected_usage"), _CODEX_RATE_LIMIT_SHAPE_ROWS)
 def test_codex_usage_transform_raw_rate_limit_shapes(rate_limits: dict, expected_usage: dict) -> None:
-  lines = [
-      json.dumps(
-          {
-              "timestamp": "2026-03-27T18:39:35.694Z",
-              "type": "event_msg",
-              "payload": {
-                  "type": "token_count",
-                  "rate_limits": rate_limits,
-              },
-          })
-  ]
+  lines = [json.dumps(codex_token_count_event("2026-03-27T18:39:35.694Z", rate_limits=rate_limits))]
 
   event = _latest_token_count_event(lines)
   assert event is not None
@@ -554,31 +522,22 @@ def _plan_quota_line(moment: datetime, used_percent: float) -> str:
 def _model_pool_line(moment: datetime) -> str:
   """One jsonl line: a model-level (spark) pool token_count event stamped *moment*."""
   return json.dumps(
-      {
-          "timestamp": _iso_z(moment),
-          "type": "event_msg",
-          "payload":
-              {
-                  "type": "token_count",
-                  "rate_limits":
-                      {
-                          "limit_id": "codex_bengalfox",
-                          "limit_name": "GPT-5.3-Codex-Spark",
-                          "primary":
-                              {
-                                  "used_percent": 0.0,
-                                  "window_minutes": 300,
-                                  "resets_at": int(moment.timestamp()) + 3600,
-                              },
-                          "secondary":
-                              {
-                                  "used_percent": 0.0,
-                                  "window_minutes": 10080,
-                                  "resets_at": int(moment.timestamp()) + 86400,
-                              },
-                      },
+      codex_token_count_event(
+          _iso_z(moment),
+          rate_limits={
+              "limit_id": "codex_bengalfox",
+              "limit_name": "GPT-5.3-Codex-Spark",
+              "primary": {
+                  "used_percent": 0.0,
+                  "window_minutes": 300,
+                  "resets_at": int(moment.timestamp()) + 3600,
               },
-      })
+              "secondary": {
+                  "used_percent": 0.0,
+                  "window_minutes": 10080,
+                  "resets_at": int(moment.timestamp()) + 86400,
+              },
+          }))
 
 
 @pytest.mark.asyncio
@@ -705,14 +664,7 @@ def test_spend_aggregation_skips_bad_rows_without_poisoning_totals(tmp_path) -> 
           output_tokens=5_000),
       _build_spend_token_count_event(timestamp=None, input_tokens=1_000_000, cached_input_tokens=0, output_tokens=0),
       _build_spend_token_count_event(timestamp=12345, input_tokens=1_000_000, cached_input_tokens=0, output_tokens=0),
-      {
-          "timestamp": (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
-          "type": "event_msg",
-          "payload": {
-              "type": "token_count",
-              "info": {}
-          }
-      },
+      codex_token_count_event((now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"), info={}),
       _build_spend_token_count_event(
           timestamp=(now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
           input_tokens=500_000,

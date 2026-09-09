@@ -1346,7 +1346,8 @@ def test_append_tail_claude_parity(tmp_path: Path) -> None:
 def test_append_tail_codex_parity(tmp_path: Path) -> None:
   """The tail round carries the model context, rootness and self-check state forward."""
   codex = Codex(tmp_path)
-  codex.write("rollout", [_codex_meta(), _codex_turn("gpt-a"), _codex_count({"input_tokens": 10}, {"total_tokens": 11})])
+  codex.write(
+      "rollout", [_codex_meta(), _codex_turn("gpt-a"), _codex_count({"input_tokens": 10}, {"total_tokens": 11})])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   _collect(None, codex, db, cache)
   log_file = codex.home / "sessions" / "rollout" / "rollout.jsonl"
@@ -1392,7 +1393,6 @@ def test_append_tail_rejects_a_replaced_or_shrunk_file(tmp_path: Path) -> None:
   claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   _collect(claude, None, db, cache)
-  log_file = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
   claude.write(  # whole-file rewrite: early content replaced, last line preserved
       claude.work, "sess1",
       [_claude_record("m9", NAME, "2024-01-03T00:00:00Z", _usage(7, 7)),

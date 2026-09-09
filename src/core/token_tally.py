@@ -110,7 +110,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple
+from typing import BinaryIO, NamedTuple
 
 from src.core.config import get_config
 from src.core.json_utils import write_json_atomically
@@ -496,15 +496,12 @@ def _reset_aggregate_memo() -> None:
 # prefix bytes, and a tail round re-hashes the same window before trusting the prefix.
 _TAIL_WINDOW = 8192
 
-
-_TAIL_WINDOW = 8192
-
 # Read size per chunk the line splitter consumes. One C-level find scan per marker hands the
 # fold only marker lines; a per-line Python membership test would pay every line instead.
 _PARSE_CHUNK = 1 << 22
 
 
-def _parse_lines(fh, markers: tuple[bytes, ...]) -> tuple[list[dict], int, int]:
+def _parse_lines(fh: BinaryIO, markers: tuple[bytes, ...]) -> tuple[list[dict], int, int]:
   """Parse the marker lines from *fh*'s current position to EOF.
 
   Returns (objects, bytes read, consumed byte offset), objects in file order. Only complete

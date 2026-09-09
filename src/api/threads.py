@@ -22,6 +22,7 @@ from src.agents.backends.pty_common import (
 from src.api.deps import get_config_on_loop, get_thread_manager, get_trigger_manager
 from src.api.message_utils import extract_text_from_message, extract_tool_result_text
 from src.api.responses import FastJsonResponse
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.memo import BoundedMemo
 from src.core.models import (
@@ -512,21 +513,21 @@ def _append_worker_events(
   for data in raw_events:
     event_timestamp = data.get("timestamp") or datetime.now(UTC)
     event_type = data.get('type', '')
-    if event_type == 'assistant' and isinstance(data.get('message'), dict):
+    if event_type == ET.ASSISTANT and isinstance(data.get('message'), dict):
       text = extract_text_from_message(data['message'])
       if text:
-        events.append(WorkerEvent(type='assistant', content=text, timestamp=event_timestamp))
+        events.append(WorkerEvent(type=ET.ASSISTANT, content=text, timestamp=event_timestamp))
       for block in data['message'].get('content', []):
         if isinstance(block, dict) and block.get('type') == 'tool_use':
           tool_id_to_name[block['id']] = block['name']
           events.append(
               WorkerEvent(
-                  type='tool_use',
+                  type=ET.TOOL_USE,
                   tool_name=block['name'],
                   input=block.get('input', {}),
                   timestamp=event_timestamp,
               ))
-    elif event_type == 'user' and isinstance(data.get('message'), dict):
+    elif event_type == ET.USER and isinstance(data.get('message'), dict):
       for block in data['message'].get('content', []):
         if block.get('type') == 'tool_result':
           tool_use_id = block.get('tool_use_id', '')
@@ -534,7 +535,7 @@ def _append_worker_events(
           result_text = extract_tool_result_text(block)
           events.append(
               WorkerEvent(
-                  type='tool_result',
+                  type=ET.TOOL_RESULT,
                   tool_name=name,
                   content=result_text,
                   timestamp=event_timestamp,

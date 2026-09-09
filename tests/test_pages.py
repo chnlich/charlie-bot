@@ -50,22 +50,37 @@ def _inline_scripts(body: str) -> list[str]:
     idx = close_idx + len("</script>")
 
 
+def _claude_row(first: str, last: str) -> ModelRow:
+  """The fixed-count claude-opus-5 row the token-usage viewer tests pin; only its date range varies."""
+  return ModelRow(
+      model="claude-opus-5",
+      source="Claude Code",
+      calls=1,
+      in_fresh=10,
+      cache_write=5,
+      cache_read=20,
+      output=30,
+      total=65,
+      first=first,
+      last=last,
+      accounts=[AccountRow(name="work (default)", calls=1, output=30, total=65)])
+
+
+def _usage_tally(rows: list[ModelRow]) -> TokenTally:
+  """The page payload the token-usage viewer tests serve from their fake collect_token_usage."""
+  return TokenTally(
+      rows=rows,
+      notes=["Claude Code: 1 unique API responses over 1 config dirs"],
+      elapsed_s=0.05,
+      scanned_bytes=999,
+  )
+
+
 @pytest.mark.asyncio
 async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-  tally = TokenTally(
-      rows=[
-          ModelRow(
-              model="claude-opus-5",
-              source="Claude Code",
-              calls=1,
-              in_fresh=10,
-              cache_write=5,
-              cache_read=20,
-              output=30,
-              total=65,
-              first="2024-01-01",
-              last="2024-01-02",
-              accounts=[AccountRow(name="work (default)", calls=1, output=30, total=65)]),
+  tally = _usage_tally(
+      [
+          _claude_row("2024-01-01", "2024-01-02"),
           ModelRow(
               model="gpt-5.2",
               source="Codex",
@@ -78,11 +93,7 @@ async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch) -
               first="2024-01-01",
               last="2024-01-03",
               accounts=[AccountRow(name="work (default)", calls=2, output=15, total=55)]),
-      ],
-      notes=["Claude Code: 1 unique API responses over 1 config dirs"],
-      elapsed_s=0.05,
-      scanned_bytes=999,
-  )
+      ])
 
   def fake_collect(**_kwargs) -> TokenTally:
     return tally
@@ -150,25 +161,7 @@ async def test_token_usage_inline_script_parses(monkeypatch: pytest.MonkeyPatch,
   the script parses under `node --check`, not that a literal string is present.
   """
   # Window string deliberately carries spaces and a `→` so an unquoted interpolation breaks.
-  tally = TokenTally(
-      rows=[
-          ModelRow(
-              model="claude-opus-5",
-              source="Claude Code",
-              calls=1,
-              in_fresh=10,
-              cache_write=5,
-              cache_read=20,
-              output=30,
-              total=65,
-              first="2026-06-24",
-              last="2026-08-07",
-              accounts=[AccountRow(name="work (default)", calls=1, output=30, total=65)]),
-      ],
-      notes=["Claude Code: 1 unique API responses over 1 config dirs"],
-      elapsed_s=0.05,
-      scanned_bytes=999,
-  )
+  tally = _usage_tally([_claude_row("2026-06-24", "2026-08-07")])
 
   monkeypatch.setattr(pages, "collect_token_usage", lambda **_kwargs: tally)
 

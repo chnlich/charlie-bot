@@ -125,8 +125,7 @@ def test_diff_file_rename_renders_as_rename(tmp_path: Path) -> None:
 
   # Passing old_path alongside path keeps git's rename pairing intact: the diff shows the
   # rename and only the one added line, not the whole file re-added.
-  params = {"repo": str(repo), "base": "main", "head": "feature", "path": "renamed.txt", "old_path": "torename.txt"}
-  diff = client.get("/api/git/diff/file", params=params).json()["diff"]
+  diff = _get_diff(client, "file", repo, "main", "feature", path="renamed.txt", old_path="torename.txt").json()["diff"]
   assert "rename from torename.txt" in diff
   assert "rename to renamed.txt" in diff
   assert "new file" not in diff

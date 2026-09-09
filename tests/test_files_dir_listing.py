@@ -155,7 +155,9 @@ def test_mtime_formatter_matches_the_gmtime_reference() -> None:
   The epochs pin the two roundings the integer calendar must reproduce: the
   second floor of a fractional epoch (gmtime truncates the fraction toward
   minus infinity) and the calendar carries across minute, day, month, and year
-  boundaries, including the leap-day arithmetic civil-from-days rides on.
+  boundaries — including the leap-day arithmetic civil-from-days rides on, the
+  negative-era floor where the C reference's truncation adjustment misleads,
+  and the unpadded-year renderings below year 1000.
   """
   boundaries = [
       0.0,
@@ -174,10 +176,18 @@ def test_mtime_formatter_matches_the_gmtime_reference() -> None:
       951868799.9999999,  # its last second
       4107542400.0,  # 2100-03-01, the first non-leap century carry
       253402300799.999,  # 9999-12-31 23:59
+      -30610224000.0,  # 0999-12-31, the unpadded-year rendering
+      -30610223361.0,  # 1000-01-01, the four-digit carry
+      -62162035200.0,  # 0000-03-01, the negative-era anchor
+      -62162035201.0,  # its previous second, 0000-02-29
+      -62135596800.0,  # 0000-01-01
+      -62167219200.0,  # 0001-03-01 proleptic (the year -1 zone)
+      -62274489600.0,  # 0001-03-01 proleptic minus one leap year
   ]
   rng = random.Random(72)
   fuzz = [rng.uniform(0, 4102444800) for _ in range(20000)]
   fuzz += [rng.uniform(-1e9, 0) for _ in range(2000)]
+  fuzz += [rng.uniform(-6.3e10, 0) for _ in range(4000)]
   fuzz += [
       float(rng.randrange(0, 4102444800)) + f
       for _ in range(4000)

@@ -173,14 +173,17 @@ def _format_mtime(epoch: float) -> str:
   to a fractional epoch — and the calendar date comes from integer civil-from-days
   arithmetic, so no per-entry ``gmtime``/``strftime`` pair is needed. The suite
   pins the output byte-identical to ``strftime("%Y-%m-%d %H:%M", gmtime(epoch))``
-  over boundary and randomized epochs; file mtimes on this host's filesystems sit
-  in the 4-digit-year zone that both forms render identically.
+  over boundary and randomized epochs; the year renders unpadded wherever
+  ``gmtime``'s struct year and the reference agree, which the fuzz sweeps from
+  negative years through the five-digit zone.
   """
   days, secs_of_day = divmod(math.floor(epoch), 86400)
   hh, rem = divmod(secs_of_day, 3600)
-  # days since 1970-01-01 -> (y, m, d), Howard Hinnant's civil_from_days.
+  # days since 1970-01-01 -> (y, m, d), Howard Hinnant's civil_from_days; the
+  # era takes plain floor division — Python's // already floors, and carrying
+  # the C form's negative-z adjustment here shifts dates before 0000-03-01.
   z = days + 719468
-  era = (z if z >= 0 else z - 146096) // 146097
+  era = z // 146097
   doe = z - era * 146097
   yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
   y = yoe + era * 400
@@ -189,7 +192,9 @@ def _format_mtime(epoch: float) -> str:
   d = doy - (153 * mp + 2) // 5 + 1
   m = mp + 3 if mp < 10 else mp - 9
   y += m <= 2
-  return "%04d-%02d-%02d %02d:%02d" % (y, m, d, hh, rem // 60)
+  # The year renders unpadded: the C reference's %Y carries no width, so year
+  # 999 is "999", not "0999".
+  return "%s-%02d-%02d %02d:%02d" % (y, m, d, hh, rem // 60)
 
 
 # Bound on _listing_memo: one browser tab lists one directory at a time, so the

@@ -12,6 +12,7 @@ from starlette.responses import Response
 
 from src.api.cron import TaskUpdate, apply_task_yaml_update, next_run_iso
 from src.api.deps import (
+    SESSION_NOT_FOUND_DETAIL,
     get_config_on_loop,
     get_plan_manager,
     get_session_manager,
@@ -701,7 +702,7 @@ async def fork_session(
         backend=backend,
     )
   except FileNotFoundError as e:
-    raise HTTPException(status_code=404, detail="Session not found") from e
+    raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -729,7 +730,7 @@ async def elone_session(
   try:
     meta = await session_mgr.elone_session(session_id, body.event_index, backend=backend)
   except FileNotFoundError as e:
-    raise HTTPException(status_code=404, detail="Session not found") from e
+    raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
   except ScheduledSessionBusyError as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
   except SuccessionRefused as e:
@@ -845,7 +846,7 @@ async def archive_session(
 async def delete_session_permanently(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)):
   result = await session_mgr.delete_session_permanently(session_id)
   if not result:
-    raise HTTPException(status_code=404, detail="Session not found")
+    raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
   return Response(status_code=204)
 
 

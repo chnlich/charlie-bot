@@ -86,10 +86,17 @@ async def get_config_on_loop() -> CharlieBotConfig:
   return get_config()
 
 
+# Client-visible 404 detail for an unresolvable session id: every route that
+# refuses a request on a missing session (HTTPException and, via
+# SlackReplyError, the Slack reply path) serves this exact string, and tests
+# pin it. One spelling everywhere.
+SESSION_NOT_FOUND_DETAIL = "Session not found"
+
+
 def require_found(meta: SessionMetadata | None) -> SessionMetadata:
   """Return non-None session metadata, or raise 404 when the manager found no session."""
   if not meta:
-    raise HTTPException(status_code=404, detail="Session not found")
+    raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
   return meta
 
 

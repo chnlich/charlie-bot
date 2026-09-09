@@ -1,14 +1,15 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
 
 const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
   require('./artifact_comments_dom_stub');
 
+const {loadArtifactCommentsContext} = require('./artifact_comments_vm_context');
+
+// Source of the script under test, for the assertions that pin constants in it.
 const ARTIFACT_COMMENTS_JS = readStatic('artifact-comments.js');
-const COMMENT_POST_JS = readStatic('comment_post.js');
 
 const SESSION_270_PLAN_PATH = '/files/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
 const PATH_SESSION_PLAN_PATH = '/files/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
@@ -29,66 +30,19 @@ function makeBlock(text, {display = 'block', childNodes = []} = {}) {
 }
 
 function loadArtifactCommentsScript(pathname, framed = false, opts = {}) {
-  const listeners = [];
-  const window = {
-    location: {pathname, hash: opts.hash || ''},
-    innerWidth: opts.innerWidth !== undefined ? opts.innerWidth : 1024,
-    innerHeight: 768,
-    addEventListener(type, handler, options) {
-      listeners.push({target: 'window', type, handler, options});
-    },
-    setTimeout() {},
-    requestAnimationFrame(fn) { fn(); return 0; },
-    getComputedStyle(el) {
-      return {display: el.display || 'block'};
-    },
-  };
-  window.self = window;
-  window.parent = framed ? (opts.parent || {}) : window;
-  // The server's inline tag, reproduced by the tests that own a session identity.
-  if (opts.serverSessionId !== undefined) window.__cbcServerSessionId = opts.serverSessionId;
-
-  const head = makeElement();
-  const body = makeElement();
-  if (opts.bodyChildren) {
-    for (const child of opts.bodyChildren) {
-      body.appendChild(child);
-    }
-  }
-  const documentElement = makeElement();
-  documentElement.tagName = 'HTML';
-  documentElement.clientWidth = opts.clientWidth || window.innerWidth;
-  const document = {
-    documentElement,
-    head,
-    body,
-    createElement() {
-      return makeElement();
-    },
-    addEventListener(type, handler, options) {
-      listeners.push({target: 'document', type, handler, options});
-    },
-    querySelectorAll(selector) {
-      return body.querySelectorAll(selector);
-    },
-  };
-
-  const context = {
-    window,
-    document,
-    console: opts.console || console,
-    Node: {DOCUMENT_POSITION_FOLLOWING: 4},
-    fetch: opts.fetch || function() {
-      throw new Error('fetch should not run while loading artifact-comments.js');
-    },
-  };
-  if (opts.sessionStorage !== undefined) {
-    context.sessionStorage = opts.sessionStorage;
-  }
-  vm.createContext(context);
-  vm.runInContext(COMMENT_POST_JS, context, {filename: 'comment_post.js'});
-  vm.runInContext(ARTIFACT_COMMENTS_JS, context, {filename: 'artifact-comments.js'});
-  // documentElement rides along so tests can assert the layer never writes it.
+  const {window, head, body, documentElement, listeners} = loadArtifactCommentsContext({
+    pathname,
+    hash: opts.hash,
+    innerWidth: opts.innerWidth,
+    framed,
+    parent: opts.parent,
+    serverSessionId: opts.serverSessionId,
+    bodyChildren: opts.bodyChildren,
+    sessionStorage: opts.sessionStorage,
+    console: opts.console,
+    fetch: opts.fetch,
+    syncRaf: true,
+  });
   return {window, head, body, documentElement, listeners};
 }
 

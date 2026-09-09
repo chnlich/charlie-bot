@@ -1,4 +1,9 @@
-"""Codex-specific context-window usage resolution from native rollout logs."""
+"""Codex-specific context-window usage resolution from native rollout logs.
+
+The rollout record-type names are wire bytes an outside producer (the Codex CLI)
+writes; this module defines the CODEX_* constants for them, and the other rollout
+readers (token_tally, ext_usage) import them instead of restating the strings.
+"""
 
 from collections.abc import Callable
 from pathlib import Path
@@ -13,16 +18,24 @@ from src.core.ndjson import iter_ndjson_events
 
 log = structlog.get_logger()
 
+# Codex rollout record-type wire names: session_meta opens a thread file,
+# turn_context carries the model in force, and event_msg wraps the token_count
+# payload the usage extractors read.
+CODEX_SESSION_META = "session_meta"
+CODEX_TURN_CONTEXT = "turn_context"
+CODEX_EVENT_MSG = "event_msg"
+CODEX_TOKEN_COUNT = "token_count"
+
 # Default codex home searched last in the candidate directory list.
 _DEFAULT_CODEX_HOME = Path.home() / ".codex"
 
 
 def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, Any] | None:
   """Return context usage from a native Codex token_count event."""
-  if event.get("type") != "event_msg":
+  if event.get("type") != CODEX_EVENT_MSG:
     return None
   payload = event.get("payload") or {}
-  if payload.get("type") != "token_count":
+  if payload.get("type") != CODEX_TOKEN_COUNT:
     return None
   info = payload.get("info") or {}
   last_usage = info.get("last_token_usage") or {}
@@ -52,7 +65,7 @@ def _extract_codex_rollout_usage_event(event: dict[str, Any]) -> dict[str, Any] 
 
 def _extract_codex_rollout_model_event(event: dict[str, Any]) -> str | None:
   """Return the model from a native Codex turn_context event."""
-  if event.get("type") != "turn_context":
+  if event.get("type") != CODEX_TURN_CONTEXT:
     return None
   payload = event.get("payload") or {}
   model = payload.get("model")

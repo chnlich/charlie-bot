@@ -112,6 +112,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, NamedTuple
 
+from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_SESSION_META, CODEX_TOKEN_COUNT, CODEX_TURN_CONTEXT
 from src.core.config import get_config
 from src.core.json_utils import write_json_atomically
 from src.core.models import BackendType
@@ -862,7 +863,7 @@ def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) 
 # Every record the tally reads (session_meta, turn_context, token_count) serializes
 # its type as a quoted literal in the raw line, so the substring filter cannot skip a
 # record the full parse would see; it only skips parsing irrelevant lines.
-_CODEX_MARKERS = (b'"session_meta"', b'"turn_context"', b'"token_count"')
+_CODEX_MARKERS = tuple(f'"{name}"'.encode() for name in (CODEX_SESSION_META, CODEX_TURN_CONTEXT, CODEX_TOKEN_COUNT))
 
 
 def _codex_records(recs: list[dict], model: str | None, records: list[list]) -> tuple[int, int, str | None]:
@@ -877,10 +878,10 @@ def _codex_records(recs: list[dict], model: str | None, records: list[list]) -> 
   final_total = 0
   for rec in recs:
     payload = rec.get("payload") or {}
-    if rec.get("type") in ("session_meta", "turn_context"):
+    if rec.get("type") in (CODEX_SESSION_META, CODEX_TURN_CONTEXT):
       model = payload.get("model") or model
       continue
-    if rec.get("type") != "event_msg" or payload.get("type") != "token_count":
+    if rec.get("type") != CODEX_EVENT_MSG or payload.get("type") != CODEX_TOKEN_COUNT:
       continue
     info = payload.get("info") or {}
     last, total = info.get("last_token_usage") or {}, info.get("total_token_usage") or {}
@@ -922,7 +923,7 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
       entry["guard"] = _boundary_guard(path, end)
       return entry, nbytes
   sig, recs, nbytes, end = _prefiltered_jsonl(path, _CODEX_MARKERS)
-  meta = next((rec for rec in recs if rec.get("type") == "session_meta"), None)
+  meta = next((rec for rec in recs if rec.get("type") == CODEX_SESSION_META), None)
   mp = (meta or {}).get("payload") or {}
   source = json.dumps(mp.get("source") or {})
   is_root = not (mp.get("forked_from_id") or mp.get("parent_thread_id") or "subagent" in source)
@@ -932,7 +933,7 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
       (
           (rec.get("payload") or {}).get("model")
           for rec in recs
-          if rec.get("type") in ("session_meta", "turn_context") and (rec.get("payload") or {}).get("model")),
+          if rec.get("type") in (CODEX_SESSION_META, CODEX_TURN_CONTEXT) and (rec.get("payload") or {}).get("model")),
       None,
   )
   records = []

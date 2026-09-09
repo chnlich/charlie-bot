@@ -23,6 +23,7 @@ description: >
 | **Gemini CLI** | `~/.gemini/skills/<name>/SKILL.md` OR `~/.agents/skills/<name>/SKILL.md` | Agent Skills (open standard) | `~/.agents/skills/` takes precedence over `~/.gemini/skills/` |
 | **OpenCode** | scans `~/.claude/` and `~/.agents/` | reuses both standards | No dedicated target — auto-discovers Claude Code + Agent Skills. Disable via `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` |
 | **Antigravity (`agy`)** | `~/.gemini/antigravity-cli/skills/<name>/SKILL.md` | Agent Skills (open standard) | Global customizations root (also scans `~/.gemini/skills/`); does NOT read `~/.claude`/`~/.agents` |
+| **charlie-code** | scans `~/.claude/skills/` and `~/.agents/skills/` | reuses both standards | No dedicated target. Also reads `.claude/skills/` and `.agents/skills/` at the git worktree root of its cwd; a repo skill wins a name collision. `--skills-root DIR` replaces the host roots for one run |
 
 ### Deduplication
 
@@ -32,7 +33,7 @@ Three sync targets cover all five CLIs:
 2. `~/.agents/skills/` — Codex + Gemini (shared open standard)
 3. `~/.gemini/antigravity-cli/skills/` — Antigravity (`agy`)
 
-OpenCode needs **no** target: it auto-scans `~/.claude/` and `~/.agents/`, both already populated above.
+OpenCode and charlie-code need **no** target: both auto-scan `~/.claude/skills/` and `~/.agents/skills/`, already populated above.
 
 ## Sync Rules
 

@@ -1024,7 +1024,7 @@ def _nudged(events: list[dict], summon_id: str) -> bool:
 
 
 def _noticed(events: list[dict], summon_id: str) -> bool:
-  return any((ev.get("slack_notice") or {}).get("input_event_id") == summon_id for ev in events)
+  return any((ev.get("slack_notice") or {}).get(ET.INPUT_EVENT_ID) == summon_id for ev in events)
 
 
 def _thread_link(summon: dict | None, slack_block: dict) -> str:
@@ -1086,7 +1086,7 @@ async def _audit_round(
           "type": ET.ASSISTANT_ERROR,
           "content": _NO_REPLY_CONTENT,
           "slack_notice": {
-              "input_event_id": summon_id
+              ET.INPUT_EVENT_ID: summon_id
           },
       })
   _ack_clear(client, target, session_id)
@@ -1111,7 +1111,7 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, sessi
   meta = await session_mgr.get_session(session_id)
   if meta is None or meta.slack_origin is None:
     return False
-  input_event_id = done.get("input_event_id")
+  input_event_id = done.get(ET.INPUT_EVENT_ID)
   if input_event_id is None:
     return False
   events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
@@ -1136,8 +1136,8 @@ def _lost_summons(events: list[dict], *, owned: set[str], running: str | None) -
   ``slack_backfill`` payload, never a synthetic master_done: that event is
   the cut point replay uses to decide which user messages are still unanswered.
   """
-  answered = {ev.get("input_event_id") for ev in events if ev.get("type") == ET.MASTER_DONE}
-  marked = {ev["slack_backfill"].get("input_event_id") for ev in events if "slack_backfill" in ev}
+  answered = {ev.get(ET.INPUT_EVENT_ID) for ev in events if ev.get("type") == ET.MASTER_DONE}
+  marked = {ev["slack_backfill"].get(ET.INPUT_EVENT_ID) for ev in events if "slack_backfill" in ev}
   return [
       ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE and "slack" in ev and ev["id"] not in answered and
       ev["id"] not in marked and ev["id"] not in owned and ev["id"] != running
@@ -1176,7 +1176,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
               "type": ET.ASSISTANT_ERROR,
               "content": _LOST_SUMMON_CONTENT,
               "slack_backfill": {
-                  "input_event_id": ev["id"]
+                  ET.INPUT_EVENT_ID: ev["id"]
               },
           })
       slack = ev["slack"]
@@ -1192,12 +1192,12 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
     if lost:
       events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
 
-    dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and ev.get("input_event_id")]
+    dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and ev.get(ET.INPUT_EVENT_ID)]
     for done in dones:
-      target = _slack_target(events, done["input_event_id"])
+      target = _slack_target(events, done[ET.INPUT_EVENT_ID])
       if target is None:
         continue
-      if await _audit_round(meta.id, events, target, done["input_event_id"], cfg, session_mgr, client):
+      if await _audit_round(meta.id, events, target, done[ET.INPUT_EVENT_ID], cfg, session_mgr, client):
         reported += 1
         # The action appended an event the next done's predicates must see.
         events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)

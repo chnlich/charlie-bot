@@ -208,7 +208,7 @@ def _scan_references(cfg: CharlieBotConfig, facts: dict[str, _SessionFacts]) -> 
   for owner in facts.values():
     if owner.cc_session_id is not None:
       references.setdefault(owner.cc_session_id, []).append(owner)
-  for thread_dir in sorted(cfg.sessions_dir.glob("*/threads/*")):
+  for thread_dir in sorted(cfg.sessions_dir.glob(f"*/{THREADS_DIR_NAME}/*")):
     if not thread_dir.is_dir():
       continue
     meta = load_json_meta(thread_dir / METADATA_NAME, "storage_cool_thread_meta_read_failed")

@@ -104,6 +104,22 @@ def test_parse_raw_lines_skips_blank_torn_and_non_json() -> None:
   assert events == [{"a": 1}, {"b": 2}]
 
 
+def test_parse_raw_lines_torn_multibyte_parses_as_replacement_char() -> None:
+  # A corrupted multi-byte sequence mid-string (its continuation byte lost to
+  # a mid-write tear or a bad byte) must parse as U+FFFD inside the string,
+  # not skip the otherwise-complete line as malformed.
+  corrupted = b'{"text": "caf\xc3"}'  # é's leading byte, its continuation byte lost
+  events = runs.parse_raw_lines(b'{"text": "caf\xc3\xa9"}\n' + corrupted + b"\n")
+  assert events == [{"text": "café"}, {"text": "caf\ufffd"}]
+
+
+def test_parse_raw_lines_keeps_valid_final_line_without_newline() -> None:
+  # A trailing partial line parses when it is complete JSON — only a torn
+  # (unparseable) tail drops; the find-walk's final piece must not lose it.
+  events = runs.parse_raw_lines(b'{"a": 1}\n{"b": 2}')
+  assert events == [{"a": 1}, {"b": 2}]
+
+
 def test_project_raw_events_applies_translate_in_order() -> None:
   events = [{"n": 1}, {"n": 2}]
   out = runs.project_raw_events(events, lambda e: [e, {"dup_of": e["n"]}])

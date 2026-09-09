@@ -27,6 +27,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
+import orjson
+
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendType
@@ -261,18 +263,37 @@ def leftover_holders_for(
 
 
 def parse_raw_lines(raw_bytes: bytes) -> list[dict]:
-  """Decode+parse raw log bytes into event dicts, skipping blank/torn lines.
+  """Parse raw log bytes into event dicts, skipping blank/torn lines.
 
   A trailing partial line (written by a process killed mid-write) is dropped —
   its offset stays un-consumed semantics make re-reading it produce at most a
   duplicate, never a loss.
   """
-  # decode with errors="replace" first: a torn multi-byte char inside a string
-  # then parses as U+FFFD instead of the line skipping as malformed, which is
-  # what feeding the strict parser the raw bytes would do (the skip contract
-  # catches ValueError, UnicodeDecodeError included)
-  lines = (raw.decode("utf-8", errors="replace") for raw in raw_bytes.split(b"\n"))
-  return list(iter_ndjson_events(lines, log_event="raw_line_not_json", log_fields={}))
+  # The strict bytes parse is the fast path: orjson reads the raw bytes, so a
+  # valid-UTF-8 log pays no decode pass (5.7 ms per 9.9 MB measured) and no
+  # whole-file line list (one find+slice per line, the M84 tail-follow walk).
+  events: list[dict] = []
+  start = 0
+  size = len(raw_bytes)
+  find = raw_bytes.find
+  while start < size:
+    end = find(b"\n", start)
+    piece = raw_bytes[start:size if end == -1 else end]
+    start = size if end == -1 else end + 1
+    try:
+      events.append(orjson.loads(piece))
+    except ValueError:
+      # A line the strict bytes parse rejects still gets the errors="replace"
+      # decode before the skip verdict: a torn multi-byte char inside a string
+      # must parse as U+FFFD instead of the line skipping as malformed (the
+      # skip contract catches ValueError, UnicodeDecodeError included). The
+      # funnel owns the skip contract — blank lines stay invisible there, and
+      # only the lines reaching this fallback can log.
+      events.extend(
+          iter_ndjson_events([piece.decode("utf-8", errors="replace")],
+                             log_event="raw_line_not_json",
+                             log_fields={}))
+  return events
 
 
 def project_raw_events(

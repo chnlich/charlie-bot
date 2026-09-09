@@ -144,7 +144,7 @@ def credentials_present(account: ClaudeAccount) -> bool:
   """True when the login's credential file carries a non-empty access token.
 
   A failed OAuth refresh can rewrite the file with both tokens emptied while the
-  metadata survives (LESSONS 2026-08-03), so the token field itself is the test;
+  metadata survives, so the token field itself is the test;
   a missing or unreadable file counts as absent credentials.
   """
   path = Path(account.config_dir) / CREDENTIALS_FILE

@@ -428,10 +428,8 @@ class _NoopBackend(TerminateFlagBackend):
 @pytest.mark.asyncio
 async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Anchor lands on disk: after one round through the consumer, a second,
-  cold-cache SessionManager reads the cc_session_id the backend returned.
-
-  This is the assertion both the 2026-03-30 and 2026-07-30 regressions were
-  missing — every prior test asserted only in-memory objects.
+  cold-cache SessionManager reads the cc_session_id the backend returned —
+  an assertion an in-memory-object check cannot make.
   """
   cfg = _make_consumer_cfg(tmp_path)
   session_mgr = SessionManager(cfg)

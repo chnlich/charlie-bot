@@ -13,13 +13,11 @@ const FAKE_MARKED_SRC =
 function loadRenderer() {
   const h = buildStreamHarness(FAKE_MARKED_SRC);
   const calls = [];
-  h.context.renderMathInElement = (el, opts) => calls.push({ el, opts });
+  h.context.renderMathInElement = (el, opts) => calls.push(el);
   return { h, calls };
 }
 
-function elWithRaw(raw) {
-  return { dataset: raw === null ? {} : { raw } };
-}
+const elWithRaw = (raw) => ({ dataset: raw === null ? {} : { raw } });
 
 test('hasMathDelimiter matches every configured delimiter family', () => {
   const { h } = loadRenderer();

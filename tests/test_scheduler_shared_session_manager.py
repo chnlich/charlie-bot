@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
+    MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
     SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET,
@@ -146,7 +147,7 @@ async def test_cron_master_wake_leaves_an_archived_session_archived(
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, make_task_spawner(spawned))
 
-  with patch("src.core.master_trigger.run_message_with_resume_recovery", new=AsyncMock()) as mock_run:
+  with patch(MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET, new=AsyncMock()) as mock_run:
     await scheduler._execute_master_task(task_cfg)
     await asyncio.wait_for(spawned[0], timeout=5)
 

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
+    MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
     OPUS_BACKEND_ID,
     TRIGGERS_GET_CONFIG_PATCH_TARGET,
     make_home_session,
@@ -38,7 +39,7 @@ async def test_trigger_master_runs_successor_when_requested_session_eloned(tmp_p
   child_id = (await mgr.elone_session(parent_id, event_index=0)).id
 
   with patch(
-      "src.core.master_trigger.run_message_with_resume_recovery",
+      MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
       new=AsyncMock(),
   ) as mock_run:
     await trigger_master(parent_id, "summary", cfg, mgr)
@@ -56,7 +57,7 @@ async def test_trigger_master_opted_out_skips_archived_without_successor(tmp_pat
   await mgr.archive_session(session.id)
 
   with patch(
-      "src.core.master_trigger.run_message_with_resume_recovery",
+      MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
       new=AsyncMock(),
   ) as mock_run:
     await trigger_master(session.id, "summary", cfg, mgr, pull_back=False)
@@ -76,7 +77,7 @@ async def test_trigger_master_default_pulls_archived_session_back_to_active(tmp_
   await mgr.archive_session(session.id)
 
   with patch(
-      "src.core.master_trigger.run_message_with_resume_recovery",
+      MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
       new=AsyncMock(),
   ) as mock_run:
     await trigger_master(session.id, "summary", cfg, mgr)

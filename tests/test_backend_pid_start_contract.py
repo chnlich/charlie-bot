@@ -31,7 +31,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from conftest import (
     ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
+    BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
+    OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+    RUNS_READ_PID_STAT_PATCH_TARGET,
 )
 
 import src.agents.backends as backends_package
@@ -103,7 +106,7 @@ def _enumerate_backend_classes() -> set[type[AgentBackend]]:
 
 def _install_sentinel_read_pid_stat(monkeypatch: pytest.MonkeyPatch) -> None:
   """Stub the /proc read to the sentinel pair; the pin must copy [0] onto pid_start."""
-  monkeypatch.setattr("src.core.runs.read_pid_stat", lambda pid: _SENTINEL_STAT)
+  monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: _SENTINEL_STAT)
 
 
 async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -131,7 +134,7 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
   process.stdin = MagicMock()
   process.stdin.drain = AsyncMock()
   process.stdin.wait_closed = AsyncMock()
-  monkeypatch.setattr("src.agents.backends.base.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
+  monkeypatch.setattr(BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, AsyncMock(return_value=process))
 
   with pytest.raises(_SpawnObserved):
     async for _event in backend.run("contract prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}):
@@ -157,7 +160,7 @@ async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
   process = MagicMock()
   process.pid = 1234
   create_process = AsyncMock(return_value=process)
-  monkeypatch.setattr("src.agents.backends.opencode.asyncio.create_subprocess_exec", create_process)
+  monkeypatch.setattr(OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, create_process)
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(side_effect=RuntimeError("stop after spawn")))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
   monkeypatch.setattr(backend, "_cleanup_server", AsyncMock())

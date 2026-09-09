@@ -16,8 +16,8 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET, reset_config_caches
 from conftest import dump_yaml as _dump
-from conftest import reset_config_caches
 from conftest import write_cron_task as _write_task_text
 
 import src.core.config as cm
@@ -31,7 +31,7 @@ def sent(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   async def fake_send_telegram(message: str, cfg) -> None:
     messages.append(message)
 
-  monkeypatch.setattr("src.core.notifications.send_telegram", fake_send_telegram)
+  monkeypatch.setattr(NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET, fake_send_telegram)
   return messages
 
 
@@ -92,7 +92,7 @@ def test_telegram_failure_is_log_only(temp_home: Path, monkeypatch: pytest.Monke
   async def raising_send_telegram(message: str, cfg) -> None:
     raise RuntimeError("telegram_bot_token is not configured")
 
-  monkeypatch.setattr("src.core.notifications.send_telegram", raising_send_telegram)
+  monkeypatch.setattr(NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET, raising_send_telegram)
 
   _fire(["x"])  # must not raise out of the evaluation
   assert json.loads(_state_file(temp_home).read_text(encoding="utf-8")) == ["x"]

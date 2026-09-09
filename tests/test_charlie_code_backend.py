@@ -3,8 +3,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
+    BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
     CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
     FLAG_LIKE_PROMPT,
+    RUNS_READ_PID_STAT_PATCH_TARGET,
     build_cli_backend,
 )
 from pydantic import ValidationError
@@ -344,13 +346,13 @@ async def _drive_run_halted_at_spawn(backend: AgentBackend, monkeypatch: pytest.
   Mirrors tests/test_backend_pid_start_contract.py's base-path harness: patched
   spawn returning a MagicMock process and a sentinel read_pid_stat.
   """
-  monkeypatch.setattr("src.core.runs.read_pid_stat", lambda pid: ("ordering-test-start", "R"))
+  monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: ("ordering-test-start", "R"))
   process = MagicMock()
   process.pid = 4242
   process.stdin = MagicMock()
   process.stdin.drain = AsyncMock()
   process.stdin.wait_closed = AsyncMock()
-  monkeypatch.setattr("src.agents.backends.base.asyncio.create_subprocess_exec", AsyncMock(return_value=process))
+  monkeypatch.setattr(BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, AsyncMock(return_value=process))
 
   async def on_spawn(pid: int) -> None:
     raise _HaltAtSpawn

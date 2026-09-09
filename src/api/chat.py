@@ -26,7 +26,7 @@ from src.core.models import (
     SessionStatus,
 )
 from src.core.sessions import SessionManager
-from src.core.slash_commands import SlashDispatchResult, dispatch_slash_command
+from src.core.slash_commands import SlashDispatchKind, SlashDispatchResult, dispatch_slash_command
 from src.core.tasks import create_logged_task
 
 log = structlog.get_logger()
@@ -102,14 +102,14 @@ async def send_message(
 
     dispatch = await dispatch_slash_command(name, args, session_dir=str(cfg.sessions_dir / session_id))
 
-    if dispatch.kind != 'not_found':
+    if dispatch.kind != SlashDispatchKind.NOT_FOUND:
       await session_mgr.persist_and_broadcast(session_id, build_user_event(req.content, uploaded_files))
 
-      if dispatch.kind == 'prompt':
+      if dispatch.kind == SlashDispatchKind.PROMPT:
         launch_prompt_dispatch(cfg, meta, dispatch, session_mgr, req.content, uploaded_files)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
-      if dispatch.kind == 'error':
+      if dispatch.kind == SlashDispatchKind.ERROR:
         error_text = dispatch.error or f'Failed to dispatch /{name}'
         asst_event = {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": error_text}]}}
         await session_mgr.persist_and_broadcast(session_id, asst_event)
@@ -117,7 +117,7 @@ async def send_message(
         await session_mgr.persist_and_broadcast(session_id, done_event)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
-      if dispatch.kind == 'shell_result':
+      if dispatch.kind == SlashDispatchKind.SHELL_RESULT:
         result = dispatch.shell_result
         out = result['stderr'] if result['exit_code'] != 0 and result['stderr'] else (
             result['stdout'] or result['stderr'] or '(no output)')

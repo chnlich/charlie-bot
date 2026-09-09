@@ -17,7 +17,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config, get_scheduled_tasks
 from src.core.models import SessionMetadata, UploadedFileRef
 from src.core.sessions import SessionManager
-from src.core.slash_commands import dispatch_slash_command, load_slash_commands
+from src.core.slash_commands import SlashDispatchKind, dispatch_slash_command, load_slash_commands
 
 log = structlog.get_logger()
 
@@ -164,13 +164,13 @@ async def execute_command(
   # Look up and dispatch via shared helper
   dispatch = await dispatch_slash_command(name, req.args, session_dir=str(cfg.sessions_dir / session_id))
 
-  if dispatch.kind == 'not_found':
+  if dispatch.kind == SlashDispatchKind.NOT_FOUND:
     return {'error': f'Unknown command: /{name}'}
 
-  if dispatch.kind == 'error':
+  if dispatch.kind == SlashDispatchKind.ERROR:
     return {'error': dispatch.error}
 
-  if dispatch.kind == 'shell_result':
+  if dispatch.kind == SlashDispatchKind.SHELL_RESULT:
     result = dispatch.shell_result
     await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
     return {
@@ -181,7 +181,7 @@ async def execute_command(
         'exit_code': result['exit_code'],
     }
 
-  if dispatch.kind == 'prompt':
+  if dispatch.kind == SlashDispatchKind.PROMPT:
     await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
     launch_prompt_dispatch(cfg, meta, dispatch, session_mgr, display_text, uploaded_files)
     return JSONResponse(status_code=202, content={'type': ET.PROMPT_DISPATCHED, 'command': name})

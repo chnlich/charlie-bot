@@ -24,7 +24,7 @@ from src.core.models import (
     SessionStatus,
     UploadedFileRef,
 )
-from src.core.slash_commands import SlashDispatchResult
+from src.core.slash_commands import SlashDispatchKind, SlashDispatchResult
 
 VOICE_KEY = "is_" + "voice"
 
@@ -194,7 +194,7 @@ async def test_execute_command_persists_uploaded_files_for_prompt_dispatch(tmp_p
           UploadedFileRef(filename="report.pdf", path="/tmp/report.pdf", size=99),
       ],
   )
-  dispatch = SlashDispatchResult(kind="prompt", substituted_prompt="Read the attachment")
+  dispatch = SlashDispatchResult(kind=SlashDispatchKind.PROMPT, substituted_prompt="Read the attachment")
 
   with (
       patch("src.api.slash.dispatch_slash_command", new=AsyncMock(return_value=dispatch)),

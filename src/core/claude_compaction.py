@@ -269,7 +269,7 @@ async def compact_with_sonnet(
       {
           "type": ET.CONTEXT_COMPACTED,
           "trigger": "manual",
-          "pre_tokens": event_pre_tokens,
+          ET.COMPACT_PRE_TOKENS: event_pre_tokens,
           "model": COMPACTION_MODEL,
       })
   return True

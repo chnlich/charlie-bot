@@ -7,9 +7,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-import aiofiles
 import structlog
-from aiofiles.threadpool.text import AsyncTextIOWrapper
 
 from src.agents.backends.base import (
     AgentBackend,
@@ -54,6 +52,20 @@ def _clamp_ts(clamp_to: datetime | None) -> str:
   if clamp_to is not None and clamp_to < now:
     return clamp_to.isoformat()
   return now.isoformat()
+
+
+def _write_all(fd: int, data: bytes) -> None:
+  """Write all of *data* to *fd*: a short write keeps going, never a torn line."""
+  view = memoryview(data)
+  while view:
+    view = view[os.write(fd, view):]
+
+
+async def _append_event_line(fd: int, line: str) -> None:
+  # One executor hop per event: aiofiles' write+flush pair costs two round-trips
+  # on the streamed-turn path. The fd carries no fdatasync — the events log is a
+  # diagnostic stream, not the fdatasync-durable chat funnel (append_ndjson).
+  await asyncio.to_thread(_write_all, fd, line.encode("utf-8"))
 
 
 class Worker:
@@ -167,7 +179,11 @@ class Worker:
     # Read stdout (NDJSON) line by line via the backend; a pooled task loops once
     # per account relay, each process appending to the same events log.
     self._events_log.parent.mkdir(parents=True, exist_ok=True)
-    async with aiofiles.open(self._events_log, "a", encoding="utf-8") as log_file:
+    # The fd is held for the whole run: a worker's events log is append-only and
+    # nothing rewrites or replaces it mid-run (only chat files archive), so a
+    # per-call open to re-resolve the path is never needed here.
+    fd = os.open(self._events_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+    try:
       while True:
         self._backend = self._build_backend(_on_spawn)
         account = self._claude_account
@@ -181,13 +197,15 @@ class Worker:
             account=account.label if account is not None else None,
             relays=self._relays)
         async for event in self._backend.run(self._task_description, str(self._worktree), env):
-          await self._process_event(event, log_file)
+          await self._process_event(event, fd)
         exit_code = self._backend.exit_code
         decision = (
             self._relay_watch.decision(exit_code, self._backend.stderr_text) if self._relay_watch is not None else None)
         if decision is None:
           break
-        await self._relay(decision, exit_code, log_file)
+        await self._relay(decision, exit_code, fd)
+    finally:
+      os.close(fd)
 
     completion = runs.raw_completion_time(self._raw_log_path())
     await self._emit_terminal_events(
@@ -227,7 +245,8 @@ class Worker:
     stream_backend = self._build_backend(None)
 
     self._events_log.parent.mkdir(parents=True, exist_ok=True)
-    async with aiofiles.open(self._events_log, "a", encoding="utf-8") as log_file:
+    fd = os.open(self._events_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+    try:
       async for event in tail_follow_events(
           raw_path,
           translate=stream_backend.translate_event,
@@ -237,7 +256,9 @@ class Worker:
           post_result_timeout=stream_backend._POST_RESULT_TIMEOUT,
           on_silence=on_silence,
       ):
-        await self._process_event(event, log_file)
+        await self._process_event(event, fd)
+    finally:
+      os.close(fd)
 
     _, _, exit_code = runs.scan_result_exit(raw_path, self._build_backend(None).translate_event)
 
@@ -261,7 +282,7 @@ class Worker:
     log.info("worker_resume_finished", thread=self._thread.id, exit_code=exit_code)
     return exit_code
 
-  async def _relay(self, decision: str, exit_code: int, log_file: AsyncTextIOWrapper) -> None:
+  async def _relay(self, decision: str, exit_code: int, fd: int) -> None:
     """Move this task to the next pool account, or end it loudly.
 
     A login failure marks the account unhealthy and tells the operator first. The
@@ -279,7 +300,7 @@ class Worker:
           config_dir=current.config_dir,
           reason="auth_failed")
       notice = claude_relay.login_required_event(current, "auth_failed")
-      await self._persist_and_broadcast(log_file, notice)
+      await self._persist_and_broadcast(fd, notice)
       if self.on_session_event is not None:
         await self.on_session_event(notice)
     if self._relays >= claude_relay.MAX_RELAYS_PER_TURN:
@@ -299,7 +320,7 @@ class Worker:
     if claude_compaction.relay_compaction_wanted(self._cfg, self._backend_option.model, self._context_tokens):
 
       async def persist(evt: dict) -> None:
-        await self._persist_and_broadcast(log_file, evt)
+        await self._persist_and_broadcast(fd, evt)
 
       await claude_compaction.compact_with_sonnet(
           cc_session_id=self._thread.claude_session_id,
@@ -319,11 +340,10 @@ class Worker:
     self._task_description = claude_relay.CONTINUATION_PROMPT
     self._resume_session_id = self._thread.claude_session_id
 
-  async def _persist_and_broadcast(self, log_file: AsyncTextIOWrapper, event: dict) -> None:
+  async def _persist_and_broadcast(self, fd: int, event: dict) -> None:
     if not event.get("timestamp"):
       event["timestamp"] = datetime.now(UTC).isoformat()
-    await log_file.write(json.dumps(event) + "\n")
-    await log_file.flush()
+    await _append_event_line(fd, json.dumps(event) + "\n")
     await streaming_manager.broadcast(self._thread.id, event)
 
   def _raw_log_path(self) -> Path:
@@ -389,7 +409,7 @@ class Worker:
     if self._backend is not None:
       self._backend.detach()
 
-  async def _process_event(self, event_data: dict, log_file: AsyncTextIOWrapper) -> None:
+  async def _process_event(self, event_data: dict, fd: int) -> None:
     """Write event to disk log and broadcast to WebSocket subscribers."""
     # Detect quota exhaustion errors
     event_type = event_data.get("type", "")
@@ -418,8 +438,7 @@ class Worker:
             resets_at=resets_at,
             account=self._claude_account.label if self._claude_account is not None else None)
         if self._relay_watch is None:
-          await log_file.write(json.dumps(event_data) + "\n")
-          await log_file.flush()
+          await _append_event_line(fd, json.dumps(event_data) + "\n")
           raise QuotaExhaustedException(f"Rate limited ({rate_type}), resets at {resets_at}")
 
     if event_type == ET.ASSISTANT:
@@ -429,20 +448,17 @@ class Worker:
         self._context_tokens = _prompt_token_sum(usage)
 
     if event_type == ET.ERROR and any(p in event_message or p in event_content for p in QUOTA_ERROR_PATTERNS):
-      await log_file.write(json.dumps(event_data) + "\n")
-      await log_file.flush()
+      await _append_event_line(fd, json.dumps(event_data) + "\n")
       raise QuotaExhaustedException(event_data.get("message", "Quota exhausted"))
 
     # Write to disk
-    await log_file.write(json.dumps(event_data) + "\n")
-    await log_file.flush()
+    await _append_event_line(fd, json.dumps(event_data) + "\n")
 
     # Broadcast to WebSocket subscribers
     await streaming_manager.broadcast(self._thread.id, event_data)
 
     async def _persist_and_broadcast(evt: dict) -> None:
-      await log_file.write(json.dumps(evt) + "\n")
-      await log_file.flush()
+      await _append_event_line(fd, json.dumps(evt) + "\n")
       await streaming_manager.broadcast(self._thread.id, evt)
 
     await handle_compaction_events(

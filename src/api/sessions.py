@@ -1,6 +1,7 @@
 """Session management API routes."""
 
 import asyncio
+from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -449,6 +450,79 @@ async def stop_tui(
   return {"stopped": True}
 
 
+_SEARCH_ROW_FRAGMENT_CAP = 512
+_SEARCH_DERIVED_KEYS = frozenset(
+    {
+        "thinking_since",
+        "has_running_tasks",
+        "has_pending_trigger",
+        "pending_trigger_count",
+        "next_trigger_at",
+    })
+_search_row_fragments: OrderedDict[int, tuple[SessionMetadata, tuple[bytes | str, ...]]] = OrderedDict()
+
+
+def _search_row_static_segments(meta: SessionMetadata) -> tuple[bytes | str, ...]:
+  """Return the row's dump segments: static JSON runs and derived key names.
+
+  The route's overlay assigns its five derived fields onto keys the model
+  already declares, so dict assignment keeps them at their model-definition
+  positions; the segments preserve that order — static runs as rendered JSON
+  (no braces, rendered by :func:`fast_json_bytes`), each derived key as its
+  name for the per-request value render.
+
+  Memoized on the cached metadata object's identity, which the value pins with
+  a strong reference so an id reuse can never serve another object's segments:
+  the metadata cache replaces the object whenever its file provably changes
+  (every writer publishes through the atomic tmp rename and the re-parse is a
+  fresh instance), so identity is the same invalidation ground the read-only
+  search's shared-reference contract stands on.
+  """
+  cached = _search_row_fragments.get(id(meta))
+  if cached is not None and cached[0] is meta:
+    _search_row_fragments.move_to_end(id(meta))
+    return cached[1]
+  row = meta.model_dump(mode="json")
+  segments: list[bytes | str] = []
+  static: dict = {}
+  for key, value in row.items():
+    if key in _SEARCH_DERIVED_KEYS:
+      if static:
+        segments.append(fast_json_bytes(static)[1:-1])
+        static = {}
+      segments.append(key)
+    else:
+      static[key] = value
+  if static:
+    segments.append(fast_json_bytes(static)[1:-1])
+  _search_row_fragments[id(meta)] = (meta, tuple(segments))
+  while len(_search_row_fragments) > _SEARCH_ROW_FRAGMENT_CAP:
+    _search_row_fragments.popitem(last=False)
+  return tuple(segments)
+
+
+def _json_scalar_bytes(value: object) -> bytes:
+  """Render one overlay value as JSON bytes.
+
+  The overlay's value types are code-fixed (None, bool, int, and the ISO
+  strings the two datetime slots carry); these renderings are
+  ``json.dumps(ensure_ascii=True)``'s own for those types, and an ISO 8601
+  string is pure ASCII with no quote or backslash, so the quoted form needs no
+  escape pass. Any other type fails loudly instead of rendering.
+  """
+  if value is None:
+    return b"null"
+  if value is True:
+    return b"true"
+  if value is False:
+    return b"false"
+  if isinstance(value, int):
+    return b"%d" % value
+  if isinstance(value, str):
+    return b'"' + value.encode("ascii") + b'"'
+  raise ValueError(f"unsupported overlay value type: {type(value).__name__}")
+
+
 @router.get('/search', response_model=list[SessionMetadata])
 async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get_session_manager)):
   """Full-text search across session names and chat content."""
@@ -468,17 +542,29 @@ async def search_sessions(q: str = '', session_mgr: SessionManager = Depends(get
       include_running_status=True,
       include_pending_trigger_status=True,
   )
-  payload = []
+  # Each row's bytes splice the memoized static segments with the five derived
+  # values rendered per request. json.dumps renders a dict context-free, so the
+  # spliced body is byte-identical to the FastJsonResponse render of the merged
+  # dicts: the segments follow the model's own key order, which is the order the
+  # in-place overlay leaves the merged dicts in.
+  parts: list[bytes] = []
   for meta in rows:
     entry = derived[meta.id]
-    row = meta.model_dump(mode="json")
-    row["thinking_since"] = _UTC_DATETIME_JSON.dump_python(thinking_state.busy_since(meta.id), mode="json")
-    row["has_running_tasks"] = entry["has_running_tasks"]
-    row["has_pending_trigger"] = entry["has_pending_trigger"]
-    row["pending_trigger_count"] = entry["pending_trigger_count"]
-    row["next_trigger_at"] = _UTC_DATETIME_JSON.dump_python(entry["next_trigger_at"], mode="json")
-    payload.append(row)
-  return FastJsonResponse(payload)
+    values = {
+        "thinking_since": _UTC_DATETIME_JSON.dump_python(thinking_state.busy_since(meta.id), mode="json"),
+        "has_running_tasks": entry["has_running_tasks"],
+        "has_pending_trigger": entry["has_pending_trigger"],
+        "pending_trigger_count": entry["pending_trigger_count"],
+        "next_trigger_at": _UTC_DATETIME_JSON.dump_python(entry["next_trigger_at"], mode="json"),
+    }
+    rendered: list[bytes] = []
+    for segment in _search_row_static_segments(meta):
+      if isinstance(segment, bytes):
+        rendered.append(segment)
+      else:
+        rendered.append(b'"' + segment.encode() + b'":' + _json_scalar_bytes(values[segment]))
+    parts.append(b"{" + b",".join(rendered) + b"}")
+  return PreencodedJSONResponse(b"[" + b",".join(parts) + b"]")
 
 
 @router.get('/{session_id}/view')

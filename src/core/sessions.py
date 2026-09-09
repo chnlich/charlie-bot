@@ -1165,13 +1165,17 @@ class SessionManager:
     """
     query_lower = query.lower()
     all_meta = await self._load_session_metas()
-    matches = [meta for meta in all_meta if query_lower in meta.name.lower()]
+    # One pass lowers every name once: the name-match test and the content-scan
+    # candidate split read the same lowered string, and a name hit is by
+    # definition no content-scan candidate.
+    matches: list[SessionMetadata] = []
+    content_candidates: list[tuple[SessionMetadata, Path]] = []
+    for meta in all_meta:
+      if query_lower in meta.name.lower():
+        matches.append(meta)
+      elif meta.status == SessionStatus.ACTIVE:
+        content_candidates.append((meta, self.get_chat_events_path(meta.id)))
     matches.sort(key=lambda meta: meta.updated_at, reverse=True)
-    content_candidates: list[tuple[SessionMetadata, Path]] = [
-        (meta, self.get_chat_events_path(meta.id))
-        for meta in all_meta
-        if meta.status == SessionStatus.ACTIVE and query_lower not in meta.name.lower()
-    ]
 
     # Classification runs on the event loop: one hot stat per candidate plus a
     # memo lookup measures ~0.1 ms for the whole set, while the same checks as

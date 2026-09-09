@@ -66,8 +66,10 @@ function loadArtifactCommentsContext(opts = {}) {
     window,
     document,
     console: opts.console || console,
-    // The comment-order sort reads both direction bits; suites that never
-    // reach it keep PRECEDING out so a stray read fails loud.
+    // The comment-order sort reads both direction bits; the comments suite's
+    // old context carried only FOLLOWING, so a PRECEDING mask bit read as
+    // undefined and fell through — nodePreceding stays off there to preserve
+    // that exact fall-through.
     Node: opts.nodePreceding
         ? {DOCUMENT_POSITION_FOLLOWING: 4, DOCUMENT_POSITION_PRECEDING: 2}
         : {DOCUMENT_POSITION_FOLLOWING: 4},

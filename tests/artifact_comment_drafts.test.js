@@ -1,16 +1,11 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
-
-const { readStatic } = require('./read_static');
 
 const {dockOf, findChildByClass, makeElement, clickElement, flushPromises} =
   require('./artifact_comments_dom_stub');
 
+const {loadArtifactCommentsContext} = require('./artifact_comments_vm_context');
 const {SESSIONS_ROOT} = require('./sessions_root_stub');
-
-const ARTIFACT_COMMENTS_JS = readStatic('artifact-comments.js');
-const COMMENT_POST_JS = readStatic('comment_post.js');
 
 const ARTIFACT_PATH = '/files' + SESSIONS_ROOT + '/sess-draft/artifacts/plan.html';
 const DRAFT_KEY = 'cbc-draft:' + ARTIFACT_PATH;
@@ -44,53 +39,17 @@ function silentConsole() {
 
 function loadScript(opts = {}) {
   const storage = opts.storage || makeStorage();
-  const pathname = opts.pathname || ARTIFACT_PATH;
-  const window = {
-    location: {pathname, hash: opts.hash || ''},
-    innerWidth: 1024,
-    innerHeight: 768,
-    addEventListener() {},
-    setTimeout() {},
-    clearTimeout() {},
-    getComputedStyle(el) {
-      return {display: el.display || 'block'};
-    },
-  };
-  window.self = window;
-  window.parent = opts.framed ? {} : window;
-  // Session identity is server-injected in production; reproduce that tag here.
-  window.__cbcServerSessionId = 'sess-draft';
-
-  const head = makeElement();
-  const body = makeElement();
-  const document = {
-    head,
-    body,
-    createElement() {
-      return makeElement();
-    },
-    addEventListener() {},
-    querySelectorAll(selector) {
-      return body.querySelectorAll(selector);
-    },
-  };
-
-  const context = {
-    window,
-    document,
+  const {context, window, body} = loadArtifactCommentsContext({
+    pathname: opts.pathname || ARTIFACT_PATH,
+    hash: opts.hash,
+    framed: opts.framed,
     console: opts.console || silentConsole(),
-    Node: {DOCUMENT_POSITION_FOLLOWING: 4, DOCUMENT_POSITION_PRECEDING: 2},
+    fetch: opts.fetch,
     sessionStorage: storage,
-    fetch:
-      opts.fetch ||
-      function () {
-        throw new Error('fetch should not run while loading artifact-comments.js');
-      },
-  };
-  vm.createContext(context);
-  vm.runInContext(COMMENT_POST_JS, context, {filename: 'comment_post.js'});
-  vm.runInContext(ARTIFACT_COMMENTS_JS, context, {filename: 'artifact-comments.js'});
-  return {context, window, head, body, storage};
+    serverSessionId: 'sess-draft',
+    nodePreceding: true,
+  });
+  return {context, window, body, storage};
 }
 
 // ---------------------------------------------------------------------------
@@ -276,45 +235,18 @@ test('storage failures degrade silently without crashing', () => {
 });
 
 test('script loads with no sessionStorage global at all (try/catch guards access)', () => {
-  // No sessionStorage on the context — every access must be guarded.
-  const ctx = {
-    window: {
-      location: {pathname: ARTIFACT_PATH, hash: ''},
-      innerWidth: 1024,
-      innerHeight: 768,
-      addEventListener() {},
-      setTimeout() {},
-      clearTimeout() {},
-      getComputedStyle(el) {
-        return {display: el.display || 'block'};
-      },
-    },
-    document: {
-      head: makeElement(),
-      body: makeElement(),
-      createElement() {
-        return makeElement();
-      },
-      addEventListener() {},
-      querySelectorAll() {
-        return [];
-      },
-    },
+  // Omitting the sessionStorage option leaves the context without the global —
+  // every access must be guarded.
+  const {window} = loadArtifactCommentsContext({
     console: silentConsole(),
-    Node: {DOCUMENT_POSITION_FOLLOWING: 4, DOCUMENT_POSITION_PRECEDING: 2},
     fetch() {
       throw new Error('unused');
     },
-  };
-  ctx.window.self = ctx.window;
-  ctx.window.parent = ctx.window;
-  vm.createContext(ctx);
-  assert.doesNotThrow(() => {
-    vm.runInContext(COMMENT_POST_JS, ctx, {filename: 'comment_post.js'});
-    vm.runInContext(ARTIFACT_COMMENTS_JS, ctx, {filename: 'artifact-comments.js'});
+    nodePreceding: true,
   });
-  assert.equal(typeof ctx.window.__cbcLoadDraft, 'function');
-  jsonEqual(ctx.window.__cbcLoadDraft(ARTIFACT_PATH), []);
+  assert.doesNotThrow(() => window.__cbcDraftKey(ARTIFACT_PATH));
+  assert.equal(typeof window.__cbcLoadDraft, 'function');
+  jsonEqual(window.__cbcLoadDraft(ARTIFACT_PATH), []);
 });
 
 // ---------------------------------------------------------------------------

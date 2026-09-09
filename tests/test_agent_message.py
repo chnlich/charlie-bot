@@ -17,6 +17,7 @@ import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
     CLI_COMMON_GET_CONFIG_PATCH_TARGET,
+    MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
     FakeSessionManager,
     _noop,
     make_home_config,
@@ -151,7 +152,7 @@ async def test_session_message_to_archived_target_relays_and_pulls_back(tmp_path
 
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch("src.core.master_trigger.run_message_with_resume_recovery", new=AsyncMock()) as mock_run,
+      patch(MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET, new=AsyncMock()) as mock_run,
       patch.object(internal, "create_logged_task", make_task_spawner(spawned)),
   ):
     resp = await internal.session_message(

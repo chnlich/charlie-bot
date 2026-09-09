@@ -357,6 +357,17 @@ def rate_limit_event(status: str, utilization: float, resets_in: timedelta = tim
   }
 
 
+def codex_token_count_event(timestamp: Any, **payload_inner: Any) -> dict:
+  """The codex token_count event envelope: an ``event_msg`` wrapping a ``token_count`` payload.
+
+  The innards (``rate_limits``, ``info``) are the per-fixture part each suite
+  passes through; the envelope — timestamp at the event level, the
+  ``event_msg``/``token_count`` typing — is the wire shape the codex readers
+  parse, defined here once.
+  """
+  return {"timestamp": timestamp, "type": "event_msg", "payload": {"type": "token_count", **payload_inner}}
+
+
 def compact_boundary_event(
     trigger: str | None = "manual", pre_tokens: int | None = None, post_tokens: int | None = None) -> dict:
   """A translated compact_boundary system event in the shape the stream carries and

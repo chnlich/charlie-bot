@@ -28,6 +28,7 @@ import requests
 from src.agents.backends.base import SESSION_ID_ENV_VAR
 from src.core.buildinfo import read_repo_head_sha
 from src.core.config import CharlieBotConfig, get_config
+from src.core.threads import METADATA_NAME
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
     HTTP_INTERNAL_API_TIMEOUT,
@@ -321,7 +322,7 @@ def find_local_thread(
     return None
   best: dict[str, Any] | None = None
   for thread_dir in threads_dir.iterdir():
-    meta_path = thread_dir / "metadata.json"
+    meta_path = thread_dir / METADATA_NAME
     try:
       meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):

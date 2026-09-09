@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -460,7 +461,7 @@ async def _iter_anthropic_sse(upstream: httpx.Response, model: str) -> AsyncIter
         break
       if not raw:
         continue
-      chunk = json.loads(raw)
+      chunk = orjson.loads(raw)
       for event, data in translator.events_for_chunk(chunk):
         yield _sse_event(event, data)
 

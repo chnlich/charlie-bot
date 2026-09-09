@@ -59,7 +59,9 @@ RAW_MISSING_ALIVE_REASON = "raw-missing-alive"
 # Improve-loop iteration threads are identified by their description prefix;
 # the loop task itself does not survive a restart (loop continuation is an
 # explicit non-goal), so these threads are finalized, never respawned, and
-# the shutdown path terminates their processes along with the loop.
+# the shutdown path terminates their processes along with the loop. The
+# description producer (improve_command.py) builds the prefix from this
+# constant, so producer and matchers cannot drift.
 IMPROVE_ITERATION_PREFIX = "Iterative improvement — iteration"
 
 # Pids that must never appear in a kill list derived from the fd scan.

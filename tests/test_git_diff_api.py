@@ -57,6 +57,10 @@ def _build_client(workspace: Path) -> TestClient:
   return TestClient(_build_app(workspace))
 
 
+def _get_diff(client: TestClient, endpoint: str, repo: Path, base: str, head: str, **params: str) -> httpx.Response:
+  return client.get(f"/api/git/diff/{endpoint}", params={"repo": str(repo), "base": base, "head": head, **params})
+
+
 def _counting_run(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
   """Patch the git API's subprocess.run to record each call's argv and delegate to the real run.
 
@@ -78,15 +82,7 @@ def test_diff_files_manifest(tmp_path: Path) -> None:
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
 
-  resp = client.get(
-      "/api/git/diff/files",
-      params={
-          "repo": str(repo),
-          "base": "main",
-          "head": "feature",
-          "mode": "three-dot"
-      },
-  )
+  resp = _get_diff(client, "files", repo, "main", "feature", mode="three-dot")
   assert resp.status_code == 200
   data = resp.json()
   by_path = {f["path"]: f for f in data["files"]}
@@ -115,15 +111,7 @@ def test_diff_file_returns_unified_diff(tmp_path: Path) -> None:
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
 
-  resp = client.get(
-      "/api/git/diff/file",
-      params={
-          "repo": str(repo),
-          "base": "main",
-          "head": "feature",
-          "path": "keep.txt"
-      },
-  )
+  resp = _get_diff(client, "file", repo, "main", "feature", path="keep.txt")
   assert resp.status_code == 200
   data = resp.json()
   assert data["path"] == "keep.txt"
@@ -137,22 +125,13 @@ def test_diff_file_rename_renders_as_rename(tmp_path: Path) -> None:
 
   # Passing old_path alongside path keeps git's rename pairing intact: the diff shows the
   # rename and only the one added line, not the whole file re-added.
-  params = {"repo": str(repo), "base": "main", "head": "feature", "path": "renamed.txt", "old_path": "torename.txt"}
-  diff = client.get("/api/git/diff/file", params=params).json()["diff"]
+  diff = _get_diff(client, "file", repo, "main", "feature", path="renamed.txt", old_path="torename.txt").json()["diff"]
   assert "rename from torename.txt" in diff
   assert "rename to renamed.txt" in diff
   assert "new file" not in diff
 
   # Without old_path git drops the pairing and the same file looks like a wholesale add.
-  readd = client.get(
-      "/api/git/diff/file",
-      params={
-          "repo": str(repo),
-          "base": "main",
-          "head": "feature",
-          "path": "renamed.txt"
-      },
-  ).json()["diff"]
+  readd = _get_diff(client, "file", repo, "main", "feature", path="renamed.txt").json()["diff"]
   assert "new file" in readd
 
 
@@ -162,14 +141,13 @@ def test_diff_file_too_large_returns_stub_and_force_loads(tmp_path: Path, monkey
   # Shrink the per-file cap so keep.txt's small diff trips it.
   monkeypatch.setattr(git_api, "_DIFF_MAX_BYTES", 10)
 
-  params = {"repo": str(repo), "base": "main", "head": "feature", "path": "keep.txt"}
-  stub = client.get("/api/git/diff/file", params=params).json()
+  stub = _get_diff(client, "file", repo, "main", "feature", path="keep.txt").json()
   assert stub["too_large"] is True
   assert stub["path"] == "keep.txt"
   assert stub["size_bytes"] > 10
   assert "diff" not in stub
 
-  forced = client.get("/api/git/diff/file", params={**params, "force": "true"}).json()
+  forced = _get_diff(client, "file", repo, "main", "feature", path="keep.txt", force="true").json()
   assert "too_large" not in forced
   assert "line2 changed" in forced["diff"]
 
@@ -178,14 +156,7 @@ def test_empty_diff_has_no_files(tmp_path: Path) -> None:
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
 
-  resp = client.get(
-      "/api/git/diff/files",
-      params={
-          "repo": str(repo),
-          "base": "main",
-          "head": "main"
-      },
-  )
+  resp = _get_diff(client, "files", repo, "main", "main")
   assert resp.status_code == 200
   data = resp.json()
   assert data["files"] == []
@@ -198,15 +169,7 @@ def test_two_dot_mode(tmp_path: Path) -> None:
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
 
-  resp = client.get(
-      "/api/git/diff/files",
-      params={
-          "repo": str(repo),
-          "base": "main",
-          "head": "feature",
-          "mode": "two-dot"
-      },
-  )
+  resp = _get_diff(client, "files", repo, "main", "feature", mode="two-dot")
   assert resp.status_code == 200
   data = resp.json()
   assert data["mode"] == "two-dot"
@@ -263,13 +226,12 @@ def test_diff_repeat_view_uses_memo(
   client = _build_client(tmp_path)
   calls = _counting_run(monkeypatch)
 
-  params = {"repo": str(repo), "base": "main", "head": "feature", **extra_params}
-  first = client.get(f"/api/git/diff/{endpoint}", params=params)
+  first = _get_diff(client, endpoint, repo, "main", "feature", **extra_params)
   assert first.status_code == 200
   assert [c[1] for c in calls] == first_calls
 
   calls.clear()
-  second = client.get(f"/api/git/diff/{endpoint}", params=params)
+  second = _get_diff(client, endpoint, repo, "main", "feature", **extra_params)
   assert second.status_code == 200
   assert second.json() == first.json()
   # The repeat view pays zero subprocesses: the ref-state signature is unchanged,
@@ -289,14 +251,13 @@ def test_diff_head_move_busts_memo(tmp_path: Path, endpoint: str, extra_params: 
   """A moved ref resolves to a new SHA key, so its view re-computes."""
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
-  params = {"repo": str(repo), "base": "main", "head": "feature", **extra_params}
-  first = client.get(f"/api/git/diff/{endpoint}", params=params).json()
+  first = _get_diff(client, endpoint, repo, "main", "feature", **extra_params).json()
 
   (repo / "added.txt").write_text("brand new\nfile\nthird\n")
   _git(repo, "add", "-A")
   _git(repo, "commit", "-qm", "advance feature")
 
-  second = client.get(f"/api/git/diff/{endpoint}", params=params).json()
+  second = _get_diff(client, endpoint, repo, "main", "feature", **extra_params).json()
   # The files response carries the moved SHA; the file response carries only the
   # body, so its re-computation shows as the new hunk line.
   if endpoint == "files":
@@ -371,14 +332,7 @@ def test_repo_outside_workspace_rejected(tmp_path: Path) -> None:
   app.dependency_overrides[get_config] = lambda: cfg
   client = TestClient(app)
 
-  resp = client.get(
-      "/api/git/diff/files",
-      params={
-          "repo": str(repo),
-          "base": "main",
-          "head": "feature"
-      },
-  )
+  resp = _get_diff(client, "files", repo, "main", "feature")
   assert resp.status_code == 400
 
 

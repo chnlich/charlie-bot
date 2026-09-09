@@ -51,6 +51,7 @@ import structlog
 import websockets
 from websockets.asyncio.client import ClientConnection
 
+from src.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
@@ -798,7 +799,7 @@ async def _require_slack_thread_session(session_id: str, session_mgr: SessionMan
   """
   meta = await session_mgr.get_session(session_id)
   if meta is None:
-    raise SlackReplyError(404, "Session not found")
+    raise SlackReplyError(404, SESSION_NOT_FOUND_DETAIL)
   if meta.slack_origin is None:
     raise SlackReplyError(409, "Session has no Slack thread")
   return meta

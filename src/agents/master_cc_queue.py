@@ -199,11 +199,11 @@ async def _session_consumer(session_id: str) -> None:
           if busy_start is not None:
             thinking_seconds = int((datetime.now(UTC) - busy_start).total_seconds())
 
-        done_event = {"type": ET.MASTER_DONE, "exit_code": exit_code, "still_thinking": still_thinking}
+        done_event = {"type": ET.MASTER_DONE, "exit_code": exit_code, ET.STILL_THINKING: still_thinking}
         if item.user_event_id:
-          done_event["input_event_id"] = item.user_event_id
+          done_event[ET.INPUT_EVENT_ID] = item.user_event_id
         if thinking_seconds is not None:
-          done_event["thinking_seconds"] = thinking_seconds
+          done_event[ET.THINKING_SECONDS] = thinking_seconds
         done_event.update(finish_extras)
         await item.callbacks.persist_and_broadcast(session_id, done_event)
 

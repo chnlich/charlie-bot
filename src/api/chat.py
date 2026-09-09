@@ -113,7 +113,7 @@ async def send_message(
         error_text = dispatch.error or f'Failed to dispatch /{name}'
         asst_event = {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": error_text}]}}
         await session_mgr.persist_and_broadcast(session_id, asst_event)
-        done_event = {"type": ET.MASTER_DONE, "exit_code": 1, "still_thinking": False}
+        done_event = {"type": ET.MASTER_DONE, "exit_code": 1, ET.STILL_THINKING: False}
         await session_mgr.persist_and_broadcast(session_id, done_event)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
@@ -124,7 +124,7 @@ async def send_message(
         md_out = '```\n' + out + '\n```'
         asst_event = {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": md_out}]}}
         await session_mgr.persist_and_broadcast(session_id, asst_event)
-        done_event = {"type": ET.MASTER_DONE, "exit_code": 0, "still_thinking": False}
+        done_event = {"type": ET.MASTER_DONE, "exit_code": 0, ET.STILL_THINKING: False}
         await session_mgr.persist_and_broadcast(session_id, done_event)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
@@ -202,7 +202,7 @@ async def run_and_finalize(
     # run_message() should handle and emit failures, but keep this as a
     # last-resort guard so the UI never gets stuck in "Thinking...".
     error_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {e}"}
-    done_event = {"type": ET.MASTER_DONE, "exit_code": 1, "still_thinking": False}
+    done_event = {"type": ET.MASTER_DONE, "exit_code": 1, ET.STILL_THINKING: False}
     await session_mgr.persist_and_broadcast(meta.id, error_event)
     await session_mgr.persist_and_broadcast(meta.id, done_event)
 

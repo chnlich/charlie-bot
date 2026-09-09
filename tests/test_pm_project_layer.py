@@ -26,6 +26,7 @@ from conftest import (
     build_scheduler_cfg,
     close_create_logged_task,
     make_cron_client,
+    make_instruction_cfg,
     make_scheduler_setup,
     make_sessions_client,
     record_create_logged_task,
@@ -416,19 +417,10 @@ async def test_regular_scheduled_session_without_role_keeps_clone_fork_guard(tmp
 
 def _instructions_cfg(tmp_path: Path) -> SimpleNamespace:
   """Minimal instruction inputs: a repo base prompt and a one-entry memory store."""
-  home = tmp_path / "home"
-  repo = tmp_path / "repo"
-  (repo / "prompts").mkdir(parents=True)
-  (repo / "prompts" / "master.md").write_text("BASE PROMPT", encoding="utf-8")
-  memory_dir = home / "memory"
-  write_memory_topics(memory_dir, ["profile resident"])
-  write_memory_entry(memory_dir, "profile", "note", title="Note", body="MEMORY BODY\n")
-  return SimpleNamespace(
-      charlie_bot_repo=repo,
-      claude_md_file=home / "MASTER_AGENT_PROMPT.md",
-      memory_dir=memory_dir,
-      charliebot_home=home,
-  )
+  cfg = make_instruction_cfg(tmp_path, manager_contract=None)
+  write_memory_topics(cfg.memory_dir, ["profile resident"])
+  write_memory_entry(cfg.memory_dir, "profile", "note", title="Note", body="MEMORY BODY\n")
+  return cfg
 
 
 def test_pm_identity_part_appended_for_project_session_with_group(tmp_path: Path) -> None:

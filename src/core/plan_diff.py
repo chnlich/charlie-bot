@@ -28,13 +28,6 @@ _BLOCK_TAGS = frozenset(
         "hr", "li", "main", "nav", "ol", "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot", "th",
         "thead", "tr", "ul"
     })
-_CJK_RANGES = (
-    (0x3400, 0x4DBF),
-    (0x4E00, 0x9FFF),
-    (0xF900, 0xFAFF),
-    (0x20000, 0x2FA1F),
-)
-
 _CBD_STYLE = """\
 .cbd-header { margin: 0 0 14px; padding: 8px 12px; border: 1px solid #d9dfe6; border-radius: 7px; background: #fff8df; color: #7a5a00; font-weight: 600; }
 .cbd-header::before { content: attr(data-cbd-header); }
@@ -53,8 +46,19 @@ class _TextPart:
   start: int
   end: int
   text: str
-  raw_ranges: list[tuple[int, int]]
   node: "_Node"
+  # True when ``text`` is the raw source slice itself (parsed data:
+  # handle_data verifies ``source[start:end] == text``, so the raw offset of
+  # logical offset i is ``start + i``). False for an entity reference: the
+  # decoded text shares one raw span, so every logical range maps to the
+  # part's whole ``(start, end)``.
+  text_is_raw: bool
+
+  def raw_span(self, logical_start: int, logical_end: int) -> tuple[int, int]:
+    """Return the raw source span of the logical range ``[logical_start, logical_end)``."""
+    if self.text_is_raw:
+      return (self.start + logical_start, self.start + logical_end)
+    return (self.start, self.end)
 
 
 @dataclass(eq=False)
@@ -119,9 +123,9 @@ class _Parser(_OffsetParser):
     self.root = _Node("#root", {}, None)
     self._stack = [self.root]
 
-  def _append_part(self, raw_start: int, raw_end: int, text: str, raw_ranges: list[tuple[int, int]]) -> None:
+  def _append_part(self, raw_start: int, raw_end: int, text: str, text_is_raw: bool) -> None:
     node = self._stack[-1]
-    part = _TextPart(raw_start, raw_end, text, raw_ranges, node)
+    part = _TextPart(raw_start, raw_end, text, node, text_is_raw)
     node.children.append(part)
     node.text_parts.append(part)
 
@@ -154,7 +158,7 @@ class _Parser(_OffsetParser):
     end = start + len(data)
     if self.source[start:end] != data:
       raise ValueError(f"could not locate text data at offset {start}")
-    self._append_part(start, end, data, [(start + index, start + index + 1) for index in range(len(data))])
+    self._append_part(start, end, data, True)
 
   def handle_entityref(self, name: str) -> None:
     self._append_ref(name, ("&" + name + ";",), 1)
@@ -173,7 +177,7 @@ class _Parser(_OffsetParser):
     if any(raw.startswith(ref) for ref in refs):
       length += 1
     text = _html.unescape(self.source[start:start + length])
-    self._append_part(start, start + length, text, [(start, start + length)] * len(text))
+    self._append_part(start, start + length, text, False)
 
 
 class _BoundaryParser(_OffsetParser):
@@ -256,11 +260,6 @@ class _LeafChange:
   new_index: int | None
 
 
-def _is_cjk(char: str) -> bool:
-  value = ord(char)
-  return any(start <= value <= end for start, end in _CJK_RANGES)
-
-
 def _is_boundary(node: _Node) -> bool:
   if node.tag in _BLOCK_TAGS:
     return True
@@ -331,30 +330,22 @@ def _normalise(text: str) -> str:
   return re.sub(r"\s+", " ", text).strip()
 
 
+# The tokeniser's scan (see _tokenise for the shape rules the alternation encodes).
+_TOKEN_RE = re.compile(r"\s+|[A-Za-z0-9_]+|.")
+
+
 def _tokenise(text: str) -> list[tuple[str, int, int]]:
+  # The three token shapes in one C-level scan; alternation order decides the
+  # shape. ``\s+`` is str.isspace()'s own set (the same C table), so a
+  # whitespace run can never reach ``.``. ``[A-Za-z0-9_]`` is exactly
+  # ``char.isascii() and (char.isalnum() or char == "_")``. Every remaining
+  # character — each CJK char, each punctuation char — is one token, the
+  # per-character granularity the differ's alignment relies on.
   tokens: list[tuple[str, int, int]] = []
-  index = 0
-  while index < len(text):
-    char = text[index]
-    if char.isspace():
-      end = index + 1
-      while end < len(text) and text[end].isspace():
-        end += 1
-      index = end
-      continue
-    if _is_cjk(char):
-      tokens.append((char, index, index + 1))
-      index += 1
-      continue
-    if char.isascii() and (char.isalnum() or char == "_"):
-      end = index + 1
-      while end < len(text) and text[end].isascii() and (text[end].isalnum() or text[end] == "_"):
-        end += 1
-      tokens.append((text[index:end], index, end))
-      index = end
-      continue
-    tokens.append((char, index, index + 1))
-    index += 1
+  for match in _TOKEN_RE.finditer(text):
+    value = match.group()
+    if not value[0].isspace():
+      tokens.append((value, match.start(), match.end()))
   return tokens
 
 
@@ -367,25 +358,27 @@ def _leaf_tokens(leaf: _Leaf) -> list[_Token]:
   offset = 0
   for part in leaf.parts:
     for value, start, end in _tokenise(part.text):
-      result.append(
-          _Token(
-              value,
-              offset + start,
-              offset + end,
-              part.raw_ranges[start][0],
-              part.raw_ranges[end - 1][1],
-          ))
+      raw_start, raw_end = part.raw_span(start, end)
+      result.append(_Token(value, offset + start, offset + end, raw_start, raw_end))
     offset += len(part.text)
   return result
 
 
-def _leaf_raw_map(leaf: _Leaf) -> tuple[list[tuple[int, int]], list[int]]:
-  raw_ranges: list[tuple[int, int]] = []
-  part_indices: list[int] = []
-  for part_index, part in enumerate(leaf.parts):
-    raw_ranges.extend(part.raw_ranges)
-    part_indices.extend([part_index] * len(part.text))
-  return raw_ranges, part_indices
+def _raw_bounds(tokens: list[_Token], start: int, end: int, leaf: _Leaf) -> list[tuple[int, int]]:
+  if start >= end:
+    return []
+  logical_start = tokens[start].logical_start
+  logical_end = tokens[end - 1].logical_end
+  result: list[tuple[int, int]] = []
+  offset = 0
+  for part in leaf.parts:
+    part_end = offset + len(part.text)
+    lo = max(offset, logical_start)
+    hi = min(part_end, logical_end)
+    if lo < hi:
+      result.append(part.raw_span(lo - offset, hi - offset))
+    offset = part_end
+  return result
 
 
 def _merged_opcodes(old: list[_Token], new: list[_Token]) -> list[tuple[str, int, int, int, int]]:
@@ -524,25 +517,6 @@ def _add_attr(source: str, node: _Node, name: str, value: str | None, insertions
   _add_insertion(insertions, node.start + close, addition)
 
 
-def _raw_bounds(tokens: list[_Token], start: int, end: int, leaf: _Leaf) -> list[tuple[int, int]]:
-  if start >= end:
-    return []
-  raw_ranges, part_indices = _leaf_raw_map(leaf)
-  logical_start = tokens[start].logical_start
-  logical_end = tokens[end - 1].logical_end
-  result: list[tuple[int, int]] = []
-  current_part = part_indices[logical_start]
-  current_start = logical_start
-  for logical_index in range(logical_start + 1, logical_end):
-    part = part_indices[logical_index]
-    if part != current_part:
-      result.append((raw_ranges[current_start][0], raw_ranges[logical_index - 1][1]))
-      current_part = part
-      current_start = logical_index
-  result.append((raw_ranges[current_start][0], raw_ranges[logical_end - 1][1]))
-  return result
-
-
 def _anchor_offset(tokens: list[_Token], start: int, leaf: _Leaf) -> int:
   if start < len(tokens):
     return tokens[start].raw_start
@@ -579,12 +553,19 @@ def _wrapping_removes_direct_text(leaf: _Leaf, ranges: list[tuple[int, int]]) ->
   for child in leaf.element.children:
     if not isinstance(child, _TextPart):
       continue
-    for index, char in enumerate(child.text):
-      if char.isspace():
-        continue
+    if child.text_is_raw:
+      for index, char in enumerate(child.text):
+        if char.isspace():
+          continue
+        has_direct_text = True
+        raw_start, raw_end = child.raw_span(index, index + 1)
+        if not any(start <= raw_start and raw_end <= end for start, end in ranges):
+          return False
+    # A reference's decoded characters share one raw span, so one check
+    # answers for all of them.
+    elif child.text.strip():
       has_direct_text = True
-      raw_start, raw_end = child.raw_ranges[index]
-      if not any(start <= raw_start and raw_end <= end for start, end in ranges):
+      if not any(start <= child.start and child.end <= end for start, end in ranges):
         return False
   return has_direct_text
 

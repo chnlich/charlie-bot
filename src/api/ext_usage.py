@@ -15,6 +15,7 @@ from fastapi import APIRouter
 
 from src.core import claude_accounts
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
+from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_TOKEN_COUNT, CODEX_TURN_CONTEXT
 from src.core.config import get_config
 from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
@@ -472,10 +473,10 @@ def _latest_token_count_event(
       event = json.loads(line)
     except json.JSONDecodeError:
       continue
-    if event.get("type") != "event_msg":
+    if event.get("type") != CODEX_EVENT_MSG:
       continue
     payload = event.get("payload", {})
-    if payload.get("type") != "token_count":
+    if payload.get("type") != CODEX_TOKEN_COUNT:
       continue
     if match is not None and not match(event):
       continue
@@ -572,12 +573,12 @@ def _extract_codex_spend_events(path: Path) -> list[_SpendEvent] | None:
         payload = event.get("payload") or {}
         if not isinstance(payload, dict):
           raise ValueError(f"payload must be an object, got {type(payload).__name__}")
-        if event_type == "turn_context":
+        if event_type == CODEX_TURN_CONTEXT:
           model = payload.get("model")
           if isinstance(model, str):
             current_model = model
           continue
-        if event_type != "event_msg" or payload.get("type") != "token_count":
+        if event_type != CODEX_EVENT_MSG or payload.get("type") != CODEX_TOKEN_COUNT:
           continue
 
         info = payload.get("info") or {}

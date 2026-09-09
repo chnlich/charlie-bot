@@ -75,12 +75,19 @@ class _IdSequencer:
     """Drop the key map before a new trace's events; the int counter continues."""
     self._seen.clear()
 
+  @property
+  def seen(self) -> dict[str, int]:
+    """The live key→id map (`start_trace` clears it); the walk probes it inline."""
+    return self._seen
+
   def __call__(self, original: object) -> int:
     key = str(original)
-    if key not in self._seen:
-      self._seen[key] = self._next_id
+    mapped = self._seen.get(key)
+    if mapped is None:
+      mapped = self._next_id
+      self._seen[key] = mapped
       self._next_id += 1
-    return self._seen[key]
+    return mapped
 
 
 def _merge_one_trace(
@@ -102,17 +109,26 @@ def _merge_one_trace(
   tid_seq.start_trace()
   flow_seq.start_trace()
 
+  # pid_labels keys stay str(pid) — int 7 and "7" are one pid merged last-wins,
+  # the rule the readers always applied — while pid_map also carries one raw
+  # value per key, so the walk remaps with one dict probe per event; a
+  # str-keyed map paid a str() on every event of a ~500k-event corpus.
   pid_labels: dict[str, str] = {}
+  raw_pids: dict[str, object] = {}
   for event in events:
     if event.get("ph") == "M" and event.get("name") == "process_labels" and event.get("args"):
-      pid_labels[str(event.get("pid"))] = event["args"].get("labels") or ""
+      pid = event.get("pid")
+      key = str(pid)
+      pid_labels[key] = event["args"].get("labels") or ""
+      raw_pids.setdefault(key, pid)
 
-  pid_map: dict[str, str] = {}
+  pid_map: dict[object, str] = {}
   synthetic_meta: dict[str, tuple[int, str]] = {}
   base_sort_index = file_index * 10000
-  for original_pid, label in pid_labels.items():
+  for key, label in pid_labels.items():
     synthetic_pid = rank_label if label == "CPU" else f"{rank_label}/{label}"
-    pid_map[original_pid] = synthetic_pid
+    pid_map[key] = synthetic_pid
+    pid_map[raw_pids[key]] = synthetic_pid
     if label == "CPU":
       synthetic_meta[synthetic_pid] = (base_sort_index, f"{rank_label} CPU")
     else:
@@ -120,10 +136,12 @@ def _merge_one_trace(
       gpu_index = int(gpu_match.group(1)) if gpu_match else 0
       synthetic_meta[synthetic_pid] = (base_sort_index + 1000 + gpu_index, f"{rank_label} {label}")
 
-  emitted_thread_names: set[str] = set()
   batcher_add = batcher.add
   pid_map_get = pid_map.get
+  tid_map_get = tid_seq.seen.get
+  tid_seq_call = tid_seq
   flow_seq_call = flow_seq
+  _str = str
 
   for event in events:
     ph = event.get("ph")
@@ -139,25 +157,30 @@ def _merge_one_trace(
       else:
         event.pop("args")
 
-    remapped_pid = pid_map_get(str(event.get("pid")), rank_label)
-    event["pid"] = remapped_pid
+    pid = event.get("pid")
+    synthetic_pid = pid_map_get(pid)
+    if synthetic_pid is None:
+      synthetic_pid = pid_map_get(_str(pid), rank_label)
+    event["pid"] = synthetic_pid
     if "tid" in event:
       original_tid = event["tid"]
-      synthetic_tid = tid_seq(original_tid)
-      event["tid"] = synthetic_tid
-      thread_key = str(original_tid)
-      if thread_key not in emitted_thread_names:
-        emitted_thread_names.add(thread_key)
+      thread_key = _str(original_tid)
+      synthetic_tid = tid_map_get(thread_key)
+      if synthetic_tid is None:
+        # First sight: the sequencer allocates and inserts; the thread_name
+        # rides the same first sight instead of a second per-event set probe.
+        synthetic_tid = tid_seq_call(original_tid)
         batcher_add(
             {
                 "ph": "M",
-                "pid": remapped_pid,
+                "pid": event["pid"],
                 "tid": synthetic_tid,
                 "name": "thread_name",
                 "args": {
                     "name": f"{rank_label}/{original_tid}"
                 },
             })
+      event["tid"] = synthetic_tid
     if ph in {"s", "t", "f"} and "id" in event:
       event["id"] = flow_seq_call(event["id"])
     batcher_add(event)

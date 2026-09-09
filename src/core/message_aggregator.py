@@ -185,7 +185,7 @@ def _task_delegated_msg(ev: dict) -> dict:
       "role": ET.TASK_DELEGATED,
       "content": "Task delegated",
       "thread_id": ev.get("thread_id", ""),
-      "delegate_invocation": ev.get("delegate_invocation"),
+      ET.DELEGATE_INVOCATION: ev.get(ET.DELEGATE_INVOCATION),
       "backend": backend,
       "model": model,
       "timestamp": ev.get("timestamp") or ev.get("created_at"),

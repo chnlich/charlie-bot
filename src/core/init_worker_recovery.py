@@ -522,7 +522,7 @@ async def _maybe_respawn(
   invocation = None
   for ev in reversed(chat_events):
     if ev.get("type") == ET.TASK_DELEGATED and ev.get("thread_id") == thread_id:
-      invocation = ev.get("delegate_invocation") or {}
+      invocation = ev.get(ET.DELEGATE_INVOCATION) or {}
       break
   if invocation is None:
     log.warning("respawn_invocation_missing", thread=thread_id, session=session_id)

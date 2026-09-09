@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 from conftest import fresh_state_fixture, make_home_config
 
+import src.api.sessions as sessions_api
 import src.core.sessions as sessions_mod
+from src.api.responses import fast_json_bytes
+from src.core import thinking_state
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 
@@ -293,3 +296,56 @@ async def test_content_search_atomic_rewrite_rescans_the_whole_file(
   [found] = await mgr.search_sessions("needle")
   assert found.id == session.id
   assert starts[-1] == 0
+
+
+@pytest.mark.asyncio
+async def test_search_route_body_is_byte_identical_to_the_merged_render(tmp_path: Path) -> None:
+  cfg = make_home_config(tmp_path)
+  mgr = SessionManager(cfg)
+  await _session_with_chat_content(mgr, '{"type":"user","content":"irrelevant"}\n', "needle-ascii")
+  await _session_with_chat_content(mgr, '{"type":"user","content":"irrelevant"}\n', "针-needle-会话")
+
+  rows, derived = await mgr.search_sessions_readonly(
+      "needle", include_running_status=True, include_pending_trigger_status=True)
+  assert len(rows) == 2
+  payload = []
+  for meta in rows:
+    entry = derived[meta.id]
+    row = meta.model_dump(mode="json")
+    row["thinking_since"] = sessions_api._UTC_DATETIME_JSON.dump_python(thinking_state.busy_since(meta.id), mode="json")
+    row["has_running_tasks"] = entry["has_running_tasks"]
+    row["has_pending_trigger"] = entry["has_pending_trigger"]
+    row["pending_trigger_count"] = entry["pending_trigger_count"]
+    row["next_trigger_at"] = sessions_api._UTC_DATETIME_JSON.dump_python(entry["next_trigger_at"], mode="json")
+    payload.append(row)
+
+  first = await sessions_api.search_sessions(q="needle", session_mgr=mgr)
+  second = await sessions_api.search_sessions(q="needle", session_mgr=mgr)
+  assert first.body == fast_json_bytes(payload)
+  assert second.body == first.body  # the memo serves the same bytes
+
+
+@pytest.mark.asyncio
+async def test_search_row_memo_follows_the_write_funnel_rename(tmp_path: Path) -> None:
+  cfg = make_home_config(tmp_path)
+  mgr = SessionManager(cfg)
+  session = await _session_with_chat_content(mgr, '{"type":"user","content":"irrelevant"}\n', "needle-v1")
+
+  first = await sessions_api.search_sessions(q="needle", session_mgr=mgr)
+  assert b"needle-v1" in first.body
+
+  await mgr.rename_session(session.id, "needle-v2")  # save_metadata replaces the cached object
+  second = await sessions_api.search_sessions(q="needle", session_mgr=mgr)
+  assert b"needle-v2" in second.body
+  assert b"needle-v1" not in second.body
+
+
+def test_search_row_memo_respects_its_cap() -> None:
+  sessions_api._search_row_fragments.clear()
+  metas = [SessionMetadata.model_construct(id=f"s{i}", name=f"needle-{i}") for i in range(600)]
+  for meta in metas:
+    sessions_api._search_row_static_segments(meta)
+  assert len(sessions_api._search_row_fragments) == sessions_api._SEARCH_ROW_FRAGMENT_CAP
+  # The evicted oldest entry is gone; a recent one survives with its pinned object.
+  assert sessions_api._search_row_fragments[id(metas[599])][0] is metas[599]
+  sessions_api._search_row_fragments.clear()

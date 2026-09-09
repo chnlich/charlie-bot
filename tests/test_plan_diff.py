@@ -438,6 +438,35 @@ def test_style_and_header_splice_positions() -> None:
   assert '<div class="cbd-header"' in annotated
 
 
+def test_header_splices_inside_the_wrap_column() -> None:
+  new = '<html><body><div class="wrap"><p>alpha beta</p></div></body></html>'
+  annotated = annotate(new, new)
+  assert annotated.count('<div class="cbd-header"') == 1
+  assert annotated.index('<div class="cbd-header"') == annotated.index('<div class="wrap">') + len('<div class="wrap">')
+  assert annotated.index('<p>alpha beta</p>') > annotated.index('<div class="cbd-header"')
+
+
+def test_header_splices_inside_main_when_wrap_is_absent() -> None:
+  new = '<html><body><main><p>alpha beta</p></main></body></html>'
+  annotated = annotate(new, new)
+  assert annotated.count('<div class="cbd-header"') == 1
+  assert annotated.index('<div class="cbd-header"') == annotated.index('<main>') + len('<main>')
+
+
+def test_header_keeps_the_body_start_fallback_without_wrap_or_main() -> None:
+  new = '<html><body><p>alpha beta</p></body></html>'
+  annotated = annotate(new, new)
+  assert annotated.count('<div class="cbd-header"') == 1
+  assert annotated.index('<div class="cbd-header"') == annotated.index('<body>') + len('<body>')
+
+
+def test_header_ignores_class_names_that_merely_contain_wrap() -> None:
+  new = '<html><body><div class="unwrap"><div class="re-wrap"><p>alpha beta</p></div></div></body></html>'
+  annotated = annotate(new, new)
+  assert annotated.count('<div class="cbd-header"') == 1
+  assert annotated.index('<div class="cbd-header"') == annotated.index('<body>') + len('<body>')
+
+
 def _anchors_from_full_parse(source: str) -> tuple[tuple | None, tuple | None]:
   from src.core.plan_diff import _first_descendant, _Node, _parse
 

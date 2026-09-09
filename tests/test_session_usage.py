@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from conftest import OPUS_BACKEND_ID, SYNTHETIC_MODEL
+from conftest import codex_token_count_event as _codex_token_count_envelope
 from conftest import compact_boundary_event as _compact_boundary_event
 
 from src.agents.backends.base import make_context_reading_event
@@ -71,31 +72,24 @@ def _codex_token_count_event(
     *, timestamp: str, total_input: int, total_cached: int, total_output: int, last_input: int, last_cached: int,
     last_output: int, last_total: int) -> dict:
   """Build one codex token_count event_msg; every fixture sets window 258400."""
-  return {
-      "timestamp": timestamp,
-      "type": "event_msg",
-      "payload":
-          {
-              "type": "token_count",
-              "info":
-                  {
-                      "total_token_usage":
-                          {
-                              "input_tokens": total_input,
-                              "cached_input_tokens": total_cached,
-                              "output_tokens": total_output,
-                          },
-                      "last_token_usage":
-                          {
-                              "input_tokens": last_input,
-                              "cached_input_tokens": last_cached,
-                              "output_tokens": last_output,
-                              "total_tokens": last_total,
-                          },
-                      "model_context_window": 258400,
-                  },
-          },
-  }
+  return _codex_token_count_envelope(
+      timestamp,
+      info={
+          "total_token_usage":
+              {
+                  "input_tokens": total_input,
+                  "cached_input_tokens": total_cached,
+                  "output_tokens": total_output,
+              },
+          "last_token_usage":
+              {
+                  "input_tokens": last_input,
+                  "cached_input_tokens": last_cached,
+                  "output_tokens": last_output,
+                  "total_tokens": last_total,
+              },
+          "model_context_window": 258400,
+      })
 
 
 def _seed_codex_session(

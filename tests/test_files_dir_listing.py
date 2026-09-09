@@ -9,6 +9,7 @@ UTC mtime text — the walk is an optimization, not a redefinition.
 from __future__ import annotations
 
 import html
+import random
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,7 +18,7 @@ from urllib.parse import quote
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.files import _dir_listing_html
+from src.api.files import _dir_listing_html, _format_mtime
 from src.api.files import router as files_router
 
 _TEMPLATE = """<!DOCTYPE html>
@@ -146,3 +147,41 @@ def test_mtime_text_is_utc(tmp_path: Path) -> None:
   stamp = time.strftime("%Y-%m-%d %H:%M", time.gmtime(target.stat().st_mtime))
   served = _dir_listing_html(tmp_path, "/files", None)
   assert served is not None and stamp in served
+
+
+def test_mtime_formatter_matches_the_gmtime_reference() -> None:
+  """_format_mtime renders strftime(gmtime(epoch)) byte-for-byte.
+
+  The epochs pin the two roundings the integer calendar must reproduce: the
+  second floor of a fractional epoch (gmtime truncates the fraction toward
+  minus infinity) and the calendar carries across minute, day, month, and year
+  boundaries, including the leap-day arithmetic civil-from-days rides on.
+  """
+  boundaries = [
+      0.0,
+      0.5,
+      59.9999999,
+      60.0,
+      3599.9999999,
+      3600.0,
+      86399.9999999,
+      86400.0,
+      -0.5,
+      -1.5,
+      -60.5,
+      -86400.5,
+      951782400.0,  # 2000-02-29 leap day
+      951868799.9999999,  # its last second
+      4107542400.0,  # 2100-03-01, the first non-leap century carry
+      253402300799.999,  # 9999-12-31 23:59
+  ]
+  rng = random.Random(72)
+  fuzz = [rng.uniform(0, 4102444800) for _ in range(20000)]
+  fuzz += [rng.uniform(-1e9, 0) for _ in range(2000)]
+  fuzz += [
+      float(rng.randrange(0, 4102444800)) + f
+      for _ in range(4000)
+      for f in (rng.random(), 0.0, 0.9999999, 59.9999999, 3599.9999999)
+  ]
+  for epoch in boundaries + fuzz:
+    assert _format_mtime(epoch) == time.strftime("%Y-%m-%d %H:%M", time.gmtime(epoch)), epoch

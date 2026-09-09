@@ -3,10 +3,10 @@
 import asyncio
 import html
 import json
+import math
 import mimetypes
 import os
 import re
-import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -166,6 +166,49 @@ def _human_size(size: int) -> str:
   return f"{size:.1f} PB"
 
 
+def _format_mtime(epoch: float) -> str:
+  """The listing's UTC minute text, "YYYY-MM-DD HH:MM", from an epoch-seconds float.
+
+  The seconds floor toward minus infinity — the rounding ``time.gmtime`` applies
+  to a fractional epoch — and the calendar date comes from integer civil-from-days
+  arithmetic, so no per-entry ``gmtime``/``strftime`` pair is needed. The suite
+  pins the output byte-identical to ``strftime("%Y-%m-%d %H:%M", gmtime(epoch))``
+  over boundary and randomized epochs; file mtimes on this host's filesystems sit
+  in the 4-digit-year zone that both forms render identically.
+  """
+  days, secs_of_day = divmod(math.floor(epoch), 86400)
+  hh, rem = divmod(secs_of_day, 3600)
+  # days since 1970-01-01 -> (y, m, d), Howard Hinnant's civil_from_days.
+  z = days + 719468
+  era = (z if z >= 0 else z - 146096) // 146097
+  doe = z - era * 146097
+  yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+  y = yoe + era * 400
+  doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+  mp = (5 * doy + 2) // 153
+  d = doy - (153 * mp + 2) // 5 + 1
+  m = mp + 3 if mp < 10 else mp - 9
+  y += m <= 2
+  return "%04d-%02d-%02d %02d:%02d" % (y, m, d, hh, rem // 60)
+
+
+# Bound on _listing_memo: one browser tab lists one directory at a time, so the
+# cap covers every listing open across tabs, and one slot holds the ~240 KB
+# worst listing on this host's corpus.
+_LISTING_MEMO_LIMIT = 8
+
+# Memo key for one directory listing: the resolved directory, the URL prefix the
+# links embed, and the walk's own entry snapshot. The served HTML is a pure
+# function of that walked state, so equal walked state proves the stored page
+# equals what this walk would build — no invalidation rule is needed, and the
+# key leans on no rename-atomicity assumption the sibling (mtime_ns, size) memos
+# require. The walk itself re-runs on every request (the stat per entry is the
+# only way to read mtimes); the memo removes the sort and the per-entry row
+# build from a repeat view.
+_ListingKey = tuple[str, str, tuple[tuple[bool, str, int, float], ...]]
+
+_listing_memo: BoundedMemo[_ListingKey, str] = BoundedMemo(_LISTING_MEMO_LIMIT)
+
 # A name over [A-Za-z0-9_.~-] is its own html.escape output and its own
 # urllib.parse.quote(safe="") output — both functions' always-safe sets — so a
 # matching entry renders by interpolation and only the rest pay the per-entry
@@ -180,8 +223,8 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
   Carries the route's dir contract: the ``?diff=`` 400 (a diff target must be a
   session artifact page, never a directory) and the unreadable-directory 403.
   One scandir pass answers is_dir from the directory record and stats each
-  entry once; the per-entry Path construction and second stat of a
-  Path.iterdir walk dominate the listing of a thousand-entry directory.
+  entry once; a repeat view of unchanged state serves the memo and pays only
+  that walk.
   """
   try:
     scandir_iter = os.scandir(os.fspath(dir_path))
@@ -205,6 +248,10 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
       except OSError:
         continue
       entries.append((is_dir, entry.name, stat.st_size, stat.st_mtime))
+  key: _ListingKey = (os.fspath(dir_path), url_prefix, tuple(entries))
+  hit = _listing_memo.get(key)
+  if hit is not None:
+    return hit
   entries.sort(key=lambda e: (not e[0], e[1].lower()))
 
   rows = []
@@ -226,9 +273,7 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
       name_text = html.escape(name_text)
       href = html.escape(f"{prefix}/{quote(name, safe='')}")
     size_text = "" if is_dir else _human_size(size)
-    # time.gmtime is the UTC rendering the datetime form produced, minus its
-    # per-entry object construction.
-    mtime_text = time.strftime("%Y-%m-%d %H:%M", time.gmtime(mtime))
+    mtime_text = _format_mtime(mtime)
     rows.append(
         f'<tr>'
         f'<td>{icon}</td><td><a href="{href}">{name_text}</a></td>'
@@ -236,7 +281,7 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
         f'</tr>\n')
 
   display_path = html.escape("/" + dir_path.as_posix().lstrip("/"))
-  return f"""<!DOCTYPE html>
+  listing = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Index of {display_path}</title>
 <style>
@@ -255,6 +300,28 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
 </table>
 </body>
 </html>"""
+  _listing_memo.store(key, listing)
+  return listing
+
+
+def _resolve_and_list(path: str, url_prefix: str, diff_param: str | None) -> tuple[Path, str | None, bool]:
+  """Resolve the request path and attempt its listing in one executor hop.
+
+  Returns ``(resolved_path, listing_html, exists)``. The exists half carries the
+  old two-hop ``exists()`` answer: a listing or a ``NotADirectoryError`` proves
+  the path present (scandir reached it), and only the ambiguous not-a-directory
+  case — a missing path whose parent is a file raises the same error as a plain
+  file — pays its explicit ``os.path.exists``. ``FileNotFoundError`` from a
+  vanished or absent path answers ``exists=False`` without a second stat.
+  """
+  fs_path = (Path("/") / path).resolve()
+  try:
+    listing = _dir_listing_html(fs_path, url_prefix, diff_param)
+  except FileNotFoundError:
+    return fs_path, None, False
+  if listing is not None:
+    return fs_path, listing, True
+  return fs_path, None, os.path.exists(fs_path)
 
 
 @router.api_route("/{path:path}", methods=["GET", "HEAD"])
@@ -264,16 +331,14 @@ async def serve_file(path: str, request: Request):
   HEAD answers the same status as GET, which is how the chat asks whether a linked path is
   still there without pulling the file down.
   """
-  fs_path = await asyncio.to_thread((Path("/") / path).resolve)
-
-  if not await asyncio.to_thread(fs_path.exists):
-    raise HTTPException(status_code=404, detail="Not found")
-
   diff_param = request.query_params.get("diff")
   url_prefix = f"/files/{path}" if path else "/files"
-  # One executor hop carries the is_dir answer and the whole listing build;
-  # None means a file, falling through to the artifact and FileResponse arms.
-  listing = await asyncio.to_thread(_dir_listing_html, fs_path, url_prefix, diff_param)
+  # One executor hop carries the resolve, the exists answer, and the whole
+  # listing build; None means a file, falling through to the artifact and
+  # FileResponse arms.
+  fs_path, listing, exists = await asyncio.to_thread(_resolve_and_list, path, url_prefix, diff_param)
+  if not exists:
+    raise HTTPException(status_code=404, detail="Not found")
   if listing is not None:
     return HTMLResponse(listing)
 

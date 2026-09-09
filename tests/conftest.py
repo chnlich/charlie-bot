@@ -313,6 +313,21 @@ def assistant_event(content: str, event_id: str = "assistant") -> dict:
   }
 
 
+def assistant_text_event(text: str) -> dict:
+  """An ASSISTANT event whose message is a single text block and nothing else: the translated event
+  a backend translator emits for model text. No id or timestamp; a test needing extra fields merges
+  them in."""
+  return {
+      "type": ET.ASSISTANT,
+      "message": {
+          "content": [{
+              "type": "text",
+              "text": text,
+          }],
+      },
+  }
+
+
 def assistant_text_tool_use_event(text: str, tool_name: str, tool_input: dict, timestamp: str) -> dict:
   """An ASSISTANT event whose message is one text block followed by one tool_use block: the
   draft-with-tools shape the aggregator tool_result tests feed through both entry points."""

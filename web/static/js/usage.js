@@ -38,7 +38,10 @@ function paintStreamDraft(draft) {
     streamPaintCodeTokens = null;
   }
   inner.innerHTML = html;
-  renderChatMath(inner);
+  // The draft text is the walk's source; renderChatMath skips its full-text
+  // KaTeX scan when it carries no math delimiter, and concatenation can only
+  // create a delimiter across the seam, never remove one.
+  renderChatMath(inner, content + thinking);
   if (wasAtBottom) {
     container.scrollTop = container.scrollHeight;
   } else {

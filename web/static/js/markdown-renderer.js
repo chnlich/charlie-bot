@@ -482,7 +482,28 @@ function flushDeferredCodeHighlights() {
   }
 }
 
-function renderChatMath(el) {
+// KaTeX auto-render can only transform text around its four configured
+// delimiters, and every one of them starts with '$', '\(' or '\[' — characters
+// marked never synthesizes and escapeHtml never adds or removes, so a source
+// carrying none of the three renders byte-identically without the walk. But
+// character references decode when the browser parses the rendered HTML, so an
+// entity-encoded delimiter initial also reaches the walk's text nodes: any
+// numeric reference, or a named reference of the four delimiter characters
+// (dollar/bsol/lpar/lparen/lsqb/lbrack), forces the walk — a false walk is the
+// safe direction.
+const MATH_ENTITY_RE = /&(?:#[0-9]|#[xX][0-9a-fA-F]|dollar|bsol|lparen|lpar|lsqb|lbrack)/;
+
+function hasMathDelimiter(text) {
+  return text.indexOf('$') !== -1 || text.indexOf('\\(') !== -1 || text.indexOf('\\[') !== -1
+    || MATH_ENTITY_RE.test(text);
+}
+
+function renderChatMath(el, sourceText) {
+  // The walk's source: the streamed paint passes the draft text; message
+  // renders fall to data-raw, the message's own source. An element with
+  // neither (raw backend output) keeps the unconditional walk.
+  const raw = typeof sourceText === 'string' ? sourceText : el.dataset && el.dataset.raw;
+  if (typeof raw === 'string' && !hasMathDelimiter(raw)) return;
   // throwOnError:false keeps stray dollar amounts ("$5 ... $10") from
   // breaking the whole bubble — invalid math renders as red inline text.
   renderMathInElement(el, {

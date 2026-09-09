@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from conftest import run_node_js_test
 
-# Keep this set disjoint from the suites still wrapped by tests/test_*_frontend.py, or a suite runs twice.
+# Keep this set disjoint from the suites still wrapped by the tests/test_*_runner.py shims, or a suite runs twice.
 _NODE_TESTS = [
     "artifact_comment_drafts.test.js",
     "artifact_comments.test.js",
@@ -27,6 +27,24 @@ _NODE_TESTS = [
     "ext_usage_render.test.mjs",
     "marked_hl_cache.test.js",
     "page_timers_visibility.test.js",
+    "panel_resize.test.js",
+    "plan_cards.test.js",
+    "plan_panel.test.js",
+    "prose_markdown_memo.test.js",
+    "rendering_worker_summary_origin.test.js",
+    "show_more_toggle.test.js",
+    "sidebar_session_model.test.js",
+    "stream_tail_skip.test.js",
+    "tailwind_class_coverage.test.js",
+    "terminal_b64.test.js",
+    "terminal_mount.test.js",
+    "test_archived_view.test.js",
+    "thinking_toggle.test.js",
+    "tui_status_scope.test.js",
+    "usage_stream_render.test.js",
+    "worker_description_prefix.test.js",
+    "worker_events_incremental.test.js",
+    "workers_list_conditional_poll.test.js",
 ]
 
 

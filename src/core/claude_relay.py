@@ -93,7 +93,7 @@ class RelayWatch:
     """Record the event; True exactly when the run must be terminated now (armed safe point)."""
     event_type = event.get("type")
     if event_type == ET.RATE_LIMIT_EVENT:
-      info = event.get("rate_limit_info")
+      info = event.get(ET.RATE_LIMIT_INFO)
       if not isinstance(info, dict):
         return False
       moment = claude_accounts.now_or(self._now)

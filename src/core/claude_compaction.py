@@ -69,7 +69,9 @@ COMPACTION_DISALLOWED_TOOLS = ",".join(
 
 COMPACT_PROMPT = "/compact\n"
 
-_BOUNDARY_MARKER = '"compact_boundary"'
+# The JSON-quoted subtype the raw transcript lines carry; built from the
+# constant so the byte needle stays in sync with the persisted wire value.
+_BOUNDARY_MARKER = f'"{ET.COMPACT_BOUNDARY}"'
 
 # ---------------------------------------------------------------------------
 # Trigger decisions (pure)

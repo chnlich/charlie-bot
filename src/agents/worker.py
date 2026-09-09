@@ -407,7 +407,7 @@ class Worker:
 
     # Detect rate-limit rejections from Claude Code (type=ET.RATE_LIMIT_EVENT)
     if event_type == ET.RATE_LIMIT_EVENT:
-      rli = event_data.get("rate_limit_info", {})
+      rli = event_data.get(ET.RATE_LIMIT_INFO, {})
       if rli.get("status") == "rejected":
         rate_type = rli.get("rateLimitType", "unknown")
         resets_at = rli.get("resetsAt", "unknown")

@@ -23,6 +23,10 @@ ASSISTANT_ERROR = "assistant_error"
 
 # -- Worker / delegation -----------------------------------------------------
 TASK_DELEGATED = "task_delegated"
+# The TASK_DELEGATED payload key carrying the persisted SpawnRequest fields the
+# boot recovery re-reads (src/core/init_worker_recovery.py); the projection
+# copies it (src/core/message_aggregator.py). Persisted wire value.
+DELEGATE_INVOCATION = "delegate_invocation"
 WORKER_SUMMARY = "worker_summary"
 COMPLETE = "complete"
 
@@ -38,8 +42,10 @@ AGENT_MESSAGE = "agent_message"
 
 # -- Slack -------------------------------------------------------------------
 # A reply the master posted to its session's Slack thread through
-# ``charliebot slack reply``; its ``slack_reply`` payload names the summon it
-# answers, which the round-end audit reads (src/core/slack_listener.py).
+# ``charliebot slack reply``; the same-named ``slack_reply`` payload names the
+# summon it answers, which the round-end audit reads
+# (src/core/slack_listener.py). Both uses share this one constant, as with
+# CONTEXT_READING below.
 SLACK_REPLY = "slack_reply"
 
 # -- Context -----------------------------------------------------------------
@@ -90,8 +96,13 @@ THINKING = "thinking"
 FILE_WRITE = "file_write"
 # Claude Code emits this raw-stream event when the subscription/API answers
 # with a rate-limit status; workers persist it verbatim, so the quota-
-# detection chain consumes the same type on read-back.
+# detection chain consumes the same type on read-back. The event carries the
+# status object under the ``rate_limit_info`` payload key — a persisted wire
+# value the emit site (src/cli/claude_sub_bridge.py) and every reader
+# (src/core/spawner_events.py, src/core/claude_relay.py, src/agents/worker.py)
+# share through this constant.
 RATE_LIMIT_EVENT = "rate_limit_event"
+RATE_LIMIT_INFO = "rate_limit_info"
 
 # -- Claude account pool -----------------------------------------------------
 # Operator notice from the account pool (src/core/claude_accounts.py): one login

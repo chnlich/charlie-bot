@@ -7,6 +7,7 @@ from pathlib import Path
 import structlog
 
 from src.core.config import charliebot_home_dir
+from src.core.threads import THREADS_DIR_NAME
 
 log = structlog.get_logger()
 
@@ -47,7 +48,7 @@ def _should_exclude(arcname: str) -> bool:
     if part in ('.git', '.claude', 'credentials', '__pycache__') or part.endswith('.pyc'):
       return True
   # Exclude sessions/*/threads and everything under it
-  return len(parts) >= 3 and parts[0] == 'sessions' and parts[2] == 'threads'
+  return len(parts) >= 3 and parts[0] == 'sessions' and parts[2] == THREADS_DIR_NAME
 
 
 def _parse_backup_date(name: str) -> datetime | None:

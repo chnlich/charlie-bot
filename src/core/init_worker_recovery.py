@@ -34,7 +34,7 @@ from src.core.models import (
 )
 from src.core.process import kill_process_group
 from src.core.tasks import create_logged_task
-from src.core.threads import METADATA_NAME
+from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 from src.core.worktree_trash import dir_size_bytes, format_size, trash_dir
 
@@ -217,7 +217,7 @@ def _scan_interrupted_runs(cfg: CharlieBotConfig, boot_time: datetime) -> tuple[
   archived: dict[str, bool] = {}
   now = utc_now()
   for session_dir in cfg.sessions_dir.iterdir():
-    threads_dir = session_dir / "threads"
+    threads_dir = session_dir / THREADS_DIR_NAME
     for thread_dir, _meta_path, meta in iter_recent_thread_metas(threads_dir, now, "thread_meta_unreadable"):
       threads.append(meta)
       if not _started_before_boot(meta, thread_dir, boot_time):

@@ -28,7 +28,7 @@ import requests
 from src.agents.backends.base import SESSION_ID_ENV_VAR
 from src.core.buildinfo import read_repo_head_sha
 from src.core.config import CharlieBotConfig, get_config
-from src.core.threads import METADATA_NAME
+from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
     HTTP_INTERNAL_API_TIMEOUT,
@@ -317,7 +317,7 @@ def find_local_thread(
   report success without re-sending. Threads in any status count.
   ``description_match`` is ``exact`` or ``contains``.
   """
-  threads_dir = get_config().sessions_dir / session_id / "threads"
+  threads_dir = get_config().sessions_dir / session_id / THREADS_DIR_NAME
   if not threads_dir.is_dir():
     return None
   best: dict[str, Any] | None = None

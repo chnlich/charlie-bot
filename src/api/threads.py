@@ -34,7 +34,7 @@ from src.core.models import (
 from src.core.ndjson import iter_ndjson_events
 from src.core.process import kill_process_group
 from src.core.sidebar_state import session_revision
-from src.core.threads import METADATA_NAME, ThreadManager, iter_thread_meta_stats
+from src.core.threads import METADATA_NAME, THREADS_DIR_NAME, ThreadManager, iter_thread_meta_stats
 from src.core.triggers import TriggerManager
 
 log = structlog.get_logger()
@@ -296,7 +296,7 @@ async def view_thread_rows(
   session_dir = cfg.sessions_dir / session_id
 
   def walk_and_parse() -> tuple[list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
-    thread_pairs, _ = _row_source_stats(str(session_dir / "threads"), str(session_dir / "triggers"))
+    thread_pairs, _ = _row_source_stats(str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"))
     return thread_pairs, thread_mgr.list_threads_from_stats(thread_pairs)
 
   thread_pairs, metas = await asyncio.to_thread(walk_and_parse)
@@ -333,7 +333,7 @@ async def list_threads(
     sig = hit[0]
   else:
     thread_pairs, trigger_pairs = await asyncio.to_thread(
-        _row_source_stats, str(session_dir / "threads"), str(session_dir / "triggers"))
+        _row_source_stats, str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"))
     sig = _signature_from_stats(thread_pairs, trigger_pairs)
     if hit is not None and hit[0] == sig:
       _sig_gate[session_id] = (rev, 0)

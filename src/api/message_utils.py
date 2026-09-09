@@ -349,31 +349,18 @@ async def build_session_view_data(
   if message_limit is not None and session_meta.archive_offset == 0:
     result = await _projection_page(session_mgr, session_id, message_limit)
     if result is not None:
-      messages, pending_draft, total_event_count, oldest_ordinal, has_more = result
-      usage = await session_mgr.resolve_session_usage(session_id, session_meta)
-      await _mark_read_best_effort(session_mgr, session_id)
-      return SessionViewData(
-          messages=messages,
-          threads=thread_rows,
-          usage=usage,
-          pending_draft=pending_draft,
-          total_event_count=total_event_count,
-          oldest_message_ordinal=oldest_ordinal,
-          has_more=has_more,
-      )
-
-  if message_limit is not None:
+      messages, pending_draft, total_event_count, oldest_message_ordinal, has_more = result
+  elif message_limit is not None:
     (messages, pending_draft, total_event_count, oldest_message_ordinal,
      has_more) = await _tail_events_page(session_mgr, session_id, session_meta.archive_offset, message_limit)
-    usage = await session_mgr.resolve_session_usage(session_id, session_meta)
   else:
     raw_events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
     total_event_count = session_meta.archive_offset + len(raw_events)
     oldest_message_ordinal = session_meta.archive_offset
     has_more = session_meta.archive_offset > 0
     messages, pending_draft = events_to_view(raw_events, event_index_offset=session_meta.archive_offset)
-    usage = await session_mgr.resolve_session_usage(session_id, session_meta)
 
+  usage = await session_mgr.resolve_session_usage(session_id, session_meta)
   await _mark_read_best_effort(session_mgr, session_id)
 
   return SessionViewData(

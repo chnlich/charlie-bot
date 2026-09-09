@@ -716,6 +716,30 @@ def _codex_windows(rate_limits: dict[str, Any], *, account: str) -> list[dict[st
   return windows
 
 
+def _codex_credits(credits: Any, *, account: str) -> dict[str, Any] | None:
+  """The credits reading to emit, or None when the wire shape is unrecognized.
+
+  ``unlimited`` is forwarded only as the strict bool the wire carries; the
+  decimal-string ``balance`` is parsed into a JSON number. Any other shape
+  emits nothing and warns through the unknown-limit-shape path, mirroring how
+  unknown window shapes are handled.
+  """
+  if not isinstance(credits, dict):
+    _warn_unknown_limit_shape(provider="codex", account=account, slot="credits", reason="credits is not an object")
+    return None
+  unlimited = credits.get("unlimited")
+  if not isinstance(unlimited, bool):
+    _warn_unknown_limit_shape(provider="codex", account=account, slot="credits", reason="unlimited is not a bool")
+    return None
+  emitted: dict[str, Any] = {"unlimited": unlimited}
+  try:
+    emitted["balance"] = float(credits.get("balance"))
+  except (TypeError, ValueError):
+    _warn_unknown_limit_shape(
+        provider="codex", account=account, slot="credits", reason="missing or unparseable balance")
+  return emitted
+
+
 def _transform_codex_response(
     event: dict[str, Any],
     *,
@@ -727,7 +751,10 @@ def _transform_codex_response(
   rate_limits = payload.get("rate_limits") or {}
   primary = rate_limits.get("primary")
   secondary = rate_limits.get("secondary")
-  credits = rate_limits.get("credits")
+  # An absent credits key (older CLI events) and a present-but-unreadable one
+  # are different states: only the latter warns, and only the former keeps the
+  # plan_type fallback below in play.
+  credits = _codex_credits(rate_limits["credits"], account=account) if "credits" in rate_limits else None
 
   usage = {
       "windows": _codex_windows(rate_limits, account=account),
@@ -735,8 +762,11 @@ def _transform_codex_response(
       "provider": "codex",
       "token_count_observed_at": event.get("timestamp", ""),
   }
+  if credits is not None:
+    usage["credits"] = credits
   if ("primary" in rate_limits and "secondary" in rate_limits and primary is None and secondary is None and
-      ((isinstance(credits, dict) and credits.get("unlimited") is True) or rate_limits.get("plan_type") == "business")):
+      ((credits is not None and credits["unlimited"] is True) or
+       ("credits" not in rate_limits and rate_limits.get("plan_type") == "business"))):
     usage["rate_limits_state"] = "business-unlimited"
   return usage
 

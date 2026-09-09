@@ -2405,6 +2405,16 @@ def capture_create_logged_task(captured: dict[str, Any]) -> Callable[..., Any]:
   return fake_create_logged_task
 
 
+def record_create_logged_task(names: list[str]) -> Callable[..., Any]:
+  """Return a create_logged_task stand-in that records each spawn's task name."""
+
+  def fake_create_logged_task(coro: Any, *, name: str | None = None) -> None:
+    names.append(name or "")
+    coro.close()
+
+  return fake_create_logged_task
+
+
 def patch_review_spawn_path(monkeypatch: pytest.MonkeyPatch, captured: dict[str, Any]) -> None:
   """Patch all three spawn-path seams; an unpatched one shells out to git or forks a backend."""
   monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)

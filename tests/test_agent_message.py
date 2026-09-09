@@ -24,6 +24,7 @@ from conftest import (
     make_json_response,
     make_task_spawner,
     patched_cli_post,
+    record_create_logged_task,
     user_event,
 )
 
@@ -184,12 +185,8 @@ def test_session_message_relay_persists_event_and_wakes_master(monkeypatch: pyte
 
   created: list[str] = []
 
-  def fake_create_logged_task(coro: Coroutine[Any, Any, Any], name: str | None = None) -> None:
-    created.append(name or "")
-    coro.close()
-
   monkeypatch.setattr(internal, "trigger_master", fake_trigger_master)
-  monkeypatch.setattr(internal, "create_logged_task", fake_create_logged_task)
+  monkeypatch.setattr(internal, "create_logged_task", record_create_logged_task(created))
 
   with make_internal_router_client(MagicMock(), session_mgr) as client:
     resp = client.post("/api/internal/session-message", json=_payload())

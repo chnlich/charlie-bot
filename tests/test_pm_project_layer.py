@@ -28,6 +28,7 @@ from conftest import (
     make_cron_client,
     make_scheduler_setup,
     make_sessions_client,
+    record_create_logged_task,
     write_memory_entry,
     write_memory_topics,
 )
@@ -141,13 +142,9 @@ async def test_master_task_fire_wakes_master_with_prompt_plus_group_line(
     triggered.append(args)
     return _noop()
 
-  def fake_create_logged_task(coro: Coroutine[Any, Any, None], name: str | None = None) -> None:
-    task_names.append(name or "")
-    coro.close()
-
   monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(SCHEDULER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
-  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, fake_create_logged_task)
+  monkeypatch.setattr(SCHEDULER_CREATE_LOGGED_TASK_PATCH_TARGET, record_create_logged_task(task_names))
   monkeypatch.setattr(SCHEDULER_SPAWN_WORKER_PATCH_TARGET, lambda **kwargs: spawned.append(kwargs) or _noop())
 
   result = await scheduler._execute_task(task_cfg)

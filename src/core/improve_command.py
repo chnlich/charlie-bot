@@ -455,7 +455,7 @@ def _quota_blocker_reason(events: list[dict]) -> str | None:
   for ev in reversed(events):
     event_type = ev.get('type')
     if event_type == ET.RATE_LIMIT_EVENT:
-      rli = ev.get('rate_limit_info', {})
+      rli = ev.get(ET.RATE_LIMIT_INFO, {})
       status = str(rli.get('status', '')).lower()
       overage_status = str(rli.get('overageStatus', '')).lower()
       if status == 'rejected' or overage_status == 'rejected':

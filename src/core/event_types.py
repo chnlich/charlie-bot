@@ -99,8 +99,8 @@ FILE_WRITE = "file_write"
 # detection chain consumes the same type on read-back. The event carries the
 # status object under the ``rate_limit_info`` payload key — a persisted wire
 # value the emit site (src/cli/claude_sub_bridge.py) and every reader
-# (src/core/spawner_events.py, src/core/claude_relay.py, src/agents/worker.py)
-# share through this constant.
+# (src/core/spawner_events.py, src/core/claude_relay.py, src/agents/worker.py,
+# src/core/improve_command.py) share through this constant.
 RATE_LIMIT_EVENT = "rate_limit_event"
 RATE_LIMIT_INFO = "rate_limit_info"
 

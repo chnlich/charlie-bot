@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
-from conftest import make_fake_run_tmux
+from conftest import (
+  SERVER_CHECK_WS_AUTH_PATCH_TARGET,
+  TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET,
+  make_fake_run_tmux,
+)
 from fastapi import WebSocketDisconnect
 
 from src.agents.backends import pty_common, terminal, tui
@@ -304,8 +308,8 @@ async def test_terminal_websocket_uses_ws_auth(monkeypatch: pytest.MonkeyPatch) 
   async def fake_run_terminal_attachment(websocket) -> None:
     attached.append(websocket)
 
-  monkeypatch.setattr("server._check_ws_auth", fake_check_ws_auth)
-  monkeypatch.setattr("src.agents.backends.terminal.run_terminal_attachment", fake_run_terminal_attachment)
+  monkeypatch.setattr(SERVER_CHECK_WS_AUTH_PATCH_TARGET, fake_check_ws_auth)
+  monkeypatch.setattr(TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET, fake_run_terminal_attachment)
 
   await terminal_websocket(ws)
 
@@ -327,8 +331,8 @@ async def test_terminal_websocket_rejects_failed_ws_auth(monkeypatch: pytest.Mon
   async def fake_run_terminal_attachment(websocket) -> None:
     attached.append(websocket)
 
-  monkeypatch.setattr("server._check_ws_auth", fake_check_ws_auth)
-  monkeypatch.setattr("src.agents.backends.terminal.run_terminal_attachment", fake_run_terminal_attachment)
+  monkeypatch.setattr(SERVER_CHECK_WS_AUTH_PATCH_TARGET, fake_check_ws_auth)
+  monkeypatch.setattr(TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET, fake_run_terminal_attachment)
 
   await terminal_websocket(ws)
 

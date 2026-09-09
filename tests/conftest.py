@@ -815,6 +815,13 @@ SESSIONS_SESSION_MANAGER_PATCH_TARGET = "src.core.sessions.SessionManager"
 # their own routes; grep `from src.core.master_trigger import trigger_master` for the full set.
 TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
 
+# Import-path patch target for the wake's inner run. Every wake fires through trigger_master,
+# whose body reads run_message_with_resume_recovery as a module global of its defining module,
+# so mock setattrs the stand-in there and the run is intercepted no matter which outer seam
+# fired the wake; the *TRIGGER_MASTER_PATCH_TARGET constants above name the outer seam, not
+# this inner one.
+MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET = "src.core.master_trigger.run_message_with_resume_recovery"
+
 # Import-path patch target for the config re-read a firing trigger passes to the master wake.
 # src/core/triggers.py binds the name at import scope (`from src.core.config import get_config`),
 # so mock setattrs the stand-in on the src.core.triggers module attribute and _wait_and_fire's
@@ -847,6 +854,23 @@ TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.core.triggers._SACCT_AVAILABLE"
 # name with `from src.core.config import get_config`, so mock setattrs the stand-in on the
 # src.cli.common module attribute and every helper defined there reads it at call time.
 CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
+
+# Import-path patch target for the version-skew hint the CLI error paths append. src/cli/common.py
+# defines _maybe_version_skew_hint and _request_with_contract reads it as a module global at call
+# time, so mock setattrs the stand-in on the src.cli.common module attribute.
+CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.cli.common._maybe_version_skew_hint"
+
+# Import-path patch target for the publish command's config read. src/cli/publish.py binds the
+# name with `from src.core.config import get_config`, so mock setattrs the stand-in on the
+# src.cli.publish module attribute and main's preflight reads it at call time.
+CLI_PUBLISH_GET_CONFIG_PATCH_TARGET = "src.cli.publish.get_config"
+
+# Import-path patch target for the Telegram delivery the cron-load alert posts. The alert helper
+# in src/core/config.py imports send_telegram at call time (lazy, notifications imports config),
+# so that import resolves the stand-in landed on the src.core.notifications module attribute;
+# import-scope binders of the same function (spawner_finalize) keep their own bound object and
+# are not intercepted through this route.
+NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET = "src.core.notifications.send_telegram"
 
 # Import-path patch targets for the master wake a Slack message fires. src/core/slack_listener.py
 # binds both names at import scope (`from src.core.master_trigger import trigger_master`,
@@ -936,6 +960,20 @@ BUILD_BACKEND_PATCH_TARGET = "src.agents.backends.registry.build_backend"
 # imports it at module scope), so a patched registry binding never reaches it.
 WORKER_BUILD_BACKEND_PATCH_TARGET = "src.agents.worker.build_backend"
 
+# Import-path patch target for the /proc stat read the backend start contract pins. src/core/runs.py
+# defines read_pid_stat; src/agents/backends/base.py binds the module (`from src.core import runs`)
+# and reads runs.read_pid_stat at call time, so monkeypatch.setattr lands the stand-in on the
+# src.core.runs module attribute where that read resolves.
+RUNS_READ_PID_STAT_PATCH_TARGET = "src.core.runs.read_pid_stat"
+
+# Import-path patch target for the subprocess spawn the backend start contract drives through the
+# AgentBackend base path. src/agents/backends/base.py binds the library with module-scope
+# `import asyncio`, so monkeypatch.setattr lands the stand-in on the shared asyncio module through
+# this route and base.run's spawn read resolves it at call time; the library-root spelling
+# (ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET above) reaches the same attribute, so a
+# caller-qualified constant here records which backend's spawn a test drives.
+BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.base.asyncio.create_subprocess_exec"
+
 # Import-path patch target for the binary resolution an OpenCodeBackend construction runs.
 # src/agents/backends/opencode.py binds the helper at import scope (`from
 # src.agents.backends.base import resolve_binary`), so monkeypatch.setattr lands the
@@ -943,6 +981,13 @@ WORKER_BUILD_BACKEND_PATCH_TARGET = "src.agents.worker.build_backend"
 # reads it at call time; sibling backends binding the same helper (codex.py,
 # antigravity_cli.py, charlie_code.py) keep their own namespaces.
 OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.opencode.resolve_binary"
+
+# Import-path patch target for the subprocess spawn the backend start contract drives through the
+# OpenCodeBackend path. src/agents/backends/opencode.py binds the library with module-scope
+# `import asyncio`, so monkeypatch.setattr lands the stand-in on the shared asyncio module through
+# this route and the SSE run loop's spawn read resolves it at call time; the library-root
+# spelling (ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET above) reaches the same attribute.
+OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.agents.backends.opencode.asyncio.create_subprocess_exec"
 
 # Import-path patch target for the binary resolution a CodexBackend construction runs.
 # src/agents/backends/codex.py binds the helper at import scope (`from
@@ -994,6 +1039,14 @@ JSON_UTILS_OS_REPLACE_PATCH_TARGET = "src.core.json_utils.os.replace"
 TUI_KILL_TMUX_SESSION_PATCH_TARGET = "src.agents.backends.tui.kill_tmux_session"
 TUI_TMUX_SESSION_EXISTS_PATCH_TARGET = "src.agents.backends.tui.tmux_session_exists"
 TUI_CLAUDE_JSONL_BUSY_PATCH_TARGET = "src.agents.backends.tui._claude_jsonl_busy"
+
+# Import-path patch targets for the server's terminal websocket. server.py defines _check_ws_auth
+# and its websocket handlers read it as a module global at call time, and the terminal handler
+# imports run_terminal_attachment at call time (`from src.agents.backends.terminal import
+# run_terminal_attachment` inside terminal_websocket), so monkeypatch.setattr lands both stand-ins
+# on their defining module attributes and the handler's reads resolve them.
+SERVER_CHECK_WS_AUTH_PATCH_TARGET = "server._check_ws_auth"
+TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET = "src.agents.backends.terminal.run_terminal_attachment"
 
 
 def build_cli_backend(

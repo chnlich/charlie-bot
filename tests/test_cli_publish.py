@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from conftest import PUBLISH_BASE_URL, build_publish_cfg, write_artifact
+from conftest import CLI_PUBLISH_GET_CONFIG_PATCH_TARGET, PUBLISH_BASE_URL, build_publish_cfg, write_artifact
 
 from src.cli.publish import main
 from src.core.config import CharlieBotConfig
@@ -14,7 +14,7 @@ from src.core.config import CharlieBotConfig
 def test_publish_prints_the_url_on_stdout_and_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = write_artifact(tmp_path)
 
-  with patch("sys.argv", ["publish", str(artifact)]), patch("src.cli.publish.get_config",
+  with patch("sys.argv", ["publish", str(artifact)]), patch(CLI_PUBLISH_GET_CONFIG_PATCH_TARGET,
                                                             return_value=build_publish_cfg(tmp_path)):
     main()
 
@@ -30,7 +30,7 @@ def test_publish_notes_a_differing_replaced_file(tmp_path: Path, capsys: pytest.
   replaced = cfg.publish_dir / "page.html"
   replaced.write_text("<p>old</p>", encoding="utf-8")
 
-  with patch("sys.argv", ["publish", str(artifact)]), patch("src.cli.publish.get_config", return_value=cfg):
+  with patch("sys.argv", ["publish", str(artifact)]), patch(CLI_PUBLISH_GET_CONFIG_PATCH_TARGET, return_value=cfg):
     main()
 
   captured = capsys.readouterr()
@@ -48,7 +48,7 @@ def test_preflight_failure_exits_non_zero_naming_the_missing_item(
 
   with (
       patch("sys.argv", ["publish", str(artifact)]),
-      patch("src.cli.publish.get_config", return_value=cfg),
+      patch(CLI_PUBLISH_GET_CONFIG_PATCH_TARGET, return_value=cfg),
       pytest.raises(SystemExit) as exc_info,
   ):
     main()
@@ -64,7 +64,7 @@ def test_missing_artifact_exits_non_zero_naming_the_path(tmp_path: Path, capsys:
 
   with (
       patch("sys.argv", ["publish", str(absent)]),
-      patch("src.cli.publish.get_config", return_value=build_publish_cfg(tmp_path)),
+      patch(CLI_PUBLISH_GET_CONFIG_PATCH_TARGET, return_value=build_publish_cfg(tmp_path)),
       pytest.raises(SystemExit) as exc_info,
   ):
     main()

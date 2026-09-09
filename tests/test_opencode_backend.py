@@ -175,15 +175,7 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
   error_events = [event for event in events if event.get("type") == ET.ERROR]
   assert not error_events
   text_events = [event for event in events if event.get("type") == ET.ASSISTANT]
-  assert text_events == [{
-      "type": ET.ASSISTANT,
-      "message": {
-          "content": [{
-              "type": "text",
-              "text": part_text,
-          }]
-      },
-  }]
+  assert text_events == [assistant_text_event(part_text)]
   assert backend.exit_code == 0
 
 

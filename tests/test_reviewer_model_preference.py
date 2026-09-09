@@ -355,10 +355,6 @@ def _make_fake_trigger(trigger_calls: list[str]) -> Callable[..., Awaitable[None
 # --- review.maybe_spawn_reviewer retry tests ---
 
 
-async def _noop(*args: Any, **kwargs: Any) -> None:
-  pass
-
-
 async def _fake_read_events_summary(
     session_id: str,
     thread_id: str,

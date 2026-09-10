@@ -5,15 +5,16 @@
 // no math — the walk M33's replay and M60's repeat-page metric stub away. This
 // collector wall-clocks the walk through the checkout's real renderer code and
 // the page's CDN-pinned katex 0.16.21 build over a jsdom DOM, over the worst
-// message page (the M60 corpus) and the largest math-free streamed draft,
-// live corpora read-only; CHECKOUT picks the code under test. jsdom stays off
-// the repo's dependency tree: one-time scratch install, resolved through
-// JSDOM_HOME (default /tmp/node_modules) with a loud preflight failure.
+// message page's assistant text blocks (a subset of M60's page corpus, which
+// adds user/worker_summary/plan bodies) and the largest math-free streamed
+// draft, live corpora read-only; CHECKOUT picks the code under test. jsdom
+// stays off the repo's dependency tree: one-time scratch install, resolved
+// through JSDOM_HOME (default /tmp/node_modules) with a loud preflight failure.
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { fetchUrl, largestAssistantDraft, worstChatFile } = require('./stream_collector_common');
+const { fetchUrl, largestAssistantDraft, worstPageCorpus, assistantTexts } = require('./stream_collector_common');
 const { buildStreamHarness } = require('./stream_render_harness');
 
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
@@ -44,30 +45,6 @@ const KATEX_OPTS = {
   ignoredClasses: ['code-block'],
   throwOnError: false,
 };
-
-// The worst message page: its 40 largest assistant text blocks (the M60
-// corpus) of the live chat file carrying the most bytes.
-function pageCorpus() {
-  const worst = worstChatFile();
-  if (!worst) throw new Error('no on-disk live chat file');
-  const { p: best, size: bestSize } = worst;
-  const texts = [];
-  for (const line of fs.readFileSync(best, 'utf8').split('\n')) {
-    let ev;
-    try {
-      ev = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const blocks = ev.type === 'assistant' && ev.message ? ev.message.content : [];
-    for (const block of Array.isArray(blocks) ? blocks : []) {
-      if (block?.type === 'text' && typeof block.text === 'string' && block.text) texts.push(block.text);
-    }
-  }
-  if (!texts.length) throw new Error('no message bodies in the worst live chat file');
-  texts.sort((a, b) => b.length - a.length);
-  return { file: best, fileSize: bestSize, page: texts.slice(0, PAGE_MESSAGES) };
-}
 
 (async () => {
   const [markedSrc, hljsSrc, katexSrc, autoSrc] = await Promise.all([
@@ -100,7 +77,7 @@ function pageCorpus() {
     rawWalk(el, opts);
   };
 
-  const { file, fileSize, page } = pageCorpus();
+  const { file, fileSize, page } = worstPageCorpus(assistantTexts, PAGE_MESSAGES);
   const pageBytes = page.reduce((sum, t) => sum + t.length, 0);
   const digest = crypto.createHash('sha1').update(page.join('\u0000')).digest('hex').slice(0, 12);
   // The corpus filter rides the checkout's own gate predicate when it exists,

@@ -55,6 +55,12 @@ def _count_lines(f: BinaryIO) -> int:
   return total
 
 
+# The one skip label for the readers that consume a whole file or an in-memory
+# line stream. The windowed readers (tail, tail_parseable, range) name their
+# own windows, so a debug log still says which reader skipped the line.
+PARSE_SKIP_LOG_EVENT = "ndjson_parse_skip"
+
+
 def iter_ndjson_events(lines: Iterable[str | bytes], *, log_event: str, log_fields: dict[str, Any]) -> Iterator[dict]:
   """Yield the JSON objects parsed from *lines*, skipping blank and malformed lines.
 
@@ -82,7 +88,7 @@ def parse_ndjson_file(path: Path) -> list[dict]:
   if not path.exists():
     return []
   with open(path, encoding="utf-8") as f:
-    return list(iter_ndjson_events(f, log_event="ndjson_parse_skip", log_fields={}))
+    return list(iter_ndjson_events(f, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}))
 
 
 def count_ndjson_lines(path: Path) -> int:

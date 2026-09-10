@@ -23,7 +23,7 @@ SLUG = "-home-u--charliebot-sessions-s1"
 
 def _cfg(tmp_path: Path, **floors: int) -> CharlieBotConfig:
   return CharlieBotConfig(
-      charliebot_home=tmp_path / "home", accounts={"claude_compaction": ClaudeCompactionConfig(**floors)})
+      charliebot_home=tmp_path / "home", accounts={"compaction": ClaudeCompactionConfig(**floors)})
 
 
 def _write_transcript(config_dir: Path, cc_session_id: str, boundaries: int = 0) -> Path:

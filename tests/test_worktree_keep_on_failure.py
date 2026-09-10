@@ -104,7 +104,7 @@ async def test_cleanup_worker_directory_returns_error_when_remove_raises(
 @pytest.mark.asyncio
 async def test_retry_failed_reviewer_keeps_worktree_when_exhausted(monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = MagicMock()
-  cfg.model_preference = []
+  cfg.backends.preference = []
   finalize_called: list[bool] = []
 
   async def fake_spawn_review_worker(*args: Any, **kwargs: Any) -> bool:
@@ -155,7 +155,7 @@ async def test_improve_loop_keeps_worktree_on_failure(tmp_path: Path, monkeypatc
   cfg = MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  cfg.worktree_dir = str(tmp_path / "worktrees")
+  cfg.paths.worktree_dir = str(tmp_path / "worktrees")
 
   class FakeSessionManager:
 
@@ -203,7 +203,7 @@ async def test_improve_loop_keeps_worktree_on_failure(tmp_path: Path, monkeypatc
       resolved_model="o3",
   )
 
-  wt_path = Path(cfg.worktree_dir) / "improve-test"
+  wt_path = Path(cfg.paths.worktree_dir) / "improve-test"
   assert wt_path.exists()  # kept on failure
   assert not remove_calls  # cleanup never attempted
   state = await load_loop_state("s", 1, cfg)

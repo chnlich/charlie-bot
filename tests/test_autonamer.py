@@ -92,13 +92,13 @@ def _fallback_chain_cfg() -> CharlieBotConfig:
   """Config whose backends.preference chains a cc-claude first backend onto a codex second backend."""
   return CharlieBotConfig(
       backends={
-          "options": [
-              backend_option(id="first-backend", label="First", type="cc-claude", model="haiku"),
-              backend_option(id="second-backend", label="Second", type="codex", model="gpt-x"),
-          ],
+          "options":
+              [
+                  backend_option(id="first-backend", label="First", type="cc-claude", model="haiku"),
+                  backend_option(id="second-backend", label="Second", type="codex", model="gpt-x"),
+              ],
           "preference": ["first-backend", "second-backend"],
-      },
-  )
+      },)
 
 
 # ---------------------------------------------------------------------------
@@ -357,27 +357,27 @@ async def test_maybe_auto_name_falls_back_to_next_backend_on_unusable_first_name
 def test_iter_light_backends_preserves_cross_type_preference_order() -> None:
   cfg = CharlieBotConfig(
       backends={
-          "options": [
-              backend_option(id="claude", label="Claude", type="cc-claude", model="haiku"),
-              backend_option(id="codex", label="Codex", type="codex", model="gpt-x"),
-              backend_option(id="kimi", label="Kimi", type="cc-kimi", model="k2", credential="test-kimi"),
-          ],
+          "options":
+              [
+                  backend_option(id="claude", label="Claude", type="cc-claude", model="haiku"),
+                  backend_option(id="codex", label="Codex", type="codex", model="gpt-x"),
+                  backend_option(id="kimi", label="Kimi", type="cc-kimi", model="k2", credential="test-kimi"),
+              ],
           "preference": ["codex", "claude", "kimi"],
-      },
-  )
+      },)
   assert [option.id for option in iter_light_backends(cfg)] == ["codex", "claude", "kimi"]
 
 
 def test_iter_light_backends_skips_unresolved_ids_and_duplicates() -> None:
   cfg = CharlieBotConfig(
       backends={
-          "options": [
-              backend_option(id="claude", label="Claude", type="cc-claude", model="haiku"),
-              backend_option(id="codex", label="Codex", type="codex", model="gpt-x"),
-          ],
+          "options":
+              [
+                  backend_option(id="claude", label="Claude", type="cc-claude", model="haiku"),
+                  backend_option(id="codex", label="Codex", type="codex", model="gpt-x"),
+              ],
           "preference": ["missing", "claude", "claude", "codex", "missing"],
-      },
-  )
+      },)
   assert [option.id for option in iter_light_backends(cfg)] == ["claude", "codex"]
 
 
@@ -385,13 +385,13 @@ def test_iter_light_backends_skips_unresolved_ids_and_duplicates() -> None:
 async def test_maybe_auto_name_builds_codex_backend_for_claude_session() -> None:
   cfg = CharlieBotConfig(
       backends={
-          "options": [
-              backend_option(id="claude-session", label="Session", type="cc-claude", model="haiku"),
-              backend_option(id="codex-gpt-5.6-luna-personal", label="Luna", type="codex", model="gpt-5.6-luna"),
-          ],
+          "options":
+              [
+                  backend_option(id="claude-session", label="Session", type="cc-claude", model="haiku"),
+                  backend_option(id="codex-gpt-5.6-luna-personal", label="Luna", type="codex", model="gpt-5.6-luna"),
+              ],
           "preference": ["codex-gpt-5.6-luna-personal"],
-      },
-  )
+      },)
   rig = await _run_auto_name(
       cfg,
       "session-luna",
@@ -417,8 +417,7 @@ async def test_maybe_auto_name_builds_same_id_opencode_backend() -> None:
       backends={
           "options": [backend_option(id="opencode-glm52", label="OC", type="opencode", model="prov/model")],
           "preference": ["opencode-glm52"],
-      },
-  )
+      },)
   rig = await _run_auto_name(
       cfg,
       "session-oc",
@@ -440,12 +439,9 @@ async def test_maybe_auto_name_builds_same_id_opencode_backend() -> None:
 async def test_maybe_auto_name_skips_loudly_when_no_preference_resolves() -> None:
   cfg = CharlieBotConfig(
       backends={
-          "options": [
-              backend_option(id="claude-session", label="Session", type="cc-claude", model="haiku"),
-          ],
+          "options": [backend_option(id="claude-session", label="Session", type="cc-claude", model="haiku"),],
           "preference": ["does-not-exist"],
-      },
-  )
+      },)
   session_meta = SessionMetadata(id="session-skip", name="Session 3", backend="claude-session")
   session_mgr = AsyncMock()
 

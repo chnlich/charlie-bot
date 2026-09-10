@@ -3,35 +3,35 @@ from typing import Any
 
 import pytest
 from conftest import (
-  AGY_BACKEND_OPTION,
-  CLEAN_EXIT_OUTCOME,
-  CODEX_BACKEND_OPTION,
-  OPUS_BACKEND_ID,
-  CapturingThreadManager,
-  JudgmentShim,
-  ReviewSpawnSessionManager,
-  ReviewSpawnThreadManager,
-  SpawnFlowSessionManager,
-  backend_option,
-  build_finalize_ctx,
-  build_worker_prompt,
-  capturing_worker,
-  make_fake_git_create_worktree,
-  patch_review_spawn_path,
-  recording_notify_completion,
-  run_worktree_spawn,
-  stage_worktree_spawn,
+    AGY_BACKEND_OPTION,
+    CLEAN_EXIT_OUTCOME,
+    CODEX_BACKEND_OPTION,
+    OPUS_BACKEND_ID,
+    CapturingThreadManager,
+    JudgmentShim,
+    ReviewSpawnSessionManager,
+    ReviewSpawnThreadManager,
+    SpawnFlowSessionManager,
+    backend_option,
+    build_finalize_ctx,
+    build_worker_prompt,
+    capturing_worker,
+    make_fake_git_create_worktree,
+    patch_review_spawn_path,
+    recording_notify_completion,
+    run_worktree_spawn,
+    stage_worktree_spawn,
 )
 
 from src.core import review, spawner, spawner_events, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  BackendOption,
-  SessionMetadata,
-  SpawnRequest,
-  TaskType,
-  ThreadMetadata,
-  ThreadStatus,
+    BackendOption,
+    SessionMetadata,
+    SpawnRequest,
+    TaskType,
+    ThreadMetadata,
+    ThreadStatus,
 )
 
 
@@ -39,17 +39,20 @@ def _build_cfg() -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=Path("/tmp/charliebot-test"),
       paths={"worktree_dir": "/tmp/worktrees"},
-      backends={"options": [
-          backend_option(
-              id=OPUS_BACKEND_ID,
-              label="Opus",
-              type="cc-claude",
-              model="claude-opus-4-6",
-              effort="max",
-              cli_binary="claude-sub",
-          ),
-          CODEX_BACKEND_OPTION,
-      ]},
+      backends={
+          "options":
+              [
+                  backend_option(
+                      id=OPUS_BACKEND_ID,
+                      label="Opus",
+                      type="cc-claude",
+                      model="claude-opus-4-6",
+                      effort="max",
+                      cli_binary="claude-sub",
+                  ),
+                  CODEX_BACKEND_OPTION,
+              ]
+      },
   )
 
 
@@ -80,9 +83,7 @@ def test_resolve_backend_option_allows_antigravity_missing_model() -> None:
   cfg = CharlieBotConfig(
       charliebot_home=Path("/tmp/charliebot-test"),
       paths={"worktree_dir": "/tmp/worktrees"},
-      backends={"options": [
-          AGY_BACKEND_OPTION,
-      ]},
+      backends={"options": [AGY_BACKEND_OPTION,]},
   )
 
   opt = spawner.resolve_backend_option(cfg, "agy", None)
@@ -95,8 +96,12 @@ def test_resolve_backend_option_allows_antigravity_missing_model() -> None:
     "backend_type, entry_kwargs",
     [
         ("cc-claude", {}),
-        ("cc-kimi", {"credential": "test-kimi"}),
-        ("cc-openai-compatible", {"api_base": "https://api.test/v1"}),
+        ("cc-kimi", {
+            "credential": "test-kimi"
+        }),
+        ("cc-openai-compatible", {
+            "api_base": "https://api.test/v1"
+        }),
         ("codex", {}),
         ("charlie-code", {}),
         ("gemini", {}),
@@ -111,9 +116,13 @@ def test_resolve_backend_option_rejects_missing_model_for_model_required_backend
   cfg = CharlieBotConfig(
       charliebot_home=Path("/tmp/charliebot-test"),
       paths={"worktree_dir": "/tmp/worktrees"},
-      backends={"options": [
-          backend_option(id=backend_type, label=backend_type, type=backend_type, model="fake-model", **entry_kwargs),
-      ]},
+      backends={
+          "options":
+              [
+                  backend_option(
+                      id=backend_type, label=backend_type, type=backend_type, model="fake-model", **entry_kwargs),
+              ]
+      },
   )
 
   with pytest.raises(ValueError, match="model is required"):
@@ -313,9 +322,7 @@ async def test_resolve_requested_subagent_backend_model_allows_antigravity_missi
   cfg = CharlieBotConfig(
       charliebot_home=Path("/tmp/charliebot-test"),
       paths={"worktree_dir": "/tmp/worktrees"},
-      backends={"options": [
-          AGY_BACKEND_OPTION,
-      ]},
+      backends={"options": [AGY_BACKEND_OPTION,]},
   )
 
   class FakeSessionManager(JudgmentShim):

@@ -63,7 +63,7 @@ async def get_source() -> Response:
 
 
 @router.put('/source')
-async def put_source(req: TexSourceRequest):
+async def put_source(req: TexSourceRequest) -> dict:
   """Write the .tex source file."""
   tex = get_tex_path()
   await asyncio.to_thread(tex.write_text, req.content, encoding='utf-8')
@@ -88,13 +88,13 @@ async def _settle_proposal(settle: Callable[[], bool], log_event: str) -> dict |
   return JSONResponse(content={'error': 'No pending proposal'}, status_code=404)
 
 
-@router.post('/accept')
-async def accept_edit():
+@router.post('/accept', response_model=None)
+async def accept_edit() -> dict | JSONResponse:
   """Accept the pending AI-proposed TeX edit."""
   return await _settle_proposal(accept_proposal, 'latex_proposal_accepted')
 
 
-@router.post('/reject')
-async def reject_edit():
+@router.post('/reject', response_model=None)
+async def reject_edit() -> dict | JSONResponse:
   """Reject the pending AI-proposed TeX edit."""
   return await _settle_proposal(reject_proposal, 'latex_proposal_rejected')

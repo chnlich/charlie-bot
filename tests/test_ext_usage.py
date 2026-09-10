@@ -1497,6 +1497,34 @@ def test_read_credentials_missing_and_tokenless_are_separate_alarms(monkeypatch,
   ]
 
 
+def test_read_credentials_flip_without_success_stays_one_line_per_event(monkeypatch, tmp_path) -> None:
+  """A state flip inside one broken streak adds a line for the new state only.
+
+  A streak ends on a token, not on a state flip: missing -> tokenless ->
+  missing logs the missing alarm once, the tokenless alarm once, and no
+  third line, because the relapsed missing sighting repeats a fired alarm.
+  """
+  warns: list[dict] = []
+  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  credentials_path = tmp_path / ".credentials.json"
+
+  for _ in range(60):
+    assert _read_credentials(credentials_path) is None
+
+  _write_credentials(credentials_path, access="")
+  for _ in range(60):
+    assert _read_credentials(credentials_path) is None
+
+  credentials_path.unlink()
+  for _ in range(60):
+    assert _read_credentials(credentials_path) is None
+
+  assert [w["event"] for w in warns] == [
+      "ext_usage_credentials_not_found",
+      "ext_usage_no_access_token",
+  ]
+
+
 def test_transform_response_absent_limits_produces_exactly_today_windows() -> None:
   raw = _plan_raw()
 

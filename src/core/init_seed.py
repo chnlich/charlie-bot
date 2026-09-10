@@ -124,7 +124,7 @@ def _seed_memory_scaffold(cfg: CharlieBotConfig) -> None:
   (memory_dir / "staging").mkdir(exist_ok=True)
 
 
-def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
+def seed_default_cron_tasks(cfg: CharlieBotConfig, *, dry_run: bool = False) -> list[dict]:
   """Seed repo-owned default cron tasks into per-job host files by name.
 
   Reads ``configs/cron.default.yaml`` from the repo and the host
@@ -134,6 +134,11 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
   file owns the prompt body and the host file carries only the path to it);
   if one exists, change nothing about it. Never rewrites or drops host-only
   files.
+
+  With ``dry_run`` the same validation and legacy tripwire run, nothing is
+  written or created, and a would-be seed reports ``would-create`` — the
+  preview ``./scripts/setup.sh -n`` shows must fail exactly where the real
+  run would.
 
   Creates ``config.d/cron.d/`` when absent. Writes through
   :func:`src.core.yaml_utils.save_yaml` (the same writer ``src/api/cron.py``
@@ -145,7 +150,8 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
   (writing nothing) when a legacy ``config.d/cron.yaml`` exists — migration to
   the per-job layout is a human action, never automatic.
 
-  Returns a per-entry report: ``[{"name": str, "status": "created"|"exists"}, ...]``.
+  Returns a per-entry report: ``[{"name": str, "status": "created"|"exists"}]``
+  (``dry_run`` reports ``would-create`` instead of ``created``).
 
   This is a library function invoked only by ``./scripts/setup.sh``. It is NOT
   called by :func:`init_charliebot_home`, so the server startup path never
@@ -178,7 +184,8 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
         f"config.d/cron.d/<name>.yaml and remove cron.yaml (migration is manual)")
 
   cron_d_dir = cfg.config_d_dir / "cron.d"
-  cron_d_dir.mkdir(parents=True, exist_ok=True)
+  if not dry_run:
+    cron_d_dir.mkdir(parents=True, exist_ok=True)
 
   report: list[dict] = []
   for entry in default_entries:
@@ -186,6 +193,9 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig) -> list[dict]:
     path = cron_d_dir / f"{name}.yaml"
     if path.exists():
       report.append({"name": name, "status": "exists"})
+      continue
+    if dry_run:
+      report.append({"name": name, "status": "would-create"})
       continue
     body = {k: v for k, v in copy.deepcopy(entry).items() if k != "name"}
     # Persist the pointer unchanged: the pointed file owns the prompt body,

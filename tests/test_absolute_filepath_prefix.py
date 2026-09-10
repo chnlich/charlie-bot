@@ -131,10 +131,7 @@ def test_a_non_html_file_is_served_byte_for_byte_under_both_prefixes(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("prefix", PREFIXES)
-async def test_a_navigation_under_either_prefix_needs_no_token(
-    monkeypatch: pytest.MonkeyPatch,
-    prefix: str,
-) -> None:
+async def test_a_navigation_under_either_prefix_needs_no_token(prefix: str) -> None:
   stub_credentials({"charliebot": {"access_key": "secret"}})
   scope = {
       "type": "http",

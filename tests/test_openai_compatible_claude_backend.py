@@ -179,7 +179,7 @@ def test_route_omits_authorization_when_credential_unset(monkeypatch: pytest.Mon
   assert captured["authorization"] is None
 
 
-def test_route_fails_loud_when_credential_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_route_fails_loud_when_credential_missing() -> None:
   stub_credentials({})
   cfg = _cfg(_option(credential="missing_upstream"))
 

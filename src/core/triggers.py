@@ -792,20 +792,16 @@ class TriggerManager:
     if fresh is None:
       return
 
-    session_meta = await self._session_mgr.get_session(fresh.session_id)
-    if session_meta is None:
-      await self._cancel_undeliverable(fresh, reason="metadata_unavailable")
-      return
-
     if fresh.watch_targets:
       suffix = _format_suffix(reason, finished, still_alive)
       trigger_message = f"[Scheduled trigger fired | {reason}] {fresh.message}{suffix}"
     else:
       trigger_message = f"[Scheduled trigger fired] {fresh.message}"
 
-    # Resolve the succession chain end first so we can decide whether to cancel
-    # or redirect delivery. An archived session with no successor is the user's
-    # explicit "no more wakes" signal and cancels, as today.
+    # Fresh chain read, and the fire path's missing-metadata guard: a
+    # metadata.json deleted or blanked mid-wait cancels here instead of
+    # delivering into a vanished session. The archived-no-successor call and
+    # the redirect live below (_is_dormant_target, deliver_to_successor).
     resolved_tail = await self._session_mgr.resolve_successor_chain(fresh.session_id)
     if resolved_tail is None:
       await self._cancel_undeliverable(fresh, reason="metadata_unavailable")

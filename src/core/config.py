@@ -1085,15 +1085,19 @@ def _prompt_pointer_entries(body: dict) -> list[dict]:
 
 
 def _record_prompt_mtime(prompt_mtimes: dict[Path, float], path: Path) -> None:
-  """Record *path*'s mtime in *prompt_mtimes*, or the 0.0 sentinel when it cannot be statted.
+  """Record *path*'s mtime in *prompt_mtimes*, or the 0.0 sentinel when it has vanished.
 
-  The sentinel keeps a vanished or unstatable pointer file in the hot-reload
-  fingerprint so the next tick re-reads it instead of serving a cached body.
+  The sentinel keeps a vanished pointer file in the hot-reload fingerprint so
+  the next tick re-reads it instead of serving a cached body. Only
+  :class:`OSError` rides the sentinel: the fingerprint walker
+  :func:`_stat_prompt_files` catches no other stat failure, so a recorded path
+  that raises, e.g. :class:`ValueError` on an embedded null byte, would escape
+  :func:`get_scheduled_tasks` and break its never-raises contract on every
+  later tick.
   """
   try:
     prompt_mtimes[path] = path.stat().st_mtime
-  except (OSError, ValueError) as stat_error:
-    log.debug("cron_prompt_pointer_stat_failed", path=str(path), error=str(stat_error))
+  except OSError:
     prompt_mtimes[path] = 0.0
 
 
@@ -1233,7 +1237,12 @@ def _reload_cron_snapshot() -> _CronSnapshot:
             for entry in _prompt_pointer_entries(failed_body):
               pointer = entry.get("prompt_file")
               if isinstance(pointer, str) and pointer:
-                _record_prompt_mtime(prompt_mtimes, _resolve_pointer_path(pointer, repo))
+                try:
+                  _record_prompt_mtime(prompt_mtimes, _resolve_pointer_path(pointer, repo))
+                except ValueError as stat_error:
+                  # An unstatable pointer (e.g. an embedded null byte) must stay out of the
+                  # fingerprint; see _record_prompt_mtime. Skipping it keeps this loader total.
+                  log.debug("cron_failed_prompt_path_unstatable", path=str(pointer), error=str(stat_error))
         errors.append(
             ScheduledTaskError(name=stem, path=str(path), error=str(e), enabled=_read_cron_file_enabled(path)))
         log.error("cron_task_load_failed", name=stem, path=str(path), error=str(e))

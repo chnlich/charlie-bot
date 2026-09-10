@@ -45,7 +45,7 @@ def _build_repo(workspace: Path) -> Path:
 def _build_app(workspace: Path) -> FastAPI:
   cfg = CharlieBotConfig(
       charliebot_home=workspace / "charliebot-home",
-      workspace_dirs=[str(workspace)],
+      paths={"workspace_dirs": [str(workspace)]},
   )
   app = FastAPI()
   app.include_router(git_api.router, prefix="/api/git")
@@ -325,7 +325,7 @@ def test_repo_outside_workspace_rejected(tmp_path: Path) -> None:
   # Point the workspace somewhere else so the repo fails the under-workspace check.
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
-      workspace_dirs=[str(tmp_path / "elsewhere")],
+      paths={"workspace_dirs": [str(tmp_path / "elsewhere")]},
   )
   app = FastAPI()
   app.include_router(git_api.router, prefix="/api/git")

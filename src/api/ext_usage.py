@@ -1026,8 +1026,9 @@ def _annotated_providers(now: datetime | None = None) -> dict[str, dict[str, Any
       continue
     sampled = claude_accounts.parse_iso_utc(entry.get("fetched_at"))
     annotated = [
-        {**window, "expired": True} if claude_accounts.panel_window_expired(window, sampled, moment) else window
-        for window in windows
+        {
+            **window, "expired": True
+        } if claude_accounts.panel_window_expired(window, sampled, moment) else window for window in windows
     ]
     providers[key] = {**entry, "windows": annotated}
   return providers

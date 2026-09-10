@@ -90,7 +90,7 @@ def test_no_event_loop_skips_send_without_persisting(
 def test_telegram_failure_is_log_only(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
   async def raising_send_telegram(message: str, cfg) -> None:
-    raise RuntimeError("telegram_bot_token is not configured")
+    raise RuntimeError("telegram delivery failed")
 
   monkeypatch.setattr(NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET, raising_send_telegram)
 

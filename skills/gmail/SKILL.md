@@ -14,13 +14,13 @@ Read and search Gmail messages using the Gmail API with a user refresh token. Re
 
 ## Configuration
 
-- Credentials location: `~/.charliebot/config.yaml`
-- Keys:
-  - `google_client_id`
-  - `google_client_secret`
-  - `google_refresh_token`
+- Credentials location: `~/.charliebot/credentials.yaml`
+- Keys (section `google`):
+  - `client_id`
+  - `client_secret`
+  - `refresh_token`
 - Auth model: OAuth2 user token flow using a long-lived refresh token
-- Store only `google_refresh_token` in config. Access tokens are minted at runtime and discarded after use.
+- Store only the `refresh_token` key in the `google` section. Access tokens are minted at runtime and discarded after use.
 
 ## API Reference
 
@@ -35,8 +35,8 @@ All Gmail API requests use:
 ```bash
 read GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REFRESH_TOKEN < <(python3 -c "
 import yaml
-c = yaml.safe_load(open('$HOME/.charliebot/config.yaml'))
-print(c['google_client_id'], c['google_client_secret'], c['google_refresh_token'])
+c = yaml.safe_load(open('$HOME/.charliebot/credentials.yaml'))
+print(c['google']['client_id'], c['google']['client_secret'], c['google']['refresh_token'])
 ")
 
 ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
@@ -91,7 +91,7 @@ curl -s "https://gmail.googleapis.com/gmail/v1/users/me/labels" \
 
 ## Bootstrap / Re-Authorization
 
-All Google integrations (Gmail, Docs, Sheets, Drive, Calendar) share a single OAuth client and refresh token stored under the unified `google_*` config keys.
+All Google integrations (Gmail, Docs, Sheets, Drive, Calendar) share a single OAuth client and refresh token stored in the `google` section of `~/.charliebot/credentials.yaml`.
 
 One-time setup to obtain a refresh token for the desktop-app OAuth flow:
 
@@ -120,13 +120,13 @@ curl -s -X POST https://oauth2.googleapis.com/token \
   --data-urlencode "redirect_uri=http://localhost"
 ```
 
-5. Save the returned `refresh_token` to `google_refresh_token` in `~/.charliebot/config.yaml`.
+5. Save the returned `refresh_token` to the `refresh_token` key of the `google` section in `~/.charliebot/credentials.yaml`.
 
 **Note:** If the GCP project is in Testing mode, the refresh token expires in ~7 days. Publish the OAuth consent screen to Production for non-expiring tokens.
 
 ## Workflow
 
-1. Read credentials from `~/.charliebot/config.yaml`.
+1. Read credentials from `~/.charliebot/credentials.yaml` (section `google`).
 2. Mint an access token using the refresh token.
 3. Search or list messages using Gmail search syntax (`q=` parameter).
 4. Fetch full message content and decode the body.

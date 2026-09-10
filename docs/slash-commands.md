@@ -154,8 +154,13 @@ Execute a slash command.
 **Request body**
 
 ```json
-{ "command": "git", "args": "status" }
+{ "command": "git", "args": "status", "uploaded_files": [] }
 ```
+
+`uploaded_files` is optional (default `[]`). Each entry carries `{filename, path, size}` — the shape
+`POST /api/chat/{session_id}/upload` returns — for a file staged in the chat input when the command
+runs. The backend persists the list on the command's user event; a prompt-scope command forwards it
+to the dispatched run.
 
 **Response — shell result**
 

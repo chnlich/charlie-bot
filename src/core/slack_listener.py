@@ -643,7 +643,7 @@ async def _backfill_followed_threads(
 # ---------------------------------------------------------------------------
 
 
-def _bot_client(cfg: CharlieBotConfig) -> SlackClient:
+def _bot_client() -> SlackClient:
   """The client every outbound path (reply, notice, backfill) posts through."""
   creds = get_credentials()
   return SlackClient(
@@ -820,7 +820,7 @@ async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, session_mg
   user, and a text preview; with a None watermark the whole thread tail counts.
   """
   meta = await _require_slack_thread_session(session_id, session_mgr)
-  unread = await _fetch_unread_eligible(_bot_client(cfg), meta.slack_origin, cfg, meta.slack_watermark_ts)
+  unread = await _fetch_unread_eligible(_bot_client(), meta.slack_origin, cfg, meta.slack_watermark_ts)
   if not unread:
     return
   raise SlackReplyError(
@@ -856,7 +856,7 @@ async def ack_messages(
   if not ids:
     raise SlackReplyError(422, "message_ids is empty")
   origin = meta.slack_origin
-  messages = await _bot_client(cfg).get_thread_replies(origin.channel_id, origin.thread_ts)
+  messages = await _bot_client().get_thread_replies(origin.channel_id, origin.thread_ts)
   eligible = {m["ts"] for m in messages if _eligible_thread_message(m, cfg.slack.allowed_user_ids)}
   unknown = [ts for ts in ids if ts not in eligible]
   if unknown:
@@ -969,7 +969,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
   bound = _bound_summon(events, user_event_id)
   answers = bound[0] if bound is not None else None
   origin = meta.slack_origin
-  client = _bot_client(cfg)
+  client = _bot_client()
   bodies = _chunk_text(text)
   for index, body in enumerate(bodies, start=1):
     ok = await _post_with_retry(client, origin.channel_id, origin.thread_ts, body, session_id=session_id)
@@ -1122,7 +1122,7 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, sessi
   target = _slack_target(events, input_event_id)
   if target is None:
     return False
-  return await _audit_round(session_id, events, target, input_event_id, cfg, session_mgr, _bot_client(cfg))
+  return await _audit_round(session_id, events, target, input_event_id, cfg, session_mgr, _bot_client())
 
 
 # ---------------------------------------------------------------------------
@@ -1162,7 +1162,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
   from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
 
   sessions = await session_mgr.list_sessions()  # archived included: a thread can be summoned again
-  client = _bot_client(cfg)
+  client = _bot_client()
   reported = 0
   for meta in sessions:
     if meta.slack_origin is None:

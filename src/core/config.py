@@ -4,9 +4,10 @@ import asyncio
 import json
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Generic, Literal, TypeVar
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -600,36 +601,79 @@ def require_backend_option(cfg: CharlieBotConfig, backend_id: str, *, subject: s
   return option
 
 
-_config: CharlieBotConfig | None = None
-# The last fingerprint _config_fingerprint() returned for the cached config; tests
-# assign a sentinel (e.g. 0.0) to force a reload.
-_config_mtime: object = None
-# The fingerprint whose load_config() last raised while a cached config existed:
-# the auth middleware's per-request get_config() call re-runs the full parse and
-# re-fires the warning on every request while the corpus stays broken unless the
-# failure is keyed to the fingerprint that produced it. Re-parse only when the
-# fingerprint moves — the same freshness rule the successful path follows.
-_config_failed_mtime: object = None
-# First sighting per error string per process: a persisting broken corpus
-# re-fires a fired alarm on every reload attempt otherwise. A successful load
-# clears the registry, so a later relapse earns one new line.
-_config_reload_errors_seen = WarnOnceRegistry()
+T = TypeVar("T")
 
 
-def _warn_config_reload_failed_once(error: Exception) -> None:
-  """Log one config_reload_failed per error string per process.
+def _install_replace(current: T | None, fresh: T) -> T:
+  """Drop the previous value and adopt the fresh one."""
+  return fresh
 
-  A caller relies on at most one line per error: a reload attempt that sees the
-  same failure re-fires a fired alarm, and the key is exactly the field the
-  line logs, so a changed failure earns one new line and nothing outside the
-  log statement drifts the key away from what was reported.
+
+class _HotReloadCache(Generic[T]):
+  """One file-backed cache that reloads through a loader when the file's fingerprint moves.
+
+  ``get(loader)`` re-runs *loader* only when the fingerprint differs from both
+  the cached value's and the last failure's; the surrounding bookkeeping is the
+  one state machine every hot-reload cache shares:
+
+  - a failed reload keeps the previous value and logs one warning per error
+    string per process (the key is exactly the field the line logs); the
+    failed fingerprint is recorded, so the same broken corpus pays no parse
+    and no line until it moves — the freshness rule the successful path
+    follows, applied to failure;
+  - a reload with nothing cached re-raises: with no fallback the raise is what
+    surfaces the broken file, so no failed fingerprint is recorded;
+  - a successful reload installs, clears the failed fingerprint, and re-arms
+    the registry: a later relapse is a new onset and earns one new line.
   """
-  _config_reload_errors_seen.log(log.warning, "config_reload_failed", str(error), error=str(error))
 
+  def __init__(
+      self,
+      fingerprint: Callable[[], tuple[float, int]],
+      event: str,
+      install: Callable[[T | None, T], T],
+  ) -> None:
+    self._fingerprint = fingerprint
+    self._event = event
+    self._install = install
+    self.value: T | None = None
+    self._mtime: tuple[float, int] | None = None
+    self.failed_mtime: tuple[float, int] | None = None
+    self.seen = WarnOnceRegistry()
 
-def _reset_config_reload_failures_for_tests() -> None:
-  """Clear the warn-once registry, restoring the process-start state."""
-  _config_reload_errors_seen.clear()
+  def reset(self) -> None:
+    """Forget the cached value and every fingerprint and warning state."""
+    self.value = None
+    self._mtime = None
+    self.failed_mtime = None
+    self.seen.clear()
+
+  def seed(self, value: T) -> None:
+    """Install *value* as if freshly loaded, stamped with the current fingerprint."""
+    self.value = value
+    self._mtime = self._fingerprint()
+
+  def get(self, loader: Callable[[], T]) -> T:
+    """Return the cached value, reloading through *loader* when the fingerprint moves."""
+    fingerprint = self._fingerprint()
+    if self.value is None or (fingerprint != self._mtime and fingerprint != self.failed_mtime):
+      try:
+        fresh = loader()
+      except Exception as error:
+        self.seen.log(log.warning, self._event, str(error), error=str(error))
+        if self.value is None:
+          raise
+        # Only a fallback value makes the failed fingerprint meaningful: with
+        # none, the raise above ends the process.
+        self.failed_mtime = fingerprint
+      else:
+        self.value = self._install(self.value, fresh)
+        self._mtime = fingerprint
+        self.failed_mtime = None
+        # The reported failure state ended: a later relapse is a new onset and
+        # earns one new line.
+        self.seen.clear()
+    return self.value
 
 
 def _file_fingerprint(name: str) -> tuple[float, int]:
@@ -657,6 +701,22 @@ def _config_fingerprint() -> tuple[float, int]:
   """The reload cache key over ``config.yaml``: :func:`_file_fingerprint` on it."""
   return _file_fingerprint("config.yaml")
 
+
+def _install_config_snapshot(current: CharlieBotConfig | None, fresh: CharlieBotConfig) -> CharlieBotConfig:
+  """First install adopts *fresh*; a reload copies field-by-field into the held instance.
+
+  Assignment validation is off, so the source must already be a fully
+  validated CharlieBotConfig.
+  """
+  if current is None:
+    return fresh
+  for name in type(fresh).model_fields:
+    setattr(current, name, getattr(fresh, name))
+  return current
+
+
+_config_cache = _HotReloadCache(
+    fingerprint=_config_fingerprint, event="config_reload_failed", install=_install_config_snapshot)
 
 # Retired config.yaml top-level keys: the loader rejects any file still carrying
 # one, and the error names where the key moved. A plain dotted value points into
@@ -801,32 +861,7 @@ def get_config() -> CharlieBotConfig:
   in-flight coroutines) observe the new values without re-fetching. Replacing
   the object instead would leave every such holder pinned to a stale snapshot.
   """
-  global _config, _config_mtime, _config_failed_mtime
-  fingerprint = _config_fingerprint()
-  if _config is None or (fingerprint != _config_mtime and fingerprint != _config_failed_mtime):
-    try:
-      fresh = load_config()
-    except Exception as e:
-      _warn_config_reload_failed_once(e)
-      if _config is None:
-        raise
-      # Only a fallback config makes the failed fingerprint meaningful: with
-      # none, the raise above ends the process.
-      _config_failed_mtime = fingerprint
-    else:
-      if _config is None:
-        _config = fresh
-      else:
-        # Copy field-by-field from the validated instance; assignment validation is
-        # off, so the source must already be a fully validated CharlieBotConfig.
-        for name in type(fresh).model_fields:
-          setattr(_config, name, getattr(fresh, name))
-      _config_mtime = fingerprint
-      _config_failed_mtime = None
-      # The reported failure state ended: a later relapse is a new onset and
-      # earns one new line.
-      _config_reload_errors_seen.clear()
-  return _config
+  return _config_cache.get(load_config)
 
 
 @dataclass
@@ -890,20 +925,8 @@ def _credentials_fingerprint() -> tuple[float, int]:
   return _file_fingerprint("credentials.yaml")
 
 
-_credentials: Credentials | None = None
-# The last fingerprint _credentials_fingerprint() returned for the cached value; tests
-# assign a sentinel (e.g. 0.0) to force a reload.
-_credentials_mtime: object = None
-# The fingerprint whose get_credentials() last raised while a cached value existed
-# (see _config_failed_mtime).
-_credentials_failed_mtime: object = None
-# First sighting per error string per process (see _config_reload_errors_seen).
-_credentials_reload_errors_seen = WarnOnceRegistry()
-
-
-def _warn_credentials_reload_failed_once(error: Exception) -> None:
-  """Log one credentials_reload_failed per error string per process."""
-  _credentials_reload_errors_seen.log(log.warning, "credentials_reload_failed", str(error), error=str(error))
+_credentials_cache = _HotReloadCache(
+    fingerprint=_credentials_fingerprint, event="credentials_reload_failed", install=_install_replace)
 
 
 def get_credentials() -> Credentials:
@@ -915,22 +938,7 @@ def get_credentials() -> Credentials:
   hold no instance references. A failed reload keeps the previous value and
   logs one warning per onset; with nothing cached yet the error propagates.
   """
-  global _credentials, _credentials_mtime, _credentials_failed_mtime
-  fingerprint = _credentials_fingerprint()
-  if _credentials is None or (fingerprint != _credentials_mtime and fingerprint != _credentials_failed_mtime):
-    try:
-      fresh = load_credentials()
-    except Exception as e:
-      _warn_credentials_reload_failed_once(e)
-      if _credentials is None:
-        raise
-      _credentials_failed_mtime = fingerprint
-    else:
-      _credentials = fresh
-      _credentials_mtime = fingerprint
-      _credentials_failed_mtime = None
-      _credentials_reload_errors_seen.clear()
-  return _credentials
+  return _credentials_cache.get(load_credentials)
 
 
 _cron_snapshot = _CronSnapshot()

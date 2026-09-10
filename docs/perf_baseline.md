@@ -226,10 +226,10 @@ EOF
 ```
 
 M5 — threads/list latency for the session with the most thread metadata files on disk (the worst
-case the 3 s workers-panel poll can hit; the key is read read-only from the host config):
+case the 3 s workers-panel poll can hit; the key is read read-only from the host credentials):
 
 ```bash
-KEY=$(grep -m1 '^charliebot_access_key:' ~/.charliebot/config.yaml | awk '{print $2}'); read SID N <<<"$(python3 -c '
+KEY=$(awk '/^charliebot:/{f=1;next} f&&/^  access_key:/{print $2;exit}' ~/.charliebot/credentials.yaml); read SID N <<<"$(python3 -c '
 from pathlib import Path
 root = Path.home() / ".charliebot" / "sessions"
 best, best_n = None, -1
@@ -248,7 +248,7 @@ worst case the 3 s active-session-view poll can hit while that session is thinki
 file feeds resolution, archived events do not):
 
 ```bash
-KEY=$(grep -m1 '^charliebot_access_key:' ~/.charliebot/config.yaml | awk '{print $2}'); read SID N <<<"$(python3 -c '
+KEY=$(awk '/^charliebot:/{f=1;next} f&&/^  access_key:/{print $2;exit}' ~/.charliebot/credentials.yaml); read SID N <<<"$(python3 -c '
 from pathlib import Path
 root = Path.home() / ".charliebot" / "sessions"
 best, best_n = None, -1
@@ -349,7 +349,7 @@ code with a scratch `CHARLIEBOT_HOME` (its own empty cache directory — cold-th
 both paths):
 
 ```bash
-KEY=$(grep -m1 '^charliebot_access_key:' ~/.charliebot/config.yaml | awk '{print $2}'); for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: Bearer $KEY" http://127.0.0.1:18498/token-usage; done | sort -n | awk '{a[NR]=$1} END {printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
+KEY=$(awk '/^charliebot:/{f=1;next} f&&/^  access_key:/{print $2;exit}' ~/.charliebot/credentials.yaml); for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: Bearer $KEY" http://127.0.0.1:18498/token-usage; done | sort -n | awk '{a[NR]=$1} END {printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
 ```
 
 M7 changed-round — the collect behind a page load whose corpus moved since the last one (any
@@ -399,7 +399,7 @@ code is a scratch-instance A/B on the search corpus (all session metadata plus a
 live chat files), the same shape as the M7 protocol.
 
 ```bash
-KEY=$(grep -m1 '^charliebot_access_key:' ~/.charliebot/config.yaml | awk '{print $2}'); for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: Bearer $KEY" "http://127.0.0.1:18498/api/sessions/search?q=zzq9xneverpresentneedle77"; done | sort -n | awk '{a[NR]=$1} END {printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
+KEY=$(awk '/^charliebot:/{f=1;next} f&&/^  access_key:/{print $2;exit}' ~/.charliebot/credentials.yaml); for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{time_total}\n' -H "Authorization: Bearer $KEY" "http://127.0.0.1:18498/api/sessions/search?q=zzq9xneverpresentneedle77"; done | sort -n | awk '{a[NR]=$1} END {printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
 ```
 
 M9 — ext-usage poller codex spend rescan, steady state. The poller's cost is background work invisible to HTTP probes, so the collector times the function the poller calls every round: the provider's spend computation over the live corpus (read-only), from the main repo checkout. The collector reports the no-churn steady state; a round where a rollout file changed re-parses just that file, and one cold full-corpus pass runs per server process start:
@@ -487,14 +487,14 @@ EOF
 ```
 
 M11 — backlog read endpoints' status codes. This host configures no
-`backlog_repos`, so both GETs read the empty-state path, and every 500 arrives
+`ui.backlog_repos`, so both GETs read the empty-state path, and every 500 arrives
 with a ~30-line ASGI traceback in the server log (the line the 5xx count below
 matches). Evidence while the live server runs older code is a scratch-instance
 A/B (scratch `CHARLIEBOT_HOME`, TestClient against before and after code), the
 same shape as the M7 protocol.
 
 ```bash
-KEY=$(grep -m1 '^charliebot_access_key:' ~/.charliebot/config.yaml | awk '{print $2}'); for p in /api/backlog /api/backlog/history; do curl -s -o /dev/null -w "$p %{http_code}\n" -H "Authorization: Bearer $KEY" "http://127.0.0.1:18498$p"; done
+KEY=$(awk '/^charliebot:/{f=1;next} f&&/^  access_key:/{print $2;exit}' ~/.charliebot/credentials.yaml); for p in /api/backlog /api/backlog/history; do curl -s -o /dev/null -w "$p %{http_code}\n" -H "Authorization: Bearer $KEY" "http://127.0.0.1:18498$p"; done
 LOG=$(ls -1t /tmp/charliebot-logs/server_*.log | head -1); grep -c "GET /api/backlog HTTP/1.1\" 500" "$LOG"
 ```
 
@@ -582,7 +582,7 @@ REPO = Path("/home/chaoli/workspace/charlie-bot")
 BASE = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
                       cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()[0]
 cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m14-home-")),
-                       workspace_dirs=["/home/chaoli/workspace"])
+                       paths={"workspace_dirs": ["/home/chaoli/workspace"]})
 
 async def run_once():
     gaps = []
@@ -2385,7 +2385,7 @@ REPO = Path("/home/chaoli/workspace/charlie-bot")
 BASE = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
                       cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()[0]
 cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m41-home-")),
-                       workspace_dirs=["/home/chaoli/workspace"])
+                       paths={"workspace_dirs": ["/home/chaoli/workspace"]})
 
 async def main():
     t0 = time.perf_counter()
@@ -2488,7 +2488,7 @@ REPO = Path("/home/chaoli/workspace/charlie-bot")
 BASE = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
                       cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()[0]
 cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m43-home-")),
-                       workspace_dirs=["/home/chaoli/workspace"])
+                       paths={"workspace_dirs": ["/home/chaoli/workspace"]})
 
 async def main():
     manifest = await diff_files(repo=str(REPO), base=BASE, head="HEAD", mode="three-dot", cfg=cfg)
@@ -3739,12 +3739,12 @@ SID = best.name
 
 # Isolation: scratch CHARLIEBOT_HOME under /tmp holding a copy of that session's
 # metadata.json and data/ (live home read once for the copy, never written); the
-# scratch config carries an empty access key, which the auth middleware passes through.
+# scratch credentials carry an empty access key, which the auth middleware passes through.
 home = Path(tempfile.mkdtemp(prefix="m65-gzip-home-"))
 (home / "sessions" / SID).mkdir(parents=True)
 shutil.copy2(best / "metadata.json", home / "sessions" / SID / "metadata.json")
 shutil.copytree(best / "data", home / "sessions" / SID / "data")
-(home / "config.yaml").write_text("charliebot_access_key: ''\n")
+(home / "credentials.yaml").write_text("charliebot:\n  access_key: ''\n")
 os.environ["CHARLIEBOT_HOME"] = str(home)
 
 import server  # noqa: E402  (the real app stack: _CharlieBotGZipMiddleware + AuthMiddleware)
@@ -4416,8 +4416,8 @@ print(f"worst raw log: {best_n / 1e6:.1f} MB ({best})")
 # live path would build for it degrades to the identity translate.
 cfg = get_config()
 backend_id = json.loads((best.parents[3] / "metadata.json").read_text()).get("backend")
-option = next((o for o in cfg.backend_options if o.id == backend_id),
-              next(o for o in cfg.backend_options if o.type == "cc-claude"))
+option = next((o for o in cfg.backends.options if o.id == backend_id),
+              next(o for o in cfg.backends.options if o.type == "cc-claude"))
 print(f"session backend {backend_id!r} -> option {option.id} ({option.type})")
 
 def fresh_translate():
@@ -4796,7 +4796,7 @@ REPO = Path("/home/chaoli/workspace/charlie-bot")
 REFS = subprocess.run(["git", "for-each-ref"], cwd=REPO, capture_output=True, text=True,
                       check=True).stdout.count("\n")
 cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m79-home-")),
-                       workspace_dirs=["/home/chaoli/workspace"])
+                       paths={"workspace_dirs": ["/home/chaoli/workspace"]})
 
 async def main():
     t0 = time.perf_counter()

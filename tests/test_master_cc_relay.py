@@ -11,6 +11,7 @@ from conftest import (
     FABLE_MODEL,
     POOLED_FABLE_ID,
     ScriptedRelayBackend,
+    backend_option,
     fable_pool_cfg,
     fresh_state_fixture,
     install_scripted_backends,
@@ -29,7 +30,7 @@ from src.core import claude_accounts, claude_relay
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.message_aggregator import MessageAggregator
-from src.core.models import BackendOption, SessionMetadata
+from src.core.models import SessionMetadata
 
 NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
 UUID = "uuid-relay-1"
@@ -115,10 +116,10 @@ async def test_place_turn_moves_the_transcript_when_the_account_changes(tmp_path
   make_transcript(tmp_path / "claude-main", UUID)
   claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=NOW)
   meta = _session_on("main")
-  item = make_work_item(cfg, meta, cfg.backend_options[0])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
 
   account, error = await master_cc_relay.place_turn(
-      cfg, item, cfg.backend_options[0], UUID, str(tmp_path), None, None, now=NOW)
+      cfg, item, cfg.backends.options[0], UUID, str(tmp_path), None, None, now=NOW)
 
   assert error is None
   assert account.label in {"ext-1", "ext-2"}
@@ -181,16 +182,17 @@ async def test_run_cc_relays_a_rejected_turn_onto_another_account(tmp_path: Path
   first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
-  item = make_work_item(cfg, meta, cfg.backend_options[0])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
 
   cc_session_id, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
 
   assert (cc_session_id, exit_code, error_msg) == (UUID, 0, None)
   assert extras["account_relays"] == 1
-  assert builds[0]["option"].claude_config_dir == str(tmp_path / "claude-main")
+  assert builds[0]["option"] is cfg.backends.options[0]
+  assert builds[0]["kwargs"]["claude_account"].config_dir == str(tmp_path / "claude-main")
   assert builds[0]["kwargs"]["extra_flags"] == ["--resume", UUID, "--exclude-dynamic-system-prompt-sections"]
-  assert first.env is not None and first.env["CLAUDE_CONFIG_DIR"] is None if "CLAUDE_CONFIG_DIR" in first.env else True
-  assert builds[1]["option"].claude_config_dir == str(tmp_path / "claude-ext-1")
+  assert first.env is not None and "CLAUDE_CONFIG_DIR" not in first.env
+  assert builds[1]["kwargs"]["claude_account"].config_dir == str(tmp_path / "claude-ext-1")
   assert builds[1]["kwargs"]["extra_flags"] == ["--resume", UUID, "--exclude-dynamic-system-prompt-sections"]
   assert second.prompt == claude_relay.CONTINUATION_PROMPT
   assert meta.claude_account == "ext-1"
@@ -211,13 +213,14 @@ async def test_run_cc_terminates_at_the_safe_point_after_a_warning_and_relays(tm
       exit_code=0)
   second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
-  item = make_work_item(cfg, meta, cfg.backend_options[0])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
 
   assert first.terminated is True
   assert (exit_code, error_msg, extras["account_relays"]) == (0, None, 1)
-  assert len(builds) == 2 and builds[1]["option"].claude_config_dir == str(tmp_path / "claude-ext-1")
+  assert len(builds) == 2
+  assert builds[1]["kwargs"]["claude_account"].config_dir == str(tmp_path / "claude-ext-1")
   assert second.prompt == claude_relay.CONTINUATION_PROMPT
 
 
@@ -230,7 +233,7 @@ async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, mon
   meta = _session_on("main")
   first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   builds = _install_backends(monkeypatch, [first])
-  item = make_work_item(cfg, meta, cfg.backend_options[0])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
 
@@ -255,7 +258,7 @@ async def test_run_cc_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -
           [rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1) for _ in range(5)
   ]
   builds = _install_backends(monkeypatch, backends)
-  item = make_work_item(cfg, meta, cfg.backend_options[0])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, error_msg, extras = await master_cc_run._run_cc(item)
 
@@ -274,7 +277,7 @@ async def test_run_cc_marks_a_login_failure_and_relays(tmp_path: Path, monkeypat
       [_assistant("Failed to authenticate: OAuth session expired and could not be refreshed")], exit_code=1)
   second = ScriptedRelayBackend([backend_base.make_result_event()], exit_code=0)
   builds = _install_backends(monkeypatch, [first, second])
-  item = make_work_item(cfg, meta, cfg.backend_options[0])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
 
@@ -318,7 +321,7 @@ async def test_run_cc_compacts_with_sonnet_before_spawning_on_an_expired_cache(
 
   def fake_build_backend(option, cfg_, **kwargs):
     order.append("spawn")
-    builds.append({"option": option})
+    builds.append({"claude_account": kwargs["claude_account"]})
     return backend
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
@@ -327,13 +330,13 @@ async def test_run_cc_compacts_with_sonnet_before_spawning_on_an_expired_cache(
       mock_session_callbacks(),
       claude_context_state=AsyncMock(
           return_value=(context_tokens, datetime.now(UTC) - timedelta(minutes=minutes_since))))
-  item = make_work_item(cfg, meta, cfg.backend_options[0], callbacks=callbacks)
+  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=callbacks)
 
   _cc, exit_code, _err, _extras = await master_cc_run._run_cc(item)
 
   assert exit_code == 0
   if compacted:
-    assert order == [f"compact:{Path(builds[0]['option'].claude_config_dir).name}:{context_tokens}", "spawn"]
+    assert order == [f"compact:{Path(builds[0]['claude_account'].config_dir).name}:{context_tokens}", "spawn"]
   else:
     assert order == ["spawn"]
 
@@ -356,7 +359,7 @@ async def test_run_cc_relay_compacts_a_large_fable_context_on_the_new_account(tm
   callbacks = dataclasses.replace(
       mock_session_callbacks(),
       claude_context_state=AsyncMock(return_value=(150_000, datetime.now(UTC) - timedelta(minutes=1))))
-  item = make_work_item(cfg, meta, cfg.backend_options[0], callbacks=callbacks)
+  item = make_work_item(cfg, meta, cfg.backends.options[0], callbacks=callbacks)
 
   _cc, exit_code, _err, _extras = await master_cc_run._run_cc(item)
 
@@ -366,26 +369,22 @@ async def test_run_cc_relay_compacts_a_large_fable_context_on_the_new_account(tm
 
 @pytest.mark.asyncio
 async def test_run_cc_without_a_pool_spawns_the_option_unchanged(tmp_path: Path, monkeypatch) -> None:
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "login"))
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          BackendOption(
-              id="pinned",
-              label="Pinned",
-              type="cc-claude",
-              model=FABLE_MODEL,
-              claude_config_dir=str(tmp_path / "pinned"))
-      ],
+      backends={"options": [backend_option(id="solo", label="Solo", type="cc-claude", model=FABLE_MODEL)]},
   )
-  make_transcript(tmp_path / "pinned", UUID)
-  meta = SessionMetadata(id="s1", name="t", backend="pinned", cc_session_id=UUID)
+  make_transcript(tmp_path / "login", UUID)
+  meta = SessionMetadata(id="s1", name="t", backend="solo", cc_session_id=UUID)
   backend = ScriptedRelayBackend([rate_limit_event("rejected", 1.0), backend_base.make_result_event()], exit_code=1)
   builds = _install_backends(monkeypatch, [backend])
-  item = make_work_item(cfg, meta, cfg.backend_options[0])
+  item = make_work_item(cfg, meta, cfg.backends.options[0])
 
   _cc, exit_code, _err, extras = await master_cc_run._run_cc(item)
 
-  assert builds[0]["option"] is cfg.backend_options[0]
+  assert builds[0]["option"] is cfg.backends.options[0]
+  assert builds[0]["kwargs"]["claude_account"] is None
+  assert builds[0]["kwargs"]["extra_flags"] == ["--resume", UUID, "--exclude-dynamic-system-prompt-sections"]
   assert len(builds) == 1 and exit_code == 1
   assert "account_relays" not in extras
   assert meta.claude_account is None

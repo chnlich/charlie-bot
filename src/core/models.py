@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Literal, get_args
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, model_validator
 
 
 def ensure_utc(v: datetime | str) -> datetime:
@@ -32,7 +32,7 @@ def utc_now() -> datetime:
 UtcDatetime = Annotated[datetime, BeforeValidator(ensure_utc)]
 
 # ---------------------------------------------------------------------------
-# Type aliases
+# Aliased types
 # ---------------------------------------------------------------------------
 
 SessionRating = Literal['thumbs_up', 'neutral', 'thumbs_down']
@@ -197,39 +197,97 @@ class BackendType(StrEnum):
   TUI_CLI = "tui-cli"
 
 
-class BackendOption(BaseModel):
+MODEL_OPTIONAL_ROUTING_BACKEND_TYPES: frozenset[BackendType] = frozenset(
+    {BackendType.ANTIGRAVITY, BackendType.TUI_CLI})
+
+
+class BackendBase(BaseModel):
+  """Fields every backend option carries; each type's own fields live on the subclasses below."""
+  model_config = ConfigDict(extra='forbid')
+
   id: str
   label: str
-  type: str  # one of the BackendType values above
   model: str | None = None
-  effort: str | None = None
-  cli_binary: str | None = None
-  codex_home: str | None = None  # codex backend only: per-account $CODEX_HOME
-  claude_config_dir: str | None = None  # cc-claude backend only: per-account CLAUDE_CONFIG_DIR
-  model_reasoning_effort: str | None = None  # codex backend only: per-backend reasoning effort override
-  model_auto_compact_token_limit: int | None = Field(
-      default=None, gt=0)  # codex backend only: per-backend auto-compact token limit
-  context_window: int | None = Field(
-      default=None, gt=0)  # charlie-code only: compaction context window in tokens (None = charlie-code default)
-  api_key: str | None = None  # charlie-code only: upstream endpoint API key for the subprocess
   # Overlay filename (no .md) under prompts/model_overlays/. Literal "none" =
   # explicitly fenceless (silent); None = undeclared; a declared-but-unreadable
   # file degrades the wake to a fenceless run. The two latter cases emit one
   # unified backend_overlay_inactive alert, told apart by its reason field —
   # the read failure never raises.
   prompt_overlay: str | None = None
-  api_base: str | None = None  # OpenAI-compatible base URL (charlie-code, cc-openai-compatible)
-  api_key_env: str | None = None  # cc-openai-compatible: env var holding the upstream API key
+
+  @model_validator(mode='after')
+  def require_model(self) -> 'BackendBase':
+    if self.model is None and self.type not in MODEL_OPTIONAL_ROUTING_BACKEND_TYPES:
+      raise ValueError(f"backend '{self.id}' (type '{self.type}') requires 'model'")
+    return self
+
+
+class CcClaudeBackend(BackendBase):
+  type: Literal[BackendType.CC_CLAUDE] = BackendType.CC_CLAUDE
+  effort: str | None = None
   fast_mode: bool = False  # cc-claude only: enable Claude Code fast mode via --settings '{"fastMode":true}'
-  opencode_proxy_url: str | None = None  # opencode only: per-backend HTTP/HTTPS proxy URL
+  cli_binary: str | None = None
+
+
+class CcKimiBackend(BackendBase):
+  type: Literal[BackendType.CC_KIMI] = BackendType.CC_KIMI
+  credential: str
+
+
+class CcOpenAICompatibleBackend(BackendBase):
+  type: Literal[BackendType.CC_OPENAI_COMPATIBLE] = BackendType.CC_OPENAI_COMPATIBLE
+  api_base: str  # OpenAI-compatible base URL
+  credential: str | None = None
+
+
+class CodexBackend(BackendBase):
+  type: Literal[BackendType.CODEX] = BackendType.CODEX
+  model_reasoning_effort: str | None = None  # per-backend reasoning effort override
+  model_auto_compact_token_limit: int | None = Field(
+      default=None, gt=0)  # per-backend auto-compact token limit
+
+
+class CharlieCodeBackend(BackendBase):
+  type: Literal[BackendType.CHARLIE_CODE] = BackendType.CHARLIE_CODE
+  api_base: str | None = None  # OpenAI-compatible base URL
+  context_window: int | None = Field(
+      default=None, gt=0)  # compaction context window in tokens (None = charlie-code default)
+  credential: str | None = None
+
+
+class GeminiBackend(BackendBase):
+  type: Literal[BackendType.GEMINI] = BackendType.GEMINI
+
+
+class OpencodeBackend(BackendBase):
+  type: Literal[BackendType.OPENCODE] = BackendType.OPENCODE
+  proxy_url: str | None = None  # per-backend HTTP/HTTPS proxy URL
+
+
+class AntigravityBackend(BackendBase):
+  type: Literal[BackendType.ANTIGRAVITY] = BackendType.ANTIGRAVITY
   print_timeout: str | None = None  # antigravity only: agy --print turn budget (Go duration, e.g. "1h")
-  # Backend ids this entry also answers for. An id retired by a config edit (an
-  # account-specific entry folded into the account pool) keeps resolving for the
-  # sessions that recorded it, so no metadata rewrite is needed.
-  aliases: list[str] = Field(default_factory=list)
 
 
-MODEL_OPTIONAL_ROUTING_BACKEND_TYPES: frozenset[BackendType] = frozenset({BackendType.ANTIGRAVITY})
+class TuiCliBackend(BackendBase):
+  type: Literal[BackendType.TUI_CLI] = BackendType.TUI_CLI
+  cli_binary: str | None = None
+
+
+# One class per type: a config entry validates against the subclass its ``type``
+# names, so illegal field/type combinations are unconstructable (same pattern as
+# WatchTarget above).
+BACKEND_CLASSES = (CcClaudeBackend, CcKimiBackend, CcOpenAICompatibleBackend, CodexBackend, CharlieCodeBackend,
+                   GeminiBackend, OpencodeBackend, AntigravityBackend, TuiCliBackend)
+
+# Discriminated union on `type`: config.yaml entries dispatch on their type tag.
+BackendOption = Annotated[
+    CcClaudeBackend | CcKimiBackend | CcOpenAICompatibleBackend | CodexBackend | CharlieCodeBackend | GeminiBackend
+    | OpencodeBackend | AntigravityBackend | TuiCliBackend,
+    Field(discriminator="type"),
+]
+
+BACKEND_OPTION_ADAPTER = TypeAdapter(BackendOption)
 
 
 def backend_type_allows_missing_model(backend_type: str) -> bool:

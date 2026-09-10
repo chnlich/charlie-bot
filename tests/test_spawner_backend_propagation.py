@@ -3,35 +3,35 @@ from typing import Any
 
 import pytest
 from conftest import (
-    AGY_BACKEND_OPTION,
-    CLEAN_EXIT_OUTCOME,
-    CODEX_BACKEND_OPTION,
-    OPUS_BACKEND_ID,
-    backend_option,
-    CapturingThreadManager,
-    JudgmentShim,
-    ReviewSpawnSessionManager,
-    ReviewSpawnThreadManager,
-    SpawnFlowSessionManager,
-    build_finalize_ctx,
-    build_worker_prompt,
-    capturing_worker,
-    make_fake_git_create_worktree,
-    patch_review_spawn_path,
-    recording_notify_completion,
-    run_worktree_spawn,
-    stage_worktree_spawn,
+  AGY_BACKEND_OPTION,
+  CLEAN_EXIT_OUTCOME,
+  CODEX_BACKEND_OPTION,
+  OPUS_BACKEND_ID,
+  CapturingThreadManager,
+  JudgmentShim,
+  ReviewSpawnSessionManager,
+  ReviewSpawnThreadManager,
+  SpawnFlowSessionManager,
+  backend_option,
+  build_finalize_ctx,
+  build_worker_prompt,
+  capturing_worker,
+  make_fake_git_create_worktree,
+  patch_review_spawn_path,
+  recording_notify_completion,
+  run_worktree_spawn,
+  stage_worktree_spawn,
 )
 
 from src.core import review, spawner, spawner_events, spawner_finalize, spawner_launch
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-    BackendOption,
-    SessionMetadata,
-    SpawnRequest,
-    TaskType,
-    ThreadMetadata,
-    ThreadStatus,
+  BackendOption,
+  SessionMetadata,
+  SpawnRequest,
+  TaskType,
+  ThreadMetadata,
+  ThreadStatus,
 )
 
 

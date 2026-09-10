@@ -56,9 +56,7 @@ def build_backend(
         **kwargs)
   if option.type == BackendType.CC_KIMI:
     return KimiBackend(
-        api_key=str(get_credentials().require(option.credential, "api_key")),
-        model=_require_model(option),
-        **kwargs)
+        api_key=str(get_credentials().require(option.credential, "api_key")), model=_require_model(option), **kwargs)
   if option.type == BackendType.CC_OPENAI_COMPATIBLE:
     proxy_base_url = f"{cfg.server_base_url}/api/anthropic-proxy/openai-compatible/{option.id}"
     return OpenAICompatibleClaudeBackend(

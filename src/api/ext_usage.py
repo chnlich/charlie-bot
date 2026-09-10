@@ -106,10 +106,8 @@ def _derive_accounts() -> dict[str, list[tuple[str, str]]]:
       "pool": {
           label: os.path.abspath(os.path.expanduser(raw)) for label, raw in claude_pool
       },
-      "claude":
-          _derive_provider_accounts("claude", CLAUDE_DEFAULT_DIR, pool=claude_pool),
-      "codex":
-          _derive_provider_accounts("codex", CODEX_DEFAULT_DIR),
+      "claude": _derive_provider_accounts("claude", CLAUDE_DEFAULT_DIR, pool=claude_pool),
+      "codex": _derive_provider_accounts("codex", CODEX_DEFAULT_DIR),
   }
 
 

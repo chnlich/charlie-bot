@@ -37,7 +37,8 @@ def _resolve_folder_under_allowed_root(folder: str, cfg: CharlieBotConfig) -> Pa
   allowed_roots = [Path(d).expanduser().resolve() for d in cfg.paths.workspace_dirs]
   allowed_roots.append(Path(cfg.paths.worktree_dir).expanduser().resolve())
   if not any(folder_path.is_relative_to(root) for root in allowed_roots):
-    raise HTTPException(status_code=400, detail="folder must be under configured paths.workspace_dirs or paths.worktree_dir")
+    raise HTTPException(
+        status_code=400, detail="folder must be under configured paths.workspace_dirs or paths.worktree_dir")
   return folder_path
 
 

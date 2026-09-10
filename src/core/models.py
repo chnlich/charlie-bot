@@ -197,8 +197,7 @@ class BackendType(StrEnum):
   TUI_CLI = "tui-cli"
 
 
-MODEL_OPTIONAL_ROUTING_BACKEND_TYPES: frozenset[BackendType] = frozenset(
-    {BackendType.ANTIGRAVITY, BackendType.TUI_CLI})
+MODEL_OPTIONAL_ROUTING_BACKEND_TYPES: frozenset[BackendType] = frozenset({BackendType.ANTIGRAVITY, BackendType.TUI_CLI})
 
 
 class BackendBase(BaseModel):
@@ -243,8 +242,7 @@ class CcOpenAICompatibleBackend(BackendBase):
 class CodexBackend(BackendBase):
   type: Literal[BackendType.CODEX] = BackendType.CODEX
   model_reasoning_effort: str | None = None  # per-backend reasoning effort override
-  model_auto_compact_token_limit: int | None = Field(
-      default=None, gt=0)  # per-backend auto-compact token limit
+  model_auto_compact_token_limit: int | None = Field(default=None, gt=0)  # per-backend auto-compact token limit
 
 
 class CharlieCodeBackend(BackendBase):
@@ -277,13 +275,14 @@ class TuiCliBackend(BackendBase):
 # One class per type: a config entry validates against the subclass its ``type``
 # names, so illegal field/type combinations are unconstructable (same pattern as
 # WatchTarget above).
-BACKEND_CLASSES = (CcClaudeBackend, CcKimiBackend, CcOpenAICompatibleBackend, CodexBackend, CharlieCodeBackend,
-                   GeminiBackend, OpencodeBackend, AntigravityBackend, TuiCliBackend)
+BACKEND_CLASSES = (
+    CcClaudeBackend, CcKimiBackend, CcOpenAICompatibleBackend, CodexBackend, CharlieCodeBackend, GeminiBackend,
+    OpencodeBackend, AntigravityBackend, TuiCliBackend)
 
 # Discriminated union on `type`: config.yaml entries dispatch on their type tag.
 BackendOption = Annotated[
-    CcClaudeBackend | CcKimiBackend | CcOpenAICompatibleBackend | CodexBackend | CharlieCodeBackend | GeminiBackend
-    | OpencodeBackend | AntigravityBackend | TuiCliBackend,
+    CcClaudeBackend | CcKimiBackend | CcOpenAICompatibleBackend | CodexBackend | CharlieCodeBackend | GeminiBackend |
+    OpencodeBackend | AntigravityBackend | TuiCliBackend,
     Field(discriminator="type"),
 ]
 

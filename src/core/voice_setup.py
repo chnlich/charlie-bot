@@ -4,7 +4,7 @@
 nvidia-smi, after ``uv sync --group gpu-voice``. The enable flow downloads the official
 Qwen3-ASR weights when missing, preflight-asserts the four GPU conditions (imports,
 cuda model load, measured decode timing, free VRAM report), and only then flips
-``voice_engine: qwen3_hf`` in the deployment config — idempotently, so rerunning setup
+``voice.engine: qwen3_hf`` in the deployment config — idempotently, so rerunning setup
 neither re-downloads nor rewrites an already-enabled config. Any preflight failure
 raises with the failing line and leaves the config untouched.
 """
@@ -43,53 +43,56 @@ PREFLIGHT_RECORDING_TARGET_SECONDS = 10.0
 
 
 def write_voice_engine(home: Path, engine: str = "qwen3_hf") -> str:
-  """Idempotently point the deployment config at *engine*; return the action taken.
+  """Idempotently set ``voice.engine`` in ``<home>/config.yaml``; return the action taken.
 
-  Reads ``<home>/config.yaml`` textually so comments and formatting survive: the
-  ``voice_engine`` line is rewritten in place when present, the key appended when
-  absent, and nothing written when the effective value already matches. A
-  ``voice_engine`` key in a ``config.d/`` fragment is an error — the config loader
-  rejects a top-level key defined in two files, so editing around it would hide the
-  conflict instead of surfacing it.
+  Reads the file textually so comments and formatting survive: the ``engine:`` line
+  inside the ``voice:`` block is rewritten in place when present, inserted right
+  after ``voice:`` when the block lacks one, and the whole block is appended when
+  ``voice:`` is missing. Nothing is written when the effective value already matches.
   """
   config_path = home / "config.yaml"
-  config_d = home / "config.d"
-  fragment_hits: list[Path] = []
-  if config_d.is_dir():
-    for fragment in sorted(config_d.glob("*.yaml")):
-      if not fragment.is_file():
-        continue
-      data = load_yaml(fragment, default={})
-      if isinstance(data, dict) and "voice_engine" in data:
-        fragment_hits.append(fragment)
-  if fragment_hits:
-    raise ValueError(
-        "voice_engine is defined in config.d fragment(s) " + ", ".join(str(path) for path in fragment_hits) +
-        "; a top-level key must live in exactly one config file — edit it there instead")
-
+  text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+  lines = text.splitlines(keepends=True)
+  voice_matches = [i for i, line in enumerate(lines) if re.match(r"^voice:\s*$", line)]
+  if len(voice_matches) > 1:
+    raise ValueError(f"config.yaml defines voice on {len(voice_matches)} lines: {config_path}")
+  # Inside the voice block: the blank, comment, and indented lines that follow it.
+  engine_matches: list[int] = []
+  if voice_matches:
+    for j in range(voice_matches[0] + 1, len(lines)):
+      line = lines[j]
+      stripped = line.strip()
+      if stripped and not stripped.startswith("#") and not line[0].isspace():
+        break
+      if re.match(r"^\s+engine:", line):
+        engine_matches.append(j)
+  if len(engine_matches) > 1:
+    raise ValueError(f"config.yaml defines voice.engine on {len(engine_matches)} lines: {config_path}")
+  # Duplicate key lines are broken yaml (safe_load last-wins); the checks above run
+  # before the effective-value skip so the idempotent path never blesses them.
   data = load_yaml(config_path, default={})
   if not isinstance(data, dict):
     raise ValueError(f"config must be a top-level mapping: {config_path}")
-  text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-  # Duplicate key lines are broken yaml (safe_load last-wins); refuse before the
-  # effective-value skip so the idempotent path never blesses them.
-  line_pattern = re.compile(r"^voice_engine:(\s.*)?$")
-  matches = [i for i, line in enumerate(text.splitlines()) if line_pattern.match(line)]
-  if len(matches) > 1:
-    raise ValueError(f"config.yaml defines voice_engine on {len(matches)} lines: {config_path}")
-  if data.get("voice_engine") == engine:
+  if data.get("voice", {}).get("engine") == engine:
     return "skipped"
 
-  if matches:
-    lines = text.splitlines(keepends=True)
-    lines[matches[0]] = f"voice_engine: {engine}\n"
+  if voice_matches:
+    if engine_matches:
+      original = lines[engine_matches[0]]
+      indent = original[:len(original) - len(original.lstrip())]
+      ending = original[len(original.rstrip("\r\n")):]
+      lines[engine_matches[0]] = f"{indent}engine: {engine}{ending}"
+    else:
+      if not lines[voice_matches[0]].endswith("\n"):
+        lines[voice_matches[0]] += "\n"
+      lines.insert(voice_matches[0] + 1, f"  engine: {engine}\n")
     config_path.write_text("".join(lines), encoding="utf-8")
     return "updated"
 
   if text and not text.endswith("\n"):
     text += "\n"
   config_path.parent.mkdir(parents=True, exist_ok=True)
-  config_path.write_text(text + f"voice_engine: {engine}\n", encoding="utf-8")
+  config_path.write_text(text + f"voice:\n  engine: {engine}\n", encoding="utf-8")
   return "appended"
 
 
@@ -190,7 +193,7 @@ def enable(cfg: CharlieBotConfig | None = None) -> dict:
   report = run_gpu_preflight(cfg)
   action = write_voice_engine(cfg.charliebot_home)
   report["config_write"] = action
-  log.info("voice_engine_enabled", engine="qwen3_hf", model_id=cfg.voice_model_id, config_write=action)
+  log.info("voice_engine_enabled", engine="qwen3_hf", model_id=cfg.voice.model_id, config_write=action)
   return report
 
 

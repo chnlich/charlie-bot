@@ -46,7 +46,7 @@ TASK_SPEC_REQUIRED_HEADINGS = (
 )
 
 
-def internal_api_auth_headers(cfg: CharlieBotConfig) -> dict[str, str]:
+def internal_api_auth_headers() -> dict[str, str]:
   """Authorization header for internal-API calls.
 
   Returns a Bearer header when the access key is configured — it lives in
@@ -157,7 +157,7 @@ def _best_effort_server_version(cfg: CharlieBotConfig) -> tuple[str | None, str 
   try:
     resp = requests.get(
         f"{cfg.server_base_url}/api/internal/version",
-        headers=internal_api_auth_headers(cfg),
+        headers=internal_api_auth_headers(),
         timeout=HTTP_VERSION_SKEW_TIMEOUT,
         verify=False,
     )
@@ -244,7 +244,7 @@ def _request_with_contract(
           url,
           json=payload,
           params=params,
-          headers=internal_api_auth_headers(cfg),
+          headers=internal_api_auth_headers(),
           timeout=HTTP_INTERNAL_API_TIMEOUT,
           verify=False)
       resp.raise_for_status()

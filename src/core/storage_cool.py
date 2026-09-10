@@ -38,6 +38,7 @@ import shutil
 import sqlite3
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -246,25 +247,31 @@ def _is_transport_name(name: str) -> bool:
   return bool(separator) and base in RAW_TRANSPORT_NAMES and suffix.isdigit()
 
 
+def _sorted_scan(root: Path, listing: Iterable[Path]) -> list[Path] | None:
+  """Materialize one sweep directory listing sorted, or None once the failure is logged.
+
+  ``root`` is the directory the warning names: the listing's own root for
+  ``iterdir``, the walked tree for ``rglob``.
+  """
+  try:
+    return sorted(listing)
+  except OSError as e:
+    log.warning("storage_cool_dir_scan_failed", dir=str(root), error=str(e))
+    return None
+
+
 def _managed_transport_dirs(session_dir: Path) -> list[Path]:
   """The two directory shapes whose direct children the transport rule governs."""
   managed: list[Path] = []
   data_root = session_dir / "data"
   master_runs = data_root / "master_runs"
   if data_root.is_dir() and not data_root.is_symlink() and master_runs.is_dir() and not master_runs.is_symlink():
-    try:
-      run_dirs = sorted(master_runs.iterdir())
-    except OSError as e:
-      log.warning("storage_cool_dir_scan_failed", dir=str(master_runs), error=str(e))
-    else:
+    run_dirs = _sorted_scan(master_runs, master_runs.iterdir())
+    if run_dirs is not None:
       managed.extend(child for child in run_dirs if child.is_dir() and not child.is_symlink())
   threads_dir = session_dir / THREADS_DIR_NAME
   if threads_dir.is_dir() and not threads_dir.is_symlink():
-    try:
-      thread_dirs = sorted(threads_dir.iterdir())
-    except OSError as e:
-      log.warning("storage_cool_dir_scan_failed", dir=str(threads_dir), error=str(e))
-      thread_dirs = []
+    thread_dirs = _sorted_scan(threads_dir, threads_dir.iterdir()) or []
     for thread_dir in thread_dirs:
       if not thread_dir.is_dir() or thread_dir.is_symlink():
         continue
@@ -277,10 +284,8 @@ def _managed_transport_dirs(session_dir: Path) -> list[Path]:
 def _sweep_raw_transport(session_dir: Path, counter: _Counter, dry_run: bool) -> None:
   """Delete the reserved transport names inside the session's managed run directories."""
   for managed_dir in _managed_transport_dirs(session_dir):
-    try:
-      entries = sorted(managed_dir.iterdir())
-    except OSError as e:
-      log.warning("storage_cool_dir_scan_failed", dir=str(managed_dir), error=str(e))
+    entries = _sorted_scan(managed_dir, managed_dir.iterdir())
+    if entries is None:
       continue
     for entry in entries:
       if not entry.is_file() or not _is_transport_name(entry.name):
@@ -448,10 +453,8 @@ def _sweep_claude_transcripts(
   for projects_root in claude_projects_roots(cfg):
     if not projects_root.is_dir():
       continue
-    try:
-      entries = sorted(projects_root.iterdir())
-    except OSError as e:
-      log.warning("storage_cool_dir_scan_failed", dir=str(projects_root), error=str(e))
+    entries = _sorted_scan(projects_root, projects_root.iterdir())
+    if entries is None:
       continue
     for entry in entries:
       if not entry.is_dir():
@@ -518,10 +521,8 @@ def _sweep_codex_rollouts(
   for tree in codex_session_trees(cfg):
     if not tree.is_dir():
       continue
-    try:
-      candidates = sorted(tree.rglob(f"{_CODEX_ROLLOUT_PREFIX}*.jsonl"))
-    except OSError as e:
-      log.warning("storage_cool_dir_scan_failed", dir=str(tree), error=str(e))
+    candidates = _sorted_scan(tree, tree.rglob(f"{_CODEX_ROLLOUT_PREFIX}*.jsonl"))
+    if candidates is None:
       continue
     for path in candidates:
       backend_session = codex_rollout_session_id(path)

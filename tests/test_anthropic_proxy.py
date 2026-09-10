@@ -387,6 +387,7 @@ async def test_iter_anthropic_sse_translates_frame_with_raw_splitline_chars() ->
     lines = blob.decode("utf-8").split("\n")
     event = lines[0][len("event: "):]
     data = json.loads(lines[1][len("data: "):])
+    assert event == data["type"], "Anthropic streaming pins data.type to the SSE event line's name"
     parsed.append((event, data))
   text = "".join(
       data["delta"]["text"]

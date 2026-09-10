@@ -57,6 +57,23 @@ function toolNameChipHtml(name) {
     + escapeHtml(name) + '</span>';
 }
 
+// One-line summary of a tool call's input: the argument that names what the tool
+// acts on (command, file path, pattern), else the first input value. `limit` caps
+// the visible text (0 = never truncated) and both consumers truncate on it. Tool
+// names arrive in both cases — 'Bash' from Claude Code transcripts, 'bash' from
+// opencode events — so both spellings map to the command line.
+function toolInputSummary(toolName, input) {
+  input = input || {};
+  const name = String(toolName || '');
+  if (name === 'Bash' || name === 'bash') return {text: input.command || '', limit: 80};
+  if (name === 'Read' || name === 'Edit' || name === 'Write') return {text: input.file_path || '', limit: 0};
+  if (name === 'Glob') return {text: input.pattern || '', limit: 0};
+  if (name === 'Grep') return {text: (input.pattern || '') + (input.path ? ' in ' + input.path : ''), limit: 0};
+  const first = Object.values(input)[0];
+  if (first == null || first === '') return {text: '', limit: 0};
+  return {text: typeof first === 'object' ? JSON.stringify(first) : String(first), limit: 60};
+}
+
 function formatBubbleTime(isoStr) {
   if (!isoStr) return '';
   const d = new Date(isoStr);
@@ -94,6 +111,7 @@ Chat.escapeJsSingleQuoted = escapeJsSingleQuoted;
 Chat.showMoreToggleHtml = showMoreToggleHtml;
 Chat.thinkingToggleHtml = thinkingToggleHtml;
 Chat.toolNameChipHtml = toolNameChipHtml;
+Chat.toolInputSummary = toolInputSummary;
 Chat.formatBubbleTime = formatBubbleTime;
 Chat.messageIdentityAttrs = messageIdentityAttrs;
 Chat.isRenderedMessage = isRenderedMessage;
@@ -106,6 +124,7 @@ Chat.expose([
   'showMoreToggleHtml',
   'thinkingToggleHtml',
   'toolNameChipHtml',
+  'toolInputSummary',
   'formatBubbleTime',
   'STIMULUS_ROLES',
 ]);

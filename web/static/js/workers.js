@@ -189,29 +189,6 @@ function paintThreadEvents(threadId, container, events) {
     return;
   }
 
-  function toolSummary(e) {
-    const input = e.input || {};
-    if (e.tool_name === 'Bash' || e.tool_name === 'bash') {
-      return {text: input.command || '', limit: 80};
-    }
-    if (e.tool_name === 'Edit' || e.tool_name === 'Write') {
-      return {text: input.file_path || '', limit: 0};
-    }
-    if (e.tool_name === 'Read') {
-      return {text: input.file_path || '', limit: 0};
-    }
-    if (e.tool_name === 'Glob') {
-      return {text: input.pattern || '', limit: 0};
-    }
-    if (e.tool_name === 'Grep') {
-      return {text: (input.pattern || '') + (input.path ? ' in ' + input.path : ''), limit: 0};
-    }
-    const first = Object.values(input)[0];
-    if (!first) return {text: '', limit: 0};
-    const display = typeof first === 'object' ? JSON.stringify(first) : String(first);
-    return {text: display, limit: 60};
-  }
-
   const parts = filtered.map(e => {
     const ts = Chat.formatBubbleTime(e.timestamp);
     const tsHtml = ts ? `<span class="text-slate-600 ml-2 text-xs">${ts}</span>` : '';
@@ -229,7 +206,7 @@ function paintThreadEvents(threadId, container, events) {
 
     if (e.type === 'tool_use') {
       const name = e.tool_name || 'tool';
-      const {text, limit} = toolSummary(e);
+      const {text, limit} = Chat.toolInputSummary(e.tool_name, e.input);
       const hasMore = limit > 0 && text.length > limit;
       const short = hasMore ? text.substring(0, limit) : text;
       let summaryHtml;

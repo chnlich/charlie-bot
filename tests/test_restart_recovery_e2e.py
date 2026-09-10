@@ -120,7 +120,7 @@ from pathlib import Path
 
 from src.core import spawner
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, CreateSessionRequest, SpawnRequest
+from src.core.models import CcClaudeBackend, CreateSessionRequest, SpawnRequest
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
@@ -129,8 +129,8 @@ async def main() -> None:
   home = Path(sys.argv[1])
   cfg = CharlieBotConfig(
       charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model")],
+      paths={"worktree_dir": str(home / "worktrees")},
+      backends={"options": [CcClaudeBackend(id="fake", label="Fake", model="fake-model")]},
   )
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
@@ -413,9 +413,9 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
   _run_git(main_checkout, "config", "user.name", "T")
 
   branch_name = "charliebot/task-finalize-idem"
-  worktree_dir = home / "worktrees"
-  worktree_dir.mkdir(parents=True)
-  wt_path = worktree_dir / git_worktree_dir_name(branch_name)
+  worktrees_root = home / "worktrees"
+  worktrees_root.mkdir(parents=True)
+  wt_path = worktrees_root / git_worktree_dir_name(branch_name)
   await git_create_worktree(main_checkout, "main", branch_name, wt_path)
   (wt_path / "change.txt").write_text("worker change\n", encoding="utf-8")
   _run_git(wt_path, "add", "change.txt")
@@ -611,7 +611,7 @@ from pathlib import Path
 
 from src.core import runs, spawner
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, CreateSessionRequest, SpawnRequest
+from src.core.models import CcClaudeBackend, CreateSessionRequest, SpawnRequest
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
@@ -621,8 +621,8 @@ async def main() -> None:
   description = sys.argv[2]
   cfg = CharlieBotConfig(
       charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model")],
+      paths={"worktree_dir": str(home / "worktrees")},
+      backends={"options": [CcClaudeBackend(id="fake", label="Fake", model="fake-model")]},
   )
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)

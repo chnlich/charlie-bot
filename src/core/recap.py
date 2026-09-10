@@ -3,7 +3,7 @@
 The default path is zero-token. ``extract_recap`` scans a session's (sparse)
 user events and returns the ordered asks plus the last exchange — no LLM call.
 A concise summary is generated only on an explicit request (via a resolved light
-backend from model_preference) and cached per ``(session_id, upto)`` so reopening
+backend from backends.preference) and cached per ``(session_id, upto)`` so reopening
 an unchanged divider costs nothing.
 """
 
@@ -267,7 +267,7 @@ async def generate_and_cache_summary(
   """Generate a recap summary for the divider at *upto*, cache it, and return it.
 
   Feeds the LLM ONLY the bounded extraction (asks + last), never raw events. The
-  summary comes from a resolved light backend picked from model_preference. If no
+  summary comes from a resolved light backend picked from backends.preference. If no
   preference entry resolves, this logs a warning and returns "" without writing
   the cache.
   """

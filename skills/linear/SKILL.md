@@ -10,7 +10,7 @@ Read, create, update, and search issues in Linear using the Linear GraphQL API.
 
 ## Configuration
 
-- Token location: `~/.charliebot/config.yaml` under `linear_api_key`
+- Token location: `~/.charliebot/credentials.yaml` under `linear.api_key`
 - Token type: Personal API Key
 - API endpoint: `https://api.linear.app/graphql`
 
@@ -23,7 +23,11 @@ Content-Type: application/json
 Authorization: TOKEN
 ```
 
-Read the token from `~/.charliebot/config.yaml` before making any API calls.
+Read the token from `~/.charliebot/credentials.yaml` (section `linear`, key `api_key`) before making any API calls:
+
+```bash
+python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.expanduser('~/.charliebot/credentials.yaml')));print(c['linear']['api_key'])"
+```
 
 ### Example: curl template
 
@@ -195,7 +199,7 @@ query($teamId: String!) {
 
 ## Workflow
 
-1. Read the token from `~/.charliebot/config.yaml`
+1. Read the token from `~/.charliebot/credentials.yaml` (`linear.api_key`)
 2. If team context is needed, call `teams` query first to resolve team IDs
 3. Use `searchIssues` for text lookups and `issues` with filters for structured queries
 4. For creating/updating issues, resolve team and user IDs first

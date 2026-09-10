@@ -15,12 +15,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from conftest import backend_option
 
 from src.cli import storage as storage_cli
 from src.core import scheduler as scheduler_module
 from src.core import storage_cool
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption
 from src.core.storage_cool import (
     claude_project_dir_name,
     codex_rollout_session_id,
@@ -33,7 +33,7 @@ NOW = datetime(2026, 9, 4, 12, 0, 0, tzinfo=UTC)
 OLD = (NOW - timedelta(days=30)).isoformat()
 RECENT = (NOW - timedelta(days=1)).isoformat()
 CLAUDE_HOME = "claude-home"
-CODEX_HOME = "codex-home"
+CODEX_HOME = ".codex"
 WORKTREE_TRASH_NAME = ".trash"
 
 SID_COLD = "11111111-2222-4333-8444-555555555555"
@@ -48,15 +48,16 @@ CODEX_LIVE = "10203040-5060-4708-90a0-b0c0d0e0f010"
 
 
 def build_cfg(tmp_path: Path, *, with_codex: bool = True) -> CharlieBotConfig:
-  """Config isolated under tmp_path: sessions, worktrees, claude and codex trees all inside it."""
-  options = [BackendOption(id="opus", label="Opus", type="cc-claude", model="m")]
+  """Config isolated under tmp_path: sessions, worktrees, claude and codex trees all inside it.
+
+  Codex runs from the default home, so the codex option carries no directory of its own."""
+  options = [backend_option(id="opus", label="Opus", type="cc-claude", model="m")]
   if with_codex:
-    options.append(
-        BackendOption(id="codex-test", label="Codex", type="codex", model="m", codex_home=str(tmp_path / CODEX_HOME)))
+    options.append(backend_option(id="codex-test", label="Codex", type="codex", model="m"))
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=options,
+      paths={"worktree_dir": str(tmp_path / "worktrees")},
+      backends={"options": options},
   )
 
 
@@ -297,7 +298,7 @@ def test_claude_dir_for_session_with_unreadable_metadata_is_not_an_orphan(
 def test_claude_deleted_worktree_dirs_deleted_and_live_worktrees_kept(
     tmp_path: Path, cool_env: CharlieBotConfig) -> None:
   cfg = cool_env
-  worktrees = Path(cfg.worktree_dir)
+  worktrees = Path(cfg.paths.worktree_dir)
   worktrees.mkdir(parents=True)
   live_worktree = worktrees / "charliebot-task-100-alive"
   live_worktree.mkdir()

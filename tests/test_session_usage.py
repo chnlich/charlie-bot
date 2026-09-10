@@ -104,6 +104,18 @@ def _codex_token_count_event(
       })
 
 
+# The codex turn the session-seeded resolve tests share verbatim; the numbers live here once.
+_CODEX_TOKEN_EVENT = _codex_token_count_event(
+    timestamp="2026-03-31T20:43:12.454Z",
+    total_input=1_431_555,
+    total_cached=1_126_656,
+    total_output=16_521,
+    last_input=179_319,
+    last_cached=176_640,
+    last_output=1_732,
+    last_total=181_051)
+
+
 def _seed_codex_session(
     session_mgr: SessionManager, *, session_id: str, name: str, backend: str, native_thread_id: str, turn_model: str,
     token_event: dict) -> SessionMetadata:
@@ -1009,15 +1021,7 @@ async def test_codex_rollout_resolves_via_other_backend_when_session_backend_abs
       backend="codex-old",
       native_thread_id="019d45a2-836d-7552-a54f-3c6c5511e502",
       turn_model="gpt-5.5",
-      token_event=_codex_token_count_event(
-          timestamp="2026-03-31T20:43:12.454Z",
-          total_input=1_431_555,
-          total_cached=1_126_656,
-          total_output=16_521,
-          last_input=179_319,
-          last_cached=176_640,
-          last_output=1_732,
-          last_total=181_051),
+      token_event=_CODEX_TOKEN_EVENT,
   )
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)
@@ -1045,15 +1049,7 @@ async def test_codex_unconfigured_compaction_logs_no_warning(tmp_path: Path, cap
       backend="codex-test",
       native_thread_id="019d45a2-836d-7552-a54f-3c6c5511e5ee",
       turn_model="gpt-5.5",
-      token_event=_codex_token_count_event(
-          timestamp="2026-03-31T20:43:12.454Z",
-          total_input=1_431_555,
-          total_cached=1_126_656,
-          total_output=16_521,
-          last_input=179_319,
-          last_cached=176_640,
-          last_output=1_732,
-          last_total=181_051),
+      token_event=_CODEX_TOKEN_EVENT,
   )
 
   usage = await session_mgr.resolve_session_usage(meta.id, meta)

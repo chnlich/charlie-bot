@@ -7,6 +7,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     CHAT_CANCEL_MASTER_PATCH_TARGET,
+    backend_option,
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
@@ -51,7 +52,7 @@ async def _run_cc_with_backend(
       charliebot_home=tmp_path / ".charliebot",
       backends={
           "options": [
-              models.BackendOption(id="fake", label="Fake", type="codex", prompt_overlay="none"),
+              backend_option(id="fake", label="Fake", type="codex", model="o3", prompt_overlay="none"),
           ],
       },
   )

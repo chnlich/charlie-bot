@@ -47,7 +47,7 @@ def unknown_backend_pin_refusal(backend_id: str, fallback_id: str) -> str:
   account, so every refusal path wraps this core in its own frame instead of
   rewording it.
   """
-  return (f"'{backend_id}' is not in config.yaml backend_options — "
+  return (f"'{backend_id}' is not in config.yaml backends.options — "
           f"refusing to substitute '{fallback_id}'")
 
 
@@ -57,25 +57,25 @@ def _resolve_session_default_backend_model(
 ) -> tuple[str, str | None]:
   """Resolve backend+model from a session's default.
 
-  A session with no backend recorded takes cfg.backend_options[0] as its default. A pinned
-  id that backend_options no longer defines (e.g. after a config.yaml rename) is a hard
-  error. Raises when cfg.backend_options is empty, when the pinned id is unknown, or when
+  A session with no backend recorded takes cfg.backends.options[0] as its default. A pinned
+  id that backends.options no longer defines (e.g. after a config.yaml rename) is a hard
+  error. Raises when cfg.backends.options is empty, when the pinned id is unknown, or when
   the selected option has no default model.
   """
   option = cfg.get_backend_option(session_meta.backend) if session_meta.backend else None
   if option is None:
-    if not cfg.backend_options:
-      raise ValueError("session backend resolution requires a configured backend_options entry")
+    if not cfg.backends.options:
+      raise ValueError("session backend resolution requires a configured backends.options entry")
     if session_meta.backend:
       log.error(
           "session_backend_unresolved",
           stored=session_meta.backend,
-          refused_substitute=cfg.backend_options[0].id,
+          refused_substitute=cfg.backends.options[0].id,
           session_id=session_meta.id,
       )
       raise ValueError(
-          f"session backend {unknown_backend_pin_refusal(session_meta.backend, cfg.backend_options[0].id)}")
-    option = cfg.backend_options[0]
+          f"session backend {unknown_backend_pin_refusal(session_meta.backend, cfg.backends.options[0].id)}")
+    option = cfg.backends.options[0]
   return _option_default_backend_model(option, source="session")
 
 
@@ -97,7 +97,7 @@ async def resolve_requested_subagent_backend_model(
 
   Both paths are strict: an unknown explicit `requested_backend` (a typo in user input) and a
   session pinned to an id config.yaml no longer defines both raise. Only an empty session
-  backend defaults, and it defaults to cfg.backend_options[0].
+  backend defaults, and it defaults to cfg.backends.options[0].
   """
   session_meta = await _require_session(session_mgr, session_id)
   if requested_backend is not None:
@@ -105,7 +105,7 @@ async def resolve_requested_subagent_backend_model(
       raise ValueError("requested backend is required")
     option = cfg.get_backend_option(requested_backend)
     if option is None:
-      raise ValueError(f"requested backend '{requested_backend}' is not in backend_options")
+      raise ValueError(f"requested backend '{requested_backend}' is not in backends.options")
     return _option_default_backend_model(option, source="requested")
   return _resolve_session_default_backend_model(cfg, session_meta)
 
@@ -136,7 +136,7 @@ def require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) 
     return thread.backend, thread.model
   option = cfg.get_backend_option(thread.backend)
   if option is None:
-    raise ValueError(f"thread '{thread.id}' backend '{thread.backend}' is not in backend_options")
+    raise ValueError(f"thread '{thread.id}' backend '{thread.backend}' is not in backends.options")
   if backend_type_allows_missing_model(option.type):
     return thread.backend, None
   raise ValueError(f"thread '{thread.id}' missing model metadata")

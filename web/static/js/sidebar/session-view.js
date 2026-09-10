@@ -23,7 +23,7 @@ function getActiveBackendId() {
 }
 
 function setActiveBackendId(backendId) {
-  globalThis.ACTIVE_BACKEND_ID = canonicalBackendId(backendId) || getDefaultBackendId();
+  globalThis.ACTIVE_BACKEND_ID = backendId || getDefaultBackendId();
 }
 
 let switchableBackends = [];
@@ -182,7 +182,7 @@ function scheduleLazySessionDataLoad() {
 }
 
 function buildEmptySessionBootstrap(session) {
-  const backend = canonicalBackendId(session.backend) || getDefaultBackendId();
+  const backend = session.backend || getDefaultBackendId();
   return {
     session,
     messages: [],

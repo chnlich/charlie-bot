@@ -40,7 +40,7 @@ async def upload_file(
     file: UploadFile = File(...),
     _meta: SessionMetadata = Depends(require_session),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> dict:
   """Upload a file to the session's uploads directory. Returns {filename, path, size}."""
   uploads_dir = cfg.sessions_dir / session_id / "uploads"
   uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -149,7 +149,7 @@ async def cancel_master_agent(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
-):
+) -> dict:
   """Send SIGTERM to the running master CC agent for this session."""
   found = await cancel_master(session_id, meta=meta, session_mgr=session_mgr)
   if not found:

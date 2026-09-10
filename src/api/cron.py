@@ -243,7 +243,7 @@ async def update_cron_task(
     req: TaskUpdate,
     cfg: CharlieBotConfig = Depends(get_config),
     session_mgr: SessionManager = Depends(get_session_manager),
-):
+) -> dict:
   if not _CRON_NAME_RE.fullmatch(name):
     raise HTTPException(status_code=400, detail=f'invalid cron task name: {name!r}')
   candidate, _ = await apply_task_yaml_update(name, req, cfg, session_mgr)
@@ -251,7 +251,7 @@ async def update_cron_task(
 
 
 @router.post('/tasks')
-async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_config)):
+async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_config)) -> dict:
   """Add a new scheduled job as its own config.d/cron.d/<name>.yaml file."""
   if not _CRON_NAME_RE.fullmatch(req.name):
     raise HTTPException(status_code=400, detail=f'invalid cron name: {req.name!r}')
@@ -284,7 +284,7 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
 
 
 @router.delete('/tasks/{name}')
-async def delete_cron_task(name: str, session_mgr: SessionManager = Depends(get_session_manager)):
+async def delete_cron_task(name: str, session_mgr: SessionManager = Depends(get_session_manager)) -> dict:
   """Remove a job by archiving its dedicated sessions, then unlinking its config.d/cron.d/<name>.yaml."""
   if not _CRON_NAME_RE.fullmatch(name):
     raise HTTPException(status_code=400, detail=f'invalid cron name: {name!r}')

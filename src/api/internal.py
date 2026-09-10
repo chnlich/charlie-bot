@@ -65,7 +65,7 @@ router = APIRouter()
 
 
 @router.get("/version")
-async def get_version():
+async def get_version() -> dict:
   """Return the running server's build info (git SHA + UTC start time).
 
   Read-only; used by the CLI to detect version skew when an internal-API call fails
@@ -124,7 +124,7 @@ async def delegate_task(
     req: DelegateRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
-):
+) -> dict:
   """Create a thread and spawn a worker agent directly."""
   if req.task_type == TaskType.VERIFY:
     if req.repo_path is not None:
@@ -195,7 +195,7 @@ async def start_improve_loop(
     req: ImproveRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
-):
+) -> dict:
   """Launch an iterative improvement loop as a background task."""
   _meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr)
 
@@ -255,7 +255,7 @@ async def schedule_trigger(
     req: ScheduleTriggerRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     trigger_mgr: TriggerManager = Depends(get_trigger_manager),
-):
+) -> dict:
   """Schedule a delayed trigger that will wake the master CC after a delay."""
   require_found(await session_mgr.get_session(req.session_id))
 
@@ -302,7 +302,7 @@ async def cancel_trigger(
     session_id: str,
     trigger_id: str,
     trigger_mgr: TriggerManager = Depends(get_trigger_manager),
-):
+) -> dict:
   """Cancel a pending trigger."""
   try:
     await trigger_mgr.cancel_trigger(session_id, trigger_id)
@@ -316,7 +316,7 @@ async def session_message(
     req: SessionMessageRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> dict:
   """Relay an agent message into another session's event log and wake its master.
 
   Persists an ``agent_message`` event (never a ``user`` event, so no takeoff
@@ -362,7 +362,7 @@ async def slack_reply(
     req: SlackReplyRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> dict:
   """Post the calling session's reply to its own Slack thread and return the readback.
 
   The in-process boundary behind ``charliebot slack reply``: the session's
@@ -386,7 +386,7 @@ async def slack_ack(
     req: SlackAckRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> dict:
   """Mark the calling session's read thread messages as consumed and return the readback.
 
   The boundary behind ``charliebot slack ack``: ``message_ids`` are Slack ts
@@ -424,7 +424,7 @@ async def plan_present(
     req: PlanPresentRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
-):
+) -> dict:
   """Register a new plan lineage (v1, trigger=initial)."""
   await _authorize_plan_session(req.session_id, session_mgr)
   try:
@@ -443,7 +443,7 @@ async def plan_amend(
     req: PlanAmendRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
-):
+) -> dict:
   """Append the next version to a plan lineage."""
   await _authorize_plan_session(req.session_id, session_mgr)
   try:
@@ -464,7 +464,7 @@ async def plan_approve(
     req: PlanApproveRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
-):
+) -> dict:
   """Record a takeoff against the latest version of a plan lineage."""
   await _authorize_plan_session(req.session_id, session_mgr)
   try:
@@ -478,7 +478,7 @@ async def plan_close(
     req: PlanCloseRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
     plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
-):
+) -> dict:
   """Terminate a plan lineage as superseded, abandoned, or completed."""
   await _authorize_plan_session(req.session_id, session_mgr)
   try:

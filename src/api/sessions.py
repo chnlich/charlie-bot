@@ -243,7 +243,7 @@ async def create_session(
 
 
 @router.get("/projects")
-async def list_projects():
+async def list_projects() -> list[dict[str, str]]:
   """Return git repos discovered from configured workspace_dirs."""
   cfg = get_config()
   return await asyncio.to_thread(cfg.discover_repos)
@@ -288,20 +288,20 @@ async def list_starred_sessions(session_mgr: SessionManager = Depends(get_sessio
 
 
 @router.get("/groups")
-async def list_groups(session_mgr: SessionManager = Depends(get_session_manager)):
+async def list_groups(session_mgr: SessionManager = Depends(get_session_manager)) -> list[str]:
   """Return sorted distinct group names across all sessions."""
   return await session_mgr.list_group_names()
 
 
 @router.post("/groups/rename")
-async def rename_group(req: RenameGroupRequest, session_mgr: SessionManager = Depends(get_session_manager)):
+async def rename_group(req: RenameGroupRequest, session_mgr: SessionManager = Depends(get_session_manager)) -> dict:
   """Rename a group across all sessions."""
   count = await session_mgr.rename_group(req.old_name, req.new_name)
   return {"updated": count}
 
 
 @router.post("/groups/delete")
-async def delete_group(req: DeleteGroupRequest, session_mgr: SessionManager = Depends(get_session_manager)):
+async def delete_group(req: DeleteGroupRequest, session_mgr: SessionManager = Depends(get_session_manager)) -> dict:
   """Remove a group from all sessions (sets group to null)."""
   count = await session_mgr.delete_group(req.group)
   return {"updated": count}
@@ -353,12 +353,12 @@ async def _load_requested_sessions(session_mgr: SessionManager, ids: str) -> lis
   return [meta for meta in loaded if meta is not None]
 
 
-@router.get('/status')
+@router.get('/status', response_model=None)
 async def all_sessions_status(
     ids: str = Query(..., description="Comma-separated ids of the sessions the sidebar is rendering"),
     force: bool = False,
     session_mgr: SessionManager = Depends(get_session_manager),
-):
+) -> dict | FastJsonResponse:
   """Return derived sidebar state for the requested sessions.
 
   Clean sessions are served from the in-process snapshot with zero disk
@@ -407,7 +407,7 @@ async def tui_status_all(
     ids: str = Query(..., description="Comma-separated ids of the sessions the sidebar is rendering"),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
-):
+) -> dict:
   """Return tmux liveness and recent Claude jsonl activity for the requested tui-cli sessions."""
   sessions = await _load_requested_sessions(session_mgr, ids)
   tui_sessions = []
@@ -441,7 +441,7 @@ async def stop_tui(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> dict:
   option = cfg.get_backend_option(meta.backend)
   if option is None or option.type != BackendType.TUI_CLI:
     raise HTTPException(status_code=400, detail="Session backend is not tui-cli")
@@ -737,7 +737,7 @@ async def summarize_session_recap(
     _meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> dict:
   """Generate (via a light backend), cache, and return the recap summary for a divider."""
   from src.core import recap
   summary = await recap.generate_and_cache_summary(session_mgr, session_id, upto, cfg)

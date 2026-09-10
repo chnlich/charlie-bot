@@ -334,7 +334,7 @@ def _list_branches_memoized_sync(repo_path: Path) -> list[str]:
 
 
 @router.get("/branches")
-async def list_branches(repo: str = Query(..., description="Full path to git repo")):
+async def list_branches(repo: str = Query(..., description="Full path to git repo")) -> list[str]:
   """Return branch names for a repo, most recent first, up to 50."""
   repo_path = Path(repo).expanduser()
   if not (repo_path / ".git").exists() and not repo_path.name == ".git":
@@ -362,7 +362,7 @@ async def list_branches(repo: str = Query(..., description="Full path to git rep
 
 
 @router.get("/repos")
-async def list_repos(cfg: CharlieBotConfig = Depends(get_config)):
+async def list_repos(cfg: CharlieBotConfig = Depends(get_config)) -> list[dict[str, str]]:
   """Scan workspace_dirs (one level deep) and return repos containing a .git folder."""
   seen: set[str] = set()
   repos: list[dict[str, str]] = []
@@ -389,7 +389,7 @@ async def diff_files(
     head: str = Query(..., description="Head ref"),
     mode: Literal["three-dot", "two-dot"] = Query("three-dot", description="Diff range mode"),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> dict:
   """Return a cheap per-file manifest (status + line counts) for the diff range.
 
   Carries no hunk content, so it never hits any size limit even for thousands of files.
@@ -454,7 +454,7 @@ async def diff_file(
         None, description="Pre-rename path; pass alongside path so a rename/copy renders as a rename, not a re-add"),
     force: bool = Query(False, description="Render even if the diff exceeds the per-file cap"),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> dict:
   """Return the unified diff for a single file.
 
   When the file's diff exceeds the per-file cap and force is false, return a

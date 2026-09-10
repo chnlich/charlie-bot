@@ -52,7 +52,6 @@ import os
 from src.core.config import get_config, get_scheduled_tasks
 from src.core.init import init_charliebot_home, seed_default_cron_tasks
 from src.core.scheduler import effective_scheduled_task_backend
-from src.core.yaml_utils import load_yaml
 
 dry = os.environ.get("DRY_RUN_VAL") == "1"
 cfg = get_config()
@@ -85,20 +84,11 @@ for label, path in [(lbl, p) for _, lbl, p in home_items]:
     print(f"  home {label}: {status}")
 
 # Per-task created/exists for repo-default cron entries, keyed on whether the
-# per-job host file config.d/cron.d/<name>.yaml exists. In dry-run, compute what
-# would be seeded from the repo defaults without writing.
-repo_root = cfg.charlie_bot_repo
-defaults = (load_yaml(repo_root / "configs" / "cron.default.yaml", default={})
-            .get("scheduled_tasks", []) or [])
-cron_dir = cfg.config_d_dir / "cron.d"
-if dry:
-    for entry in defaults:
-        name = entry.get("name")
-        status = "exists" if (cron_dir / f"{name}.yaml").exists() else "would-create"
-        print(f"  cron {name}: {status}")
-else:
-    for item in seed_default_cron_tasks(cfg):
-        print(f"  cron {item['name']}: {item['status']}")
+# per-job host file config.d/cron.d/<name>.yaml exists. The dry-run runs the
+# same validation and legacy tripwire as the real run and writes nothing, so
+# the preview fails exactly where the real run would.
+for item in seed_default_cron_tasks(cfg, dry_run=dry):
+    print(f"  cron {item['name']}: {item['status']}")
 
 # Effective scheduled task list: name / cron / resolved timezone / resolved
 # backend. If backend resolution raises (e.g. empty backend_options on a fresh

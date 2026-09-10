@@ -250,6 +250,34 @@ def test_seed_fails_loud_on_legacy_cron(temp_home: Path) -> None:
   assert not (cfg.config_d_dir / "cron.d").exists(), "nothing written on legacy tripwire"
 
 
+# --- 7. dry-run preview reports without writing -------------------------------
+
+
+def test_seed_dry_run_writes_nothing(temp_home: Path) -> None:
+  cfg = get_config()
+  report = seed_default_cron_tasks(cfg, dry_run=True)
+  assert report and all(it["status"] == "would-create" for it in report)
+  assert not (cfg.config_d_dir / "cron.d").exists(), "dry-run must not create cron.d"
+
+  real = seed_default_cron_tasks(cfg)
+  assert all(it["status"] == "created" for it in real)
+
+
+def test_seed_dry_run_reports_existing(temp_home: Path) -> None:
+  cfg = get_config()
+  seed_default_cron_tasks(cfg)
+  report = seed_default_cron_tasks(cfg, dry_run=True)
+  assert all(it["status"] == "exists" for it in report)
+
+
+def test_seed_dry_run_fails_loud_on_legacy_cron(temp_home: Path) -> None:
+  cfg = get_config()
+  _write_legacy_cron(temp_home)
+  with pytest.raises(ValueError, match="legacy"):
+    seed_default_cron_tasks(cfg, dry_run=True)
+  assert not (cfg.config_d_dir / "cron.d").exists()
+
+
 # --- timezone boundaries -----------------------------------------------------
 
 

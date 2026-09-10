@@ -61,6 +61,8 @@ function sessionFetchStub(calls, sessionId, sessionName) {
   };
 }
 
+const FETCH_OK = async () => ({ok: true, status: 200, json: async () => ({name: 'S'})});
+
 function rectsIntersect(a, b) {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
@@ -714,7 +716,7 @@ function loadWithShortcuts(width = 1024) {
     innerWidth: width,
     serverSessionId: 'session-270',
     console: {warn() {}, error() {}},
-    fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
+    fetch: FETCH_OK,
   });
 }
 
@@ -1013,6 +1015,12 @@ function addBlockComment(body, listeners, block, text) {
   clickElement(actions.children.find((c) => c.textContent === 'Add'));
 }
 
+function fireResize(listeners) {
+  for (const l of listeners) {
+    if (l.target === 'window' && l.type === 'resize') l.handler();
+  }
+}
+
 test('gutter cards are positioned by the stackCards pure function (render glue)', async () => {
   // Colliding anchors force stackCards to push cards apart; raw anchors would not match.
   // The rects also give the fake layout a 640px-wide article column so that
@@ -1026,7 +1034,7 @@ test('gutter cards are positioned by the stackCards pure function (render glue)'
   const {window, head, body, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     bodyChildren: blocks,
     serverSessionId: 'session-270',
-    fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
+    fetch: FETCH_OK,
   });
   const stackCards = window.__cbcStackCards;
   const gap = window.__cbcGutterGap;
@@ -1063,13 +1071,8 @@ test('gutter mode never writes the artifact\'s own layout', async () => {
   const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     bodyChildren: [block],
     serverSessionId: 'session-270',
-    fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
+    fetch: FETCH_OK,
   });
-  const fireResize = () => {
-    for (const l of listeners) {
-      if (l.target === 'window' && l.type === 'resize') l.handler();
-    }
-  };
   const contentRight = block.getBoundingClientRect().right;
   assert.ok(
     window.__cbcChooseWidth(documentElement.clientWidth, contentRight, window.__cbcGutterGap, 240, 300) >= 240,
@@ -1088,27 +1091,27 @@ test('gutter mode never writes the artifact\'s own layout', async () => {
   assert.equal(body.style.paddingRight, undefined, 'paddingRight is never set');
 
   window.innerWidth = 800;
-  fireResize();
+  fireResize(listeners);
   assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute identical below the threshold');
   assert.equal(documentElement.attributes.style, documentStyleAttr, 'documentElement style attribute identical below the threshold');
   assert.equal(body.style.paddingRight, undefined, 'paddingRight is never set on exit either');
 
   window.innerWidth = 1024;
-  fireResize();
+  fireResize(listeners);
   assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute identical after re-entry');
   assert.equal(documentElement.attributes.style, documentStyleAttr, 'documentElement style attribute identical after re-entry');
 
   window.innerWidth = 800;
-  fireResize();
+  fireResize(listeners);
   // A pre-existing inline paddingRight on the body belongs to the artifact: it
   // must survive entry and exit untouched, never reserved over, never emptied.
   body.style.paddingRight = '10px';
   window.innerWidth = 1024;
-  fireResize();
+  fireResize(listeners);
   assert.equal(body.style.paddingRight, '10px', 'pre-existing inline paddingRight survives entry untouched');
   assert.equal(body.attributes.style, bodyStyleAttr, 'body style attribute still identical after entry with preset padding');
   window.innerWidth = 800;
-  fireResize();
+  fireResize(listeners);
   assert.equal(body.style.paddingRight, '10px', 'pre-existing inline paddingRight survives exit untouched');
 });
 
@@ -1121,13 +1124,8 @@ test('gutter mode aligns the dock to the column and restores its prior inline va
   const {window, body, documentElement, listeners} = loadArtifactCommentsScript(SESSION_270_PLAN_PATH, false, {
     bodyChildren: [block],
     serverSessionId: 'session-270',
-    fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
+    fetch: FETCH_OK,
   });
-  const fireResize = () => {
-    for (const l of listeners) {
-      if (l.target === 'window' && l.type === 'resize') l.handler();
-    }
-  };
   const dock = dockOf(body);
   const tray = findChildByClass(dock, '__cbc-tray');
 
@@ -1147,7 +1145,7 @@ test('gutter mode aligns the dock to the column and restores its prior inline va
   assert.equal(tray.style.width, '100%', 'tray fills the bar in the column');
 
   window.innerWidth = 800;
-  fireResize();
+  fireResize(listeners);
   assert.ok(!dock.style.left, 'dock inline left removed on exit when no inline value existed before');
   assert.ok(!dock.style.right, 'dock inline right removed on exit when no inline value existed before');
   assert.ok(!dock.style.width, 'dock inline width removed on exit when no inline value existed before');
@@ -1156,13 +1154,13 @@ test('gutter mode aligns the dock to the column and restores its prior inline va
   // A preset inline value is captured on entry and restored exactly, not emptied.
   dock.style.right = '14px';
   window.innerWidth = 1024;
-  fireResize();
+  fireResize(listeners);
   assert.equal(dock.style.left, contentRight + gap + 'px', 'dock left edge aligns to the column again on re-entry');
   assert.equal(dock.style.right, 'auto', 'dock right is auto again in the column');
   assert.equal(dock.style.width, columnWidth + 'px', 'dock width is the chosen column width again on re-entry');
   assert.equal(tray.style.width, '100%', 'tray fills the bar again on re-entry');
   window.innerWidth = 800;
-  fireResize();
+  fireResize(listeners);
   assert.ok(!dock.style.left, 'dock inline left removed again when no inline value existed before');
   assert.equal(dock.style.right, '14px', 'preset inline dock right restored exactly, not emptied');
   assert.ok(!dock.style.width, 'dock inline width removed again when no inline value existed before');
@@ -1180,13 +1178,8 @@ test('gutter mode never relocates the action bar as window width changes', async
     bodyChildren: [block],
     innerWidth: 1400,
     serverSessionId: 'session-270',
-    fetch: async () => ({ok: true, status: 200, async json() { return {name: 'S'}; }}),
+    fetch: FETCH_OK,
   });
-  const fireResize = () => {
-    for (const l of listeners) {
-      if (l.target === 'window' && l.type === 'resize') l.handler();
-    }
-  };
   const dock = dockOf(body);
   const contentRight = block.getBoundingClientRect().right;
   const columnLeft = contentRight + window.__cbcGutterGap + 'px';
@@ -1206,17 +1199,17 @@ test('gutter mode never relocates the action bar as window width changes', async
   assert.equal(dock.style.left, columnLeft, 'bar inline left tracks the column left edge at 1400px');
 
   window.innerWidth = 1024;
-  fireResize();
+  fireResize(listeners);
   assertBarAtHome(1024);
   assert.equal(dock.style.left, columnLeft, 'bar inline left still tracks the column left edge at 1024px');
 
   window.innerWidth = 800;
-  fireResize();
+  fireResize(listeners);
   assertBarAtHome(800);
   assert.ok(!dock.style.left, 'bar inline left returns to its pre-entry state below the threshold');
 
   window.innerWidth = 1400;
-  fireResize();
+  fireResize(listeners);
   assertBarAtHome(1400);
   assert.equal(dock.style.left, columnLeft, 'bar inline left tracks the column left edge again at 1400px');
 });
@@ -1224,8 +1217,6 @@ test('gutter mode never relocates the action bar as window width changes', async
 // ---------------------------------------------------------------------------
 // Re-anchor, hover, and click affordances (comment-gutter part 2b)
 // ---------------------------------------------------------------------------
-
-const FETCH_OK = async () => ({ok: true, status: 200, json: async () => ({name: 'S'})});
 
 // Seeds `drafts` against the session-270 plan page, then loads the script
 // there: sessionStorage carries the drafts, `children` are the body nodes the

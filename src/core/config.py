@@ -936,6 +936,13 @@ def get_credentials() -> Credentials:
 _cron_snapshot = _CronSnapshot()
 
 
+def _resolve_pointer_path(pointer: str, repo: Path) -> Path:
+  """Resolve one raw ``prompt_file`` pointer: ``~``-prefixed or absolute literal, else against *repo*."""
+  if pointer.startswith("~") or Path(pointer).is_absolute():
+    return Path(os.path.expanduser(pointer))
+  return repo / pointer
+
+
 def _resolve_prompt_file(entry: dict, repo_root: Path) -> Path | None:
   """Resolve a cron entry's ``prompt_file`` into ``prompt`` in place.
 
@@ -945,9 +952,8 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Path | None:
   :class:`Path` (for mtime tracking) or ``None`` if the entry had no
   ``prompt_file``.
 
-  Path resolution has no search order and no shadowing: a relative path is
-  resolved against *repo_root* (``cfg.charlie_bot_repo``); a ``~``-prefixed or
-  absolute path is taken literally via :func:`os.path.expanduser`.
+  Path resolution has no search order and no shadowing:
+  :func:`_resolve_pointer_path` is the rule.
 
   Raises :class:`ValueError` if the entry carries both a non-empty ``prompt``
   and a ``prompt_file`` (two prompt sources is a configuration error), or if the
@@ -960,10 +966,7 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Path | None:
     raise ValueError(
         f"cron entry {entry.get('name')!r} has both 'prompt' and 'prompt_file'; "
         "exactly one prompt source is allowed")
-  if pf.startswith("~") or Path(pf).is_absolute():
-    path = Path(os.path.expanduser(pf))
-  else:
-    path = repo_root / pf
+  path = _resolve_pointer_path(pf, repo_root)
   try:
     body = path.read_text(encoding="utf-8")
   except OSError as e:
@@ -1076,6 +1079,24 @@ def _valid_cron_name(name: str) -> bool:
   return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name))
 
 
+def _prompt_pointer_entries(body: dict) -> list[dict]:
+  """The mapping entries a cron prompt-pointer walk covers: the body, then each mapping step."""
+  return [body] + [step for step in body.get("steps") or [] if isinstance(step, dict)]
+
+
+def _record_prompt_mtime(prompt_mtimes: dict[Path, float], path: Path) -> None:
+  """Record *path*'s mtime in *prompt_mtimes*, or the 0.0 sentinel when it cannot be statted.
+
+  The sentinel keeps a vanished or unstatable pointer file in the hot-reload
+  fingerprint so the next tick re-reads it instead of serving a cached body.
+  """
+  try:
+    prompt_mtimes[path] = path.stat().st_mtime
+  except (OSError, ValueError) as stat_error:
+    log.debug("cron_prompt_pointer_stat_failed", path=str(path), error=str(stat_error))
+    prompt_mtimes[path] = 0.0
+
+
 def _resolve_prompt_pointer(entry: dict, repo: Path, prompt_mtimes: dict[Path, float]) -> None:
   """Resolve one mapping's ``prompt_file`` into ``prompt`` in place.
 
@@ -1089,12 +1110,7 @@ def _resolve_prompt_pointer(entry: dict, repo: Path, prompt_mtimes: dict[Path, f
     return
   resolved = _resolve_prompt_file(entry, repo)
   entry["prompt_file"] = prompt_file  # preserve the raw pointer for the API/UI
-  try:
-    prompt_mtimes[resolved] = resolved.stat().st_mtime
-  except OSError:
-    # The file existed moments ago (we just read it); a transient race falls
-    # back to a sentinel so the next tick re-reads.
-    prompt_mtimes[resolved] = 0.0
+  _record_prompt_mtime(prompt_mtimes, resolved)
 
 
 def _validate_cron_body(body: dict, repo: Path, stem: str) -> tuple[ScheduledTaskConfig, dict[Path, float]]:
@@ -1115,10 +1131,8 @@ def _validate_cron_body(body: dict, repo: Path, stem: str) -> tuple[ScheduledTas
   error) on any failure.
   """
   prompt_mtimes: dict[Path, float] = {}
-  _resolve_prompt_pointer(body, repo, prompt_mtimes)
-  for step in body.get("steps") or []:
-    if isinstance(step, dict):
-      _resolve_prompt_pointer(step, repo, prompt_mtimes)
+  for entry in _prompt_pointer_entries(body):
+    _resolve_prompt_pointer(entry, repo, prompt_mtimes)
   _resolve_local_timezone(body)
   if body.get("repo"):
     body["repo"] = os.path.expanduser(body["repo"])
@@ -1215,27 +1229,11 @@ def _reload_cron_snapshot() -> _CronSnapshot:
         except Exception as read_error:
           log.debug("cron_failed_file_prompt_path_unreadable", path=str(path), error=str(read_error))
         else:
-          failed_pointers: list[str] = []
           if isinstance(failed_body, dict):
-            top_pointer = failed_body.get("prompt_file")
-            if isinstance(top_pointer, str) and top_pointer:
-              failed_pointers.append(top_pointer)
-            for step in failed_body.get("steps") or []:
-              if isinstance(step, dict):
-                step_pointer = step.get("prompt_file")
-                if isinstance(step_pointer, str) and step_pointer:
-                  failed_pointers.append(step_pointer)
-          for failed_prompt_file in failed_pointers:
-            if failed_prompt_file.startswith("~") or Path(failed_prompt_file).is_absolute():
-              failed_prompt_path = Path(os.path.expanduser(failed_prompt_file))
-            else:
-              failed_prompt_path = repo / failed_prompt_file
-            try:
-              prompt_mtimes[failed_prompt_path] = failed_prompt_path.stat().st_mtime
-            except OSError:
-              prompt_mtimes[failed_prompt_path] = 0.0
-            except ValueError as stat_error:
-              log.debug("cron_failed_prompt_path_unstatable", path=str(failed_prompt_path), error=str(stat_error))
+            for entry in _prompt_pointer_entries(failed_body):
+              pointer = entry.get("prompt_file")
+              if isinstance(pointer, str) and pointer:
+                _record_prompt_mtime(prompt_mtimes, _resolve_pointer_path(pointer, repo))
         errors.append(
             ScheduledTaskError(name=stem, path=str(path), error=str(e), enabled=_read_cron_file_enabled(path)))
         log.error("cron_task_load_failed", name=stem, path=str(path), error=str(e))

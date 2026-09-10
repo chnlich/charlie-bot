@@ -46,6 +46,30 @@
     return typeof detail === 'string' ? detail : JSON.stringify(detail);
   }
 
+  // The one error shape for the page-level fetches: a network failure or a
+  // non-JSON body reports through setError after reset() restores the page's
+  // idle chrome. The ok-check stays at the call site.
+  async function fetchJson(url, reset) {
+    let resp;
+    try {
+      resp = await fetch(url);
+    } catch (e) {
+      reset();
+      setError(`Network error: ${e.message}`);
+      return null;
+    }
+
+    let data = null;
+    try {
+      data = await resp.json();
+    } catch (e) {
+      reset();
+      setError(`Server returned non-JSON response (HTTP ${resp.status})`);
+      return null;
+    }
+    return { resp, data };
+  }
+
   function readQuery() {
     const p = new URLSearchParams(location.search);
     return {
@@ -258,23 +282,9 @@
     const token = ++comparisonToken;
     const qs = diffQuery(params);
 
-    let resp;
-    try {
-      resp = await fetch(`/api/git/diff/files?${qs.toString()}`);
-    } catch (e) {
-      hide(loadingEl);
-      setError(`Network error: ${e.message}`);
-      return;
-    }
-
-    let data = null;
-    try {
-      data = await resp.json();
-    } catch (e) {
-      hide(loadingEl);
-      setError(`Server returned non-JSON response (HTTP ${resp.status})`);
-      return;
-    }
+    const fetched = await fetchJson(`/api/git/diff/files?${qs.toString()}`, () => hide(loadingEl));
+    if (!fetched) return;
+    const { resp, data } = fetched;
 
     hide(loadingEl);
     if (token !== comparisonToken) return;
@@ -340,23 +350,11 @@
     }
     statusEl.textContent = 'preparing code-server…';
 
-    let resp;
-    try {
-      resp = await fetch(`/api/code-server/open?folder=${encodeURIComponent(repo)}`);
-    } catch (e) {
+    const fetched = await fetchJson(`/api/code-server/open?folder=${encodeURIComponent(repo)}`, () => {
       statusEl.textContent = '';
-      setError(`Network error: ${e.message}`);
-      return;
-    }
-
-    let data = null;
-    try {
-      data = await resp.json();
-    } catch (e) {
-      statusEl.textContent = '';
-      setError(`Server returned non-JSON response (HTTP ${resp.status})`);
-      return;
-    }
+    });
+    if (!fetched) return;
+    const { resp, data } = fetched;
 
     if (!resp.ok) {
       setError(responseDetail(data, resp.status));

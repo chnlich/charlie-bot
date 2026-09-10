@@ -62,7 +62,7 @@ def _start_code_server(binary: str, config_path: Path) -> subprocess.Popen:
 def open_code_server(
     folder: str = Query(..., description="Folder path to open in code-server"),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> dict:
   binary = _resolve_code_server_executable(cfg)
   if binary is None:
     raise HTTPException(status_code=404, detail="code-server not available on this host")

@@ -29,7 +29,7 @@ class SwitchEventRequest(BaseModel):
 
 
 @router.post('/switch-events')
-async def post_switch_event(req: SwitchEventRequest):
+async def post_switch_event(req: SwitchEventRequest) -> dict:
   """Log one switch-telemetry point as a single diag_switch line; no persistence."""
   record = req.model_dump()
   error = record['error']

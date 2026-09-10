@@ -60,7 +60,7 @@ backends:
 # Accounts: the Claude subscription pool and its compaction floors.
 accounts:
   claude: []
-  compaction:
+  claude_compaction:
     relay_tokens: 100000
     expired_cache_tokens: 50000
 

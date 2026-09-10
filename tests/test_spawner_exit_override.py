@@ -103,7 +103,7 @@ async def test_missing_events_file_returns_original(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_events_log_path_raising_does_not_propagate(tmp_path: Path) -> None:
+async def test_get_events_log_path_raising_does_not_propagate() -> None:
 
   class _BrokenThreadManager:
 

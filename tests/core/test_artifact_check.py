@@ -818,11 +818,11 @@ def test_cli_missing_trigger_is_usage_error(genre: str, capsys: pytest.CaptureFi
   assert "--trigger" in capsys.readouterr().err
 
 
-def test_cli_missing_genre_is_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_missing_genre_is_usage_error() -> None:
   assert _run_cli(["page.html"]) == 2
 
 
-def test_cli_unknown_genre_is_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_unknown_genre_is_usage_error() -> None:
   assert _run_cli(["page.html", "--genre", "weird"]) == 2
 
 

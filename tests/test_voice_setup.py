@@ -139,7 +139,7 @@ def test_enable_twice_rewrites_nothing_when_already_enabled(monkeypatch: pytest.
   assert voice_setup.enable(cfg)["config_write"] == "skipped"
 
 
-def test_main_requires_enable_subcommand(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_main_requires_enable_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr("sys.argv", ["voice_setup"])
   with pytest.raises(SystemExit):
     voice_setup.main()

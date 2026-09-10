@@ -186,7 +186,7 @@ def _make_callbacks(persist_order: list[str]) -> SessionCallbacks:
 
 
 @pytest.mark.asyncio
-async def test_consumer_clears_master_run_after_master_done(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_consumer_clears_master_run_after_master_done() -> None:
   persist_order: list[str] = []
   callbacks = _make_callbacks(persist_order)
   session_meta = SessionMetadata(id="session-clear", name="t")

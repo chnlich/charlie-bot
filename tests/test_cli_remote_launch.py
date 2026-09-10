@@ -155,7 +155,7 @@ def test_missing_session_dir_exits_4(tmp_path: Path, capsys: pytest.CaptureFixtu
   assert "session dir" in err
 
 
-def test_pid_parse_failure_exits_3(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_pid_parse_failure_exits_3(tmp_path: Path) -> None:
   session = "sess-bad-pid"
   cfg = _mock_config(_make_session_dir(tmp_path, session))
 

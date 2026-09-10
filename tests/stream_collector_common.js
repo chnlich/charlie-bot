@@ -1,10 +1,15 @@
 'use strict';
-// Shared plumbing for the stream-render collectors: the CDN fetch and the
-// live-corpus scan. Read-only over ~/.charliebot/sessions; the collectors keep
-// their own metric definitions (harness options, replay cadence, reporting).
+// Shared plumbing for the stream-render collectors: the CDN fetch, the
+// live-corpus scan, and the streamed-draft replay scaffolding the M33 and M54
+// metrics share (one cadence, one replay loop, one timed fleet, one parity
+// check, so their numbers stay comparable). Read-only over
+// ~/.charliebot/sessions; the collectors keep their own metric definitions
+// (corpus filter, harness options, reporting).
 const fs = require('node:fs');
 const https = require('node:https');
 const path = require('node:path');
+
+const { buildStreamHarness } = require('./stream_render_harness');
 
 function fetchUrl(url) {
   return new Promise((resolve, reject) => {
@@ -103,4 +108,64 @@ function worstPageCorpus(bodyTexts, pageMessages) {
   return { file: best, fileSize: bestSize, page: texts.slice(0, pageMessages) };
 }
 
-module.exports = { fetchUrl, largestAssistantDraft, assistantTexts, worstPageCorpus };
+// The streamed-draft replay cadence both metrics report against.
+const REPLAY_DELTA_BYTES = 200;
+const REPLAY_TICK_MS = 40;
+const TIMED_REPLAYS = 5;
+
+// One replay: the draft grows REPLAY_DELTA_BYTES bytes per paint, one
+// REPLAY_TICK_MS virtual tick per delta, then one trailing flush mirrors the
+// browser's trailing paint. The harness's timers drain against the virtual
+// clock, so wall time covers only render work. options.leadEmptyPaint opens
+// with one empty paint, which consumes the harness's immediate first paint
+// (usage.js paints a stream's first call outright), so delta one paints from
+// the coalesced flush instead — M54's call sequence; M33 has no leading paint.
+function replayDraft(markedSrc, text, { harnessOptions, leadEmptyPaint = false } = {}) {
+  const h = buildStreamHarness(markedSrc, harnessOptions);
+  const deltas = Math.ceil(text.length / REPLAY_DELTA_BYTES);
+  if (leadEmptyPaint) h.showStreaming({ content: '' });
+  for (let i = 1; i <= deltas; i++) {
+    h.showStreaming({ content: text.slice(0, i * REPLAY_DELTA_BYTES) });
+    h.advance(REPLAY_TICK_MS);
+  }
+  h.advance(REPLAY_DELTA_BYTES);
+  return h.stats();
+}
+
+// One untimed cold pass (the first streamed turn after a page load), then
+// TIMED_REPLAYS timed replays; the reported fleet is the sorted paint walls
+// plus the last replay's paint count and final frame.
+function timedReplays(markedSrc, text, options = {}) {
+  replayDraft(markedSrc, text, options);
+  const times = [];
+  let renders = 0, finalHtml = '';
+  for (let r = 0; r < TIMED_REPLAYS; r++) {
+    const s = replayDraft(markedSrc, text, options);
+    times.push(s.paintMs);
+    renders = s.frames.length;
+    finalHtml = s.frames[s.frames.length - 1];
+  }
+  times.sort((a, b) => a - b);
+  return { times, renders, finalHtml };
+}
+
+// Final-frame parity: the last painted frame must equal a direct full-draft
+// render through the same harness context — the same real-hljs options
+// included, so a highlight cache hit's bytes are pinned to a cold render's.
+function finalFrameParity(markedSrc, text, finalHtml, { harnessOptions } = {}) {
+  const probe = buildStreamHarness(markedSrc, harnessOptions);
+  const reference = probe.context.marked.parse(probe.context.fixNestedFences(text));
+  return finalHtml === reference;
+}
+
+module.exports = {
+  fetchUrl,
+  largestAssistantDraft,
+  assistantTexts,
+  worstPageCorpus,
+  REPLAY_DELTA_BYTES,
+  REPLAY_TICK_MS,
+  replayDraft,
+  timedReplays,
+  finalFrameParity,
+};

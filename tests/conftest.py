@@ -1078,6 +1078,24 @@ def build_cli_backend(
   return backend_cls(**kwargs)
 
 
+def stub_subprocess_spawn(monkeypatch: pytest.MonkeyPatch, patch_target: str, pid: int) -> MagicMock:
+  """Install a MagicMock asyncio subprocess on a spawn patch target and return it.
+
+  The one home of the backend-test spawn stub: stdin's drain and wait_closed are
+  AsyncMocks because ``AgentBackend._write_stdin_prompt`` awaits them when a
+  backend feeds a prompt over stdin, and a bare MagicMock attribute would fail
+  that await. A test asserting the spawn call's own kwargs builds its AsyncMock
+  instead, to hold the reference ``await_args`` reads.
+  """
+  process = MagicMock()
+  process.pid = pid
+  process.stdin = MagicMock()
+  process.stdin.drain = AsyncMock()
+  process.stdin.wait_closed = AsyncMock()
+  monkeypatch.setattr(patch_target, AsyncMock(return_value=process))
+  return process
+
+
 def plan_page_html(goal_body: str = "Ship the fix.") -> str:
   """Minimal plan page passing the plan assertion set: the shipped template's <style> block
   verbatim (style-verbatim compares after whitespace collapse), six numbered sections, and a footer,

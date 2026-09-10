@@ -416,3 +416,9 @@ Known-alive symbols:
   whole-repo matches outside the three definitions, so vulture flags each as an unused
   method. Same framework-registered class as the `check_prompt_or_handler_or_loop` entry
   above.
+- `drain`, `wait_closed` (the stdin mocks of `stub_subprocess_spawn` in `tests/conftest.py`)
+  — attribute writes on the MagicMock asyncio subprocess the helper installs on a spawn
+  patch target: `AgentBackend._write_stdin_prompt` (src/agents/backends/base.py) awaits
+  them by attribute read when a backend feeds a prompt over stdin, so nothing in the repo
+  reads the names statically. Vulture flags each write as an unused attribute. Same
+  dynamic-read class as the `speedup` stub entry above.

@@ -1,5 +1,4 @@
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
@@ -10,6 +9,7 @@ from conftest import (
     backend_option,
     build_cli_backend,
     stub_credentials,
+    stub_subprocess_spawn,
 )
 from pydantic import ValidationError
 
@@ -342,18 +342,9 @@ class _OrderRecordingBackend(AgentBackend):
 
 
 async def _drive_run_halted_at_spawn(backend: AgentBackend, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """Drive backend.run() with a mocked subprocess; on_spawn raises the sentinel.
-
-  Mirrors tests/test_backend_pid_start_contract.py's base-path harness: patched
-  spawn returning a MagicMock process and a sentinel read_pid_stat.
-  """
+  """Drive backend.run() with the conftest stub spawn; on_spawn raises the sentinel."""
   monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: ("ordering-test-start", "R"))
-  process = MagicMock()
-  process.pid = 4242
-  process.stdin = MagicMock()
-  process.stdin.drain = AsyncMock()
-  process.stdin.wait_closed = AsyncMock()
-  monkeypatch.setattr(BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, AsyncMock(return_value=process))
+  stub_subprocess_spawn(monkeypatch, BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 4242)
 
   async def on_spawn(pid: int) -> None:
     raise _HaltAtSpawn

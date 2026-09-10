@@ -107,6 +107,8 @@ def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypa
   cfg_path = home / ".charliebot" / "config.yaml"
   cfg_path.write_text("server:\n  port: 1111\n", encoding="utf-8")
   monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+  # The test asserts default-home resolution under the patched Path.home, so the suite-wide profile variable is cleared.
+  monkeypatch.delenv(core_config.CHARLIEBOT_HOME_ENV, raising=False)
   monkeypatch.setattr(core_config, "_config", None)
   monkeypatch.setattr(core_config, "_config_mtime", 0.0)
   monkeypatch.setattr(core_config, "_config_failed_mtime", None)
@@ -131,6 +133,8 @@ def test_get_config_keeps_previous_value_when_reload_fails(tmp_path: Path, monke
   cfg_path = home / ".charliebot" / "config.yaml"
   cfg_path.write_text("server:\n  port: 1111\n", encoding="utf-8")
   monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+  # The test asserts default-home resolution under the patched Path.home, so the suite-wide profile variable is cleared.
+  monkeypatch.delenv(core_config.CHARLIEBOT_HOME_ENV, raising=False)
   monkeypatch.setattr(core_config, "_config", None)
   monkeypatch.setattr(core_config, "_config_mtime", 0.0)
   monkeypatch.setattr(core_config, "_config_failed_mtime", None)

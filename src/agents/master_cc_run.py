@@ -459,7 +459,7 @@ def _resolve_resume_id(
 ) -> str | None:
   """Return the cc_session_id to resume, or None when it is not reachable.
 
-  Each cc-claude account has its own CLAUDE_CONFIG_DIR and cannot see another's
+  Each pool account has its own login directory and cannot see another's
   conversations, so resuming an id recorded under a different account always fails.
   A pooled option (src/core/claude_accounts.py) looks in the session's own account
   first and then in every pool login, writing a hit elsewhere back onto
@@ -474,7 +474,7 @@ def _resolve_resume_id(
     return cc_session_id
   if cfg is not None and claude_accounts.is_pooled(option, cfg):
     return _resolve_pooled_resume_id(cfg, session_meta, cc_session_id)
-  config_dir = claude_config_dir(option)
+  config_dir = claude_config_dir()
   if _cc_transcript_exists(config_dir, cc_session_id):
     return cc_session_id
   log.warning(
@@ -641,7 +641,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
 
   from src.agents.backends.registry import build_backend
   option = item.backend_option
-  # A caller that passed no option must not silently inherit backend_options[0]:
+  # A caller that passed no option must not silently inherit backends.options[0]:
   # the session's own pin is the explicit choice and takes precedence.
   if option is None and session_meta.backend:
     option = cfg.get_backend_option(session_meta.backend)
@@ -651,7 +651,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       # lazy: spawner_backends→review→master_trigger→master_cc would close a cycle
       # through this module if imported at top level.
       from src.core.spawner_backends import unknown_backend_pin_refusal
-      fallback_id = cfg.backend_options[0].id if cfg.backend_options else "(none)"
+      fallback_id = cfg.backends.options[0].id if cfg.backends.options else "(none)"
       msg = (f"backend {unknown_backend_pin_refusal(session_meta.backend, fallback_id)}; "
              "this run did not execute.")
       log.error(
@@ -662,12 +662,12 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       )
     else:
       # Neither an explicit per-run option nor a session pin. Refusing the
-      # backend_options[0] fallback avoids silently running on an arbitrary
+      # backends.options[0] fallback avoids silently running on an arbitrary
       # backend; error and exit 1. (The sibling fallback inside
       # _resolve_resume_option stays, deliberately out of scope.)
       msg = (
           "no backend option was given and this session pins none — refusing to "
-          "fall back to backend_options[0]; this run did not execute.")
+          "fall back to backends.options[0]; this run did not execute.")
       log.error(
           "master_cc_backend_unresolved",
           session=session_meta.id,
@@ -842,7 +842,6 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     record_persisted = True
 
   async def _spawn_and_stream(
-      spawn_option: BackendOption,
       spawn_prompt: str,
       spawn_flags: list[str],
       spawn_resume_id: str | None,
@@ -855,8 +854,9 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       log_dir = cfg.sessions_dir / session_meta.id / "data" / "master_runs" / started_at.isoformat()
       raw_log = str(log_dir / runs.RAW_LOG_NAME)
     backend = build_backend(
-        spawn_option,
+        option,
         cfg,
+        claude_account=account,
         extra_flags=spawn_flags or None,
         buffer_limit=cfg.subprocess_buffer_limit,
         on_spawn=_on_spawn,
@@ -878,11 +878,10 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       log.warning("master_cc_stderr", session=session_meta.id, stderr=backend.stderr_text)
 
   try:
-    spawn_option = option.model_copy(update={"claude_config_dir": account.config_dir}) if account else option
     spawn_prompt, spawn_flags, spawn_resume_id = prompt, extra_flags, resume_session_id
     while True:
       watch = claude_relay.RelayWatch(account.label, option.model) if account is not None else None
-      await _spawn_and_stream(spawn_option, spawn_prompt, spawn_flags, spawn_resume_id)
+      await _spawn_and_stream(spawn_prompt, spawn_flags, spawn_resume_id)
       assert backend is not None
       decision = watch.decision(exit_code, backend.stderr_text) if watch is not None else None
       if decision is None:
@@ -905,7 +904,6 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       relays += 1
       account = next_account
       session_meta.claude_account = account.label
-      spawn_option = option.model_copy(update={"claude_config_dir": account.config_dir})
       spawn_prompt = claude_relay.CONTINUATION_PROMPT
       spawn_flags, spawn_resume_id = _build_extra_flags(option, cc_session_id, item)
 
@@ -1006,7 +1004,7 @@ def _resolve_resume_option(
     if option is not None:
       return option
     log.warning("master_cc_resume_backend_unresolved", session=session_meta.id, backend=session_meta.backend)
-  return cfg.backend_options[0] if cfg.backend_options else None
+  return cfg.backends.options[0] if cfg.backends.options else None
 
 
 def _build_fresh_translate(cfg: CharlieBotConfig, option: BackendOption | None) -> Callable[[dict], list[dict]]:

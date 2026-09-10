@@ -17,6 +17,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     TerminateFlagBackend,
+    backend_option,
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
@@ -39,7 +40,6 @@ from src.core.message_aggregator import (
     _model_fallback_notice_msg,
 )
 from src.core.models import (
-    BackendOption,
     CreateSessionRequest,
     MasterRunRecord,
     SessionMetadata,
@@ -47,7 +47,7 @@ from src.core.models import (
 from src.core.sessions import SessionManager
 
 CONFIGURED = "claude-fable-5-1"
-FABLE_OPTION = BackendOption(
+FABLE_OPTION = backend_option(
     id="claude-fable-5.1", label="Fable", type="cc-claude", model=CONFIGURED, prompt_overlay="none")
 
 
@@ -318,7 +318,7 @@ async def _run_live_round(
     events: list[dict],
 ) -> list[dict]:
   """Drive the real _run_cc with a raw-log-pinning backend double; return the persisted events."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backend_options=[option])
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [option]})
   meta = SessionMetadata(id=session_id, name="t", backend=option.id)
   cb = mock_session_callbacks()
 
@@ -376,7 +376,7 @@ async def test_live_in_family_round_emits_nothing(tmp_path: Path, monkeypatch: p
 async def test_live_non_cc_backend_emits_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_type: str) -> None:
   """Non-cc backends never trigger the detector, whatever their stream served."""
-  option = BackendOption(id="other", label="Other", type=backend_type, model="some-model")
+  option = backend_option(id="other", label="Other", type=backend_type, model="some-model")
   events = [_assistant("glm-5.2", "served by another kind"), _result()]
   persisted = await _run_live_round(tmp_path, monkeypatch, f"fb-notice-live-{backend_type}", option, events)
 
@@ -407,7 +407,7 @@ async def test_resume_round_emits_identical_notice_from_projection(
       started_at=datetime.now(UTC) - timedelta(seconds=60),
       raw_log=str(raw_path),
   )
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backend_options=[FABLE_OPTION])
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [FABLE_OPTION]})
   meta = SessionMetadata(id=session_id, name="t", backend=FABLE_OPTION.id)
   cb = mock_session_callbacks()
 
@@ -448,7 +448,7 @@ async def test_resume_notice_persists_exactly_once_with_full_fields(
       started_at=datetime.now(UTC) - timedelta(seconds=60),
       raw_log=str(raw_path),
   )
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backend_options=[FABLE_OPTION])
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [FABLE_OPTION]})
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="fb-persist"))
   meta = await mgr.get_session(session.id)

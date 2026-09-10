@@ -52,6 +52,7 @@ from src.core.config import (
 )
 from src.core.json_utils import load_json_meta
 from src.core.models import BackendType, SessionStatus, parse_utc_datetime
+from src.core.runs import CURSOR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 from src.core.timeouts import SQLITE_LOCK_WAIT_MS, SQLITE_LOCK_WAIT_SECONDS
 from src.core.token_tally import DEFAULT_OPENCODE_DB
@@ -66,14 +67,17 @@ ORPHAN_IDLE_DAYS = 2
 # The five transport names a run's managed directories reserve, plus the numbered
 # variants a re-spawn rotates them to (src/agents/backends/base.py
 # _rotate_stale_transport). Matching stays scoped to the managed directories.
-RAW_TRANSPORT_NAMES = frozenset(
-    {
-        "agent.raw.ndjson",
-        "agent.stderr.log",
-        "agent.raw.cursor",
-        "stdout.log",
-        "stderr.log",
-    })
+# The three agent-pipe names come from runs.py, the module that owns the
+# transport contract; the two tee names stay literals because their writers are
+# backend modules (opencode.py, antigravity_cli.py) and core must not import
+# backends.
+RAW_TRANSPORT_NAMES = frozenset({
+    RAW_LOG_NAME,
+    STDERR_LOG_NAME,
+    CURSOR_NAME,
+    "stdout.log",
+    "stderr.log",
+})
 
 # Canonical UUID form of a CharlieBot session id, as it appears verbatim inside a
 # Claude Code transcript directory name (hyphens pass the cwd encoding through).

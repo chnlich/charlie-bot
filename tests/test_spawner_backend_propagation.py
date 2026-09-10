@@ -72,7 +72,7 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
   assert opt.effort == "max"
   assert opt.cli_binary == "claude-sub"
 
-  with pytest.raises(ValueError, match="not configured"):
+  with pytest.raises(ValueError, match="is not in backends.options"):
     spawner.resolve_backend_option(cfg, "missing", "o3")
 
   with pytest.raises(ValueError, match="model is required"):

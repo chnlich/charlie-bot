@@ -9,7 +9,7 @@ import structlog
 from src.core import event_types as ET
 from src.core import finalize_effects
 from src.core.chat_events import chat_events_path
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, require_backend_option
 from src.core.git import (
     git_current_branch,
     git_worktree_remove_reporting,
@@ -277,9 +277,7 @@ def _resolve_preference_option(cfg: CharlieBotConfig, option_id: str) -> Backend
 
   Raises ValueError if the option_id is not in backends.options or requires but lacks a model.
   """
-  option = cfg.get_backend_option(option_id)
-  if option is None:
-    raise ValueError(f"backends.preference entry '{option_id}' not in backends.options")
+  option = require_backend_option(cfg, option_id, subject="backends.preference entry ")
   if backend_type_allows_missing_model(option.type):
     return option.model_copy(update={"model": None})
   if not option.model:

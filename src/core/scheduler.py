@@ -19,6 +19,7 @@ from src.core.config import (
     ScheduledTaskConfig,
     get_config,
     get_scheduled_tasks,
+    require_backend_option,
 )
 from src.core.master_trigger import trigger_master
 from src.core.models import (
@@ -68,8 +69,7 @@ TASK_HANDLERS: dict[str, callable] = {
 def effective_scheduled_task_backend(task_cfg: ScheduledTaskConfig, cfg: CharlieBotConfig) -> str:
   """Return the backend id a scheduled task should use."""
   if task_cfg.backend:
-    if cfg.get_backend_option(task_cfg.backend) is None:
-      raise ValueError(f"scheduled task backend '{task_cfg.backend}' is not in backends.options")
+    require_backend_option(cfg, task_cfg.backend, subject="scheduled task ")
     return task_cfg.backend
   if not cfg.backends.options:
     raise ValueError("scheduled task backend resolution requires a configured backends.options entry")

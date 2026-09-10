@@ -588,6 +588,18 @@ class CharlieBotConfig(BaseModel):
     return repos
 
 
+def require_backend_option(cfg: CharlieBotConfig, backend_id: str, *, subject: str) -> BackendOption:
+  """Return the configured backend option for `backend_id`; raise ValueError when none matches.
+
+  The error names the checked surface with the caller's role as prefix:
+  "<subject>backend 'x' is not in backends.options".
+  """
+  option = cfg.get_backend_option(backend_id)
+  if option is None:
+    raise ValueError(f"{subject}backend '{backend_id}' is not in backends.options")
+  return option
+
+
 _config: CharlieBotConfig | None = None
 # The last fingerprint _config_fingerprint() returned for the cached config; tests
 # assign a sentinel (e.g. 0.0) to force a reload.

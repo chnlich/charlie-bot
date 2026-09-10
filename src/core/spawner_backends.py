@@ -3,7 +3,7 @@
 import structlog
 
 from src.core import review
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, require_backend_option
 from src.core.models import (
     BackendOption,
     SessionMetadata,
@@ -19,9 +19,7 @@ def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str | 
   """Resolve a runtime backend option from explicit backend/model values."""
   if not backend_id:
     raise ValueError("resolved backend is required")
-  option = cfg.get_backend_option(backend_id)
-  if option is None:
-    raise ValueError(f"resolved backend '{backend_id}' is not configured")
+  option = require_backend_option(cfg, backend_id, subject="resolved ")
   if backend_type_allows_missing_model(option.type):
     resolved_model = None
   elif not model:
@@ -103,9 +101,7 @@ async def resolve_requested_subagent_backend_model(
   if requested_backend is not None:
     if not requested_backend:
       raise ValueError("requested backend is required")
-    option = cfg.get_backend_option(requested_backend)
-    if option is None:
-      raise ValueError(f"requested backend '{requested_backend}' is not in backends.options")
+    option = require_backend_option(cfg, requested_backend, subject="requested ")
     return _option_default_backend_model(option, source="requested")
   return _resolve_session_default_backend_model(cfg, session_meta)
 
@@ -134,9 +130,7 @@ def require_thread_backend_model(thread: ThreadMetadata, cfg: CharlieBotConfig) 
     raise ValueError(f"thread '{thread.id}' missing backend metadata")
   if thread.model:
     return thread.backend, thread.model
-  option = cfg.get_backend_option(thread.backend)
-  if option is None:
-    raise ValueError(f"thread '{thread.id}' backend '{thread.backend}' is not in backends.options")
+  option = require_backend_option(cfg, thread.backend, subject=f"thread '{thread.id}' ")
   if backend_type_allows_missing_model(option.type):
     return thread.backend, None
   raise ValueError(f"thread '{thread.id}' missing model metadata")

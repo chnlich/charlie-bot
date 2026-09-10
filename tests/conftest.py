@@ -1485,6 +1485,17 @@ def reset_config_caches() -> None:
 
 
 @pytest.fixture
+def make_config(tmp_path: Path) -> Callable[..., CharlieBotConfig]:
+  """Factory for a CharlieBotConfig rooted at tmp_path/".charliebot": each keyword is a section
+  name carrying a raw dict or a section model instance (e.g. make_config(server={"port": 2001}))."""
+
+  def _make(**sections: Any) -> CharlieBotConfig:
+    return CharlieBotConfig(charliebot_home=tmp_path / ".charliebot", **sections)
+
+  return _make
+
+
+@pytest.fixture
 def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   """Point HOME at a temp dir and reset the config/cron module-level caches.
 

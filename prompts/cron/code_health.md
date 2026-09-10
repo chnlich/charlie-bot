@@ -84,7 +84,7 @@ Compose the review task file: `prompts/cron/code_review_prompt.md` verbatim, plu
 final line `PR: <number> <url>`. Run the review with the repo's own reviewer CLI from a
 scratch directory outside this worktree (`mktemp -d`), with `--json`, and with the
 model, api_base, and context_window of the `charlie-code-kimi-k3` entry in
-backend_options:
+`backends.options`:
 
     charlie-code --json \
       --model <model> \

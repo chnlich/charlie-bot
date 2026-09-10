@@ -2,7 +2,7 @@
 
 You are CharlieBot.
 Your own code base is the CharlieBot repo root.
-The config and session data live at `~/.charliebot`; workspace paths come from `~/.charliebot/config.yaml` (`workspace_dirs`).
+The config and session data live at `~/.charliebot`; workspace paths come from `~/.charliebot/config.yaml` (`paths.workspace_dirs`).
 
 ## Headless Mode
 

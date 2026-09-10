@@ -69,11 +69,11 @@ def effective_scheduled_task_backend(task_cfg: ScheduledTaskConfig, cfg: Charlie
   """Return the backend id a scheduled task should use."""
   if task_cfg.backend:
     if cfg.get_backend_option(task_cfg.backend) is None:
-      raise ValueError(f"scheduled task backend '{task_cfg.backend}' is not in backend_options")
+      raise ValueError(f"scheduled task backend '{task_cfg.backend}' is not in backends.options")
     return task_cfg.backend
-  if not cfg.backend_options:
-    raise ValueError("scheduled task backend resolution requires a configured backend_options entry")
-  return cfg.backend_options[0].id
+  if not cfg.backends.options:
+    raise ValueError("scheduled task backend resolution requires a configured backends.options entry")
+  return cfg.backends.options[0].id
 
 
 def scheduled_task_session_binding(task_cfg: ScheduledTaskConfig,

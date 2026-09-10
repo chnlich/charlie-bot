@@ -393,3 +393,16 @@ Known-alive symbols:
   pinning the codex resolver's default home under tmp_path so the seeded rollout tree
   resolves there. Vulture flags it as an unused function. Same autouse class as
   `_clean_probe_state` above.
+- `require_model` (`src/core/models.py`) — pydantic `@model_validator(mode='after')` method on
+  `BackendBase`, registered with pydantic at class-definition time and invoked during model
+  validation: it rejects a backend config entry whose type requires a `model` but declares
+  none. The method name has exactly zero whole-repo matches outside its definition, so
+  vulture flags it as an unused method. Same framework-registered class as the
+  `check_prompt_or_handler_or_loop` entry above.
+- `_expand_tilde` (`src/core/config.py`, on `PathsConfig`, `UiConfig`, and `PublishConfig`) —
+  pydantic `@model_validator(mode='after')` methods, registered with pydantic at
+  class-definition time and invoked during model validation: each expands `~` in its
+  section's path settings against the process HOME. The method name has exactly zero
+  whole-repo matches outside the three definitions, so vulture flags each as an unused
+  method. Same framework-registered class as the `check_prompt_or_handler_or_loop` entry
+  above.

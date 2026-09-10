@@ -15,7 +15,7 @@ class OpenAICompatibleClaudeBackend(AnthropicEndpointBackend):
     if not proxy_base_url:
       raise ValueError("cc-openai-compatible backend requires proxy_base_url")
     if not auth_token:
-      raise ValueError("cc-openai-compatible backend requires charliebot_access_key for proxy auth")
+      raise ValueError("cc-openai-compatible backend requires an auth_token for proxy auth")
     if not model:
       raise ValueError("cc-openai-compatible backend requires a model")
     super().__init__(base_url=proxy_base_url.rstrip("/"), auth_token=auth_token, model=model, **kwargs)

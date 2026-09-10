@@ -6,6 +6,7 @@
   const messageIdentityAttrs = Chat.messageIdentityAttrs;
   const renderRoundRatingButtons = Chat.renderRoundRatingButtons;
   const embedLinkedHtmlArtifacts = Chat.embedLinkedHtmlArtifacts;
+  const toolInputSummary = Chat.toolInputSummary;
 
 // The one branch glyph: the clone_start banner's "Cloned from" marker and the
 // separator's "Clone to here" fork button below.
@@ -21,22 +22,10 @@ const CHEVRON_DOWN_SVG_PATH = '<path stroke-linecap="round" stroke-linejoin="rou
 let pageDepth = 'outline';
 Chat.pageDepth = pageDepth;
 
-function toolInputSummary(tool) {
-  var input = tool.input || {};
-  if (tool.name === 'Bash') return {text: input.command || '', limit: 80};
-  if (tool.name === 'Read' || tool.name === 'Edit' || tool.name === 'Write') return {text: input.file_path || '', limit: 0};
-  if (tool.name === 'Glob') return {text: input.pattern || '', limit: 0};
-  if (tool.name === 'Grep') return {text: (input.pattern || '') + (input.path ? ' in ' + input.path : ''), limit: 0};
-  var first = Object.values(input)[0];
-  if (first == null || first === '') return {text: '', limit: 0};
-  var display = typeof first === 'object' ? JSON.stringify(first) : String(first);
-  return {text: display, limit: 60};
-}
-
 function renderToolActivity(tools) {
   if (!Array.isArray(tools) || !tools.length) return '';
   var rows = tools.map(function(tool, i) {
-    var summary = toolInputSummary(tool);
+    var summary = toolInputSummary(tool.name, tool.input);
     var text = summary.text;
     var limit = summary.limit;
     var summaryHtml;

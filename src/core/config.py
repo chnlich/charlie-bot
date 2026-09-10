@@ -896,11 +896,6 @@ def _warn_credentials_reload_failed_once(error: Exception) -> None:
   _credentials_reload_errors_seen.log(log.warning, "credentials_reload_failed", str(error), error=str(error))
 
 
-def _reset_credentials_reload_failures_for_tests() -> None:
-  """Clear the credentials warn-once registry, restoring the process-start state."""
-  _credentials_reload_errors_seen.clear()
-
-
 def get_credentials() -> Credentials:
   """Return the process-wide credentials, refreshed when ``credentials.yaml`` changes.
 

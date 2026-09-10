@@ -958,16 +958,16 @@ def _resolve_prompt_file(entry: dict, repo_root: Path) -> Path | None:
 CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 
 
-def claude_config_dir(option: BackendOption) -> Path:
+def claude_config_dir(account: ClaudeAccount | None = None) -> Path:
   """Resolve the CLAUDE_CONFIG_DIR a cc-claude process will use.
 
-  Single source of truth for the resume-domain resolution order: the option's
-  ``claude_config_dir`` override, then ``$CLAUDE_CONFIG_DIR``, then
+  Single source of truth for the resolution order: the pool account's
+  ``config_dir`` when one is pinned, then ``$CLAUDE_CONFIG_DIR``, then
   ``~/.claude``. Both the API backend-switch guard and the runtime resume
   resolver call this — do not restate the order anywhere else.
   """
-  if option.claude_config_dir:
-    return Path(option.claude_config_dir).expanduser()
+  if account is not None:
+    return Path(account.config_dir).expanduser()
   env_dir = os.environ.get(CLAUDE_CONFIG_DIR_ENV_VAR)
   if env_dir:
     return Path(env_dir).expanduser()

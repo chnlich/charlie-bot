@@ -3,7 +3,6 @@
 import asyncio
 import json
 import os
-from pathlib import Path
 from typing import ClassVar
 
 import structlog
@@ -36,7 +35,6 @@ class CodexBackend(AgentBackend):
       self,
       *,
       model: str,
-      codex_home: str | None = None,
       model_reasoning_effort: str | None = None,
       model_auto_compact_token_limit: int | None = None,
       **kwargs) -> None:
@@ -44,7 +42,6 @@ class CodexBackend(AgentBackend):
       raise ValueError("codex backend requires a model (set backend_options[].model in config.yaml)")
     super().__init__(model=model, **kwargs)
     self._codex_bin = resolve_binary("codex", USER_LOCAL_BIN)
-    self._codex_home = str(Path(codex_home).expanduser()) if codex_home else None
     self._model_reasoning_effort = "xhigh" if model_reasoning_effort is None else model_reasoning_effort
     self._model_auto_compact_token_limit = model_auto_compact_token_limit
     # Track accumulated text per item_id for delta computation
@@ -104,8 +101,6 @@ class CodexBackend(AgentBackend):
   def _prepare_env(self, env: dict) -> dict:
     codex_env = {**env}
     prepend_path_dir(codex_env, USER_LOCAL_BIN)
-    if self._codex_home:
-      codex_env['CODEX_HOME'] = self._codex_home
     return codex_env
 
   async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:

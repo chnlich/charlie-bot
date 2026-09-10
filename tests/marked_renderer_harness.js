@@ -44,23 +44,6 @@ async function loadMarkedSrc() {
 // via marked.use. Stubs cover only the non-marked globals (hljs, document)
 // that the file touches; a caller-passed hljs replaces the stub so
 // tests can count or shape highlight calls.
-async function loadRenderer(hljs) {
-  const markedSrc = await loadMarkedSrc();
-  const context = {
-    console,
-    hljs: hljs || hljsStub,
-    document: { querySelectorAll: () => [] },
-  };
-  vm.createContext(context);
-  vm.runInContext(markedSrc, context, { filename: 'marked.min.js' });
-  const src = readStatic('markdown-renderer.js');
-  vm.runInContext(src, context, { filename: 'markdown-renderer.js' });
-  return context.marked;
-}
-
-// The same load, returning the whole vm context so a test can reach the file's
-// own globals (fixNestedFences, openFenceTail, streamPaintTailCode) beside
-// marked.
 async function loadRendererContext(hljs) {
   const markedSrc = await loadMarkedSrc();
   const context = {
@@ -73,6 +56,11 @@ async function loadRendererContext(hljs) {
   const src = readStatic('markdown-renderer.js');
   vm.runInContext(src, context, { filename: 'markdown-renderer.js' });
   return context;
+}
+
+// The marked object of that same load, for tests that only parse.
+async function loadRenderer(hljs) {
+  return (await loadRendererContext(hljs)).marked;
 }
 
 // The same marked build with no repo renderer loaded, so its tokenizer is

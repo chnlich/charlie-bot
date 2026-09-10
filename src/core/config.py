@@ -344,28 +344,7 @@ class CharlieBotConfig(BaseModel):
   # Backend options available for model switching
   # Additional backends (Codex/Gemini/Kimi/Antigravity/etc.) must be configured via
   # ~/.charliebot/config.yaml -> backend_options.
-  backend_options: list[BackendOption] = [
-      BackendOption(
-          id="claude-opus-4.8",
-          label="CC \u00b7 Opus 5",
-          type=BackendType.CC_CLAUDE,
-          model="claude-opus-5",
-          effort="xhigh"),
-      BackendOption(
-          id="claude-opus-4.8-fast",
-          label="CC \u00b7 Opus 4.8 Fast",
-          type=BackendType.CC_CLAUDE,
-          model="claude-opus-4-8",
-          effort="medium",
-          fast_mode=True),
-      BackendOption(
-          id="claude-fable-5",
-          label="CC \u00b7 Fable 5",
-          type=BackendType.CC_CLAUDE,
-          model="claude-fable-5",
-          effort="max"),
-      BackendOption(id="claude-tui", label="Claude TUI", type=BackendType.TUI_CLI),
-  ]
+  backend_options: list[BackendOption] = []
 
   # Ordered preference list of BackendOption ids, consumed by two selectors:
   #   - checking-role (reviewer, verify default): first entry that DIFFERS from the
@@ -554,15 +533,8 @@ class CharlieBotConfig(BaseModel):
     return self.charliebot_home / "config.d"
 
   def get_backend_option(self, backend_id: str) -> BackendOption | None:
-    """Look up a backend option by id, then by alias.
-
-    An exact id always wins; ``aliases`` answer for ids a config edit retired, so
-    sessions that recorded the old id keep resolving without a metadata rewrite.
-    """
-    exact = next((opt for opt in self.backend_options if opt.id == backend_id), None)
-    if exact is not None:
-      return exact
-    return next((opt for opt in self.backend_options if backend_id in opt.aliases), None)
+    """Look up a backend option by exact id; None when no entry matches."""
+    return next((opt for opt in self.backend_options if opt.id == backend_id), None)
 
   def discover_repos(self) -> list[dict[str, str]]:
     """Scan workspace_dirs for directories containing a .git folder."""

@@ -10,9 +10,16 @@ from typing import get_args, get_origin
 import pytest
 import yaml
 from pydantic import BaseModel
+from conftest import backend_option
 
 from src.core import config as config_module
-from src.core.config import CHARLIEBOT_HOME_ENV, CREDENTIALS_PREFIX, LEGACY_KEYS, CharlieBotConfig
+from src.core.config import (
+    CHARLIEBOT_HOME_ENV,
+    CREDENTIALS_PREFIX,
+    LEGACY_KEYS,
+    CharlieBotConfig,
+    require_backends,
+)
 from src.core.init_seed import init_charliebot_home
 from src.core.models import BACKEND_CLASSES
 
@@ -260,3 +267,19 @@ def test_init_charliebot_home_seeds_config_and_credentials(tmp_path, monkeypatch
   assert credentials_path.stat().st_mode & 0o777 == 0o600
   assert config_module.load_credentials().sections == {}
   assert (home / "config.yaml").read_bytes() == EXAMPLE_PATH.read_bytes()
+
+
+def test_require_backends_rejects_empty_list():
+  """An empty backends.options raises ValueError naming the key and the example file."""
+  with pytest.raises(ValueError) as exc_info:
+    require_backends(CharlieBotConfig())
+  message = str(exc_info.value)
+  assert "backends.options" in message
+  assert "config.example.yaml" in message
+
+
+def test_require_backends_accepts_one_entry():
+  """A config listing one backend option passes the startup gate."""
+  cfg = CharlieBotConfig(
+      backends={"options": [backend_option(id="a", label="A", type="cc-claude", model="m")]})
+  assert require_backends(cfg) is None

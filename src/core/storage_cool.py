@@ -56,6 +56,7 @@ from src.core.runs import CURSOR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 from src.core.timeouts import SQLITE_LOCK_WAIT_MS, SQLITE_LOCK_WAIT_SECONDS
 from src.core.token_tally import DEFAULT_OPENCODE_DB
+from src.core.worktree_trash import TRASH_DIR_NAME
 
 log = structlog.get_logger()
 
@@ -89,8 +90,6 @@ _SESSION_ID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a
 _SESSIONS_SEGMENT = "-sessions-"
 
 _CODEX_ROLLOUT_PREFIX = "rollout-"
-
-WORKTREE_TRASH_DIR = ".trash"
 
 _SQL_PARAM_CHUNK = 500
 
@@ -406,7 +405,7 @@ def _live_worktree_dir_names(cfg: CharlieBotConfig) -> set[str]:
   return {
       claude_project_dir_name(child)
       for child in worktree_dir.iterdir()
-      if child.is_dir() and child.name != WORKTREE_TRASH_DIR
+      if child.is_dir() and child.name != TRASH_DIR_NAME
   }
 
 

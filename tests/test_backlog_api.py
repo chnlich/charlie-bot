@@ -34,7 +34,7 @@ def test_reads_serve_configured_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: 
   (repo / "backlog" / "history-2026-01-01.yaml").write_text(yaml.dump([{"timestamp": "2026-01-01", "action": "add"}]))
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      backlog_repos=[BacklogRepoConfig(label="main", path=str(repo))],
+      ui={"backlog_repos": [BacklogRepoConfig(label="main", path=str(repo))]},
   )
   client = _build_client(monkeypatch, tmp_path, cfg)
 

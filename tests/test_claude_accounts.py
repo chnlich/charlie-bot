@@ -101,7 +101,7 @@ accounts:
       config_dir: ~/.claude
     - label: ext-1
       config_dir: ~/.claude-ext-1
-  claude_compaction:
+  compaction:
     relay_tokens: 120000
     expired_cache_tokens: 60000
 backends:
@@ -117,8 +117,8 @@ backends:
   cfg = core_config.load_config()
 
   assert [account.label for account in cfg.accounts.claude] == ["main", "ext-1"]
-  assert cfg.accounts.claude_compaction.relay_tokens == 120000
-  assert cfg.accounts.claude_compaction.expired_cache_tokens == 60000
+  assert cfg.accounts.compaction.relay_tokens == 120000
+  assert cfg.accounts.compaction.expired_cache_tokens == 60000
   assert cfg.backends.options[0].id == "claude-fable-5"
 
 
@@ -126,8 +126,8 @@ def test_config_defaults_carry_no_pool_and_default_floors(tmp_path: Path) -> Non
   cfg = _no_pool_cfg(tmp_path)
 
   assert cfg.accounts.claude == []
-  assert (cfg.accounts.claude_compaction.relay_tokens,
-          cfg.accounts.claude_compaction.expired_cache_tokens) == (100_000, 50_000)
+  assert (cfg.accounts.compaction.relay_tokens,
+          cfg.accounts.compaction.expired_cache_tokens) == (100_000, 50_000)
 
 
 # ---------------------------------------------------------------------------

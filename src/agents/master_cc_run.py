@@ -977,7 +977,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         if proposal:
           tex_event = {'type': ET.TEX_EDIT_PROPOSED}
           await item.callbacks.persist_and_broadcast(session_meta.id, tex_event)
-          log.info('tex_edit_proposed', session=session_meta.id)
+          log.info(ET.TEX_EDIT_PROPOSED, session=session_meta.id)
         else:
           clear_snapshot()
 

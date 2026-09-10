@@ -592,7 +592,7 @@ async def _run_single_iteration(
         report_path.write_text, "<!-- runner fallback: worker wrote no report -->\n" + fallback_body)
 
   log.info(
-      "improve_iteration_completed",
+      ET.IMPROVE_ITERATION_COMPLETED,
       session=session_id,
       iteration=i,
       status=status,

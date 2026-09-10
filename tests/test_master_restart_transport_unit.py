@@ -29,11 +29,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    SESSIONS_SESSION_MANAGER_PATCH_TARGET,
-    make_work_item,
-    patch_instructions_content,
-    run_session_consumer,
+  BUILD_BACKEND_PATCH_TARGET,
+  SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+  backend_option,
+  make_work_item,
+  patch_instructions_content,
+  run_session_consumer,
 )
 
 from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
@@ -41,9 +42,8 @@ from src.core import init as init_module
 from src.core import process as core_process
 from src.core import runs
 from src.core.config import CharlieBotConfig
-from conftest import backend_option
-
 from src.core.models import (
+    BackendOption,
     CreateSessionRequest,
     MasterRunRecord,
     SessionCallbacks,

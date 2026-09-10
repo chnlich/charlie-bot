@@ -6,18 +6,17 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import fake_backends
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from conftest import fake_backends
-
 from src.api import threads as threads_api
 from src.api.deps import (
-    get_config,
-    get_config_on_loop,
-    get_session_manager,
-    get_thread_manager,
-    get_trigger_manager,
+  get_config,
+  get_config_on_loop,
+  get_session_manager,
+  get_thread_manager,
+  get_trigger_manager,
 )
 from src.api.sessions import router as sessions_router
 from src.api.threads import _LIST_DESCRIPTION_CAP

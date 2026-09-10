@@ -40,6 +40,21 @@ from src.core.timeouts import ARTIFACT_PROBE_TIMEOUT
 # Repo root derived from this file: src/core/artifact_check.py -> parents[2] == repo root.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# One name per assertion: the outcome name a check stamps, its _ASSERTION_RUNNERS key, and its
+# _ASSERTION_SETS member are the same string, so the registry and the genre sets build on these
+# constants and a typo fails at import instead of as a KeyError when that check runs.
+STYLE_VERBATIM = "style-verbatim"
+SECTIONS_NUMBERED = "sections-numbered"
+FOOT_PRESENT = "foot-present"
+EXPLAIN_TRIAD = "explain-triad"
+FORK_OPEN_SHAPE = "fork-open-shape"
+FORK_EXPLAINER = "fork-explainer"
+FACT_ANCHORED = "fact-anchored"
+REQ_CHIPS = "req-chips"
+GOAL_BUDGET = "goal-budget"
+PAGE_HEIGHT = "page-height"
+ORDINAL_NAMED = "ordinal-named"
+
 # ---------------------------------------------------------------------------
 # Budgets and measurements
 # ---------------------------------------------------------------------------
@@ -277,7 +292,7 @@ _EXPLAINER_BODY_TAGS = frozenset({"li", "p", "table", "pre"})
 
 
 def _check_style_verbatim(ctx: _Context) -> list[AssertionOutcome]:
-  name = "style-verbatim"
+  name = STYLE_VERBATIM
   page_styles = _find(ctx.root, "style")
   if len(page_styles) != 1:
     return [_fail(name, f"page carries {len(page_styles)} <style> blocks, expected exactly one")]
@@ -291,7 +306,7 @@ def _check_style_verbatim(ctx: _Context) -> list[AssertionOutcome]:
 
 
 def _check_sections_numbered(ctx: _Context) -> list[AssertionOutcome]:
-  name = "sections-numbered"
+  name = SECTIONS_NUMBERED
   numbered: list[tuple[_Element, str]] = []
   for h2 in _find(ctx.root, "h2"):
     numbers = _find(h2, "span", ("n",))
@@ -321,7 +336,7 @@ def _open_forks(root: _Element) -> list[tuple[int, _Element]]:
 
 
 def _check_fork_open_shape(ctx: _Context) -> list[AssertionOutcome]:
-  name = "fork-open-shape"
+  name = FORK_OPEN_SHAPE
   failures: list[AssertionOutcome] = []
   for i, fork in _open_forks(ctx.root):
     missing: list[str] = []
@@ -337,7 +352,7 @@ def _check_fork_open_shape(ctx: _Context) -> list[AssertionOutcome]:
 
 
 def _check_fork_explainer(ctx: _Context) -> list[AssertionOutcome]:
-  name = "fork-explainer"
+  name = FORK_EXPLAINER
   failures: list[AssertionOutcome] = []
   for i, fork in _open_forks(ctx.root):
     layers = _find(fork, "details", ("details-layer",))
@@ -349,7 +364,7 @@ def _check_fork_explainer(ctx: _Context) -> list[AssertionOutcome]:
 
 
 def _check_fact_anchored(ctx: _Context) -> list[AssertionOutcome]:
-  name = "fact-anchored"
+  name = FACT_ANCHORED
   failures: list[AssertionOutcome] = []
   for i, fact in enumerate(_find(ctx.root, "span", ("tag", "fact")), 1):
     block = fact.parent
@@ -364,7 +379,7 @@ def _check_fact_anchored(ctx: _Context) -> list[AssertionOutcome]:
 
 
 def _check_goal_budget(ctx: _Context) -> list[AssertionOutcome]:
-  name = "goal-budget"
+  name = GOAL_BUDGET
   try:
     weighted = _measure_goal_weighted(ctx.artifact)
   except ValueError as e:
@@ -379,7 +394,7 @@ def _check_goal_budget(ctx: _Context) -> list[AssertionOutcome]:
 
 
 def _check_page_height(ctx: _Context) -> list[AssertionOutcome]:
-  name = "page-height"
+  name = PAGE_HEIGHT
   try:
     height = _measure_page_height(_require_chrome_bin(ctx.cfg), ctx.artifact)
   except ValueError as e:
@@ -589,7 +604,7 @@ def _ordinal_named_scan(ctx: _Context) -> tuple[set[str], list[tuple[_Element, l
 
 
 def _check_ordinal_named(ctx: _Context) -> list[AssertionOutcome]:
-  name = "ordinal-named"
+  name = ORDINAL_NAMED
   named, flagged = _ordinal_named_scan(ctx)
   if not flagged:
     return [_ok(name, f"{len(named)} external labels named in reach")]
@@ -621,35 +636,31 @@ def _presence_check(
 
 
 _ASSERTION_RUNNERS = {
-    "style-verbatim": _check_style_verbatim,
-    "sections-numbered": _check_sections_numbered,
-    "foot-present": _presence_check("foot-present", "div", ("foot",), "no div.foot on the page"),
-    "explain-triad": _presence_check("explain-triad", "div", ("triad",), "no div.triad on the page"),
-    "fork-open-shape": _check_fork_open_shape,
-    "fork-explainer": _check_fork_explainer,
-    "fact-anchored": _check_fact_anchored,
-    "req-chips": _presence_check("req-chips", "span", ("req",), "no span.req requirement chips on the page"),
-    "goal-budget": _check_goal_budget,
-    "page-height": _check_page_height,
-    "ordinal-named": _check_ordinal_named,
+    STYLE_VERBATIM: _check_style_verbatim,
+    SECTIONS_NUMBERED: _check_sections_numbered,
+    FOOT_PRESENT: _presence_check(FOOT_PRESENT, "div", ("foot",), "no div.foot on the page"),
+    EXPLAIN_TRIAD: _presence_check(EXPLAIN_TRIAD, "div", ("triad",), "no div.triad on the page"),
+    FORK_OPEN_SHAPE: _check_fork_open_shape,
+    FORK_EXPLAINER: _check_fork_explainer,
+    FACT_ANCHORED: _check_fact_anchored,
+    REQ_CHIPS: _presence_check(REQ_CHIPS, "span", ("req",), "no span.req requirement chips on the page"),
+    GOAL_BUDGET: _check_goal_budget,
+    PAGE_HEIGHT: _check_page_height,
+    ORDINAL_NAMED: _check_ordinal_named,
 }
 
 # The genre -> assertion-set table: the only place genres and their sets are stated.
 _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
     "plan":
         (
-            "style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "fork-explainer", "goal-budget",
-            "page-height", "ordinal-named"),
+            STYLE_VERBATIM, SECTIONS_NUMBERED, FOOT_PRESENT, FORK_OPEN_SHAPE, FORK_EXPLAINER, GOAL_BUDGET, PAGE_HEIGHT,
+            ORDINAL_NAMED),
     "understanding":
-        (
-            "style-verbatim", "sections-numbered", "foot-present", "fork-open-shape", "fork-explainer", "page-height",
-            "ordinal-named"),
+        (STYLE_VERBATIM, SECTIONS_NUMBERED, FOOT_PRESENT, FORK_OPEN_SHAPE, FORK_EXPLAINER, PAGE_HEIGHT, ORDINAL_NAMED),
     "sitrep":
-        (
-            "style-verbatim", "sections-numbered", "fork-open-shape", "fork-explainer", "fact-anchored", "req-chips",
-            "ordinal-named"),
-    "debug": ("style-verbatim", "sections-numbered", "fork-open-shape", "fact-anchored", "ordinal-named"),
-    "explain": ("style-verbatim", "sections-numbered", "explain-triad", "fork-open-shape", "ordinal-named"),
+        (STYLE_VERBATIM, SECTIONS_NUMBERED, FORK_OPEN_SHAPE, FORK_EXPLAINER, FACT_ANCHORED, REQ_CHIPS, ORDINAL_NAMED),
+    "debug": (STYLE_VERBATIM, SECTIONS_NUMBERED, FORK_OPEN_SHAPE, FACT_ANCHORED, ORDINAL_NAMED),
+    "explain": (STYLE_VERBATIM, SECTIONS_NUMBERED, EXPLAIN_TRIAD, FORK_OPEN_SHAPE, ORDINAL_NAMED),
 }
 
 GENRES: tuple[str, ...] = tuple(_ASSERTION_SETS)

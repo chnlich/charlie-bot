@@ -11,6 +11,7 @@ import structlog
 from src.agents.backends.base import (
     USER_LOCAL_BIN,
     AgentBackend,
+    make_compact_boundary_event,
     make_context_reading_event,
     make_error_event,
     make_result_event,
@@ -135,16 +136,7 @@ class CharlieCodeBackend(AgentBackend):
       return [make_error_event(event.get("message", ""))]
 
     if event_type == "compact":
-      return [
-          {
-              "type": ET.SYSTEM,
-              "subtype": ET.COMPACT_BOUNDARY,
-              ET.COMPACT_METADATA: {
-                  "trigger": event["trigger"],
-                  ET.COMPACT_PRE_TOKENS: event["pre_tokens"],
-              },
-          }
-      ]
+      return [make_compact_boundary_event(event["trigger"], event["pre_tokens"])]
 
     if event_type == "context":
       return [

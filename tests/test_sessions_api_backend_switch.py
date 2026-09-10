@@ -11,15 +11,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 import yaml
-from conftest import CODEX_BACKEND_OPTION
+from conftest import CODEX_BACKEND_OPTION, backend_option
 from conftest import make_sessions_client as _build_client
 from conftest import make_transcript as _make_transcript
 
 from src.agents import master_cc
 from src.api.sessions import _active_backend_payload, _same_backend_domain
-from src.core.config import CharlieBotConfig
+from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
 from src.core.models import (
-    BackendOption,
     CreateSessionRequest,
     SessionMetadata,
     SessionStatus,
@@ -27,34 +26,23 @@ from src.core.models import (
 from src.core.sessions import SessionManager
 
 
-def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path, Path]:
+def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path]:
+  """cfg plus the one login directory every cc-claude option shares: entries carry
+  no per-entry config dir any more — they all draw the process login, which the
+  guard/reachability test pins through $CLAUDE_CONFIG_DIR."""
   config_a = tmp_path / "cfg-a"
-  config_b = tmp_path / "cfg-b"
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          BackendOption(
-              id="claude-opus-5",
-              label="Opus 5",
-              type="cc-claude",
-              model="claude-opus-5",
-              claude_config_dir=str(config_a)),
-          BackendOption(
-              id="claude-fable-5",
-              label="Fable 5",
-              type="cc-claude",
-              model="claude-fable-5",
-              claude_config_dir=str(config_a)),
-          BackendOption(
-              id="invite-opus",
-              label="Invite Opus",
-              type="cc-claude",
-              model="claude-opus-4-6",
-              claude_config_dir=str(config_b)),
-          CODEX_BACKEND_OPTION,
-      ],
+      backends={
+          "options": [
+              backend_option(id="claude-opus-5", label="Opus 5", type="cc-claude", model="claude-opus-5"),
+              backend_option(id="claude-fable-5", label="Fable 5", type="cc-claude", model="claude-fable-5"),
+              backend_option(id="invite-opus", label="Invite Opus", type="cc-claude", model="claude-opus-4-6"),
+              CODEX_BACKEND_OPTION,
+          ]
+      },
   )
-  return cfg, config_a, config_b
+  return cfg, config_a
 
 
 # ---------------------------------------------------------------------------
@@ -62,15 +50,17 @@ def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path, Path]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("tgt_id", ["claude-opus-5", "claude-fable-5", "invite-opus", "codex-o3"])
-def test_guard_is_exactly_transcript_reachability(tmp_path: Path, tgt_id: str) -> None:
+@pytest.mark.parametrize("tgt_id", ["claude-opus-5", "claude-fable-5", "codex-o3"])
+def test_guard_is_exactly_transcript_reachability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tgt_id: str) -> None:
   """allowed(cur, tgt) holds exactly when _resolve_resume_id(tgt) re-finds the transcript.
 
-  A transcript written under the *current* option's resolved config dir is
-  reachable by a cc-claude target iff that target shares the current option's
+  A transcript written under the process login dir ($CLAUDE_CONFIG_DIR) is
+  reachable by any cc-claude target — every cc-claude option shares that one
   resume domain. Non-cc-claude targets are refused by the guard regardless.
   """
-  cfg, config_a, _config_b = _build_cfg(tmp_path)
+  cfg, config_a = _build_cfg(tmp_path)
+  monkeypatch.setenv(CLAUDE_CONFIG_DIR_ENV_VAR, str(config_a))
   sid = "cc-session-uuid"
   _make_transcript(config_a, sid)
 
@@ -91,11 +81,11 @@ def test_guard_is_exactly_transcript_reachability(tmp_path: Path, tgt_id: str) -
 
 def test_switchable_backend_ids_follow_uniform_domain_rule(tmp_path: Path) -> None:
   """Ordinary sessions follow the domain rule; PM dedicated sessions offer all backends."""
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   meta = SessionMetadata(id="m_id", name="t", backend="claude-opus-5")
   payload = _active_backend_payload(meta, cfg)
   assert payload["active_backend"] == "claude-opus-5"
-  assert payload["switchable_backends"] == ["claude-opus-5", "claude-fable-5"]
+  assert payload["switchable_backends"] == ["claude-opus-5", "claude-fable-5", "invite-opus"]
   assert payload["backend_switch_rotates"] is False
 
   # A role-carrying session follows the same domain rule: outside the
@@ -110,22 +100,22 @@ def test_switchable_backend_ids_follow_uniform_domain_rule(tmp_path: Path) -> No
   # that switching rotates.
   dedicated = SessionMetadata(id="pm-id", name="pm", backend="claude-opus-5", scheduled_task="pm_x", role="project")
   dedicated_payload = _active_backend_payload(dedicated, cfg)
-  assert dedicated_payload["switchable_backends"] == [opt.id for opt in cfg.backend_options]
+  assert dedicated_payload["switchable_backends"] == [opt.id for opt in cfg.backends.options]
   assert dedicated_payload["backend_switch_rotates"] is True
 
   # A cron-dedicated role-less session keeps the domain-filtered list (its
   # session-page switch stays an in-place switch).
   rl = SessionMetadata(id="rl-id", name="rl", backend="claude-opus-5", scheduled_task="nightly", role=None)
   rl_payload = _active_backend_payload(rl, cfg)
-  assert rl_payload["switchable_backends"] == ["claude-opus-5", "claude-fable-5"]
+  assert rl_payload["switchable_backends"] == ["claude-opus-5", "claude-fable-5", "invite-opus"]
   assert rl_payload["backend_switch_rotates"] is False
 
 
 def test_payload_resolves_default_when_backend_empty(tmp_path: Path) -> None:
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   meta = SessionMetadata(id="m_id", name="t", backend="")
   payload = _active_backend_payload(meta, cfg)
-  assert payload["active_backend"] == cfg.backend_options[0].id
+  assert payload["active_backend"] == cfg.backends.options[0].id
   assert "claude-opus-5" in payload["switchable_backends"]
 
 
@@ -156,7 +146,7 @@ async def test_switch_same_domain_returns_updated_meta_and_persists_audit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   sid = await _seed(session_mgr, backend="claude-opus-5")
 
@@ -174,7 +164,7 @@ async def test_switch_same_domain_returns_updated_meta_and_persists_audit(
 
 @pytest.mark.asyncio
 async def test_switch_to_effective_current_is_idempotent_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   sid = await _seed(session_mgr, backend="claude-opus-5")
 
@@ -196,7 +186,7 @@ async def test_switch_to_effective_current_is_idempotent_noop(tmp_path: Path, mo
 
 @pytest.mark.asyncio
 async def test_switch_cross_domain_refuses_and_guides_clone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   sid = await _seed(session_mgr, backend="claude-opus-5")
 
@@ -204,7 +194,6 @@ async def test_switch_cross_domain_refuses_and_guides_clone(tmp_path: Path, monk
 
   with _build_client(cfg, session_mgr) as client:
     for target, reason in [
-        ("invite-opus", "different config dir"),
         ("codex-o3", "non-cc-claude family"),
     ]:
       response = client.post(f"/api/sessions/{sid}/backend", json={"backend": target})
@@ -218,7 +207,7 @@ async def test_switch_cross_domain_refuses_and_guides_clone(tmp_path: Path, monk
 @pytest.mark.asyncio
 async def test_switch_same_domain_role_session_stays_in_place(tmp_path: Path) -> None:
   """A non-cron role session switches in place via the ordinary same-domain path."""
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   role_session = await _seed_role(session_mgr, backend="claude-opus-5")
 
@@ -240,12 +229,12 @@ async def test_switch_same_domain_role_session_stays_in_place(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_switch_cross_domain_role_session_gets_clone_fork_400(tmp_path: Path) -> None:
   """A non-cron role-carrying session gets the uniform cross-domain 400; it is unchanged."""
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   role_session = await _seed_role(session_mgr, backend="claude-opus-5")
 
   with _build_client(cfg, session_mgr) as client:
-    for target in ("invite-opus", "codex-o3"):
+    for target in ("codex-o3",):
       response = client.post(f"/api/sessions/{role_session.id}/backend", json={"backend": target})
       assert response.status_code == 400, f"target={target}"
       detail = response.json()["detail"]
@@ -261,7 +250,7 @@ async def test_switch_cross_domain_role_session_gets_clone_fork_400(tmp_path: Pa
 
 def test_manager_resolve_route_is_gone(tmp_path: Path) -> None:
   """GET /api/sessions/manager does not route; "manager" can only match /{session_id} → 404."""
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   with _build_client(cfg, session_mgr) as client:
     response = client.get("/api/sessions/manager")
@@ -271,7 +260,7 @@ def test_manager_resolve_route_is_gone(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_switch_unknown_backend_is_400(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   sid = await _seed(session_mgr, backend="claude-opus-5")
   captured = _capture_persisted_events(monkeypatch, session_mgr)
@@ -285,7 +274,7 @@ async def test_switch_unknown_backend_is_400(tmp_path: Path, monkeypatch: pytest
 
 @pytest.mark.asyncio
 async def test_switch_missing_session_returns_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   captured = _capture_persisted_events(monkeypatch, session_mgr)
   with _build_client(cfg, session_mgr) as client:
@@ -339,7 +328,7 @@ async def test_switch_pm_dedicated_session_writes_through_to_yaml_and_rotates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   home = tmp_path / ".charliebot"
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
   session_mgr = SessionManager(cfg)
@@ -380,7 +369,7 @@ async def test_switch_pm_dedicated_session_busy_is_409_without_yaml_write(
 
   home = tmp_path / ".charliebot"
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   yaml_path = _seed_pm_task(home, "pm_x")
   parent = await _seed_pm_session(session_mgr)
@@ -401,7 +390,7 @@ async def test_switch_pm_dedicated_session_busy_is_409_without_yaml_write(
 
 @pytest.mark.asyncio
 async def test_switch_pm_dedicated_session_unknown_backend_is_400(tmp_path: Path) -> None:
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   parent = SessionMetadata(id="pm-id", name="pm", scheduled_task="pm_x", role="project", backend="claude-opus-5")
   await session_mgr.save_metadata(parent)
@@ -416,7 +405,7 @@ async def test_switch_pm_dedicated_session_unknown_backend_is_400(tmp_path: Path
 @pytest.mark.asyncio
 async def test_switch_pm_dedicated_session_missing_task_yaml_is_404(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   home = tmp_path / ".charliebot"
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
   session_mgr = SessionManager(cfg)
@@ -434,7 +423,7 @@ async def test_switch_pm_dedicated_session_missing_task_yaml_is_404(
 @pytest.mark.asyncio
 async def test_switch_role_less_dedicated_session_stays_in_place(tmp_path: Path) -> None:
   """A cron-dedicated role-less session keeps the in-place domain switch."""
-  cfg, _config_a, _config_b = _build_cfg(tmp_path)
+  cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   rl = await session_mgr.create_session(
       CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),

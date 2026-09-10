@@ -25,6 +25,7 @@ from src.core.config import (
     get_scheduled_task_errors,
     get_scheduled_tasks,
     master_task_project_error,
+    require_backend_option,
 )
 from src.core.models import SessionMetadata
 from src.core.scheduler import scheduled_task_session_binding
@@ -63,8 +64,12 @@ def _write_cron_yaml(name: str, data: dict) -> None:
 
 
 def _validate_backend_id(backend: str | None, cfg: CharlieBotConfig) -> None:
-  if backend and cfg.get_backend_option(backend) is None:
-    raise HTTPException(status_code=400, detail=f"backend '{backend}' is not in backends.options")
+  if not backend:
+    return
+  try:
+    require_backend_option(cfg, backend, subject="")
+  except ValueError as e:
+    raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 def _apply_task_update(task: dict, req: "TaskUpdate") -> dict:

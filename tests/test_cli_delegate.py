@@ -315,7 +315,7 @@ def test_main_help_states_backend_omission_rule(capsys: pytest.CaptureFixture[st
   assert exc_info.value.code == 0
   out = " ".join(capsys.readouterr().out.split())
   assert "Omit --backend unless the user explicitly named a backend for this delegation" in out
-  assert "verify is routed to the first model_preference entry that differs from it" in out
+  assert "verify is routed to the first backends.preference entry that differs from it" in out
 
 
 def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

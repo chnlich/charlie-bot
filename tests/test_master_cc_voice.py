@@ -10,6 +10,7 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
     TerminateFlagBackend,
+    backend_option,
     drain_session_consumer,
     make_work_item,
     mock_session_callbacks,
@@ -28,7 +29,7 @@ DISCLAIMER = master_cc_run._VOICE_DISCLAIMER
 def _make_cfg(tmp_path: Path) -> core_config.CharlieBotConfig:
   return core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[models.BackendOption(id="fake", label="Fake", type="codex")],
+      backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")]},
   )
 
 
@@ -69,7 +70,7 @@ async def test_run_cc_hands_disclaimer_prefixed_prompt_to_backend(
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **kw: backend)
   patch_instructions_content(monkeypatch)
 
-  item = make_work_item(cfg, meta, cfg.backend_options[0], user_content="transcribed hello", is_voice=True)
+  item = make_work_item(cfg, meta, cfg.backends.options[0], user_content="transcribed hello", is_voice=True)
 
   await master_cc._run_cc(item)
 
@@ -87,7 +88,7 @@ async def test_run_cc_passes_verbatim_prompt_when_not_voice(
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **kw: backend)
   patch_instructions_content(monkeypatch)
 
-  item = make_work_item(cfg, meta, cfg.backend_options[0], user_content="plain hello")
+  item = make_work_item(cfg, meta, cfg.backends.options[0], user_content="plain hello")
 
   await master_cc._run_cc(item)
 

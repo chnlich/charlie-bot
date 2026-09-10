@@ -20,14 +20,14 @@ _START_TIMEOUT_SEC = 5.0
 _POLL_INTERVAL_SEC = 0.2
 
 
-def _resolve_code_server_binary(cfg: CharlieBotConfig) -> str | None:
+def _resolve_code_server_executable(cfg: CharlieBotConfig) -> str | None:
   if cfg.code_server.bin:
     return shutil.which(str(Path(cfg.code_server.bin).expanduser()))
   return shutil.which("code-server")
 
 
 def is_code_server_available(cfg: CharlieBotConfig) -> bool:
-  return _resolve_code_server_binary(cfg) is not None
+  return _resolve_code_server_executable(cfg) is not None
 
 
 def _resolve_folder_under_allowed_root(folder: str, cfg: CharlieBotConfig) -> Path:
@@ -63,7 +63,7 @@ def open_code_server(
     folder: str = Query(..., description="Folder path to open in code-server"),
     cfg: CharlieBotConfig = Depends(get_config),
 ):
-  binary = _resolve_code_server_binary(cfg)
+  binary = _resolve_code_server_executable(cfg)
   if binary is None:
     raise HTTPException(status_code=404, detail="code-server not available on this host")
 

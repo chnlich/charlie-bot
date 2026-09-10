@@ -144,9 +144,9 @@ class Worker:
         else:
           backend_kwargs["claude_session_id"] = self._thread.claude_session_id
       if on_spawn is not None:
-        return build_backend(self._backend_option, self._cfg, **backend_kwargs)
+        return build_backend(self._backend_option, self._cfg, claude_account=self._claude_account, **backend_kwargs)
       try:
-        return build_backend(self._backend_option, self._cfg, **backend_kwargs)
+        return build_backend(self._backend_option, self._cfg, claude_account=self._claude_account, **backend_kwargs)
       except Exception as e:
         log.warning(
             "translate_backend_unresolved",
@@ -336,7 +336,6 @@ class Worker:
       )
     self._relays += 1
     self._claude_account = nxt
-    self._backend_option = self._backend_option.model_copy(update={"claude_config_dir": nxt.config_dir})
     self._task_description = claude_relay.CONTINUATION_PROMPT
     self._resume_session_id = self._thread.claude_session_id
 

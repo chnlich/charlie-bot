@@ -76,13 +76,18 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 ## CLI at a glance
 
+- `charliebot artifact` — run an artifact page's genre DOM assertions, plus the optional cold-read probe
+- `charliebot config` — print a config key's value through the loader (`config get <key>`)
 - `charliebot delegate` — delegate a task to a worker agent
 - `charliebot improve` — start an iterative improvement loop
 - `charliebot memory` — query and stage entries in the memory store
 - `charliebot plan` — register, amend, approve, and close plans
+- `charliebot publish` — publish an artifact to the URL readers beyond the operator's devices open
 - `charliebot remote-launch` — launch a long-running remote command
 - `charliebot schedule-trigger` — schedule a delayed trigger (timed or watching PIDs/SLURM jobs)
 - `charliebot session` — create sessions and relay agent-to-agent messages between them
+- `charliebot slack` — reply to or ack the Slack thread a session was summoned from
+- `charliebot storage` — reclaim storage held by cold sessions and unreferenced backend records
 - `charliebot gc-trash` — inspect and purge quarantined worktree trash
 
 ## Repository layout

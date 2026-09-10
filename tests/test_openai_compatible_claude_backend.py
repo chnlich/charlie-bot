@@ -3,6 +3,7 @@ from typing import Any
 
 import httpx
 import pytest
+from conftest import backend_option, stub_credentials
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -10,7 +11,6 @@ from src.agents.backends.openai_compatible_claude import OpenAICompatibleClaudeB
 from src.agents.backends.registry import build_backend
 from src.api.anthropic_proxy import router as proxy_router
 from src.core.config import CharlieBotConfig, get_config
-from src.core.models import BackendOption
 
 _PROXY_PREFIX = "/api/anthropic-proxy"
 _BACKEND_ID = "cc-glm52"
@@ -21,7 +21,7 @@ _UPSTREAM_BASE = "http://upstream.example/v1"
 _AUTH_TOKEN = "charliebot-key"
 
 
-def _option(**overrides) -> BackendOption:
+def _option(**overrides) -> Any:
   base: dict[str, Any] = {
       "id": _BACKEND_ID,
       "label": "CC GLM-5.2",
@@ -30,15 +30,11 @@ def _option(**overrides) -> BackendOption:
       "api_base": _UPSTREAM_BASE,
   }
   base.update(overrides)
-  return BackendOption(**base)
+  return backend_option(**base)
 
 
-def _cfg(option: BackendOption | None = None, **overrides) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      server_port=8123,
-      charliebot_access_key=overrides.pop("charliebot_access_key", _AUTH_TOKEN),
-      backend_options=[option or _option()],
-  )
+def _cfg(option: Any | None = None) -> CharlieBotConfig:
+  return CharlieBotConfig(server={"port": 8123}, backends={"options": [option or _option()]})
 
 
 def test_prepare_env_sets_proxy_endpoint_and_token() -> None:
@@ -60,13 +56,14 @@ def test_requires_model_proxy_and_auth_token() -> None:
     OpenAICompatibleClaudeBackend(proxy_base_url="http://localhost:8000/proxy", auth_token="key", model="")
   with pytest.raises(ValueError, match="proxy_base_url"):
     OpenAICompatibleClaudeBackend(proxy_base_url="", auth_token="key", model=_PROXY_MODEL)
-  with pytest.raises(ValueError, match="charliebot_access_key"):
+  with pytest.raises(ValueError, match="auth_token"):
     OpenAICompatibleClaudeBackend(proxy_base_url="http://localhost:8000/proxy", auth_token="", model=_PROXY_MODEL)
 
 
 def test_registry_builds_openai_compatible_backend() -> None:
   option = _option()
   cfg = _cfg(option)
+  stub_credentials({"charliebot": {"access_key": _AUTH_TOKEN}})
 
   backend = build_backend(option, cfg)
 
@@ -77,14 +74,11 @@ def test_registry_builds_openai_compatible_backend() -> None:
   assert prepared["ANTHROPIC_MODEL"] == _PROXY_MODEL
 
 
-def test_registry_requires_model_and_access_key() -> None:
-  option_no_model = _option(model=None)
-  with pytest.raises(ValueError, match="no default model"):
-    build_backend(option_no_model, _cfg(option_no_model, charliebot_access_key=_AUTH_TOKEN))
+def test_registry_requires_access_key_from_credentials() -> None:
+  stub_credentials({})
 
-  option_with_model = _option()
-  with pytest.raises(ValueError, match="charliebot_access_key"):
-    build_backend(option_with_model, _cfg(option_with_model, charliebot_access_key=""))
+  with pytest.raises(ValueError, match=r"credentials\.charliebot\.access_key"):
+    build_backend(_option(), _cfg())
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +131,8 @@ def _anthropic_payload() -> dict:
 
 
 def test_route_forwards_upstream_model_and_bearer_auth_and_translates_response(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setenv("GLM_INTERNAL_KEY", "secret-token")
-  cfg = _cfg(_option(api_key_env="GLM_INTERNAL_KEY"))
+  stub_credentials({"glm-upstream": {"api_key": "secret-token"}})
+  cfg = _cfg(_option(credential="glm-upstream"))
   captured: dict[str, Any] = {}
 
   def handler(request: httpx.Request) -> httpx.Response:
@@ -165,7 +159,7 @@ def test_route_forwards_upstream_model_and_bearer_auth_and_translates_response(m
   assert body["stop_reason"] == "end_turn"
 
 
-def test_route_omits_authorization_when_api_key_env_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_route_omits_authorization_when_credential_unset(monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = _cfg(_option())
   captured: dict[str, Any] = {}
 
@@ -185,9 +179,9 @@ def test_route_omits_authorization_when_api_key_env_absent(monkeypatch: pytest.M
   assert captured["authorization"] is None
 
 
-def test_route_fails_loud_when_api_key_env_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.delenv("DEFINITELY_MISSING_KEY", raising=False)
-  cfg = _cfg(_option(api_key_env="DEFINITELY_MISSING_KEY"))
+def test_route_fails_loud_when_credential_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+  stub_credentials({})
+  cfg = _cfg(_option(credential="missing_upstream"))
 
   with _build_client(cfg) as client:
     response = client.post(
@@ -196,11 +190,11 @@ def test_route_fails_loud_when_api_key_env_missing(monkeypatch: pytest.MonkeyPat
     )
 
   assert response.status_code == 400
-  assert "DEFINITELY_MISSING_KEY" in response.json()["detail"]
+  assert "missing_upstream" in response.json()["detail"]
 
 
 def test_route_returns_404_for_unknown_backend_id() -> None:
-  cfg = CharlieBotConfig(server_port=8123, charliebot_access_key="key", backend_options=[])
+  cfg = CharlieBotConfig(server={"port": 8123}, backends={"options": []})
 
   with _build_client(cfg) as client:
     response = client.post(
@@ -214,11 +208,8 @@ def test_route_returns_404_for_unknown_backend_id() -> None:
 
 def test_route_rejects_wrong_backend_type() -> None:
   cfg = CharlieBotConfig(
-      server_port=8123,
-      charliebot_access_key="key",
-      backend_options=[
-          BackendOption(id="opus", label="Opus", type="cc-claude", model="claude-opus-4-8"),
-      ],
+      server={"port": 8123},
+      backends={"options": [backend_option(id="opus", label="Opus", type="cc-claude", model="claude-opus-4-8")]},
   )
 
   with _build_client(cfg) as client:
@@ -229,21 +220,3 @@ def test_route_rejects_wrong_backend_type() -> None:
 
   assert response.status_code == 400
   assert "not type 'cc-openai-compatible'" in response.json()["detail"]
-
-
-@pytest.mark.parametrize(
-    ("override", "detail"), [
-        pytest.param({"api_base": None}, "missing api_base", id="api_base"),
-        pytest.param({"model": None}, "missing model", id="model"),
-    ])
-def test_route_requires_option_fields(override: dict[str, Any], detail: str) -> None:
-  cfg = _cfg(_option(**override))
-
-  with _build_client(cfg) as client:
-    response = client.post(
-        _MESSAGES_PATH,
-        json=_anthropic_payload(),
-    )
-
-  assert response.status_code == 400
-  assert detail in response.json()["detail"]

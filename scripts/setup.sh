@@ -65,6 +65,7 @@ home_items = [
     ("dir", "~/.charliebot/sessions/", cfg.sessions_dir),
     ("dir", "~/.charliebot/config.d/", cfg.config_d_dir),
     ("file", "~/.charliebot/config.yaml", cfg.config_file),
+    ("file", "~/.charliebot/credentials.yaml", cfg.credentials_file),
     ("dir", "~/.charliebot/memory/", cfg.memory_dir),
     ("file", "~/.charliebot/memory/topics", cfg.memory_dir / "topics"),
     ("file", "~/.charliebot/memory/.gitignore", cfg.memory_dir / ".gitignore"),

@@ -378,8 +378,15 @@ def test_takeoff_gate_scan_matches_forward_walk_on_randomized_histories() -> Non
   random file order, judged at randomized `now` points."""
   rng = random.Random(20260909)
   phrase_pool = [
-      "take off", "TAKE   OFF", "pre take off", "PRE\n\t TAKE   OFF", "please proceed",
-      "pre take off then take off", "let us begin", "take\toff", "no authorization here",
+      "take off",
+      "TAKE   OFF",
+      "pre take off",
+      "PRE\n\t TAKE   OFF",
+      "please proceed",
+      "pre take off then take off",
+      "let us begin",
+      "take\toff",
+      "no authorization here",
       "x" * 200 + " take off",
   ]
   stamp_pool = [
@@ -417,8 +424,13 @@ def test_takeoff_gate_scan_matches_forward_walk_on_randomized_histories() -> Non
     return {"type": ET.ASSISTANT, "content": rng.choice(phrase_pool)}
 
   now_base = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
-  offsets = [-timedelta(hours=13), -timedelta(hours=12), timedelta(0), timedelta(hours=11, minutes=59),
-             timedelta(hours=12), timedelta(hours=48)]
+  offsets = [
+      -timedelta(hours=13), -timedelta(hours=12),
+      timedelta(0),
+      timedelta(hours=11, minutes=59),
+      timedelta(hours=12),
+      timedelta(hours=48)
+  ]
   for _ in range(400):
     events = [random_event() for _ in range(rng.randint(0, 14))]
     now = now_base + rng.choice(offsets)

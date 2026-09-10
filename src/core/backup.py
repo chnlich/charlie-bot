@@ -1,4 +1,4 @@
-"""Core backup/restore logic for a CharlieBot profile's state directory."""
+"""Core backup logic for a CharlieBot profile's state directory."""
 
 import tarfile
 from datetime import datetime
@@ -34,11 +34,6 @@ _BACKUP_SUFFIX = '.tar.gz'
 _DAILY_THRESHOLD = 7
 _WEEKLY_THRESHOLD = 30
 _MONTHLY_THRESHOLD = 90
-
-
-def _safe_extractall(tar: tarfile.TarFile, target: Path) -> None:
-  """Extract tar members safely, preventing path-traversal attacks (CVE-2007-4559)."""
-  tar.extractall(path=target, filter='data')
 
 
 def _should_exclude(arcname: str) -> bool:
@@ -138,52 +133,3 @@ def apply_retention(target_dir: Path | None = None) -> None:
         log.info('backup_deleted', name=backup_file.name, age_days=age)
       except Exception as e:
         log.warning('backup_delete_failed', name=backup_file.name, error=str(e))
-
-
-def restore_backup(archive_path: Path, target: Path | None = None) -> None:
-  """Extract a backup archive to target directory.
-
-  Args:
-    archive_path: Path to the .tar.gz backup file.
-    target: Destination directory. Defaults to this profile's state directory.
-  """
-  if target is None:
-    target = charliebot_dir()
-  if target.exists():
-    answer = input(f'Warning: {target} already exists. Overwrite? [y/N] ').strip().lower()
-    if answer != 'y':
-      print('Restore cancelled.')
-      log.info('backup_restore_cancelled', archive=str(archive_path), target=str(target))
-      return
-  target.mkdir(parents=True, exist_ok=True)
-  with tarfile.open(archive_path, 'r:gz') as tar:
-    _safe_extractall(tar, target)
-  log.info('backup_restored', archive=str(archive_path), target=str(target))
-
-
-def list_backups(scan_dir: Path | None = None) -> list:
-  """Return sorted list of backup files with size and date info.
-
-  Args:
-    scan_dir: Directory to scan. Defaults to this profile's backup directory.
-
-  Returns:
-    List of dicts with keys: path, name, size, date.
-  """
-  if scan_dir is None:
-    scan_dir = backup_dir()
-  if not scan_dir.exists():
-    return []
-  results = []
-  for f in sorted(scan_dir.glob(f'{_BACKUP_PREFIX}*{_BACKUP_SUFFIX}')):
-    try:
-      stat = f.stat()
-      results.append({
-          'path': f,
-          'name': f.name,
-          'size': stat.st_size,
-          'date': _parse_backup_date(f.name),
-      })
-    except Exception as e:
-      log.warning('backup_list_stat_failed', path=str(f), error=str(e))
-  return results

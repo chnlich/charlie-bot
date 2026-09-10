@@ -1,5 +1,7 @@
 """Schema and loader gates for the sectioned CharlieBotConfig."""
 
+import json
+import os
 import re
 from pathlib import Path
 from typing import get_args, get_origin
@@ -130,3 +132,83 @@ def test_backend_entry_unknown_field_names_id_type_and_field(tmp_path, monkeypat
   with pytest.raises(ValueError) as excinfo:
     config_module.load_config()
   assert str(excinfo.value) == "backend entry 'test-backend' (type cc-claude) has unknown field 'bogus_field'"
+
+
+def _credentials_home(tmp_path, monkeypatch) -> Path:
+  """A temp CHARLIEBOT_HOME with a minimal valid sectioned config.yaml; returns the home path."""
+  home = tmp_path / "home"
+  home.mkdir()
+  (home / "config.yaml").write_text("server:\n  port: 2001\n", encoding="utf-8")
+  monkeypatch.setenv(CHARLIEBOT_HOME_ENV, str(home))
+  return home
+
+
+def test_load_without_credentials_file_gives_empty_sections(tmp_path, monkeypatch):
+  home = _credentials_home(tmp_path, monkeypatch)
+  assert config_module.load_config().server.port == 2001
+  credentials = config_module.load_credentials()
+  assert credentials.sections == {}
+  assert credentials.path == home / "credentials.yaml"
+
+
+def test_credentials_stay_out_of_config_and_get_returns_each_sentinel(tmp_path, monkeypatch):
+  home = _credentials_home(tmp_path, monkeypatch)
+  sections = {
+      "alpha": {"token": "sentinel-alpha-token", "secret": "sentinel-alpha-secret"},
+      "beta": {"token": "sentinel-beta-token", "secret": "sentinel-beta-secret"},
+  }
+  (home / "credentials.yaml").write_text(yaml.safe_dump(sections), encoding="utf-8")
+  dumped = json.dumps(config_module.load_config().model_dump(mode="json"))
+  credentials = config_module.load_credentials()
+  for section, keys in sections.items():
+    for key, sentinel in keys.items():
+      assert sentinel not in dumped
+      assert credentials.get(section, key) == sentinel
+  with pytest.raises(ValueError) as excinfo:
+    credentials.require("alpha", "missing_key")
+  assert str(excinfo.value) == f"credentials.alpha.missing_key is not set in {home / 'credentials.yaml'}"
+
+
+@pytest.mark.parametrize(
+    "body, fragment",
+    [
+        ("- one\n- two\n", "credentials must be a mapping"),
+        ("alpha: scalar\n", "credentials.alpha"),
+        ("alpha:\n  key: [1, 2]\n", "credentials.alpha.key"),
+    ],
+)
+def test_credentials_shape_errors_name_the_offending_depth(tmp_path, monkeypatch, body, fragment):
+  home = _credentials_home(tmp_path, monkeypatch)
+  (home / "credentials.yaml").write_text(body, encoding="utf-8")
+  with pytest.raises(ValueError) as excinfo:
+    config_module.load_credentials()
+  assert fragment in str(excinfo.value)
+
+
+def test_get_credentials_caches_until_the_file_changes(tmp_path, monkeypatch):
+  home = _credentials_home(tmp_path, monkeypatch)
+  cred_path = home / "credentials.yaml"
+  cred_path.write_text("alpha:\n  key: one\n", encoding="utf-8")
+  first = config_module.get_credentials()
+  assert first.get("alpha", "key") == "one"
+  assert config_module.get_credentials() is first
+  cred_path.write_text("alpha:\n  key: two\n", encoding="utf-8")
+  st = os.stat(cred_path)
+  os.utime(cred_path, (st.st_atime, st.st_mtime + 10))
+  second = config_module.get_credentials()
+  assert second is not first
+  assert second.get("alpha", "key") == "two"
+
+
+def test_credentials_example_covers_every_credentials_legacy_key():
+  example_path = Path(__file__).resolve().parents[1] / "configs" / "credentials.example.yaml"
+  raw_lines = example_path.read_text(encoding="utf-8").splitlines()
+  stripped = "\n".join(line[2:] if line.startswith("# ") else line for line in raw_lines)
+  example = yaml.safe_load(stripped)
+  assert isinstance(example, dict)
+  for old_key, location in LEGACY_KEYS.items():
+    if not old_key.startswith(CREDENTIALS_PREFIX):
+      continue
+    section, key = location.split(".", 1)
+    assert section in example, old_key
+    assert key in example[section], old_key

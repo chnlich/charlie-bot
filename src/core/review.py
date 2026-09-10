@@ -273,17 +273,17 @@ def validate_review_prerequisites(
 
 
 def _resolve_preference_option(cfg: CharlieBotConfig, option_id: str) -> BackendOption:
-  """Resolve a model_preference entry to its BackendOption with default model.
+  """Resolve a backends.preference entry to its BackendOption with default model.
 
-  Raises ValueError if the option_id is not in backend_options or requires but lacks a model.
+  Raises ValueError if the option_id is not in backends.options or requires but lacks a model.
   """
   option = cfg.get_backend_option(option_id)
   if option is None:
-    raise ValueError(f"model_preference entry '{option_id}' not in backend_options")
+    raise ValueError(f"backends.preference entry '{option_id}' not in backends.options")
   if backend_type_allows_missing_model(option.type):
     return option.model_copy(update={"model": None})
   if not option.model:
-    raise ValueError(f"model_preference entry '{option_id}' has no default model")
+    raise ValueError(f"backends.preference entry '{option_id}' has no default model")
   return option
 
 
@@ -293,13 +293,13 @@ def select_reviewer_backend(
     worker_model: str | None,
     tried_backends: list[str],
 ) -> tuple[str, str | None, list[str]] | None:
-  """Select a checking-role backend (reviewer, verify default) via model_preference, skipping already-tried backends.
+  """Select a checking-role backend (reviewer, verify default) via backends.preference, skipping already-tried backends.
 
   Returns (resolved_backend, resolved_model, updated_tried_backends) or None if exhausted.
   """
   resolved_backend, resolved_model = worker_backend, worker_model
 
-  for pref_id in cfg.model_preference:
+  for pref_id in cfg.backends.preference:
     if pref_id == worker_backend:
       log.debug("reviewer_skip_same_backend", preference=pref_id)
       continue
@@ -321,7 +321,7 @@ def select_reviewer_backend(
     except Exception as e:
       log.warning("reviewer_preference_failed", preference=pref_id, error=str(e))
   else:
-    if cfg.model_preference:
+    if cfg.backends.preference:
       if worker_backend not in tried_backends:
         log.info("reviewer_fallback_to_worker_backend", worker_backend=worker_backend, tried=tried_backends)
       else:
@@ -358,9 +358,9 @@ async def _resolve_review_spawn_context(
 
   tried_backends = list(tried_backends) if tried_backends is not None else []
 
-  # Max retries guard: at most len(model_preference) retries after the initial spawn.
-  if len(tried_backends) > len(cfg.model_preference):
-    log.warning("reviewer_max_retries_exceeded", tried=tried_backends, max=len(cfg.model_preference))
+  # Max retries guard: at most len(backends.preference) retries after the initial spawn.
+  if len(tried_backends) > len(cfg.backends.preference):
+    log.warning("reviewer_max_retries_exceeded", tried=tried_backends, max=len(cfg.backends.preference))
     return None
 
   prerequisites = validate_review_prerequisites(original_thread, session_id)
@@ -560,7 +560,7 @@ async def maybe_spawn_reviewer(
     combined = f"**Original worker result:**\n{original_events}\n\n**Review result:**\n{events_summary}"
     await _trigger_master_judged(session_id, combined, thread_meta.id, cfg, session_mgr)
     if exit_code == 0 and original_thread:
-      cleanup_error = await finalize_review_chain(session_id, original_thread, Path(cfg.worktree_dir))
+      cleanup_error = await finalize_review_chain(session_id, original_thread, Path(cfg.paths.worktree_dir))
       if cleanup_error:
         await session_mgr.deliver_to_successor(session_id, {"type": ET.ERROR, "content": cleanup_error})
     return

@@ -500,15 +500,11 @@ async def test_identity_judgment_runs_before_any_new_turn_door(tmp_path: Path, m
   order, never on timing."""
   import server
   from src.api import deps
-  from src.core import config as core_config
   from src.core.scheduler import Scheduler
   from src.core.triggers import TriggerManager
 
   home = tmp_path / "home"
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  monkeypatch.setattr(core_config, "_config", None)
-  monkeypatch.setattr(core_config, "_config_mtime", 0.0)
-  monkeypatch.setattr(core_config, "_config_failed_mtime", None)
   monkeypatch.setattr(deps, "_session_manager", None)
   monkeypatch.setattr(deps, "_thread_manager", None)
   monkeypatch.setattr(deps, "_trigger_manager", None)

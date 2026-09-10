@@ -34,10 +34,7 @@ def counted_loads(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 
 def _seed_good_config() -> None:
   """Cache a good config: an empty profile home loads clean on defaults."""
-  core_config._config = None
-  core_config._config_mtime = 0.0
-  core_config._config_failed_mtime = None
-  core_config._reset_config_reload_failures_for_tests()
+  core_config._config_cache.reset()
   core_config.get_config()
 
 
@@ -137,9 +134,7 @@ def test_recovery_rearms_the_warning(profile_home, reload_log) -> None:
 def test_startup_with_broken_config_still_raises(profile_home, reload_log) -> None:
   """No cached config means nothing to fall back to: the raise survives."""
   _write_broken(profile_home, "unknown_m53_key")
-  core_config._config = None
-  core_config._config_mtime = 0.0
-  core_config._config_failed_mtime = None
+  core_config._config_cache.reset()
   with pytest.raises(ValueError, match="unknown config key"):
     core_config.get_config()
 
@@ -151,9 +146,9 @@ def test_reset_config_caches_clears_the_failed_state(profile_home, reload_log) -
   _seed_good_config()
   _write_broken(profile_home, "unknown_m53_key")
   core_config.get_config()
-  assert core_config._config_failed_mtime is not None
-  assert core_config._config_reload_errors_seen
+  assert core_config._config_cache.failed_mtime is not None
+  assert core_config._config_cache.seen
 
   conftest_mod.reset_config_caches()
-  assert core_config._config_failed_mtime is None
-  assert not core_config._config_reload_errors_seen
+  assert core_config._config_cache.failed_mtime is None
+  assert not core_config._config_cache.seen

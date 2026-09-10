@@ -212,7 +212,7 @@ def test_prepare_env_sets_charliebot_opencode_config(monkeypatch) -> None:
 
 
 def test_prepare_env_merges_proxy_and_local_no_proxy_without_mutating_input(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, opencode_proxy_url="http://proxy.test:8080")
+  backend = _build_backend(monkeypatch, proxy_url="http://proxy.test:8080")
   input_env = {
       "PATH": "/usr/bin",
       "NO_PROXY": "internal.test,localhost,127.0.0.1",
@@ -253,7 +253,7 @@ def test_prepare_env_without_proxy_preserves_proxy_related_environment(monkeypat
 
 
 def test_proxy_state_is_isolated_between_backend_instances(monkeypatch) -> None:
-  proxied = _build_backend(monkeypatch, opencode_proxy_url="http://proxy.test:8080")
+  proxied = _build_backend(monkeypatch, proxy_url="http://proxy.test:8080")
   unproxied = _build_backend(monkeypatch)
 
   proxied_env = proxied._prepare_env({"PATH": "/usr/bin"})
@@ -269,7 +269,7 @@ def test_proxy_state_is_isolated_between_backend_instances(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_run_passes_proxy_environment_to_serve_subprocess(monkeypatch, tmp_path: Path) -> None:
-  backend = _build_backend(monkeypatch, model="provider/model", opencode_proxy_url="http://proxy.test:8080")
+  backend = _build_backend(monkeypatch, model="provider/model", proxy_url="http://proxy.test:8080")
   process = MagicMock()
   process.pid = 1234
   create_process = AsyncMock(return_value=process)
@@ -309,7 +309,7 @@ def _assert_pdeathsig_preexec(kwargs: dict) -> None:
 
 @pytest.mark.asyncio
 async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="provider/model", opencode_proxy_url="http://proxy.test:8080")
+  backend = _build_backend(monkeypatch, model="provider/model", proxy_url="http://proxy.test:8080")
   monkeypatch.setenv("NO_PROXY", "internal.test,localhost")
   monkeypatch.setenv("HTTP_PROXY", "http://ambient-http.test:8080")
   monkeypatch.setenv("HTTPS_PROXY", "http://ambient-https.test:8080")

@@ -1,10 +1,10 @@
 """Claude account pool: which subscription login serves a Claude Code process.
 
 CharlieBot runs Claude Code under one of several subscription logins, each a
-``CLAUDE_CONFIG_DIR`` holding its own credentials and transcript store. With the
-login baked into the backend entry, a rate-limited account ends the master turn
-and the user switches by hand; the pool moves that choice into the system.
-``claude_accounts`` in config.yaml lists the logins, every selection reads each
+``CLAUDE_CONFIG_DIR`` holding its own credentials and transcript store. A
+rate-limited account ends the master turn and the user switches by hand; the
+pool moves that choice into the system. ``accounts.claude`` in config.yaml
+lists the logins, every selection reads each
 login's health (a usable credential file, no recent authentication failure) and
 headroom (the newest rate-limit reading), and a relay to another login is a
 transcript copy into the target's ``projects`` tree followed by a same-id
@@ -16,10 +16,10 @@ newest rate-limit reading per account (from ``rate_limit_event`` and from the
 usage panel poller) and the time of the account's last authentication failure,
 all re-learned by any later run.
 
-A backend entry is *pooled* when it is a cc-claude entry without
-``claude_config_dir`` and the config declares ``claude_accounts``. An entry with
-its own ``claude_config_dir`` stays pinned to that login, and a config without
-``claude_accounts`` behaves exactly as it did before this module existed.
+A backend entry is *pooled* when it is a cc-claude entry and ``accounts.claude``
+is non-empty. A cc-claude entry has no login field of its own: with a non-empty
+``accounts.claude`` every cc-claude entry is pooled, and with an empty one every
+cc-claude entry uses the default login directory.
 """
 
 from __future__ import annotations
@@ -109,18 +109,18 @@ def pool(cfg: CharlieBotConfig) -> list[ClaudeAccount]:
   """The configured accounts with ``config_dir`` expanded to an absolute path."""
   return [
       ClaudeAccount(label=account.label, config_dir=str(Path(account.config_dir).expanduser()))
-      for account in cfg.claude_accounts
+      for account in cfg.accounts.claude
   ]
 
 
 def is_pooled(option: BackendOption, cfg: CharlieBotConfig) -> bool:
   """True when *option* draws its login from the pool.
 
-  A cc-claude entry without ``claude_config_dir`` is pooled as soon as the config
-  declares ``claude_accounts``; an entry carrying its own directory stays pinned,
-  and every other backend family has no Claude login at all.
+  A cc-claude entry has no login field of its own: a non-empty ``accounts.claude``
+  pools every cc-claude entry, and every other backend family has no Claude login
+  at all.
   """
-  return option.type == BackendType.CC_CLAUDE and not option.claude_config_dir and bool(cfg.claude_accounts)
+  return option.type == BackendType.CC_CLAUDE and bool(cfg.accounts.claude)
 
 
 def account_by_label(cfg: CharlieBotConfig, label: str | None) -> ClaudeAccount | None:

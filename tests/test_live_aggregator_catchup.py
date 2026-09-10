@@ -1,9 +1,11 @@
 """Tests for the live aggregator's lazy disk catch-up behind persist_and_broadcast.
 
 The first persist_and_broadcast for a session after server start catches the
-live aggregator up to the whole on-disk corpus; the catch-up runs in a thread,
-emits no stream deltas (they are built and discarded otherwise), and restores
-stream-delta emission before the aggregator carries the live feed.
+live aggregator up to the whole on-disk corpus; the corpus load runs in a
+thread and the feed runs in on-loop slices, emits no stream deltas (they are
+built and discarded otherwise), and restores stream-delta emission before the
+aggregator carries the live feed. A drop landing mid-init (its epoch bump
+re-checked at every slice boundary) discards the unfinished init and reruns.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import pytest
 from conftest import BROADCAST_PATCH_TARGET
 
 from src.core import event_types as ET
+from src.core import sessions as sessions_module
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
@@ -83,10 +86,10 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path) -> None:
   inits = 0
   original = SessionManager._init_live_aggregator
 
-  def counting_init(self, session_id):
+  async def counting_init(self, session_id, epoch):
     nonlocal inits
     inits += 1
-    return original(self, session_id)
+    return await original(self, session_id, epoch)
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     with patch.object(SessionManager, "_init_live_aggregator", counting_init):
@@ -105,21 +108,50 @@ async def test_drop_during_catchup_discards_stale_init(tmp_path) -> None:
   mgr = SessionManager(cfg)
   sid = await _seed_session(mgr)
 
-  original = SessionManager._init_live_aggregator
-  calls = 0
+  original = SessionManager._load_aggregator_init_inputs
+  loads = 0
 
-  def dropping_init(self, session_id):
-    nonlocal calls
-    calls += 1
-    aggregator = original(self, session_id)
-    if calls == 1:
-      # A drop landing while the threaded catch-up runs must win over it.
+  def dropping_load(self, session_id):
+    nonlocal loads
+    loads += 1
+    inputs = original(self, session_id)
+    if loads == 1:
+      # A drop landing while the catch-up runs must win over it: the epoch
+      # re-check at the first slice boundary discards this init.
       self._drop_session_runtime_state(session_id)
-    return aggregator
+    return inputs
 
-  with patch.object(SessionManager, "_init_live_aggregator", dropping_init):
+  with patch.object(SessionManager, "_load_aggregator_init_inputs", dropping_load):
     aggregator = await mgr._get_or_init_aggregator(sid)
 
-  assert calls == 2
+  assert loads == 2
+  assert mgr._aggregators[sid] is aggregator
+  assert aggregator.emit_stream_deltas is True
+
+
+@pytest.mark.asyncio
+async def test_drop_mid_feed_discards_and_reruns(tmp_path, monkeypatch) -> None:
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = SessionManager(cfg)
+  sid = await _seed_session(mgr)
+
+  real_aggregator = sessions_module.MessageAggregator
+  feeds = 0
+
+  class DropMidFeed(real_aggregator):
+
+    def feed(self, event):
+      nonlocal feeds
+      feeds += 1
+      if feeds == 2:
+        # Lands inside the init's first slice; the slice-boundary epoch
+        # re-check must discard the unfinished init.
+        mgr._drop_session_runtime_state(sid)
+      return super().feed(event)
+
+  monkeypatch.setattr(sessions_module, "MessageAggregator", DropMidFeed)
+  aggregator = await mgr._get_or_init_aggregator(sid)
+
+  assert feeds >= 3  # the dropped run's feeds plus the rerun's
   assert mgr._aggregators[sid] is aggregator
   assert aggregator.emit_stream_deltas is True

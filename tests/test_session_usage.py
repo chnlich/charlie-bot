@@ -10,11 +10,11 @@ from conftest import compact_boundary_event as _compact_boundary_event
 
 from src.agents.backends.base import make_context_reading_event
 from src.agents.backends.claude_code import (
-  CLAUDE_COMPACT_CONTEXT_RESERVE,
-  CLAUDE_COMPACT_OUTPUT_RESERVE,
-  HEADLESS_CLAUDE_DEFAULT_ENV,
-  _reset_declared_window_warnings_for_tests,
-  headless_claude_declared_window,
+    CLAUDE_COMPACT_CONTEXT_RESERVE,
+    CLAUDE_COMPACT_OUTPUT_RESERVE,
+    HEADLESS_CLAUDE_DEFAULT_ENV,
+    _reset_declared_window_warnings_for_tests,
+    headless_claude_declared_window,
 )
 from src.core import codex_usage, session_usage
 from src.core import event_types as ET
@@ -29,10 +29,11 @@ def _build_cfg(tmp_path: Path, **codex_kwargs) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path,
       backends={
-          "options": [
-              backend_option(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude", model="claude-opus-4-6"),
-              codex_opt,
-          ]
+          "options":
+              [
+                  backend_option(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude", model="claude-opus-4-6"),
+                  codex_opt,
+              ]
       },
   )
 
@@ -104,8 +105,8 @@ def _codex_token_count_event(
 
 
 def _seed_codex_session(
-    session_mgr: SessionManager, *, session_id: str, name: str, backend: str, native_thread_id: str,
-    turn_model: str, token_event: dict) -> SessionMetadata:
+    session_mgr: SessionManager, *, session_id: str, name: str, backend: str, native_thread_id: str, turn_model: str,
+    token_event: dict) -> SessionMetadata:
   """Write the session metadata, a filler user event, and a one-turn codex rollout under the
   default codex home the autouse fixture pins."""
   meta = SessionMetadata(id=session_id, name=name, backend=backend, cc_session_id=native_thread_id)
@@ -116,10 +117,11 @@ def _seed_codex_session(
           "timestamp": "2026-03-31T20:42:52Z"
       },
   ])
-  _write_codex_rollout(codex_usage._DEFAULT_CODEX_HOME, native_thread_id, [
-      _codex_turn_context(turn_model),
-      token_event,
-  ])
+  _write_codex_rollout(
+      codex_usage._DEFAULT_CODEX_HOME, native_thread_id, [
+          _codex_turn_context(turn_model),
+          token_event,
+      ])
   return meta
 
 
@@ -990,10 +992,11 @@ async def test_codex_rollout_resolves_via_other_backend_when_session_backend_abs
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path,
       backends={
-          "options": [
-              backend_option(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude", model="claude-opus-4-6"),
-              backend_option(id="codex-new", label="Codex New", type="codex", model="gpt-5.5"),
-          ]
+          "options":
+              [
+                  backend_option(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude", model="claude-opus-4-6"),
+                  backend_option(id="codex-new", label="Codex New", type="codex", model="gpt-5.5"),
+              ]
       },
   )
   session_mgr = SessionManager(cfg)
@@ -1041,7 +1044,6 @@ async def test_codex_unconfigured_compaction_logs_no_warning(tmp_path: Path, cap
       name="Codex Unconfigured",
       backend="codex-test",
       native_thread_id="019d45a2-836d-7552-a54f-3c6c5511e5ee",
-
       turn_model="gpt-5.5",
       token_event=_codex_token_count_event(
           timestamp="2026-03-31T20:43:12.454Z",
@@ -1071,15 +1073,13 @@ async def test_codex_unconfigured_compaction_logs_no_warning(tmp_path: Path, cap
 
 @pytest.mark.asyncio
 async def test_codex_context_compact_at_uses_auto_compact_limit_when_configured(tmp_path: Path) -> None:
-  session_mgr = SessionManager(
-      _build_cfg(tmp_path, model_auto_compact_token_limit=180_000))
+  session_mgr = SessionManager(_build_cfg(tmp_path, model_auto_compact_token_limit=180_000))
   meta = _seed_codex_session(
       session_mgr,
       session_id="session-autocompact",
       name="Auto Compact",
       backend="codex-test",
       native_thread_id="019d26e4-be1c-7171-a3fd-6f1ab10662de",
-
       turn_model="gpt-5.5",
       token_event=_codex_token_count_event(
           timestamp="2026-03-25T21:32:09.989Z",
@@ -1149,7 +1149,6 @@ async def test_codex_native_cost_by_turn_model(tmp_path: Path, turn_model: str, 
       name="Codex Cost Session",
       backend="codex-test",
       native_thread_id="019d9f9e-5d7a-7f44-81a8-e9cb8261a51d",
-
       turn_model=turn_model,
       token_event=_codex_token_count_event(
           timestamp="2026-03-31T20:43:12.454Z",

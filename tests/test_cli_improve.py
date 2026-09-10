@@ -21,7 +21,6 @@ def _mock_config(tmp_path: Path):
   cfg = MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  cfg.server_port = 9443
   return cfg
 
 

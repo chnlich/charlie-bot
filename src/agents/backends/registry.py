@@ -12,7 +12,7 @@ from src.agents.backends.kimi import KimiBackend
 from src.agents.backends.openai_compatible_claude import OpenAICompatibleClaudeBackend
 from src.agents.backends.opencode import OpenCodeBackend
 from src.agents.backends.tui import TuiBackend
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, ClaudeAccount, get_credentials
 from src.core.models import BackendOption, BackendType
 
 
@@ -22,12 +22,21 @@ def _require_model(option: BackendOption) -> str:
   return option.model
 
 
-def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -> AgentBackend:
+def build_backend(
+    option: BackendOption,
+    cfg: CharlieBotConfig,
+    *,
+    claude_account: ClaudeAccount | None = None,
+    **kwargs: Any,
+) -> AgentBackend:
   """Instantiate the correct AgentBackend for *option*.
 
   Args:
     option: The BackendOption describing which backend to build.
-    cfg: App configuration (used for API keys, etc.).
+    cfg: App configuration, used for the server base URL. Secrets come from
+      ``get_credentials()`` (the credentials file), not from ``cfg``.
+    claude_account: Claude login account providing the config directory for
+      cc-claude backends; ``None`` leaves the backend without one.
     **kwargs: Extra keyword arguments forwarded to the backend constructor
       (e.g. extra_flags, buffer_limit, on_spawn).
 
@@ -43,28 +52,24 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
         effort=option.effort,
         cli_binary=option.cli_binary,
         fast_mode=option.fast_mode,
-        claude_config_dir=option.claude_config_dir,
+        claude_config_dir=claude_account.config_dir if claude_account else None,
         **kwargs)
   if option.type == BackendType.CC_KIMI:
-    model = _require_model(option)
-    if not cfg.moonshot_api_key:
-      raise ValueError("moonshot_api_key not set in config")
-    return KimiBackend(api_key=cfg.moonshot_api_key, model=model, **kwargs)
+    return KimiBackend(
+        api_key=str(get_credentials().require(option.credential, "api_key")),
+        model=_require_model(option),
+        **kwargs)
   if option.type == BackendType.CC_OPENAI_COMPATIBLE:
-    model = _require_model(option)
-    if not cfg.charliebot_access_key:
-      raise ValueError("charliebot_access_key not set in config")
     proxy_base_url = f"{cfg.server_base_url}/api/anthropic-proxy/openai-compatible/{option.id}"
     return OpenAICompatibleClaudeBackend(
         proxy_base_url=proxy_base_url,
-        auth_token=cfg.charliebot_access_key,
-        model=model,
+        auth_token=str(get_credentials().require("charliebot", "access_key")),
+        model=_require_model(option),
         **kwargs,
     )
   if option.type == BackendType.CODEX:
     return CodexBackend(
         model=_require_model(option),
-        codex_home=option.codex_home,
         model_reasoning_effort=option.model_reasoning_effort,
         model_auto_compact_token_limit=option.model_auto_compact_token_limit,
         **kwargs)
@@ -73,12 +78,12 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -
         model=_require_model(option),
         api_base=option.api_base,
         context_window=option.context_window,
-        api_key=option.api_key,
+        api_key=str(get_credentials().require(option.credential, "api_key")) if option.credential else None,
         **kwargs)
   if option.type == BackendType.GEMINI:
     return GeminiCliBackend(model=_require_model(option), **kwargs)
   if option.type == BackendType.OPENCODE:
-    return OpenCodeBackend(model=_require_model(option), opencode_proxy_url=option.opencode_proxy_url, **kwargs)
+    return OpenCodeBackend(model=_require_model(option), proxy_url=option.proxy_url, **kwargs)
   if option.type == BackendType.ANTIGRAVITY:
     return AntigravityCliBackend(print_timeout=option.print_timeout, **kwargs)
   if option.type == BackendType.TUI_CLI:

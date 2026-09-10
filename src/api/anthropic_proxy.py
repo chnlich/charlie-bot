@@ -278,6 +278,9 @@ def openai_chat_response_to_anthropic(response: dict, requested_model: str) -> d
 
 
 def _sse_event(event: str, data: dict) -> bytes:
+  # Anthropic streaming clients dispatch on data["type"], so the wire format
+  # pins it to the SSE event line's name; the translators below leave it out.
+  data = {"type": event, **data}
   return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n".encode()
 
 
@@ -300,7 +303,6 @@ class OpenAIChatStreamToAnthropic:
         (
             "message_start",
             {
-                "type": "message_start",
                 "message":
                     {
                         "id": self._message_id,
@@ -329,7 +331,6 @@ class OpenAIChatStreamToAnthropic:
             (
                 "content_block_delta",
                 {
-                    "type": "content_block_delta",
                     "index": self._text_index,
                     "delta": {
                         "type": "text_delta",
@@ -352,7 +353,6 @@ class OpenAIChatStreamToAnthropic:
         (
             "message_delta",
             {
-                "type": "message_delta",
                 "delta": {
                     "stop_reason": _stop_reason(self._finish_reason),
                     "stop_sequence": None,
@@ -360,7 +360,7 @@ class OpenAIChatStreamToAnthropic:
                 "usage": usage,
             },
         ))
-    events.append(("message_stop", {"type": "message_stop"}))
+    events.append(("message_stop", {}))
     return events
 
   def _ensure_text_block(self) -> list[tuple[str, dict]]:
@@ -373,7 +373,6 @@ class OpenAIChatStreamToAnthropic:
         (
             "content_block_start",
             {
-                "type": "content_block_start",
                 "index": self._text_index,
                 "content_block": {
                     "type": "text",
@@ -388,13 +387,13 @@ class OpenAIChatStreamToAnthropic:
       return []
     index = self._text_index
     self._text_index = None
-    return [("content_block_stop", {"type": "content_block_stop", "index": index})]
+    return [("content_block_stop", {"index": index})]
 
   def _close_tool_blocks(self) -> list[tuple[str, dict]]:
     events: list[tuple[str, dict]] = []
     for call_index in list(self._tool_indexes):
       block_index = self._tool_indexes.pop(call_index)
-      events.append(("content_block_stop", {"type": "content_block_stop", "index": block_index}))
+      events.append(("content_block_stop", {"index": block_index}))
     return events
 
   def _handle_tool_delta(self, tool_call: dict) -> list[tuple[str, dict]]:
@@ -419,7 +418,6 @@ class OpenAIChatStreamToAnthropic:
           (
               "content_block_start",
               {
-                  "type": "content_block_start",
                   "index": block_index,
                   "content_block": {
                       "type": "tool_use",
@@ -436,7 +434,6 @@ class OpenAIChatStreamToAnthropic:
           (
               "content_block_delta",
               {
-                  "type": "content_block_delta",
                   "index": self._tool_indexes[call_index],
                   "delta": {
                       "type": "input_json_delta",

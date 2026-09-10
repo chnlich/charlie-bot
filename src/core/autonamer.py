@@ -5,7 +5,7 @@ Two strategies, picked by who triggers them:
 1. Light-backend one-shot (SDK sessions: cc-claude / codex / opencode / etc.)
    - Entry: maybe_auto_name(...) — called from src/api/chat.py after a master_done event.
    - Reads CharlieBot's chat_events.jsonl (user message + assistant_text).
-   - Picks resolved light backends from model_preference in order
+   - Picks resolved light backends from backends.preference in order
      (iter_light_backends) and asks them, via one_shot_text, for {name, group}.
    - Group may reuse an existing group name from other sessions.
 
@@ -119,7 +119,7 @@ def _parse_name_and_group(raw: str) -> tuple[str | None, str | None]:
 def iter_light_backends(cfg: CharlieBotConfig) -> Iterator[BackendOption]:
   """Yield each resolved light one-shot backend once, in preference order."""
   yielded_ids: set[str] = set()
-  for entry_id in cfg.model_preference:
+  for entry_id in cfg.backends.preference:
     option = cfg.get_backend_option(entry_id)
     if option is None or option.id in yielded_ids:
       continue

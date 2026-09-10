@@ -27,7 +27,8 @@ Usage:
 
 Drive mode opens a headless Chrome (binary from config key
 ``headless_chrome_bin``) against the running server (default
-``http://127.0.0.1:<server_port>``; the access key comes from config), runs
+``http://127.0.0.1:<server.port>``; the access key comes from
+credentials.yaml), runs
 the legs below, and writes ``<out>/trace_<tag>.json`` (raw trace) and
 ``<out>/metrics_<tag>.json``; tag is the first 8 chars of the session id plus
 the injected CSS file stem when present. --report mode re-reads an existing
@@ -97,7 +98,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 import websockets  # noqa: E402
 
-from src.core.config import CharlieBotConfig, get_config  # noqa: E402
+from src.core.config import CharlieBotConfig, get_config, get_credentials  # noqa: E402
 
 LIST_SELECTOR = "#session-list"
 CHAT_SELECTOR_CANDIDATES = ("#messages", "#chat-messages", "#message-list", "main .overflow-y-auto")
@@ -415,8 +416,8 @@ async def drive_mode(args: argparse.Namespace) -> int:
     fail(f"headless_chrome_bin does not exist: {chrome_bin}")
   if args.inject_css and not Path(args.inject_css).is_file():
     fail(f"--inject-css file not found: {args.inject_css}")
-  base_url = (args.url or f"http://127.0.0.1:{cfg.server_port}").rstrip("/")
-  key = cfg.charliebot_access_key
+  base_url = (args.url or f"http://127.0.0.1:{cfg.server.port}").rstrip("/")
+  key = str(get_credentials().get("charliebot", "access_key") or "")
   try:
     with urllib.request.urlopen(f"{base_url}/", timeout=HTTP_GET_TIMEOUT_S) as resp:
       resp.read(1)
@@ -571,7 +572,7 @@ def parse_args() -> argparse.Namespace:
   mode = p.add_mutually_exclusive_group(required=True)
   mode.add_argument("--session", help="session id to drive the probe against (drive mode)")
   mode.add_argument("--report", help="re-read an existing trace JSON and re-apply the gate (report mode)")
-  p.add_argument("--url", help="server base URL (default http://127.0.0.1:<server_port> from config)")
+  p.add_argument("--url", help="server base URL (default http://127.0.0.1:<server.port> from config)")
   p.add_argument(
       "--out",
       default="/tmp/charliebot-scroll-probe/",

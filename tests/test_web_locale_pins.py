@@ -11,10 +11,10 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-WEB_GLOBS = ("web/templates/*.html", "web/static/js/**/*.js")
+WEB_GLOBS = ("web/templates/**/*.html", "web/static/js/**/*.js")
 
 
-def test_every_tocale_call_under_web_pins_en_us() -> None:
+def test_every_tolocale_call_under_web_pins_en_us() -> None:
   sources = [path for pattern in WEB_GLOBS for path in sorted(ROOT.glob(pattern))]
   assert sources, "no web sources found to check"
   unpinned = []

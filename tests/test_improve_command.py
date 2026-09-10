@@ -39,7 +39,7 @@ def _make_cfg(tmp_path: Path):
   cfg = MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  cfg.worktree_dir = str(tmp_path / "worktrees")
+  cfg.paths.worktree_dir = str(tmp_path / "worktrees")
   return cfg
 
 

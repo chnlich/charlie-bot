@@ -2086,7 +2086,9 @@ async def test_user_agent_probe_nonzero_exit_falls_back_with_warning(monkeypatch
   fake = _FakeUsageHTTP([200])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
   events = _capture_user_agent_resolutions(monkeypatch)
-  _arm_user_agent_probe(monkeypatch, returncode=1)
+  # Version-looking stdout with a non-zero exit must NOT be trusted: this test
+  # fails if the probe falls through to parsing instead of the returncode branch.
+  _arm_user_agent_probe(monkeypatch, stdout=b"2.9.9 (Claude Code)", returncode=1)
 
   await provider.fetch()
 

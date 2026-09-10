@@ -14,7 +14,7 @@
 - **Language**: Python 3.12+
 - **Master Agent**: Claude Code session (pluggable backends)
 - **Worker Agent**: Claude Code (local CLI invocation, non-interactive mode)
-- **Backend**: FastAPI, WebSockets/SSE for real-time streaming, asyncio for concurrency
+- **Backend**: FastAPI, WebSockets for real-time streaming, asyncio for concurrency
 - **Frontend**: vanilla JS + Tailwind CSS, served by FastAPI StaticFiles
 - **Storage**: JSON for state/data, YAML for configuration
 

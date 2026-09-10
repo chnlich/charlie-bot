@@ -20,7 +20,7 @@ from src.core.config import get_config
 from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
 from src.core.log_once import WarnOnceRegistry
-from src.core.models import BackendType, ClaudeAccount
+from src.core.models import ClaudeAccount
 from src.core.streaming import streaming_manager
 from src.core.timeouts import EXT_USAGE_ROUND_GAP_SECONDS, HTTP_OAUTH_TIMEOUT
 
@@ -66,36 +66,18 @@ CODEX_DEFAULT_DIR = str(Path.home() / ".codex")
 # ---------------------------------------------------------------------------
 
 
-def _account_label(provider: str, expanded_path: str) -> str:
-  """Derive an account label from a directory's expanded absolute path.
-
-  basename -> strip a leading '.' -> strip the provider prefix ('claude'/'codex')
-  and a following '-'. The provider default dir is labelled 'main' by the
-  caller, not by this function.
-  """
-  name = os.path.basename(expanded_path)
-  name = name.removeprefix(".")
-  if name.startswith(provider):
-    name = name[len(provider):]
-    name = name.removeprefix("-")
-  return name
-
-
 def _derive_provider_accounts(
     provider: str,
     default_dir: str,
-    options: list,
-    get_dir: Any,
     pool: list[tuple[str, str]] | None = None,
 ) -> list[tuple[str, str]]:
   """Return ordered [(label, expanded_abs_path)] for one provider.
 
-  Always includes the provider default dir first (label 'main'). Configured pool
-  accounts (``claude_accounts``: (label, dir) pairs) come next under their own
-  labels, then the backend entries that pin a directory. Dedupes by expanded
-  absolute path, so an entry explicitly pointing at the default collapses into
-  the default. Later label collisions fall back to the full basename, then fail
-  loud (skip) — never silently overwriting an existing key.
+  The provider default dir comes first (label 'main'), then the configured pool
+  accounts (``accounts.claude``: (label, dir) pairs) under their own labels.
+  Dedupes by expanded absolute path, so an entry explicitly pointing at the
+  default collapses into the default. Label collisions fail loud (skip) —
+  never silently overwriting an existing key.
   """
   default_expanded = os.path.abspath(os.path.expanduser(default_dir))
   seen: set[str] = {default_expanded}
@@ -113,41 +95,21 @@ def _derive_provider_accounts(
     labels.add(label)
     accounts.append((label, expanded))
 
-  for opt in options:
-    raw = get_dir(opt)
-    if not raw:
-      continue
-    expanded = os.path.abspath(os.path.expanduser(raw))
-    if expanded in seen:
-      continue
-    label = _account_label(provider, expanded)
-    if label in labels:
-      label = os.path.basename(expanded)
-      if label in labels:
-        log.error("ext_usage_account_label_collision_skip", provider=provider, dir=expanded)
-        continue
-    seen.add(expanded)
-    labels.add(label)
-    accounts.append((label, expanded))
-
   return accounts
 
 
 def _derive_accounts() -> dict[str, list[tuple[str, str]]]:
   """Derive the full account set for both providers from the live config."""
   cfg = get_config()
-  claude_opts = [o for o in cfg.backend_options if o.type == BackendType.CC_CLAUDE]
-  codex_opts = [o for o in cfg.backend_options if o.type == BackendType.CODEX]
-  claude_pool = [(account.label, account.config_dir) for account in cfg.claude_accounts]
+  claude_pool = [(account.label, account.config_dir) for account in cfg.accounts.claude]
   return {
       "pool": {
           label: os.path.abspath(os.path.expanduser(raw)) for label, raw in claude_pool
       },
       "claude":
-          _derive_provider_accounts(
-              "claude", CLAUDE_DEFAULT_DIR, claude_opts, lambda o: o.claude_config_dir, pool=claude_pool),
+          _derive_provider_accounts("claude", CLAUDE_DEFAULT_DIR, pool=claude_pool),
       "codex":
-          _derive_provider_accounts("codex", CODEX_DEFAULT_DIR, codex_opts, lambda o: o.codex_home),
+          _derive_provider_accounts("codex", CODEX_DEFAULT_DIR),
   }
 
 

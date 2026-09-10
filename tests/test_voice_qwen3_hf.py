@@ -40,7 +40,7 @@ def _load_wav_frames(path) -> bytes:
 
 def test_qwen3_hf_gpu_decode_real_recording() -> None:
   """The official transformers weights decode a real recording on cuda; text comes out."""
-  cfg = CharlieBotConfig(voice_engine="qwen3_hf")
+  cfg = CharlieBotConfig(voice={"engine": "qwen3_hf"})
   _require_gpu_assets(cfg)
 
   wav_path = voice_setup.pick_preflight_recording(cfg.sessions_dir)
@@ -62,7 +62,7 @@ def test_qwen3_hf_gpu_decode_real_recording() -> None:
 
 def test_qwen3_hf_gpu_session_streams_and_finalizes() -> None:
   """The production session path (VAD + partials + finish) runs on the GPU engine."""
-  cfg = CharlieBotConfig(voice_engine="qwen3_hf")
+  cfg = CharlieBotConfig(voice={"engine": "qwen3_hf"})
   _require_gpu_assets(cfg)
 
   wav_path = voice_setup.pick_preflight_recording(cfg.sessions_dir)

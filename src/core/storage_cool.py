@@ -476,7 +476,7 @@ def _sweep_claude_transcripts(
 # ---------------------------------------------------------------------------
 
 
-def codex_session_trees(cfg: CharlieBotConfig) -> list[Path]:
+def codex_session_trees() -> list[Path]:
   """The rollout tree codex writes into; codex runs from the default home."""
   return [Path.home() / ".codex" / "sessions"]
 
@@ -495,7 +495,6 @@ def codex_rollout_session_id(path: Path) -> str | None:
 
 
 def _sweep_codex_rollouts(
-    cfg: CharlieBotConfig,
     facts: dict[str, _SessionFacts],
     references: dict[str, list[_SessionFacts]],
     now: datetime,
@@ -506,7 +505,7 @@ def _sweep_codex_rollouts(
 ) -> None:
   """Delete rollout files under the session-cold / unreferenced-plus-window rule."""
   scoped_backends = _scoped_backend_sessions(facts, references, session_id) if session_id is not None else set()
-  for tree in codex_session_trees(cfg):
+  for tree in codex_session_trees():
     if not tree.is_dir():
       continue
     candidates = _sorted_scan(tree, tree.rglob(f"{_CODEX_ROLLOUT_PREFIX}*.jsonl"))
@@ -898,7 +897,7 @@ def run_cool_sweep(
     if cold_facts.cold:
       _sweep_raw_transport(cfg.sessions_dir / cold_id, transport, dry_run)
   _sweep_claude_transcripts(cfg, facts, now, claude, dry_run=dry_run, session_id=session_id)
-  _sweep_codex_rollouts(cfg, facts, references, now, codex, dry_run=dry_run, session_id=session_id)
+  _sweep_codex_rollouts(facts, references, now, codex, dry_run=dry_run, session_id=session_id)
   _sweep_opencode(DEFAULT_OPENCODE_DB, facts, references, now, opencode, dry_run=dry_run, session_id=session_id)
   if vacuum and not dry_run:
     _vacuum_opencode_store(force=force)

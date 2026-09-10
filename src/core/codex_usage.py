@@ -171,7 +171,7 @@ class CodexUsageResolver:
     if not native_thread_id:
       return None
 
-    native_usage = self._load_codex_rollout_usage(native_thread_id, backend_id)
+    native_usage = self._load_codex_rollout_usage(native_thread_id)
     if native_usage is None:
       return None
 
@@ -238,29 +238,26 @@ class CodexUsageResolver:
         return live_session_id
     return self._read_translated_session_id(session_id)
 
-  def _codex_candidate_session_dirs(self, backend_id: str) -> list[Path]:
-    """The single candidate ``~/.codex/sessions`` directory; codex runs from the default home."""
-    return [_DEFAULT_CODEX_HOME / "sessions"]
-
-  def _find_codex_rollout_path(self, native_thread_id: str, backend_id: str) -> Path | None:
+  def _find_codex_rollout_path(self, native_thread_id: str) -> Path | None:
     cached_path = self._codex_rollout_path_cache.get(native_thread_id)
     if cached_path is not None and cached_path.exists():
       return cached_path
 
-    for candidate_dir in self._codex_candidate_session_dirs(backend_id):
-      if not candidate_dir.exists():
-        continue
-      matches = list(candidate_dir.rglob(f"rollout-*{native_thread_id}.jsonl"))
-      if not matches:
-        continue
-      matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-      rollout_path = matches[0]
-      self._codex_rollout_path_cache[native_thread_id] = rollout_path
-      return rollout_path
-    return None
+    # Codex runs from the default home, so the corpus is that home's sessions
+    # tree alone; no per-backend or config-provided home exists to search.
+    candidate_dir = _DEFAULT_CODEX_HOME / "sessions"
+    if not candidate_dir.exists():
+      return None
+    matches = list(candidate_dir.rglob(f"rollout-*{native_thread_id}.jsonl"))
+    if not matches:
+      return None
+    matches.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    rollout_path = matches[0]
+    self._codex_rollout_path_cache[native_thread_id] = rollout_path
+    return rollout_path
 
-  def _load_codex_rollout_usage(self, native_thread_id: str, backend_id: str) -> dict | None:
-    rollout_path = self._find_codex_rollout_path(native_thread_id, backend_id)
+  def _load_codex_rollout_usage(self, native_thread_id: str) -> dict | None:
+    rollout_path = self._find_codex_rollout_path(native_thread_id)
     if rollout_path is None:
       return None
 

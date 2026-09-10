@@ -57,14 +57,17 @@ backlog_repos: []
 
 # Slack summon entrypoint.
 # Slack app bot token (xoxb-…); requires chat:write + reactions:write + history scopes.
-# slack_bot_token: ""
+slack_bot_token: xoxb-placeholder
 # Slack app-level token (xapp-…); requires connections:write, Socket Mode only.
 # slack_app_token: ""
 # Slack user ids allowed to summon; empty = nobody.
 # slack_allowed_user_ids: []
 
-# Other backend / notification secrets: moonshot_api_key, telegram_bot_token,
-# telegram_chat_id. cc-openai-compatible backends configure the upstream api_base,
+# Telegram notification target.
+telegram_bot_token: 000:placeholder
+
+# Other backend / notification secrets: moonshot_api_key, telegram_chat_id.
+# cc-openai-compatible backends configure the upstream api_base,
 # model, and api_key_env per backend_option above (no top-level fields).
 # Integration keys for the skills under skills/ (the feishu_/gemini_/google_/
 # google_docs_* set, linear_api_key, slack_user_token, public_base_url) stay unlisted

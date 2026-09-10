@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -790,6 +791,122 @@ def get_config() -> CharlieBotConfig:
       # earns one new line.
       _config_reload_errors_seen.clear()
   return _config
+
+
+@dataclass
+class Credentials:
+  """One profile's ``credentials.yaml``: ``section -> key -> scalar`` secret values.
+
+  Deliberately outside :class:`CharlieBotConfig`: the structure file never
+  carries secrets, so nothing holding a config can leak one. :meth:`get`
+  answers "is it set"; :meth:`require` turns a missing value into a
+  :class:`ValueError` naming the key path and the file it is missing from.
+  """
+
+  path: Path
+  sections: dict[str, dict[str, str | int]]
+
+  def get(self, section: str, key: str) -> str | int | None:
+    """Return the value under *section*/*key*, or None when it is unset."""
+    return self.sections.get(section, {}).get(key)
+
+  def require(self, section: str, key: str) -> str | int:
+    """Return the value under *section*/*key*, raising :class:`ValueError` when it is unset."""
+    value = self.get(section, key)
+    if value is None:
+      raise ValueError(f"credentials.{section}.{key} is not set in {self.path}")
+    return value
+
+
+def load_credentials() -> Credentials:
+  """Load this profile's ``credentials.yaml``, the secrets file split out of ``config.yaml``.
+
+  A missing file loads as empty sections. The document must be a mapping whose
+  values are mappings whose values are strings or integers; a ``None`` value
+  counts as unset and is dropped. Any other shape raises :class:`ValueError`
+  naming the offending path as ``credentials.<section>`` or
+  ``credentials.<section>.<key>``. Section and key names are never validated:
+  any name loads.
+  """
+  path = charliebot_home_dir() / "credentials.yaml"
+  data = load_yaml(path, default={})
+  if data is None:
+    data = {}
+  if not isinstance(data, dict):
+    raise ValueError(f"credentials must be a mapping of sections: {path}")
+  sections: dict[str, dict[str, str | int]] = {}
+  for section, keys in data.items():
+    if not isinstance(keys, dict):
+      raise ValueError(f"credentials.{section} must be a mapping of keys: {path}")
+    entry: dict[str, str | int] = {}
+    for key, value in keys.items():
+      if value is None:
+        continue
+      if not isinstance(value, (str, int)):
+        raise ValueError(f"credentials.{section}.{key} must be a string or integer: {path}")
+      entry[key] = value
+    sections[section] = entry
+  return Credentials(path=path, sections=sections)
+
+
+def _credentials_fingerprint() -> tuple[float, int]:
+  """The reload cache key over ``credentials.yaml``: its ``(mtime, size)``; ``(0.0, 0)`` when missing.
+
+  Same scheme as :func:`_config_fingerprint`, over the secrets file instead.
+  """
+  try:
+    st = os.stat(os.path.join(_resolve_home()[1], "credentials.yaml"))
+  except OSError:
+    return (0.0, 0)
+  return (st.st_mtime, st.st_size)
+
+
+_credentials: Credentials | None = None
+# The last fingerprint _credentials_fingerprint() returned for the cached value; tests
+# assign a sentinel (e.g. 0.0) to force a reload.
+_credentials_mtime: object = None
+# The fingerprint whose get_credentials() last raised while a cached value existed
+# (see _config_failed_mtime).
+_credentials_failed_mtime: object = None
+# First sighting per error string per process (see _config_reload_errors_seen).
+_credentials_reload_errors_seen = WarnOnceRegistry()
+
+
+def _warn_credentials_reload_failed_once(error: Exception) -> None:
+  """Log one credentials_reload_failed per error string per process."""
+  _credentials_reload_errors_seen.log(log.warning, "credentials_reload_failed", str(error), error=str(error))
+
+
+def _reset_credentials_reload_failures_for_tests() -> None:
+  """Clear the credentials warn-once registry, restoring the process-start state."""
+  _credentials_reload_errors_seen.clear()
+
+
+def get_credentials() -> Credentials:
+  """Return the process-wide credentials, refreshed when ``credentials.yaml`` changes.
+
+  Independent of :func:`get_config`: the reload key is ``credentials.yaml``'s
+  ``(mtime, size)`` (see :func:`_credentials_fingerprint`), and the cached
+  :class:`Credentials` is replaced wholesale — its consumers read per call and
+  hold no instance references. A failed reload keeps the previous value and
+  logs one warning per onset; with nothing cached yet the error propagates.
+  """
+  global _credentials, _credentials_mtime, _credentials_failed_mtime
+  fingerprint = _credentials_fingerprint()
+  if _credentials is None or (fingerprint != _credentials_mtime and fingerprint != _credentials_failed_mtime):
+    try:
+      fresh = load_credentials()
+    except Exception as e:
+      _warn_credentials_reload_failed_once(e)
+      if _credentials is None:
+        raise
+      _credentials_failed_mtime = fingerprint
+    else:
+      _credentials = fresh
+      _credentials_mtime = fingerprint
+      _credentials_failed_mtime = None
+      _credentials_reload_errors_seen.clear()
+  return _credentials
 
 
 _cron_snapshot = _CronSnapshot()

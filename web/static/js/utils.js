@@ -4,8 +4,8 @@
 function relativeTime(isoStr) {
   if (!isoStr) return '';
   const d = new Date(isoStr);
-  const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-  const timeStr = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', hour12: true });
+  const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const timeStr = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
   return dateStr + ', ' + timeStr;
 }
 

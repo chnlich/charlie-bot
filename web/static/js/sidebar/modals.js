@@ -117,7 +117,7 @@ function applyCronBrokenView(task) {
   document.getElementById('cron-save-btn').classList.toggle('hidden', isBroken);
   const errorBox = document.getElementById('cron-error-box');
   if (isBroken) {
-    errorBox.textContent = `加载失败：${task.error}\n文件路径：${task.path}`;
+    errorBox.textContent = `Load failed: ${task.error}\nFile: ${task.path}`;
     errorBox.classList.remove('hidden');
   } else {
     errorBox.textContent = '';

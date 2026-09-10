@@ -160,7 +160,7 @@
 
         const type = ev.type || 'unknown';
         const badgeCls = badgeStyle(type);
-        const ts = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString() : '';
+        const ts = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString('en-US') : '';
 
         // Summary line: pick a useful one-liner
         let summary = '';

@@ -553,7 +553,7 @@ test('buildStandaloneUrlFromVersion returns null for unknown version', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 对比上一版 diff toggle: version predecessor, ?diff= query, viewer reload key
+// Compare with previous diff toggle: version predecessor, ?diff= query, viewer reload key
 // ---------------------------------------------------------------------------
 
 test('hasPredecessor: false for a single-version lineage, true from version 2 on', () => {

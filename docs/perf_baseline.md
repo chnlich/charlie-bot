@@ -3162,7 +3162,7 @@ shape as the M18 protocol:
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} node /home/chaoli/workspace/charlie-bot/tests/stream_hl_render_collector.js
 ```
 
-M55 — artifact compare-view serve, steady state. The plan panel's 对比上一版
+M55 — artifact compare-view serve, steady state. The plan panel's Compare with previous
 toggle and every artifact `?diff=` link run the file server's annotate path:
 the pre-fix handler read both pages and ran `plan_diff.annotate` inline on the
 event loop per request — ~0.25 s of loop freeze per compare view of a 1 MB
@@ -3250,7 +3250,7 @@ t0 = time.perf_counter()
 r = client.get(url)  # cold pass, as at first compare-view open; not timed
 cold = time.perf_counter() - t0
 assert r.status_code == 200, (r.status_code, r.text[:200])
-assert "对比上一版" in r.text, "annotated page missing the compare header"
+assert "This version · vs previous" in r.text, "annotated page missing the compare header"
 
 times = []
 bodies = set()

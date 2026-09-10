@@ -269,7 +269,7 @@ function showSwitchPlaceholder(sessionId) {
   const dot = document.createElement('span');
   dot.className = 'w-2 h-2 rounded-full bg-blue-400 animate-pulse-dot';
   const label = document.createElement('span');
-  label.textContent = '正在打开 ' + switchTargetName(sessionId) + '…';
+  label.textContent = 'Opening ' + switchTargetName(sessionId) + '…';
   row.appendChild(dot);
   row.appendChild(label);
   container.appendChild(row);

@@ -1317,8 +1317,8 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
 
   Compares the fresh set against the last-alerted set persisted at
   :func:`_cron_alert_state_path`; on any difference it records the new set and
-  fires one notification — ``"⚠️ cron 任务加载失败: <names>"`` when the new set
-  is non-empty, ``"✅ cron 加载失败已全部解除"`` when it turned empty (recovery
+  fires one notification — ``"⚠️ cron tasks failed to load: <names>"`` when the new set
+  is non-empty, ``"✅ all cron load failures resolved"`` when it turned empty (recovery
   fires only on the full transition, not on every shrink); an identical set
   stays silent.
 
@@ -1340,9 +1340,9 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
     return
   names = sorted(new_set)
   if names:
-    message = "⚠️ cron 任务加载失败: " + ", ".join(names)
+    message = "⚠️ cron tasks failed to load: " + ", ".join(names)
   else:
-    message = "✅ cron 加载失败已全部解除"
+    message = "✅ all cron load failures resolved"
   try:
     # Lazy: notifications imports this module.
     from src.core.notifications import send_telegram

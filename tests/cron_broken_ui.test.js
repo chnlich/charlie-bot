@@ -81,11 +81,11 @@ test('the scheduled list shows the global failure badge derived from the tasks f
   await settle();
 
   const html = elements['session-list'].innerHTML;
-  assert.ok(html.includes('2 个定时任务加载失败'), html);
+  assert.ok(html.includes('2 scheduled tasks failed to load'), html);
   // Clicking opens the cron editor on the first broken task by name order.
   assert.ok(html.includes("openCronEditor('a-broken')"), html);
   // Even with zero sessions the badge pages the maintainer.
-  assert.ok(html.indexOf('2 个定时任务加载失败') < html.indexOf('No scheduled sessions'), html);
+  assert.ok(html.indexOf('2 scheduled tasks failed to load') < html.indexOf('No scheduled sessions'), html);
 });
 
 test('no badge when nothing is broken', async () => {
@@ -93,7 +93,7 @@ test('no badge when nothing is broken', async () => {
   context.Sidebar.renderGroupedScheduledList([]);
   await settle();
 
-  assert.ok(!elements['session-list'].innerHTML.includes('加载失败'), elements['session-list'].innerHTML);
+  assert.ok(!elements['session-list'].innerHTML.includes('scheduled tasks failed to load'), elements['session-list'].innerHTML);
 });
 
 function loadModals() {

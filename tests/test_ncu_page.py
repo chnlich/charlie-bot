@@ -9,7 +9,7 @@ from src.core.ncu_parsing import _extract_rules, parse_ncu_report
 
 _SAMPLE_REPORT = Path("/data/home/chaoli/scripts/20260528_rmsnorm_ncu/out/ncu_cuda.ncu-rep")
 _FULL_REPORT = Path("/data/home/chaoli/scripts/20260528_rmsnorm_ncu_s1856/out/ncu_cuda_full.ncu-rep")
-_ROOFLINE_PLACEHOLDER = "本报告未采集 roofline 数据 (需要 --set full/detailed)"
+_ROOFLINE_PLACEHOLDER = "No roofline data in this report (requires --set full/detailed)"
 
 _requires_sample = pytest.mark.skipif(not _SAMPLE_REPORT.is_file(), reason="sample ncu-rep not present on this host")
 _requires_full_report = pytest.mark.skipif(not _FULL_REPORT.is_file(), reason="full ncu-rep not present on this host")

@@ -358,8 +358,7 @@ class ChatEventStore:
       return events
     try:
       with open(path, encoding="utf-8") as f:
-        events = list(
-            iter_ndjson_events(f, log_event="archive_parse_skip", log_fields={"session_id": session_id}))
+        events = list(iter_ndjson_events(f, log_event="archive_parse_skip", log_fields={"session_id": session_id}))
     except OSError as e:
       log.debug("archive_read_failed", path=str(path), error=str(e))
       return []

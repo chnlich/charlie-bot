@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from conftest import _ok_asgi_downstream, make_page_request, run_through_asgi_middleware
+from conftest import _ok_asgi_downstream, make_page_request, run_through_asgi_middleware, stub_credentials
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -84,10 +84,10 @@ def test_artifact_injection_decides_the_same_way_under_both_prefixes(
 ) -> None:
   # Injection is anchored on the configured sessions root, which the test owns here —
   # the prefix spelling plays no part in the decision. The client carries the access key
-  # cookie so the injected-credential branch is the one under test.
-  monkeypatch.setattr(
-      files_api, "get_config",
-      lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions", charliebot_access_key="secret"))
+  # cookie so the injected-credential branch is the one under test; the key itself is
+  # a credential (credentials.yaml), stubbed in memory.
+  monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions"))
+  stub_credentials({"charliebot": {"access_key": "secret"}})
   client = _client("secret")
   for label, target in targets.items():
     injected = {ARTIFACT_SCRIPT in client.get(f"{prefix}{target}").text for prefix in PREFIXES}
@@ -124,7 +124,7 @@ async def test_a_navigation_under_either_prefix_needs_no_token(
     monkeypatch: pytest.MonkeyPatch,
     prefix: str,
 ) -> None:
-  monkeypatch.setattr(auth, "get_config", lambda: SimpleNamespace(charliebot_access_key="secret"))
+  stub_credentials({"charliebot": {"access_key": "secret"}})
   scope = {
       "type": "http",
       "method": "GET",

@@ -39,7 +39,7 @@ from src.api.auth import AuthMiddleware, _credential_matches
 from src.api.deps import session_manager, set_trigger_manager, thread_manager
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
-from src.core.config import CharlieBotConfig, get_config, get_credentials
+from src.core.config import CharlieBotConfig, get_config, get_credentials, require_backends
 from src.core.http import close_http_client
 from src.core.init import (
     init_charliebot_home,
@@ -622,6 +622,7 @@ if __name__ == "__main__":
   import uvicorn
 
   cfg = get_config()
+  require_backends(cfg)
   uvicorn.run(
       "server:app",
       host=cfg.server.host,

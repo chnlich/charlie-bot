@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 import re
-import stat
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
@@ -23,7 +22,6 @@ from pydantic import (
 from src.core.log_once import WarnOnceRegistry
 from src.core.models import (
     BackendOption,
-    BackendType,
     ClaudeAccount,
     ClaudeCompactionConfig,
 )
@@ -258,15 +256,173 @@ class _CronSnapshot:
 
 class BacklogRepoConfig(BaseModel):
   """A single backlog repo entry: label + path."""
+
+  model_config = ConfigDict(extra='forbid')
+
   label: str
   path: str
 
 
 class HomeService(BaseModel):
   """A service this host runs, listed on the /home page and probed for reachability."""
+
+  model_config = ConfigDict(extra='forbid')
+
   name: str  # card title
   description: str  # one line saying what it is for
   url: str  # what the card links to; the probe connects to this URL's host and port
+
+
+class ServerConfig(BaseModel):
+  """``server:`` section: the bind address uvicorn listens on."""
+
+  model_config = ConfigDict(extra='forbid')
+
+  # The bind address uvicorn listens on. Loopback by default; a host that
+  # fronts the server itself (reverse proxy on another interface, Tailscale) sets it.
+  host: str = "127.0.0.1"
+  port: int = 18498
+
+  # Subprocess stdout buffer limit in MB (for asyncio StreamReader)
+  subprocess_buffer_limit_mb: int = 1024
+
+
+class PathsConfig(BaseModel):
+  """``paths:`` section: repos to scan and where worker worktrees live."""
+
+  model_config = ConfigDict(extra='forbid')
+
+  # Workspace directories to scan for git repos
+  workspace_dirs: list[str] = ["~/workspace"]
+
+  # Root directory for worker worktrees
+  worktree_dir: str = "~/worktrees"
+
+  @model_validator(mode="after")
+  def _expand_tilde(self) -> "PathsConfig":
+    """Expand ``~`` in both path settings against the process HOME."""
+    self.workspace_dirs = [os.path.expanduser(p) for p in self.workspace_dirs]
+    self.worktree_dir = os.path.expanduser(self.worktree_dir)
+    return self
+
+
+class BackendsConfig(BaseModel):
+  """``backends:`` section: model-switch options and the selector preference order."""
+
+  model_config = ConfigDict(extra='forbid')
+
+  # Ordered preference list of BackendOption ids, consumed by two selectors:
+  #   - checking-role (reviewer, verify default): first entry that DIFFERS from the
+  #     checked party's backend and resolves — see review.select_reviewer_backend.
+  #   - light one-shot (autonamer, recap): resolved entries in list order — see
+  #     autonamer.iter_light_backends.
+  # Empty list (default) skips the one-shot.
+  preference: list[str] = []
+
+  # Backend options available for model switching
+  # Additional backends (Codex/Gemini/Kimi/Antigravity/etc.) must be configured via
+  # ~/.charliebot/config.yaml -> backends.options.
+  options: list[BackendOption] = []
+
+
+class AccountsConfig(BaseModel):
+  """``accounts:`` section: the Claude subscription pool and its compaction floors."""
+
+  model_config = ConfigDict(extra='forbid')
+
+  # Claude account pool: the subscription logins (each a CLAUDE_CONFIG_DIR) a
+  # cc-claude entry without claude_config_dir draws from (src/core/claude_accounts.py).
+  # Empty = no pool: every cc-claude entry resolves its login exactly as it did
+  # before the pool existed.
+  claude: list[ClaudeAccount] = []
+
+  # Token floors for the Sonnet compaction the pool runs on Fable sessions.
+  claude_compaction: ClaudeCompactionConfig = ClaudeCompactionConfig()
+
+
+class VoiceConfig(BaseModel):
+  """``voice:`` section: transcription engine selection."""
+
+  model_config = ConfigDict(extra='forbid')
+
+  # Voice transcription engine. 'sherpa' runs the CPU ONNX pipeline everywhere; 'qwen3_hf'
+  # runs the official transformers Qwen3-ASR weights on NVIDIA GPUs (gpu-voice dependency
+  # group + weights, provisioned by scripts/setup.sh on hosts with nvidia-smi). Engine
+  # changes take effect on server restart.
+  engine: Literal['sherpa', 'qwen3_hf'] = 'sherpa'
+
+  # Model repository id for the qwen3_hf engine; switching tiers (1.7B <-> 0.6B) is a
+  # one-value change.
+  model_id: str = 'Qwen/Qwen3-ASR-1.7B-hf'
+
+
+class CodeServerConfig(BaseModel):
+  """``code_server:`` section: code-server integration."""
+
+  model_config = ConfigDict(extra='forbid')
+
+  # code-server integration
+  bin: str | None = None
+  config: str = "configs/code-server.yaml"
+
+
+class UiConfig(BaseModel):
+  """``ui:`` section: the backlog panel and the /home page service cards."""
+
+  model_config = ConfigDict(extra='forbid')
+
+  # Backlog panel
+  backlog_repos: list[BacklogRepoConfig] = []
+
+  # Home page — services this host runs, probed for reachability; default empty. Each card
+  # links to the URL and the probe connects to the same host and port.
+  home_services: list[HomeService] = []
+
+  @model_validator(mode="after")
+  def _expand_tilde(self) -> "UiConfig":
+    """Expand ``~`` in each backlog repo path."""
+    for entry in self.backlog_repos:
+      entry.path = os.path.expanduser(entry.path)
+    return self
+
+
+class SlackConfig(BaseModel):
+  """``slack:`` section: the summon entrypoint's user allow-list."""
+
+  model_config = ConfigDict(extra='forbid')
+
+  # Slack summon entrypoint
+  allowed_user_ids: list[str] = []  # Slack user ids allowed to summon; empty = nobody
+
+
+class PublishConfig(BaseModel):
+  """``publish:`` section: the outbound static publish lane."""
+
+  model_config = ConfigDict(extra='forbid')
+
+  # Publish lane — the pair the outbound-link rewrite consumes (src/core/publish.py):
+  # dir is the directory the host's 443 static lane serves, and public_base_url
+  # is the base of the links readers outside the operator's devices open. Unconfigured
+  # (either one) makes publish unavailable; the reply path then refuses instead of
+  # falling back to a server-port link.
+  dir: Path | None = None
+  public_base_url: str | None = None
+
+  @model_validator(mode="after")
+  def _expand_tilde(self) -> "PublishConfig":
+    """Expand ``~`` in the publish directory."""
+    if self.dir is not None:
+      self.dir = self.dir.expanduser()
+    return self
+
+
+class TelegramConfig(BaseModel):
+  """``telegram:`` section: the notification target."""
+
+  model_config = ConfigDict(extra='forbid')
+
+  # Telegram notifications
+  chat_id: str | None = None
 
 
 def _alias_field_names(alias: str | AliasChoices | AliasPath | None) -> set[str]:
@@ -283,160 +439,35 @@ def _alias_field_names(alias: str | AliasChoices | AliasPath | None) -> set[str]
 class CharlieBotConfig(BaseModel):
   """CharlieBot configuration, loaded from ~/.charliebot/config.yaml.
 
-  ``extra='forbid'`` turns an unknown top-level key into an error naming it —
-  at construction and at startup load — instead of silently dropping it (same
-  rationale as :class:`ScheduledTaskConfig`). ``model_construct`` is overridden
-  for the same reason: pydantic 2.12.5 drops unknown construct kwargs silently
-  even under forbid. Copy-style home redirection goes through :meth:`with_home`.
+  The mapping is sectioned: each settings group lives under its top-level
+  section key (``server:``, ``paths:``, ``backends:``, ...) and every section
+  model pins ``extra='forbid'``, so an unknown key — top-level or nested —
+  errors naming it instead of being silently dropped (same rationale as
+  :class:`ScheduledTaskConfig`). ``model_construct`` is overridden for the same
+  reason: pydantic 2.12.5 drops unknown construct kwargs silently even under
+  forbid. Copy-style home redirection goes through :meth:`with_home`.
   """
 
   model_config = ConfigDict(extra='forbid')
 
-  # Kimi (Moonshot) — optional, not wired in by default
-  moonshot_api_key: str | None = None
-
-  # Authentication — shared secret; empty string disables auth
-  charliebot_access_key: str = ""
-
-  # Server — the bind address uvicorn listens on. Loopback by default; a host that
-  # fronts the server itself (reverse proxy on another interface, Tailscale) sets it.
-  server_host: str = "127.0.0.1"
-  server_port: int = 18498
-
-  # Voice transcription engine. 'sherpa' runs the CPU ONNX pipeline everywhere; 'qwen3_hf'
-  # runs the official transformers Qwen3-ASR weights on NVIDIA GPUs (gpu-voice dependency
-  # group + weights, provisioned by scripts/setup.sh on hosts with nvidia-smi). Engine
-  # changes take effect on server restart.
-  voice_engine: Literal['sherpa', 'qwen3_hf'] = 'sherpa'
-  # Model repository id for the qwen3_hf engine; switching tiers (1.7B <-> 0.6B) is a
-  # one-value change.
-  voice_model_id: str = 'Qwen/Qwen3-ASR-1.7B-hf'
-
   # Paths — resolved per instantiation so CHARLIEBOT_HOME selects the profile
   charliebot_home: Path = Field(default_factory=charliebot_home_dir)
-
-  # Workspace directories to scan for git repos
-  workspace_dirs: list[str] = ["~/workspace"]
-
-  # Root directory for worker worktrees
-  worktree_dir: str = "~/worktrees"
-
-  # code-server integration
-  code_server_config: str = "configs/code-server.yaml"
-  code_server_bin: str | None = None
 
   # Plan registration page-height gate — absolute path of a headless-chromium-compatible
   # binary on the host running the server. The value stays host-local in config.yaml;
   # nothing in the repo hardcodes a path.
   headless_chrome_bin: str = ""
 
-  # Backlog panel
-  backlog_repos: list[BacklogRepoConfig] = []
-  # Home page — services this host runs, probed for reachability; default empty. Each card
-  # links to the URL and the probe connects to the same host and port.
-  home_services: list[HomeService] = []
-  backlog_repo: str | None = None  # deprecated, migrated to backlog_repos
-  backlog_label: str = 'Project Backlog'  # deprecated, used during migration
-
-  # Subprocess stdout buffer limit in MB (for asyncio StreamReader)
-  subprocess_buffer_limit_mb: int = 1024
-
-  # Backend options available for model switching
-  # Additional backends (Codex/Gemini/Kimi/Antigravity/etc.) must be configured via
-  # ~/.charliebot/config.yaml -> backend_options.
-  backend_options: list[BackendOption] = []
-
-  # Ordered preference list of BackendOption ids, consumed by two selectors:
-  #   - checking-role (reviewer, verify default): first entry that DIFFERS from the
-  #     checked party's backend and resolves — see review.select_reviewer_backend.
-  #   - light one-shot (autonamer, recap): resolved entries in list order — see
-  #     autonamer.iter_light_backends.
-  # Empty list (default) skips the one-shot.
-  model_preference: list[str] = []
-
-  # Claude account pool: the subscription logins (each a CLAUDE_CONFIG_DIR) a
-  # cc-claude entry without claude_config_dir draws from (src/core/claude_accounts.py).
-  # Empty = no pool: every cc-claude entry resolves its login exactly as it did
-  # before the pool existed.
-  claude_accounts: list[ClaudeAccount] = []
-  # Token floors for the Sonnet compaction the pool runs on Fable sessions.
-  claude_compaction: ClaudeCompactionConfig = ClaudeCompactionConfig()
-
-  # Telegram notifications
-  telegram_bot_token: str | None = None
-  telegram_chat_id: str | None = None
-
-  # Slack summon entrypoint
-  slack_bot_token: str | None = None  # xoxb-…, chat:write + history scopes
-  slack_app_token: str | None = None  # xapp-…, connections:write, Socket Mode only
-  slack_allowed_user_ids: list[str] = []  # Slack user ids allowed to summon; empty = nobody
-
-  # Integration keys hosts carry in config.yaml / config.d/*.yaml whose consumers read
-  # the raw yaml outside this repo (skill scripts). Declared only so extra='forbid'
-  # keeps those files loadable; this model never acts on the values, and the names
-  # are load-bearing yaml keys. A whole-repo grep can never find the consumer — it
-  # lives in a host skill dir — so zero matches is not evidence a field is unused.
-  # Deleting one breaks startup on every host whose config carries the key.
-  aigw_api_key: str | None = None  # aigw LLM gateway virtual key; consumed outside repo code
-  feishu_app_id: str | None = None
-  feishu_app_secret: str | None = None
-  feishu_refresh_token: str | None = None
-  feishu_user_access_token: str | None = None
-  gemini_api_key: str | None = None
-  gemini_model: str | None = None
-  google_client_id: str | None = None
-  google_client_secret: str | None = None
-  google_docs_client_id: str | None = None
-  google_docs_client_secret: str | None = None
-  google_docs_default_folder_id: str | None = None
-  google_docs_refresh_token: str | None = None
-  google_refresh_token: str | None = None
-  linear_api_key: str | None = None
-  slack_user_token: str | None = None
-  twitter_api_key: str | None = None  # x-posting skill (OAuth 1.0a); deleted twice, see known_alive.md
-  twitter_api_secret: str | None = None
-  twitter_access_token: str | None = None
-  twitter_access_token_secret: str | None = None
-  public_base_url: str | None = None
-  # Publish lane — the pair the outbound-link rewrite consumes (src/core/publish.py):
-  # publish_dir is the directory the host's 443 static lane serves, and public_base_url
-  # is the base of the links readers outside the operator's devices open. Unconfigured
-  # (either one) makes publish unavailable; the reply path then refuses instead of
-  # falling back to a server-port link.
-  publish_dir: Path | None = None
-
-  @model_validator(mode="before")
-  @classmethod
-  def migrate_and_expand(cls, values: dict) -> dict:
-    """Backward compat: rename project_dirs -> workspace_dirs, expand ~ in paths.
-
-    Data-carrying migrations only: a lone legacy ``project_dirs`` is renamed and
-    ``backlog_repo``/``backlog_label`` fold into ``backlog_repos``. Deprecated keys
-    with nothing to carry (``max_concurrent_workers``, a ``project_dirs`` alongside
-    ``workspace_dirs``) stay in place so ``extra='forbid'`` raises naming them
-    instead of silently dropping them.
-    """
-    if "project_dirs" in values and "workspace_dirs" not in values:
-      values["workspace_dirs"] = values.pop("project_dirs")
-    # Expand ~ in workspace_dirs and worktree_dir
-    ws = values.get("workspace_dirs", ["~/workspace"])
-    values["workspace_dirs"] = [os.path.expanduser(p) for p in ws]
-    wd = values.get("worktree_dir", "~/worktrees")
-    values["worktree_dir"] = os.path.expanduser(wd)
-    if values.get("publish_dir"):
-      values["publish_dir"] = os.path.expanduser(values["publish_dir"])
-    # Migrate old backlog_repo (singular) → backlog_repos list
-    if values.get("backlog_repo") and not values.get("backlog_repos"):
-      label = values.pop("backlog_label", "Backlog")
-      repo = os.path.expanduser(values.pop("backlog_repo"))
-      values["backlog_repos"] = [{"label": label, "path": repo}]
-    elif values.get("backlog_repo"):
-      values["backlog_repo"] = os.path.expanduser(values["backlog_repo"])
-    # Expand ~ in backlog_repos entries
-    for entry in values.get("backlog_repos", []):
-      if isinstance(entry, dict) and entry.get("path"):
-        entry["path"] = os.path.expanduser(entry["path"])
-    return values
+  server: ServerConfig = Field(default_factory=ServerConfig)
+  paths: PathsConfig = Field(default_factory=PathsConfig)
+  backends: BackendsConfig = Field(default_factory=BackendsConfig)
+  accounts: AccountsConfig = Field(default_factory=AccountsConfig)
+  voice: VoiceConfig = Field(default_factory=VoiceConfig)
+  code_server: CodeServerConfig = Field(default_factory=CodeServerConfig)
+  ui: UiConfig = Field(default_factory=UiConfig)
+  slack: SlackConfig = Field(default_factory=SlackConfig)
+  publish: PublishConfig = Field(default_factory=PublishConfig)
+  telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
   @classmethod
   def model_construct(cls, _fields_set: set[str] | None = None, **values: object) -> "CharlieBotConfig":
@@ -477,12 +508,12 @@ class CharlieBotConfig(BaseModel):
   @property
   def subprocess_buffer_limit(self) -> int:
     """Return the subprocess buffer limit in bytes."""
-    return self.subprocess_buffer_limit_mb * 1024 * 1024
+    return self.server.subprocess_buffer_limit_mb * 1024 * 1024
 
   @property
   def server_base_url(self) -> str:
     """Return the local base URL for CLI-to-server internal API calls."""
-    return f"http://localhost:{self.server_port}"
+    return f"http://localhost:{self.server.port}"
 
   @property
   def sessions_dir(self) -> Path:
@@ -505,7 +536,7 @@ class CharlieBotConfig(BaseModel):
 
   @property
   def code_server_config_path(self) -> Path:
-    path = Path(self.code_server_config).expanduser()
+    path = Path(self.code_server.config).expanduser()
     if path.is_absolute():
       return path
     return self.charlie_bot_repo / path
@@ -529,17 +560,22 @@ class CharlieBotConfig(BaseModel):
     return self.charliebot_home / "config.yaml"
 
   @property
+  def credentials_file(self) -> Path:
+    """The profile's credentials.yaml: the secrets split out of config.yaml."""
+    return self.charliebot_home / "credentials.yaml"
+
+  @property
   def config_d_dir(self) -> Path:
     return self.charliebot_home / "config.d"
 
   def get_backend_option(self, backend_id: str) -> BackendOption | None:
     """Look up a backend option by exact id; None when no entry matches."""
-    return next((opt for opt in self.backend_options if opt.id == backend_id), None)
+    return next((opt for opt in self.backends.options if opt.id == backend_id), None)
 
   def discover_repos(self) -> list[dict[str, str]]:
-    """Scan workspace_dirs for directories containing a .git folder."""
+    """Scan paths.workspace_dirs for directories containing a .git folder."""
     repos: list[dict[str, str]] = []
-    for dir_str in self.workspace_dirs:
+    for dir_str in self.paths.workspace_dirs:
       parent = Path(dir_str)
       if not parent.is_dir():
         continue
@@ -583,117 +619,146 @@ def _reset_config_reload_failures_for_tests() -> None:
   _config_reload_errors_seen.clear()
 
 
-def _scan_fragments(config_d: str) -> list[tuple[str, os.stat_result]]:
-  """config.d/*.yaml fragment stats, sorted by name; dotfiles and the legacy cron.yaml excluded.
+def _config_fingerprint() -> tuple[float, int]:
+  """The reload cache key over ``config.yaml``: its ``(mtime, size)``.
 
-  One scandir walk shared by the loader (which wants paths) and the fingerprint
-  (which wants ``(name, mtime, size)``), so the fragment rule lives here once.
-  A fragment removed between the scandir and its stat is skipped — the settled
-  set lands on the next call, the same skip ``Path.is_file`` gave a raced
-  entry — and a directory or special file named ``*.yaml`` is not a fragment.
-  """
-  if not os.path.isdir(config_d):
-    return []
-  found = []
-  with os.scandir(config_d) as entries:
-    for entry in entries:
-      name = entry.name
-      if not name.endswith(".yaml") or name.startswith(".") or name == "cron.yaml":
-        continue
-      try:
-        st = entry.stat()
-      except OSError:
-        continue
-      if not stat.S_ISREG(st.st_mode):
-        continue
-      found.append((name, st))
-  return sorted(found)
-
-
-def _config_fragments(home: Path) -> list[Path]:
-  """config.d/*.yaml, sorted by name; dotfiles and the legacy cron.yaml excluded."""
-  config_d = home / "config.d"
-  return [config_d / name for name, _ in _scan_fragments(str(config_d))]
-
-
-def _config_fingerprint() -> tuple:
-  """The reload cache key over ``config.yaml`` and every config fragment.
-
-  ``config.yaml``'s ``(mtime, size)`` plus ``(name, mtime, size)`` for each
-  fragment in name order. Size comes from the same stat call and costs nothing
-  extra; it catches mtime-preserving writes (``cp -p``, ``touch -r``, two writes
-  inside one second on a coarse-resolution filesystem) that an mtime-only key
-  would miss silently. A content change that preserves both mtime and size is
-  deliberately not covered. A missing file stats to a sentinel rather than
-  raising.
+  Size comes from the same stat call and costs nothing extra; it catches
+  mtime-preserving writes (``cp -p``, ``touch -r``, two writes inside one second
+  on a coarse-resolution filesystem) that an mtime-only key would miss silently.
+  A content change that preserves both mtime and size is deliberately not
+  covered. A missing file stats to a sentinel rather than raising.
 
   This is the per-request path (the auth middleware's ``get_config``), so the
-  walk stays on raw strings and ``os`` calls: per-call ``Path`` allocation and
+  stat stays on raw strings and ``os`` calls: per-call ``Path`` allocation and
   ``resolve`` measured ~130 µs of the ~150 µs middleware floor on the live
   corpus, against ~10 µs of unavoidable fresh stats.
   """
-  home_str = _resolve_home()[1]
   try:
-    st = os.stat(os.path.join(home_str, "config.yaml"))
+    st = os.stat(os.path.join(_resolve_home()[1], "config.yaml"))
   except OSError:
-    main = (0.0, 0)
-  else:
-    main = (st.st_mtime, st.st_size)
-  return (main, tuple((name, s.st_mtime, s.st_size) for name, s in _scan_fragments(os.path.join(home_str, "config.d"))))
+    return (0.0, 0)
+  return (st.st_mtime, st.st_size)
+
+
+# Retired config.yaml top-level keys: the loader rejects any file still carrying
+# one, and the error names where the key moved. A plain dotted value points into
+# the sectioned mapping; a value under :data:`CREDENTIALS_PREFIX` moves into
+# credentials.yaml (secrets live there, and the suffix is that file's key path);
+# a ``removed...`` value has no successor.
+CREDENTIALS_PREFIX = "credentials: "
+
+LEGACY_KEYS: dict[str, str] = {
+    "server_host": "server.host",
+    "server_port": "server.port",
+    "subprocess_buffer_limit_mb": "server.subprocess_buffer_limit_mb",
+    "workspace_dirs": "paths.workspace_dirs",
+    "project_dirs": "paths.workspace_dirs",
+    "worktree_dir": "paths.worktree_dir",
+    # Per-entry moves inside a backend option: claude_config_dir and codex_home are
+    # retired, api_key/api_key_env fold into credential, opencode_proxy_url into
+    # proxy_url, aliases retired.
+    "backend_options": "backends.options",
+    "model_preference": "backends.preference",
+    "claude_accounts": "accounts.claude",
+    "claude_compaction": "accounts.claude_compaction",
+    "voice_engine": "voice.engine",
+    "voice_model_id": "voice.model_id",
+    "code_server_bin": "code_server.bin",
+    "code_server_config": "code_server.config",
+    "backlog_repos": "ui.backlog_repos",
+    "home_services": "ui.home_services",
+    "backlog_repo": "removed (list the repo under ui.backlog_repos)",
+    "backlog_label": "removed",
+    "slack_allowed_user_ids": "slack.allowed_user_ids",
+    "publish_dir": "publish.dir",
+    "public_base_url": "publish.public_base_url",
+    "telegram_chat_id": "telegram.chat_id",
+    CREDENTIALS_PREFIX + "slack_bot_token": "slack.bot_token",
+    CREDENTIALS_PREFIX + "slack_app_token": "slack.app_token",
+    CREDENTIALS_PREFIX + "slack_user_token": "slack.user_token",
+    CREDENTIALS_PREFIX + "telegram_bot_token": "telegram.bot_token",
+    CREDENTIALS_PREFIX + "charliebot_access_key": "charliebot.access_key",
+    CREDENTIALS_PREFIX + "moonshot_api_key": "moonshot.api_key",
+    CREDENTIALS_PREFIX + "aigw_api_key": "aigw.api_key",
+    CREDENTIALS_PREFIX + "linear_api_key": "linear.api_key",
+    CREDENTIALS_PREFIX + "gemini_api_key": "gemini.api_key",
+    CREDENTIALS_PREFIX + "gemini_model": "gemini.model",
+    CREDENTIALS_PREFIX + "feishu_app_id": "feishu.app_id",
+    CREDENTIALS_PREFIX + "feishu_app_secret": "feishu.app_secret",
+    CREDENTIALS_PREFIX + "feishu_refresh_token": "feishu.refresh_token",
+    CREDENTIALS_PREFIX + "feishu_user_access_token": "feishu.user_access_token",
+    CREDENTIALS_PREFIX + "google_client_id": "google.client_id",
+    CREDENTIALS_PREFIX + "google_client_secret": "google.client_secret",
+    CREDENTIALS_PREFIX + "google_refresh_token": "google.refresh_token",
+    CREDENTIALS_PREFIX + "google_docs_client_id": "google.client_id",
+    CREDENTIALS_PREFIX + "google_docs_client_secret": "google.client_secret",
+    CREDENTIALS_PREFIX + "google_docs_refresh_token": "google.refresh_token",
+    CREDENTIALS_PREFIX + "google_docs_default_folder_id": "google.docs_default_folder_id",
+    CREDENTIALS_PREFIX + "twitter_api_key": "twitter.api_key",
+    CREDENTIALS_PREFIX + "twitter_api_secret": "twitter.api_secret",
+    CREDENTIALS_PREFIX + "twitter_access_token": "twitter.access_token",
+    CREDENTIALS_PREFIX + "twitter_access_token_secret": "twitter.access_token_secret",
+}
 
 
 def load_config() -> CharlieBotConfig:
-  """Load config from this profile's ``config.yaml`` and ``config.d`` fragments.
+  """Load config from this profile's ``config.yaml``.
 
-  The merged mapping starts from ``config.yaml``'s top-level mapping; each
-  fragment from :func:`_config_fragments` then merges its own top-level mapping
-  in file-name order. The merge is shallow and disjoint: a top-level key belongs
-  entirely to the one file that sets it, and a key defined in two files raises
-  naming the key and both paths — there is no override precedence. With no
-  ``config.d/`` directory (or an empty one) the result is exactly what loading
-  ``config.yaml`` alone gives.
+  The file holds the whole sectioned mapping; secrets live separately in
+  ``credentials.yaml``. Two tripwires fire before validation: any ``*.yaml``
+  file directly under ``config.d/`` (only ``config.d/cron.d/`` holds fragment
+  files now), and any top-level key from :data:`LEGACY_KEYS` — the error opens
+  with the config path and names each old key with its new location.
   """
   home = charliebot_home_dir()
   config_path = home / "config.yaml"
 
-  yaml_data: dict = load_yaml(config_path, default={})
-  key_origin: dict[str, Path] = dict.fromkeys(yaml_data, config_path)
-  for fragment in _config_fragments(home):
-    fragment_data: dict = load_yaml(fragment, default={})
-    if not isinstance(fragment_data, dict):
-      raise ValueError(f"config fragment must be a top-level mapping: {fragment}")
-    for key, value in fragment_data.items():
-      if key in key_origin:
+  config_d = home / "config.d"
+  if config_d.is_dir():
+    for entry in sorted(config_d.iterdir()):
+      if entry.name.endswith(".yaml") and entry.is_file():
         raise ValueError(
-            f"config key {key!r} is defined in both {key_origin[key]} and {fragment}; "
-            "a top-level key must live in exactly one file")
-      key_origin[key] = fragment
-      yaml_data[key] = value
+            f"{entry} is not a config location: only config.d/cron.d/ holds fragment files; "
+            "keys belong in config.yaml (structure) or credentials.yaml (secrets)")
+
+  yaml_data: dict = load_yaml(config_path, default={})
+  legacy_hits = [key for key in yaml_data if key in LEGACY_KEYS]
+  if legacy_hits:
+    lines = "\n".join(f"  {key} -> {LEGACY_KEYS[key]}" for key in legacy_hits)
+    raise ValueError(f"{config_path} still uses retired top-level keys; move each one:\n{lines}")
 
   # The home directory is chosen by the environment, never by a file that lives
   # inside it: honouring the key would leave the config loaded from one profile and
   # the state written to another, and dropping it silently would hide the mistake.
   if "charliebot_home" in yaml_data:
     raise ValueError(
-        f"{key_origin['charliebot_home']} sets 'charliebot_home'; that path is chosen by the "
+        f"{config_path} sets 'charliebot_home'; that path is chosen by the "
         f"{CHARLIEBOT_HOME_ENV} environment variable. Remove the key.")
   try:
     return CharlieBotConfig(charliebot_home=home, **yaml_data)
   except ValidationError as e:
-    # extra='forbid' raises naming the key only; key_origin tracks which file each
-    # key came from, so the startup error names both.
+    # An unknown field inside a backend entry gets its own message: the raw
+    # entry's id and type are what the operator greps the file for. The
+    # discriminated union inserts the matched type tag into the error path, so
+    # the field name is the last segment.
+    for err in e.errors():
+      if err["type"] == "extra_forbidden" and err["loc"][:2] == ("backends", "options"):
+        raw_entry = yaml_data["backends"]["options"][err["loc"][2]]
+        raise ValueError(
+            f"backend entry '{raw_entry.get('id')}' (type {raw_entry.get('type')}) "
+            f"has unknown field '{err['loc'][-1]}'") from e
     extras = [err["loc"][0] for err in e.errors() if err["type"] == "extra_forbidden" and len(err["loc"]) == 1]
     if not extras:
       raise
     raise ValueError(
-        "unknown config key(s) " + ", ".join(f"{key!r} ({key_origin[key]})" for key in extras) +
+        "unknown config key(s) " + ", ".join(repr(key) for key in extras) +
         "; declare the key(s) on CharlieBotConfig or remove them") from e
 
 
 def get_config() -> CharlieBotConfig:
-  """Return the process-wide config, refreshed in place when any config file changes.
+  """Return the process-wide config, refreshed in place when ``config.yaml`` changes.
 
-  The reload key covers ``config.yaml`` and every ``config.d`` fragment — see
+  The reload key is ``config.yaml``'s ``(mtime, size)`` — see
   :func:`_config_fingerprint`. The returned instance keeps a stable identity
   across reloads: holders that captured it earlier (manager singletons,
   in-flight coroutines) observe the new values without re-fetching. Replacing

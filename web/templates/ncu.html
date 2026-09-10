@@ -338,14 +338,14 @@
     function fmtNum(v) {
       if (v === null || v === undefined) return null;
       if (typeof v !== 'number') return String(v);
-      if (Number.isInteger(v)) return v.toLocaleString();
-      return v.toLocaleString(undefined, { maximumFractionDigits: 4 });
+      if (Number.isInteger(v)) return v.toLocaleString('en-US');
+      return v.toLocaleString('en-US', { maximumFractionDigits: 4 });
     }
 
     function fmtDuration(ns) {
       if (ns === null || ns === undefined) return null;
-      const main = Math.round(ns).toLocaleString() + ' ns';
-      if (ns >= 1000) return main + ' (' + (ns / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' µs)';
+      const main = Math.round(ns).toLocaleString('en-US') + ' ns';
+      if (ns >= 1000) return main + ' (' + (ns / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' µs)';
       return main;
     }
 
@@ -365,9 +365,9 @@
         [1e3, 'K'],
       ];
       for (const [scale, prefix] of scales) {
-        if (Math.abs(v) >= scale) return (v / scale).toLocaleString(undefined, { maximumFractionDigits: 3 }) + ' ' + prefix + unit;
+        if (Math.abs(v) >= scale) return (v / scale).toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' ' + prefix + unit;
       }
-      return v.toLocaleString(undefined, { maximumFractionDigits: 3 }) + ' ' + unit;
+      return v.toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' ' + unit;
     }
 
     function fmtPerf(v) { return fmtSI(v, 'FLOP/s'); }
@@ -375,7 +375,7 @@
     function fmtIntensity(v) {
       if (v === null || v === undefined) return 'N/A';
       if (typeof v !== 'number') return String(v);
-      return v.toLocaleString(undefined, { maximumFractionDigits: 4 }) + ' FLOP/byte';
+      return v.toLocaleString('en-US', { maximumFractionDigits: 4 }) + ' FLOP/byte';
     }
 
     function cell(text, cls) {

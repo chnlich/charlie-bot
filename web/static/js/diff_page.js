@@ -197,7 +197,7 @@
       placeholder.type = 'button';
       placeholder.className = 'w-full text-left px-3 py-2 text-sm text-amber-700 bg-amber-50 hover:bg-amber-100';
       placeholder.textContent =
-        `${data.size_bytes.toLocaleString()} bytes — too large to render, click to load anyway`;
+        `${data.size_bytes.toLocaleString('en-US')} bytes — too large to render, click to load anyway`;
       placeholder.addEventListener('click', () => loadFileInto(body, params, file, token, true));
       body.appendChild(placeholder);
       return;
@@ -306,8 +306,8 @@
     const files = data.files || [];
     const sep = data.mode === 'three-dot' ? '...' : '..';
     statusEl.textContent =
-      `${data.total_files} files · +${data.total_additions.toLocaleString()} ` +
-      `-${data.total_deletions.toLocaleString()} · ${data.mode} · ${data.base}${sep}${data.head}`;
+      `${data.total_files} files · +${data.total_additions.toLocaleString('en-US')} ` +
+      `-${data.total_deletions.toLocaleString('en-US')} · ${data.mode} · ${data.base}${sep}${data.head}`;
 
     if (files.length === 0) {
       emptyEl.classList.remove('hidden');

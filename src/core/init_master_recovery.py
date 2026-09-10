@@ -47,7 +47,7 @@ async def run_crash_recovery(
 
   Reconciliation NEVER kills an interrupted run's recorded process: an
   interrupted run's truth is resolved from disk (raw log + pid/pid_start
-  liveness) into the six-row outcome table, then either re-attached (still
+  liveness) into the outcome table, then either re-attached (still
   running), drained (finished while we were down), respawned (never started),
   or failed (died mid-run). Only leftover descendants holding the run's
   raw-log fd are killed, and they are named in a report. The finalize chain it

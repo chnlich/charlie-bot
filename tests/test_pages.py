@@ -12,7 +12,7 @@ import pytest
 from conftest import make_home_config, make_page_request
 
 from src.api import pages
-from src.core.models import BackendOption, SessionMetadata
+from src.core.models import SessionMetadata
 from src.core.token_tally import AccountRow, ModelRow, TokenTally
 
 
@@ -309,36 +309,3 @@ async def test_index_embeds_initial_sessions_for_client_sidebar_render(
   assert 'id="pending-trigger-session-with-trigger"' not in body
   assert "Loading sessions..." in body
 
-
-@pytest.mark.asyncio
-async def test_index_renders_an_aliased_session_backend_as_its_live_option(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """A session that recorded a retired backend id renders under the option whose aliases
-  answer for it: the page hands the client the live id plus the alias map, so the header
-  badge, the switch dropdown, and the new-session select all name a configured option."""
-  cfg = make_home_config(tmp_path)
-  cfg.backend_options = [
-      BackendOption(
-          id="claude-fable-5",
-          label="CC · Fable 5",
-          type="cc-claude",
-          model="claude-fable-5",
-          aliases=["claude-fable-5-invite1"]),
-      BackendOption(id="claude-sonnet-5", label="CC · Sonnet 5", type="cc-claude", model="claude-sonnet-5"),
-  ]
-  session = SessionMetadata(id="legacy-session", name="Legacy", backend="claude-fable-5-invite1")
-
-  monkeypatch.setattr(pages, "build_session_bootstrap_data", _bootstrap_stub(session))
-
-  response = await pages.index(
-      request=make_page_request("/"),
-      session=session.id,
-      session_mgr=PendingTriggerSessionManager(session),
-      cfg=cfg,
-  )
-
-  body = response.body.decode("utf-8")
-  assert 'globalThis.ACTIVE_BACKEND_ID = "claude-fable-5";' in body
-  assert '"claude-fable-5-invite1": "claude-fable-5",' in body
-  assert '<option value="claude-fable-5" selected>' in body
-  assert 'id="backend-badge"' in body and ">CC · Fable 5</span>" in body

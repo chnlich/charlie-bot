@@ -1,7 +1,5 @@
 """Tests for A7: /api/internal/version endpoint and the version-skew hint pure function."""
 
-from pathlib import Path
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -11,7 +9,7 @@ from src.cli.common import compose_version_skew_hint
 from src.core import buildinfo
 
 
-def test_version_endpoint_returns_sha_and_started_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_version_endpoint_returns_sha_and_started_at(monkeypatch: pytest.MonkeyPatch) -> None:
   """Acceptance #9: GET /api/internal/version returns sha and started_at."""
   monkeypatch.setattr(buildinfo, "_sha", "abc1234", raising=False)
   monkeypatch.setattr(buildinfo, "_started_at", "2026-07-21T00:00:00+00:00", raising=False)
@@ -25,7 +23,7 @@ def test_version_endpoint_returns_sha_and_started_at(tmp_path: Path, monkeypatch
   assert body["started_at"] == "2026-07-21T00:00:00+00:00"
 
 
-def test_init_build_info_populates_sha_and_started_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_init_build_info_populates_sha_and_started_at(monkeypatch: pytest.MonkeyPatch) -> None:
   """init_build_info captures a real SHA and a non-empty started_at."""
 
   def fake_read_repo_head_sha(timeout: float) -> str:

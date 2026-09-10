@@ -327,10 +327,7 @@ async def test_listings_memo_serves_write_funnel_change_immediately(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_listings_memo_sweep_surfaces_out_of_band_edit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_listings_memo_sweep_surfaces_out_of_band_edit(tmp_path: Path) -> None:
   mgr = _make_session_mgr(tmp_path)
   meta = SessionMetadata(name="before")
   _write_metadata(mgr, meta)

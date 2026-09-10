@@ -116,7 +116,7 @@ def _touch_config(home) -> None:
   os.utime(path, (_UTIME_TICK[0], _UTIME_TICK[0]))
 
 
-def test_recovery_rearms_the_warning(profile_home, reload_log, counted_loads) -> None:
+def test_recovery_rearms_the_warning(profile_home, reload_log) -> None:
   """A load that succeeds clears the registry: a later relapse is a new onset
   and earns one new line."""
   _seed_good_config()

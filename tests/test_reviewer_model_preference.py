@@ -215,7 +215,7 @@ async def test_spawn_review_worker_resolves_preference(
 
 
 @pytest.mark.asyncio
-async def test_spawn_review_worker_returns_false_when_session_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_spawn_review_worker_returns_false_when_session_missing() -> None:
   """A missing session must not dereference a None session_meta.
 
   ``spawn_review_worker`` returns False and creates no review thread when

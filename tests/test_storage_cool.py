@@ -1136,7 +1136,7 @@ def test_cli_storage_cool_unknown_session_exits_nonzero(
 
 
 def test_cool_storage_scheduler_handler_runs_the_real_sweep(
-    tmp_path: Path, cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+    cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = cool_env
   assert "cool_storage" in scheduler_module.TASK_HANDLERS
   write_session_meta(cfg, SID_COLD, cold_meta())

@@ -396,10 +396,7 @@ def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path, *, backend: str | Non
   return yaml_path, md_path, _NIGHTLY_PROMPT_MD
 
 
-def test_load_cron_file_loads_prompt_file(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_load_cron_file_loads_prompt_file(tmp_path: Path) -> None:
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
   cfg = build_scheduler_cfg(tmp_path)

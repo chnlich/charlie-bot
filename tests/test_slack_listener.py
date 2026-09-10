@@ -503,7 +503,7 @@ class _StubHttp:
 
 
 @pytest.mark.asyncio
-async def test_get_channel_name_resolves_and_caches(tmp_path: Path) -> None:
+async def test_get_channel_name_resolves_and_caches() -> None:
   http = _StubHttp({"ok": True, "channel": {"name": "general"}})
   client = SlackClient(http, bot_token="test-bot-token", app_token="test-app-token")  # type: ignore[arg-type]
 
@@ -518,7 +518,7 @@ async def test_get_channel_name_resolves_and_caches(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_channel_name_missing_scope_caches_none(tmp_path: Path) -> None:
+async def test_get_channel_name_missing_scope_caches_none() -> None:
   """A failure resolves to None without raising and is cached for the process lifetime."""
   http = _StubHttp({"ok": False, "error": "missing_scope"})
   client = SlackClient(http, bot_token="test-bot-token", app_token="test-app-token")  # type: ignore[arg-type]

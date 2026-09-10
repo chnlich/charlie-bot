@@ -30,7 +30,7 @@ from src.core.sessions import (
 
 
 @pytest.fixture(autouse=True)
-def _clean_probe_state(monkeypatch: pytest.MonkeyPatch):
+def _clean_probe_state():
   from src.core.init_worker_recovery import _reset_thread_meta_memo_for_tests
   from src.core.sessions import _reset_trigger_meta_memo_for_tests
 

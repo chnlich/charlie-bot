@@ -11,7 +11,7 @@ from src.api import backlog as backlog_api
 from src.core.config import BacklogRepoConfig, CharlieBotConfig
 
 
-def _build_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cfg: CharlieBotConfig) -> TestClient:
+def _build_client(monkeypatch: pytest.MonkeyPatch, cfg: CharlieBotConfig) -> TestClient:
   monkeypatch.setattr("src.core.config.get_config", lambda: cfg)
   app = FastAPI()
   app.include_router(backlog_api.router, prefix="/api/backlog")
@@ -19,7 +19,7 @@ def _build_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cfg: CharlieB
 
 
 def test_reads_return_empty_lists_when_unconfigured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  client = _build_client(monkeypatch, tmp_path, CharlieBotConfig(charliebot_home=tmp_path / "home"))
+  client = _build_client(monkeypatch, CharlieBotConfig(charliebot_home=tmp_path / "home"))
 
   for path in ("/api/backlog", "/api/backlog/history"):
     resp = client.get(path)
@@ -36,7 +36,7 @@ def test_reads_serve_configured_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: 
       charliebot_home=tmp_path / "home",
       ui={"backlog_repos": [BacklogRepoConfig(label="main", path=str(repo))]},
   )
-  client = _build_client(monkeypatch, tmp_path, cfg)
+  client = _build_client(monkeypatch, cfg)
 
   items = client.get("/api/backlog").json()
   assert [i["id"] for i in items] == ["a1"]
@@ -45,7 +45,7 @@ def test_reads_serve_configured_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
 
 def test_patch_stays_loud_when_unconfigured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  client = _build_client(monkeypatch, tmp_path, CharlieBotConfig(charliebot_home=tmp_path / "home"))
+  client = _build_client(monkeypatch, CharlieBotConfig(charliebot_home=tmp_path / "home"))
 
   resp = client.patch("/api/backlog/a1", json={"status": "approved"})
   assert resp.status_code == 500

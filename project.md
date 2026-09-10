@@ -199,7 +199,7 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 ## 8. Communication & Monitoring
 
 ### 8.1 Real-Time Streaming
-- **WebSockets or SSE**: Stream PTY output directly from Worker to frontend
+- **WebSockets**: Stream PTY output and live events directly to the frontend; the browser never consumes SSE (SSE parsing exists only server-side, for upstream LLM streams)
 - **HTTP GET**: Used for loading historical logs (non-real-time)
 - **Persistence**: Worker state is flushed to disk in real-time; Master can resume after restart
 
@@ -275,10 +275,12 @@ it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backen
 
 **WebSocket Endpoints**
 - `/ws/sessions/{session_id}` — session-level events (worker completion summaries pushed to chat)
+- `/ws/voice/{session_id}` — voice input: recorded audio streams to the local transcriber, partials and final text stream back
+- `/ws/terminal` — the profile's tmux-backed web terminal
 
 **Frontend**
 - Vanilla-JS UI under `web/static/js/`, served by FastAPI StaticFiles (Node.js/npm is build-time only: Tailwind CSS)
-- Panels: Sessions sidebar, Chat (SSE streaming), Threads list, Plan review checklist, Voice push-to-talk
+- Panels: Sessions sidebar, Chat (WebSocket streaming), Threads list, Plan review checklist, Voice push-to-talk
 - ChatPanel subscribes to session WebSocket — receives worker summaries and renders them as assistant messages
 - ThreadsPanel polls every 3 seconds for thread status updates
 - No-cache middleware on HTML to prevent stale JS bundles

@@ -6,6 +6,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     FakeBackend,
+    backend_option,
     build_antigravity_cfg,
     make_work_item,
     patch_instructions_content,
@@ -72,7 +73,7 @@ async def test_run_cc_routes_antigravity_native_resume_id(
       cc_session_id="existing-session-id",
       backend="agy",
   )
-  backend_option = cfg.backend_options[0]
+  backend_option = cfg.backends.options[0]
   captures: dict[str, object] = {}
 
   def fake_build_backend(option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs):
@@ -137,7 +138,7 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
 
   fresh_meta = models.SessionMetadata(id="session-id", name="Antigravity", backend="agy")
-  item1 = make_work_item(cfg, fresh_meta, cfg.backend_options[0])
+  item1 = make_work_item(cfg, fresh_meta, cfg.backends.options[0])
   cc_session_id, exit_code, error_msg, _ = await master_cc._run_cc(item1)
 
   assert cc_session_id == "conv-abc"
@@ -146,7 +147,7 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
 
   # Run 2: the anchored session passes the anchor through as the resume id.
   anchored_meta = models.SessionMetadata(id="session-id", name="Antigravity", backend="agy", cc_session_id="conv-abc")
-  item2 = make_work_item(cfg, anchored_meta, cfg.backend_options[0])
+  item2 = make_work_item(cfg, anchored_meta, cfg.backends.options[0])
   await master_cc._run_cc(item2)
 
   assert captures["kwargs"]["resume_session_id"] == "conv-abc"
@@ -163,7 +164,7 @@ async def test_run_cc_guard_round_fails_with_guard_reason(
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **kw: _AnchorMismatchBackend())
   patch_instructions_content(monkeypatch)
 
-  item = make_work_item(cfg, session_meta, cfg.backend_options[0])
+  item = make_work_item(cfg, session_meta, cfg.backends.options[0])
 
   _cc_session_id, exit_code, error_msg, _finish_extras = await master_cc._run_cc(item)
 
@@ -179,12 +180,12 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
 ) -> None:
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),
-      ],
+      backends={"options": [
+          backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),
+      ]},
   )
   session_meta = models.SessionMetadata(id="session-id", name="CC", backend="cc")
-  backend_option = cfg.backend_options[0]
+  option = cfg.backends.options[0]
   captures: dict[str, object] = {}
 
   def fake_build_backend(option, cfg, **kwargs):
@@ -194,7 +195,7 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
   patch_instructions_content(monkeypatch)
 
-  item = make_work_item(cfg, session_meta, backend_option)
+  item = make_work_item(cfg, session_meta, option)
 
   await master_cc._run_cc(item)
 
@@ -235,16 +236,18 @@ async def test_claude_family_with_reachable_anchor_logs_resume_session_true(
 ) -> None:
   config_dir = tmp_path / "claude-config"
   _make_transcript(config_dir, "existing-session-id")
+  # Per-entry login pinning is retired: an unpinned cc-claude option resolves
+  # its login directory through the CLAUDE_CONFIG_DIR environment.
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          models.BackendOption(
-              id="cc", label="CC", type="cc-claude", model="claude-fable-5", claude_config_dir=str(config_dir)),
-      ],
+      backends={"options": [
+          backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),
+      ]},
   )
   session_meta = models.SessionMetadata(id="session-id", name="CC", backend="cc", cc_session_id="existing-session-id")
 
-  entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backend_options[0], monkeypatch)
+  entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backends.options[0], monkeypatch)
 
   assert entry["resume_session"] is True
 
@@ -256,13 +259,13 @@ async def test_claude_family_with_no_anchor_logs_resume_session_false(
 ) -> None:
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),
-      ],
+      backends={"options": [
+          backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),
+      ]},
   )
   session_meta = models.SessionMetadata(id="session-id", name="CC", backend="cc")
 
-  entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backend_options[0], monkeypatch)
+  entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backends.options[0], monkeypatch)
 
   assert entry["resume_session"] is False
 
@@ -274,13 +277,13 @@ async def test_native_resume_backend_with_reachable_anchor_logs_resume_session_t
 ) -> None:
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          models.BackendOption(id="oc", label="OpenCode", type="opencode", model="glm-5.2"),
-      ],
+      backends={"options": [
+          backend_option(id="oc", label="OpenCode", type="opencode", model="glm-5.2"),
+      ]},
   )
   session_meta = models.SessionMetadata(
       id="session-id", name="OpenCode", backend="oc", cc_session_id="existing-session-id")
 
-  entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backend_options[0], monkeypatch)
+  entry = await _run_cc_starting_entry(cfg, session_meta, cfg.backends.options[0], monkeypatch)
 
   assert entry["resume_session"] is True

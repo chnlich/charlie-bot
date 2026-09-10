@@ -35,7 +35,6 @@ def _repo_argv(repo: str, task_spec_file: Path, *extra: str, session: str | None
 
 def _mock_config(tmp_path: Path):
   cfg = MagicMock()
-  cfg.server_port = 9443
   cfg.sessions_dir = tmp_path / "fake_sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   return cfg

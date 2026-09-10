@@ -48,11 +48,6 @@
       {{ opt.id|tojson }}: {{ opt.type|tojson }},
       {% endfor %}
     };
-    const BACKEND_ALIASES = {
-      {% for opt in backend_options %}{% for alias in opt.aliases %}
-      {{ alias|tojson }}: {{ opt.id|tojson }},
-      {% endfor %}{% endfor %}
-    };
     globalThis.ACTIVE_BACKEND_ID = {{ active_backend|tojson }};
     globalThis.ACTIVE_BACKEND_TYPE = {{ (active_backend_type or '')|tojson }};
     const AUTH_ENABLED = {{ auth_enabled|tojson }};

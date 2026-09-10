@@ -5,7 +5,7 @@ homes) is merged, with the per-account split kept as a secondary breakdown on ea
 
 Sources, all local logs (no vendor usage API is called):
   Claude Code  <config_dir>/projects/**/*.jsonl   assistant message.usage + message.model
-  Codex        <codex_home>/sessions/**/*.jsonl   token_count events, model from turn_context
+  Codex        ~/.codex/sessions/**/*.jsonl       token_count events, model from turn_context
   opencode     ~/.local/share/opencode/opencode.db   table message, JSON data.tokens + modelID
 
 Two accounting traps this handles:

@@ -1,6 +1,8 @@
 """Seed and first-run initialization of the ~/.charliebot/ directory structure."""
 
 import copy
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -17,8 +19,10 @@ from src.core.yaml_utils import load_yaml, save_yaml
 def _default_config_yaml() -> dict:
   """Build the default config dict with placeholder values."""
   return {
-      "workspace_dirs": ["~/workspace"],
-      "worktree_dir": "~/worktrees",
+      "paths": {
+          "workspace_dirs": ["~/workspace"],
+          "worktree_dir": "~/worktrees",
+      },
   }
 
 
@@ -85,6 +89,15 @@ async def init_charliebot_home() -> None:
       cfg.config_file.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
     else:
       save_yaml(cfg.config_file, _default_config_yaml())
+
+  # Seed credentials.yaml from the committed template if missing. The file holds
+  # this profile's secrets, so it is created owner-readable only (0600); the
+  # template in the repo is all comments, so the seeded file loads as empty
+  # sections until the operator fills values in.
+  if not cfg.credentials_file.exists():
+    template = cfg.charlie_bot_repo / "configs" / "credentials.example.yaml"
+    shutil.copyfile(template, cfg.credentials_file)
+    os.chmod(cfg.credentials_file, 0o600)
 
 
 def _seed_if_missing(path: Path, content: str) -> None:

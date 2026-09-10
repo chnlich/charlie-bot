@@ -728,8 +728,8 @@ def load_config() -> CharlieBotConfig:
   legacy_hits = [key for key in yaml_data if key in LEGACY_KEYS or CREDENTIALS_PREFIX + key in LEGACY_KEYS]
   if legacy_hits:
     lines = "\n".join(
-        f"  {key} -> "
-        + (LEGACY_KEYS[key] if key in LEGACY_KEYS else "credentials.yaml " + LEGACY_KEYS[CREDENTIALS_PREFIX + key])
+        f"  {key} -> " +
+        (LEGACY_KEYS[key] if key in LEGACY_KEYS else "credentials.yaml " + LEGACY_KEYS[CREDENTIALS_PREFIX + key])
         for key in legacy_hits)
     raise ValueError(f"{config_path} still uses retired top-level keys; move each one:\n{lines}")
 

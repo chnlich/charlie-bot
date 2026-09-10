@@ -124,7 +124,8 @@ async def test_declared_overlay_missing_file_degrades(tmp_path: Path, monkeypatc
   reason=unreadable plus the overlay name and the exception class name.
   """
   cfg = _wake_cfg(tmp_path, monkeypatch)
-  option = backend_option(id="fake", label="Fake", type="codex", model="ignored/model", prompt_overlay="missing_overlay")
+  option = backend_option(
+      id="fake", label="Fake", type="codex", model="ignored/model", prompt_overlay="missing_overlay")
   captured: dict[str, object] = {}
   monkeypatch.setattr(
       registry, "build_backend",

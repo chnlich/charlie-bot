@@ -750,11 +750,7 @@ def fable_pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "
       tmp_path,
       [
           backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL),
-          backend_option(
-              id="pinned",
-              label="Pinned",
-              type="cc-claude",
-              model=FABLE_MODEL),
+          backend_option(id="pinned", label="Pinned", type="cc-claude", model=FABLE_MODEL),
       ],
       home=tmp_path / ".charliebot",
       worktree_dir=tmp_path / "worktrees",
@@ -1210,12 +1206,10 @@ def build_tui_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
   registers opus plus the claude-tui terminal backend the TUI handlers resolve a session against."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backends={
-          "options": [
-              OPUS_BACKEND_OPTION,
-              backend_option(id="claude-tui", label="Claude TUI", type="tui-cli"),
-          ]
-      },
+      backends={"options": [
+          OPUS_BACKEND_OPTION,
+          backend_option(id="claude-tui", label="Claude TUI", type="tui-cli"),
+      ]},
   )
 
 
@@ -1250,10 +1244,11 @@ def build_recovery_cfg(home: Path) -> CharlieBotConfig:
       charliebot_home=home,
       paths={"worktree_dir": str(home / "worktrees")},
       backends={
-          "options": [
-              backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model"),
-              backend_option(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
-          ]
+          "options":
+              [
+                  backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model"),
+                  backend_option(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
+              ]
       },
   )
 
@@ -1264,8 +1259,7 @@ def build_light_cc_cfg() -> CharlieBotConfig:
       backends={
           "options": [backend_option(id="light-cc", label="Light CC", type="cc-claude", model="haiku")],
           "preference": ["light-cc"],
-      }
-  )
+      })
 
 
 def build_chain_cfg(*options: models.BackendOption) -> CharlieBotConfig:
@@ -1292,7 +1286,10 @@ def build_publish_cfg(
   resolved_url = public_base_url if public_base_url is not None else PUBLISH_BASE_URL
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      publish={"dir": resolved_dir, "public_base_url": resolved_url},
+      publish={
+          "dir": resolved_dir,
+          "public_base_url": resolved_url
+      },
   )
 
 

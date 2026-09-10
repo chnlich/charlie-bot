@@ -124,7 +124,8 @@ async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch, p
 
 
 @pytest.mark.asyncio
-async def test_token_usage_route_is_single_flight(monkeypatch: pytest.MonkeyPatch, pages_config: CharlieBotConfig) -> None:
+async def test_token_usage_route_is_single_flight(
+    monkeypatch: pytest.MonkeyPatch, pages_config: CharlieBotConfig) -> None:
   calls = 0
 
   def fake_collect(**_kwargs) -> TokenTally:
@@ -323,4 +324,3 @@ async def test_index_embeds_initial_sessions_for_client_sidebar_render(
   assert '"pending_trigger_count": 2' in body
   assert 'id="pending-trigger-session-with-trigger"' not in body
   assert "Loading sessions..." in body
-

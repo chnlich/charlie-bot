@@ -14,11 +14,11 @@ from pydantic import BaseModel
 
 from src.core import config as config_module
 from src.core.config import (
-  CHARLIEBOT_HOME_ENV,
-  CREDENTIALS_PREFIX,
-  LEGACY_KEYS,
-  CharlieBotConfig,
-  require_backends,
+    CHARLIEBOT_HOME_ENV,
+    CREDENTIALS_PREFIX,
+    LEGACY_KEYS,
+    CharlieBotConfig,
+    require_backends,
 )
 from src.core.init_seed import init_charliebot_home
 from src.core.models import BACKEND_CLASSES
@@ -167,8 +167,14 @@ def test_load_without_credentials_file_gives_empty_sections(tmp_path, monkeypatc
 def test_credentials_stay_out_of_config_and_get_returns_each_sentinel(tmp_path, monkeypatch):
   home = _credentials_home(tmp_path, monkeypatch)
   sections = {
-      "alpha": {"token": "sentinel-alpha-token", "secret": "sentinel-alpha-secret"},
-      "beta": {"token": "sentinel-beta-token", "secret": "sentinel-beta-secret"},
+      "alpha": {
+          "token": "sentinel-alpha-token",
+          "secret": "sentinel-alpha-secret"
+      },
+      "beta": {
+          "token": "sentinel-beta-token",
+          "secret": "sentinel-beta-secret"
+      },
   }
   (home / "credentials.yaml").write_text(yaml.safe_dump(sections), encoding="utf-8")
   dumped = json.dumps(config_module.load_config().model_dump(mode="json"))
@@ -284,6 +290,5 @@ def test_require_backends_rejects_empty_list():
 
 def test_require_backends_accepts_one_entry():
   """A config listing one backend option passes the startup gate."""
-  cfg = CharlieBotConfig(
-      backends={"options": [backend_option(id="a", label="A", type="cc-claude", model="m")]})
+  cfg = CharlieBotConfig(backends={"options": [backend_option(id="a", label="A", type="cc-claude", model="m")]})
   assert require_backends(cfg) is None

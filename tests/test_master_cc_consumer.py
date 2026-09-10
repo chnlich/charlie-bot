@@ -479,7 +479,8 @@ async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
   patch_instructions_content(monkeypatch)
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
-  item = make_work_item(cfg, meta, cfg.backends.options[0], user_content="next round", callbacks=session_mgr.callbacks())
+  item = make_work_item(
+      cfg, meta, cfg.backends.options[0], user_content="next round", callbacks=session_mgr.callbacks())
   await master_cc._run_cc(item)
 
   events = session_mgr.load_chat_events_sync(session.id)

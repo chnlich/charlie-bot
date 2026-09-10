@@ -57,9 +57,10 @@ async def test_session_default_raises_for_stale_backend() -> None:
 @pytest.mark.asyncio
 async def test_session_default_uses_first_option_when_no_backend_pinned() -> None:
   """An empty session backend is the documented default, not a substitution."""
-  cfg = _build_cfg([
-      backend_option(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),
-  ])
+  cfg = _build_cfg(
+      [
+          backend_option(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),
+      ])
   session = SessionMetadata(name="s", backend="")
   mgr = _mock_session_mgr(session)
 

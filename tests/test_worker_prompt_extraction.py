@@ -60,8 +60,9 @@ def test_memory_block_renders_into_prompt(tmp_path: Path) -> None:
 
 def _real_worker_prompt_text() -> str:
   return (
-      CharlieBotConfig(charliebot_home=Path("/tmp/unused"), paths={"worktree_dir": "/tmp/worktrees"}).charlie_bot_repo /
-      "prompts" / "worker.md").read_text(encoding="utf-8")
+      CharlieBotConfig(charliebot_home=Path("/tmp/unused"), paths={
+          "worktree_dir": "/tmp/worktrees"
+      }).charlie_bot_repo / "prompts" / "worker.md").read_text(encoding="utf-8")
 
 
 def test_missing_worker_prompt_file_raises_with_path_and_cause(tmp_path: Path) -> None:

@@ -101,7 +101,10 @@ def test_absent_publish_directory_raises_naming_the_directory(tmp_path: Path) ->
   artifact = write_artifact(tmp_path)
   absent_dir = tmp_path / "undeployed"
   cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "home", publish={"dir": absent_dir, "public_base_url": PUBLISH_BASE_URL})
+      charliebot_home=tmp_path / "home", publish={
+          "dir": absent_dir,
+          "public_base_url": PUBLISH_BASE_URL
+      })
 
   with pytest.raises(PublishError) as exc_info:
     publish_artifact(artifact, cfg)

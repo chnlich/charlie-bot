@@ -338,7 +338,7 @@ class AccountsConfig(BaseModel):
   claude: list[ClaudeAccount] = []
 
   # Token floors for the Sonnet compaction the pool runs on Fable sessions.
-  compaction: ClaudeCompactionConfig = ClaudeCompactionConfig()
+  claude_compaction: ClaudeCompactionConfig = ClaudeCompactionConfig()
 
 
 class VoiceConfig(BaseModel):
@@ -661,7 +661,7 @@ LEGACY_KEYS: dict[str, str] = {
     "backend_options": "backends.options",
     "model_preference": "backends.preference",
     "claude_accounts": "accounts.claude",
-    "claude_compaction": "accounts.compaction",
+    "claude_compaction": "accounts.claude_compaction",
     "voice_engine": "voice.engine",
     "voice_model_id": "voice.model_id",
     "code_server_bin": "code_server.bin",

@@ -371,7 +371,7 @@ Known-alive symbols:
   trigger moments (an account relay, a cache gone cold past the hour) and the same
   `context_compacted` / `context_compact_failed` events the auto-compaction path already
   renders; the rendering half is wired (`src/core/message_aggregator.py`), and
-  `CharlieBotConfig.accounts.compaction` ships the config plumbed for the trigger sites. A staged
+  `CharlieBotConfig.claude_compaction` ships the config plumbed for the trigger sites. A staged
   feature foundation, kept deliberately; never delete on static-tool evidence while the trigger
   wiring is pending.
 - `_nonempty`, `_relative`, `_no_explicit_null_supplement` (`src/core/project_config.py`) —

@@ -12,12 +12,14 @@
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+from conftest import backend_option, stub_credentials
 
 from src.agents.worker import Worker
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, ThreadMetadata
+from src.core.models import ThreadMetadata
 
 # Every backend type the registry can build (src/agents/backends/registry.py).
 ALL_BACKEND_TYPES = [
@@ -57,12 +59,21 @@ def _hide_all_binaries(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(f"{module}.resolve_binary", _missing)
 
 
+# Sections the registry reads secrets from: cc-kimi resolves its api_key under
+# its own credential section, cc-openai-compatible under charliebot.access_key.
+_CREDENTIAL_SECTIONS = {"test-kimi": {"api_key": "test-key"}, "charliebot": {"access_key": "test-key"}}
+
+
 def _worker(tmp_path: Path, backend_type: str) -> Worker:
+  stub_credentials(_CREDENTIAL_SECTIONS)
+  option_kwargs: dict[str, Any] = {"id": "opt", "label": "Opt", "type": backend_type, "model": "test-model"}
+  if backend_type in ("cc-openai-compatible", "charlie-code"):
+    option_kwargs["api_base"] = "http://test.invalid"  # charlie-code requires it (validated before its binary)
+  if backend_type == "cc-kimi":
+    option_kwargs["credential"] = "test-kimi"
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      moonshot_api_key="test-key",  # cc-kimi requires it
-      charliebot_access_key="test-key",  # cc-openai-compatible requires it
+      paths={"worktree_dir": str(tmp_path / "worktrees")},
   )
   return Worker(
       thread_metadata=ThreadMetadata(session_id="sess-1", description="test"),
@@ -70,13 +81,7 @@ def _worker(tmp_path: Path, backend_type: str) -> Worker:
       events_log_path=tmp_path / "data" / "events.jsonl",
       task_description="test",
       cfg=cfg,
-      backend_option=BackendOption(
-          id="opt",
-          label="Opt",
-          type=backend_type,
-          model="test-model",
-          api_base="http://test.invalid",  # charlie-code requires it (validated before its binary)
-      ),
+      backend_option=backend_option(**option_kwargs),
   )
 
 

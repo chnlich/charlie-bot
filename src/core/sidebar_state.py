@@ -53,10 +53,8 @@ _probe_signatures: dict[str, tuple] = {}
 _poll_count = 0
 
 # session id -> monotone change revision, bumped by every mark_sidebar_dirty
-# call. Consumers outside the poll (the workers-panel list proof) snapshot it
-# when they prove a derived value against disk and skip the proof while it
-# matches; the every-Nth-poll sweep each consumer runs bounds a mark its
-# writer path forgot.
+# call. Consumers outside the poll prove a derived value against disk through
+# a :class:`RevisionSweepGate` and skip the proof while it stands.
 _revisions: dict[str, int] = {}
 
 
@@ -69,6 +67,47 @@ def mark_sidebar_dirty(session_id: str) -> None:
 def session_revision(session_id: str) -> int:
   """Current change revision of *session_id*'s probed state sources."""
   return _revisions.get(session_id, 0)
+
+
+class RevisionSweepGate:
+  """Per-consumer revision gate with the every-Nth-poll sweep.
+
+  A consumer proves a derived value against disk and serves the stored value
+  while :meth:`serve_hit` says the proof stands: the session's change revision
+  still matches the one the proof was taken at, and fewer than *sweep_every*
+  polls passed since the proof. A hit bumps the poll count and never resets
+  it, so the sweep arrives on schedule even when every poll hits;
+  :meth:`mark_proven` resets the count at a fresh proof.
+
+  The revision enters only through the caller, which reads it from
+  :func:`session_revision` before its walk: a mark landing mid-walk or
+  mid-rebuild only raises the live revision past the stored one, so the next
+  poll re-walks instead of serving a value missing that write.
+  """
+
+  def __init__(self, sweep_every: int) -> None:
+    self._sweep_every = sweep_every
+    self._gates: dict[str, tuple[int, int]] = {}
+
+  def serve_hit(self, session_id: str, revision: int) -> bool:
+    """Consume one poll against the stored proof; True when it still stands."""
+    gate = self._gates.get(session_id)
+    if gate is None or gate[0] != revision or gate[1] + 1 >= self._sweep_every:
+      return False
+    self._gates[session_id] = (revision, gate[1] + 1)
+    return True
+
+  def mark_proven(self, session_id: str, revision: int) -> None:
+    """Store a fresh proof taken at *revision*, resetting the sweep countdown."""
+    self._gates[session_id] = (revision, 0)
+
+  def drop(self, session_id: str) -> None:
+    """Forget the session's proof (its stored value failed the walk)."""
+    self._gates.pop(session_id, None)
+
+  def clear(self) -> None:
+    """Forget every proof (the tests' cross-test pollution reset)."""
+    self._gates.clear()
 
 
 def is_dirty(session_id: str) -> bool:

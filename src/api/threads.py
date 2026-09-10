@@ -33,7 +33,7 @@ from src.core.models import (
 )
 from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
 from src.core.process import kill_process_group
-from src.core.sidebar_state import session_revision
+from src.core.sidebar_state import RevisionSweepGate, session_revision
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME, ThreadManager, iter_thread_meta_stats
 from src.core.triggers import TriggerManager
 
@@ -182,11 +182,7 @@ _list_body_memo: BoundedMemo[str, tuple[tuple[tuple[str, int, int], ...], bytes,
 # per-file stat walk. The sweep walk every Nth poll bounds a mark its writer
 # path forgot to the same ~30 s window the sidebar's populate sweep accepts.
 _LIST_PROOF_SWEEP_EVERY = 10
-# session id -> (revision the stored body was proven current at, polls since
-# that proof). A revision read before the walk is stored, never after: a mark
-# landing mid-walk or mid-rebuild only raises the revision, so the next poll
-# re-walks instead of serving a body missing that write.
-_sig_gate: dict[str, tuple[int, int]] = {}
+_sig_gate = RevisionSweepGate(_LIST_PROOF_SWEEP_EVERY)
 
 
 def _row_source_stats(threads_dir: str,
@@ -271,7 +267,7 @@ def _thread_list_items(
 _VIEW_ROWS_MEMO_LIMIT = 8
 _VIEW_ROWS_SWEEP_EVERY = 10
 _view_rows_memo: BoundedMemo[str, list[dict]] = BoundedMemo(_VIEW_ROWS_MEMO_LIMIT)
-_view_rows_gate: dict[str, tuple[int, int]] = {}
+_view_rows_gate = RevisionSweepGate(_VIEW_ROWS_SWEEP_EVERY)
 
 
 async def view_thread_rows(
@@ -289,9 +285,7 @@ async def view_thread_rows(
   """
   hit = _view_rows_memo.get(session_id)
   rev = session_revision(session_id)
-  gate = _view_rows_gate.get(session_id)
-  if hit is not None and gate is not None and gate[0] == rev and gate[1] + 1 < _VIEW_ROWS_SWEEP_EVERY:
-    _view_rows_gate[session_id] = (rev, gate[1] + 1)
+  if hit is not None and _view_rows_gate.serve_hit(session_id, rev):
     return hit
   session_dir = cfg.sessions_dir / session_id
 
@@ -303,7 +297,7 @@ async def view_thread_rows(
   rows = _thread_list_items(session_id, thread_pairs, metas)
   rows.sort(key=lambda row: row["created_at"], reverse=True)
   _view_rows_memo.store(session_id, rows)
-  _view_rows_gate[session_id] = (rev, 0)
+  _view_rows_gate.mark_proven(session_id, rev)
   return rows
 
 
@@ -326,19 +320,17 @@ async def list_threads(
   session_dir = cfg.sessions_dir / session_id
   hit = _list_body_memo.get(session_id)
   rev = session_revision(session_id)
-  gate = _sig_gate.get(session_id)
   thread_pairs: list[tuple[str, os.stat_result]] | None = None
-  if (hit is not None and gate is not None and gate[0] == rev and gate[1] + 1 < _LIST_PROOF_SWEEP_EVERY):
-    _sig_gate[session_id] = (rev, gate[1] + 1)
+  if hit is not None and _sig_gate.serve_hit(session_id, rev):
     sig = hit[0]
   else:
     thread_pairs, trigger_pairs = await asyncio.to_thread(
         _row_source_stats, str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"))
     sig = _signature_from_stats(thread_pairs, trigger_pairs)
     if hit is not None and hit[0] == sig:
-      _sig_gate[session_id] = (rev, 0)
+      _sig_gate.mark_proven(session_id, rev)
     else:
-      _sig_gate.pop(session_id, None)
+      _sig_gate.drop(session_id)
   if hit is not None and hit[0] == sig:
     if etag == hit[2]:
       return Response(status_code=204, headers={"ETag": hit[2], "Cache-Control": "no-store"})
@@ -378,7 +370,7 @@ async def list_threads(
   body = json.dumps(combined, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
   etag_value = '"' + hashlib.sha1(body).hexdigest() + '"'
   _list_body_memo.store(session_id, (sig, body, etag_value))
-  _sig_gate[session_id] = (rev, 0)
+  _sig_gate.mark_proven(session_id, rev)
   if etag == etag_value:
     return Response(status_code=204, headers={"ETag": etag_value, "Cache-Control": "no-store"})
   return Response(

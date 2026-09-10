@@ -9,9 +9,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import make_home_config, make_page_request
+from conftest import make_home_config, make_page_request, stub_credentials
 
 from src.api import pages
+from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
 from src.core.token_tally import AccountRow, ModelRow, TokenTally
 
@@ -22,6 +23,15 @@ def _reset_token_usage_single_flight() -> None:
   pages._token_usage_task = None
   yield
   pages._token_usage_task = None
+
+
+@pytest.fixture
+def pages_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CharlieBotConfig:
+  """Own the config the token-usage route reads (its cache path resolves through
+  get_config()): a tmp home, so no test touches the host profile."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  monkeypatch.setattr(pages, "get_config", lambda: cfg)
+  return cfg
 
 
 class FakeSessionManager:
@@ -77,7 +87,7 @@ def _usage_tally(rows: list[ModelRow]) -> TokenTally:
 
 
 @pytest.mark.asyncio
-async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch, pages_config: CharlieBotConfig) -> None:
   tally = _usage_tally(
       [
           _claude_row("2024-01-01", "2024-01-02"),
@@ -114,7 +124,7 @@ async def test_token_usage_route_returns_rows(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
-async def test_token_usage_route_is_single_flight(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_token_usage_route_is_single_flight(monkeypatch: pytest.MonkeyPatch, pages_config: CharlieBotConfig) -> None:
   calls = 0
 
   def fake_collect(**_kwargs) -> TokenTally:
@@ -135,7 +145,8 @@ async def test_token_usage_route_is_single_flight(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_token_usage_viewer_clears_inflight_task_after_render(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_token_usage_viewer_clears_inflight_task_after_render(
+    monkeypatch: pytest.MonkeyPatch, pages_config: CharlieBotConfig) -> None:
   """A finished collection is cleared, so the next request re-scans afresh."""
   calls = 0
 
@@ -153,7 +164,8 @@ async def test_token_usage_viewer_clears_inflight_task_after_render(monkeypatch:
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="requires node on PATH")
 @pytest.mark.asyncio
-async def test_token_usage_inline_script_parses(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_token_usage_inline_script_parses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, pages_config: CharlieBotConfig) -> None:
   """The page's inline script must be valid JavaScript.
 
   A bare `window_str` interpolation (a string containing spaces and a non-ASCII arrow) emitted
@@ -192,6 +204,7 @@ async def test_index_uses_pinned_runtime_git_version(monkeypatch: pytest.MonkeyP
 
   monkeypatch.setattr(pages, "_RUNTIME_GIT_VERSION", "abc1234 · 03-24")
   monkeypatch.setattr(pages, "_get_git_version", fail_git_lookup)
+  stub_credentials({"charliebot": {"access_key": ""}})
 
   response_one = await pages.index(
       request=make_page_request("/"),
@@ -215,6 +228,7 @@ async def test_index_uses_pinned_runtime_git_version(monkeypatch: pytest.MonkeyP
 async def test_index_versions_local_static_assets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   cfg = make_home_config(tmp_path)
   monkeypatch.setattr(pages, "_RUNTIME_GIT_VERSION", "abc1234 · 03-24")
+  stub_credentials({"charliebot": {"access_key": ""}})
 
   response = await pages.index(
       request=make_page_request("/"),
@@ -293,6 +307,7 @@ async def test_index_embeds_initial_sessions_for_client_sidebar_render(
       pending_trigger_count=2,
   )
   monkeypatch.setattr(pages, "build_session_bootstrap_data", _bootstrap_stub(session))
+  stub_credentials({"charliebot": {"access_key": ""}})
 
   response = await pages.index(
       request=make_page_request("/"),

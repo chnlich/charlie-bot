@@ -11,6 +11,7 @@ from conftest import (
     CLI_COMMON_REQUESTS_POST_PATCH_TARGET,
     assert_cli_reject_exit2,
     make_json_response,
+    stub_credentials,
 )
 
 from src.cli import common
@@ -231,7 +232,7 @@ def test_validate_repo_path_rejects_nonexistent_dir(tmp_path: Path, capsys: pyte
 def test_post_internal_api_bearer_header(access_key: str, expect_header: bool) -> None:
   cfg = MagicMock()
   cfg.server_base_url = "https://server"
-  cfg.charliebot_access_key = access_key
+  stub_credentials({"charliebot": {"access_key": access_key}})
 
   with (
       patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),

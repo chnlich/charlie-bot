@@ -28,7 +28,7 @@ from src.agents import master_cc_state
 from src.agents.backends.base import make_text_event
 from src.core import event_types as ET
 from src.core import tasks as tasks_module
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, PublishConfig
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import (
     CreateSessionRequest,
@@ -590,9 +590,9 @@ _FILE_HOST = "https://agent.example.test:18498"
 
 def _pub_cfg(tmp_path: Path) -> CharlieBotConfig:
   """The slack rig's cfg with the publish lane deployed under tmp_path."""
-  publish_dir = tmp_path / "publish"
-  publish_dir.mkdir(parents=True, exist_ok=True)
-  return build_slack_cfg(tmp_path).model_copy(update={"publish_dir": publish_dir, "public_base_url": _PUB_BASE})
+  lane = tmp_path / "publish"
+  lane.mkdir(parents=True, exist_ok=True)
+  return build_slack_cfg(tmp_path).model_copy(update={"publish": PublishConfig(dir=lane, public_base_url=_PUB_BASE)})
 
 
 def _rig_with_publish_lane(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, _FakeSlackClient]:
@@ -616,7 +616,7 @@ async def test_reply_rewrites_a_file_server_url_to_the_published_one_and_keeps_q
   assert client.posts == [{"channel": _CHANNEL, "text": f"details: {published_url} thanks", "thread_ts": _THREAD}]
   assert result["text"] == f"details: {published_url} thanks"
   assert result["operator_only_note"] is None
-  published = cfg.publish_dir / "sitrep.html"
+  published = cfg.publish.dir / "sitrep.html"
   assert published.read_text(encoding="utf-8") == "<p>sitrep body</p>"
   reply = _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)[0]
   assert reply["content"] == f"details: {published_url} thanks"
@@ -635,7 +635,7 @@ async def test_reply_rewrites_a_percent_encoded_file_server_path(tmp_path: Path)
   published_url = f"{_PUB_BASE}/encoded.html"
   assert client.posts == [{"channel": _CHANNEL, "text": f"details: {published_url}", "thread_ts": _THREAD}]
   assert result["text"] == f"details: {published_url}"
-  assert (cfg.publish_dir / artifact.name).read_text(encoding="utf-8") == "<p>encoded body</p>"
+  assert (cfg.publish.dir / artifact.name).read_text(encoding="utf-8") == "<p>encoded body</p>"
 
 
 @pytest.mark.asyncio
@@ -651,12 +651,12 @@ async def test_reply_refuses_as_a_whole_when_the_linked_file_is_gone(tmp_path: P
   assert f"{_FILE_HOST}/files/{gone}" in excinfo.value.detail
   assert not client.posts
   assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
-  assert not any(cfg.publish_dir.iterdir())
+  assert not any(cfg.publish.dir.iterdir())
 
 
 @pytest.mark.asyncio
 async def test_reply_refuses_as_a_whole_when_the_publish_lane_is_unconfigured(tmp_path: Path) -> None:
-  cfg, session_mgr, client = _rig(tmp_path)  # no publish_dir, no public_base_url
+  cfg, session_mgr, client = _rig(tmp_path)  # the publish lane is unconfigured
   artifact = write_artifact(tmp_path, "sitrep.html", "<p>sitrep body</p>")
   sid = await _slack_session(session_mgr)
 
@@ -664,7 +664,7 @@ async def test_reply_refuses_as_a_whole_when_the_publish_lane_is_unconfigured(tm
     await post_reply(sid, f"details: {_FILE_HOST}/files/{artifact}", cfg, session_mgr)
 
   assert excinfo.value.status == 422
-  assert "publish_dir" in excinfo.value.detail
+  assert "publish.dir" in excinfo.value.detail
   assert not client.posts
   assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
 
@@ -703,7 +703,7 @@ async def test_reply_with_a_file_server_url_on_another_port_stays_as_written(tmp
 
   assert client.posts[0]["text"] == text
   assert result["operator_only_note"] is None
-  assert not any(cfg.publish_dir.iterdir())
+  assert not any(cfg.publish.dir.iterdir())
 
 
 # ---------------------------------------------------------------------------

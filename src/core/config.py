@@ -620,8 +620,8 @@ def _reset_config_reload_failures_for_tests() -> None:
   _config_reload_errors_seen.clear()
 
 
-def _config_fingerprint() -> tuple[float, int]:
-  """The reload cache key over ``config.yaml``: its ``(mtime, size)``.
+def _file_fingerprint(name: str) -> tuple[float, int]:
+  """The ``(mtime, size)`` reload cache key over one file in the profile home.
 
   Size comes from the same stat call and costs nothing extra; it catches
   mtime-preserving writes (``cp -p``, ``touch -r``, two writes inside one second
@@ -635,10 +635,15 @@ def _config_fingerprint() -> tuple[float, int]:
   corpus, against ~10 µs of unavoidable fresh stats.
   """
   try:
-    st = os.stat(os.path.join(_resolve_home()[1], "config.yaml"))
+    st = os.stat(os.path.join(_resolve_home()[1], name))
   except OSError:
     return (0.0, 0)
   return (st.st_mtime, st.st_size)
+
+
+def _config_fingerprint() -> tuple[float, int]:
+  """The reload cache key over ``config.yaml``: :func:`_file_fingerprint` on it."""
+  return _file_fingerprint("config.yaml")
 
 
 # Retired config.yaml top-level keys: the loader rejects any file still carrying
@@ -869,15 +874,8 @@ def load_credentials() -> Credentials:
 
 
 def _credentials_fingerprint() -> tuple[float, int]:
-  """The reload cache key over ``credentials.yaml``: its ``(mtime, size)``; ``(0.0, 0)`` when missing.
-
-  Same scheme as :func:`_config_fingerprint`, over the secrets file instead.
-  """
-  try:
-    st = os.stat(os.path.join(_resolve_home()[1], "credentials.yaml"))
-  except OSError:
-    return (0.0, 0)
-  return (st.st_mtime, st.st_size)
+  """The reload cache key over ``credentials.yaml``: :func:`_file_fingerprint` on it."""
+  return _file_fingerprint("credentials.yaml")
 
 
 _credentials: Credentials | None = None

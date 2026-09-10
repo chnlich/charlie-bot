@@ -39,20 +39,14 @@ def test_server_section_prints_exact_json(
 def test_paths_section_prints_configured_values(
     profile_home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """The paths section round-trips: the JSON carries exactly the configured values."""
-  workspace_dir = profile_home / "workspace"
-  worktree_dir = profile_home / "worktrees"
-  save_yaml(
-      profile_home / "config.yaml",
-      {
-          "paths": {
-              "workspace_dirs": [str(workspace_dir)],
-              "worktree_dir": str(worktree_dir),
-          }
-      },
-  )
+  paths = {
+      "workspace_dirs": [str(profile_home / "workspace")],
+      "worktree_dir": str(profile_home / "worktrees"),
+  }
+  save_yaml(profile_home / "config.yaml", {"paths": paths})
   code, out, err = _run_get(monkeypatch, capsys, "paths")
   assert code == 0
-  assert json.loads(out) == {"workspace_dirs": [str(workspace_dir)], "worktree_dir": str(worktree_dir)}
+  assert json.loads(out) == paths
   assert err == ""
 
 

@@ -108,9 +108,9 @@ async def _create_worktree_and_process(
       wt_path = Path(request.worktree_path_override)
       thread.skip_cleanup = request.skip_cleanup
     else:
-      wt_path = Path(cfg.worktree_dir) / git_worktree_dir_name(branch_name)
+      wt_path = Path(cfg.paths.worktree_dir) / git_worktree_dir_name(branch_name)
 
-      Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
+      Path(cfg.paths.worktree_dir).mkdir(parents=True, exist_ok=True)
       resolution = await git_create_worktree(resolved_repo, base_branch, branch_name, wt_path, remote_tip=remote_tip)
       canonical_branch = resolution.canonical
       is_continuation = False

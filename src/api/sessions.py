@@ -76,7 +76,7 @@ _UTC_DATETIME_JSON = TypeAdapter(UtcDatetime | None)
 
 
 def _default_backend_id(cfg: CharlieBotConfig) -> str:
-  return cfg.backend_options[0].id if cfg.backend_options else "claude"
+  return cfg.backends.options[0].id if cfg.backends.options else "claude"
 
 
 def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dict:
@@ -88,7 +88,7 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
   # Same trigger condition as the write-through guard in switch_session_backend.
   rotates = bool(meta.scheduled_task and meta.role is not None)
   if rotates:
-    switchable = [opt.id for opt in cfg.backend_options]
+    switchable = [opt.id for opt in cfg.backends.options]
   else:
     switchable = _switchable_backend_ids(active_backend, cfg)
   return {
@@ -115,17 +115,16 @@ def _bootstrap_payload(bootstrap: SessionBootstrapData, cfg: CharlieBotConfig) -
 def _backend_domain(option: BackendOption, cfg: CharlieBotConfig) -> str | None:
   """The resume domain an option belongs to, or None for non-cc-claude backends.
 
-  Pooled cc-claude options (src/core/claude_accounts.py) share one domain: the
-  pool moves the transcript with the session, so any model in the pool can resume
-  it. Pinned cc-claude options share a domain exactly when they resolve to the
-  same ``claude_config_dir`` (each account has its own transcript store). Every
-  other backend family is its own, non-switchable domain.
+  cc-claude entries (src/core/claude_accounts.py) share one resume domain —
+  the pool when one is configured, else the default login directory — and the
+  pool moves the transcript with the session, so any model in the domain can
+  resume it. Every other backend family is its own, non-switchable domain.
   """
   if option.type != BackendType.CC_CLAUDE:
     return None
   if claude_accounts.is_pooled(option, cfg):
     return claude_accounts.POOL_DOMAIN
-  return str(claude_config_dir(option))
+  return str(claude_config_dir())
 
 
 def _same_backend_domain(cur_id: str, tgt_id: str, cfg: CharlieBotConfig) -> bool:
@@ -156,7 +155,7 @@ def _switchable_backend_ids(
   active_domain = _backend_domain_for(active_backend, cfg)
   if active_domain is None:
     return []
-  return [opt.id for opt in cfg.backend_options if _backend_domain(opt, cfg) == active_domain]
+  return [opt.id for opt in cfg.backends.options if _backend_domain(opt, cfg) == active_domain]
 
 
 def _backend_domain_for(backend_id: str, cfg: CharlieBotConfig) -> str | None:
@@ -177,10 +176,10 @@ def _resolve_requested_backend(
 
   Raises HTTPException(400) for any non-None backend id -- whether it arrives
   explicitly via ``requested_backend`` or is inherited via ``fallback_backend``
-  -- that isn't a member of ``cfg.backend_options`` and doesn't resolve through
+  -- that isn't a member of ``cfg.backends.options`` and doesn't resolve through
   the codex-family alias below.
   """
-  valid_backend_ids = {opt.id for opt in cfg.backend_options}
+  valid_backend_ids = {opt.id for opt in cfg.backends.options}
   resolved_fallback = fallback_backend or _default_backend_id(cfg)
 
   if requested_backend is not None and requested_backend in valid_backend_ids:
@@ -188,7 +187,7 @@ def _resolve_requested_backend(
     return requested_backend
 
   if requested_backend is not None and requested_backend.startswith("codex"):
-    codex_option = next((opt for opt in cfg.backend_options if opt.type == BackendType.CODEX), None)
+    codex_option = next((opt for opt in cfg.backends.options if opt.type == BackendType.CODEX), None)
     if codex_option:
       log.info("using_requested_backend_family_match", requested=requested_backend, backend=codex_option.id)
       return codex_option.id
@@ -597,7 +596,7 @@ async def get_session_view(
   view = await build_session_view_data(session_id, session_mgr, thread_rows)
   trigger_mgr = trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
-  active_backend = meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "claude")
+  active_backend = meta.backend or (cfg.backends.options[0].id if cfg.backends.options else "claude")
   active_backend_opt = cfg.get_backend_option(active_backend)
   active_backend_type = active_backend_opt.type if active_backend_opt else ""
   # FastJsonResponse for the message-page cost reason in get_session_events_page.
@@ -854,15 +853,16 @@ async def switch_session_backend(
   """Switch a session's backend, in place or via write-through rotation.
 
   ``meta.backend`` is an effective current backend: the raw field when set,
-  else ``backend_options[0]``. For an ordinary (or role-less dedicated) session,
-  only cc-claude options sharing the same ``claude_config_dir`` are switchable
+  else ``backends.options[0]``. For an ordinary (or role-less dedicated)
+  session, only cc-claude options sharing the session's resume domain — the
+  pool, or the default login directory when the pool is empty — are switchable
   in place; a session targeting anything else must fork/clone. For a
   cron-dedicated role-carrying (PM) session the yaml is the single control
   point, so the request writes through to the task yaml and returns the rotated
   session (whose ``id`` can differ from the path id), reusing the cron editor's
   implementation.
   """
-  valid_ids = {opt.id for opt in cfg.backend_options}
+  valid_ids = {opt.id for opt in cfg.backends.options}
   if body.backend not in valid_ids:
     raise HTTPException(
         status_code=400,

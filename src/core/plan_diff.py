@@ -37,7 +37,7 @@ ins.cbd-ins { background: rgba(46, 160, 67, .18); text-decoration: none; }
 .cbd-new { background: rgba(46, 160, 67, .10); }
 tr.cbd-del > td::after { content: attr(data-cbd-del); color: #cf222e; text-decoration: line-through; }
 """
-_HEADER_TEXT = "本版 · 对比上一版"
+_HEADER_TEXT = "This version · vs previous"
 _CLASS_RE = re.compile(r"(?<![\w:-])class\s*=\s*(?P<quote>[\"'])(?P<value>[^\"']*)(?P=quote)", re.IGNORECASE)
 _UNQUOTED_CLASS_RE = re.compile(r"(?<![\w:-])class\s*=\s*(?P<value>[^\s>]+)", re.IGNORECASE)
 

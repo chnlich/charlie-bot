@@ -331,7 +331,7 @@
     const REPORT = {{ report | tojson }};
     const kernels = REPORT.kernels;
     const CSV_FALLBACK = REPORT.parser === 'csv';
-    const ROOFLINE_PLACEHOLDER = '本报告未采集 roofline 数据 (需要 --set full/detailed)';
+    const ROOFLINE_PLACEHOLDER = 'No roofline data in this report (requires --set full/detailed)';
     const rooflineReport = REPORT.roofline || { available: false, message: ROOFLINE_PLACEHOLDER, rooflines: [] };
     let selectedRooflineId = rooflineReport.rooflines && rooflineReport.rooflines.length ? rooflineReport.rooflines[0].id : null;
 

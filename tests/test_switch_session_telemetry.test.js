@@ -108,7 +108,7 @@ test('click paints the placeholder synchronously over the old session DOM', asyn
   assert.equal(h.messages.children.length, 1, 'old session DOM must be gone at click time');
   assert.equal(row.children[0].className.includes('animate-pulse-dot'), true,
       'placeholder must reuse the thinking pulse-dot style');
-  assert.match(row.children[1].textContent, /正在打开/);
+  assert.match(row.children[1].textContent, /Opening/);
   assert.match(row.children[1].textContent, /Beta/);
   assert.equal(h.headerName.textContent, 'Beta', 'header name must update at click time');
   assert.equal(h.elements.get('session-session-b').classList.contains('bg-blue-600/20'), true,

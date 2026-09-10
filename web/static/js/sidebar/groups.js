@@ -231,8 +231,8 @@ function renderCronErrorBadge() {
   const broken = (pmStateCache && pmStateCache.brokenTasks) || [];
   if (!broken.length) return '';
   return `<div class="mx-3 my-2 px-3 py-2 rounded-lg bg-red-900/40 border border-red-700/50 text-red-300 text-xs cursor-pointer"
-       role="button" title="查看第一个加载失败的任务"
-       onclick="openCronEditor('${escapeHtml(broken[0].name)}')">⚠ ${broken.length} 个定时任务加载失败</div>`;
+       role="button" title="Open the first failed task"
+       onclick="openCronEditor('${escapeHtml(broken[0].name)}')">⚠ ${broken.length} scheduled tasks failed to load</div>`;
 }
 
 // Session-row action buttons shared by renderScheduledSessionItem and

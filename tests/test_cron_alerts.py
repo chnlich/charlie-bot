@@ -3,8 +3,8 @@
 At every cron snapshot reload, ``src/core/config.py::_fire_cron_error_alert``
 compares the fresh broken-task name set against the last-alerted set persisted
 at ``<CHARLIEBOT_HOME>/state/cron_alert_fingerprint.json``: a transition to a
-non-empty set fires one ``"⚠️ cron 任务加载失败: <names>"``, a transition back
-to empty fires one ``"✅ cron 加载失败已全部解除"``, and an identical set stays
+non-empty set fires one ``"⚠️ cron tasks failed to load: <names>"``, a transition back
+to empty fires one ``"✅ all cron load failures resolved"``, and an identical set stays
 silent — including across a restart, because the fingerprint lives on disk. A
 synchronous (no running loop) context skips the send without persisting, so the
 scheduler's unconditional 60s tick still fires the alert. Telegram failures are
@@ -55,18 +55,18 @@ def test_alert_fires_once_on_transition_recovers_once_and_repeats_nothing(
     sent: list[str],
 ) -> None:
   _fire(["beta", "alpha"])
-  assert sent == ["⚠️ cron 任务加载失败: alpha, beta"]
+  assert sent == ["⚠️ cron tasks failed to load: alpha, beta"]
   assert json.loads(_state_file(temp_home).read_text(encoding="utf-8")) == ["alpha", "beta"]
 
   # The identical set stays silent — including across a simulated restart
   # (fresh in-memory caches; only the persisted fingerprint survives).
   reset_config_caches()
   _fire(["alpha", "beta"])
-  assert sent == ["⚠️ cron 任务加载失败: alpha, beta"]
+  assert sent == ["⚠️ cron tasks failed to load: alpha, beta"]
 
   # Recovery (non-empty → empty) fires exactly once.
   _fire([])
-  assert sent == ["⚠️ cron 任务加载失败: alpha, beta", "✅ cron 加载失败已全部解除"]
+  assert sent == ["⚠️ cron tasks failed to load: alpha, beta", "✅ all cron load failures resolved"]
   assert json.loads(_state_file(temp_home).read_text(encoding="utf-8")) == []
 
   _fire([])
@@ -84,7 +84,7 @@ def test_no_event_loop_skips_send_without_persisting(
   assert not _state_file(temp_home).exists()
 
   _fire(["x"])
-  assert sent == ["⚠️ cron 任务加载失败: x"]
+  assert sent == ["⚠️ cron tasks failed to load: x"]
 
 
 def test_telegram_failure_is_log_only(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -132,7 +132,7 @@ def test_alert_fires_through_loader_refresh(
     await asyncio.sleep(0)
 
   asyncio.run(refresh())
-  assert sent == ["⚠️ cron 任务加载失败: memory-curator"]
+  assert sent == ["⚠️ cron tasks failed to load: memory-curator"]
 
   # Restoring the pointed file (the host file only carries the path to it) flips
   # the job back to healthy on the next refresh, and the recovery notification
@@ -145,4 +145,4 @@ def test_alert_fires_through_loader_refresh(
     await asyncio.sleep(0)
 
   asyncio.run(refresh_again())
-  assert sent == ["⚠️ cron 任务加载失败: memory-curator", "✅ cron 加载失败已全部解除"]
+  assert sent == ["⚠️ cron tasks failed to load: memory-curator", "✅ all cron load failures resolved"]

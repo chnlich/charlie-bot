@@ -60,7 +60,7 @@ function toolNameChipHtml(name) {
 function formatBubbleTime(isoStr) {
   if (!isoStr) return '';
   const d = new Date(isoStr);
-  return d.toLocaleString(undefined, {
+  return d.toLocaleString('en-US', {
     month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short'
   });

@@ -58,7 +58,7 @@ _ROOFLINE_ACHIEVED_SM_CLOCK = "smsp__cycles_elapsed.avg.per_second"
 _ROOFLINE_PEAK_TRAFFIC_PER_CYCLE = "dram__bytes.sum.peak_sustained"
 _ROOFLINE_ACHIEVED_TRAFFIC = "dram__bytes.sum.per_second"
 _ROOFLINE_DRAM_CLOCK = "dram__cycles_elapsed.avg.per_second"
-_ROOFLINE_PLACEHOLDER = "本报告未采集 roofline 数据 (需要 --set full/detailed)"
+_ROOFLINE_PLACEHOLDER = "No roofline data in this report (requires --set full/detailed)"
 
 _ROOFLINE_DEFINITIONS = [
     {

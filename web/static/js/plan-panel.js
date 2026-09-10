@@ -16,7 +16,7 @@ const planPanel = (() => {
   let _errors = [];
   let _selectedPlanId = null;
   let _selectedVersion = null;
-  // 对比上一版 toggle. Reset to the selected version's default (on when a
+  // Compare with previous toggle. Reset to the selected version's default (on when a
   // predecessor exists) at every selection change; a user click overrides it
   // until the next change of plan or version.
   let _diffEnabled = false;
@@ -66,7 +66,7 @@ const planPanel = (() => {
   }
 
   // The lineage version immediately before `version` (greatest v below it), or
-  // null — this is what the 对比上一版 toggle and its ?diff= query key off.
+  // null — this is what the Compare with previous toggle and its ?diff= query key off.
   function predecessorVersion(plan, version) {
     if (!plan || !plan.versions) return null;
     var pred = null;

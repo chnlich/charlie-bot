@@ -54,10 +54,12 @@ async def test_recap_skipped_when_session_missing() -> None:
 @pytest.mark.asyncio
 async def test_recap_returns_empty_on_no_resolvable_preference() -> None:
   cfg = CharlieBotConfig(
-      backend_options=[
-          BackendOption(id="claude-haiku", label="Haiku", type="cc-claude", model="haiku"),
-      ],
-      model_preference=["does-not-exist"],
+      backends={
+          "options": [
+              BackendOption(id="claude-haiku", label="Haiku", type="cc-claude", model="haiku"),
+          ],
+          "preference": ["does-not-exist"],
+      },
   )
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="codex-session")

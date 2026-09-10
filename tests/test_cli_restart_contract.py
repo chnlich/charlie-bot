@@ -458,7 +458,7 @@ def test_plan_readback_resolves_to_seeded_plan_on_sent_but_lost(
   }
   stub = _StubPlanListener(plans_payload)
   try:
-    cfg = _cfg(tmp_path, server_port=stub.port)
+    cfg = _cfg(tmp_path, server={"port": stub.port})
     monkeypatch.setattr(common, "get_config", lambda: cfg)
 
     plan_module.main(["present", "--session", "sess-plan", "--file", "artifacts/plan_01.html", "--title", "My Plan"])
@@ -473,7 +473,7 @@ def test_plan_readback_reports_outcome_unknown_when_nothing_matches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   stub = _StubPlanListener({"plans": []})
   try:
-    cfg = _cfg(tmp_path, server_port=stub.port)
+    cfg = _cfg(tmp_path, server={"port": stub.port})
     monkeypatch.setattr(common, "get_config", lambda: cfg)
 
     with pytest.raises(SystemExit) as exc_info:

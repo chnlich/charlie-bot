@@ -19,7 +19,12 @@ from src.core.publish import PublishError, publish_artifact
 )
 def test_publish_copies_and_joins_the_url_with_a_single_slash(tmp_path: Path, base: str, expected_url: str) -> None:
   artifact = write_artifact(tmp_path)
-  cfg = build_publish_cfg(tmp_path, public_base_url=base)
+  # The publish lane deployed the way the host's deployment step leaves it, with this
+  # row's base URL (build_publish_cfg pins the shared default; the sectioned pair
+  # carries the per-case override).
+  lane_dir = tmp_path / "publish"
+  lane_dir.mkdir(parents=True, exist_ok=True)
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", publish={"dir": lane_dir, "public_base_url": base})
 
   result = publish_artifact(artifact, cfg)
 

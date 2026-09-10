@@ -39,8 +39,8 @@ from src.agents.backends.claude_code import (
     claude_supervisor_env,
     headless_claude_env,
 )
+from src.core import claude_accounts
 from src.core import event_types as ET
-from src.core.claude_accounts import model_family, now_or, transcript_path
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
 from src.core.process import kill_process_group
 
@@ -79,12 +79,12 @@ _BOUNDARY_MARKER = f'"{ET.COMPACT_BOUNDARY}"'
 
 
 def is_fable(model: str | None) -> bool:
-  return model_family(model) == FABLE_FAMILY
+  return claude_accounts.model_family(model) == FABLE_FAMILY
 
 
 def cache_expired(last_request_at: datetime | None, now: datetime | None = None) -> bool:
   """True when the previous request is more than CACHE_TTL old; None (no request yet) is not expired."""
-  return last_request_at is not None and now_or(now) - last_request_at > CACHE_TTL
+  return last_request_at is not None and claude_accounts.now_or(now) - last_request_at > CACHE_TTL
 
 
 def expired_cache_compaction_wanted(
@@ -191,7 +191,7 @@ def _judge(returncode: int, stdout: bytes, before: int, after: int) -> Compactio
     return CompactionOutcome(ok=False, error=f"exit {returncode}: {detail or 'run reported an error'}", models=models)
   if after <= before:
     return CompactionOutcome(ok=False, error="transcript gained no compact_boundary row", models=models)
-  if not models or any(model_family(name) != COMPACTION_FAMILY for name in models):
+  if not models or any(claude_accounts.model_family(name) != COMPACTION_FAMILY for name in models):
     return CompactionOutcome(ok=False, error=f"compaction served by {', '.join(models) or 'no model'}", models=models)
   return CompactionOutcome(ok=True, models=models)
 
@@ -213,7 +213,7 @@ async def compact_with_sonnet(
   ``context_compact_failed`` (``error`` names the cause). Never raises for a
   failed run: the caller proceeds on the untouched transcript.
   """
-  transcript = transcript_path(config_dir, cc_session_id)
+  transcript = claude_accounts.transcript_path(config_dir, cc_session_id)
   if transcript is None:
     return await _fail(persist_and_broadcast, log_context, f"no transcript for {cc_session_id} under {config_dir}")
   before = count_compact_boundaries(transcript)

@@ -47,9 +47,9 @@ def test_model_construct_lists_every_unknown_kwarg() -> None:
 
 def test_model_construct_still_builds_known_fields(tmp_path: Path) -> None:
   """Known fields delegate to super() unchanged."""
-  cfg = CharlieBotConfig.model_construct(charliebot_home=tmp_path, server_port=1)
+  cfg = CharlieBotConfig.model_construct(charliebot_home=tmp_path, server={"port": 1})
   assert cfg.charliebot_home == tmp_path
-  assert cfg.server_port == 1
+  assert cfg.server.port == 1
   assert cfg.sessions_dir == tmp_path / "sessions"
 
 
@@ -81,7 +81,9 @@ def test_with_home_redirects_every_derived_path(tmp_path: Path) -> None:
   props, redirected_props = _path_properties(cfg), _path_properties(redirected)
   assert set(props) == set(redirected_props)
   home_derived = {name for name, path in props.items() if home_a == path or home_a in path.parents}
-  assert home_derived == {"sessions_dir", "claude_md_file", "memory_dir", "config_file", "config_d_dir"}
+  assert home_derived == {
+      "sessions_dir", "claude_md_file", "memory_dir", "config_file", "config_d_dir", "credentials_file"
+  }
   for name, path in props.items():
     if name in home_derived:
       assert redirected_props[name] == home_b / path.relative_to(home_a)
@@ -93,14 +95,18 @@ def test_with_home_preserves_the_rest_of_the_instance(tmp_path: Path) -> None:
   """Exactly one field moves: nested models keep their identity, the original is untouched."""
   home_a = tmp_path / "home-a"
   home_b = tmp_path / "home-b"
-  cfg = CharlieBotConfig(charliebot_home=home_a)
+  cfg = CharlieBotConfig(
+      charliebot_home=home_a,
+      backends={"options": [{
+          "id": "one", "label": "One", "type": "cc-claude", "model": "m"
+      }]})
   redirected = cfg.with_home(home_b)
 
   assert redirected is not cfg
   assert cfg.charliebot_home == home_a
   assert redirected.charliebot_home == home_b
   assert redirected.model_dump() == {**cfg.model_dump(), "charliebot_home": home_b}
-  assert redirected.backend_options[0] is cfg.backend_options[0]
+  assert redirected.backends.options[0] is cfg.backends.options[0]
 
 
 def test_with_home_expands_tilde(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -119,39 +125,39 @@ def test_with_home_rejects_relative_path() -> None:
 def test_voice_engine_defaults_to_sherpa() -> None:
   """A config carrying neither key behaves exactly as before: CPU sherpa, 1.7B tier."""
   cfg = CharlieBotConfig()
-  assert cfg.voice_engine == "sherpa"
-  assert cfg.voice_model_id == "Qwen/Qwen3-ASR-1.7B-hf"
+  assert cfg.voice.engine == "sherpa"
+  assert cfg.voice.model_id == "Qwen/Qwen3-ASR-1.7B-hf"
 
 
 def test_voice_engine_accepts_explicit_qwen3_hf() -> None:
   """Both keys are settable; the model id picks the tier independently of the engine."""
-  cfg = CharlieBotConfig(voice_engine="qwen3_hf", voice_model_id="Qwen/Qwen3-ASR-0.6B-hf")
-  assert cfg.voice_engine == "qwen3_hf"
-  assert cfg.voice_model_id == "Qwen/Qwen3-ASR-0.6B-hf"
+  cfg = CharlieBotConfig(voice={"engine": "qwen3_hf", "model_id": "Qwen/Qwen3-ASR-0.6B-hf"})
+  assert cfg.voice.engine == "qwen3_hf"
+  assert cfg.voice.model_id == "Qwen/Qwen3-ASR-0.6B-hf"
 
 
 def test_voice_engine_rejects_unknown_engine() -> None:
   """An engine typo is a validation error naming the field, not a silent sherpa."""
   with pytest.raises(ValidationError) as exc_info:
-    CharlieBotConfig(voice_engine="cuda")
-  assert "voice_engine" in str(exc_info.value)
+    CharlieBotConfig(voice={"engine": "cuda"})
+  assert "voice.engine" in str(exc_info.value)
 
 
 def test_load_config_reads_voice_keys(temp_home: Path) -> None:
   """The YAML config path parses both keys (config.yaml -> CharlieBotConfig)."""
   config_path = temp_home / ".charliebot" / "config.yaml"
   config_path.parent.mkdir(parents=True)
-  config_path.write_text("voice_engine: qwen3_hf\nvoice_model_id: Qwen/Qwen3-ASR-0.6B-hf\n", encoding="utf-8")
+  config_path.write_text("voice:\n  engine: qwen3_hf\n  model_id: Qwen/Qwen3-ASR-0.6B-hf\n", encoding="utf-8")
   cfg = load_config()
-  assert cfg.voice_engine == "qwen3_hf"
-  assert cfg.voice_model_id == "Qwen/Qwen3-ASR-0.6B-hf"
+  assert cfg.voice.engine == "qwen3_hf"
+  assert cfg.voice.model_id == "Qwen/Qwen3-ASR-0.6B-hf"
 
 
 def test_load_config_defaults_voice_keys_when_absent(temp_home: Path) -> None:
   """An existing config without the keys loads unchanged on the default engine."""
   config_path = temp_home / ".charliebot" / "config.yaml"
   config_path.parent.mkdir(parents=True)
-  config_path.write_text("server_port: 18499\n", encoding="utf-8")
+  config_path.write_text("server:\n  port: 18499\n", encoding="utf-8")
   cfg = load_config()
-  assert cfg.voice_engine == "sherpa"
-  assert cfg.server_port == 18499
+  assert cfg.voice.engine == "sherpa"
+  assert cfg.server.port == 18499

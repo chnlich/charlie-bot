@@ -1485,14 +1485,8 @@ def reset_config_caches() -> None:
   earlier test (or a value loaded from the host's real credentials.yaml) must
   not answer for this one.
   """
-  core_config._config = None
-  core_config._config_mtime = 0.0
-  core_config._config_failed_mtime = None
-  core_config._config_reload_errors_seen.clear()
-  core_config._credentials = None
-  core_config._credentials_mtime = None
-  core_config._credentials_failed_mtime = None
-  core_config._credentials_reload_errors_seen.clear()
+  core_config._config_cache.reset()
+  core_config._credentials_cache.reset()
   core_config._home_cache.clear()
   core_config._cron_snapshot = core_config._CronSnapshot()
 
@@ -1501,8 +1495,7 @@ def stub_credentials(sections: dict[str, dict[str, str | int]]) -> None:
   """Plant in-memory credentials for get_credentials(): the given sections become the cached
   Credentials, stamped with the current credentials.yaml fingerprint, so the answer comes from
   memory and no file is read."""
-  core_config._credentials = core_config.Credentials(path=Path("credentials.yaml"), sections=sections)
-  core_config._credentials_mtime = core_config._credentials_fingerprint()
+  core_config._credentials_cache.seed(core_config.Credentials(path=Path("credentials.yaml"), sections=sections))
 
 
 @pytest.fixture(autouse=True)

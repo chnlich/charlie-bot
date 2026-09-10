@@ -22,17 +22,23 @@ function fetchUrl(url) {
   });
 }
 
-// The largest single assistant text block across live chat files that accept()
-// passes; '' when none does. A block cannot exceed its file's size, so files no
-// larger than the current best are skipped.
-function largestAssistantDraft(accept) {
+// Every live session's chat file as { p, size }, skipping the sessions whose
+// file is absent or unreadable. The one census both corpora below walk.
+function liveChatFiles() {
   const root = path.join(process.env.HOME, '.charliebot', 'sessions');
   const files = [];
   for (const d of fs.readdirSync(root)) {
     const p = path.join(root, d, 'data', 'chat_events.jsonl');
     try { files.push({ p, size: fs.statSync(p).size }); } catch { continue; }
   }
-  files.sort((a, b) => a.size - b.size);
+  return files;
+}
+
+// The largest single assistant text block across live chat files that accept()
+// passes; '' when none does. A block cannot exceed its file's size, so files no
+// larger than the current best are skipped.
+function largestAssistantDraft(accept) {
+  const files = liveChatFiles().sort((a, b) => a.size - b.size);
   let best = '';
   for (const f of files) {
     if (f.size <= best.length) continue;
@@ -64,23 +70,11 @@ function assistantTexts(ev) {
 // The live chat file carrying the most bytes, as { p, size }; null when the
 // live tree holds no chat file.
 function worstChatFile() {
-  const root = path.join(process.env.HOME, '.charliebot', 'sessions');
-  let best = null;
-  let bestSize = -1;
-  for (const d of fs.readdirSync(root)) {
-    const p = path.join(root, d, 'data', 'chat_events.jsonl');
-    let size;
-    try {
-      size = fs.statSync(p).size;
-    } catch {
-      continue;
-    }
-    if (size > bestSize) {
-      best = p;
-      bestSize = size;
-    }
+  let worst = null;
+  for (const f of liveChatFiles()) {
+    if (worst === null || f.size > worst.size) worst = f;
   }
-  return best ? { p: best, size: bestSize } : null;
+  return worst;
 }
 
 // The worst live chat file's message page: the pageMessages largest bodies its

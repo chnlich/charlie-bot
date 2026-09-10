@@ -1,7 +1,7 @@
 """Local streaming-style speech transcription with a dual engine: sherpa (CPU) or qwen3_hf (GPU).
 
 The default 'sherpa' engine runs the int8 sherpa-onnx Qwen3-ASR pipeline on CPU. The
-'qwen3_hf' engine (cfg.voice_engine) runs the official transformers Qwen3-ASR weights on
+'qwen3_hf' engine (cfg.voice.engine) runs the official transformers Qwen3-ASR weights on
 NVIDIA GPUs; it needs the gpu-voice dependency group, which only GPU hosts install, so
 every torch/transformers import here is lazy and branch-local.
 """
@@ -73,7 +73,7 @@ class VoiceModelPaths:
   qwen3_decoder: Path
   qwen3_tokenizer: Path
   silero_vad: Path
-  # qwen3_hf engine only: local snapshot dir of cfg.voice_model_id under cache_dir,
+  # qwen3_hf engine only: local snapshot dir of cfg.voice.model_id under cache_dir,
   # published by ensure_models_cached after snapshot_download. None for the sherpa engine.
   hf_snapshot: Path | None = None
 
@@ -90,7 +90,7 @@ class _SpeechModelBundle:
   vad_config: object
   decode_lock: threading.Lock
   # The engine whose decoder actually produced `recognizer` — 'sherpa' after a GPU
-  # fallback even when cfg.voice_engine is 'qwen3_hf' — and the model id behind it.
+  # fallback even when cfg.voice.engine is 'qwen3_hf' — and the model id behind it.
   engine: str
   model_id: str
 
@@ -100,7 +100,7 @@ _provisioning_started = False
 _ready_paths: VoiceModelPaths | None = None
 _provisioning_error: str | None = None
 _bundle: _SpeechModelBundle | None = None
-# The cfg.voice_engine the cached _bundle answers for; a bundle built as a fallback
+# The cfg.voice.engine the cached _bundle answers for; a bundle built as a fallback
 # keeps the requesting engine here so the cache check still hits on the next session.
 _bundle_engine: str | None = None
 
@@ -177,7 +177,7 @@ def get_ready_model_paths() -> VoiceModelPaths:
 
 def ensure_models_cached(cfg: CharlieBotConfig) -> VoiceModelPaths:
   """Download missing model artifacts for the configured engine, verify, and publish readiness."""
-  if cfg.voice_engine == "qwen3_hf":
+  if cfg.voice.engine == "qwen3_hf":
     paths = voice_model_paths(cfg)
     paths.cache_dir.mkdir(parents=True, exist_ok=True)
     _ensure_artifact(paths.silero_vad, SILERO_VAD_URL, SILERO_VAD_SHA256)
@@ -190,7 +190,7 @@ def ensure_models_cached(cfg: CharlieBotConfig) -> VoiceModelPaths:
 
 
 def ensure_qwen3_hf_snapshot(cfg: CharlieBotConfig) -> Path:
-  """Return the local snapshot dir of cfg.voice_model_id, downloading it when missing.
+  """Return the local snapshot dir of cfg.voice.model_id, downloading it when missing.
 
   Uses huggingface_hub (ships with transformers in the gpu-voice group), so the import
   stays inside the qwen3_hf paths. Download failures raise into the provisioning error
@@ -202,7 +202,7 @@ def ensure_qwen3_hf_snapshot(cfg: CharlieBotConfig) -> Path:
   cache_dir.mkdir(parents=True, exist_ok=True)
   snapshot = Path(
       snapshot_download(
-          repo_id=cfg.voice_model_id,
+          repo_id=cfg.voice.model_id,
           cache_dir=str(cache_dir),
           etag_timeout=HTTP_MODEL_DOWNLOAD_TIMEOUT,
       ))
@@ -244,7 +244,7 @@ def models_are_cached(cfg: CharlieBotConfig) -> bool:
   paths = voice_model_paths(cfg)
   if not paths.silero_vad.is_file():
     return False
-  if cfg.voice_engine == "qwen3_hf":
+  if cfg.voice.engine == "qwen3_hf":
     return _qwen3_hf_snapshot_cached(cfg, paths) is not None
   return all(path.is_file() for path in _qwen3_model_files(paths))
 
@@ -256,7 +256,7 @@ def _qwen3_hf_snapshot_cached(cfg: CharlieBotConfig, paths: VoiceModelPaths) -> 
 
   try:
     snapshot = Path(
-        snapshot_download(repo_id=cfg.voice_model_id, cache_dir=str(paths.cache_dir), local_files_only=True))
+        snapshot_download(repo_id=cfg.voice.model_id, cache_dir=str(paths.cache_dir), local_files_only=True))
   except LocalEntryNotFoundError:
     return None
   return snapshot if _snapshot_complete(snapshot) else None
@@ -341,10 +341,10 @@ def _get_model_bundle(cfg: CharlieBotConfig, paths: VoiceModelPaths) -> _SpeechM
   with _state_lock:
     bundle = _bundle
     bundle_engine = _bundle_engine
-  if bundle is not None and bundle_engine == cfg.voice_engine:
+  if bundle is not None and bundle_engine == cfg.voice.engine:
     return bundle
 
-  if cfg.voice_engine == "qwen3_hf":
+  if cfg.voice.engine == "qwen3_hf":
     try:
       bundle = create_qwen3_hf_bundle(cfg, paths)
     except Exception as exc:
@@ -358,9 +358,9 @@ def _get_model_bundle(cfg: CharlieBotConfig, paths: VoiceModelPaths) -> _SpeechM
 
   log.info("voice_model_bundle_ready", engine=bundle.engine, model_id=bundle.model_id)
   with _state_lock:
-    if _bundle is None or _bundle_engine != cfg.voice_engine:
+    if _bundle is None or _bundle_engine != cfg.voice.engine:
       _bundle = bundle
-      _bundle_engine = cfg.voice_engine
+      _bundle_engine = cfg.voice.engine
     return _bundle
 
 
@@ -408,7 +408,7 @@ def create_qwen3_hf_bundle(cfg: CharlieBotConfig, paths: VoiceModelPaths) -> _Sp
       vad_config=_create_vad_config(paths),
       decode_lock=threading.Lock(),
       engine="qwen3_hf",
-      model_id=cfg.voice_model_id,
+      model_id=cfg.voice.model_id,
   )
 
 

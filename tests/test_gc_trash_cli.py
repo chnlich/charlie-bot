@@ -12,7 +12,7 @@ from src.core.config import CharlieBotConfig
 
 def _cfg_with_trash(tmp_path: Path) -> CharlieBotConfig:
   cfg = build_worktree_cfg(tmp_path)
-  trash = Path(cfg.worktree_dir) / ".trash"
+  trash = Path(cfg.paths.worktree_dir) / ".trash"
   for name in ("charliebot-task-a", "charliebot-task-b"):
     entry = trash / name
     entry.mkdir(parents=True)
@@ -23,7 +23,7 @@ def _cfg_with_trash(tmp_path: Path) -> CharlieBotConfig:
 def test_gc_trash_dry_run_lists_but_deletes_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _cfg_with_trash(tmp_path)
-  trash = Path(cfg.worktree_dir) / ".trash"
+  trash = Path(cfg.paths.worktree_dir) / ".trash"
   monkeypatch.setattr(gc_trash, "get_config", lambda: cfg)
   monkeypatch.setattr(sys, "argv", ["charliebot gc-trash"])
 
@@ -41,7 +41,7 @@ def test_gc_trash_dry_run_lists_but_deletes_nothing(
 def test_gc_trash_yes_hard_deletes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _cfg_with_trash(tmp_path)
-  trash = Path(cfg.worktree_dir) / ".trash"
+  trash = Path(cfg.paths.worktree_dir) / ".trash"
   monkeypatch.setattr(gc_trash, "get_config", lambda: cfg)
   monkeypatch.setattr(sys, "argv", ["charliebot gc-trash", "--yes"])
 

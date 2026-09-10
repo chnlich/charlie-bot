@@ -1,5 +1,6 @@
 """Regression tests for /api/internal/delegate takeoff gate behavior."""
 
+import random
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,47 @@ from src.core.models import (
     ThreadMetadata,
 )
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
+
+
+def _reference_takeoff_gate(
+    events: list[dict[str, Any]],
+    now: datetime,
+) -> None:
+  """The forward full-history walk the backward scan must match verdict-for-verdict.
+
+  Kept verbatim from the pre-scan implementation (phrase matching, stamp parsing,
+  and the 12 h window) as the randomized parity test's reference: any divergence
+  between this walk and :func:`check_takeoff_gate` is a semantics bug, not a test
+  artifact.
+  """
+  effective_now = now.astimezone(UTC)
+  latest_user_has_takeoff = False
+  latest_pre_takeoff_at: datetime | None = None
+  for event in events:
+    if event.get("type") != ET.USER or not isinstance(event.get("content"), str):
+      continue
+    normalized = " ".join(event.get("content").casefold().split())
+    latest_user_has_takeoff = "take off" in normalized
+    if "pre take off" in normalized:
+      timestamp = event.get("timestamp")
+      if isinstance(timestamp, str) and timestamp:
+        try:
+          issued_at = datetime.fromisoformat(timestamp)
+        except ValueError:
+          issued_at = None
+        if issued_at is not None:
+          if issued_at.tzinfo is None:
+            issued_at = None
+          else:
+            issued_at = issued_at.astimezone(UTC)
+        if issued_at is not None:
+          latest_pre_takeoff_at = issued_at
+  pre_takeoff_active = (
+      latest_pre_takeoff_at is not None and
+      latest_pre_takeoff_at <= effective_now < latest_pre_takeoff_at + timedelta(hours=12))
+  if latest_user_has_takeoff or pre_takeoff_active:
+    return
+  raise DelegationBlockedError("blocked")
 
 
 def _build_request(
@@ -296,6 +338,116 @@ def test_takeoff_gate_blocks_when_no_user_string_message_contains_takeoff() -> N
 def test_takeoff_gate_blocks_with_empty_history_or_no_user_messages(events: list[dict[str, Any]]) -> None:
   with pytest.raises(DelegationBlockedError):
     check_takeoff_gate("session-id", FakeSessionManager(events))
+
+
+def test_takeoff_gate_expired_pre_takeoff_before_a_take_off_message_stays_allowed() -> None:
+  """The backward scan stops at the file-last real user message; a file-older
+  expired pre-takeoff can never change the verdict the takeoff phrase already settles."""
+  issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+  session_mgr = FakeSessionManager(
+      [
+          user_event("pre take off", issued_at.isoformat()),
+          user_event("some ordinary follow-up"),
+          user_event("take off"),
+      ])
+
+  check_takeoff_gate("session-id", session_mgr, now=issued_at + timedelta(hours=48))
+
+
+def test_takeoff_gate_scan_stops_at_file_last_parseable_pre_takeoff() -> None:
+  """A file-older parseable pre-takeoff never overrides the file-last one, so the
+  scan may stop at it: both walks must expire the window by the same stamp."""
+  first_issued_at = datetime(2026, 7, 17, 12, 0, tzinfo=UTC)
+  last_issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+  session_mgr = FakeSessionManager(
+      [
+          user_event("pre take off", first_issued_at.isoformat()),
+          user_event("work in progress"),
+          user_event("pre take off", last_issued_at.isoformat()),
+          user_event("please continue with the plan"),
+      ])
+
+  check_takeoff_gate("session-id", session_mgr, now=last_issued_at + timedelta(hours=11))
+  with pytest.raises(DelegationBlockedError):
+    check_takeoff_gate("session-id", session_mgr, now=last_issued_at + timedelta(hours=12))
+
+
+def test_takeoff_gate_scan_matches_forward_walk_on_randomized_histories() -> None:
+  """Verdict parity between the backward scan and the forward reference over
+  randomized histories: phrase variants, stamp variants, and event kinds in
+  random file order, judged at randomized `now` points."""
+  rng = random.Random(20260909)
+  phrase_pool = [
+      "take off",
+      "TAKE   OFF",
+      "pre take off",
+      "PRE\n\t TAKE   OFF",
+      "please proceed",
+      "pre take off then take off",
+      "let us begin",
+      "take\toff",
+      "no authorization here",
+      "x" * 200 + " take off",
+  ]
+  stamp_pool = [
+      None,
+      "not-a-timestamp",
+      "2026-07-18T12:00:00",  # tz-less: fails closed
+      "2026-07-18T12:00:00+00:00",
+      "2026-07-20T12:00:00+00:00",
+      "2026-07-10T12:00:00+00:00",
+  ]
+
+  def random_event() -> dict[str, Any]:
+    kind = rng.random()
+    if kind < 0.55:
+      return user_event(rng.choice(phrase_pool), rng.choice(stamp_pool))
+    if kind < 0.7:
+      return scheduled_trigger_event(rng.choice(phrase_pool), rng.choice(stamp_pool))
+    if kind < 0.85:
+      return {
+          "type": ET.USER,
+          "message": {
+              "role": "user",
+              "content": [{
+                  "type": ET.TOOL_RESULT,
+                  "content": rng.choice(phrase_pool)
+              }],
+          },
+      }
+    if kind < 0.95:
+      return {
+          "type": ET.TASK_DELEGATED,
+          "description": rng.choice(phrase_pool),
+          "timestamp": rng.choice(stamp_pool) or "2026-07-18T12:00:00+00:00",
+      }
+    return {"type": ET.ASSISTANT, "content": rng.choice(phrase_pool)}
+
+  now_base = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+  offsets = [
+      -timedelta(hours=13), -timedelta(hours=12),
+      timedelta(0),
+      timedelta(hours=11, minutes=59),
+      timedelta(hours=12),
+      timedelta(hours=48)
+  ]
+  for _ in range(400):
+    events = [random_event() for _ in range(rng.randint(0, 14))]
+    now = now_base + rng.choice(offsets)
+    mgr = FakeSessionManager(events)
+    reference_verdict: tuple[bool, str] = (False, "")
+    try:
+      _reference_takeoff_gate(events, now)
+      reference_verdict = (True, "")
+    except DelegationBlockedError as e:
+      reference_verdict = (False, str(e))
+    scan_verdict: tuple[bool, str] = (False, "")
+    try:
+      check_takeoff_gate("session-id", mgr, now=now)
+      scan_verdict = (True, "")
+    except DelegationBlockedError as e:
+      scan_verdict = (False, str(e))
+    assert scan_verdict[0] == reference_verdict[0], (events, now, scan_verdict, reference_verdict)
 
 
 @pytest.mark.asyncio

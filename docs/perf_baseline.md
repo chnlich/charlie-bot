@@ -95,6 +95,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M83 versioned static-asset revalidation, warm page load | M83 collector below | seconds per revalidation request (If-None-Match) per asset over the dashboard's template-referenced asset set; the warm-cache revalidation-request count the page load issues | revalidate median < 0.002 s per asset; 0 revalidation requests per warm page load | — (introduced with its first history row) |
 | M84 backend stream-line parse, worst on-disk raw log | M84 collector below | seconds per full replay of the raw-log tail-follow loop and the stdout-stream NDJSON funnel over the worst on-disk raw agent log (scratch copy, live home read-only) | tail-follow median < 0.060 s; stdout-stream median < 0.010 s | — (introduced with its first history row) |
 | M85 verify-finalize report read, steady state | M85 collector below | seconds per `read_verify_final_report` call, worst on-disk worker log | median < 0.005 s | — (introduced with its first history row) |
+| M86 delegation takeoff-gate scan, delegation-flow shape | M86 collector below | seconds per `check_takeoff_gate` call, worst live chat corpus, one authorized user message appended (the corpus-as-it-stands round is the parity witness) | median < 0.001 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -5251,10 +5252,116 @@ asyncio.run(main())
 EOF
 ```
 
+M86 — delegation takeoff-gate scan, delegation-flow shape. Every
+`/api/internal/delegate` and `/api/internal/improve` POST runs
+`check_takeoff_gate` over the delegating session's whole chat history (the
+delegation target is always the busiest master session), on the default
+executor pool. The pre-scan form walked every event and re-normalized every
+real user message's full content on each call — O(history) per delegation,
+growing with the master session without bound; the backward form reads the
+file-last real user message's takeoff phrase and the file-last parseable
+pre-takeoff stamp and stops once both are settled, so the walked span is the
+tail after the last user message (one turn's length) while the verdict stays
+the forward walk's (a file-older message can never overwrite either answer the
+verdict reads; a blocked misfire — no take-off, no parseable pre-takeoff
+anywhere — still walks the whole file, the same span the pre-scan form always
+paid). The cost is thread-pool time on the spawn path, invisible to the
+standing HTTP probes, so the collector copies the session whose live chat file
+carries the most events into a scratch `CHARLIEBOT_HOME` under /tmp
+(metadata.json and data/ only; live home read once for the copy, never
+written), times nine warm calls over the corpus as it stands (the parity
+witness — its verdict is whatever the live state is, reported not asserted),
+then appends the delegation-flow shape — one authorized real user message, the
+take-off instruction a delegate POST follows — and times nine warm calls,
+asserting the allowed verdict:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
+
+# Worst gate corpus: the session whose LIVE chat file carries the most events;
+# the delegation target is always the busiest master session's chat history.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        with open(p, errors="replace") as f:
+            n = sum(1 for _ in f)
+        if n > best_n:
+            best, best_n = d, n
+SID = best.name
+print(f"worst gate corpus: session {SID}, {best_n} live chat events")
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp holding only a copy of that
+# session's metadata.json and data/; live home read once for the copy, never written.
+home = Path(tempfile.mkdtemp(prefix="m86-gate-home-", dir="/tmp"))
+dst = home / "sessions" / SID
+dst.mkdir(parents=True)
+shutil.copy2(best / "metadata.json", dst / "metadata.json")
+shutil.copytree(best / "data", dst / "data")
+cfg = CharlieBotConfig(charliebot_home=home)
+mgr = SessionManager(cfg)
+
+
+def timed_gate():
+    times, blocked = [], False
+    for _ in range(9):
+        t0 = time.perf_counter()
+        try:
+            check_takeoff_gate(SID, mgr)
+        except DelegationBlockedError:
+            blocked = True
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    return times[4], times[-1], blocked
+
+
+async def main():
+    try:
+        check_takeoff_gate(SID, mgr)  # cold pass, as at a server start with a cold events cache; not timed
+    except DelegationBlockedError:
+        pass
+    a_med, a_max, a_blocked = timed_gate()
+    print(f"corpus as it stands: {'blocked' if a_blocked else 'allowed'}; warm gate median {a_med * 1000:.2f} ms, "
+          f"max {a_max * 1000:.2f} ms over 9 (parity witness; the verdict is the live state's)")
+    await mgr.save_chat_event(SID, {
+        "type": "user",
+        "content": "take off — proceed with the delegated task",
+        "timestamp": "2026-09-09T18:00:00+00:00",
+    })
+    try:
+        check_takeoff_gate(SID, mgr)  # cold pass over the appended corpus; not timed
+    except DelegationBlockedError:
+        pass
+    times, blocked = [], False
+    for _ in range(9):
+        t0 = time.perf_counter()
+        try:
+            check_takeoff_gate(SID, mgr)
+        except DelegationBlockedError:
+            blocked = True
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    assert not blocked, "the delegation-flow shape must gate-allow"
+    print(f"{best_n}-event corpus, one authorized user message appended; delegation-flow gate "
+          f"median {times[4] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms over 9")
+    shutil.rmtree(home)
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-09 | this PR | M86 delegation takeoff-gate, delegation-flow shape median 2.27/3.65/4.00 → 0.00/0.00/0.00 ms, maxima 2.73-6.46 → 0.00-0.03 ms over nine timed warm calls (three interleaved rounds of the verbatim collector, 20534-event worst live chat file of session d321b9ad, scratch CHARLIEBOT_HOME per round, live home read-only, main checkout before vs branch worktree after back-to-back at load 8.2-11.2 one-minute — a host build was spiking, so the before side's spread is load noise, and every paired round still landed ≥2 orders faster); parity witness, the corpus as it stands (blocked verdict both arms): before median 2.20/2.50/5.01 ms, after 3.73/3.73/2.34 ms, same full-walk span both sides, verdicts identical; 39-passed gate-test file plus a 400-history randomized parity test against the verbatim forward walk, full 4948-passed suite | every `/api/internal/delegate` and `/api/internal/improve` POST ran `check_takeoff_gate` as an O(full-history) forward walk, re-normalizing every real user message's whole content and overwriting the two answers the verdict reads (the file-last real user message's takeoff phrase, the file-last parseable pre-takeoff stamp) — per-delegation thread-pool time growing with the busiest master session without bound (2.2-4.0 ms at 20,534 events today, on the spawn path behind the executor pool); the scan now walks backward and stops once both answers are settled — a file-older message can never overwrite either, so the walked span is the tail after the last user message, one turn's length, while a blocked misfire (no take-off, no parseable pre-takeoff anywhere) still walks the whole file, the same span the forward form always paid; one documented divergence, diagnostic only: pre-takeoff bearers file-older than the first parseable one no longer emit `_parse_pre_takeoff_timestamp` warnings (verdict-exact, fewer warning lines) |
 | 2026-09-09 | this PR | M75 first-event catch-up loop-lag median 0.0103/0.0106/0.0102 → 0.0082/0.0087/0.0067 s, −20 % to −35 %, every paired round faster (three interleaved rounds of the verbatim collector, 20534-event worst live chat file of session d321b9ad, scratch CHARLIEBOT_HOME per round, live home read-only, main checkout before vs branch worktree after back-to-back at load 2.70-2.83 one-minute); loop-lag maxima 0.0805-0.0839 → 0.0774-0.0955 s and wall medians 0.0976-0.1010 → 0.0984-0.1130 s unchanged within noise — the residual stall is the threaded cold load's own CPU and its GC pause (component check on the same corpus: cold threaded load max ticker gap 27.9 ms with gc on vs 12.1 ms off, wall 90 vs 61 ms), outside the feed this diff slices; feed-only attribution: the unsliced on-loop feed's worst ticker hold 23.3 ms vs 6.3 ms sliced at 256 events, wall 19 → 22.6 ms; no-regression re-measures interleaved ×2: M45 catchup replay loop-lag 0.0063/0.0063 → 0.0063/0.0065 s max 0.0064-0.0065 → 0.0064-0.0068 s with digest 314dfbe9fd89 identical, M26 advance 0.15/0.15 → 0.17/0.15 ms parity True digest e94c56635194, M6 append-round 0.06/0.05 → 0.06/0.05 ms parity True; 4899-passed suite plus one new mid-feed drop test | the first persist_and_broadcast for a session after server start fed the whole caught-up corpus through the aggregator inside one threaded span — the M45 pathology's one un-sliced sibling: the pure-Python feed parked the event loop behind GIL handoffs for the feed's full span (23 ms worst hold measured on the on-loop form, on top of the load's), and the streamed turn's first delta after a restart waits behind the whole init; the feed now runs on the event loop in 256-event slices with a yield between slices (the `_CatchupWalk` shape), and the drop epoch re-check moved from once post-init to every slice boundary so a mid-init drop aborts at the next boundary instead of finishing the stale feed; the corpus load keeps its threaded hop (a cold parse is one C-heavy pass), and the slice loop re-reads the list length so an append landing mid-feed is fed like the threaded form's list iteration reached it; M75 healthy range unchanged (the reading was already inside < 0.020 s) |
 | 2026-09-09 | this PR | M74 turn-end rescan loop-lag median 0.0104/0.0105/0.0105 → 0.0085/0.0072/0.0098 s, wall median 0.0122/0.0120/0.0122 → 0.0086/0.0073/0.0099 s, −18 % to −39 %, wall maxima 0.0201-0.0209 → 0.0127-0.0158 s (three interleaved rounds of the verbatim collector, 9.9 MB / 391-line worst on-disk raw agent log of session 4fcd4c43, live home read-only, main checkout before vs branch worktree after back-to-back at load 3.0-3.1 one-minute / 2.24 five-minute, every paired round faster, 391 projected events both arms); component attribution: parse_raw_lines measured 9.76 ms of the 12.2 ms wall on the same corpus (whole split 8.26 ms, replace-decode pass 5.69 ms, orjson-on-bytes 4.68 ms — the walk+strict-bytes fast path 6.17 ms); no-regression witness on the sibling funnel: M84 tail-follow replay 11.4 → 11.6 ms, stdout-stream 5.9 → 5.3 ms, within noise, that loop untouched; parity 0 divergences over 1650 live raw logs / 186,647 lines (old inline implementation vs new, event-identical); 4940-passed suite plus 2 new contract tests (torn-multibyte U+FFFD fallback, valid final line without newline) | parse_raw_lines whole-split every raw log (one list of all 391 lines per pass) and replace-decoded every line before the parse funnel (5.7 ms per 9.9 MB) although orjson reads raw bytes directly; the walk now emits one find+slice piece per line (the M84 tail-follow walk) and the strict bytes parse is the fast path — the errors="replace" decode runs only on a line the strict parse rejects, keeping the torn-multibyte-parses-as-U+FFFD contract (pinned by a new test on a corrupted byte mid-line, the shape a truncation cannot produce) and the funnel's single skip-contract home; the change rides every claude-family master turn end (the model-attribution rescan) and the re-attach result scan (scan_result_exit and resolve_run share the helper); M74 healthy range unchanged (already inside < 0.015 s) |
 | 2026-09-09 | this PR | M84 tail-follow replay median 29.9/29.1/29.6 → 11.2/10.9/11.3 ms, −62 % to −63 %, maxima 30.6/29.9/29.9 → 11.8/11.1/11.6 ms (three interleaved rounds of the verbatim collector — arms swapped in round 2 — 9.9 MB / 391-line worst on-disk raw agent log of session 4fcd4c43, scratch copy per round, live home read-only, every paired round faster at load 1.0-1.6; parser parity 0 divergences over all 391 lines in every round, 391/391 events both arms; stdout-stream replay unchanged 5.1-5.2 ms, the untouched sibling funnel; component attribution: cProfile puts bytes.split at 65 % of the pre-fix replay wall, 21.7 ms per pass, and the chunked split microbenchmarks 3.37 ms per 9.9 MB pass against 0.56 ms for the resumable find+slice walk — 6x; 4934-passed suite plus 2 new carried-partial and torn-tail contract tests) | the tail-follow loop's consumed-line split ran `buf.split(b"\n")` per 64 KB chunk — a full list allocation of every complete line in the chunk per read, re-copying and re-boxing the chunk's whole content per cycle (the loop's split cost measured 21.7 ms of the 37 ms replay on the 25 KB-average-line corpus) — while a resumable `chunk.find(b"\n", start)` + slice walk yields the identical line sequence (empty pieces, trailing partial carry, torn-tail drop all unchanged) at one list-free slice per line; the loop is the live read side of every covered backend's streamed turn (master runs and thread transports both write agent.raw.ndjson), so the win rides every live turn's read path, and the re-attach replay shares it; M84 healthy range unchanged (the reading was already inside < 0.060 s) |

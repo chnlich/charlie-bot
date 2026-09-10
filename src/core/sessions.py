@@ -1932,9 +1932,11 @@ class SessionManager:
     the init's full duration.
 
     A drop landing while the init runs must win: the epoch read at the start
-    and re-checked after every slice is `_drop_session_runtime_state`'s bump,
-    so a mid-init drop discards the unfinished init (its events cache re-primed
-    by the dropped run is cleared) and the init reruns against the new state.
+    is re-checked after every slice-boundary yield (the yield sits between the
+    slice's feed and the re-check), so a drop landing in the load, in a feed,
+    or in a boundary yield discards the unfinished init -- its events cache
+    re-primed by the dropped run is cleared -- and the init reruns against the
+    new state; the final re-check and the publication share no yield.
     """
     aggregator = self._aggregators.get(session_id)
     if aggregator is not None:
@@ -1980,9 +1982,14 @@ class SessionManager:
         for _ in aggregator.feed(ev):
           pass
       start = end
+      # The yield sits before the re-check, so the check the publication
+      # follows is never separated from its feed by a yield: a drop landing
+      # in the load, in a feed, or in the boundary yield itself is detected
+      # here, and no drop window survives between the last check and the
+      # return below.
+      await asyncio.sleep(0)
       if self._aggregator_epoch.get(session_id, 0) != epoch:
         return None
-      await asyncio.sleep(0)
     # The same instance carries the live feed after the catch-up, so the
     # stream-delta suppression above must not survive publication.
     aggregator.emit_stream_deltas = True

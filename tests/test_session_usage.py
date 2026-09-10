@@ -1253,6 +1253,14 @@ async def test_facts_memo_extension_feeds_a_private_copy(tmp_path: Path) -> None
   assert memo.get(meta.id)[2].facts().cost == pytest.approx(0.30)
 
 
+def _scan_usage_facts(events: list[dict]) -> session_usage._UsageFacts:
+  """Full-scan oracle: one fresh fold over the whole event list, the reference
+  the incremental suffix-feeding folds are compared against."""
+  fold = session_usage._UsageFold()
+  fold.feed(events)
+  return fold.facts()
+
+
 def test_usage_fold_of_appended_suffixes_matches_full_scan() -> None:
   """Feeding a list in suffixes lands on the same facts as one full pass."""
   events = [
@@ -1275,12 +1283,12 @@ def test_usage_fold_of_appended_suffixes_matches_full_scan() -> None:
   ]
   fold = session_usage._UsageFold()
   fold.feed(events[:3])
-  assert fold.facts() == session_usage._scan_usage_facts(events[:3])
+  assert fold.facts() == _scan_usage_facts(events[:3])
   fold.feed(events[3:6])
-  assert fold.facts() == session_usage._scan_usage_facts(events[:6])
+  assert fold.facts() == _scan_usage_facts(events[:6])
   fold.feed(events[6:])
   fold.feed([])
-  assert fold.facts() == session_usage._scan_usage_facts(events)
+  assert fold.facts() == _scan_usage_facts(events)
 
 
 def test_usage_fold_reading_slot_of_appended_suffixes_matches_full_scan() -> None:
@@ -1300,13 +1308,13 @@ def test_usage_fold_reading_slot_of_appended_suffixes_matches_full_scan() -> Non
   ]
   prefix_fold = session_usage._UsageFold()
   prefix_fold.feed(events[:2])
-  assert prefix_fold.facts() == session_usage._scan_usage_facts(events[:2])
+  assert prefix_fold.facts() == _scan_usage_facts(events[:2])
 
   # The suffix carries the context_reading that overrides the earlier claude slot.
   full_fold = prefix_fold.copy()
   full_fold.feed(events[2:])
   full_fold.feed([])
-  assert full_fold.facts() == session_usage._scan_usage_facts(events)
+  assert full_fold.facts() == _scan_usage_facts(events)
   # The slot kind flipped from claude to resolved, and the reading payload won.
   assert full_fold.facts().reading_kind == session_usage._READING_RESOLVED
   assert full_fold.facts().reading == _k3_reading()[ET.CONTEXT_READING]
@@ -1322,7 +1330,7 @@ def test_usage_fold_reading_slot_of_appended_suffixes_matches_full_scan() -> Non
 def _usage_reference(session_mgr: SessionManager, meta: SessionMetadata) -> dict | None:
   """Full-scan reference: the tiers over a fresh fold of the whole event list."""
   events = session_mgr.load_chat_events_sync(meta.id)
-  facts = session_usage._scan_usage_facts(events)
+  facts = _scan_usage_facts(events)
   return (
       session_usage._resolve_claude_tier(facts) or session_usage._resolve_snapshot_tier(facts) or
       (None if not events else session_usage._resolve_no_source_tier(facts)))

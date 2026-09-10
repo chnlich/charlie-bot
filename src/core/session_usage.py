@@ -215,19 +215,6 @@ class _UsageFold:
     return out
 
 
-def _scan_usage_facts(events: list[dict]) -> _UsageFacts:
-  """Collect every tier's inputs in one pass over *events*.
-
-  The latest-reading slot rides the same order rule: a qualifying ``assistant``
-  event resets the boundary seen so far, a ``compact_boundary`` refines it only
-  while the slot kind is ``claude``, and any later snapshot or
-  ``context_reading`` moves the slot away from claude.
-  """
-  fold = _UsageFold()
-  fold.feed(events)
-  return fold.facts()
-
-
 def _usage_dict(
     context_tokens: int | None,
     context_full: int | None,

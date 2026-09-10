@@ -318,7 +318,9 @@ async def main():
         usage = await mgr.resolve_session_usage(SID, meta)
         times.append(time.perf_counter() - t0)
         events = mgr.load_chat_events_sync(SID)
-        facts = session_usage._scan_usage_facts(events)
+        fold = session_usage._UsageFold()
+        fold.feed(events)
+        facts = fold.facts()
         reference = (session_usage._resolve_claude_tier(facts) or session_usage._resolve_snapshot_tier(facts)
                      or (None if not events else session_usage._resolve_no_source_tier(facts)))
         parity = parity and usage == reference

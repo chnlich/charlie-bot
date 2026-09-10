@@ -1509,14 +1509,15 @@ def stub_credentials(sections: dict[str, dict[str, str | int]]) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
   """Every test runs under its own empty profile home, so a code path that calls the real
   get_config() loads defaults instead of the host's ~/.charliebot; a test that asserts
   default-home behavior deletes the variable itself, as temp_home does. Autouse fixtures run
   before requested ones, so temp_home (deletes the variable, points HOME at a tmp dir) and
-  profile_home (sets it) keep working unchanged."""
-  profile = tmp_path / "profile"
-  profile.mkdir()
+  profile_home (sets it) keep working unchanged. The directory lives outside the test's own
+  tmp_path, so a test that creates its own profile directory under tmp_path does not collide
+  with it."""
+  profile = tmp_path_factory.mktemp("profile")
   monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(profile))
   reset_config_caches()
   yield

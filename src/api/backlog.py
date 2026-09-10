@@ -29,51 +29,56 @@ def _repo_path(repo: str | None) -> Path | None:
   return None
 
 
-def _load_all_items(repo_path: Path) -> list[dict]:
-  """Load items from backlog/backlogs/*.yaml (with _source), or fall back to backlog/backlog.yaml."""
+def _backlog_store(repo_path: Path) -> tuple[list[Path], bool] | None:
+  """The yaml files making up the backlog store, plus whether that store is per-module.
+
+  Returns (files in read order, per_module); None when the repo has neither the
+  per-module dir nor the fallback file. Per-module (backlog/backlogs/*.yaml) is
+  authoritative when present; the fallback backlog/backlog.yaml is not — its
+  items keep any `_source` they already carry.
+  """
   backlogs_dir = repo_path / 'backlog' / 'backlogs'
   if backlogs_dir.is_dir():
-    items = []
-    for yaml_file in sorted(backlogs_dir.glob('*.yaml')):
-      source = yaml_file.stem
-      file_items = load_yaml(yaml_file, default=[])
-      for item in file_items:
-        item['_source'] = source
-      items.extend(file_items)
-    return items
+    return sorted(backlogs_dir.glob('*.yaml')), True
+  fallback = repo_path / 'backlog' / 'backlog.yaml'
+  return ([fallback], False) if fallback.exists() else None
 
-  path = repo_path / 'backlog' / 'backlog.yaml'
-  if not path.exists():
+
+def _load_all_items(repo_path: Path) -> list[dict]:
+  """Load items from the backlog store, tagging each item's `_source`."""
+  store = _backlog_store(repo_path)
+  if store is None:
     return []
-  items = load_yaml(path, default=[])
-  for item in items:
-    item.setdefault('_source', 'backlog')
+  files, per_module = store
+  items: list[dict] = []
+  for yaml_file in files:
+    for item in load_yaml(yaml_file, default=[]):
+      if per_module:
+        item['_source'] = yaml_file.stem
+      else:
+        item.setdefault('_source', 'backlog')
+      items.append(item)
   return items
 
 
 def _find_item_file(repo_path: Path, item_id: str, source: str | None = None) -> tuple[Path | None, list | None]:
-  """Return (yaml_path, items) for the file containing item_id, or (None, None).
+  """Return (yaml_path, items) for the store file containing item_id, or (None, None).
 
-  If *source* is given (e.g. 'alpha-lab-backtest'), only search that file —
-  this disambiguates duplicate IDs across per-module backlogs.
+  In a per-module store, a given *source* (e.g. 'alpha-lab-backtest') restricts
+  the search to that file — this disambiguates duplicate IDs across per-module
+  backlogs. The fallback store has one implicit source, so *source* is ignored
+  there.
   """
-  backlogs_dir = repo_path / 'backlog' / 'backlogs'
-  if backlogs_dir.is_dir():
-    files = sorted(backlogs_dir.glob('*.yaml'))
-    if source:
-      files = [f for f in files if f.stem == source]
-    for yaml_file in files:
-      items = load_yaml(yaml_file, default=[])
-      if any(str(i.get('id')) == item_id for i in items):
-        return yaml_file, items
+  store = _backlog_store(repo_path)
+  if store is None:
     return None, None
-
-  path = repo_path / 'backlog' / 'backlog.yaml'
-  if not path.exists():
-    return None, None
-  items = load_yaml(path, default=[])
-  if any(str(i.get('id')) == item_id for i in items):
-    return path, items
+  files, per_module = store
+  if per_module and source:
+    files = [f for f in files if f.stem == source]
+  for yaml_file in files:
+    items = load_yaml(yaml_file, default=[])
+    if any(str(i.get('id')) == item_id for i in items):
+      return yaml_file, items
   return None, None
 
 

@@ -26,7 +26,7 @@ import pkgutil
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
@@ -35,6 +35,7 @@ from conftest import (
     OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
     RUNS_READ_PID_STAT_PATCH_TARGET,
+    stub_subprocess_spawn,
 )
 
 import src.agents.backends as backends_package
@@ -129,12 +130,7 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     raise _SpawnObserved
 
   backend = cls(on_spawn=on_spawn, log_dir=tmp_path / "logs", **_BASE_CTOR_KWARGS[cls])
-  process = MagicMock()
-  process.pid = 31337
-  process.stdin = MagicMock()
-  process.stdin.drain = AsyncMock()
-  process.stdin.wait_closed = AsyncMock()
-  monkeypatch.setattr(BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, AsyncMock(return_value=process))
+  stub_subprocess_spawn(monkeypatch, BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 31337)
 
   with pytest.raises(_SpawnObserved):
     async for _event in backend.run("contract prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}):
@@ -147,7 +143,7 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
 
 async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """opencode custom run() harness (test_opencode_backend.py's MagicMock spawn shape)."""
+  """opencode custom run() harness over the shared conftest spawn stub."""
   monkeypatch.setattr(OPENCODE_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/opencode")
   _install_sentinel_read_pid_stat(monkeypatch)
   observed: list[tuple[int, str | None]] = []
@@ -157,10 +153,7 @@ async def _drive_opencode(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     observed.append((pid, backend.pid_start))
 
   backend = cls(model="provider/model", on_spawn=on_spawn)
-  process = MagicMock()
-  process.pid = 1234
-  create_process = AsyncMock(return_value=process)
-  monkeypatch.setattr(OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, create_process)
+  stub_subprocess_spawn(monkeypatch, OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 1234)
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(side_effect=RuntimeError("stop after spawn")))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
   monkeypatch.setattr(backend, "_cleanup_server", AsyncMock())

@@ -81,10 +81,14 @@ def test_load_config_names_every_legacy_key_in_the_file(tmp_path, monkeypatch):
   message = str(excinfo.value)
   assert str(home / "config.yaml") in message.splitlines()[0]
   named = dict(re.findall(r"^  (.+) -> (.+)$", message, re.M))
-  expected = set(yaml.safe_load(FIXTURE_PATH.read_text(encoding="utf-8"))) & set(LEGACY_KEYS)
+  fixture_keys = set(yaml.safe_load(FIXTURE_PATH.read_text(encoding="utf-8")))
+  expected = {key for key in fixture_keys if key in LEGACY_KEYS or CREDENTIALS_PREFIX + key in LEGACY_KEYS}
   assert set(named) == expected
   for key, location in named.items():
-    assert location == LEGACY_KEYS[key]
+    if key in LEGACY_KEYS:
+      assert location == LEGACY_KEYS[key]
+    else:
+      assert location == "credentials.yaml " + LEGACY_KEYS[CREDENTIALS_PREFIX + key]
 
 
 def test_legacy_table_matches_the_model_tree():

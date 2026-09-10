@@ -431,7 +431,7 @@ def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytes
     def __init__(self) -> None:
       super().__init__("bad request")
       self.response = MagicMock()
-      self.response.json.return_value = {"detail": "requested backend 'missing' is not in backend_options"}
+      self.response.json.return_value = {"detail": "requested backend 'missing' is not in backends.options"}
 
   with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "missing",
                                         session="s1")) as post_mock:

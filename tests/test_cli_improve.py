@@ -260,7 +260,7 @@ async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
   thread_mgr = AsyncMock()
 
   async def fake_resolve_requested_subagent_backend_model(*args: object, **kwargs: object) -> tuple[str, str]:
-    raise ValueError("requested backend 'missing' is not in backend_options")
+    raise ValueError("requested backend 'missing' is not in backends.options")
 
   with patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=MagicMock()), \
        patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
@@ -271,7 +271,7 @@ async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
     await start_improve_loop(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 
   assert exc_info.value.status_code == 400
-  assert exc_info.value.detail == "requested backend 'missing' is not in backend_options"
+  assert exc_info.value.detail == "requested backend 'missing' is not in backends.options"
 
 
 @pytest.mark.asyncio

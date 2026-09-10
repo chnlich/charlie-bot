@@ -388,7 +388,7 @@ def _idle_past_window(path: Path, now: datetime, idle_days: int) -> bool:
 
 def _live_worktree_dir_names(cfg: CharlieBotConfig) -> set[str]:
   """Encoded cwd names of the worktrees currently on disk (their runs may still write)."""
-  worktree_dir = Path(cfg.worktree_dir)
+  worktree_dir = Path(cfg.paths.worktree_dir)
   if not worktree_dir.is_dir():
     return set()
   return {
@@ -432,7 +432,7 @@ def _sweep_claude_transcripts(
   same orphan rule once the worktree itself is gone. Any other name encodes a cwd
   CharlieBot never handed a claude process and is never touched.
   """
-  worktree_prefix = claude_project_dir_name(Path(cfg.worktree_dir)) + "-"
+  worktree_prefix = claude_project_dir_name(Path(cfg.paths.worktree_dir)) + "-"
   live_worktrees = _live_worktree_dir_names(cfg) if session_id is None else set()
   for projects_root in claude_projects_roots(cfg):
     if not projects_root.is_dir():

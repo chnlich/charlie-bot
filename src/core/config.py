@@ -708,8 +708,10 @@ def load_config() -> CharlieBotConfig:
   The file holds the whole sectioned mapping; secrets live separately in
   ``credentials.yaml``. Two tripwires fire before validation: any ``*.yaml``
   file directly under ``config.d/`` (only ``config.d/cron.d/`` holds fragment
-  files now), and any top-level key from :data:`LEGACY_KEYS` — the error opens
-  with the config path and names each old key with its new location.
+  files now), and any top-level key from :data:`LEGACY_KEYS` — structure keys
+  and secrets alike; the error opens with the config path and names each old
+  key with its new location (a secret's location is its ``credentials.yaml``
+  key path).
   """
   home = charliebot_home_dir()
   config_path = home / "config.yaml"
@@ -723,9 +725,12 @@ def load_config() -> CharlieBotConfig:
             "keys belong in config.yaml (structure) or credentials.yaml (secrets)")
 
   yaml_data: dict = load_yaml(config_path, default={})
-  legacy_hits = [key for key in yaml_data if key in LEGACY_KEYS]
+  legacy_hits = [key for key in yaml_data if key in LEGACY_KEYS or CREDENTIALS_PREFIX + key in LEGACY_KEYS]
   if legacy_hits:
-    lines = "\n".join(f"  {key} -> {LEGACY_KEYS[key]}" for key in legacy_hits)
+    lines = "\n".join(
+        f"  {key} -> "
+        + (LEGACY_KEYS[key] if key in LEGACY_KEYS else "credentials.yaml " + LEGACY_KEYS[CREDENTIALS_PREFIX + key])
+        for key in legacy_hits)
     raise ValueError(f"{config_path} still uses retired top-level keys; move each one:\n{lines}")
 
   # The home directory is chosen by the environment, never by a file that lives

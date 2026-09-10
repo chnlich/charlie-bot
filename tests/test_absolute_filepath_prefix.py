@@ -67,7 +67,16 @@ def targets(tmp_path: Path) -> dict[str, Path]:
   }
 
 
-def test_both_prefixes_return_the_same_status_and_bytes(targets: dict[str, Path]) -> None:
+@pytest.fixture
+def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Own the config and credentials the file router reads: sessions root under tmp_path,
+  empty access key (the gate is a no-op). Without this the route reads the host profile,
+  which is not a test fixture."""
+  monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions"))
+  stub_credentials({"charliebot": {"access_key": ""}})
+
+
+def test_both_prefixes_return_the_same_status_and_bytes(targets: dict[str, Path], isolated_config: None) -> None:
   client = _client(None)
   for label, target in targets.items():
     responses = [client.get(f"{prefix}{target}") for prefix in PREFIXES]
@@ -98,7 +107,8 @@ def test_artifact_injection_decides_the_same_way_under_both_prefixes(
     assert ARTIFACT_SCRIPT not in client.get(f"{prefix}{targets['plain HTML file']}").text
 
 
-def test_head_answers_the_same_status_as_get_under_both_prefixes(targets: dict[str, Path]) -> None:
+def test_head_answers_the_same_status_as_get_under_both_prefixes(
+    targets: dict[str, Path], isolated_config: None) -> None:
   # The render-time probe asks with HEAD, so the marker only ever appears for a path the server
   # answers 404 for: a HEAD that came back 405 would mark nothing at all.
   client = _client(None)
@@ -111,7 +121,8 @@ def test_head_answers_the_same_status_as_get_under_both_prefixes(targets: dict[s
     assert client.head(f"{prefix}{targets['absent path']}").status_code == 404
 
 
-def test_a_non_html_file_is_served_byte_for_byte_under_both_prefixes(targets: dict[str, Path]) -> None:
+def test_a_non_html_file_is_served_byte_for_byte_under_both_prefixes(
+    targets: dict[str, Path], isolated_config: None) -> None:
   client = _client(None)
   target = targets["non-HTML file"]
   for prefix in PREFIXES:

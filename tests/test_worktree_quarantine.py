@@ -433,7 +433,7 @@ def _write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Pa
 async def test_maybe_respawn_verify_task_cross_models_backend_when_omitted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A never-started VERIFY delegation with no explicit --backend must still resolve
-  cross-model via model_preference on respawn (mirrors _authorize_spawn_request's VERIFY
+  cross-model via backends.preference on respawn (mirrors _authorize_spawn_request's VERIFY
   branch in api/internal.py) — not silently fall back to the session's own backend, which
   would defeat verify's "checked by a different model" invariant.
   """

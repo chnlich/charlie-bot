@@ -9,16 +9,16 @@ from typing import get_args, get_origin
 
 import pytest
 import yaml
-from pydantic import BaseModel
 from conftest import backend_option
+from pydantic import BaseModel
 
 from src.core import config as config_module
 from src.core.config import (
-    CHARLIEBOT_HOME_ENV,
-    CREDENTIALS_PREFIX,
-    LEGACY_KEYS,
-    CharlieBotConfig,
-    require_backends,
+  CHARLIEBOT_HOME_ENV,
+  CREDENTIALS_PREFIX,
+  LEGACY_KEYS,
+  CharlieBotConfig,
+  require_backends,
 )
 from src.core.init_seed import init_charliebot_home
 from src.core.models import BACKEND_CLASSES

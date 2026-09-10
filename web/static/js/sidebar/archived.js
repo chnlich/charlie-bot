@@ -86,7 +86,7 @@ function appendArchivedRows(sessions) {
   }).join('');
   archivedState.rowsEl.appendChild(pageEl);
   archivedState.renderedCount += sessions.length;
-  sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
+  Sidebar.resyncSessionUnread(sessions);
 }
 
 async function fetchArchivedPage() {

@@ -238,7 +238,7 @@ function renderSidebarLoadErrors(errors) {
 
 function restoreSidebarFromUrl() {
   renderSidebarFilterPills();
-  INITIAL_SESSIONS.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
+  Sidebar.resyncSessionUnread(INITIAL_SESSIONS);
   const params = new URLSearchParams(location.search);
   const urlFilter = params.get('filter');
   const urlQuery = params.get('q');

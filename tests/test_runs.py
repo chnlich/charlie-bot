@@ -351,7 +351,7 @@ def test_resolve_attaches_leftover_holders_only_when_not_alive(sleep_holding_std
   holders_scan = {(target.stat().st_dev, target.stat().st_ino): [runs.HolderProcess(pid=proc.pid, cmdline="sleep 30")]}
 
   # Provably dead run (full liveness identity recorded): the leftover holder
-  # is attached for reporting + row-5 cleanup.
+  # is attached for reporting + leftover cleanup.
   resolution = _resolve(tmp_path, pid=999999, pid_start="1", holders_scan=holders_scan)
   assert resolution.outcome is runs.RunOutcome.DIED
   assert [h.pid for h in resolution.leftover_holders] == [proc.pid]

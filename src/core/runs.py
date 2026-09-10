@@ -13,7 +13,7 @@ This module owns the pure/queryable parts of that contract:
 - process liveness (``pid`` + ``/proc/<pid>/stat`` field 22 + host boot time);
 - descendant discovery (one ``/proc/*/fd/1`` scan, diagnostic only — never a
   liveness input);
-- the outcome table (six rows) mapping on-disk facts to a ``RunOutcome``;
+- the outcome table mapping on-disk facts to a ``RunOutcome``;
 - the pure raw-line -> translated-event projection shared by the live read
   loop, the re-attach path, and tests;
 - reading the run's true completion time (the raw log's final mtime).
@@ -210,7 +210,7 @@ def scan_stdout_holders() -> dict[tuple[int, int], list[HolderProcess]]:
   symlink to whatever the process's stdout is; only regular files are indexed
   (a run's raw log; consoles/pipes/sockets are skipped). Used exclusively to
   find descendants that outlived their run's process group — it feeds reporting
-  and row-5 cleanup, never liveness judgments.
+  and the leftover-holder cleanup, never liveness judgments.
   """
   holders: dict[tuple[int, int], list[HolderProcess]] = {}
   for entry in os.scandir("/proc"):
@@ -385,7 +385,7 @@ def write_raw_cursor(cursor: Path, offset: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Outcome resolution (the six-row table)
+# Outcome resolution
 # ---------------------------------------------------------------------------
 
 
@@ -430,7 +430,7 @@ def resolve_run(
   never a DIED-on-missing-evidence finalize.
 
   ``holders_scan`` is the output of one ``scan_stdout_holders`` call shared by
-  a whole reconcile pass; when given and the run is not alive, row-5 leftover
+  a whole reconcile pass; when given and the run is not alive, leftover
   descendants are attached to the resolution (the outcome itself still comes
   from the other rows).
   """

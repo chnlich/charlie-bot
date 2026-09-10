@@ -61,7 +61,10 @@ backends:
 
   cfg = core_config.load_config()
 
-  assert [option.proxy_url for option in cfg.backends.options] == ["http://proxy.test:8080", None, None]
+  proxied, plain, claude = cfg.backends.options
+  assert proxied.proxy_url == "http://proxy.test:8080"
+  assert plain.proxy_url is None
+  assert claude.id == "claude"
 
 
 def test_registry_scopes_opencode_proxy_to_opencode_constructor(monkeypatch) -> None:

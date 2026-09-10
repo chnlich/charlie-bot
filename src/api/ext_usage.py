@@ -4,6 +4,8 @@ import asyncio
 import contextlib
 import json
 import os
+import re
+import subprocess
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -50,11 +52,11 @@ USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 TOKEN_REFRESH_URL = "https://platform.claude.com/v1/oauth/token"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 ANTHROPIC_BETA = "oauth-2025-04-20"
-# The usage endpoint rate-limits per access token, and reportedly far more
-# generously for the Claude Code user agent than for an unrecognized one. Kept as a
-# protocol constant beside ANTHROPIC_BETA rather than probed from the installed CLI,
-# which would couple this module to the CLI's install layout.
-USER_AGENT = "claude-code/2.1.219"
+# The usage endpoint rate-limits per access token, reportedly far more
+# generously for the Claude Code user agent than for an unrecognized one. The
+# User-Agent itself is resolved at runtime from the installed CLI (_user_agent
+# below); this constant is only the fallback for when that probe fails.
+USER_AGENT_FALLBACK = "claude-code/2.1.219"
 
 CLAUDE_DEFAULT_DIR = str(Path.home() / ".claude")
 CODEX_DEFAULT_DIR = str(Path.home() / ".codex")
@@ -167,7 +169,7 @@ class ClaudeUsageProvider:
 
   async def _get_usage(self, access_token: str) -> Any:
     client = get_http_client()
-    return await client.get(USAGE_URL, headers=_oauth_headers(access_token), timeout=HTTP_OAUTH_TIMEOUT)
+    return await client.get(USAGE_URL, headers=await _oauth_headers(access_token), timeout=HTTP_OAUTH_TIMEOUT)
 
   async def _reauthenticate(self, failed_token: str) -> str | None:
     """Return a usable access token after a 401, yielding to whoever renewed first.
@@ -728,12 +730,76 @@ def _transform_codex_response(
   return usage
 
 
-def _oauth_headers(access_token: str) -> dict[str, str]:
+# ---------------------------------------------------------------------------
+# User-Agent: the installed CLI's version, probed once per process
+# ---------------------------------------------------------------------------
+
+# None until the first OAuth/token request triggers the probe; holds the
+# resolved User-Agent afterwards so later requests cost no subprocess.
+_user_agent_cache: str | None = None
+
+_CLI_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+
+
+def _extract_cli_version(output: str) -> str | None:
+  """The first ``\\d+\\.\\d+\\.\\d+`` token in *output*, or None when absent."""
+  match = _CLI_VERSION_RE.search(output)
+  return match.group(0) if match else None
+
+
+async def _probe_user_agent() -> tuple[str, str]:
+  """One ``claude --version`` probe, as (user_agent, source).
+
+  No shell, PATH lookup. A missing binary, a non-zero exit, a probe timeout,
+  or output without a version all fall back to ``USER_AGENT_FALLBACK`` with
+  source "fallback"; only a parsed version returns source "probe".
+  """
+  try:
+    proc = await asyncio.to_thread(subprocess.run, ["claude", "--version"], capture_output=True, timeout=5)
+  except (OSError, subprocess.SubprocessError):
+    return USER_AGENT_FALLBACK, "fallback"
+  version = _extract_cli_version(proc.stdout.decode(errors="replace"))
+  if version is None:
+    return USER_AGENT_FALLBACK, "fallback"
+  return f"claude-code/{version}", "probe"
+
+
+async def _user_agent() -> str:
+  """The User-Agent every OAuth request carries: the installed CLI's version.
+
+  Probed lazily on the first OAuth/token request and cached module-level, so
+  the subprocess cost is paid once per process. The one resolution is logged
+  as ``ext_usage_user_agent_resolved``; a fallback is the loud warning path.
+  """
+  global _user_agent_cache
+  if _user_agent_cache is None:
+    user_agent, source = await _probe_user_agent()
+    _user_agent_cache = user_agent
+    version = user_agent.removeprefix("claude-code/")
+    if source == "fallback":
+      log.warning("ext_usage_user_agent_resolved", version=version, source=source)
+    else:
+      log.info("ext_usage_user_agent_resolved", version=version, source=source)
+  return _user_agent_cache
+
+
+def _reset_user_agent_for_tests() -> None:
+  """Seed the cache with the fallback so no test probes the real binary.
+
+  A test exercising the probe path clears ``_user_agent_cache`` first and
+  monkeypatches ``subprocess.run``; the module-level cache would otherwise
+  leak a resolved value between tests.
+  """
+  global _user_agent_cache
+  _user_agent_cache = USER_AGENT_FALLBACK
+
+
+async def _oauth_headers(access_token: str) -> dict[str, str]:
   """Headers every OAuth-authenticated call to this API carries."""
   return {
       "Authorization": f"Bearer {access_token}",
       "anthropic-beta": ANTHROPIC_BETA,
-      "User-Agent": USER_AGENT,
+      "User-Agent": await _user_agent(),
   }
 
 
@@ -774,7 +840,7 @@ async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> s
             "refresh_token": refresh_token,
             "client_id": CLIENT_ID,
         },
-        headers={"User-Agent": USER_AGENT},
+        headers={"User-Agent": await _user_agent()},
         timeout=HTTP_OAUTH_TIMEOUT,
     )
   except Exception:

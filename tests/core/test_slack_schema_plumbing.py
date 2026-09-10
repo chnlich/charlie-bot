@@ -7,7 +7,13 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import make_work_item, mock_session_callbacks, run_session_consumer, stub_credentials
+from conftest import (
+    OPUS_BACKEND_OPTION,
+    make_work_item,
+    mock_session_callbacks,
+    run_session_consumer,
+    stub_credentials,
+)
 
 from src.agents import master_cc
 from src.core import event_types as ET
@@ -42,7 +48,7 @@ def test_config_round_trips_slack_allow_list() -> None:
 
 @pytest.mark.asyncio
 async def test_create_session_accepts_caller_supplied_id_and_slack_origin(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [OPUS_BACKEND_OPTION]})
   origin = SlackOrigin(team_id="T_TEST", channel_id="C_TEST", thread_ts="1700000000.000100")
   meta = await SessionManager(cfg).create_session(CreateSessionRequest(session_id="fixed-id-0001", slack_origin=origin))
   assert meta.id == "fixed-id-0001"
@@ -56,7 +62,7 @@ async def test_create_session_accepts_caller_supplied_id_and_slack_origin(tmp_pa
 
 @pytest.mark.asyncio
 async def test_create_session_defaults_still_generate_uuid4_and_no_origin(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [OPUS_BACKEND_OPTION]})
   meta = await SessionManager(cfg).create_session(CreateSessionRequest(name="t"))
   parsed = uuid.UUID(meta.id)
   assert parsed.version == 4

@@ -57,6 +57,11 @@ from src.core.triggers import TriggerManager  # noqa: E402
 import src.core.headless_render as headless_render  # noqa: E402
 
 
+def backend_option(**kwargs: Any) -> models.BackendBase:
+  """Build a typed backend option from raw kwargs (the config.yaml shape), dispatching on ``type``."""
+  return models.BACKEND_OPTION_ADAPTER.validate_python(kwargs)
+
+
 @pytest.fixture(autouse=True)
 def _stub_headless_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
   """The suite's renderer is the write_stub_chrome shell script (answers --dump-dom only); give the drive seam that shape."""
@@ -733,17 +738,16 @@ POOLED_FABLE_ID = "claude-fable-5"
 
 
 def fable_pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
-  """A pooled config with one pooled Fable option and a pinned Fable entry in its own config dir."""
+  """A pooled config with one pooled Fable option and a second pinned Fable entry."""
   return pool_cfg(
       tmp_path,
       [
-          models.BackendOption(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL),
-          models.BackendOption(
+          backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL),
+          backend_option(
               id="pinned",
               label="Pinned",
               type="cc-claude",
-              model=FABLE_MODEL,
-              claude_config_dir=str(tmp_path / "pinned")),
+              model=FABLE_MODEL),
       ],
       home=tmp_path / ".charliebot",
       worktree_dir=tmp_path / "worktrees",
@@ -765,17 +769,17 @@ def session_dir_names(cfg: CharlieBotConfig) -> set[str]:
 # payload builders keep the raw string because it is wire data there.
 OPUS_BACKEND_ID = "claude-opus-4.6"
 
-OPUS_BACKEND_OPTION = models.BackendOption(id=OPUS_BACKEND_ID, label="Opus", type="cc-claude", model="claude-opus-4-6")
-CODEX_BACKEND_OPTION = models.BackendOption(id="codex-o3", label="Codex", type="codex", model="o3")
+OPUS_BACKEND_OPTION = backend_option(id=OPUS_BACKEND_ID, label="Opus", type="cc-claude", model="claude-opus-4-6")
+CODEX_BACKEND_OPTION = backend_option(id="codex-o3", label="Codex", type="codex", model="o3")
 
 # Antigravity option as the antigravity-routing tests register it: model-less, so the
 # model-is-required rejection and the resume-id routing keep their fixture shape.
-AGY_BACKEND_OPTION = models.BackendOption(id="agy", label="Antigravity", type="antigravity")
+AGY_BACKEND_OPTION = backend_option(id="agy", label="Antigravity", type="antigravity")
 
 THREE_BACKEND_OPTIONS = [
     OPUS_BACKEND_OPTION,
     CODEX_BACKEND_OPTION,
-    models.BackendOption(id="kimi-k2.5", label="Kimi", type="cc-kimi", model="kimi-k2.5"),
+    backend_option(id="kimi-k2.5", label="Kimi", type="cc-kimi", model="kimi-k2.5", credential="test-kimi"),
 ]
 
 PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
@@ -1208,7 +1212,7 @@ def build_tui_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
       charliebot_home=tmp_path / ".charliebot",
       backend_options=[
           OPUS_BACKEND_OPTION,
-          models.BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
+          backend_option(id="claude-tui", label="Claude TUI", type="tui-cli"),
       ],
   )
 
@@ -1241,8 +1245,8 @@ def build_recovery_cfg(home: Path) -> CharlieBotConfig:
       charliebot_home=home,
       worktree_dir=str(home / "worktrees"),
       backend_options=[
-          models.BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
-          models.BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
+          backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model"),
+          backend_option(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
       ],
   )
 
@@ -1250,7 +1254,7 @@ def build_recovery_cfg(home: Path) -> CharlieBotConfig:
 def build_light_cc_cfg() -> CharlieBotConfig:
   """CharlieBotConfig whose only backend is a light cc-claude option, also the sole model preference."""
   return CharlieBotConfig(
-      backend_options=[models.BackendOption(id="light-cc", label="Light CC", type="cc-claude", model="haiku")],
+      backend_options=[backend_option(id="light-cc", label="Light CC", type="cc-claude", model="haiku")],
       model_preference=["light-cc"],
   )
 
@@ -2510,7 +2514,7 @@ def _cfg(home: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=home,
       worktree_dir=str(home / "worktrees"),
-      backend_options=[models.BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model")],
+      backend_options=[backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model")],
   )
 
 

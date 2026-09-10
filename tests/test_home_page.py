@@ -5,11 +5,10 @@ from __future__ import annotations
 import re
 import socket
 from pathlib import Path
-from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
-from conftest import _ok_asgi_downstream, make_page_request, run_through_asgi_middleware
+from conftest import _ok_asgi_downstream, make_page_request, run_through_asgi_middleware, stub_credentials
 
 from src.api import auth, pages
 from src.api.auth import AuthMiddleware
@@ -19,7 +18,7 @@ from src.core.config import CharlieBotConfig, HomeService
 def _cfg(home: Path, services: list[dict[str, str]]) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=home,
-      home_services=[HomeService(**service) for service in services],
+      ui={"home_services": [HomeService(**service) for service in services]},
   )
 
 
@@ -145,12 +144,12 @@ async def test_home_bad_url_entry_does_not_break_the_page(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_home_html_navigation_requires_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_home_html_navigation_requires_auth() -> None:
   """An unauthenticated browser navigation gets 401 with the HTML login page, not bare JSON."""
   assert "/home" not in auth._PUBLIC_PATHS
   assert not any("/home".startswith(prefix) for prefix in auth._PUBLIC_PREFIXES)
 
-  monkeypatch.setattr(auth, "get_config", lambda: SimpleNamespace(charliebot_access_key="secret"))
+  stub_credentials({"charliebot": {"access_key": "secret"}})
 
   scope = {
       "type": "http",

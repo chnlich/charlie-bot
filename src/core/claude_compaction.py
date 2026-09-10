@@ -102,7 +102,8 @@ def expired_cache_compaction_wanted(
 
 def relay_compaction_wanted(cfg: CharlieBotConfig, model: str | None, context_tokens: int | None) -> bool:
   """A Fable session about to relay to another account with a context at or above the floor."""
-  return is_fable(model) and context_tokens is not None and context_tokens >= cfg.accounts.claude_compaction.relay_tokens
+  return is_fable(
+      model) and context_tokens is not None and context_tokens >= cfg.accounts.claude_compaction.relay_tokens
 
 
 # ---------------------------------------------------------------------------

@@ -366,7 +366,8 @@ async def serve_file(path: str, request: Request) -> Response:
     html_text = await asyncio.to_thread(_annotated_diff_page, base_path, fs_path, inject_ui, session_id)
     return HTMLResponse(html_text, media_type="text/html")
 
-  if session_id is not None and request_has_access_key(request, str(get_credentials().get("charliebot", "access_key") or "")):
+  if session_id is not None and request_has_access_key(request, str(get_credentials().get("charliebot", "access_key") or
+                                                                    "")):
     # One executor hop: signature, memo hit, and on a miss the read+inject+store.
     body = await asyncio.to_thread(_injected_artifact_page, fs_path, session_id)
     return HTMLResponse(body, media_type="text/html")

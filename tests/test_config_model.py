@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from src.core.config import CharlieBotConfig, load_config
+from src.core.config import CharlieBotConfig, ServerConfig, load_config
 
 # A read-only derived property a hand-redirect could target, and a fabricated
 # name; both must be rejected by name on both construction entry points.
@@ -47,7 +47,7 @@ def test_model_construct_lists_every_unknown_kwarg() -> None:
 
 def test_model_construct_still_builds_known_fields(tmp_path: Path) -> None:
   """Known fields delegate to super() unchanged."""
-  cfg = CharlieBotConfig.model_construct(charliebot_home=tmp_path, server={"port": 1})
+  cfg = CharlieBotConfig.model_construct(charliebot_home=tmp_path, server=ServerConfig(port=1))
   assert cfg.charliebot_home == tmp_path
   assert cfg.server.port == 1
   assert cfg.sessions_dir == tmp_path / "sessions"

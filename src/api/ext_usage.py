@@ -898,8 +898,9 @@ async def _poll_loop() -> None:
   """Background loop that refreshes one derived account per round-gap sleep.
 
   Accounts are fetched round-robin in derivation order: each fetch updates that
-  account's ``_cached_usage`` entry and broadcasts the full cache over the sidebar
-  websocket, then sleeps ``EXT_USAGE_ROUND_GAP_SECONDS`` before the next account.
+  account's ``_cached_usage`` entry and broadcasts the cache with each claude
+  window's expiry judged at emit time over the sidebar websocket, then sleeps
+  ``EXT_USAGE_ROUND_GAP_SECONDS`` before the next account.
   The account set is re-derived once per full round (every N fetches) so config
   edits apply at round boundaries; dropped accounts are pruned from both
   ``_instances`` and ``_cached_usage``. A zero-account round still sleeps once
@@ -979,7 +980,7 @@ async def _poll_loop() -> None:
         if inst.provider == "claude" and inst.label in pool_dirs:
           _annotate_login_state(cache_key, ClaudeAccount(label=inst.label, config_dir=pool_dirs[inst.label]))
         if _cached_usage:
-          await streaming_manager.broadcast("sidebar", {"type": "ext_usage", "providers": dict(_cached_usage)})
+          await streaming_manager.broadcast("sidebar", {"type": "ext_usage", "providers": _annotated_providers()})
           log.info("ext_usage_fetched", providers=list(_cached_usage.keys()))
         await asyncio.sleep(ROUND_GAP_SECONDS)
     except Exception:
@@ -1006,6 +1007,32 @@ def _annotate_login_state(cache_key: str, account: ClaudeAccount) -> None:
     entry["login_required"] = account.config_dir
 
 
+def _annotated_providers(now: datetime | None = None) -> dict[str, dict[str, Any]]:
+  """The cached snapshot with each claude window's expiry judged at emit time.
+
+  Windows the shared ``claude_accounts.panel_window_expired`` rule marks
+  expired at the server clock carry ``expired: true``; live windows carry no
+  key and codex entries are never annotated. The judgement is recomputed per
+  emit on copies — a frozen cache flips as the clock crosses a reset, whether
+  or not the account ever fetches again, and nothing is written back into
+  ``_cached_usage``.
+  """
+  moment = claude_accounts.now_or(now)
+  providers: dict[str, dict[str, Any]] = {}
+  for key, entry in _cached_usage.items():
+    windows = entry.get("windows")
+    if entry.get("provider") != "claude" or not isinstance(windows, list):
+      providers[key] = entry
+      continue
+    sampled = claude_accounts.parse_iso_utc(entry.get("fetched_at"))
+    annotated = [
+        {**window, "expired": True} if claude_accounts.panel_window_expired(window, sampled, moment) else window
+        for window in windows
+    ]
+    providers[key] = {**entry, "windows": annotated}
+  return providers
+
+
 # ---------------------------------------------------------------------------
 # API route
 # ---------------------------------------------------------------------------
@@ -1013,10 +1040,10 @@ def _annotate_login_state(cache_key: str, account: ClaudeAccount) -> None:
 
 @router.get("/ext-usage")
 async def get_ext_usage() -> dict[str, Any]:
-  """Return cached external tool usage data."""
+  """Return the cached usage snapshot with claude window expiry judged at read time."""
   if not _cached_usage:
     return {"error": "Usage data not yet available"}
-  return {"providers": dict(_cached_usage)}
+  return {"providers": _annotated_providers()}
 
 
 # ---------------------------------------------------------------------------

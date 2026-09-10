@@ -593,8 +593,7 @@ test('mobile CSS selectors for the strip match the attributes the renderer emits
   collect(strip);
   assert.ok(emitted.size > 0, 'renderer emitted data-field attributes');
 
-  const cssPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/static/css/styles.css');
-  const css = fs.readFileSync(cssPath, 'utf8');
+  const css = _readStylesCss();
   const selectors = [...css.matchAll(/#ext-usage-strip[^{}]*?\[([a-z-]+)([$^*]?=)"([^"]+)"\]/g)];
   assert.ok(selectors.length > 0, 'styles.css scopes attribute selectors to #ext-usage-strip');
 
@@ -775,10 +774,9 @@ test('the 7d- narrow-screen rule also sweeps up the scoped weekly bucket', () =>
   };
   collect(strip);
 
-  const cssPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/static/css/styles.css');
-  const css = fs.readFileSync(cssPath, 'utf8');
+  const css = _readStylesCss();
   assert.ok(css.includes('[data-field^="7d-"]'),
-      'styles.css:395 must still key the narrow-screen 7d group off the data-field prefix');
+      'styles.css must still key the narrow-screen 7d group off the data-field prefix');
 
   const scopedFields = [...emitted].filter((f) => f.startsWith('7d-') && f !== '7d-bar' && f !== '7d-pct' && f !== '7d-reset');
   assert.ok(scopedFields.length > 0,

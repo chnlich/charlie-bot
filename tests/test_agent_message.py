@@ -26,6 +26,7 @@ from conftest import (
     make_task_spawner,
     patched_cli_post,
     record_create_logged_task,
+    stub_credentials,
     user_event,
 )
 
@@ -224,9 +225,9 @@ def test_session_message_request_rejects_extra_fields() -> None:
 
 def _mock_cli_config(tmp_path: Path) -> MagicMock:
   cfg = MagicMock()
-  cfg.server_port = 9443
+  cfg.server.port = 9443
   cfg.server_base_url = "http://localhost:9443"
-  cfg.charliebot_access_key = ""
+  stub_credentials({"charliebot": {"access_key": ""}})
   cfg.sessions_dir = tmp_path / "sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   return cfg

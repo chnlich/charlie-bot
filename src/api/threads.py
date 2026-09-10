@@ -588,7 +588,7 @@ async def cancel_thread(
     session_id: str,
     thread_id: str,
     thread_mgr: ThreadManager = Depends(get_thread_manager),
-):
+) -> dict:
   """Cancel a running thread (sends SIGTERM to the subprocess via streaming manager)."""
   thread = await thread_mgr.get_thread(session_id, thread_id)
   if not thread:

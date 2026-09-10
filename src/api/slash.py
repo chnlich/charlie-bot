@@ -123,12 +123,12 @@ class SlashExecuteRequest(BaseModel):
 
 
 @router.get('/commands')
-async def list_commands():
+async def list_commands() -> list[dict]:
   """Return all available slash commands: the YAML registry plus the built-ins."""
   return await _build_command_list()
 
 
-@router.post('/{session_id}/execute')
+@router.post('/{session_id}/execute', response_model=None)
 async def execute_command(
     request: Request,
     session_id: str,
@@ -136,7 +136,7 @@ async def execute_command(
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config),
-):
+) -> dict | JSONResponse:
   """Execute a slash command for a session."""
   name = req.command.lstrip('/')
   args_text = req.args.strip()

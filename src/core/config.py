@@ -756,6 +756,20 @@ def load_config() -> CharlieBotConfig:
         "; declare the key(s) on CharlieBotConfig or remove them") from e
 
 
+def require_backends(cfg: CharlieBotConfig) -> None:
+  """Raise ValueError when ``backends.options`` is empty.
+
+  The server calls this once at startup because every session and cron run
+  resolves a backend from this list, so an empty list is a deployment error
+  worth stopping on. ``load_config`` stays permissive for CLIs that never
+  resolve a backend.
+  """
+  if not cfg.backends.options:
+    raise ValueError(
+        "config.yaml: backends.options lists no backend; "
+        "copy the starter entries from configs/config.example.yaml")
+
+
 def get_config() -> CharlieBotConfig:
   """Return the process-wide config, refreshed in place when ``config.yaml`` changes.
 

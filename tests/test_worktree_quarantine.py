@@ -10,6 +10,7 @@ from conftest import (
     OPUS_BACKEND_ID,
     SPAWNER_RESUME_WORKER_PATCH_TARGET,
     _await_recovery_tasks,
+    backend_option,
     build_worktree_cfg,
     spy_on_load_json_meta,
 )
@@ -227,7 +228,7 @@ def _install_recording_quarantine(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 @pytest.mark.asyncio
 async def test_sweep_quarantines_old_failed_worktree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = build_worktree_cfg(tmp_path)
-  parent = Path(cfg.worktree_dir)
+  parent = Path(cfg.paths.worktree_dir)
   wt = _make_worktree(parent, "charliebot-task-old")
   quarantined = _install_recording_quarantine(monkeypatch)
 
@@ -242,7 +243,7 @@ async def test_sweep_quarantines_old_failed_worktree(tmp_path: Path, monkeypatch
 @pytest.mark.asyncio
 async def test_sweep_age_threshold_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = build_worktree_cfg(tmp_path)
-  parent = Path(cfg.worktree_dir)
+  parent = Path(cfg.paths.worktree_dir)
   recent = _make_worktree(parent, "charliebot-task-recent")
   old = _make_worktree(parent, "charliebot-task-aged")
   quarantined = _install_recording_quarantine(monkeypatch)
@@ -273,7 +274,7 @@ async def test_sweep_age_threshold_boundary(tmp_path: Path, monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_sweep_skips_keep_worktree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = build_worktree_cfg(tmp_path)
-  wt = _make_worktree(Path(cfg.worktree_dir), "charliebot-task-pinned")
+  wt = _make_worktree(Path(cfg.paths.worktree_dir), "charliebot-task-pinned")
   quarantined = _install_recording_quarantine(monkeypatch)
 
   await init_module._quarantine_stale_failed_worktrees(
@@ -287,7 +288,7 @@ async def test_sweep_skips_keep_worktree(tmp_path: Path, monkeypatch: pytest.Mon
 async def test_sweep_skips_missing_and_unparseable_completed_at(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = build_worktree_cfg(tmp_path)
-  parent = Path(cfg.worktree_dir)
+  parent = Path(cfg.paths.worktree_dir)
   no_ts = _make_worktree(parent, "charliebot-task-nots")
   bad_ts = _make_worktree(parent, "charliebot-task-badts")
   quarantined = _install_recording_quarantine(monkeypatch)
@@ -319,7 +320,7 @@ async def test_sweep_skips_missing_and_unparseable_completed_at(
 async def test_sweep_survives_non_string_completed_at_and_continues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = build_worktree_cfg(tmp_path)
-  parent = Path(cfg.worktree_dir)
+  parent = Path(cfg.paths.worktree_dir)
   malformed = _make_worktree(parent, "charliebot-task-number-ts")
   old = _make_worktree(parent, "charliebot-task-valid")
   quarantined = _install_recording_quarantine(monkeypatch)
@@ -348,7 +349,7 @@ async def test_sweep_survives_non_string_completed_at_and_continues(
 async def test_sweep_skips_when_running_thread_references_worktree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = build_worktree_cfg(tmp_path)
-  wt = _make_worktree(Path(cfg.worktree_dir), "charliebot-task-shared")
+  wt = _make_worktree(Path(cfg.paths.worktree_dir), "charliebot-task-shared")
   quarantined = _install_recording_quarantine(monkeypatch)
 
   await init_module._quarantine_stale_failed_worktrees(
@@ -366,7 +367,7 @@ async def test_sweep_skips_when_running_thread_references_worktree(
 @pytest.mark.asyncio
 async def test_sweep_dedups_shared_worktree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = build_worktree_cfg(tmp_path)
-  wt = _make_worktree(Path(cfg.worktree_dir), "charliebot-task-chain")
+  wt = _make_worktree(Path(cfg.paths.worktree_dir), "charliebot-task-chain")
   quarantined = _install_recording_quarantine(monkeypatch)
 
   # Original worker + its reviewer both failed and share one worktree -> moved once.
@@ -384,7 +385,7 @@ async def test_sweep_dedups_shared_worktree(tmp_path: Path, monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_sweep_is_idempotent_on_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = build_worktree_cfg(tmp_path)
-  wt = _make_worktree(Path(cfg.worktree_dir), "charliebot-task-once")
+  wt = _make_worktree(Path(cfg.paths.worktree_dir), "charliebot-task-once")
   quarantined = _install_recording_quarantine(monkeypatch)
   threads = [_thread(thread_id="t1", status="failed", worktree_path=wt, age_days=20.0)]
 
@@ -398,7 +399,7 @@ async def test_sweep_is_idempotent_on_rerun(tmp_path: Path, monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_sweep_never_raises_when_helper_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = build_worktree_cfg(tmp_path)
-  wt = _make_worktree(Path(cfg.worktree_dir), "charliebot-task-boom")
+  wt = _make_worktree(Path(cfg.paths.worktree_dir), "charliebot-task-boom")
 
   async def boom(*args: Any, **kwargs: Any) -> Path:
     raise RuntimeError("simulated quarantine failure")
@@ -432,21 +433,23 @@ def _write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Pa
 async def test_maybe_respawn_verify_task_cross_models_backend_when_omitted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A never-started VERIFY delegation with no explicit --backend must still resolve
-  cross-model via model_preference on respawn (mirrors _authorize_spawn_request's VERIFY
+  cross-model via backends.preference on respawn (mirrors _authorize_spawn_request's VERIFY
   branch in api/internal.py) — not silently fall back to the session's own backend, which
   would defeat verify's "checked by a different model" invariant.
   """
   from src.core import spawner as spawner_module
-  from src.core.models import BackendOption, SessionMetadata, TaskType
+  from src.core.models import SessionMetadata, TaskType
 
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          BackendOption(id="session-backend", label="S", type="cc-claude", model="s-model"),
-          BackendOption(id="other-backend", label="O", type="cc-claude", model="o-model"),
-      ],
-      model_preference=["other-backend"],
+      paths={"worktree_dir": str(tmp_path / "worktrees")},
+      backends={
+          "options": [
+              backend_option(id="session-backend", label="S", type="cc-claude", model="s-model"),
+              backend_option(id="other-backend", label="O", type="cc-claude", model="o-model"),
+          ],
+          "preference": ["other-backend"],
+      },
   )
 
   class FakeSessionManager:
@@ -489,7 +492,7 @@ async def test_run_crash_recovery_recovers_and_sweeps(tmp_path: Path, monkeypatc
   import json
 
   cfg = build_worktree_cfg(tmp_path)
-  parent = Path(cfg.worktree_dir)
+  parent = Path(cfg.paths.worktree_dir)
   old_wt = _make_worktree(parent, "charliebot-task-aged")
   running_wt = _make_worktree(parent, "charliebot-task-live")
   quarantined = _install_recording_quarantine(monkeypatch)
@@ -797,7 +800,7 @@ async def test_recover_window_covers_quarantine_band_and_skips_older(
       edge, only reachable if the server stayed up longer than the window).
   """
   cfg = build_worktree_cfg(tmp_path)
-  parent = Path(cfg.worktree_dir)
+  parent = Path(cfg.paths.worktree_dir)
   band_wt = _make_worktree(parent, "charliebot-task-band")
   recent_wt = _make_worktree(parent, "charliebot-task-recent")
   ancient_wt = _make_worktree(parent, "charliebot-task-ancient")

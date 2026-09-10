@@ -1,0 +1,73 @@
+# CharlieBot config template.
+# setup.sh copies this to ~/.charliebot/config.yaml when that file does not exist,
+# and the server startup path (init_charliebot_home) seeds it too if still missing.
+# Every uncommented field below sits at its default; the optional per-host settings
+# at the bottom ship commented out. Edit per host, fill in secrets, and never commit
+# your filled-in config.yaml.
+#
+# --- Config fragments ---
+# Any top-level key may instead live in ~/.charliebot/config.d/<topic>.yaml
+# (e.g. config.d/slack.yaml); the loader merges those fragments with this file.
+# A key must appear in exactly one file: defining the same key in config.yaml and
+# a fragment (or in two fragments) fails startup. `charliebot config get <key>`
+# prints a key's value wherever it lives — prefer it over opening a file by path.
+
+# --- Server ---
+
+# Bind port.
+server_port: 18498
+
+# Web UI access token. Secret. Set this if the server is reachable beyond localhost.
+charliebot_access_key: ""
+
+# --- Paths ---
+
+# Directories scanned for git repos.
+workspace_dirs: ["~/workspace"]
+
+# Root directory for worker worktrees.
+worktree_dir: ~/worktrees
+
+# --- Backends ---
+
+# Reviewer backend preference: list of backend_options ids. Empty = reviewer uses the worker's backend.
+model_preference: []
+
+# Backends available for model switching. The uncommented list below is the schema
+# default (CharlieBotConfig.backend_options); tests/test_config_fragments.py pins the
+# two together. Editing the list REPLACES the default — to add a codex backend,
+# append an entry such as:
+#   {id: codex-gpt-5.5, label: "Codex · GPT-5.5", type: codex, model: gpt-5.5}
+# Codex reasoning effort is xhigh unless the entry sets model_reasoning_effort.
+backend_options:
+  - {id: claude-opus-4.8, label: "CC · Opus 5", type: cc-claude, model: claude-opus-5, effort: xhigh}
+  - {id: claude-opus-4.8-fast, label: "CC · Opus 4.8 Fast", type: cc-claude, model: claude-opus-4-8, effort: medium, fast_mode: true}
+  - {id: claude-fable-5, label: "CC · Fable 5", type: cc-claude, model: claude-fable-5, effort: max}
+  - {id: claude-tui, label: "Claude TUI", type: tui-cli}
+
+# --- Backlog panel ---
+
+# Repos shown in the backlog panel, each {label, path}.
+backlog_repos: []
+
+# --- Optional per-host settings (uncomment here or set in a fragment when used) ---
+# Host addresses and credentials that ship unset. Add each in exactly one place:
+# uncomment it here, or put it in ~/.charliebot/config.d/<topic>.yaml — see the
+# fragments note above.
+
+# Slack summon entrypoint.
+# Slack app bot token (xoxb-…); requires chat:write + reactions:write + history scopes.
+# slack_bot_token: ""
+# Slack app-level token (xapp-…); requires connections:write, Socket Mode only.
+# slack_app_token: ""
+# Slack user ids allowed to summon; empty = nobody.
+# slack_allowed_user_ids: []
+
+# Other backend / notification secrets: moonshot_api_key, telegram_bot_token,
+# telegram_chat_id. cc-openai-compatible backends configure the upstream api_base,
+# model, and api_key_env per backend_option above (no top-level fields).
+# Integration keys for the skills under skills/ (the feishu_/gemini_/google_/
+# google_docs_* set, linear_api_key, slack_user_token, public_base_url) stay unlisted
+# here by design: CharlieBotConfig declares them so host files carrying them load
+# under extra='forbid', and the consuming skill scripts read the raw yaml. Each
+# skill's SKILL.md names the keys it reads.

@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 import pytest
-from conftest import FLAG_LIKE_PROMPT
+from conftest import FLAG_LIKE_PROMPT, backend_option
 
 from src.agents.backends.claude_code import (
     BASE_COMMAND,
@@ -10,6 +10,9 @@ from src.agents.backends.claude_code import (
     ClaudeCodeBackend,
     claude_supervisor_env,
 )
+from src.agents.backends.registry import build_backend
+from src.core.config import CharlieBotConfig
+from src.core.models import ClaudeAccount
 
 _ENDPOINT_BASE_URL = "https://contract.invalid"
 _ENDPOINT_TOKEN = "contract-token"
@@ -214,9 +217,14 @@ def test_claude_supervisor_env_does_not_mutate_input() -> None:
   assert source == {"CLAUDECODE": "1"}
 
 
-def test_claude_config_dir_expands_user_and_injects_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pool_account_config_dir_expands_user_and_injects_env(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A cc-claude entry's login dir now rides the pool account (ClaudeAccount.config_dir);
+  the backend still expands ``~`` against HOME before injecting CLAUDE_CONFIG_DIR."""
   monkeypatch.setenv("HOME", "/home/test-user")
-  backend = ClaudeCodeBackend(model="claude-opus-4-8", claude_config_dir="~/accounts/invite-1")
+  option = backend_option(id="cc", label="CC", type="cc-claude", model="claude-opus-4-8")
+  account = ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1")
+
+  backend = build_backend(option, CharlieBotConfig(), claude_account=account)
 
   env = backend._prepare_env({})
 

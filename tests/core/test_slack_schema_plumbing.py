@@ -7,11 +7,17 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from conftest import make_work_item, mock_session_callbacks, run_session_consumer
+from conftest import (
+    OPUS_BACKEND_OPTION,
+    make_work_item,
+    mock_session_callbacks,
+    run_session_consumer,
+    stub_credentials,
+)
 
 from src.agents import master_cc
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, get_credentials
 from src.core.models import (
     CreateSessionRequest,
     SessionMetadata,
@@ -22,26 +28,27 @@ from src.core.sessions import SessionManager
 
 def test_config_without_slack_keys_yields_defaults() -> None:
   cfg = CharlieBotConfig.model_validate({})
-  assert cfg.slack_bot_token is None
-  assert cfg.slack_app_token is None
-  assert cfg.slack_allowed_user_ids == []
+  assert cfg.slack.allowed_user_ids == []
 
 
-def test_config_round_trips_slack_keys() -> None:
-  cfg = CharlieBotConfig.model_validate(
-      {
-          "slack_bot_token": "test-bot-token",
-          "slack_app_token": "test-app-token",
-          "slack_allowed_user_ids": ["U_TEST"],
-      })
-  assert cfg.slack_bot_token == "test-bot-token"
-  assert cfg.slack_app_token == "test-app-token"
-  assert cfg.slack_allowed_user_ids == ["U_TEST"]
+def test_slack_tokens_come_from_credentials() -> None:
+  stub_credentials({"slack": {
+      "bot_token": "test-bot-token",
+      "app_token": "test-app-token",
+  }})
+  creds = get_credentials()
+  assert creds.get("slack", "bot_token") == "test-bot-token"
+  assert creds.get("slack", "app_token") == "test-app-token"
+
+
+def test_config_round_trips_slack_allow_list() -> None:
+  cfg = CharlieBotConfig.model_validate({"slack": {"allowed_user_ids": ["U_TEST"]}})
+  assert cfg.slack.allowed_user_ids == ["U_TEST"]
 
 
 @pytest.mark.asyncio
 async def test_create_session_accepts_caller_supplied_id_and_slack_origin(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [OPUS_BACKEND_OPTION]})
   origin = SlackOrigin(team_id="T_TEST", channel_id="C_TEST", thread_ts="1700000000.000100")
   meta = await SessionManager(cfg).create_session(CreateSessionRequest(session_id="fixed-id-0001", slack_origin=origin))
   assert meta.id == "fixed-id-0001"
@@ -55,7 +62,7 @@ async def test_create_session_accepts_caller_supplied_id_and_slack_origin(tmp_pa
 
 @pytest.mark.asyncio
 async def test_create_session_defaults_still_generate_uuid4_and_no_origin(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [OPUS_BACKEND_OPTION]})
   meta = await SessionManager(cfg).create_session(CreateSessionRequest(name="t"))
   parsed = uuid.UUID(meta.id)
   assert parsed.version == 4

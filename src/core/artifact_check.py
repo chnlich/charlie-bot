@@ -9,7 +9,7 @@ half of the genre's GRAMMAR; rules needing judgment stay with the reader and the
 line — never stopping at the first failure. Structure parsing uses the standard library's
 ``html.parser``; only ``page-height`` shells out to headless chrome, so every other
 assertion runs on a host without a renderer. ``run_probe`` sends the page text plus the
-cold-read seven questions to CharlieBot's preferred light backends (config model_preference
+cold-read seven questions to CharlieBot's preferred light backends (config backends.preference
 order) and returns the attempts, the answering backend, and its verbatim answer; every
 genre's delivery gate routes through it after the assertions pass.
 
@@ -716,7 +716,7 @@ class ProbeResult:
 def run_probe(cfg: CharlieBotConfig, artifact: Path, trigger: str) -> ProbeResult:
   """Send the page's full text plus the seven-question prompt to the preferred light backends.
 
-  Backends are tried in config model_preference order (iter_light_backends); each failure is
+  Backends are tried in config backends.preference order (iter_light_backends); each failure is
   recorded and the next backend is tried. Returns the answering backend's id and answer, or
   a ProbeResult of attempts only when every backend failed.
   """
@@ -724,7 +724,7 @@ def run_probe(cfg: CharlieBotConfig, artifact: Path, trigger: str) -> ProbeResul
   prompt = f"{artifact.read_text(encoding='utf-8')}\n\n{questions}"
   options = list(iter_light_backends(cfg))
   if not options:
-    raise ValueError("no light backends resolvable from config model_preference")
+    raise ValueError("no light backends resolvable from config backends.preference")
   attempts: list[tuple[str, str]] = []
   for option in options:
     try:

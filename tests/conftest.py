@@ -57,6 +57,16 @@ from src.core.triggers import TriggerManager  # noqa: E402
 import src.core.headless_render as headless_render  # noqa: E402
 
 
+def backend_option(**kwargs: Any) -> models.BackendBase:
+  """Build a typed backend option from raw kwargs (the config.yaml shape), dispatching on ``type``."""
+  return models.BACKEND_OPTION_ADAPTER.validate_python(kwargs)
+
+
+def fake_backends() -> dict[str, list[models.BackendBase]]:
+  """One cc-claude entry so SessionManager.create_session has a default backend."""
+  return {"options": [backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model")]}
+
+
 @pytest.fixture(autouse=True)
 def _stub_headless_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
   """The suite's renderer is the write_stub_chrome shell script (answers --dump-dom only); give the drive seam that shape."""
@@ -558,7 +568,7 @@ def setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str)
   """Build a session dir tree at <tmp_path>/sessions/<sid> and chdir into it; the returned mock cfg is
   what the tests patch into src.cli.common.get_config."""
   cfg = MagicMock()
-  cfg.server_port = 9443
+  cfg.server.port = 9443
   cfg.sessions_dir = tmp_path / "sessions"
   session_dir = cfg.sessions_dir / sid
   session_dir.mkdir(parents=True, exist_ok=True)
@@ -608,8 +618,10 @@ def run_node_js_test(node_test: Path, skip_reason: str) -> None:
 
 def make_home_config(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/"charliebot-home". Leaves the home dir un-created:
-  one call site (the sherpa streaming test) mkdirs it itself, and most sites never touch disk."""
-  return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home")
+  one call site (the sherpa streaming test) mkdirs it itself, and most sites never touch disk.
+  One Opus backend registered so SessionManager.create_session's default (backends.options[0])
+  resolves."""
+  return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home", backends={"options": [OPUS_BACKEND_OPTION]})
 
 
 def make_session_mgr(tmp_path: Path) -> SessionManager:
@@ -629,7 +641,7 @@ async def make_home_session(
   backend=None takes create_session's default (the first registered backend). A test needing more
   sessions calls mgr.create_session directly; a test needing no session builds the cfg/mgr pair
   inline."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [OPUS_BACKEND_OPTION]})
   mgr = SessionManager(cfg)
   session = await mgr.create_session(models.CreateSessionRequest(name=name), backend=backend)
   return cfg, mgr, session
@@ -718,9 +730,9 @@ def pool_cfg(
     write_pool_credentials(Path(account.config_dir))
   return CharlieBotConfig(
       charliebot_home=home,
-      worktree_dir=str(worktree_dir),
-      claude_accounts=accounts,
-      backend_options=backend_options,
+      paths={"worktree_dir": str(worktree_dir)},
+      accounts={"claude": accounts},
+      backends={"options": backend_options},
   )
 
 
@@ -733,17 +745,16 @@ POOLED_FABLE_ID = "claude-fable-5"
 
 
 def fable_pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
-  """A pooled config with one pooled Fable option and a pinned Fable entry in its own config dir."""
+  """A pooled config with one pooled Fable option and a second pinned Fable entry."""
   return pool_cfg(
       tmp_path,
       [
-          models.BackendOption(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL),
-          models.BackendOption(
+          backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL),
+          backend_option(
               id="pinned",
               label="Pinned",
               type="cc-claude",
-              model=FABLE_MODEL,
-              claude_config_dir=str(tmp_path / "pinned")),
+              model=FABLE_MODEL),
       ],
       home=tmp_path / ".charliebot",
       worktree_dir=tmp_path / "worktrees",
@@ -765,17 +776,17 @@ def session_dir_names(cfg: CharlieBotConfig) -> set[str]:
 # payload builders keep the raw string because it is wire data there.
 OPUS_BACKEND_ID = "claude-opus-4.6"
 
-OPUS_BACKEND_OPTION = models.BackendOption(id=OPUS_BACKEND_ID, label="Opus", type="cc-claude", model="claude-opus-4-6")
-CODEX_BACKEND_OPTION = models.BackendOption(id="codex-o3", label="Codex", type="codex", model="o3")
+OPUS_BACKEND_OPTION = backend_option(id=OPUS_BACKEND_ID, label="Opus", type="cc-claude", model="claude-opus-4-6")
+CODEX_BACKEND_OPTION = backend_option(id="codex-o3", label="Codex", type="codex", model="o3")
 
 # Antigravity option as the antigravity-routing tests register it: model-less, so the
 # model-is-required rejection and the resume-id routing keep their fixture shape.
-AGY_BACKEND_OPTION = models.BackendOption(id="agy", label="Antigravity", type="antigravity")
+AGY_BACKEND_OPTION = backend_option(id="agy", label="Antigravity", type="antigravity")
 
 THREE_BACKEND_OPTIONS = [
     OPUS_BACKEND_OPTION,
     CODEX_BACKEND_OPTION,
-    models.BackendOption(id="kimi-k2.5", label="Kimi", type="cc-kimi", model="kimi-k2.5"),
+    backend_option(id="kimi-k2.5", label="Kimi", type="cc-kimi", model="kimi-k2.5", credential="test-kimi"),
 ]
 
 PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
@@ -1106,8 +1117,8 @@ def build_plan_cfg(tmp_path: Path) -> CharlieBotConfig:
   sessions/worktrees dirs live under tmp_path so each test owns its own tree."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=PLAN_TEST_BACKEND_OPTIONS,
+      paths={"worktree_dir": str(tmp_path / "worktrees")},
+      backends={"options": PLAN_TEST_BACKEND_OPTIONS},
       headless_chrome_bin=write_stub_chrome(tmp_path, 800),
   )
 
@@ -1117,11 +1128,8 @@ def build_scheduler_cfg(tmp_path: Path) -> CharlieBotConfig:
   owns its own tree, and both the opus and codex backends are registered for backend-override cases."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          CODEX_BACKEND_OPTION,
-      ],
+      paths={"worktree_dir": str(tmp_path / "worktrees")},
+      backends={"options": [OPUS_BACKEND_OPTION, CODEX_BACKEND_OPTION]},
   )
 
 
@@ -1130,20 +1138,19 @@ def build_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
   tree, and the backend list registers opus only."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-      ],
+      backends={"options": [OPUS_BACKEND_OPTION]},
   )
 
 
 def build_slack_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig for slack tests: the home dir lives under tmp_path so each test owns its own tree, and the
-  test tokens plus the single allowed user id wire the delivery and listener paths under src.core.slack_listener."""
+  stubbed test tokens plus the single allowed user id wire the delivery and listener paths under
+  src.core.slack_listener."""
+  stub_credentials({"slack": {"bot_token": "test-bot-token", "app_token": "test-app-token"}})
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      slack_bot_token="test-bot-token",
-      slack_app_token="test-app-token",
-      slack_allowed_user_ids=["U_ALLOWED"],
+      slack={"allowed_user_ids": ["U_ALLOWED"]},
+      backends=fake_backends(),
   )
 
 
@@ -1184,7 +1191,7 @@ def build_antigravity_cfg(tmp_path: Path) -> CharlieBotConfig:
   resume-id routing resolves against."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[AGY_BACKEND_OPTION],
+      backends={"options": [AGY_BACKEND_OPTION]},
   )
 
 
@@ -1194,10 +1201,7 @@ def build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:
   cases exercise."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          CODEX_BACKEND_OPTION,
-      ],
+      backends={"options": [OPUS_BACKEND_OPTION, CODEX_BACKEND_OPTION]},
   )
 
 
@@ -1206,10 +1210,12 @@ def build_tui_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
   registers opus plus the claude-tui terminal backend the TUI handlers resolve a session against."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          models.BackendOption(id="claude-tui", label="Claude TUI", type="tui-cli"),
-      ],
+      backends={
+          "options": [
+              OPUS_BACKEND_OPTION,
+              backend_option(id="claude-tui", label="Claude TUI", type="tui-cli"),
+          ]
+      },
   )
 
 
@@ -1219,18 +1225,21 @@ def build_codex_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
   launch paths resolve."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          CODEX_BACKEND_OPTION,
-      ],
+      paths={"worktree_dir": str(tmp_path / "worktrees")},
+      backends={"options": [CODEX_BACKEND_OPTION]},
   )
 
 
 def build_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig for tests that create and remove worktree dirs: both the charliebot-home and the
   worktrees dirs live under tmp_path so each test owns its own tree — the default (~/worktrees) would
-  touch real host worktrees."""
-  return CharlieBotConfig(charliebot_home=tmp_path / "home", worktree_dir=str(tmp_path / "worktrees"))
+  touch real host worktrees. One cc-claude backend registered so SessionManager.create_session
+  (which reads cfg.backends.options[0]) resolves its default."""
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / "home",
+      paths={"worktree_dir": str(tmp_path / "worktrees")},
+      backends=fake_backends(),
+  )
 
 
 def build_recovery_cfg(home: Path) -> CharlieBotConfig:
@@ -1239,30 +1248,34 @@ def build_recovery_cfg(home: Path) -> CharlieBotConfig:
   the cc-claude fake plus the opencode fake-oc whose uncovered transport the recovery legs exercise."""
   return CharlieBotConfig(
       charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[
-          models.BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model"),
-          models.BackendOption(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
-      ],
+      paths={"worktree_dir": str(home / "worktrees")},
+      backends={
+          "options": [
+              backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model"),
+              backend_option(id="fake-oc", label="FakeOC", type="opencode", model="fake-model"),
+          ]
+      },
   )
 
 
 def build_light_cc_cfg() -> CharlieBotConfig:
   """CharlieBotConfig whose only backend is a light cc-claude option, also the sole model preference."""
   return CharlieBotConfig(
-      backend_options=[models.BackendOption(id="light-cc", label="Light CC", type="cc-claude", model="haiku")],
-      model_preference=["light-cc"],
+      backends={
+          "options": [backend_option(id="light-cc", label="Light CC", type="cc-claude", model="haiku")],
+          "preference": ["light-cc"],
+      }
   )
 
 
 def build_chain_cfg(*options: models.BackendOption) -> CharlieBotConfig:
-  """CharlieBotConfig whose model_preference chains the given options in the order given.
+  """CharlieBotConfig whose backends.preference chains the given options in the order given.
 
-  One-shot fallback tests read the chain off backend_options and model_preference
+  One-shot fallback tests read the chain off backends.options and backends.preference
   together, so the pair must not drift; deriving the preference list here is what
   keeps the order stated once per test.
   """
-  return CharlieBotConfig(backend_options=list(options), model_preference=[option.id for option in options])
+  return CharlieBotConfig(backends={"options": list(options), "preference": [option.id for option in options]})
 
 
 PUBLISH_BASE_URL = "https://pub.example.test/charliebot_pub"
@@ -1276,10 +1289,10 @@ def build_publish_cfg(
   """
   resolved_dir = publish_dir if publish_dir is not None else tmp_path / "publish"
   resolved_dir.mkdir(parents=True, exist_ok=True)
+  resolved_url = public_base_url if public_base_url is not None else PUBLISH_BASE_URL
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      publish_dir=resolved_dir,
-      public_base_url=public_base_url if public_base_url is not None else PUBLISH_BASE_URL,
+      publish={"dir": resolved_dir, "public_base_url": resolved_url},
   )
 
 
@@ -1413,9 +1426,10 @@ def pidfd_open_available() -> None:
 
 def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: Path) -> None:
   """Point the CLI HTTP layer at a fake config so tests never touch a real server."""
+  stub_credentials({"charliebot": {"access_key": ""}})
   monkeypatch.setattr(
       CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-      lambda: SimpleNamespace(server_base_url="https://server", charliebot_access_key="", sessions_dir=sessions_dir))
+      lambda: SimpleNamespace(server_base_url="https://server", sessions_dir=sessions_dir))
 
 
 def _patched_cli_transport(transport_target: str, cfg: object, argv: list[str],
@@ -1470,14 +1484,55 @@ def reset_config_caches() -> None:
 
   The config cache and the cron snapshot both key freshness on a fingerprint,
   so an instance cached under an earlier test's profile would answer for the
-  wrong one.
+  wrong one. The credentials cache joins the reset: a stub planted by an
+  earlier test (or a value loaded from the host's real credentials.yaml) must
+  not answer for this one.
   """
   core_config._config = None
   core_config._config_mtime = 0.0
   core_config._config_failed_mtime = None
   core_config._config_reload_errors_seen.clear()
+  core_config._credentials = None
+  core_config._credentials_mtime = None
+  core_config._credentials_failed_mtime = None
+  core_config._credentials_reload_errors_seen.clear()
   core_config._home_cache.clear()
   core_config._cron_snapshot = core_config._CronSnapshot()
+
+
+def stub_credentials(sections: dict[str, dict[str, str | int]]) -> None:
+  """Plant in-memory credentials for get_credentials(): the given sections become the cached
+  Credentials, stamped with the current credentials.yaml fingerprint, so the answer comes from
+  memory and no file is read."""
+  core_config._credentials = core_config.Credentials(path=Path("credentials.yaml"), sections=sections)
+  core_config._credentials_mtime = core_config._credentials_fingerprint()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+  """Every test runs under its own empty profile home, so a code path that calls the real
+  get_config() loads defaults instead of the host's ~/.charliebot; a test that asserts
+  default-home behavior deletes the variable itself, as temp_home does. Autouse fixtures run
+  before requested ones, so temp_home (deletes the variable, points HOME at a tmp dir) and
+  profile_home (sets it) keep working unchanged. The directory lives outside the test's own
+  tmp_path, so a test that creates its own profile directory under tmp_path does not collide
+  with it."""
+  profile = tmp_path_factory.mktemp("profile")
+  monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(profile))
+  reset_config_caches()
+  yield
+  reset_config_caches()
+
+
+@pytest.fixture
+def make_config(tmp_path: Path) -> Callable[..., CharlieBotConfig]:
+  """Factory for a CharlieBotConfig rooted at tmp_path/".charliebot": each keyword is a section
+  name carrying a raw dict or a section model instance (e.g. make_config(server={"port": 2001}))."""
+
+  def _make(**sections: Any) -> CharlieBotConfig:
+    return CharlieBotConfig(charliebot_home=tmp_path / ".charliebot", **sections)
+
+  return _make
 
 
 @pytest.fixture
@@ -2509,8 +2564,8 @@ async def await_recovery_tasks(prefixes: tuple[str, ...]) -> None:
 def _cfg(home: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[models.BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model")],
+      paths={"worktree_dir": str(home / "worktrees")},
+      backends={"options": [backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model")]},
   )
 
 

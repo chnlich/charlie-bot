@@ -63,7 +63,7 @@ from src.core import init as init_module
 from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.message_aggregator import MessageAggregator
-from src.core.models import BackendOption, CreateSessionRequest, MasterRunRecord
+from src.core.models import CcClaudeBackend, CreateSessionRequest, MasterRunRecord, OpencodeBackend
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
@@ -108,7 +108,7 @@ from pathlib import Path
 
 from src.agents import master_cc, master_cc_run
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, CreateSessionRequest, TaskType, ThreadStatus
+from src.core.models import CcClaudeBackend, CreateSessionRequest, TaskType, ThreadStatus
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
@@ -119,9 +119,9 @@ async def main() -> None:
   kind = sys.argv[3]
   cfg = CharlieBotConfig(
       charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[
-          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=shim, prompt_overlay="none")],
+      paths={"worktree_dir": str(home / "worktrees")},
+      backends={"options": [
+          CcClaudeBackend(id="fake", label="Fake", model="fake-model", cli_binary=shim, prompt_overlay="none")]},
   )
   # Prompt assembly is orthogonal to this protocol; keep the turn minimal.
   master_cc_run._build_instructions_content = lambda session_meta, cfg, prompt_overlay: "instructions"
@@ -183,7 +183,7 @@ from pathlib import Path
 
 from src.agents import master_cc, master_cc_run, master_cc_state
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, CreateSessionRequest
+from src.core.models import CcClaudeBackend, CreateSessionRequest
 from src.core.sessions import SessionManager
 
 
@@ -192,9 +192,9 @@ async def main() -> None:
   shim = sys.argv[2]
   cfg = CharlieBotConfig(
       charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[
-          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=shim, prompt_overlay="none")],
+      paths={"worktree_dir": str(home / "worktrees")},
+      backends={"options": [
+          CcClaudeBackend(id="fake", label="Fake", model="fake-model", cli_binary=shim, prompt_overlay="none")]},
   )
   # Prompt assembly is orthogonal to this protocol; keep the turn minimal.
   master_cc_run._build_instructions_content = lambda session_meta, cfg, prompt_overlay: "instructions"
@@ -253,16 +253,15 @@ Everything else.
 def _cfg(home: Path, shim: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[
-          BackendOption(
+      paths={"worktree_dir": str(home / "worktrees")},
+      backends={"options": [
+          CcClaudeBackend(
               id="fake",
               label="Fake",
-              type="cc-claude",
               model="fake-model",
               cli_binary=str(shim),
               prompt_overlay="none")
-      ],
+      ]},
   )
 
 
@@ -271,11 +270,11 @@ def _uncovered_transport_cfg(home: Path, shim: Path) -> CharlieBotConfig:
   backend the pinned session rides."""
   return CharlieBotConfig(
       charliebot_home=home,
-      worktree_dir=str(home / "worktrees"),
-      backend_options=[
-          BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model", cli_binary=str(shim)),
-          BackendOption(id="oc", label="OC", type="opencode", model="oc-model", prompt_overlay="none"),
-      ],
+      paths={"worktree_dir": str(home / "worktrees")},
+      backends={"options": [
+          CcClaudeBackend(id="fake", label="Fake", model="fake-model", cli_binary=str(shim)),
+          OpencodeBackend(id="oc", label="OC", model="oc-model", prompt_overlay="none"),
+      ]},
   )
 
 
@@ -725,7 +724,7 @@ async def test_replayed_delegate_readback_lands_on_existing_thread(
   # accepted then the connection is reset — the sent-but-lost class.
   black_hole = _BlackHoleServer()
   try:
-    (home / "config.yaml").write_text(f"server_port: {black_hole.port}\n", encoding="utf-8")
+    (home / "config.yaml").write_text(f"server:\n  port: {black_hole.port}\n", encoding="utf-8")
 
     await _recover(
         monkeypatch,

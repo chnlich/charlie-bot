@@ -22,9 +22,11 @@ from src.core.verify_trailer import read_verify_final_report
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=BACKEND_OPTIONS,
-      model_preference=[OPUS_BACKEND_ID, "codex-o3", "kimi-k2.5"],
+      paths={"worktree_dir": str(tmp_path / "worktrees")},
+      backends={
+          "options": BACKEND_OPTIONS,
+          "preference": [OPUS_BACKEND_ID, "codex-o3", "kimi-k2.5"],
+      },
   )
 
 

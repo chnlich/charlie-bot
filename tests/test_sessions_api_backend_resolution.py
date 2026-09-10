@@ -85,13 +85,9 @@ async def test_fork_route_inherits_parent_backend_when_backend_omitted(two_backe
   assert response.json()["backend"] == OPUS_BACKEND_ID
 
 
-# The fork row exercises the codex family alias (codex-future resolves to codex-o3);
-# the elone row pins the resolved id directly.
+# The override row pins the resolved id directly: backend ids resolve exactly as
+# configured (no aliasing).
 _ROUTE_OVERRIDE_ROWS = [
-    pytest.param("fork", {
-        "event_index": 1,
-        "backend": "codex-future"
-    }, "codex-o3", id="fork-family-alias"),
     pytest.param("elone", {
         "event_index": 1,
         "backend": "codex-o3"
@@ -194,7 +190,7 @@ async def test_route_rejects_unresolvable_backend_and_persists_nothing(
 @pytest.mark.asyncio
 async def test_persisted_backend_stays_within_backend_options_across_mixed_calls(two_backend_env: _RouteEnv,) -> None:
   cfg, session_mgr, _ = two_backend_env
-  valid_ids = {opt.id for opt in cfg.backend_options}
+  valid_ids = {opt.id for opt in cfg.backends.options}
   fork_parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
   elone_ok_parent_id = await _seed_parent(session_mgr, backend=OPUS_BACKEND_ID)
   elone_bad_parent_id = await _seed_parent(session_mgr, backend="missing-backend")
@@ -210,7 +206,7 @@ async def test_persisted_backend_stays_within_backend_options_across_mixed_calls
         f"/api/sessions/{fork_parent_id}/fork",
         json={
             "event_index": 1,
-            "backend": "codex-future"
+            "backend": "codex-o3"
         },
     ).status_code == 200
     assert client.post(
@@ -253,4 +249,4 @@ async def test_create_route_defaults_to_first_backend_option_when_omitted(two_ba
     response = client.post("/api/sessions/", json={})
 
   assert response.status_code == 200
-  assert response.json()["backend"] == cfg.backend_options[0].id
+  assert response.json()["backend"] == cfg.backends.options[0].id

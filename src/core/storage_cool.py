@@ -45,14 +45,9 @@ from pathlib import Path
 
 import structlog
 
-from src.core.config import (
-    BackendOption,
-    CharlieBotConfig,
-    claude_config_dir,
-    get_config,
-)
+from src.core.config import CharlieBotConfig, claude_config_dir, get_config
 from src.core.json_utils import load_json_meta
-from src.core.models import BackendType, SessionStatus, parse_utc_datetime
+from src.core.models import SessionStatus, parse_utc_datetime
 from src.core.runs import CURSOR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 from src.core.timeouts import SQLITE_LOCK_WAIT_MS, SQLITE_LOCK_WAIT_SECONDS
@@ -340,18 +335,15 @@ def claude_projects_roots(cfg: CharlieBotConfig) -> list[Path]:
 
   A transcript tree outlives the environment that created it, so the search set
   must not depend on the current one: the default home is seeded beside the
-  ``claude_config_dir`` answers for the environment and the configured cc-claude
-  options, mirroring how ``codex_session_trees`` seeds its store.  Widening the
+  ``claude_config_dir()`` answer for the environment and the configured pool
+  accounts, mirroring how ``codex_session_trees`` seeds its store.  Widening the
   searched trees does not widen what is deletable: a name that encodes neither a
   CharlieBot session id nor the worktree prefix stays untouched no matter which
   tree it sits in.
   """
-  homes = {Path.home() / ".claude", claude_config_dir(BackendOption(id="-", label="-", type=BackendType.CC_CLAUDE))}
-  for account in cfg.claude_accounts:
+  homes = {Path.home() / ".claude", claude_config_dir()}
+  for account in cfg.accounts.claude:
     homes.add(Path(account.config_dir).expanduser())
-  for option in cfg.backend_options:
-    if option.type == BackendType.CC_CLAUDE:
-      homes.add(claude_config_dir(option))
   return sorted(home / "projects" for home in homes)
 
 
@@ -404,7 +396,7 @@ def _idle_past_window(path: Path, now: datetime, idle_days: int) -> bool:
 
 def _live_worktree_dir_names(cfg: CharlieBotConfig) -> set[str]:
   """Encoded cwd names of the worktrees currently on disk (their runs may still write)."""
-  worktree_dir = Path(cfg.worktree_dir)
+  worktree_dir = Path(cfg.paths.worktree_dir)
   if not worktree_dir.is_dir():
     return set()
   return {
@@ -448,7 +440,7 @@ def _sweep_claude_transcripts(
   same orphan rule once the worktree itself is gone. Any other name encodes a cwd
   CharlieBot never handed a claude process and is never touched.
   """
-  worktree_prefix = claude_project_dir_name(Path(cfg.worktree_dir)) + "-"
+  worktree_prefix = claude_project_dir_name(Path(cfg.paths.worktree_dir)) + "-"
   live_worktrees = _live_worktree_dir_names(cfg) if session_id is None else set()
   for projects_root in claude_projects_roots(cfg):
     if not projects_root.is_dir():
@@ -485,12 +477,8 @@ def _sweep_claude_transcripts(
 
 
 def codex_session_trees(cfg: CharlieBotConfig) -> list[Path]:
-  """Every rollout tree a configured codex backend writes into, default included."""
-  homes = {Path.home() / ".codex"}
-  for option in cfg.backend_options:
-    if option.type == BackendType.CODEX and option.codex_home:
-      homes.add(Path(option.codex_home).expanduser())
-  return sorted(home / "sessions" for home in homes)
+  """The rollout tree codex writes into; codex runs from the default home."""
+  return [Path.home() / ".codex" / "sessions"]
 
 
 def codex_rollout_session_id(path: Path) -> str | None:

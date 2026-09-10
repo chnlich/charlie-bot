@@ -239,37 +239,8 @@ class CodexUsageResolver:
     return self._read_translated_session_id(session_id)
 
   def _codex_candidate_session_dirs(self, backend_id: str) -> list[Path]:
-    """Ordered candidate ``<home>/sessions`` directories searched for rollout logs.
-
-    Searched in order, stopping at the first directory that yields a match:
-
-    1. the session's own backend option ``codex_home``, when that backend id is
-       still in config;
-    2. the union of ``codex_home`` across every configured backend of type codex;
-    3. ``~/.codex``.
-
-    Each candidate is searched as ``<home>/sessions``. Rollout file names embed a
-    globally unique codex thread id, so searching several trees cannot mis-match.
-    """
-    dirs: list[Path] = []
-    seen: set[Path] = set()
-
-    def _add(home: Path) -> None:
-      sessions_dir = home / "sessions"
-      if sessions_dir not in seen:
-        seen.add(sessions_dir)
-        dirs.append(sessions_dir)
-
-    own_option = self._cfg.get_backend_option(backend_id) if backend_id else None
-    if own_option is not None and own_option.codex_home:
-      _add(Path(own_option.codex_home).expanduser())
-
-    for opt in self._cfg.backend_options:
-      if opt.type == BackendType.CODEX and opt.codex_home:
-        _add(Path(opt.codex_home).expanduser())
-
-    _add(_DEFAULT_CODEX_HOME)
-    return dirs
+    """The single candidate ``~/.codex/sessions`` directory; codex runs from the default home."""
+    return [_DEFAULT_CODEX_HOME / "sessions"]
 
   def _find_codex_rollout_path(self, native_thread_id: str, backend_id: str) -> Path | None:
     cached_path = self._codex_rollout_path_cache.get(native_thread_id)

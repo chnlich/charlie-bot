@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from conftest import stub_credentials
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -18,13 +19,14 @@ SCRIPT = f"<script src=/static/js/artifact-comments.js?v={pages_api._static_asse
 def sessions_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   """Point the configured sessions root and access key at test values.
 
-  files.py imports ``get_config`` by name, so the patch lands on the module.
-  A real app carries the auth middleware and routes /files/ as public; these
-  tests cover the file server alone, so the fixture must supply the access key
-  the middleware would otherwise own.
+  files.py imports ``get_config`` by name, so the patch lands on the module;
+  the access key is a credential, stubbed in memory (credentials.yaml's
+  charliebot.access_key). A real app carries the auth middleware and routes
+  /files/ as public; these tests cover the file server alone, so the fixture
+  must supply the access key the middleware would otherwise own.
   """
-  monkeypatch.setattr(
-      files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path, charliebot_access_key="secret"))
+  monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path))
+  stub_credentials({"charliebot": {"access_key": "secret"}})
   return tmp_path
 
 
@@ -161,8 +163,8 @@ def test_serve_file_wrong_credential_returns_original_bytes(sessions_root: Path)
 
 def test_serve_file_empty_configured_key_injects(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """No configured key = every reader authenticates, so injection stays on."""
-  monkeypatch.setattr(
-      files_api, "get_config", lambda: SimpleNamespace(sessions_dir=sessions_root, charliebot_access_key=""))
+  monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=sessions_root))
+  stub_credentials({"charliebot": {"access_key": ""}})
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
 
   resp = _build_client(None).get("/files" + str(page))

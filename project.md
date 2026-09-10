@@ -36,7 +36,8 @@ checks whether a profile is set and passes the resolved home to new panes explic
 
 ```text
 ~/.charliebot/
-├── config.yaml          # API keys, settings, and workspace_dirs list
+├── config.yaml          # Structure settings in sections; workspace_dirs list
+├── credentials.yaml     # Secrets (API keys, tokens), section → key
 ├── memory/             # Labeled-entry memory store (local git repo)
 │   ├── entries/<topic>/<slug>.md   # canonical entries (one fact per file)
 │   ├── topics                       # controlled topic vocabulary
@@ -82,9 +83,9 @@ charlie-bot/
 |------|------|------------------|
 | **Master Agent** | Claude Code session (`src/agents/master_cc.py`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend. |
 | **Worker Agent** | Claude Code CLI (`src/agents/worker.py`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
-| **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto base branch, merges (ff-only), and cleans up the worktree. Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `model_preference` config). |
+| **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto base branch, merges (ff-only), and cleans up the worktree. Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.preference` config). |
 
-**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`). The `BackendType` vocabulary (`src/core/models.py`) names the backends, and `src/agents/backends/registry.py` dispatches each `BackendOption.type` to its implementation. Backend selection is configured via `backend_options` and `model_preference` in `config.yaml`.
+**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`). The `BackendType` vocabulary (`src/core/models.py`) names the backends, and `src/agents/backends/registry.py` dispatches each `BackendOption.type` to its implementation. Backend selection is configured via `backends.options` and `backends.preference` in `config.yaml`.
 
 ### 4.2 Session & Thread Model
 - **Session**: Represents a project/workspace. Each Session has:
@@ -124,14 +125,14 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 
 3. **Review** (Phase 2 — Automatic on Worker Success):
    - On successful worker completion, `spawn_review_worker()` (`src/core/review.py`) automatically spawns a Review Agent
-   - The reviewer intentionally uses a **different LLM backend** than the worker (cross-backend review), selected from `model_preference` config
+   - The reviewer intentionally uses a **different LLM backend** than the worker (cross-backend review), selected from `backends.preference` config
    - Reviewer reads session conversation + worker log for context, then:
      - Reviews `git diff base_branch...branch_name`
      - Fixes any issues found, commits fixes
      - Rebases the branch onto the base branch
      - Merges back to main with `--ff-only`
      - Cleans up the worktree
-   - If the reviewer **fails**, it retries with the next untried backend from `model_preference`. Max retries = `len(model_preference)`
+   - If the reviewer **fails**, it retries with the next untried backend from `backends.preference`. Max retries = `len(backends.preference)`
 
 4. **Master Trigger on Completion**:
    - After review completes (success or all retries exhausted), the master agent is triggered via `trigger_master()` with a combined summary of worker + reviewer results
@@ -217,8 +218,8 @@ Master parses this to distinguish "thinking" from "stuck" and track progress pre
 ## 9. Error Handling & Resilience
 
 ### 9.1 Model Fallback
-- Multiple backends configured via `backend_options` in `config.yaml` (see that file for the current list)
-- `model_preference` controls reviewer backend selection order, enabling cross-backend code review
+- Multiple backends configured via `backends.options` in `config.yaml` (see that file for the current list)
+- `backends.preference` controls reviewer backend selection order, enabling cross-backend code review
 - Failed reviewers automatically retry with the next untried backend
 
 ### 9.2 Rebase Conflict Handling
@@ -266,7 +267,7 @@ it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backen
 - Master Agent as Claude Code session (`src/agents/master_cc.py`) with `--resume` support for persistent conversations. Supports any configured backend via the pluggable `AgentBackend` interface
 - Delegation CLI (`src/cli/delegate.py`) — called by the master to spawn workers via `POST /api/internal/delegate`
 - Worker spawner (`src/core/spawner.py`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
-- Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `model_preference`). Failed reviewers retry with the next untried backend
+- Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `backends.preference`). Failed reviewers retry with the next untried backend
 - Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `trigger_master()` for user notification and follow-up decisions
 - `SessionManager`, `ThreadManager`, `PlanRegistryManager`, `TriggerManager`, `StreamingManager`
 - `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml` and the memory store scaffold (git repo + topics vocabulary)
@@ -284,9 +285,9 @@ it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backen
 - Draft persistence: unsent message text is saved to localStorage per session (debounced 300ms) and restored on session switch-back or page reload
 
 **Configuration**
-- `~/.charliebot/config.yaml` is the single source of truth for API keys and settings — no environment variables
-- `backend_options`: configurable list of LLM backends (see that file for the current list)
-- `model_preference`: ordered list of backend IDs for cross-backend reviewer selection
+- `~/.charliebot/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `publish`, `telegram`); `~/.charliebot/credentials.yaml` holds every secret as section → key and is the single source of truth for API keys — no environment variables
+- `backends.options`: configurable list of LLM backends (see that file for the current list)
+- `backends.preference`: ordered list of backend IDs for cross-backend reviewer selection
 
 ### 11.2 Pending / Not Yet Implemented
 

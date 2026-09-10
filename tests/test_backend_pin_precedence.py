@@ -2,7 +2,7 @@
 
 Covers both `backend_option is None` substitution sites (chat.py's message
 path, master_trigger.py's wake path) and the run_cc guard's precedence over
-`backend_options[0]` for callers (replay) that pass no option at all.
+`backends.options[0]` for callers (replay) that pass no option at all.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     OPUS_BACKEND_OPTION,
     FakeBackend,
+    backend_option,
     build_two_backend_cfg,
     patch_instructions_content,
 )
@@ -24,7 +25,7 @@ from src.api.chat import run_and_finalize
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.master_trigger import trigger_master
-from src.core.models import BackendOption, CreateSessionRequest
+from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
 
 
@@ -57,11 +58,11 @@ async def _expect_pin_hard_fail(
 
 @pytest.mark.asyncio
 async def test_message_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monkeypatch) -> None:
-  """No backend_options entry starts with codex — the pin still must not be
+  """No backends.options entry starts with codex — the pin still must not be
   substituted onto anything."""
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[OPUS_BACKEND_OPTION],
+      backends={"options": [OPUS_BACKEND_OPTION]},
   )
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
@@ -81,7 +82,7 @@ async def test_wake_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monke
   schedule triggers / review wakes, which all funnel through trigger_master."""
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[OPUS_BACKEND_OPTION],
+      backends={"options": [OPUS_BACKEND_OPTION]},
   )
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
@@ -100,11 +101,13 @@ async def test_unresolvable_codex_pin_lands_on_none_of_several_codex_options(tmp
   pin must hard-fail rather than land on any of them."""
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-          BackendOption(id="codex-alpha", label="Codex Alpha", type="codex", model="alpha"),
-          BackendOption(id="codex-beta", label="Codex Beta", type="codex", model="beta"),
-      ],
+      backends={
+          "options": [
+              OPUS_BACKEND_OPTION,
+              backend_option(id="codex-alpha", label="Codex Alpha", type="codex", model="alpha"),
+              backend_option(id="codex-beta", label="Codex Beta", type="codex", model="beta"),
+          ]
+      },
   )
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
@@ -129,11 +132,11 @@ async def test_unresolvable_codex_pin_lands_on_none_of_several_codex_options(tmp
 @pytest.mark.asyncio
 async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_zero(tmp_path: Path, monkeypatch) -> None:
   """replay_user_message never passes backend_option — the only caller that
-  doesn't. A resolvable pin that isn't backend_options[0] must still win."""
+  doesn't. A resolvable pin that isn't backends.options[0] must still win."""
   cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-o3")
-  assert session.backend != cfg.backend_options[0].id
+  assert session.backend != cfg.backends.options[0].id
 
   captured: dict[str, object] = {}
   monkeypatch.setattr(
@@ -149,7 +152,7 @@ async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_ze
 @pytest.mark.asyncio
 async def test_replay_unresolvable_pin_hard_fails_not_substituted(tmp_path: Path, monkeypatch) -> None:
   """Replay of an unresolvable pin must reach the hard fail, same as the
-  message and wake paths — never a substitution onto backend_options[0]."""
+  message and wake paths — never a substitution onto backends.options[0]."""
   cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"), backend="codex-ghost-9")
@@ -169,7 +172,7 @@ async def test_replay_unresolvable_pin_hard_fails_not_substituted(tmp_path: Path
 @pytest.mark.asyncio
 async def test_empty_pin_no_option_rejects_not_backend_options_zero(tmp_path: Path, monkeypatch) -> None:
   """No pin at all and no explicit option must hard-fail, not fall back to
-  backend_options[0] (the wake-path fallback was removed)."""
+  backends.options[0] (the wake-path fallback was removed)."""
   cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Test Session"))

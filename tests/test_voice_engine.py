@@ -25,7 +25,7 @@ def _stub_bundle(engine: str, model_id: str) -> transcriber._SpeechModelBundle:
 
 
 def test_default_engine_builds_sherpa_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
-  """voice_engine unset: the sherpa factory builds the bundle and the GPU one is never touched."""
+  """voice.engine unset: the sherpa factory builds the bundle and the GPU one is never touched."""
   cfg = CharlieBotConfig()
   sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   calls: list[str] = []
@@ -44,9 +44,9 @@ def test_default_engine_builds_sherpa_bundle(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_qwen3_hf_engine_builds_gpu_bundle(monkeypatch: pytest.MonkeyPatch) -> None:
-  """voice_engine=qwen3_hf: the GPU factory builds the bundle carrying the config's model id."""
-  cfg = CharlieBotConfig(voice_engine="qwen3_hf", voice_model_id="Qwen/Qwen3-ASR-0.6B-hf")
-  gpu = _stub_bundle("qwen3_hf", cfg.voice_model_id)
+  """voice.engine=qwen3_hf: the GPU factory builds the bundle carrying the config's model id."""
+  cfg = CharlieBotConfig(voice={"engine": "qwen3_hf", "model_id": "Qwen/Qwen3-ASR-0.6B-hf"})
+  gpu = _stub_bundle("qwen3_hf", cfg.voice.model_id)
   received: list[tuple] = []
 
   def fake_gpu(received_cfg, paths):
@@ -67,7 +67,7 @@ def test_qwen3_hf_engine_builds_gpu_bundle(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_gpu_engine_failure_falls_back_to_sherpa_with_warning(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
   """A GPU init error warns and decodes on the CPU engine instead of failing the session."""
-  cfg = CharlieBotConfig(voice_engine="qwen3_hf", charliebot_home=tmp_path)
+  cfg = CharlieBotConfig(voice={"engine": "qwen3_hf"}, charliebot_home=tmp_path)
   sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   ensured: list[CharlieBotConfig] = []
 
@@ -96,7 +96,7 @@ def test_gpu_engine_failure_falls_back_to_sherpa_with_warning(monkeypatch: pytes
 
 def test_gpu_fallback_result_is_cached_under_the_requested_engine(monkeypatch: pytest.MonkeyPatch) -> None:
   """After a fallback build, later sessions reuse it without retrying the GPU engine."""
-  cfg = CharlieBotConfig(voice_engine="qwen3_hf")
+  cfg = CharlieBotConfig(voice={"engine": "qwen3_hf"})
   sherpa = _stub_bundle("sherpa", transcriber.QWEN3_ASR_DIR_NAME)
   gpu_calls: list[int] = []
   sherpa_calls: list[int] = []
@@ -125,7 +125,7 @@ def test_bundle_cache_rebuilds_when_engine_changes(monkeypatch: pytest.MonkeyPat
   monkeypatch.setattr(transcriber, "create_qwen3_hf_bundle", lambda cfg, paths: gpu)
 
   sherpa_cfg = CharlieBotConfig()
-  gpu_cfg = CharlieBotConfig(voice_engine="qwen3_hf")
+  gpu_cfg = CharlieBotConfig(voice={"engine": "qwen3_hf"})
   paths = transcriber.voice_model_paths(sherpa_cfg)
 
   first = transcriber._get_model_bundle(sherpa_cfg, paths)

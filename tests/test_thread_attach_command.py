@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from conftest import backend_option
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -10,7 +11,7 @@ from src.api.deps import get_config_on_loop, get_thread_manager
 from src.api.threads import build_attach_command
 from src.api.threads import router as threads_router
 from src.core.config import CharlieBotConfig, get_config
-from src.core.models import BackendOption, ThreadMetadata
+from src.core.models import ThreadMetadata
 from src.core.threads import ThreadManager
 
 
@@ -29,15 +30,17 @@ def _thread(**overrides) -> ThreadMetadata:
 def _claude_sub_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      backend_options=[
-          BackendOption(
-              id="claude-sub",
-              label="Claude Sub",
-              type="cc-claude",
-              model="claude-opus-4-8",
-              cli_binary="claude-sub",
-          ),
-      ],
+      backends={
+          "options": [
+              backend_option(
+                  id="claude-sub",
+                  label="Claude Sub",
+                  type="cc-claude",
+                  model="claude-opus-4-8",
+                  cli_binary="claude-sub",
+              ),
+          ],
+      },
   )
 
 
@@ -108,9 +111,11 @@ def _build_client(cfg: CharlieBotConfig, thread_mgr: ThreadManager) -> TestClien
 async def test_thread_metadata_endpoint_exposes_derived_attach_fields(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      backend_options=[
-          BackendOption(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),
-      ],
+      backends={
+          "options": [
+              backend_option(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),
+          ],
+      },
   )
   thread_mgr = ThreadManager(cfg)
   worktree = tmp_path / "worktree"
@@ -147,9 +152,11 @@ async def test_thread_metadata_endpoint_exposes_derived_attach_fields(tmp_path: 
 async def test_thread_metadata_endpoint_attach_mode_serves_only_the_pair(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      backend_options=[
-          BackendOption(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),
-      ],
+      backends={
+          "options": [
+              backend_option(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),
+          ],
+      },
   )
   thread_mgr = ThreadManager(cfg)
   worktree = tmp_path / "worktree"

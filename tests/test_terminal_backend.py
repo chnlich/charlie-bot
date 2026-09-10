@@ -21,6 +21,7 @@ from fastapi import WebSocketDisconnect
 
 from src.agents.backends import pty_common, terminal, tui
 from src.agents.backends.pty_common import PTY_INPUT, PTY_RESIZE
+from src.core.config import CHARLIEBOT_HOME_ENV
 
 
 def _b64(data: bytes) -> str:
@@ -161,6 +162,8 @@ async def test_ensure_terminal_session_starts_global_login_shell(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+  # The default home keeps the historical name; any other home appends a digest of its path.
+  monkeypatch.delenv(CHARLIEBOT_HOME_ENV, raising=False)
   home_dir = tmp_path / "home"
   home_dir.mkdir()
   calls = []
@@ -195,6 +198,8 @@ async def test_ensure_terminal_session_starts_global_login_shell(
 
 @pytest.mark.asyncio
 async def test_ensure_terminal_session_reuses_existing_tmux_session(monkeypatch: pytest.MonkeyPatch,) -> None:
+  # The default home keeps the historical name; any other home appends a digest of its path.
+  monkeypatch.delenv(CHARLIEBOT_HOME_ENV, raising=False)
   calls = []
 
   async def fake_run_tmux(*args: str, check: bool = False) -> tuple[int, str]:
@@ -210,6 +215,8 @@ async def test_ensure_terminal_session_reuses_existing_tmux_session(monkeypatch:
 
 @pytest.mark.asyncio
 async def test_run_terminal_attachment_attaches_and_handles_input(monkeypatch: pytest.MonkeyPatch,) -> None:
+  # The default home keeps the historical name; any other home appends a digest of its path.
+  monkeypatch.delenv(CHARLIEBOT_HOME_ENV, raising=False)
   ensured = []
   _FakeAttachment.instances = []
   ws = _ScriptedWebSocket(

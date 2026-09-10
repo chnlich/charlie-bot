@@ -7,7 +7,7 @@ from http.cookies import CookieError, SimpleCookie
 from starlette.requests import Request
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from src.core.config import get_config
+from src.core.config import get_credentials
 
 
 def _credential_matches(candidate: str, key: str) -> bool:
@@ -160,7 +160,7 @@ class AuthMiddleware:
     if scope["type"] != "http":
       await self.app(scope, receive, send)
       return
-    key = get_config().charliebot_access_key
+    key = str(get_credentials().get("charliebot", "access_key") or "")
     path = scope["path"]
 
     # Let public paths through without auth.

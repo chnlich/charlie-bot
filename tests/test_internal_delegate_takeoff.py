@@ -689,7 +689,7 @@ async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest
     assert mgr is session_mgr
 
   async def fake_resolve_requested_subagent_backend_model(*args: Any, **kwargs: Any) -> tuple[str, str]:
-    raise ValueError("requested backend 'codex-o3' is not in backend_options")
+    raise ValueError("requested backend 'codex-o3' is not in backends.options")
 
   monkeypatch.setattr(internal, "check_takeoff_gate", fake_takeoff_gate)
   monkeypatch.setattr(
@@ -700,19 +700,18 @@ async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest
     await internal.delegate_task(req, session_mgr=session_mgr, thread_mgr=thread_mgr)
 
   assert exc_info.value.status_code == 400
-  assert exc_info.value.detail == "requested backend 'codex-o3' is not in backend_options"
+  assert exc_info.value.detail == "requested backend 'codex-o3' is not in backends.options"
   thread_mgr.create_thread.assert_not_awaited()
 
 
-# --- verify default backend via model_preference ---
+# --- verify default backend via backends.preference ---
 
 
-def _build_verify_cfg(model_preference: list[str]) -> CharlieBotConfig:
+def _build_verify_cfg(preference: list[str]) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=Path("/tmp/charliebot-test"),
-      worktree_dir="/tmp/worktrees",
-      backend_options=VERIFY_BACKEND_OPTIONS,
-      model_preference=model_preference,
+      paths={"worktree_dir": "/tmp/worktrees"},
+      backends={"options": VERIFY_BACKEND_OPTIONS, "preference": preference},
   )
 
 
@@ -728,11 +727,11 @@ class BackendFakeSessionManager:
 async def _authorize_verify(
     monkeypatch: pytest.MonkeyPatch,
     session_backend: str,
-    model_preference: list[str],
+    preference: list[str],
     backend: str | None = None,
 ) -> tuple[str | None, str | None]:
   req = _build_request(task_type=TaskType.VERIFY, repo_path=None, base_branch=None, backend=backend)
-  monkeypatch.setattr(internal, "get_config", lambda: _build_verify_cfg(model_preference))
+  monkeypatch.setattr(internal, "get_config", lambda: _build_verify_cfg(preference))
   session_mgr = BackendFakeSessionManager(session_backend)
   _meta, _cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr)
   return resolved_backend, resolved_model
@@ -742,7 +741,7 @@ async def _authorize_verify(
 async def test_verify_no_backend_defaults_to_first_differing_preference(monkeypatch: pytest.MonkeyPatch) -> None:
   """Session backend is the first preference entry -> the second (first differing) entry wins."""
   resolved = await _authorize_verify(
-      monkeypatch, session_backend=OPUS_BACKEND_ID, model_preference=[OPUS_BACKEND_ID, "codex-o3"])
+      monkeypatch, session_backend=OPUS_BACKEND_ID, preference=[OPUS_BACKEND_ID, "codex-o3"])
   assert resolved == ("codex-o3", "o3")
 
 
@@ -750,13 +749,13 @@ async def test_verify_no_backend_defaults_to_first_differing_preference(monkeypa
 async def test_verify_no_backend_session_backend_not_in_preference_uses_first_entry(
     monkeypatch: pytest.MonkeyPatch) -> None:
   resolved = await _authorize_verify(
-      monkeypatch, session_backend="kimi-k2.5", model_preference=[OPUS_BACKEND_ID, "codex-o3"])
+      monkeypatch, session_backend="kimi-k2.5", preference=[OPUS_BACKEND_ID, "codex-o3"])
   assert resolved == (OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model)
 
 
 @pytest.mark.asyncio
 async def test_verify_no_backend_empty_preference_keeps_session_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-  resolved = await _authorize_verify(monkeypatch, session_backend="codex-o3", model_preference=[])
+  resolved = await _authorize_verify(monkeypatch, session_backend="codex-o3", preference=[])
   assert resolved == ("codex-o3", "o3")
 
 
@@ -765,7 +764,7 @@ async def test_verify_explicit_backend_wins_over_preference(monkeypatch: pytest.
   resolved = await _authorize_verify(
       monkeypatch,
       session_backend=OPUS_BACKEND_ID,
-      model_preference=[OPUS_BACKEND_ID, "codex-o3"],
+      preference=[OPUS_BACKEND_ID, "codex-o3"],
       backend="kimi-k2.5",
   )
   assert resolved == ("kimi-k2.5", "kimi-k2.5")
@@ -777,9 +776,9 @@ async def test_verify_unknown_explicit_backend_returns_400(monkeypatch: pytest.M
     await _authorize_verify(
         monkeypatch,
         session_backend=OPUS_BACKEND_ID,
-        model_preference=[OPUS_BACKEND_ID, "codex-o3"],
+        preference=[OPUS_BACKEND_ID, "codex-o3"],
         backend="nonexistent",
     )
 
   assert exc_info.value.status_code == 400
-  assert exc_info.value.detail == "requested backend 'nonexistent' is not in backend_options"
+  assert exc_info.value.detail == "requested backend 'nonexistent' is not in backends.options"

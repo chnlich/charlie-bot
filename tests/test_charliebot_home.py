@@ -81,11 +81,11 @@ def test_config_yaml_may_not_set_the_home(monkeypatch, tmp_path) -> None:
 def test_config_loads_from_the_selected_profile(monkeypatch, tmp_path) -> None:
   profile = tmp_path / "profile"
   profile.mkdir()
-  (profile / "config.yaml").write_text("server_port: 19999\n", encoding="utf-8")
+  (profile / "config.yaml").write_text("server:\n  port: 19999\n", encoding="utf-8")
   monkeypatch.setenv("CHARLIEBOT_HOME", str(profile))
   cfg = core_config.load_config()
   assert cfg.charliebot_home == profile
-  assert cfg.server_port == 19999
+  assert cfg.server.port == 19999
   assert cfg.sessions_dir == profile / "sessions"
 
 

@@ -285,10 +285,10 @@ def test_memory_curator_prompts_no_host_paths() -> None:
 
 # --- 9. failure isolation: one broken file never aborts another ---------------
 #
-# Each parametrized case injects a single broken file (or a legacy cron.yaml)
-# alongside two healthy jobs, then asserts the loader is total (never raises),
-# produces exactly one error record attributed to the injected file / legacy
-# name, and still loads both healthy jobs fully.
+# Each parametrized case injects a single broken file alongside two healthy
+# jobs, then asserts the loader is total (never raises), produces exactly one
+# error record attributed to the injected file, and still loads both healthy
+# jobs fully.
 #
 
 
@@ -330,10 +330,6 @@ def _inject_inline_prompt(h: Path) -> Path:
       }))
 
 
-def _inject_legacy(h: Path) -> Path:
-  return _write_legacy_cron(h)
-
-
 # The broken-file taxonomy is defined once, here: both parametrized consumers
 # below (loader isolation and the API total test) read this list, so adding a
 # case happens in this one place.
@@ -345,7 +341,6 @@ _BROKEN_CASES = [
     (_inject_missing_source, "broken-5", "broken-5.yaml"),
     (_inject_missing_prompt_file, "broken-6", "broken-6.yaml"),
     (_inject_inline_prompt, "broken-7", "broken-7.yaml"),
-    (_inject_legacy, "cron.yaml (legacy)", "cron.yaml"),
 ]
 _BROKEN_CASE_IDS = [
     "whole-file-syntax",
@@ -355,7 +350,6 @@ _BROKEN_CASE_IDS = [
     "missing-required-source",
     "missing-prompt-file",
     "inline-prompt",
-    "legacy-cron",
 ]
 
 

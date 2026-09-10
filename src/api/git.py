@@ -94,9 +94,9 @@ def _resolve_repo_under_workspace(repo: str, cfg: CharlieBotConfig) -> Path:
   repo_path = Path(repo).expanduser().resolve()
   if not (repo_path / ".git").exists():
     raise HTTPException(status_code=400, detail=f"Not a git repo: {repo}")
-  workspace_roots = [Path(d).expanduser().resolve() for d in cfg.workspace_dirs]
+  workspace_roots = [Path(d).expanduser().resolve() for d in cfg.paths.workspace_dirs]
   if not any(repo_path.is_relative_to(root) for root in workspace_roots):
-    raise HTTPException(status_code=400, detail="repo must be under configured workspace_dirs")
+    raise HTTPException(status_code=400, detail="repo must be under configured paths.workspace_dirs")
   return repo_path
 
 
@@ -363,10 +363,10 @@ async def list_branches(repo: str = Query(..., description="Full path to git rep
 
 @router.get("/repos")
 async def list_repos(cfg: CharlieBotConfig = Depends(get_config)):
-  """Scan workspace_dirs (one level deep) and return repos containing a .git folder."""
+  """Scan paths.workspace_dirs (one level deep) and return repos containing a .git folder."""
   seen: set[str] = set()
   repos: list[dict[str, str]] = []
-  for dir_str in cfg.workspace_dirs:
+  for dir_str in cfg.paths.workspace_dirs:
     parent = Path(dir_str).expanduser()
     if not parent.is_dir():
       continue

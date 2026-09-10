@@ -334,7 +334,7 @@ def test_cron_api_rejects_invalid_backend_on_create(
     )
 
   assert response.status_code == 400
-  assert response.json()["detail"] == "backend 'missing-backend' is not in backend_options"
+  assert response.json()["detail"] == "backend 'missing-backend' is not in backends.options"
   assert not (cron_dir / "nightly.yaml").exists()
 
 
@@ -348,7 +348,7 @@ def test_cron_api_rejects_invalid_backend_on_update(
     response = client.put("/api/cron/tasks/nightly", json={"backend": "missing-backend"})
 
   assert response.status_code == 400
-  assert response.json()["detail"] == "backend 'missing-backend' is not in backend_options"
+  assert response.json()["detail"] == "backend 'missing-backend' is not in backends.options"
   assert (yaml.safe_load((cron_dir / "nightly.yaml").read_text(encoding="utf-8")).get("backend") == "codex-o3")
 
 

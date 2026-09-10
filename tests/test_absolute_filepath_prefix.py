@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from conftest import _ok_asgi_downstream, make_page_request, run_through_asgi_middleware
+from conftest import _ok_asgi_downstream, make_page_request, run_through_asgi_middleware, stub_credentials
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -67,7 +67,16 @@ def targets(tmp_path: Path) -> dict[str, Path]:
   }
 
 
-def test_both_prefixes_return_the_same_status_and_bytes(targets: dict[str, Path]) -> None:
+@pytest.fixture
+def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Own the config and credentials the file router reads: sessions root under tmp_path,
+  empty access key (the gate is a no-op). Without this the route reads the host profile,
+  which is not a test fixture."""
+  monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions"))
+  stub_credentials({"charliebot": {"access_key": ""}})
+
+
+def test_both_prefixes_return_the_same_status_and_bytes(targets: dict[str, Path], isolated_config: None) -> None:
   client = _client(None)
   for label, target in targets.items():
     responses = [client.get(f"{prefix}{target}") for prefix in PREFIXES]
@@ -84,10 +93,10 @@ def test_artifact_injection_decides_the_same_way_under_both_prefixes(
 ) -> None:
   # Injection is anchored on the configured sessions root, which the test owns here —
   # the prefix spelling plays no part in the decision. The client carries the access key
-  # cookie so the injected-credential branch is the one under test.
-  monkeypatch.setattr(
-      files_api, "get_config",
-      lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions", charliebot_access_key="secret"))
+  # cookie so the injected-credential branch is the one under test; the key itself is
+  # a credential (credentials.yaml), stubbed in memory.
+  monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions"))
+  stub_credentials({"charliebot": {"access_key": "secret"}})
   client = _client("secret")
   for label, target in targets.items():
     injected = {ARTIFACT_SCRIPT in client.get(f"{prefix}{target}").text for prefix in PREFIXES}
@@ -98,7 +107,8 @@ def test_artifact_injection_decides_the_same_way_under_both_prefixes(
     assert ARTIFACT_SCRIPT not in client.get(f"{prefix}{targets['plain HTML file']}").text
 
 
-def test_head_answers_the_same_status_as_get_under_both_prefixes(targets: dict[str, Path]) -> None:
+def test_head_answers_the_same_status_as_get_under_both_prefixes(
+    targets: dict[str, Path], isolated_config: None) -> None:
   # The render-time probe asks with HEAD, so the marker only ever appears for a path the server
   # answers 404 for: a HEAD that came back 405 would mark nothing at all.
   client = _client(None)
@@ -111,7 +121,8 @@ def test_head_answers_the_same_status_as_get_under_both_prefixes(targets: dict[s
     assert client.head(f"{prefix}{targets['absent path']}").status_code == 404
 
 
-def test_a_non_html_file_is_served_byte_for_byte_under_both_prefixes(targets: dict[str, Path]) -> None:
+def test_a_non_html_file_is_served_byte_for_byte_under_both_prefixes(
+    targets: dict[str, Path], isolated_config: None) -> None:
   client = _client(None)
   target = targets["non-HTML file"]
   for prefix in PREFIXES:
@@ -124,7 +135,7 @@ async def test_a_navigation_under_either_prefix_needs_no_token(
     monkeypatch: pytest.MonkeyPatch,
     prefix: str,
 ) -> None:
-  monkeypatch.setattr(auth, "get_config", lambda: SimpleNamespace(charliebot_access_key="secret"))
+  stub_credentials({"charliebot": {"access_key": "secret"}})
   scope = {
       "type": "http",
       "method": "GET",

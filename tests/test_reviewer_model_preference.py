@@ -12,6 +12,7 @@ from conftest import (
     JudgmentShim,
     ReviewSpawnSessionManager,
     ReviewSpawnThreadManager,
+    backend_option,
     capture_create_logged_task,
     fake_git_current_branch,
     fake_spawn_worker,
@@ -91,7 +92,7 @@ def test_resolve_preference_option_missing_id() -> None:
 
 def test_resolve_preference_option_no_model() -> None:
   cfg = _build_cfg(options=[
-      BackendOption(id="no-model", label="No Model", type="cc-claude", model=None),
+      backend_option(id="no-model", label="No Model", type="cc-claude", model=""),
   ])
   with pytest.raises(ValueError, match="no default model"):
     review._resolve_preference_option(cfg, "no-model")

@@ -11,6 +11,7 @@ from conftest import (
     CODEX_RESOLVE_BINARY_PATCH_TARGET,
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
     SYNTHETIC_MODEL,
+    backend_option,
     build_light_cc_cfg,
     fake_one_shot_proc,
     make_one_shot_backend,
@@ -23,7 +24,7 @@ from src.core.autonamer import (
     maybe_auto_name_from_claude_ai_title,
 )
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, SessionMetadata
+from src.core.models import SessionMetadata
 
 _BUILD_BACKEND_PATCH_TARGET = "src.core.autonamer.build_backend"
 _STREAMING_BROADCAST_PATCH_TARGET = "src.core.autonamer.streaming_manager.broadcast"
@@ -92,8 +93,8 @@ def _fallback_chain_cfg() -> CharlieBotConfig:
   return CharlieBotConfig(
       backends={
           "options": [
-              BackendOption(id="first-backend", label="First", type="cc-claude", model="haiku"),
-              BackendOption(id="second-backend", label="Second", type="codex", model="gpt-x"),
+              backend_option(id="first-backend", label="First", type="cc-claude", model="haiku"),
+              backend_option(id="second-backend", label="Second", type="codex", model="gpt-x"),
           ],
           "preference": ["first-backend", "second-backend"],
       },
@@ -357,9 +358,9 @@ def test_iter_light_backends_preserves_cross_type_preference_order() -> None:
   cfg = CharlieBotConfig(
       backends={
           "options": [
-              BackendOption(id="claude", label="Claude", type="cc-claude", model="haiku"),
-              BackendOption(id="codex", label="Codex", type="codex", model="gpt-x"),
-              BackendOption(id="kimi", label="Kimi", type="kimi", model="k2"),
+              backend_option(id="claude", label="Claude", type="cc-claude", model="haiku"),
+              backend_option(id="codex", label="Codex", type="codex", model="gpt-x"),
+              backend_option(id="kimi", label="Kimi", type="cc-kimi", model="k2", credential="test-kimi"),
           ],
           "preference": ["codex", "claude", "kimi"],
       },
@@ -371,8 +372,8 @@ def test_iter_light_backends_skips_unresolved_ids_and_duplicates() -> None:
   cfg = CharlieBotConfig(
       backends={
           "options": [
-              BackendOption(id="claude", label="Claude", type="cc-claude", model="haiku"),
-              BackendOption(id="codex", label="Codex", type="codex", model="gpt-x"),
+              backend_option(id="claude", label="Claude", type="cc-claude", model="haiku"),
+              backend_option(id="codex", label="Codex", type="codex", model="gpt-x"),
           ],
           "preference": ["missing", "claude", "claude", "codex", "missing"],
       },
@@ -385,8 +386,8 @@ async def test_maybe_auto_name_builds_codex_backend_for_claude_session() -> None
   cfg = CharlieBotConfig(
       backends={
           "options": [
-              BackendOption(id="claude-session", label="Session", type="cc-claude", model="haiku"),
-              BackendOption(id="codex-gpt-5.6-luna-personal", label="Luna", type="codex", model="gpt-5.6-luna"),
+              backend_option(id="claude-session", label="Session", type="cc-claude", model="haiku"),
+              backend_option(id="codex-gpt-5.6-luna-personal", label="Luna", type="codex", model="gpt-5.6-luna"),
           ],
           "preference": ["codex-gpt-5.6-luna-personal"],
       },
@@ -414,7 +415,7 @@ async def test_maybe_auto_name_builds_codex_backend_for_claude_session() -> None
 async def test_maybe_auto_name_builds_same_id_opencode_backend() -> None:
   cfg = CharlieBotConfig(
       backends={
-          "options": [BackendOption(id="opencode-glm52", label="OC", type="opencode", model="prov/model")],
+          "options": [backend_option(id="opencode-glm52", label="OC", type="opencode", model="prov/model")],
           "preference": ["opencode-glm52"],
       },
   )
@@ -440,7 +441,7 @@ async def test_maybe_auto_name_skips_loudly_when_no_preference_resolves() -> Non
   cfg = CharlieBotConfig(
       backends={
           "options": [
-              BackendOption(id="claude-session", label="Session", type="cc-claude", model="haiku"),
+              backend_option(id="claude-session", label="Session", type="cc-claude", model="haiku"),
           ],
           "preference": ["does-not-exist"],
       },

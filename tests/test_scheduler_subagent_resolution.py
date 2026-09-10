@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import CODEX_BACKEND_OPTION
+from conftest import CODEX_BACKEND_OPTION, backend_option
 
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, SessionMetadata
@@ -27,7 +27,7 @@ def _mock_session_mgr(session: SessionMetadata) -> AsyncMock:
 @pytest.mark.asyncio
 async def test_session_default_returns_configured_backend() -> None:
   cfg = _build_cfg([
-      BackendOption(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7"),
+      backend_option(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7"),
   ])
   session = SessionMetadata(name="s", backend="claude-opus-4.7")
   mgr = _mock_session_mgr(session)
@@ -43,7 +43,7 @@ async def test_session_default_raises_for_stale_backend() -> None:
   """A session pinned to an id config no longer defines must fail loudly, never substitute."""
   cfg = _build_cfg(
       [
-          BackendOption(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),
+          backend_option(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),
           CODEX_BACKEND_OPTION,
       ])
   # Stored id no longer exists (e.g. renamed from claude-opus-4.6 to claude-opus-4.7).
@@ -58,7 +58,7 @@ async def test_session_default_raises_for_stale_backend() -> None:
 async def test_session_default_uses_first_option_when_no_backend_pinned() -> None:
   """An empty session backend is the documented default, not a substitution."""
   cfg = _build_cfg([
-      BackendOption(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),
+      backend_option(id="claude-opus-4.7", label="Opus 4.7", type="cc-claude", model="claude-opus-4-7"),
   ])
   session = SessionMetadata(name="s", backend="")
   mgr = _mock_session_mgr(session)
@@ -83,7 +83,7 @@ async def test_session_default_raises_when_no_backend_options() -> None:
 async def test_requested_backend_raises_for_unknown_typo() -> None:
   """Explicit --backend typos must still fail fast."""
   cfg = _build_cfg([
-      BackendOption(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7"),
+      backend_option(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7"),
   ])
   session = SessionMetadata(name="s", backend="claude-opus-4.7")
   mgr = _mock_session_mgr(session)
@@ -95,7 +95,7 @@ async def test_requested_backend_raises_for_unknown_typo() -> None:
 @pytest.mark.asyncio
 async def test_session_default_raises_when_option_has_no_model() -> None:
   cfg = _build_cfg([
-      BackendOption(id="claude-opus-4.7", label="Opus", type="cc-claude", model=None),
+      backend_option(id="claude-opus-4.7", label="Opus", type="cc-claude", model=""),
   ])
   session = SessionMetadata(name="s", backend="claude-opus-4.7")
   mgr = _mock_session_mgr(session)

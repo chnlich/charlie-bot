@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from conftest import (
     JSON_UTILS_OS_REPLACE_PATCH_TARGET,
+    backend_option,
     build_chain_cfg,
     build_light_cc_cfg,
     make_home_session,
@@ -19,7 +20,7 @@ from conftest import append_events as _append_events
 
 from src.core import recap
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, SessionMetadata
+from src.core.models import SessionMetadata
 from src.core.recap import generate_and_cache_summary
 
 # Import-path patch targets for the recap seams. src/core/recap.py binds build_backend at
@@ -56,7 +57,7 @@ async def test_recap_returns_empty_on_no_resolvable_preference() -> None:
   cfg = CharlieBotConfig(
       backends={
           "options": [
-              BackendOption(id="claude-haiku", label="Haiku", type="cc-claude", model="haiku"),
+              backend_option(id="claude-haiku", label="Haiku", type="cc-claude", model="haiku"),
           ],
           "preference": ["does-not-exist"],
       },
@@ -118,10 +119,10 @@ async def test_recap_uses_preferences_when_session_backend_is_empty() -> None:
 
 
 _RECAP_CHAIN_OPTIONS = {
-    "first": BackendOption(id="first", label="First", type="cc-claude", model="haiku"),
-    "second": BackendOption(id="second", label="Second", type="codex", model="gpt-x"),
-    "empty": BackendOption(id="empty", label="Empty", type="codex", model="gpt-x"),
-    "last": BackendOption(id="last", label="Last", type="kimi", model="k2"),
+    "first": backend_option(id="first", label="First", type="cc-claude", model="haiku"),
+    "second": backend_option(id="second", label="Second", type="codex", model="gpt-x"),
+    "empty": backend_option(id="empty", label="Empty", type="codex", model="gpt-x"),
+    "last": backend_option(id="last", label="Last", type="cc-kimi", model="k2", credential="test-kimi"),
 }
 
 

@@ -16,6 +16,7 @@ from conftest import (
     assistant_text_event,
     build_cli_backend,
     fake_one_shot_proc,
+    stub_subprocess_spawn,
 )
 
 import src.agents.backends.opencode as opencode_mod
@@ -42,11 +43,9 @@ def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
 def _rig_end_to_end_run(monkeypatch, backend: OpenCodeBackend, response) -> MagicMock:
   """Mock the serve-and-connect path so backend.run() consumes `response` as the
   /event stream end-to-end; returns the spawned process mock for spawn assertions."""
-  process = MagicMock()
-  process.pid = 4321
+  process = stub_subprocess_spawn(monkeypatch, OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 4321)
   process.returncode = 0
   process.wait = AsyncMock(return_value=0)
-  monkeypatch.setattr(OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, AsyncMock(return_value=process))
   monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
   monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
   monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())

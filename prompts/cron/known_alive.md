@@ -85,10 +85,10 @@ Known-alive symbols:
   `for attr in ("slack_listener_task", "slack_backfill_task")` and fetches each via
   `getattr(app.state, attr, None)`. Vulture flags the `slack_backfill_task` assignment as an unused
   attribute; the names appear only at the write and inside the string tuple.
-- `check_prompt_or_handler_or_loop`, `migrate_and_expand` — pydantic `@model_validator` methods on
-  `ScheduledTaskConfig`/`CharlieBotConfig` in `src/core/config.py`, registered with pydantic at
-  class-definition time and invoked during model validation. The method names have exactly zero
-  whole-repo matches outside their definitions, so vulture flags them as unused methods.
+- `check_prompt_or_handler_or_loop` — pydantic `@model_validator` method on `ScheduledTaskConfig`
+  in `src/core/config.py`, registered with pydantic at class-definition time and invoked during
+  model validation. The method name has exactly zero whole-repo matches outside its definition,
+  so vulture flags it as an unused method.
 - `seed_default_cron_tasks` (`src/core/init_seed.py`) — production-scope vulture (`src/ server.py`)
   flags it as an unused function because its only production caller is the Python heredoc embedded
   in `scripts/setup.sh` (a shell script, invisible to Python dead-code tools). The absence from the
@@ -131,24 +131,16 @@ Known-alive symbols:
   backend's `run()` an async generator (the consumer's `async for` would TypeError a plain
   coroutine), as each site's inline comment states. The condition is the point; nothing to
   delete.
-- `model_config` (eighteen pydantic `BaseModel` classes: `StepConfig`, `ScheduledTaskConfig`, and
-  `CharlieBotConfig` in `src/core/config.py`; `ProjectConfig` in `src/core/project_config.py`;
-  `ClaudeAccount`, `ClaudeCompactionConfig`, `DelegateInvocationMetadata`, `ImproveRequest`,
-  `ScheduleTriggerRequest`, `SessionMessageRequest`, `SlackReplyRequest`, `SlackAckRequest`,
-  `PlanPresentRequest`, `PlanAmendRequest`, `PlanApproveRequest`, `PlanCloseRequest` in
-  `src/core/models.py`; `SwitchEventRequest` in `src/api/diag.py`; `TaskCreate` in
-  `src/api/cron.py`) — the pydantic v2 `ConfigDict` class attribute, which `ModelMetaclass`
-  consumes by attribute name at class-definition time. Seventeen of them pin `extra='forbid'`,
-  which turns an unknown config or request key into a validation error; `TaskCreate` pins
+- `model_config` (the pydantic v2 `ConfigDict` class attribute, assigned on the pydantic
+  `BaseModel` classes of `src/core/config.py`, `src/core/models.py`, `src/core/project_config.py`,
+  `src/api/diag.py`, and `src/api/cron.py`) — `ModelMetaclass` consumes it by attribute name at
+  class-definition time. Every assignment pins `extra='forbid'`, which turns an unknown config or
+  request key into a validation error, except `TaskCreate` in `src/api/cron.py`, which pins
   `extra='ignore'` (the pydantic default) so the create-request body stays looser than the
-  loader's forbid task model, as the comment above the assignment states. Nothing in the repo
-  reads the name (whole-repo grep finds only the eighteen assignments — the `model_config`
-  substring in `src/agents/backends/codex.py` is the unrelated `_model_config_args` method), so
-  vulture flags each assignment as an unused variable.
-- `backlog_label` (`src/core/config.py`, `CharlieBotConfig`) — deprecated migration field,
-  read by string in the same file's `migrate_and_expand` validator: `values.pop("backlog_label",
-  "Backlog")` (its twin `backlog_repo` is reached the same way via `values.get("backlog_repo")`).
-  Vulture flags the field as an unused variable because nothing in the repo attribute-reads it.
+  loader's forbid task model, as the comment above the assignment states. The name is read only
+  by the schema tests asserting the pin (`tests/test_config_schema.py`,
+  `tests/test_backend_option_types.py`); vulture flags each production assignment as an unused
+  variable.
 - `return_value`, `side_effect` attribute writes across `tests/` (e.g.
   `session_mgr.get_session.return_value = ...` in `tests/test_autonamer.py`,
   `resp_mock.json.return_value = ...` in `tests/test_cli_improve.py`) — `unittest.mock`
@@ -247,13 +239,6 @@ Known-alive symbols:
   (`resume_calls == [True]`), so deleting the parameter makes the stub raise TypeError on
   the unexpected keyword. Vulture flags it at 100% confidence as an unused variable. Same
   class as the `verify_report` keyword-fixed stub-parameter entry above.
-- `cls` (`src/core/config.py`, first parameter of `migrate_and_expand`, the
-  `@model_validator(mode="before")` `@classmethod` on `CharlieBotConfig`) — the pydantic
-  classmethod-validator protocol passes the class as the first positional argument, so the
-  arity is framework-fixed even though the body reads only `values`; deleting `cls` turns
-  every `CharlieBotConfig` construction into a TypeError. Vulture flags it at 100%
-  confidence as an unused variable. Same framework-fixed class as the `model_config` entry
-  above.
 - `sig` (`tests/test_worktree_quarantine.py`, second parameter of the
   three identical `lambda pid, sig: killed.append(pid)` stubs installed for
   `worker_recovery_module.kill_process_group` via `monkeypatch.setattr`) — signature-mirror
@@ -360,8 +345,7 @@ Known-alive symbols:
   resume domain in `src/api/sessions.py`), and the comment above `_event_readings` assigns its
   writes to the master and worker event loops of a run on that account. A staged feature
   foundation, kept deliberately: the live tests reference the six flagged entry points, so no
-  Step 3 deletion bar can clear while the trigger wiring is pending. Same kept-deliberately
-  class as the deprecated-field entries above.
+  Step 3 deletion bar can clear while the trigger wiring is pending.
 - `expired_cache_compaction_wanted`, `relay_compaction_wanted`, `compact_with_sonnet`
   (`src/core/claude_compaction.py`) — vulture flags each as an unused function;
   `is_fable` and `CompactionOutcome` (same file) are reached only from inside the module, and
@@ -371,15 +355,15 @@ Known-alive symbols:
   trigger moments (an account relay, a cache gone cold past the hour) and the same
   `context_compacted` / `context_compact_failed` events the auto-compaction path already
   renders; the rendering half is wired (`src/core/message_aggregator.py`), and
-  `CharlieBotConfig.claude_compaction` ships the config plumbed for the trigger sites. A staged
+  `AccountsConfig.claude_compaction` (composed at `CharlieBotConfig.accounts`) ships the config
+  plumbed for the trigger sites. A staged
   feature foundation, kept deliberately; never delete on static-tool evidence while the trigger
   wiring is pending.
 - `_nonempty`, `_relative`, `_no_explicit_null_supplement` (`src/core/project_config.py`) —
   pydantic `@field_validator` / `@model_validator` methods on `ProjectConfig`, registered with
   pydantic at class-definition time and invoked during model validation. The method names have
   exactly zero whole-repo matches outside their definitions, so vulture flags them as unused
-  methods. Same framework-registered class as the `check_prompt_or_handler_or_loop` /
-  `migrate_and_expand` entry above.
+  methods. Same framework-registered class as the `check_prompt_or_handler_or_loop` entry above.
 - `inline_merge_executor` (`tests/test_perfetto_pages.py`) — pytest fixture (monkeypatches
   `pages._merge_executor` to yield None so the merge runs inline), requested by name in four
   tests' parameter lists; the bodies never reference the parameter, so vulture flags it as an

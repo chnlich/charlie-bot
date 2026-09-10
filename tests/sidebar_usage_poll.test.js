@@ -104,6 +104,22 @@ function makeSession(id, name, overrides = {}) {
   };
 }
 
+// The grouped-sidebar fixture: a session-list nav element wired into the
+// context, plus the seven-member Work group every group-limit assertion
+// reads. overrides (localStorageItems, querySelectorAll, ACTIVE_BACKEND_ID,
+// ...) pass through to buildContext; the session-list pairing is not
+// overridable — every render assertion below reads nav.innerHTML.
+function buildNavContext(overrides = {}) {
+  const nav = createElement();
+  const built = buildContext({...overrides, elements: new Map([['session-list', nav]])});
+  return {nav, ...built};
+}
+
+function makeWorkSessions() {
+  return Array.from({length: 7}, (_, idx) =>
+    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+}
+
 function sessionAnchorOpenTag(html, id) {
   const match = html.match(new RegExp(`<a\\b[^>]*id="session-${id}"[^>]*>`));
   if (!match) throw new Error(`Missing rendered session anchor for ${id}`);
@@ -476,12 +492,8 @@ test('restoreSidebarFromUrl renders initial all sessions through grouped rendere
 });
 
 test('renderSessionList limits each grouped session section to five visible sessions', () => {
-  const nav = createElement();
-  const {context} = buildContext({
-    elements: new Map([['session-list', nav]]),
-  });
-  const workSessions = Array.from({length: 7}, (_, idx) =>
-    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+  const {nav, context} = buildNavContext();
+  const workSessions = makeWorkSessions();
   const personalSessions = Array.from({length: 6}, (_, idx) =>
     makeSession(`personal-${idx + 1}`, `Personal ${idx + 1}`, {group: 'Personal'}));
 
@@ -499,7 +511,6 @@ test('renderSessionList limits each grouped session section to five visible sess
 });
 
 test('toggleSessionGroupLimit expansion is ephemeral and resets on the filter-pill enter path', async () => {
-  const nav = createElement();
   const workExtra = createElement({
     className: 'session-group-limit-extra hidden',
     dataset: {sessionGroupLimitExtra: 'Work'},
@@ -518,13 +529,11 @@ test('toggleSessionGroupLimit expansion is ephemeral and resets on the filter-pi
     dataset: {sgroupLimitToggleKey: 'Personal'},
     textContent: 'Show all',
   });
-  const workSessions = Array.from({length: 7}, (_, idx) =>
-    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+  const workSessions = makeWorkSessions();
   const personalSessions = Array.from({length: 6}, (_, idx) =>
     makeSession(`personal-${idx + 1}`, `Personal ${idx + 1}`, {group: 'Personal'}));
   const sessions = [...workSessions, ...personalSessions];
-  const {context} = buildContext({
-    elements: new Map([['session-list', nav]]),
+  const {nav, context} = buildNavContext({
     querySelectorAll: (selector) => {
       if (selector === '.session-group-limit-extra') return [workExtra, personalExtra];
       if (selector === '.session-group-limit-toggle') return [workToggle, personalToggle];
@@ -557,12 +566,8 @@ test('toggleSessionGroupLimit expansion is ephemeral and resets on the filter-pi
 });
 
 test('switchSidebarFilter owns no expansion reset and preserves expansion across filters', async () => {
-  const nav = createElement();
-  const {context} = buildContext({
-    elements: new Map([['session-list', nav]]),
-  });
-  const sessions = Array.from({length: 7}, (_, idx) =>
-    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+  const {nav, context} = buildNavContext();
+  const sessions = makeWorkSessions();
   context.fetch = async () => ({ok: true, json: async () => sessions});
 
   // The render entry point must never reset the expansion table, not even when
@@ -580,12 +585,8 @@ test('switchSidebarFilter owns no expansion reset and preserves expansion across
 test('enterSidebarFilter collapses expansions on a tab change and keeps them on the active pill', async () => {
   // Entering a different filter clears the expansion table.
   {
-    const nav = createElement();
-    const {context} = buildContext({
-      elements: new Map([['session-list', nav]]),
-    });
-    const sessions = Array.from({length: 7}, (_, idx) =>
-      makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+    const {nav, context} = buildNavContext();
+    const sessions = makeWorkSessions();
     context.fetch = async () => ({ok: true, json: async () => sessions});
 
     context.toggleSessionGroupLimit('Work');
@@ -600,12 +601,8 @@ test('enterSidebarFilter collapses expansions on a tab change and keeps them on 
 
   // Re-clicking the pill for the filter already shown keeps the expansion.
   {
-    const nav = createElement();
-    const {context} = buildContext({
-      elements: new Map([['session-list', nav]]),
-    });
-    const sessions = Array.from({length: 7}, (_, idx) =>
-      makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+    const {nav, context} = buildNavContext();
+    const sessions = makeWorkSessions();
     context.fetch = async () => ({ok: true, json: async () => sessions});
 
     context.toggleSessionGroupLimit('Work');
@@ -619,8 +616,6 @@ test('enterSidebarFilter collapses expansions on a tab change and keeps them on 
 });
 
 test('in-place refresh paths preserve group expansion', async () => {
-  const makeWorkSessions = () => Array.from({length: 7}, (_, idx) =>
-    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
   const paths = [
     {
       name: 'websocket session_group_changed event',
@@ -676,10 +671,7 @@ test('in-place refresh paths preserve group expansion', async () => {
   ];
 
   for (const path of paths) {
-    const nav = createElement();
-    const {context} = buildContext({
-      elements: new Map([['session-list', nav]]),
-    });
+    const {nav, context} = buildNavContext();
     const sessions = makeWorkSessions();
     context.fetch = async (url, opts = {}) => {
       if (opts.method && opts.method !== 'GET') return {ok: true, async json() { return {}; }};
@@ -701,14 +693,10 @@ test('in-place refresh paths preserve group expansion', async () => {
 });
 
 test('page load renders every group collapsed with the five-row preview and a Show all toggle', () => {
-  const nav = createElement();
-  const {context} = buildContext({
-    elements: new Map([['session-list', nav]]),
-  });
+  const {nav, context} = buildNavContext();
   // A fresh page load starts with an empty expansion table; nothing has been
   // expanded yet, so every group renders at its preview length.
-  const sessions = Array.from({length: 7}, (_, idx) =>
-    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+  const sessions = makeWorkSessions();
 
   context.renderSessionList(sessions, 'all');
 
@@ -719,15 +707,12 @@ test('page load renders every group collapsed with the five-row preview and a Sh
 });
 
 test('stale session-group-list-expanded localStorage seed stays inert', () => {
-  const nav = createElement();
-  const {context} = buildContext({
-    elements: new Map([['session-list', nav]]),
+  const {nav, context} = buildNavContext({
     localStorageItems: {
       'session-group-list-expanded': '{"Work": true}',
     },
   });
-  const sessions = Array.from({length: 7}, (_, idx) =>
-    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+  const sessions = makeWorkSessions();
 
   context.renderSessionList(sessions, 'archived');
 
@@ -739,9 +724,7 @@ test('stale session-group-list-expanded localStorage seed stays inert', () => {
 });
 
 test('group limit toggles and filter switches never write the expansion keys to localStorage', async () => {
-  const nav = createElement();
-  const {context, localStorageData} = buildContext({
-    elements: new Map([['session-list', nav]]),
+  const {nav, context, localStorageData} = buildNavContext({
     localStorageItems: {
       'session-group-list-expanded': '{"Work": true}',
       'cron-group-list-expanded': '{"Nightly": true}',
@@ -764,13 +747,9 @@ test('group limit toggles and filter switches never write the expansion keys to 
 });
 
 test('renderSessionList keeps active grouped session visible outside the first five', () => {
-  const nav = createElement();
-  const {context} = buildContext({
-    elements: new Map([['session-list', nav]]),
-  });
+  const {nav, context} = buildNavContext();
   context.SESSION_ID = 'work-7';
-  const sessions = Array.from({length: 7}, (_, idx) =>
-    makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
+  const sessions = makeWorkSessions();
 
   context.renderSessionList(sessions, 'all');
 
@@ -780,10 +759,7 @@ test('renderSessionList keeps active grouped session visible outside the first f
 });
 
 test('renderSessionList leaves search results flat and untrimmed', () => {
-  const nav = createElement();
-  const {context} = buildContext({
-    elements: new Map([['session-list', nav]]),
-  });
+  const {nav, context} = buildNavContext();
   const sessions = Array.from({length: 7}, (_, idx) =>
     makeSession(`search-${idx + 1}`, `Search ${idx + 1}`, {group: 'Work'}));
 
@@ -796,12 +772,10 @@ test('renderSessionList leaves search results flat and untrimmed', () => {
 });
 
 test('renderGroupedScheduledList limits project groups to five visible sessions', () => {
-  const nav = createElement();
-  const {context} = buildContext({
+  const {nav, context} = buildNavContext({
     localStorageItems: {
       'cron-group-collapsed': JSON.stringify({Nightly: false}),
     },
-    elements: new Map([['session-list', nav]]),
   });
   const sessions = Array.from({length: 7}, (_, idx) =>
     makeSession(`scheduled-${idx + 1}`, `Scheduled ${idx + 1}`, {

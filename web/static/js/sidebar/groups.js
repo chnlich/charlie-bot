@@ -370,6 +370,12 @@ function renderEmptyNote(text) {
   return `<p class="text-slate-500 text-sm px-3 py-2">${text}</p>`;
 }
 
+// Every sidebar render path rebuilds rows in place from a session list, so the
+// unread map must be refolded from that same list or unread badges go stale.
+function resyncSessionUnread(sessions) {
+  sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
+}
+
 function renderGroupedScheduledList(sessions, options = {}) {
   const nav = document.getElementById('session-list');
   lastScheduledRenderArgs = sessions;
@@ -415,8 +421,7 @@ function renderGroupedScheduledList(sessions, options = {}) {
     </div>`;
   }
   nav.innerHTML = badgeHtml + html;
-  // Resync sessionUnread dict from fresh DOM data
-  sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
+  resyncSessionUnread(sessions);
   updateRelativeTimes();
   refreshTuiDots();
 }
@@ -657,9 +662,9 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     </div>`;
   }
   nav.innerHTML = html;
-  sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
+  resyncSessionUnread(sessions);
   if (pmStateCache) {
-    Object.values(pmStateCache.pmByGroup).forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
+    resyncSessionUnread(Object.values(pmStateCache.pmByGroup));
   }
   updateRelativeTimes();
   refreshTuiDots();
@@ -823,8 +828,7 @@ function renderSessionList(sessions, filter) {
     ? renderEmptyNote('Showing the newest 200 matches — narrow the search.')
     : '';
   nav.innerHTML = sessions.map(s => renderSessionItem(s, filter)).join('') + truncationHint;
-  // Resync sessionUnread dict from fresh DOM data
-  sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
+  resyncSessionUnread(sessions);
   updateRelativeTimes();
   refreshTuiDots();
 }
@@ -867,6 +871,7 @@ const SIDEBAR_ONLY = {
   updateGroupLimitDom,
   renderCronErrorBadge,
   openPmSlotEditor,
+  resyncSessionUnread,
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 

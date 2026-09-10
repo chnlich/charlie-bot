@@ -1261,11 +1261,12 @@ def test_annotation_leaves_codex_pending_and_error_entries_untouched() -> None:
   codex = {
       "provider": "codex",
       "account": "main",
-      "windows": [{
-          "window_minutes": 10080,
-          "utilization": 96.0,
-          "resets_at": _iso_z(datetime(2020, 1, 8, tzinfo=UTC)),
-      }],
+      "windows":
+          [{
+              "window_minutes": 10080,
+              "utilization": 96.0,
+              "resets_at": _iso_z(datetime(2020, 1, 8, tzinfo=UTC)),
+          }],
       "fetched_at": _iso_z(datetime(2020, 1, 1, tzinfo=UTC)),
       "token_count_observed_at": _iso_z(datetime(2020, 1, 1, tzinfo=UTC)),
   }
@@ -1310,11 +1311,12 @@ async def test_get_ext_usage_annotates_claude_windows_at_read_time() -> None:
 
 def test_poll_broadcast_carries_emit_time_expiry_annotation(monkeypatch) -> None:
   stale_value = {
-      "windows": [{
-          "window_minutes": 300,
-          "utilization": 91.0,
-          "resets_at": _iso_z(datetime(2020, 1, 1, 1, 0, tzinfo=UTC)),
-      }],
+      "windows":
+          [{
+              "window_minutes": 300,
+              "utilization": 91.0,
+              "resets_at": _iso_z(datetime(2020, 1, 1, 1, 0, tzinfo=UTC)),
+          }],
       "fetched_at": _iso_z(datetime(2020, 1, 1, 0, 0, tzinfo=UTC)),
       "provider": "claude",
   }

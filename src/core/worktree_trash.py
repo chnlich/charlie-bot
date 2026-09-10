@@ -15,12 +15,14 @@ from src.core.models import utc_now
 
 log = structlog.get_logger()
 
-_TRASH_DIR_NAME = ".trash"
+# On-disk name of the quarantine dir under the worktree root; the storage sweep
+# excludes the same directory by this name when it lists live worktrees.
+TRASH_DIR_NAME = ".trash"
 
 
 def trash_dir(worktree_dir: str) -> Path:
   """Return the quarantine trash dir under the worktree root."""
-  return Path(worktree_dir) / _TRASH_DIR_NAME
+  return Path(worktree_dir) / TRASH_DIR_NAME
 
 
 def dir_size_bytes(path: Path) -> int:

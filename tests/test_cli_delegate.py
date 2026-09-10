@@ -35,7 +35,6 @@ def _repo_argv(repo: str, task_spec_file: Path, *extra: str, session: str | None
 
 def _mock_config(tmp_path: Path):
   cfg = MagicMock()
-  cfg.server_port = 9443
   cfg.sessions_dir = tmp_path / "fake_sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   return cfg
@@ -316,7 +315,7 @@ def test_main_help_states_backend_omission_rule(capsys: pytest.CaptureFixture[st
   assert exc_info.value.code == 0
   out = " ".join(capsys.readouterr().out.split())
   assert "Omit --backend unless the user explicitly named a backend for this delegation" in out
-  assert "verify is routed to the first model_preference entry that differs from it" in out
+  assert "verify is routed to the first backends.preference entry that differs from it" in out
 
 
 def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -432,7 +431,7 @@ def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytes
     def __init__(self) -> None:
       super().__init__("bad request")
       self.response = MagicMock()
-      self.response.json.return_value = {"detail": "requested backend 'missing' is not in backend_options"}
+      self.response.json.return_value = {"detail": "requested backend 'missing' is not in backends.options"}
 
   with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "missing",
                                         session="s1")) as post_mock:

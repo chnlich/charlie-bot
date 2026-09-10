@@ -1,16 +1,15 @@
 """Tests for the access-key auth middleware."""
 
 import json
-from types import SimpleNamespace
 
 import pytest
 from conftest import (
     _ok_asgi_downstream,
     asgi_downstream_called,
     run_through_asgi_middleware,
+    stub_credentials,
 )
 
-from src.api import auth
 from src.api.auth import AuthMiddleware
 
 
@@ -35,8 +34,10 @@ def _scope(
   }
 
 
-def _middleware(monkeypatch: pytest.MonkeyPatch, key: str) -> AuthMiddleware:
-  monkeypatch.setattr(auth, "get_config", lambda: SimpleNamespace(charliebot_access_key=key))
+def _middleware(key: str) -> AuthMiddleware:
+  # The middleware reads the access key from get_credentials() (credentials.yaml,
+  # section "charliebot", key "access_key"); the stub plants it in memory.
+  stub_credentials({"charliebot": {"access_key": key}})
   return AuthMiddleware(app=_ok_asgi_downstream)
 
 
@@ -66,9 +67,8 @@ _PASS_THROUGH_ROWS = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("key, method, path, headers, cookies", _PASS_THROUGH_ROWS)
 async def test_request_reaches_downstream(
-    monkeypatch: pytest.MonkeyPatch, key: str, method: str, path: str, headers: dict[str, str] | None,
-    cookies: dict[str, str] | None) -> None:
-  mw = _middleware(monkeypatch, key=key)
+    key: str, method: str, path: str, headers: dict[str, str] | None, cookies: dict[str, str] | None) -> None:
+  mw = _middleware(key=key)
   sent = await run_through_asgi_middleware(mw, _scope(method=method, path=path, headers=headers, cookies=cookies))
   status, _, _ = _response(sent)
   assert status == 200
@@ -76,8 +76,8 @@ async def test_request_reaches_downstream(
 
 
 @pytest.mark.asyncio
-async def test_html_navigation_returns_login_page(monkeypatch: pytest.MonkeyPatch) -> None:
-  mw = _middleware(monkeypatch, key="secret")
+async def test_html_navigation_returns_login_page() -> None:
+  mw = _middleware(key="secret")
   sent = await run_through_asgi_middleware(mw, _scope(headers={"accept": "text/html"}))
   status, content_type, body = _response(sent)
   assert status == 401
@@ -87,8 +87,8 @@ async def test_html_navigation_returns_login_page(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_api_request_returns_json_401(monkeypatch: pytest.MonkeyPatch) -> None:
-  mw = _middleware(monkeypatch, key="secret")
+async def test_api_request_returns_json_401() -> None:
+  mw = _middleware(key="secret")
   sent = await run_through_asgi_middleware(mw, _scope(headers={"accept": "application/json"}))
   status, content_type, body = _response(sent)
   assert status == 401
@@ -97,8 +97,8 @@ async def test_api_request_returns_json_401(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_invalid_cookie_returns_json_401(monkeypatch: pytest.MonkeyPatch) -> None:
-  mw = _middleware(monkeypatch, key="secret")
+async def test_invalid_cookie_returns_json_401() -> None:
+  mw = _middleware(key="secret")
   sent = await run_through_asgi_middleware(
       mw, _scope(headers={"accept": "application/json"}, cookies={"charliebot_access_key": "wrong"}))
   status, content_type, _ = _response(sent)
@@ -107,9 +107,9 @@ async def test_invalid_cookie_returns_json_401(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
-async def test_non_get_html_accept_still_json_401(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_non_get_html_accept_still_json_401() -> None:
   # Only GET navigations get the HTML login page; a POST with text/html does not.
-  mw = _middleware(monkeypatch, key="secret")
+  mw = _middleware(key="secret")
   sent = await run_through_asgi_middleware(mw, _scope(method="POST", headers={"accept": "text/html"}))
   status, content_type, _ = _response(sent)
   assert status == 401
@@ -117,19 +117,19 @@ async def test_non_get_html_accept_still_json_401(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_viewer_pages_match_exact_path_only(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_viewer_pages_match_exact_path_only() -> None:
   # Exact-path matching: query strings are excluded from request.url.path so
   # "/perfetto?trace=..." resolves to "/perfetto", but sibling paths stay gated.
-  mw = _middleware(monkeypatch, key="secret")
+  mw = _middleware(key="secret")
   sent = await run_through_asgi_middleware(mw, _scope(path="/perfetto/secret", headers={"accept": "application/json"}))
   status, _, _ = _response(sent)
   assert status == 401
 
 
 @pytest.mark.asyncio
-async def test_gated_route_still_requires_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_gated_route_still_requires_credential() -> None:
   # A representative gated route must remain 401 without a credential.
-  mw = _middleware(monkeypatch, key="secret")
+  mw = _middleware(key="secret")
   sent = await run_through_asgi_middleware(mw, _scope(path="/api/sessions", headers={"accept": "application/json"}))
   status, _, _ = _response(sent)
   assert status == 401

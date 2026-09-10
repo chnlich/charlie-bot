@@ -41,8 +41,9 @@ from src.core import init as init_module
 from src.core import process as core_process
 from src.core import runs
 from src.core.config import CharlieBotConfig
+from conftest import backend_option
+
 from src.core.models import (
-    BackendOption,
     CreateSessionRequest,
     MasterRunRecord,
     SessionCallbacks,
@@ -55,7 +56,7 @@ from src.core.sessions import SessionManager
 def _cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      backend_options=[BackendOption(id="fake", label="Fake", type="cc-claude", model="fake-model")],
+      backends={"options": [backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model")]},
   )
 
 
@@ -293,7 +294,7 @@ async def test_cancel_covered_turn_detaches_and_keeps_the_record(
   _install_backend(monkeypatch, backend)
 
   await _cancel_run(
-      _cancel_item(cfg, meta, _persisting_callbacks(session_mgr), cfg.backend_options[0]), backend.spawned)
+      _cancel_item(cfg, meta, _persisting_callbacks(session_mgr), cfg.backends.options[0]), backend.spawned)
 
   backend.detach.assert_called_once_with()
   backend.terminate.assert_not_awaited()
@@ -313,7 +314,7 @@ async def test_cancel_uncovered_transport_terminates(tmp_path: Path, monkeypatch
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"))
   backend = _HungBackend()
   _install_backend(monkeypatch, backend)
-  option = BackendOption(id="oc", label="OC", type="opencode", model=None)
+  option = backend_option(id="oc", label="OC", type="opencode", model="oc-model")
 
   await _cancel_run(_cancel_item(cfg, meta, _persisting_callbacks(session_mgr), option), backend.spawned)
 
@@ -331,7 +332,7 @@ async def test_cancel_before_record_persisted_terminates(tmp_path: Path, monkeyp
   _install_backend(monkeypatch, backend)
 
   await _cancel_run(
-      _cancel_item(cfg, meta, _persisting_callbacks(session_mgr), cfg.backend_options[0]), backend.run_entered)
+      _cancel_item(cfg, meta, _persisting_callbacks(session_mgr), cfg.backends.options[0]), backend.run_entered)
 
   backend.terminate.assert_awaited_once_with()
   backend.detach.assert_not_called()
@@ -361,7 +362,7 @@ async def test_let_go_writes_no_terminal_state(tmp_path: Path, monkeypatch: pyte
           cfg,
           meta,
           _persisting_callbacks(session_mgr, mark_unread=mark_unread),
-          cfg.backend_options[0],
+          cfg.backends.options[0],
           should_check_tex=True), backend.spawned)
 
   backend.detach.assert_called_once_with()

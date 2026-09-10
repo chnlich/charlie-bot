@@ -19,7 +19,12 @@ from src.core.publish import PublishError, publish_artifact
 )
 def test_publish_copies_and_joins_the_url_with_a_single_slash(tmp_path: Path, base: str, expected_url: str) -> None:
   artifact = write_artifact(tmp_path)
-  cfg = build_publish_cfg(tmp_path, public_base_url=base)
+  # The publish lane deployed the way the host's deployment step leaves it, with this
+  # row's base URL (build_publish_cfg pins the shared default; the sectioned pair
+  # carries the per-case override).
+  lane_dir = tmp_path / "publish"
+  lane_dir.mkdir(parents=True, exist_ok=True)
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", publish={"dir": lane_dir, "public_base_url": base})
 
   result = publish_artifact(artifact, cfg)
 
@@ -43,7 +48,7 @@ def test_publish_sets_mode_0644(tmp_path: Path) -> None:
 def test_publish_of_a_differing_same_name_file_reports_the_overwrite(tmp_path: Path) -> None:
   artifact = write_artifact(tmp_path)
   cfg = build_publish_cfg(tmp_path)
-  replaced = cfg.publish_dir / "page.html"
+  replaced = cfg.publish.dir / "page.html"
   replaced.write_text("<p>old page</p>", encoding="utf-8")
 
   result = publish_artifact(artifact, cfg)
@@ -55,7 +60,7 @@ def test_publish_of_a_differing_same_name_file_reports_the_overwrite(tmp_path: P
 def test_publish_over_an_identical_file_reports_no_overwrite(tmp_path: Path) -> None:
   artifact = write_artifact(tmp_path)
   cfg = build_publish_cfg(tmp_path)
-  (cfg.publish_dir / "page.html").write_text("<p>hello</p>", encoding="utf-8")
+  (cfg.publish.dir / "page.html").write_text("<p>hello</p>", encoding="utf-8")
 
   result = publish_artifact(artifact, cfg)
 
@@ -83,19 +88,20 @@ def test_missing_artifact_raises_naming_the_path(tmp_path: Path) -> None:
 
 def test_missing_publish_dir_key_raises_naming_the_key(tmp_path: Path) -> None:
   artifact = write_artifact(tmp_path)
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", public_base_url=PUBLISH_BASE_URL)
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", publish={"public_base_url": PUBLISH_BASE_URL})
 
   with pytest.raises(PublishError) as exc_info:
     publish_artifact(artifact, cfg)
 
-  assert "publish_dir" in str(exc_info.value)
+  assert "publish.dir" in str(exc_info.value)
 
 
 def test_absent_publish_directory_raises_naming_the_directory(tmp_path: Path) -> None:
   """The copy refuses rather than producing links the undeployed 443 lane cannot serve."""
   artifact = write_artifact(tmp_path)
   absent_dir = tmp_path / "undeployed"
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", publish_dir=absent_dir, public_base_url=PUBLISH_BASE_URL)
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "home", publish={"dir": absent_dir, "public_base_url": PUBLISH_BASE_URL})
 
   with pytest.raises(PublishError) as exc_info:
     publish_artifact(artifact, cfg)
@@ -105,15 +111,15 @@ def test_absent_publish_directory_raises_naming_the_directory(tmp_path: Path) ->
 
 def test_missing_public_base_url_key_raises_naming_the_key(tmp_path: Path) -> None:
   artifact = write_artifact(tmp_path)
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", publish_dir=tmp_path / "publish")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", publish={"dir": tmp_path / "publish"})
 
   with pytest.raises(PublishError) as exc_info:
     publish_artifact(artifact, cfg)
 
-  assert "public_base_url" in str(exc_info.value)
+  assert "publish.public_base_url" in str(exc_info.value)
 
 
 def test_config_expands_tilde_in_publish_dir_like_the_other_path_fields() -> None:
-  cfg = CharlieBotConfig(publish_dir="~/publish")
+  cfg = CharlieBotConfig(publish={"dir": "~/publish"})
 
-  assert cfg.publish_dir == Path.home() / "publish"
+  assert cfg.publish.dir == Path.home() / "publish"

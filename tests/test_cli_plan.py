@@ -257,7 +257,6 @@ def test_plan_session_mismatch_rejected(
 def test_plan_no_session_outside_session_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = MagicMock()
-  cfg.server_port = 9443
   cfg.sessions_dir = tmp_path / "sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   monkeypatch.chdir(tmp_path)

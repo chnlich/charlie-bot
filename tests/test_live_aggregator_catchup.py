@@ -14,7 +14,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET
+from conftest import BROADCAST_PATCH_TARGET, fake_backends
 
 from src.core import event_types as ET
 from src.core import sessions as sessions_module
@@ -52,7 +52,7 @@ async def _seed_session(mgr: SessionManager) -> str:
 
 @pytest.mark.asyncio
 async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   mgr = SessionManager(cfg)
   sid = await _seed_session(mgr)
 
@@ -79,7 +79,7 @@ async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path)
 
 @pytest.mark.asyncio
 async def test_concurrent_first_persists_catch_up_once(tmp_path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   mgr = SessionManager(cfg)
   sid = await _seed_session(mgr)
 
@@ -104,7 +104,7 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_drop_during_catchup_discards_stale_init(tmp_path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   mgr = SessionManager(cfg)
   sid = await _seed_session(mgr)
 
@@ -131,7 +131,7 @@ async def test_drop_during_catchup_discards_stale_init(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_drop_mid_feed_discards_and_reruns(tmp_path, monkeypatch) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   mgr = SessionManager(cfg)
   sid = await _seed_session(mgr)
 

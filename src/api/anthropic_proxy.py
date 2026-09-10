@@ -1,7 +1,6 @@
 """Anthropic-compatible proxy routes for non-Anthropic model servers."""
 
 import json
-import os
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -12,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig, get_config, get_credentials
 from src.core.http import get_http_client
 from src.core.models import BackendType
 from src.core.sse import iter_sse_lines
@@ -472,14 +471,19 @@ async def _iter_anthropic_sse(upstream: httpx.Response, model: str) -> AsyncIter
     await upstream.aclose()
 
 
-def _upstream_headers(api_key_env: str | None, backend_id: str) -> dict[str, str]:
+def _upstream_headers(credential: str | None, backend_id: str) -> dict[str, str]:
+  """Build upstream request headers for a backend.
+
+  Without a credential the bare headers are returned. With a credential the
+  Bearer token comes from the credentials file (``get_credentials().require``
+  on the credential's ``api_key`` entry); a missing key raises the loader's
+  ``ValueError``.
+  """
+  del backend_id  # Kept in the signature for call-site readability; not part of the headers.
   headers = {"Content-Type": "application/json"}
-  if not api_key_env:
+  if not credential:
     return headers
-  token = os.environ.get(api_key_env)
-  if not token:
-    raise ValueError(f"api_key_env '{api_key_env}' is not set in the environment for backend '{backend_id}'")
-  headers["Authorization"] = f"Bearer {token}"
+  headers["Authorization"] = f"Bearer {get_credentials().require(credential, 'api_key')}"
   return headers
 
 
@@ -511,7 +515,7 @@ async def openai_compatible_messages(
     anthropic_payload = await request.json()
     openai_payload = anthropic_to_openai_chat_request(anthropic_payload, upstream_model=option.model)
     upstream_url = _join_openai_chat_url(option.api_base)
-    headers = _upstream_headers(option.api_key_env, backend_id)
+    headers = _upstream_headers(option.credential, backend_id)
   except ValueError as e:
     raise HTTPException(status_code=400, detail=str(e)) from e
 

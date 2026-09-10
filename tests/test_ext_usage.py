@@ -17,7 +17,6 @@ from src.api.ext_usage import (
     CODEX_DEFAULT_DIR,
     ClaudeUsageProvider,
     CodexUsageProvider,
-    _account_label,
     _derive_accounts,
     _extract_codex_spend_events,
     _latest_token_count_event,
@@ -29,7 +28,7 @@ from src.api.ext_usage import (
     _transform_response,
 )
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption
+from src.core.models import ClaudeAccount
 
 _fresh_unknown_limit_shape_registry = fresh_state_fixture(ext_usage_mod._reset_unknown_limit_shapes_for_tests)
 _fresh_credential_read_warning_registry = fresh_state_fixture(ext_usage_mod._reset_credential_read_warnings_for_tests)
@@ -886,57 +885,37 @@ def test_transform_response_preserves_claude_payload_shape() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _patch_config(monkeypatch, options: list[BackendOption]) -> None:
-  monkeypatch.setattr(ext_usage_mod, "get_config", lambda: CharlieBotConfig(backend_options=options))
-
-
-def test_account_label_strips_provider_prefix_and_leading_dot() -> None:
-  assert _account_label("claude", "/home/u/.claude-invite-1") == "invite-1"
-  assert _account_label("codex", "/home/u/.codex-personal") == "personal"
-  assert _account_label("claude", "/home/u/claudepersonal") == "personal"
-
-
-def test_account_label_keeps_non_conventional_basename() -> None:
-  assert _account_label("claude", "/home/u/accounts/foo") == "foo"
-
-
 def test_derive_accounts_always_includes_defaults_and_dedupes_explicit_default(monkeypatch) -> None:
-  options = [
-      BackendOption(id="cc1", label="a", type="cc-claude", model="m", claude_config_dir="~/.claude"),
-      BackendOption(id="cc2", label="b", type="cc-claude", model="m", claude_config_dir="~/.claude-invite-1"),
-      BackendOption(id="cx1", label="c", type="codex", model="m", codex_home="~/.codex"),
-      BackendOption(id="cx2", label="d", type="codex", model="m", codex_home="~/.codex-personal"),
-  ]
-  _patch_config(monkeypatch, options)
+  cfg = CharlieBotConfig(
+      accounts={
+          "claude": [
+              ClaudeAccount(label="main", config_dir=CLAUDE_DEFAULT_DIR),
+              ClaudeAccount(label="ext-1", config_dir="~/.claude-invite-1"),
+          ]
+      })
+  monkeypatch.setattr(ext_usage_mod, "get_config", lambda: cfg)
 
   accounts = _derive_accounts()
 
   assert accounts["claude"][0] == ("main", CLAUDE_DEFAULT_DIR)
   assert accounts["codex"][0] == ("main", CODEX_DEFAULT_DIR)
-  assert [label for label, _ in accounts["claude"]] == ["main", "invite-1"]
-  assert [label for label, _ in accounts["codex"]] == ["main", "personal"]
-
-
-def test_derive_accounts_label_collision_falls_back_to_full_basename(monkeypatch) -> None:
-  options = [
-      BackendOption(id="cc1", label="a", type="cc-claude", model="m", claude_config_dir="~/.claude-invite-1"),
-      BackendOption(id="cc2", label="b", type="cc-claude", model="m", claude_config_dir="~/x/claude-invite-1"),
-  ]
-  _patch_config(monkeypatch, options)
-
-  labels = [label for label, _ in _derive_accounts()["claude"]]
-
-  assert labels == ["main", "invite-1", "claude-invite-1"]
+  assert [label for label, _ in accounts["claude"]] == ["main", "ext-1"]
+  assert [label for label, _ in accounts["codex"]] == ["main"]
+  assert accounts["pool"] == {"main": CLAUDE_DEFAULT_DIR, "ext-1": os.path.abspath(os.path.expanduser(
+      "~/.claude-invite-1"))}
 
 
 def test_derive_accounts_label_collision_skip_fail_loud(monkeypatch) -> None:
-  # Two distinct dirs both derive label "invite-1"; the later one's full basename
-  # also collides, so it is skipped (logged) rather than overwriting the first.
-  options = [
-      BackendOption(id="cc1", label="a", type="cc-claude", model="m", claude_config_dir="~/.claude-invite-1"),
-      BackendOption(id="cc2", label="b", type="cc-claude", model="m", claude_config_dir="~/accounts/invite-1"),
-  ]
-  _patch_config(monkeypatch, options)
+  # Two distinct dirs both labelled "invite-1": the later one is skipped (logged)
+  # rather than overwriting the first.
+  cfg = CharlieBotConfig(
+      accounts={
+          "claude": [
+              ClaudeAccount(label="invite-1", config_dir="~/.claude-invite-1"),
+              ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1"),
+          ]
+      })
+  monkeypatch.setattr(ext_usage_mod, "get_config", lambda: cfg)
 
   labels = [label for label, _ in _derive_accounts()["claude"]]
 

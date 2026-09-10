@@ -17,6 +17,7 @@ from conftest import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     JudgmentShim,
     ScriptedRelayBackend,
+    backend_option,
     build_finalize_ctx,
     fable_pool_cfg,
     fresh_state_fixture,
@@ -36,7 +37,7 @@ from src.core import (
 )
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, SpawnRequest, ThreadMetadata, ThreadStatus
+from src.core.models import SpawnRequest, ThreadMetadata, ThreadStatus
 
 CC_ID = "11111111-2222-3333-4444-555555555555"
 
@@ -74,8 +75,6 @@ def _thread() -> ThreadMetadata:
 def _worker(tmp_path: Path, cfg: CharlieBotConfig, label: str | None) -> Worker:
   option = cfg.get_backend_option(POOLED_FABLE_ID)
   account = claude_accounts.account_by_label(cfg, label) if label else None
-  if account is not None:
-    option = option.model_copy(update={"claude_config_dir": account.config_dir})
   return Worker(
       _thread(),
       tmp_path / "work",
@@ -97,18 +96,17 @@ def _logged_events(tmp_path: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def test_pin_pool_account_picks_the_most_headroom_and_passes_pinned_entries_through(tmp_path: Path) -> None:
+def test_pin_pool_account_picks_the_most_headroom_and_leaves_the_option_unchanged(tmp_path: Path) -> None:
   cfg = fable_pool_cfg(tmp_path)
   claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"])
   claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.20)["rate_limit_info"])
   claude_accounts.observe_rate_limit("ext-2", rate_limit_event("allowed", 0.60)["rate_limit_info"])
+  pooled = cfg.get_backend_option(POOLED_FABLE_ID)
 
-  option, account = claude_relay.pin_pool_account(cfg, cfg.get_backend_option(POOLED_FABLE_ID))
-  pinned, pinned_account = claude_relay.pin_pool_account(cfg, cfg.get_backend_option("pinned"))
+  option, account = claude_relay.pin_pool_account(cfg, pooled)
 
-  assert (account.label, option.claude_config_dir) == ("ext-1", str(tmp_path / "claude-ext-1"))
-  assert option.id == POOLED_FABLE_ID
-  assert pinned_account is None and pinned.claude_config_dir == str(tmp_path / "pinned")
+  assert option is pooled
+  assert (account.label, account.config_dir) == ("ext-1", str(tmp_path / "claude-ext-1"))
 
 
 def test_pin_pool_account_raises_with_the_earliest_reset_when_every_account_is_rejected(tmp_path: Path) -> None:
@@ -145,7 +143,8 @@ async def test_construct_worker_pins_the_pool_account_onto_the_worker_only(tmp_p
   worker = await spawner_launch._construct_worker("s1", thread, tmp_path / "work", "prompt", cfg, thread_mgr, request)
 
   assert worker.claude_account.label == "ext-1"
-  assert worker._backend_option.claude_config_dir == str(tmp_path / "claude-ext-1")
+  assert worker._backend_option == cfg.get_backend_option(POOLED_FABLE_ID)
+  assert worker.claude_account.config_dir == str(tmp_path / "claude-ext-1")
   assert (thread.backend, thread.model) == (POOLED_FABLE_ID, FABLE_MODEL)
   assert thread_mgr.saved[-1].backend == POOLED_FABLE_ID
   assert thread.claude_session_id
@@ -168,7 +167,7 @@ async def test_worker_relays_a_rejected_run_onto_another_account(tmp_path: Path,
   exit_code = await worker.run()
 
   assert exit_code == 0
-  assert builds[1]["option"].claude_config_dir == str(tmp_path / "claude-ext-1")
+  assert builds[1]["kwargs"]["claude_account"].config_dir == str(tmp_path / "claude-ext-1")
   assert builds[1]["kwargs"]["extra_flags"] == ["--resume", CC_ID]
   assert "claude_session_id" not in builds[1]["kwargs"]
   assert builds[0]["kwargs"]["claude_session_id"] == CC_ID
@@ -204,7 +203,7 @@ async def test_worker_terminates_at_the_safe_point_after_a_far_warning_and_relay
 async def test_worker_outside_the_pool_still_raises_on_rejection(tmp_path: Path, monkeypatch) -> None:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[BackendOption(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL)],
+      backends={"options": [backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL)]},
   )
   _install_backends(monkeypatch, [ScriptedRelayBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
   worker = _worker(tmp_path, cfg, None)

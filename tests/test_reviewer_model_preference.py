@@ -1,4 +1,4 @@
-"""Tests for cross-backend reviewer selection via model_preference and retry logic."""
+"""Tests for cross-backend reviewer selection via backends.preference and retry logic."""
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -12,6 +12,7 @@ from conftest import (
     JudgmentShim,
     ReviewSpawnSessionManager,
     ReviewSpawnThreadManager,
+    backend_option,
     capture_create_logged_task,
     fake_git_current_branch,
     fake_spawn_worker,
@@ -39,14 +40,21 @@ def _worktree_paths(tmp_path_factory: pytest.TempPathFactory) -> None:
   _WORKTREE_PATH = str(worktree_subdir)
 
 
-def _build_cfg(**overrides: Any) -> CharlieBotConfig:
-  defaults = {
-      'charliebot_home': Path("/tmp/charliebot-test"),
-      'worktree_dir': _WORKTREE_DIR,
-      'backend_options': BACKEND_OPTIONS,
-  }
-  defaults.update(overrides)
-  return CharlieBotConfig(**defaults)
+def _build_cfg(
+    *,
+    options: list[BackendOption] | None = None,
+    preference: list[str] | None = None,) -> CharlieBotConfig:
+  """A config rooted at /tmp whose worktrees live in the module-scoped dir; backends.options
+  defaults to the conftest trio, overridable with *options*, and *preference* sets
+  backends.preference when non-empty."""
+  backends: dict[str, Any] = {"options": BACKEND_OPTIONS if options is None else options}
+  if preference:
+    backends["preference"] = preference
+  return CharlieBotConfig(
+      charliebot_home=Path("/tmp/charliebot-test"),
+      paths={"worktree_dir": _WORKTREE_DIR},
+      backends=backends,
+  )
 
 
 def _make_original_thread(
@@ -78,20 +86,20 @@ def test_resolve_preference_option_valid() -> None:
 
 def test_resolve_preference_option_missing_id() -> None:
   cfg = _build_cfg()
-  with pytest.raises(ValueError, match="not in backend_options"):
+  with pytest.raises(ValueError, match="not in backends.options"):
     review._resolve_preference_option(cfg, "nonexistent")
 
 
 def test_resolve_preference_option_no_model() -> None:
-  cfg = _build_cfg(backend_options=[
-      BackendOption(id="no-model", label="No Model", type="cc-claude", model=None),
+  cfg = _build_cfg(options=[
+      backend_option(id="no-model", label="No Model", type="cc-claude", model=""),
   ])
   with pytest.raises(ValueError, match="no default model"):
     review._resolve_preference_option(cfg, "no-model")
 
 
 def test_resolve_preference_option_antigravity_missing_model() -> None:
-  cfg = _build_cfg(backend_options=[AGY_BACKEND_OPTION])
+  cfg = _build_cfg(options=[AGY_BACKEND_OPTION])
   opt = review._resolve_preference_option(cfg, "agy")
   assert opt.id == "agy"
   assert opt.model is None
@@ -129,7 +137,7 @@ async def test_spawn_review_worker_skips_when_reviewer_already_exists(monkeypatc
 @pytest.mark.asyncio
 async def test_spawn_review_worker_replaces_failed_reviewer_via_exclusion(monkeypatch: pytest.MonkeyPatch) -> None:
   """On the retry path the failed reviewer itself must not block its replacement."""
-  cfg = _build_cfg(model_preference=["kimi-k2.5"])
+  cfg = _build_cfg(preference=["kimi-k2.5"])
   original = _make_original_thread()
   failed_reviewer = ThreadMetadata(
       id="failed-review", session_id="session-id", description="Review", review_of=original.id)
@@ -154,8 +162,8 @@ async def test_spawn_review_worker_replaces_failed_reviewer_via_exclusion(monkey
   assert captured["request"].resolved_backend == "kimi-k2.5"
 
 
-# One model_preference selection rule per case. Row shape: (extra backend option,
-# model_preference, worker backend/model, expected reviewer backend/model).
+# One backends.preference selection rule per case. Row shape: (extra backend option,
+# preference, worker backend/model, expected reviewer backend/model).
 _PREFERENCE_CASES = [
     pytest.param(None, [], ("codex-o3", "o3"), ("codex-o3", "o3"), id="empty-preference-uses-worker-backend"),
     pytest.param(
@@ -180,19 +188,19 @@ _PREFERENCE_CASES = [
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("extra_option", "model_preference", "worker", "expected"), _PREFERENCE_CASES)
+@pytest.mark.parametrize(("extra_option", "preference", "worker", "expected"), _PREFERENCE_CASES)
 async def test_spawn_review_worker_resolves_preference(
     monkeypatch: pytest.MonkeyPatch,
     extra_option: BackendOption | None,
-    model_preference: list[str],
+    preference: list[str],
     worker: tuple[str, str | None],
     expected: tuple[str, str | None],
 ) -> None:
-  """spawn_review_worker resolves the reviewer backend/model from model_preference."""
-  overrides: dict[str, Any] = {"model_preference": model_preference}
-  if extra_option is not None:
-    overrides["backend_options"] = [*BACKEND_OPTIONS, extra_option]
-  cfg = _build_cfg(**overrides)
+  """spawn_review_worker resolves the reviewer backend/model from backends.preference."""
+  cfg = _build_cfg(
+      options=[*BACKEND_OPTIONS, extra_option] if extra_option is not None else None,
+      preference=preference,
+  )
   captured: dict[str, Any] = {}
 
   patch_review_spawn_path(monkeypatch, captured)
@@ -237,7 +245,7 @@ async def test_spawn_review_worker_returns_false_when_session_missing(monkeypatc
 @pytest.mark.asyncio
 async def test_retry_skips_tried_backend(monkeypatch: pytest.MonkeyPatch) -> None:
   """On retry, tried_backends are skipped; next untried preference is selected."""
-  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
+  cfg = _build_cfg(preference=["kimi-k2.5", OPUS_BACKEND_ID])
   captured: dict[str, Any] = {}
 
   patch_review_spawn_path(monkeypatch, captured)
@@ -259,7 +267,7 @@ async def test_retry_skips_tried_backend(monkeypatch: pytest.MonkeyPatch) -> Non
 @pytest.mark.asyncio
 async def test_retry_all_prefs_exhausted_falls_back_to_worker(monkeypatch: pytest.MonkeyPatch) -> None:
   """When all preferences are tried, falls back to worker's original backend."""
-  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
+  cfg = _build_cfg(preference=["kimi-k2.5", OPUS_BACKEND_ID])
   captured: dict[str, Any] = {}
 
   patch_review_spawn_path(monkeypatch, captured)
@@ -281,7 +289,7 @@ async def test_retry_all_prefs_exhausted_falls_back_to_worker(monkeypatch: pytes
 @pytest.mark.asyncio
 async def test_retry_all_backends_exhausted_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
   """When all backends including worker are tried, returns False."""
-  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
+  cfg = _build_cfg(preference=["kimi-k2.5", OPUS_BACKEND_ID])
 
   monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
 
@@ -300,7 +308,7 @@ async def test_retry_all_backends_exhausted_returns_false(monkeypatch: pytest.Mo
 @pytest.mark.asyncio
 async def test_tried_backends_propagated_to_review_thread(monkeypatch: pytest.MonkeyPatch) -> None:
   """Review thread metadata gets tried_backends set."""
-  cfg = _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID])
+  cfg = _build_cfg(preference=["kimi-k2.5", OPUS_BACKEND_ID])
   thread_mgr = ReviewSpawnThreadManager()
 
   monkeypatch.setattr(review, "git_current_branch", fake_git_current_branch)
@@ -439,7 +447,7 @@ async def _run_notify_rig(
       "(full summary)",
       NotifyFakeThreadManager(thread_map),
       NotifyFakeSessionManager(),
-      _build_cfg(model_preference=["kimi-k2.5", OPUS_BACKEND_ID]),
+      _build_cfg(preference=["kimi-k2.5", OPUS_BACKEND_ID]),
   )
   return spawn_calls, trigger_calls
 

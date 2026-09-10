@@ -39,10 +39,8 @@ from src.core.sessions import SessionManager
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[
-          OPUS_BACKEND_OPTION,
-      ],
+      paths={"worktree_dir": str(tmp_path / "worktrees")},
+      backends={"options": [OPUS_BACKEND_OPTION]},
   )
 
 

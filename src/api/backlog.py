@@ -24,11 +24,8 @@ def _repo_path(repo: str | None) -> Path | None:
     return Path(repo).expanduser()
   from src.core.config import get_config
   cfg = get_config()
-  # The migrate_and_expand validator folds the legacy backlog_repo key into
-  # backlog_repos, so a validated config never has the singular set without the
-  # list; the list check above therefore covers every configured case.
-  if cfg.backlog_repos:
-    return Path(cfg.backlog_repos[0].path)
+  if cfg.ui.backlog_repos:
+    return Path(cfg.ui.backlog_repos[0].path)
   return None
 
 
@@ -85,7 +82,7 @@ async def get_repos() -> JSONResponse:
   """Return configured backlog repos [{label, path}]."""
   from src.core.config import get_config
   cfg = get_config()
-  return JSONResponse(content=[{"label": r.label, "path": r.path} for r in cfg.backlog_repos])
+  return JSONResponse(content=[{"label": r.label, "path": r.path} for r in cfg.ui.backlog_repos])
 
 
 @router.get('')
@@ -174,7 +171,7 @@ async def patch_backlog(
   if repo_path is None:
     # A write with no configured repo has nowhere to persist; that is an
     # operator error, not the reads' empty state, so it stays loud.
-    raise ValueError('backlog_repos not configured in config.yaml')
+    raise ValueError('ui.backlog_repos not configured in config.yaml')
   yaml_path, items = await asyncio.to_thread(_find_item_file, repo_path, item_id, source)
   if yaml_path is None:
     return JSONResponse(content={'error': f'Item {item_id} not found'}, status_code=404)

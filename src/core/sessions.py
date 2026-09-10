@@ -811,7 +811,7 @@ class SessionManager:
         name=name,
         scheduled_task=req.scheduled_task,
         role=req.role,
-        backend=backend or self._cfg.backend_options[0].id,
+        backend=backend or self._cfg.backends.options[0].id,
         slack_origin=req.slack_origin,
         **overrides)
 

@@ -780,8 +780,8 @@ async def run_improve_loop(
   # hard-fails on ambiguity (stale/mismatched local base), so iterations always
   # start from a fresh, unambiguous base. Persist the canonical bare branch name
   # so merge-back pushes and reviewer instructions never see an origin/ form.
-  wt_path = Path(cfg.worktree_dir) / work_branch.replace('/', '-')
-  Path(cfg.worktree_dir).mkdir(parents=True, exist_ok=True)
+  wt_path = Path(cfg.paths.worktree_dir) / work_branch.replace('/', '-')
+  Path(cfg.paths.worktree_dir).mkdir(parents=True, exist_ok=True)
   try:
     resolution = await git_create_worktree(
         resolved_repo, base_branch or await git_current_branch(resolved_repo), work_branch, wt_path)
@@ -931,7 +931,7 @@ async def run_improve_loop(
           str(wt_path),
           work_branch,
           session_id,
-          Path(cfg.worktree_dir),
+          Path(cfg.paths.worktree_dir),
           log_fields={"session": session_id},
           label="Improve-loop worktree",
           fail_event="improve_loop_cleanup_failed",

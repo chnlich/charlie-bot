@@ -705,7 +705,7 @@ def _probe_cfg(tmp_path: Path) -> tuple[SimpleNamespace, dict[str, SimpleNamespa
   options = {name: SimpleNamespace(id=name) for name in ("alpha", "beta")}
   cfg = SimpleNamespace(
       headless_chrome_bin=write_stub_chrome(tmp_path, 800),
-      model_preference=["alpha", "beta"],
+      backends=SimpleNamespace(preference=["alpha", "beta"]),
       get_backend_option=options.get,
   )
   return cfg, options
@@ -894,6 +894,6 @@ def test_run_probe_all_backends_failing(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
 
 def test_run_probe_raises_without_resolvable_backends(tmp_path: Path) -> None:
-  cfg = SimpleNamespace(model_preference=[], get_backend_option=lambda entry_id: None)
+  cfg = SimpleNamespace(backends=SimpleNamespace(preference=[]), get_backend_option=lambda entry_id: None)
   with pytest.raises(ValueError, match="no light backends resolvable"):
     run_probe(cfg, _write(tmp_path, "<html>x</html>"), "t")

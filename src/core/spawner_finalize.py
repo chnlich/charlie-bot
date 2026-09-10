@@ -196,7 +196,7 @@ async def _run_finalize_effects(
   judgment-idempotent (src/core/finalize_effects), so repetition converges to a no-op.
   """
   skip_cleanup = _should_skip_worktree_cleanup(ctx.thread, ctx.outcome.exit_code)
-  cleanup_error = await _cleanup_worker_directory(ctx.thread, skip_cleanup, Path(ctx.cfg.worktree_dir))
+  cleanup_error = await _cleanup_worker_directory(ctx.thread, skip_cleanup, Path(ctx.cfg.paths.worktree_dir))
   if cleanup_error:
     await ctx.session_mgr.deliver_to_successor(ctx.session_id, {"type": ET.ERROR, "content": cleanup_error})
 

@@ -9,6 +9,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from conftest import fake_backends
+
 from src.api import threads as threads_api
 from src.api.deps import (
     get_config,
@@ -31,7 +33,7 @@ LONG_DESCRIPTION = "spec " * 300  # 1500 chars, over the list cap
 
 
 def _seeded_client(tmp_path: Path):
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   sessions = SessionManager(cfg)
 
   async def seed() -> tuple[str, str]:
@@ -143,7 +145,7 @@ def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
   client.get(url)
   assert walks["n"] == 2
 
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   rows = {row["id"]: row for row in response_rows(client.get(url))}
   any_id = next(iter(rows))
   asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
@@ -173,7 +175,7 @@ def test_list_body_memo_invalidates_on_metadata_rewrite(tmp_path: Path) -> None:
 
   rows = {row["id"]: row for row in first.json()}
   any_id = next(iter(rows))
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
 
   third = client.get(url)
@@ -197,7 +199,7 @@ def test_list_poll_repeating_the_rendered_etag_gets_a_bodyless_204(tmp_path: Pat
   # A signature move publishes a new body and tag; the stale tag re-serves 200.
   rows = {row["id"]: row for row in first.json()}
   any_id = next(iter(rows))
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
   stale = client.get(url, params={"etag": etag})
   assert stale.status_code == 200
@@ -219,7 +221,7 @@ def test_marked_rebuild_reuses_rows_and_parses_from_one_walk(tmp_path: Path) -> 
   rows_first = {row["id"]: row for row in first.json()}
   any_id = next(iter(rows_first))
 
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   thread_mgr = ThreadManager(cfg)
   asyncio.run(thread_mgr.update_status(session_id, any_id, ThreadStatus.RUNNING))
 
@@ -257,7 +259,7 @@ def test_marked_rebuild_reuses_rows_and_parses_from_one_walk(tmp_path: Path) -> 
 
 def test_rebuild_tolerates_file_vanished_between_walk_and_read(tmp_path: Path) -> None:
   """A pair the walk statted but whose file vanished before its read parses as no row, not a crash."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   sessions = SessionManager(cfg)
 
   async def seed() -> str:
@@ -283,7 +285,7 @@ def test_rebuild_tolerates_file_vanished_between_walk_and_read(tmp_path: Path) -
 
 def test_list_threads_from_stats_matches_list_threads(tmp_path: Path) -> None:
   """The shared parse-merge serves the same metas from pre-walked pairs as from its own scan."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   sessions = SessionManager(cfg)
 
   async def seed() -> str:

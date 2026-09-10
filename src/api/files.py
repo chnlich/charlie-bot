@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from src.api.auth import request_has_access_key
 from src.api.pages import _static_asset_version
 from src.core import plan_diff
-from src.core.config import get_config
+from src.core.config import get_config, get_credentials
 from src.core.memo import BoundedMemo
 
 router = APIRouter()
@@ -360,13 +360,13 @@ async def serve_file(path: str, request: Request) -> Response:
     if session_id is None:
       raise HTTPException(status_code=400, detail=f"diff target is not a session artifact page: {fs_path}")
     base_path = _resolve_diff_base(session_id, diff_param)
-    inject_ui = request_has_access_key(request, get_config().charliebot_access_key)
+    inject_ui = request_has_access_key(request, str(get_credentials().get("charliebot", "access_key") or ""))
     # A cold annotate parses both pages whole (~0.25 s on a 1 MB pair), so the
     # build runs off the event loop; a memo hit answers with zero file bytes.
     html_text = await asyncio.to_thread(_annotated_diff_page, base_path, fs_path, inject_ui, session_id)
     return HTMLResponse(html_text, media_type="text/html")
 
-  if session_id is not None and request_has_access_key(request, get_config().charliebot_access_key):
+  if session_id is not None and request_has_access_key(request, str(get_credentials().get("charliebot", "access_key") or "")):
     # One executor hop: signature, memo hit, and on a miss the read+inject+store.
     body = await asyncio.to_thread(_injected_artifact_page, fs_path, session_id)
     return HTMLResponse(body, media_type="text/html")

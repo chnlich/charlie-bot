@@ -151,8 +151,9 @@
     <li><b>Codex cumulative totals are not additive:</b> subagent threads inherit the parent&rsquo;s
       <code>total_token_usage</code>, so summing across files double counts; the per-request
       <code>last_token_usage</code> is summed instead, and the cumulative value only cross-checks root sessions.</li>
-    <li><b>Not covered:</b> Gemini (<code>gemini_api_key</code> direct) has no local token log; any call made on another
-      machine, or outside the config dirs / codex homes registered in <code>config.yaml</code>, is not in this table.</li>
+    <li><b>Not covered:</b> Gemini (<code>gemini.api_key</code> direct) has no local token log; any call made on another
+      machine, or outside the Claude login directories listed under <code>accounts.claude</code> in <code>config.yaml</code>,
+      or the default <code>~/.codex</code> home, is not in this table.</li>
     <li><b>Retention:</b> the left edge {{ window[0] }} is the date of the oldest local log file, not an account start date;
       earlier sessions that have been pruned cannot be counted.</li>
     <li><b>Cost:</b> this reports tokens only and does not convert to money — these calls run on subscriptions, not per-token.</li>

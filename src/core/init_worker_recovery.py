@@ -656,8 +656,8 @@ async def _quarantine_stale_failed_worktrees(cfg: CharlieBotConfig, threads: lis
   failed thread's metadata mtime equals its ``completed_at``, so every quarantine
   candidate (completed_at 7–30 days ago) is in the list the recovery scan produced.
   """
-  worktree_parent = Path(cfg.worktree_dir)
-  trash_path = trash_dir(cfg.worktree_dir)
+  worktree_parent = Path(cfg.paths.worktree_dir)
+  trash_path = trash_dir(cfg.paths.worktree_dir)
 
   active_worktrees = {
       meta.get("worktree_path")

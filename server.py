@@ -39,7 +39,7 @@ from src.api.auth import AuthMiddleware, _credential_matches
 from src.api.deps import session_manager, set_trigger_manager, thread_manager
 from src.core import timeouts
 from src.core.buildinfo import init_build_info
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig, get_config, get_credentials, require_backends
 from src.core.http import close_http_client
 from src.core.init import (
     init_charliebot_home,
@@ -172,7 +172,7 @@ async def _check_ws_auth(websocket: WebSocket) -> bool:
   Returns True if the connection is authorized, False otherwise
   (and closes the socket with code 4401).
   """
-  access_key = get_config().charliebot_access_key
+  access_key = str(get_credentials().get("charliebot", "access_key") or "")
   if not access_key:
     return True
   token = websocket.query_params.get("token", "")
@@ -278,7 +278,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   await ext_usage.start_poller()
 
   slack_listener_task = None
-  if cfg.slack_bot_token and cfg.slack_app_token and cfg.slack_allowed_user_ids:
+  creds = get_credentials()
+  if creds.get("slack", "bot_token") and creds.get("slack", "app_token") and cfg.slack.allowed_user_ids:
     from src.core.slack_listener import (
         run_listener,  # lazy: avoids import cycle at module scope
     )
@@ -621,10 +622,11 @@ if __name__ == "__main__":
   import uvicorn
 
   cfg = get_config()
+  require_backends(cfg)
   uvicorn.run(
       "server:app",
-      host=cfg.server_host,
-      port=cfg.server_port,
+      host=cfg.server.host,
+      port=cfg.server.port,
       reload=False,
       # uvicorn 0.42 applies this to uvicorn.error, uvicorn.access, and
       # uvicorn.asgi, silencing every uvicorn INFO line (access lines,

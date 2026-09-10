@@ -87,10 +87,10 @@ class OpenCodeBackend(AgentBackend):
   _SERVER_START_TIMEOUT = 30.0
   _SERVER_STOP_TIMEOUT = 5.0
 
-  def __init__(self, *, opencode_proxy_url: str | None = None, **kwargs) -> None:
+  def __init__(self, *, proxy_url: str | None = None, **kwargs) -> None:
     super().__init__(**kwargs)
     self._opencode_bin = resolve_binary("opencode", str(Path.home() / ".opencode" / "bin"))
-    self._opencode_proxy_url = opencode_proxy_url
+    self._proxy_url = proxy_url
     # Injectable seam so lock-retry tests never sleep real seconds.
     self._sleep = asyncio.sleep
     self._reset_run_state()
@@ -128,9 +128,9 @@ class OpenCodeBackend(AgentBackend):
     prepend_path_dir(oc_env, str(Path.home() / ".opencode" / "bin"))
     oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps(
         self._headless_config() if opencode_config is None else opencode_config)
-    if self._opencode_proxy_url is not None:
-      oc_env["HTTP_PROXY"] = self._opencode_proxy_url
-      oc_env["HTTPS_PROXY"] = self._opencode_proxy_url
+    if self._proxy_url is not None:
+      oc_env["HTTP_PROXY"] = self._proxy_url
+      oc_env["HTTPS_PROXY"] = self._proxy_url
       oc_env["NO_PROXY"] = self._merge_local_no_proxy(oc_env.get("NO_PROXY", ""))
     return oc_env
 

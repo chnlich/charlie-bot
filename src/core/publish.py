@@ -37,29 +37,30 @@ class PublishResult(str):
 
 
 def publish_artifact(artifact: str | Path, cfg: CharlieBotConfig) -> PublishResult:
-  """Copy *artifact* into ``cfg.publish_dir`` and return the published file and URL.
+  """Copy *artifact* into ``cfg.publish.dir`` and return the published file and URL.
 
-  Preflight, in order: both ``publish_dir`` and ``public_base_url`` configured (the
-  error names the missing key), the publish directory present — the host's
-  deployment step creates it (a missing one means the 443 lane serves nothing, so
-  the copy refuses instead of producing links that dead-end) — and the artifact an
-  existing regular file (the error names the path). The copy lands at
-  ``<publish_dir>/<basename>``, mode 0644, overwriting an existing file of that
-  name; ``overwrote`` reports a replacement whose content differed, so the caller
-  can surface the collision. The URL is ``public_base_url`` joined to the basename
-  by a single ``/``, however many trailing slashes the base carries.
+  Preflight, in order: both ``publish.dir`` and ``publish.public_base_url``
+  configured (the error names the missing key), the publish directory present —
+  the host's deployment step creates it (a missing one means the 443 lane serves
+  nothing, so the copy refuses instead of producing links that dead-end) — and
+  the artifact an existing regular file (the error names the path). The copy
+  lands at ``<publish.dir>/<basename>``, mode 0644, overwriting an existing file
+  of that name; ``overwrote`` reports a replacement whose content differed, so
+  the caller can surface the collision. The URL is ``publish.public_base_url``
+  joined to the basename by a single ``/``, however many trailing slashes the
+  base carries.
   """
-  if cfg.publish_dir is None:
-    raise PublishError("publish_dir is not configured; the publish lane is unavailable")
-  if not cfg.public_base_url:
-    raise PublishError("public_base_url is not configured; the publish lane is unavailable")
-  if not cfg.publish_dir.is_dir():
-    raise PublishError(f"publish directory does not exist: {cfg.publish_dir}")
+  if cfg.publish.dir is None:
+    raise PublishError("publish.dir is not configured; the publish lane is unavailable")
+  if not cfg.publish.public_base_url:
+    raise PublishError("publish.public_base_url is not configured; the publish lane is unavailable")
+  if not cfg.publish.dir.is_dir():
+    raise PublishError(f"publish directory does not exist: {cfg.publish.dir}")
   src = Path(artifact)
   if not src.is_file():
     raise PublishError(f"artifact is not an existing regular file: {src}")
-  dest = cfg.publish_dir / src.name
+  dest = cfg.publish.dir / src.name
   overwrote = dest.is_file() and not filecmp.cmp(src, dest, shallow=False)
   shutil.copyfile(src, dest)
   dest.chmod(0o644)
-  return PublishResult(f"{cfg.public_base_url.rstrip('/')}/{src.name}", dest, overwrote)
+  return PublishResult(f"{cfg.publish.public_base_url.rstrip('/')}/{src.name}", dest, overwrote)

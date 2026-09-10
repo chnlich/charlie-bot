@@ -9,6 +9,7 @@ from conftest import (
     CODEX_RESOLVE_BINARY_PATCH_TARGET,
     FLAG_LIKE_PROMPT,
     assistant_text_event,
+    backend_option,
     build_cli_backend,
     fake_one_shot_proc,
 )
@@ -18,7 +19,6 @@ from src.agents.backends.codex import CodexBackend
 from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption
 
 
 def _build_backend(monkeypatch, **kwargs) -> CodexBackend:
@@ -383,12 +383,12 @@ def test_build_command_resume_emits_auto_compact_once_when_configured(monkeypatc
 
 
 def test_backend_option_defaults_auto_compact_limit_to_none() -> None:
-  option = BackendOption(id="codex-o3", label="Codex", type="codex", model="o3")
+  option = backend_option(id="codex-o3", label="Codex", type="codex", model="o3")
   assert option.model_auto_compact_token_limit is None
 
 
 def test_backend_option_accepts_positive_auto_compact_limit() -> None:
-  option = BackendOption(
+  option = backend_option(
       id="codex-o3",
       label="Codex",
       type="codex",
@@ -401,7 +401,7 @@ def test_backend_option_accepts_positive_auto_compact_limit() -> None:
 @pytest.mark.parametrize("bad", [0, -1, -1000])
 def test_backend_option_rejects_nonpositive_auto_compact_limit(bad: int) -> None:
   with pytest.raises(ValidationError):
-    BackendOption(
+    backend_option(
         id="codex-o3",
         label="Codex",
         type="codex",
@@ -415,7 +415,7 @@ def test_registry_propagates_auto_compact_limit_into_codex_backend(monkeypatch) 
       CODEX_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/codex",
   )
-  option = BackendOption(
+  option = backend_option(
       id="codex-o3",
       label="Codex",
       type="codex",

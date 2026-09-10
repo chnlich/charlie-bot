@@ -19,7 +19,7 @@ Source code: `~/workspace/charlie-bot/src/core/`
 
 1. Worker runs in isolated git worktree (`~/worktrees/`)
 2. Branch naming: `charliebot/task-{timestamp}-{id}`
-3. On worker success → reviewer auto-spawned (may use different backend via `model_preference`)
+3. On worker success → reviewer auto-spawned (may use different backend via `backends.preference`)
 4. Reviewer: checks diff, fixes issues, rebases, merges `--ff-only`
 5. On merge → master agent gets summary
 
@@ -128,13 +128,12 @@ The Claude backend defaults to a 400k window. The working knob is `CLAUDE_CODE_A
 
 One Claude login carries a five-hour and a weekly window, so a long master turn or a delegated worker that crosses the line stops mid-work. The account pool keeps that work running on another login of the same subscription tier (`src/core/claude_accounts.py` owns account state and selection; `src/core/claude_relay.py` owns the relay mechanics both the master turn and workers use).
 
-- **Config**: `claude_accounts:` lists `label` + `config_dir` pairs, each directory one `CLAUDE_CONFIG_DIR` login. A `cc-claude` entry without `claude_config_dir` is pooled; one entry per model, with `aliases` keeping retired per-account ids resolvable. An entry with `claude_config_dir` stays pinned to that login. Without a `claude_accounts` key nothing changes.
+- **Config**: `accounts.claude:` in `~/.charliebot/config.yaml` lists `label` + `config_dir` pairs, each directory one `CLAUDE_CONFIG_DIR` login. Every `cc-claude` entry draws from the pool — there is no per-entry login directory. One entry per model, with `aliases` keeping retired per-account ids resolvable.
 - **Selection**: the healthy account with the most headroom, headroom being one minus the higher of the five-hour and seven-day utilization read from `rate_limit_event` and the usage-panel poll; a rejection holds headroom at zero until its `resetsAt`. A master turn keeps its account while the prompt cache is warm (last request under 60 minutes ago) and the reading sits under 90 percent; a worker picks at launch.
-- **Relay** (master loop in `src/agents/master_cc_run.py`, worker loop in `src/agents/worker.py`): a rejected `rate_limit_event` relays after the process exits; `allowed_warning` at 90 percent or above with the reset more than 45 minutes away terminates the process at the next `tool_result` and relays; an exit naming "Failed to authenticate" marks the account unhealthy for 15 minutes, emits `claude_account_login_required`, and relays. The transcript (`<config_dir>/projects/<slug>/<uuid>.jsonl` plus its sidecar directory) is copied to the new directory and Claude Code resumes the same id with a fixed continuation prompt. Three relays per turn at most; an exhausted pool ends the turn with the earliest reset time (a worker reports it as quota exhaustion, so a VERIFY still retries down `model_preference`).
+- **Relay** (master loop in `src/agents/master_cc_run.py`, worker loop in `src/agents/worker.py`): a rejected `rate_limit_event` relays after the process exits; `allowed_warning` at 90 percent or above with the reset more than 45 minutes away terminates the process at the next `tool_result` and relays; an exit naming "Failed to authenticate" marks the account unhealthy for 15 minutes, emits `claude_account_login_required`, and relays. The transcript (`<config_dir>/projects/<slug>/<uuid>.jsonl` plus its sidecar directory) is copied to the new directory and Claude Code resumes the same id with a fixed continuation prompt. Three relays per turn at most; an exhausted pool ends the turn with the earliest reset time (a worker reports it as quota exhaustion, so a VERIFY still retries down `backends.preference`).
 - **Sonnet compaction** (`src/core/claude_compaction.py`) runs only when the cache is already cold: before a relay (Fable, 100K tokens or more) and at turn start after more than 60 minutes idle (Fable, 50K or more), never at turn end. It runs `claude -p --resume <uuid> --model claude-sonnet-5` with `/compact`; success means a new `compact_boundary` row in the transcript and a Sonnet-only `modelUsage`. Chat shows "Context compacted (manual, by Sonnet)".
 - **Login loss**: the usage panel row shows `re-login needed: <config_dir>` while the account is unhealthy or its credential file is empty; chat gets one account-free notice. Re-login on the host with `CLAUDE_CONFIG_DIR=<config_dir> claude login`.
 - **Where the account shows**: session metadata `claude_account` only (not in backend options, chat, or the panel badge); server log events `master_cc_account_chosen`, `master_cc_account_relay`, `worker_account_relay`, `claude_account_login_required`; `master_done.account_relays` counts a turn's relays.
-- **Migration**: the code lands backward compatible; restart the server (user-controlled), then edit `~/.charliebot/config.yaml` (hot reload): add `claude_accounts`, collapse the per-account `cc-claude` entries to one per model carrying `aliases`.
 
 ---
 
@@ -178,7 +177,7 @@ to a `~/.charliebot` repo if one exists. Cross-host shared skills go in
 
 - The repo-to-host invariant (host files reference repo content; the bodies live in the repo) cuts by evolution: evolving bodies stay in the repo via pointers, while non-evolving entry skeletons (name/cron/timezone/prompt_file) may be seeded once into host files.
 - Seeding belongs to an explicitly invoked setup command; keep it out of the server-start path, where writers reorder user files and race concurrent writes.
-- `effective_scheduled_task_backend` (src/core/scheduler.py) resolves an omitted cron `backend` to `cfg.backend_options[0].id` (positional), so repo-shipped default tasks leave `backend` unset — the value is a host-local name.
+- `effective_scheduled_task_backend` (src/core/scheduler.py) resolves an omitted cron `backend` to `cfg.backends.options[0].id` (positional), so repo-shipped default tasks leave `backend` unset — the value is a host-local name.
 - Repo content reaching a host already depends on rerunning setup (`sync-skills.sh` symlinks skills), so "new default cron tasks need setup rerun" matches existing product rules.
 
 ---

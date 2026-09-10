@@ -7,6 +7,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     CHAT_CANCEL_MASTER_PATCH_TARGET,
+    backend_option,
     make_work_item,
     mock_session_callbacks,
     patch_instructions_content,
@@ -49,9 +50,11 @@ async def _run_cc_with_backend(
 ) -> tuple[models.SessionCallbacks, tuple[str | None, int, str | None, dict]]:
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          models.BackendOption(id="fake", label="Fake", type="codex", prompt_overlay="none"),
-      ],
+      backends={
+          "options": [
+              backend_option(id="fake", label="Fake", type="codex", model="o3", prompt_overlay="none"),
+          ],
+      },
   )
   callbacks = mock_session_callbacks()
 
@@ -61,7 +64,7 @@ async def _run_cc_with_backend(
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
   patch_instructions_content(monkeypatch)
 
-  item = make_work_item(cfg, session_meta, cfg.backend_options[0], user_content=user_content, callbacks=callbacks)
+  item = make_work_item(cfg, session_meta, cfg.backends.options[0], user_content=user_content, callbacks=callbacks)
   result = await master_cc._run_cc(item)
   return callbacks, result
 

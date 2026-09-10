@@ -11,6 +11,7 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     TRIGGERS_GET_CONFIG_PATCH_TARGET,
     FakeBackend,
+    backend_option,
     make_home_config,
     make_work_item,
     patch_instructions_content,
@@ -34,32 +35,36 @@ def _write_transcript(config_dir: Path, cc_session_id: str) -> None:
   (project / f"{cc_session_id}.jsonl").write_text("{}\n", encoding="utf-8")
 
 
-def test_load_config_reads_opencode_proxy_url_per_backend(tmp_path: Path, monkeypatch) -> None:
+def test_load_config_reads_proxy_url_per_backend(tmp_path: Path, monkeypatch) -> None:
   home = tmp_path / "charliebot"
   home.mkdir()
   (home / "config.yaml").write_text(
       """
-backend_options:
-  - id: opencode-proxied
-    label: Proxied OpenCode
-    type: opencode
-    model: provider/model
-    opencode_proxy_url: http://proxy.test:8080
-  - id: opencode-plain
-    label: Plain OpenCode
-    type: opencode
-    model: provider/model
-  - id: claude
-    label: Claude
-    type: cc-claude
-    model: model
+backends:
+  options:
+    - id: opencode-proxied
+      label: Proxied OpenCode
+      type: opencode
+      model: provider/model
+      proxy_url: http://proxy.test:8080
+    - id: opencode-plain
+      label: Plain OpenCode
+      type: opencode
+      model: provider/model
+    - id: claude
+      label: Claude
+      type: cc-claude
+      model: model
 """,
       encoding="utf-8")
   monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(home))
 
   cfg = core_config.load_config()
 
-  assert [option.opencode_proxy_url for option in cfg.backend_options] == ["http://proxy.test:8080", None, None]
+  proxied, plain, claude = cfg.backends.options
+  assert proxied.proxy_url == "http://proxy.test:8080"
+  assert plain.proxy_url is None
+  assert claude.id == "claude"
 
 
 def test_registry_scopes_opencode_proxy_to_opencode_constructor(monkeypatch) -> None:
@@ -70,41 +75,26 @@ def test_registry_scopes_opencode_proxy_to_opencode_constructor(monkeypatch) -> 
     def __init__(self, **kwargs) -> None:
       captured["opencode"] = kwargs
 
-  class _FakeClaudeBackend:
-
-    def __init__(self, **kwargs) -> None:
-      captured["claude"] = kwargs
-
   monkeypatch.setattr(registry, "OpenCodeBackend", _FakeOpenCodeBackend)
-  monkeypatch.setattr(registry, "ClaudeCodeBackend", _FakeClaudeBackend)
   cfg = core_config.CharlieBotConfig(charliebot_home=Path("/tmp/charliebot-test"))
-  proxied = models.BackendOption(
+  proxied = backend_option(
       id="opencode-proxied",
       label="Proxied OpenCode",
       type="opencode",
       model="provider/model",
-      opencode_proxy_url="http://proxy.test:8080",
+      proxy_url="http://proxy.test:8080",
   )
-  plain = models.BackendOption(
+  plain = backend_option(
       id="opencode-plain",
       label="Plain OpenCode",
       type="opencode",
       model="provider/model",
   )
-  non_opencode = models.BackendOption(
-      id="claude",
-      label="Claude",
-      type="cc-claude",
-      model="model",
-      opencode_proxy_url="http://proxy.test:8080",
-  )
 
   registry.build_backend(proxied, cfg)
-  assert captured["opencode"]["opencode_proxy_url"] == "http://proxy.test:8080"
+  assert captured["opencode"]["proxy_url"] == "http://proxy.test:8080"
   registry.build_backend(plain, cfg)
-  assert captured["opencode"]["opencode_proxy_url"] is None
-  registry.build_backend(non_opencode, cfg)
-  assert "opencode_proxy_url" not in captured["claude"]
+  assert captured["opencode"]["proxy_url"] is None
 
 
 # --------------------------------------------------------------- config reload
@@ -115,8 +105,10 @@ def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypa
   home = tmp_path / "home"
   (home / ".charliebot").mkdir(parents=True)
   cfg_path = home / ".charliebot" / "config.yaml"
-  cfg_path.write_text("server_port: 1111\n", encoding="utf-8")
+  cfg_path.write_text("server:\n  port: 1111\n", encoding="utf-8")
   monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+  # The test asserts default-home resolution under the patched Path.home, so the suite-wide profile variable is cleared.
+  monkeypatch.delenv(core_config.CHARLIEBOT_HOME_ENV, raising=False)
   monkeypatch.setattr(core_config, "_config", None)
   monkeypatch.setattr(core_config, "_config_mtime", 0.0)
   monkeypatch.setattr(core_config, "_config_failed_mtime", None)
@@ -124,37 +116,39 @@ def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypa
 
   first = core_config.get_config()
   holder = first  # a long-lived singleton captures the object here
-  assert first.server_port == 1111
+  assert first.server.port == 1111
 
-  cfg_path.write_text("server_port: 2222\n", encoding="utf-8")
+  cfg_path.write_text("server:\n  port: 2222\n", encoding="utf-8")
   import os
   os.utime(cfg_path, (0, 0))  # force a different mtime
 
   second = core_config.get_config()
   assert second is first
-  assert holder.server_port == 2222
+  assert holder.server.port == 2222
 
 
 def test_get_config_keeps_previous_value_when_reload_fails(tmp_path: Path, monkeypatch) -> None:
   home = tmp_path / "home"
   (home / ".charliebot").mkdir(parents=True)
   cfg_path = home / ".charliebot" / "config.yaml"
-  cfg_path.write_text("server_port: 1111\n", encoding="utf-8")
+  cfg_path.write_text("server:\n  port: 1111\n", encoding="utf-8")
   monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+  # The test asserts default-home resolution under the patched Path.home, so the suite-wide profile variable is cleared.
+  monkeypatch.delenv(core_config.CHARLIEBOT_HOME_ENV, raising=False)
   monkeypatch.setattr(core_config, "_config", None)
   monkeypatch.setattr(core_config, "_config_mtime", 0.0)
   monkeypatch.setattr(core_config, "_config_failed_mtime", None)
   monkeypatch.setattr(core_config, "_home_cache", {})
 
   first = core_config.get_config()
-  cfg_path.write_text("server_port: 2222\n", encoding="utf-8")
+  cfg_path.write_text("server:\n  port: 2222\n", encoding="utf-8")
   import os
   os.utime(cfg_path, (0, 0))
   monkeypatch.setattr(core_config, "load_config", lambda: (_ for _ in ()).throw(ValueError("bad yaml")))
 
   second = core_config.get_config()
   assert second is first
-  assert second.server_port == 1111
+  assert second.server.port == 1111
 
 
 # ------------------------------------------------------------- trigger wake-up
@@ -177,7 +171,7 @@ async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_pa
 
   current = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
-      backend_options=[models.BackendOption(id="added-later", label="New", type="cc-claude", model="m")],
+      backends={"options": [backend_option(id="added-later", label="New", type="cc-claude", model="m")]},
   )
   with (
       patch_trigger_mocks() as mock_master,
@@ -198,7 +192,7 @@ async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_pa
 # substitute a different backend.
 _REFUSAL_ROWS = [
     pytest.param("deleted-id", ("deleted-id", "refusing to substitute"), id="unknown-pin"),
-    pytest.param("", ("no backend option", "backend_options[0]"), id="no-pin"),
+    pytest.param("", ("no backend option", "backends.options[0]"), id="no-pin"),
 ]
 
 
@@ -215,7 +209,7 @@ async def test_run_cc_refuses_to_substitute_an_unresolvable_session_backend(
   error naming the cause."""
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5")],
+      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]},
   )
   session_meta = models.SessionMetadata(id="session-id", name="S", backend=session_backend)
   spawned: list[object] = []
@@ -236,7 +230,7 @@ async def test_run_cc_refuses_to_substitute_an_unresolvable_session_backend(
 
 def test_spawner_refuses_to_substitute_an_unknown_pinned_backend() -> None:
   cfg = core_config.CharlieBotConfig(
-      backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5")])
+      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]})
   session_meta = models.SessionMetadata(id="s", name="S", backend="deleted-id")
   with pytest.raises(ValueError, match="refusing to substitute"):
     _resolve_session_default_backend_model(cfg, session_meta)
@@ -244,24 +238,12 @@ def test_spawner_refuses_to_substitute_an_unknown_pinned_backend() -> None:
 
 def test_spawner_defaults_when_session_pins_no_backend() -> None:
   cfg = core_config.CharlieBotConfig(
-      backend_options=[models.BackendOption(id="cc", label="CC", type="cc-claude", model="claude-fable-5")])
+      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]})
   session_meta = models.SessionMetadata(id="s", name="S", backend="")
   assert _resolve_session_default_backend_model(cfg, session_meta) == ("cc", "claude-fable-5")
 
 
 # ------------------------------------------------------------ resume guarding
-
-
-def test_claude_config_dir_prefers_option_then_env_then_home(monkeypatch) -> None:
-  opt = models.BackendOption(id="a", label="A", type="cc-claude", model="m", claude_config_dir="~/.claude-ext-1")
-  assert core_config.claude_config_dir(opt) == Path.home() / ".claude-ext-1"
-
-  bare = models.BackendOption(id="b", label="B", type="cc-claude", model="m")
-  monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/env-claude")
-  assert core_config.claude_config_dir(bare) == Path("/tmp/env-claude")
-
-  monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-  assert core_config.claude_config_dir(bare) == Path.home() / ".claude"
 
 
 def test_cc_transcript_exists_ignores_subagent_logs(tmp_path: Path) -> None:
@@ -276,12 +258,13 @@ def test_cc_transcript_exists_ignores_subagent_logs(tmp_path: Path) -> None:
   assert master_cc._cc_transcript_exists(cfg_dir, "absent") is False
 
 
-# Rows are the transcript-reachability gate's two outcomes. --resume survives
-# only when the anchor's transcript exists in the configured account dir; a
-# transcript under any other account's dir drops the resume context instead of
+# Rows are the transcript-reachability gate's two outcomes for a non-pooled
+# cc-claude option, whose login dir the gate reads from $CLAUDE_CONFIG_DIR.
+# --resume survives only when the anchor's transcript exists in that dir; a
+# transcript under any other login's dir drops the resume context instead of
 # resuming a foreign session.
 _TRANSCRIPT_ROWS = [
-    pytest.param(False, id="transcript-in-another-account-dir"),
+    pytest.param(False, id="transcript-in-another-login-dir"),
     pytest.param(True, id="transcript-in-configured-dir"),
 ]
 
@@ -294,26 +277,25 @@ async def test_run_cc_resume_gate_by_transcript_location(
     transcript_in_configured_dir: bool,
 ) -> None:
   """The anchor's --resume survives only when its transcript exists in the
-  configured claude_config_dir; otherwise the resume context drops with reason
+  configured login dir; otherwise the resume context drops with reason
   transcript_missing and the run proceeds without it."""
-  target = tmp_path / ".claude-ext-1" if transcript_in_configured_dir else tmp_path / ".claude"
-  _write_transcript(tmp_path / ".claude-ext-1", "conv-1")
-  if not transcript_in_configured_dir:
-    (target / "projects").mkdir(parents=True)
+  configured = tmp_path / ".claude-configured"
+  elsewhere = tmp_path / ".claude-elsewhere"
+  _write_transcript(elsewhere, "conv-1")
+  if transcript_in_configured_dir:
+    _write_transcript(configured, "conv-1")
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(configured))
 
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          models.BackendOption(
-              id="cc", label="CC", type="cc-claude", model="claude-fable-5", claude_config_dir=str(target))
-      ],
+      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]},
   )
   session_meta = models.SessionMetadata(id="session-id", name="S", backend="cc", cc_session_id="conv-1")
   captures: dict[str, object] = {}
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **k: captures.update(kwargs=k) or FakeBackend())
   patch_instructions_content(monkeypatch)
 
-  item = make_work_item(cfg, session_meta, cfg.backend_options[0])
+  item = make_work_item(cfg, session_meta, cfg.backends.options[0])
   _cc, exit_code, error_msg, _extras = await master_cc._run_cc(item)
 
   assert exit_code == 0 and error_msg is None

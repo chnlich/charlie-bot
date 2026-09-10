@@ -54,7 +54,7 @@ from websockets.asyncio.client import ClientConnection
 from src.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
-from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
+from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig, get_credentials
 from src.core.http import get_http_client
 from src.core.master_trigger import trigger_master
 from src.core.models import (
@@ -369,7 +369,7 @@ async def handle_app_mention(
   thread_ts = event.get("thread_ts") or event.get("ts")
   slack_user = event.get("user")
 
-  if event.get("type") != "app_mention" or slack_user not in cfg.slack_allowed_user_ids:
+  if event.get("type") != "app_mention" or slack_user not in cfg.slack.allowed_user_ids:
     logger.debug("slack_mention_dropped", channel=channel_id, thread_ts=thread_ts, slack_user=slack_user)
     return None
 
@@ -453,7 +453,7 @@ async def _fetch_unread_eligible(
     client: SlackClient, origin: SlackOrigin, cfg: CharlieBotConfig, watermark_ts: str | None) -> list[dict]:
   """Read the session's thread once and return its unread eligible messages."""
   messages = await client.get_thread_replies(origin.channel_id, origin.thread_ts)
-  return _unread_eligible(messages, cfg.slack_allowed_user_ids, watermark_ts)
+  return _unread_eligible(messages, cfg.slack.allowed_user_ids, watermark_ts)
 
 
 async def _armed_follow_triggers(trigger_mgr: TriggerManager, session_id: str) -> list[PendingTrigger]:
@@ -581,7 +581,7 @@ async def handle_thread_message(
     return None
   if thread_ts is None:
     return None  # channel-top-level messages are no thread's follow traffic
-  if event.get("bot_id") is not None or slack_user not in cfg.slack_allowed_user_ids:
+  if event.get("bot_id") is not None or slack_user not in cfg.slack.allowed_user_ids:
     return None
   team_id = event.get("team") or event.get("team_id")
   sid = summon_session_id(team_id, channel_id, thread_ts)
@@ -645,7 +645,11 @@ async def _backfill_followed_threads(
 
 def _bot_client(cfg: CharlieBotConfig) -> SlackClient:
   """The client every outbound path (reply, notice, backfill) posts through."""
-  return SlackClient(get_http_client(), bot_token=cfg.slack_bot_token, app_token=cfg.slack_app_token)
+  creds = get_credentials()
+  return SlackClient(
+      get_http_client(),
+      bot_token=str(creds.require("slack", "bot_token")),
+      app_token=str(creds.require("slack", "app_token")))
 
 
 async def _post_with_retry(client: SlackClient, channel: str, thread_ts: str, text: str, *, session_id: str) -> bool:
@@ -853,7 +857,7 @@ async def ack_messages(
     raise SlackReplyError(422, "message_ids is empty")
   origin = meta.slack_origin
   messages = await _bot_client(cfg).get_thread_replies(origin.channel_id, origin.thread_ts)
-  eligible = {m["ts"] for m in messages if _eligible_thread_message(m, cfg.slack_allowed_user_ids)}
+  eligible = {m["ts"] for m in messages if _eligible_thread_message(m, cfg.slack.allowed_user_ids)}
   unknown = [ts for ts in ids if ts not in eligible]
   if unknown:
     raise SlackReplyError(422, f"Unknown or ineligible message id: {unknown[0]}")
@@ -895,7 +899,7 @@ def _rewrite_file_links(text: str, cfg: CharlieBotConfig) -> tuple[str, list[str
   """
   routes: list[str] = []
   for m in _SERVER_PORT_URL_RE.finditer(text):
-    if int(m.group("port")) != cfg.server_port:
+    if int(m.group("port")) != cfg.server.port:
       continue
     if (m.group("path") or "").startswith(_FILE_URL_PREFIXES):
       continue
@@ -904,7 +908,7 @@ def _rewrite_file_links(text: str, cfg: CharlieBotConfig) -> tuple[str, list[str
   out: list[str] = []
   cursor = 0
   for m in _FILE_SERVER_URL_RE.finditer(text):
-    if int(m.group("port")) != cfg.server_port:
+    if int(m.group("port")) != cfg.server.port:
       continue
     fs_path = Path(unquote(m.group("fs_path")))
     if not fs_path.is_file():
@@ -1215,7 +1219,9 @@ async def _expect_hello(ws: ClientConnection) -> None:
 async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
   """Socket Mode connect/receive/reconnect loop; never returns."""
   http = get_http_client()
-  client = SlackClient(http, bot_token=cfg.slack_bot_token, app_token=cfg.slack_app_token)
+  creds = get_credentials()
+  client = SlackClient(
+      http, bot_token=str(creds.require("slack", "bot_token")), app_token=str(creds.require("slack", "app_token")))
   trigger_mgr = TriggerManager(cfg, session_mgr)
   backoff = 1.0
 

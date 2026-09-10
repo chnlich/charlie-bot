@@ -17,6 +17,7 @@ import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
     OPUS_BACKEND_ID,
+    fake_backends,
     make_home_session,
     recycle_archive_cutoff_events,
 )
@@ -670,7 +671,7 @@ async def test_archive_fallback_serves_from_old_path(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_lru_eviction_drops_oldest_projection(tmp_path: Path) -> None:
   """The LRU cap evicts the least-recently-used projection."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   mgr = SessionManager(cfg)
 
   session_ids: list[str] = []

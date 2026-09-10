@@ -64,7 +64,7 @@ def _write_cron_yaml(name: str, data: dict) -> None:
 
 def _validate_backend_id(backend: str | None, cfg: CharlieBotConfig) -> None:
   if backend and cfg.get_backend_option(backend) is None:
-    raise HTTPException(status_code=400, detail=f"backend '{backend}' is not in backend_options")
+    raise HTTPException(status_code=400, detail=f"backend '{backend}' is not in backends.options")
 
 
 def _apply_task_update(task: dict, req: "TaskUpdate") -> dict:

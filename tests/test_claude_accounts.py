@@ -9,6 +9,7 @@ import pytest
 from conftest import (
     FABLE_MODEL,
     POOLED_FABLE_ID,
+    backend_option,
     fresh_state_fixture,
     make_transcript,
     make_work_item,
@@ -26,7 +27,6 @@ from src.core import config as core_config
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-    BackendOption,
     ClaudeAccount,
     CreateSessionRequest,
     SessionMetadata,
@@ -39,66 +39,55 @@ SONNET = "claude-sonnet-5"
 _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
-def _options(pinned_dir: Path) -> list[BackendOption]:
+def _options() -> list:
   return [
-      BackendOption(
-          id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL, aliases=["claude-fable-5-ext1"]),
-      BackendOption(id="claude-sonnet-5", label="Sonnet", type="cc-claude", model=SONNET),
-      BackendOption(
-          id="pinned-opus", label="Pinned", type="cc-claude", model="claude-opus-5", claude_config_dir=str(pinned_dir)),
-      BackendOption(id="codex-o3", label="Codex", type="codex", model="o3"),
+      backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL),
+      backend_option(id="claude-sonnet-5", label="Sonnet", type="cc-claude", model=SONNET),
+      backend_option(id="codex-o3", label="Codex", type="codex", model="o3"),
   ]
 
 
 def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
   return pool_cfg(
       tmp_path,
-      _options(tmp_path / "pinned"),
+      _options(),
       home=tmp_path / "home",
       worktree_dir=tmp_path / "worktrees",
       labels=labels,
   )
 
 
-def _legacy_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(charliebot_home=tmp_path / "home", backend_options=_options(tmp_path / "pinned"))
+def _no_pool_cfg(tmp_path: Path) -> CharlieBotConfig:
+  return CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": _options()})
 
 
 # ---------------------------------------------------------------------------
-# Membership and aliases
+# Membership
 # ---------------------------------------------------------------------------
 
 
-def test_is_pooled_only_for_dirless_cc_claude_entries_when_pool_declared(tmp_path: Path) -> None:
+def test_every_cc_claude_entry_is_pooled_when_the_pool_is_declared(tmp_path: Path) -> None:
   pooled_cfg = _pool_cfg(tmp_path)
-  legacy_cfg = _legacy_cfg(tmp_path)
+  no_pool_cfg = _no_pool_cfg(tmp_path)
   fable = pooled_cfg.get_backend_option(POOLED_FABLE_ID)
-  pinned = pooled_cfg.get_backend_option("pinned-opus")
+  sonnet = pooled_cfg.get_backend_option("claude-sonnet-5")
   codex = pooled_cfg.get_backend_option("codex-o3")
 
   assert claude_accounts.is_pooled(fable, pooled_cfg) is True
-  assert claude_accounts.is_pooled(pinned, pooled_cfg) is False
+  assert claude_accounts.is_pooled(sonnet, pooled_cfg) is True
   assert claude_accounts.is_pooled(codex, pooled_cfg) is False
-  # No claude_accounts key: the same entry keeps today's per-directory semantics.
-  assert claude_accounts.is_pooled(fable, legacy_cfg) is False
+  # No accounts.claude entries: no cc-claude entry is pooled.
+  assert claude_accounts.is_pooled(fable, no_pool_cfg) is False
 
 
 def test_pool_expands_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setenv("HOME", str(tmp_path))
   cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "home", claude_accounts=[ClaudeAccount(label="main", config_dir="~/.claude")])
+      charliebot_home=tmp_path / "home", accounts={"claude": [ClaudeAccount(label="main", config_dir="~/.claude")]})
 
   assert claude_accounts.pool(cfg)[0].config_dir == str(tmp_path / ".claude")
   assert claude_accounts.account_for_dir(cfg, "~/.claude").label == "main"
   assert claude_accounts.account_by_label(cfg, "missing") is None
-
-
-def test_get_backend_option_resolves_aliases_after_exact_ids(tmp_path: Path) -> None:
-  cfg = _pool_cfg(tmp_path)
-
-  assert cfg.get_backend_option("claude-fable-5-ext1").id == "claude-fable-5"
-  assert cfg.get_backend_option(POOLED_FABLE_ID).id == "claude-fable-5"
-  assert cfg.get_backend_option("claude-fable-sub") is None
 
 
 def test_load_config_reads_pool_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -106,37 +95,39 @@ def test_load_config_reads_pool_keys(tmp_path: Path, monkeypatch: pytest.MonkeyP
   home.mkdir()
   (home / "config.yaml").write_text(
       """
-claude_accounts:
-  - label: main
-    config_dir: ~/.claude
-  - label: ext-1
-    config_dir: ~/.claude-ext-1
-claude_compaction:
-  relay_tokens: 120000
-  expired_cache_tokens: 60000
-backend_options:
-  - id: claude-fable-5
-    label: Fable
-    type: cc-claude
-    model: claude-fable-5-1
-    aliases: [claude-fable-5-ext1]
+accounts:
+  claude:
+    - label: main
+      config_dir: ~/.claude
+    - label: ext-1
+      config_dir: ~/.claude-ext-1
+  claude_compaction:
+    relay_tokens: 120000
+    expired_cache_tokens: 60000
+backends:
+  options:
+    - id: claude-fable-5
+      label: Fable
+      type: cc-claude
+      model: claude-fable-5-1
 """,
       encoding="utf-8")
   monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(home))
 
   cfg = core_config.load_config()
 
-  assert [account.label for account in cfg.claude_accounts] == ["main", "ext-1"]
-  assert cfg.claude_compaction.relay_tokens == 120000
-  assert cfg.claude_compaction.expired_cache_tokens == 60000
-  assert cfg.backend_options[0].aliases == ["claude-fable-5-ext1"]
+  assert [account.label for account in cfg.accounts.claude] == ["main", "ext-1"]
+  assert cfg.accounts.claude_compaction.relay_tokens == 120000
+  assert cfg.accounts.claude_compaction.expired_cache_tokens == 60000
+  assert cfg.backends.options[0].id == "claude-fable-5"
 
 
 def test_config_defaults_carry_no_pool_and_default_floors(tmp_path: Path) -> None:
-  cfg = _legacy_cfg(tmp_path)
+  cfg = _no_pool_cfg(tmp_path)
 
-  assert cfg.claude_accounts == []
-  assert (cfg.claude_compaction.relay_tokens, cfg.claude_compaction.expired_cache_tokens) == (100_000, 50_000)
+  assert cfg.accounts.claude == []
+  assert (cfg.accounts.claude_compaction.relay_tokens,
+          cfg.accounts.claude_compaction.expired_cache_tokens) == (100_000, 50_000)
 
 
 # ---------------------------------------------------------------------------
@@ -351,36 +342,20 @@ def test_resolve_resume_id_pool_miss_returns_none_and_keeps_account(tmp_path: Pa
   assert meta.claude_account == "ext-1"
 
 
-def test_resolve_resume_id_without_pool_keeps_the_pinned_directory_rule(tmp_path: Path) -> None:
-  cfg = _legacy_cfg(tmp_path)
-  pinned = cfg.get_backend_option("pinned-opus")
-  make_transcript(tmp_path / "pinned", "uuid-5")
-  make_transcript(tmp_path / "elsewhere", "uuid-6")
-
-  found = SessionMetadata(id="s1", name="t", backend="pinned-opus", cc_session_id="uuid-5")
-  missing = SessionMetadata(id="s1", name="t", backend="pinned-opus", cc_session_id="uuid-6")
-  assert master_cc_run._resolve_resume_id(pinned, found, cfg=cfg) == "uuid-5"
-  assert master_cc_run._resolve_resume_id(pinned, missing, cfg=cfg) is None
-  assert found.claude_account is None
-
-
 # ---------------------------------------------------------------------------
 # Backend-switch domain
 # ---------------------------------------------------------------------------
 
 
-def test_pooled_entries_share_one_switch_domain_and_pinned_entries_keep_theirs(tmp_path: Path) -> None:
+def test_pooled_entries_share_one_switch_domain(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
 
   assert _backend_domain(cfg.get_backend_option(POOLED_FABLE_ID), cfg) == claude_accounts.POOL_DOMAIN
   assert _backend_domain(cfg.get_backend_option("claude-sonnet-5"), cfg) == claude_accounts.POOL_DOMAIN
-  assert _backend_domain(cfg.get_backend_option("pinned-opus"), cfg) == str(tmp_path / "pinned")
   assert _backend_domain(cfg.get_backend_option("codex-o3"), cfg) is None
 
   pooled = _active_backend_payload(SessionMetadata(id="a", name="t", backend=POOLED_FABLE_ID), cfg)
   assert pooled["switchable_backends"] == ["claude-fable-5", "claude-sonnet-5"]
-  pinned = _active_backend_payload(SessionMetadata(id="b", name="t", backend="pinned-opus"), cfg)
-  assert pinned["switchable_backends"] == ["pinned-opus"]
 
 
 # ---------------------------------------------------------------------------
@@ -388,14 +363,14 @@ def test_pooled_entries_share_one_switch_domain_and_pinned_entries_keep_theirs(t
 # ---------------------------------------------------------------------------
 
 
-def test_usage_panel_accounts_come_from_the_pool_under_their_own_labels(tmp_path: Path, monkeypatch) -> None:
+def test_usage_panel_accounts_are_the_default_dir_plus_the_pool_labels(tmp_path: Path, monkeypatch) -> None:
   cfg = _pool_cfg(tmp_path)
   monkeypatch.setattr(ext_usage_mod, "get_config", lambda: cfg)
 
   accounts = ext_usage_mod._derive_accounts()["claude"]
 
   assert accounts[0] == ("main", ext_usage_mod.CLAUDE_DEFAULT_DIR)
-  assert [label for label, _ in accounts] == ["main", "ext-1", "ext-2", "pinned"]
+  assert [label for label, _ in accounts] == ["main", "ext-1", "ext-2"]
   assert dict(accounts)["ext-1"] == str(tmp_path / "claude-ext-1")
 
 
@@ -410,7 +385,6 @@ def test_token_tally_and_cold_storage_include_pool_directories(tmp_path: Path, m
 
   roots = storage_cool.claude_projects_roots(cfg)
   assert tmp_path / "claude-ext-2" / "projects" in roots
-  assert tmp_path / "pinned" / "projects" in roots
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +394,7 @@ def test_token_tally_and_cold_storage_include_pool_directories(tmp_path: Path, m
 
 @pytest.mark.asyncio
 async def test_persist_claude_account_round_trips_without_touching_other_fields(tmp_path: Path) -> None:
-  cfg = _legacy_cfg(tmp_path)
+  cfg = _no_pool_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend=POOLED_FABLE_ID)
   await session_mgr.persist_cc_session_id(meta.id, "uuid-7")
@@ -434,11 +408,11 @@ async def test_persist_claude_account_round_trips_without_touching_other_fields(
 
 @pytest.mark.asyncio
 async def test_consumer_persists_the_account_the_run_settled_on(tmp_path: Path) -> None:
-  cfg = _legacy_cfg(tmp_path)
+  cfg = _no_pool_cfg(tmp_path)
   session_meta = SessionMetadata(id="consumer-account", name="t", backend=POOLED_FABLE_ID)
   callbacks = mock_session_callbacks()
   callbacks.persist_claude_account.side_effect = lambda sid, label: "other"
-  item = make_work_item(cfg, session_meta, cfg.backend_options[0], callbacks=callbacks)
+  item = make_work_item(cfg, session_meta, cfg.backends.options[0], callbacks=callbacks)
 
   async def fake_run_cc(work_item):
     work_item.session_meta.claude_account = "ext-1"
@@ -457,10 +431,10 @@ async def test_consumer_persists_the_account_the_run_settled_on(tmp_path: Path) 
 
 @pytest.mark.asyncio
 async def test_consumer_skips_account_persistence_when_no_account_was_assigned(tmp_path: Path) -> None:
-  cfg = _legacy_cfg(tmp_path)
+  cfg = _no_pool_cfg(tmp_path)
   session_meta = SessionMetadata(id="consumer-none", name="t", backend=POOLED_FABLE_ID)
   callbacks = mock_session_callbacks()
-  item = make_work_item(cfg, session_meta, cfg.backend_options[0], callbacks=callbacks)
+  item = make_work_item(cfg, session_meta, cfg.backends.options[0], callbacks=callbacks)
 
   async def fake_run_cc(work_item):
     return "uuid-9", 0, None, {}

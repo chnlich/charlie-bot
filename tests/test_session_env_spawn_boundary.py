@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 
 import pytest
-from conftest import make_work_item, patch_instructions_content
+from conftest import backend_option, make_work_item, patch_instructions_content
 
 from src.agents import master_cc
 from src.agents.backends.claude_code import ClaudeCodeBackend, claude_supervisor_env
@@ -69,8 +69,8 @@ async def test_master_child_environment_carries_its_own_session_id(
   shim, dump = _install_env_dump_shim(tmp_path)
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backend_options=[
-          models.BackendOption(
+      backends={"options": [
+          backend_option(
               id="fake",
               label="Fake",
               type="cc-claude",
@@ -78,14 +78,14 @@ async def test_master_child_environment_carries_its_own_session_id(
               cli_binary=str(shim),
               prompt_overlay="none",
           )
-      ],
+      ]},
   )
   (cfg.sessions_dir / "live-session").mkdir(parents=True)
   # A server started from inside another session's shell hands down a stale id.
   monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "stale-session")
   patch_instructions_content(monkeypatch)
 
-  item = make_work_item(cfg, models.SessionMetadata(id="live-session", name="Live"), cfg.backend_options[0])
+  item = make_work_item(cfg, models.SessionMetadata(id="live-session", name="Live"), cfg.backends.options[0])
   await master_cc._run_cc(item)
 
   assert _read_env_dump(dump)["CHARLIEBOT_SESSION_ID"] == "live-session"

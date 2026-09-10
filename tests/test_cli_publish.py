@@ -27,7 +27,7 @@ def test_publish_prints_the_url_on_stdout_and_exits_zero(tmp_path: Path, capsys:
 def test_publish_notes_a_differing_replaced_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = write_artifact(tmp_path, body="<p>new</p>")
   cfg = build_publish_cfg(tmp_path)
-  replaced = cfg.publish_dir / "page.html"
+  replaced = cfg.publish.dir / "page.html"
   replaced.write_text("<p>old</p>", encoding="utf-8")
 
   with patch("sys.argv", ["publish", str(artifact)]), patch(CLI_PUBLISH_GET_CONFIG_PATCH_TARGET, return_value=cfg):
@@ -37,14 +37,15 @@ def test_publish_notes_a_differing_replaced_file(tmp_path: Path, capsys: pytest.
   assert json.loads(captured.err)["note"] == f"overwrote a differing file with the same name: {replaced}"
 
 
-@pytest.mark.parametrize("missing", ["publish_dir", "public_base_url"])
+@pytest.mark.parametrize("missing", ["publish.dir", "publish.public_base_url"])
 def test_preflight_failure_exits_non_zero_naming_the_missing_item(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], missing: str) -> None:
   artifact = tmp_path / "page.html"
   artifact.write_text("<p>hello</p>", encoding="utf-8")
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  if missing == "public_base_url":
-    cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", publish_dir=tmp_path / "publish")
+  if missing == "publish.dir":
+    cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  else:
+    cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", publish={"dir": tmp_path / "publish"})
 
   with (
       patch("sys.argv", ["publish", str(artifact)]),

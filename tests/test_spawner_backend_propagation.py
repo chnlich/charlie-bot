@@ -7,6 +7,7 @@ from conftest import (
     CLEAN_EXIT_OUTCOME,
     CODEX_BACKEND_OPTION,
     OPUS_BACKEND_ID,
+    backend_option,
     CapturingThreadManager,
     JudgmentShim,
     ReviewSpawnSessionManager,
@@ -37,9 +38,9 @@ from src.core.models import (
 def _build_cfg() -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=Path("/tmp/charliebot-test"),
-      worktree_dir="/tmp/worktrees",
-      backend_options=[
-          BackendOption(
+      paths={"worktree_dir": "/tmp/worktrees"},
+      backends={"options": [
+          backend_option(
               id=OPUS_BACKEND_ID,
               label="Opus",
               type="cc-claude",
@@ -48,15 +49,15 @@ def _build_cfg() -> CharlieBotConfig:
               cli_binary="claude-sub",
           ),
           CODEX_BACKEND_OPTION,
-      ],
+      ]},
   )
 
 
-def _build_tmp_cfg(tmp_path: Path, backend_option: BackendOption) -> CharlieBotConfig:
+def _build_tmp_cfg(tmp_path: Path, option: BackendOption) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
-      worktree_dir=str(tmp_path / "worktrees"),
-      backend_options=[backend_option],
+      paths={"worktree_dir": str(tmp_path / "worktrees")},
+      backends={"options": [option]},
   )
 
 
@@ -78,30 +79,41 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
 def test_resolve_backend_option_allows_antigravity_missing_model() -> None:
   cfg = CharlieBotConfig(
       charliebot_home=Path("/tmp/charliebot-test"),
-      worktree_dir="/tmp/worktrees",
-      backend_options=[
+      paths={"worktree_dir": "/tmp/worktrees"},
+      backends={"options": [
           AGY_BACKEND_OPTION,
-      ],
+      ]},
   )
 
   opt = spawner.resolve_backend_option(cfg, "agy", None)
 
   assert opt.id == "agy"
   assert opt.model is None
-  assert opt.cli_binary is None
 
 
 @pytest.mark.parametrize(
-    "backend_type",
-    ["cc-claude", "cc-kimi", "cc-openai-compatible", "codex", "charlie-code", "gemini", "opencode"],
+    "backend_type, entry_kwargs",
+    [
+        ("cc-claude", {}),
+        ("cc-kimi", {"credential": "test-kimi"}),
+        ("cc-openai-compatible", {"api_base": "https://api.test/v1"}),
+        ("codex", {}),
+        ("charlie-code", {}),
+        ("gemini", {}),
+        ("opencode", {}),
+    ],
 )
-def test_resolve_backend_option_rejects_missing_model_for_model_required_backends(backend_type: str) -> None:
+def test_resolve_backend_option_rejects_missing_model_for_model_required_backends(
+    backend_type: str, entry_kwargs: dict) -> None:
+  # The sectioned schema rejects a model-less model-required entry outright, so
+  # each config entry carries a model and the resolver's own None rejection is
+  # what the test drives.
   cfg = CharlieBotConfig(
       charliebot_home=Path("/tmp/charliebot-test"),
-      worktree_dir="/tmp/worktrees",
-      backend_options=[
-          BackendOption(id=backend_type, label=backend_type, type=backend_type),
-      ],
+      paths={"worktree_dir": "/tmp/worktrees"},
+      backends={"options": [
+          backend_option(id=backend_type, label=backend_type, type=backend_type, model="fake-model", **entry_kwargs),
+      ]},
   )
 
   with pytest.raises(ValueError, match="model is required"):
@@ -300,10 +312,10 @@ async def test_resolve_requested_subagent_backend_model_defaults_to_session_back
 async def test_resolve_requested_subagent_backend_model_allows_antigravity_missing_model() -> None:
   cfg = CharlieBotConfig(
       charliebot_home=Path("/tmp/charliebot-test"),
-      worktree_dir="/tmp/worktrees",
-      backend_options=[
+      paths={"worktree_dir": "/tmp/worktrees"},
+      backends={"options": [
           AGY_BACKEND_OPTION,
-      ],
+      ]},
   )
 
   class FakeSessionManager(JudgmentShim):
@@ -531,7 +543,7 @@ async def test_create_repoless_worker_assigns_claude_session_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   cfg = _build_tmp_cfg(
-      tmp_path, BackendOption(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"))
+      tmp_path, backend_option(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"))
   thread = ThreadMetadata(
       id="thread-1",
       session_id="session-id",

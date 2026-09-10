@@ -29,18 +29,18 @@ def _home(tmp_path: Path) -> Path:
 
 def test_write_voice_engine_appends_when_absent(tmp_path: Path) -> None:
   home = _home(tmp_path)
-  (home / "config.yaml").write_text("# host config\nserver_port: 18498\n", encoding="utf-8")
+  (home / "config.yaml").write_text("# host config\nserver:\n  port: 18498\n", encoding="utf-8")
 
   action = voice_setup.write_voice_engine(home)
 
   assert action == "appended"
   text = (home / "config.yaml").read_text(encoding="utf-8")
-  assert text == "# host config\nserver_port: 18498\nvoice_engine: qwen3_hf\n"
+  assert text == "# host config\nserver:\n  port: 18498\nvoice:\n  engine: qwen3_hf\n"
 
 
 def test_write_voice_engine_skips_when_already_enabled(tmp_path: Path) -> None:
   home = _home(tmp_path)
-  original = "server_port: 18498\nvoice_engine: qwen3_hf\n"
+  original = "server:\n  port: 18498\nvoice:\n  engine: qwen3_hf\n"
   (home / "config.yaml").write_text(original, encoding="utf-8")
 
   action = voice_setup.write_voice_engine(home)
@@ -52,13 +52,13 @@ def test_write_voice_engine_skips_when_already_enabled(tmp_path: Path) -> None:
 def test_write_voice_engine_updates_in_place(tmp_path: Path) -> None:
   home = _home(tmp_path)
   (home / "config.yaml").write_text(
-      "server_port: 18498\nvoice_engine: sherpa  # keep cpu\n# trailing comment\n", encoding="utf-8")
+      "server:\n  port: 18498\nvoice:\n  engine: sherpa  # keep cpu\n# trailing comment\n", encoding="utf-8")
 
   action = voice_setup.write_voice_engine(home)
 
   assert action == "updated"
   text = (home / "config.yaml").read_text(encoding="utf-8")
-  assert text == "server_port: 18498\nvoice_engine: qwen3_hf\n# trailing comment\n"
+  assert text == "server:\n  port: 18498\nvoice:\n  engine: qwen3_hf\n# trailing comment\n"
 
 
 def test_write_voice_engine_creates_missing_config(tmp_path: Path) -> None:
@@ -67,29 +67,7 @@ def test_write_voice_engine_creates_missing_config(tmp_path: Path) -> None:
   action = voice_setup.write_voice_engine(home)
 
   assert action == "appended"
-  assert (home / "config.yaml").read_text(encoding="utf-8") == "voice_engine: qwen3_hf\n"
-
-
-def test_write_voice_engine_rejects_fragment_defined_key(tmp_path: Path) -> None:
-  """A voice_engine key in config.d would collide with the appended one at load; refuse."""
-  home = _home(tmp_path)
-  (home / "config.yaml").write_text("server_port: 18498\n", encoding="utf-8")
-  fragment = home / "config.d" / "voice.yaml"
-  fragment.parent.mkdir()
-  fragment.write_text("voice_engine: sherpa\n", encoding="utf-8")
-
-  with pytest.raises(ValueError, match="config.d"):
-    voice_setup.write_voice_engine(home)
-
-
-def test_write_voice_engine_ignores_fragments_without_the_key(tmp_path: Path) -> None:
-  home = _home(tmp_path)
-  (home / "config.yaml").write_text("server_port: 18498\n", encoding="utf-8")
-  fragment = home / "config.d" / "telegram.yaml"
-  fragment.parent.mkdir()
-  fragment.write_text("telegram_chat_id: '123'\n", encoding="utf-8")
-
-  assert voice_setup.write_voice_engine(home) == "appended"
+  assert (home / "config.yaml").read_text(encoding="utf-8") == "voice:\n  engine: qwen3_hf\n"
 
 
 def test_write_voice_engine_rejects_non_mapping_config(tmp_path: Path) -> None:
@@ -102,8 +80,7 @@ def test_write_voice_engine_rejects_non_mapping_config(tmp_path: Path) -> None:
 
 def test_write_voice_engine_rejects_duplicate_key_lines(tmp_path: Path) -> None:
   home = _home(tmp_path)
-  (home / "config.yaml").write_text(
-      "voice_engine: sherpa\nserver_port: 18498\nvoice_engine: qwen3_hf\n", encoding="utf-8")
+  (home / "config.yaml").write_text("voice:\n  engine: sherpa\n  engine: qwen3_hf\n", encoding="utf-8")
 
   with pytest.raises(ValueError, match="2 lines"):
     voice_setup.write_voice_engine(home)

@@ -5,7 +5,10 @@ from src.core.review import build_review_prompt
 
 
 def _cfg() -> CharlieBotConfig:
-  return CharlieBotConfig(charliebot_home=Path("/tmp/charliebot-review-prompt-test"), worktree_dir="/tmp/worktrees")
+  return CharlieBotConfig(
+      charliebot_home=Path("/tmp/charliebot-review-prompt-test"),
+      paths={"worktree_dir": "/tmp/worktrees"},
+  )
 
 
 def test_review_prompt_fetches_remote_base_before_scope_diff() -> None:

@@ -359,7 +359,7 @@ def _create_provider(provider: str, label: str, dir_path: str) -> ClaudeUsagePro
 # missing or tokenless file is the whole alarm; every later round in the same
 # broken streak repeats a fired alarm. A read that returns a token re-arms the
 # path: a relapse after it is a new onset, not a repeat.
-_CREDENTIAL_READ_WARNED: dict[str, str] = {}
+_CREDENTIAL_READ_WARNINGS_SEEN = WarnOnceRegistry()
 
 
 def _warn_credential_read_once(event: str, credentials_path: Path) -> None:
@@ -369,16 +369,13 @@ def _warn_credential_read_once(event: str, credentials_path: Path) -> None:
   poller's next round re-reading an unchanged broken file is not a new state,
   while a relapse after a successful read is.
   """
-  key = str(credentials_path)
-  if _CREDENTIAL_READ_WARNED.get(key) == event:
-    return
-  _CREDENTIAL_READ_WARNED[key] = event
-  log.warning(event, path=key)
+  path = str(credentials_path)
+  _CREDENTIAL_READ_WARNINGS_SEEN.log(log.warning, event, (event, path), path=path)
 
 
 def _reset_credential_read_warnings_for_tests() -> None:
   """Clear the warn-once registry, restoring the process-start state."""
-  _CREDENTIAL_READ_WARNED.clear()
+  _CREDENTIAL_READ_WARNINGS_SEEN.clear()
 
 
 def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
@@ -396,7 +393,7 @@ def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
     _warn_credential_read_once("ext_usage_no_access_token", credentials_path)
     return None
 
-  _CREDENTIAL_READ_WARNED.pop(str(credentials_path), None)
+  _CREDENTIAL_READ_WARNINGS_SEEN.forget_where(lambda key: key[1] == str(credentials_path))
   # expiresAt is deliberately not read: token renewal keys off the server's 401
   # in ClaudeUsageProvider.fetch, never a local expiry check.
   return {

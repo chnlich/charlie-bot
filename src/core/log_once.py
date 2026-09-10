@@ -14,9 +14,11 @@ class WarnOnceRegistry:
   what is reported earns one new line, and nothing outside the log statement
   can drift the key away from what was reported.
 
-  ``clear`` forgets every key, so a later sighting earns one new line again:
-  a consumer re-arms the registry when a successful read ends the broken
-  streak, and tests restore the process-start state with it.
+  ``clear`` forgets every key and ``forget_where`` forgets the keys a
+  predicate accepts, so a later sighting earns one new line again. A
+  consumer re-arms the whole registry when a successful read ends every
+  broken streak, or one alarm's keys when it ends one streak; tests restore
+  the process-start state with ``clear``.
   """
 
   def __init__(self) -> None:
@@ -32,6 +34,10 @@ class WarnOnceRegistry:
   def clear(self) -> None:
     """Forget every key, restoring the process-start state."""
     self._seen.clear()
+
+  def forget_where(self, match: Callable[[Hashable], bool]) -> None:
+    """Forget every key *match* accepts, so its next sighting earns one new line."""
+    self._seen = {key for key in self._seen if not match(key)}
 
   def __bool__(self) -> bool:
     """True when at least one key has fired."""

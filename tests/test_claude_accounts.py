@@ -252,7 +252,6 @@ def test_panel_scoped_window_counts_only_for_its_model_family() -> None:
 # Panel expiry: the shared predicate and the pool fold that drops expired windows
 # ---------------------------------------------------------------------------
 
-
 EXPIRY_NOW = datetime(2026, 9, 10, 16, 0, tzinfo=UTC)
 
 
@@ -350,7 +349,10 @@ def test_panel_fold_keeps_a_live_weekly_window_whose_sample_has_aged() -> None:
       "resets_at": (EXPIRY_NOW + timedelta(days=2)).isoformat(),
   }
   claude_accounts.observe_usage_panel(
-      "ext-1", {"windows": [weekly], "fetched_at": (EXPIRY_NOW - timedelta(hours=6)).isoformat()})
+      "ext-1", {
+          "windows": [weekly],
+          "fetched_at": (EXPIRY_NOW - timedelta(hours=6)).isoformat()
+      })
 
   assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=EXPIRY_NOW) == pytest.approx(0.40)
 

@@ -27,7 +27,7 @@ from src.api.code_server import is_code_server_available
 from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
 from src.api.sessions import _bootstrap_payload
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig, get_config, get_credentials
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
 from src.core.sessions import SessionManager
@@ -217,7 +217,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent.parent.parent / 
 @router.get("/api/auth/status")
 async def auth_status(cfg: CharlieBotConfig = Depends(get_config)) -> JSONResponse:
   """Return whether access-key authentication is enabled."""
-  return JSONResponse({"auth_enabled": bool(cfg.charliebot_access_key)})
+  return JSONResponse({"auth_enabled": bool(str(get_credentials().get("charliebot", "access_key") or ""))})
 
 
 @router.get("/sessions/{session_id}/events", response_class=HTMLResponse)
@@ -689,14 +689,14 @@ async def home_page(request: Request, cfg: CharlieBotConfig = Depends(get_config
   loop, concurrently, and nothing is persisted or cached.
   """
   statuses = await asyncio.gather(
-      *(asyncio.to_thread(_probe_home_service, service.url) for service in cfg.home_services))
+      *(asyncio.to_thread(_probe_home_service, service.url) for service in cfg.ui.home_services))
   services = [
       {
           "name": service.name,
           "description": service.description,
           "url": service.url,
           "status": "up" if up else "down",
-      } for service, up in zip(cfg.home_services, statuses, strict=True)
+      } for service, up in zip(cfg.ui.home_services, statuses, strict=True)
   ]
   return templates.TemplateResponse(
       request,
@@ -756,11 +756,9 @@ async def index(
     return RedirectResponse(f"/?session={sessions[0].id}")
 
   active_backend = active_session.backend if active_session else (
-      cfg.backend_options[0].id if cfg.backend_options else "claude")
+      cfg.backends.options[0].id if cfg.backends.options else "claude")
   active_backend_opt = cfg.get_backend_option(active_backend)
   if active_backend_opt is not None:
-    # A retired id (config aliases) renders as the option answering for it, so the
-    # new-session select and the client's ACTIVE_BACKEND_ID name a live option.
     active_backend = active_backend_opt.id
   active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
   active_backend_type = active_backend_opt.type if active_backend_opt else ""
@@ -774,12 +772,12 @@ async def index(
           "pending_draft": pending_draft,
           "event_count": event_count,
           "session_bootstrap": session_bootstrap,
-          "backend_options": cfg.backend_options,
+          "backend_options": cfg.backends.options,
           "active_backend": active_backend,
           "active_backend_label": active_backend_label,
           "active_backend_type": active_backend_type,
           "load_errors": load_errors,
-          "auth_enabled": bool(cfg.charliebot_access_key),
+          "auth_enabled": bool(str(get_credentials().get("charliebot", "access_key") or "")),
           "hostname": socket.gethostname(),
           "sessions_root": str(cfg.sessions_dir),
           "version": _RUNTIME_GIT_VERSION,

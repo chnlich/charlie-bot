@@ -15,7 +15,7 @@ Read, create, and edit documents in the Feishu workspace using the Feishu Open A
 - Credentials location: `~/.charliebot/credentials.yaml`
 - Keys (section `feishu`): `app_id`, `app_secret`, `user_access_token`, `refresh_token`
 - Auth method: OAuth2 user access token (acts as the user's own account)
-- Reading pattern (yq is not installed on hosts): one python line per value, e.g.
+- Reading pattern (no YAML CLI is installed on hosts): one python line per value, e.g.
 
 ```bash
 python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.expanduser('~/.charliebot/credentials.yaml')));print(c['feishu']['user_access_token'])"

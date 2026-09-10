@@ -671,7 +671,7 @@ test('in-place refresh paths preserve group expansion', async () => {
   ];
 
   for (const path of paths) {
-      const {nav, context} = buildNavContext();
+    const {nav, context} = buildNavContext();
     const sessions = makeWorkSessions();
     context.fetch = async (url, opts = {}) => {
       if (opts.method && opts.method !== 'GET') return {ok: true, async json() { return {}; }};

@@ -245,14 +245,53 @@ def observe_usage_panel(label: str, usage: dict, now: datetime | None = None) ->
   _panel_readings[label] = {"at": at, "windows": [w for w in windows if isinstance(w, dict)]}
 
 
-def _panel_reading(label: str, model: str | None) -> RateLimitReading | None:
-  """The panel reading folded for *model*: plan-wide windows plus its scoped bucket."""
+def parse_iso_utc(value: Any) -> datetime | None:
+  """UTC datetime from an ISO-8601 string, or None when missing or unparseable."""
+  if not isinstance(value, str) or not value:
+    return None
+  try:
+    parsed = datetime.fromisoformat(value)
+  except ValueError:
+    return None
+  return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+
+def panel_window_expired(window: dict[str, Any], sampled: datetime | None, now: datetime) -> bool:
+  """Whether one stored usage-panel window's reading is expired at *now*.
+
+  The single expiry rule shared by the account pool's fold and the usage
+  panel's emit-time annotation: a window is expired when its reset has passed
+  while the sample predates it, or when the sample is older than the window is
+  long. An unparseable ``resets_at`` leaves only the age rule; a missing or
+  unparseable sample time reads as live (never expired on a guess).
+  """
+  if sampled is None:
+    return False
+  resets_at = parse_iso_utc(window.get("resets_at"))
+  if resets_at is not None and resets_at <= now and sampled < resets_at:
+    return True
+  window_minutes = window.get("window_minutes")
+  if isinstance(window_minutes, int) and not isinstance(window_minutes, bool):
+    return now - sampled > timedelta(minutes=window_minutes)
+  return False
+
+
+def _panel_reading(label: str, model: str | None, now: datetime | None = None) -> RateLimitReading | None:
+  """The panel reading folded for *model*: plan-wide windows plus its scoped bucket.
+
+  Windows the shared ``panel_window_expired`` rule marks expired are dropped
+  before the fold, so a window whose reset has passed stops pressing the
+  headroom; with every stored window expired there is no panel reading at all.
+  """
   stored = _panel_readings.get(label)
   if stored is None:
     return None
+  moment = now_or(now)
   family = model_family(model)
   values: list[float] = []
   for window in stored["windows"]:
+    if panel_window_expired(window, stored["at"], moment):
+      continue
     value = window.get("utilization")
     if not isinstance(value, (int, float)) or isinstance(value, bool):
       continue
@@ -265,9 +304,9 @@ def _panel_reading(label: str, model: str | None) -> RateLimitReading | None:
   return RateLimitReading(at=stored["at"], utilization=max(values))
 
 
-def latest_reading(label: str, model: str | None) -> RateLimitReading | None:
+def latest_reading(label: str, model: str | None, now: datetime | None = None) -> RateLimitReading | None:
   """The newer of the account's event reading and its panel reading, or None."""
-  candidates = [reading for reading in (_event_readings.get(label), _panel_reading(label, model)) if reading]
+  candidates = [reading for reading in (_event_readings.get(label), _panel_reading(label, model, now)) if reading]
   if not candidates:
     return None
   return max(candidates, key=lambda reading: reading.at)
@@ -279,7 +318,7 @@ def headroom(label: str, model: str | None, now: datetime | None = None) -> floa
   An account nobody has read yet scores a full window: it is tried first and
   its first event supplies the reading.
   """
-  reading = latest_reading(label, model)
+  reading = latest_reading(label, model, now)
   if reading is None:
     return 1.0
   if reading.rejected_until is not None and reading.rejected_until > now_or(now):

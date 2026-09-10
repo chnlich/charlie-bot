@@ -32,6 +32,7 @@ from src.core.models import ClaudeAccount
 
 _fresh_unknown_limit_shape_registry = fresh_state_fixture(ext_usage_mod._reset_unknown_limit_shapes_for_tests)
 _fresh_credential_read_warning_registry = fresh_state_fixture(ext_usage_mod._reset_credential_read_warnings_for_tests)
+_fresh_usage_cache = fresh_state_fixture(ext_usage_mod._cached_usage.clear)
 
 
 def _build_token_count_event(
@@ -1215,6 +1216,120 @@ def test_poll_outer_exception_still_backs_off_before_retrying(monkeypatch) -> No
 
   assert derive_count["i"] == 2
   assert state["sleeps"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Emit-time expiry annotation (broadcast + GET route): the shared claude
+# predicate judged on the server clock at every emit, on emit copies only.
+# ---------------------------------------------------------------------------
+
+
+def _cached_claude_snapshot(windows: list[dict], fetched_at: str) -> dict:
+  return {"provider": "claude", "account": "main", "windows": windows, "fetched_at": fetched_at}
+
+
+def test_annotation_flips_across_a_reset_crossing_on_injected_clocks() -> None:
+  """Death-decoupling: the flip needs no fresh fetch — one frozen snapshot annotates
+  differently once the server clock crosses the window's reset."""
+  reset_at = datetime(2026, 9, 10, 5, 50, tzinfo=UTC)
+  ext_usage_mod._cached_usage["claude:main"] = _cached_claude_snapshot(
+      [
+          {
+              "window_minutes": 300,
+              "utilization": 91.0,
+              "resets_at": _iso_z(reset_at)
+          },
+          {
+              "window_minutes": 10080,
+              "utilization": 17.0,
+              "resets_at": _iso_z(reset_at + timedelta(days=3))
+          },
+      ],
+      fetched_at=_iso_z(reset_at - timedelta(hours=2)))
+
+  before = ext_usage_mod._annotated_providers(now=reset_at - timedelta(minutes=1))
+  after = ext_usage_mod._annotated_providers(now=reset_at + timedelta(minutes=1))
+
+  assert "expired" not in before["claude:main"]["windows"][0]
+  assert after["claude:main"]["windows"][0]["expired"] is True
+  assert "expired" not in after["claude:main"]["windows"][1]
+  # The judgement is emit-time state: the cache itself stays unannotated.
+  assert all("expired" not in w for w in ext_usage_mod._cached_usage["claude:main"]["windows"])
+
+
+def test_annotation_leaves_codex_pending_and_error_entries_untouched() -> None:
+  codex = {
+      "provider": "codex",
+      "account": "main",
+      "windows": [{
+          "window_minutes": 10080,
+          "utilization": 96.0,
+          "resets_at": _iso_z(datetime(2020, 1, 8, tzinfo=UTC)),
+      }],
+      "fetched_at": _iso_z(datetime(2020, 1, 1, tzinfo=UTC)),
+      "token_count_observed_at": _iso_z(datetime(2020, 1, 1, tzinfo=UTC)),
+  }
+  pending = {"provider": "claude", "account": "unread", "pending": True}
+  error = {"provider": "claude", "account": "broken", "error": "rate limited"}
+  ext_usage_mod._cached_usage.update({"codex:main": codex, "claude:unread": pending, "claude:broken": error})
+
+  providers = ext_usage_mod._annotated_providers()
+
+  # A codex reading this stale would fail the browser predicate; the annotation
+  # is claude-only, so codex windows never carry the key.
+  assert all("expired" not in w for w in providers["codex:main"]["windows"])
+  assert providers["claude:unread"] == pending
+  assert providers["claude:broken"] == error
+
+
+@pytest.mark.asyncio
+async def test_get_ext_usage_annotates_claude_windows_at_read_time() -> None:
+  moment = datetime.now(UTC)
+  dead = _cached_claude_snapshot(
+      [{
+          "window_minutes": 300,
+          "utilization": 91.0,
+          "resets_at": _iso_z(moment - timedelta(hours=1)),
+      }],
+      fetched_at=_iso_z(moment - timedelta(hours=2)))
+  live = _cached_claude_snapshot(
+      [{
+          "window_minutes": 300,
+          "utilization": 12.0,
+          "resets_at": _iso_z(moment + timedelta(hours=1)),
+      }],
+      fetched_at=_iso_z(moment))
+  ext_usage_mod._cached_usage.update({"claude:main": dead, "claude:ext-1": live})
+
+  result = await ext_usage_mod.get_ext_usage()
+
+  assert result["providers"]["claude:main"]["windows"][0]["expired"] is True
+  assert "expired" not in result["providers"]["claude:ext-1"]["windows"][0]
+  assert all("expired" not in w for w in ext_usage_mod._cached_usage["claude:main"]["windows"])
+
+
+def test_poll_broadcast_carries_emit_time_expiry_annotation(monkeypatch) -> None:
+  stale_value = {
+      "windows": [{
+          "window_minutes": 300,
+          "utilization": 91.0,
+          "resets_at": _iso_z(datetime(2020, 1, 1, 1, 0, tzinfo=UTC)),
+      }],
+      "fetched_at": _iso_z(datetime(2020, 1, 1, 0, 0, tzinfo=UTC)),
+      "provider": "claude",
+  }
+
+  def create_provider(provider, label, dir_path):
+    if provider == "claude":
+      return _FakeProvider(lambda: stale_value)
+    return _FakeProvider(lambda: None, error="no sessions found")
+
+  accounts = {"claude": [("main", "/fake/main")], "codex": [("main", "/fake/codex")]}
+  state = _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, create_provider=create_provider, n=1)
+
+  assert state["payloads"][0]["providers"]["claude:main"]["windows"][0]["expired"] is True
+  # The annotation rides on the emit copy only.
+  assert "expired" not in ext_usage_mod._cached_usage["claude:main"]["windows"][0]
 
 
 def test_codex_usage_transform_reports_weekly_only_shape() -> None:

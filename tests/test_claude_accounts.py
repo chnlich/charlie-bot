@@ -249,6 +249,113 @@ def test_panel_scoped_window_counts_only_for_its_model_family() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Panel expiry: the shared predicate and the pool fold that drops expired windows
+# ---------------------------------------------------------------------------
+
+
+EXPIRY_NOW = datetime(2026, 9, 10, 16, 0, tzinfo=UTC)
+
+
+def test_panel_window_expired_when_the_reset_passed_after_the_sample() -> None:
+  window = {
+      "window_minutes": 300,
+      "utilization": 91.0,
+      "resets_at": (EXPIRY_NOW - timedelta(hours=1)).isoformat(),
+  }
+  sampled = EXPIRY_NOW - timedelta(hours=2)
+
+  assert claude_accounts.panel_window_expired(window, sampled, EXPIRY_NOW) is True
+  # The same sample with the reset still ahead is live.
+  assert claude_accounts.panel_window_expired(window, sampled, EXPIRY_NOW - timedelta(hours=3)) is False
+
+
+def test_panel_window_expired_when_the_sample_is_older_than_the_window() -> None:
+  window = {"window_minutes": 300, "utilization": 42.0, "resets_at": ""}
+
+  assert claude_accounts.panel_window_expired(window, EXPIRY_NOW - timedelta(hours=6), EXPIRY_NOW) is True
+  assert claude_accounts.panel_window_expired(window, EXPIRY_NOW - timedelta(minutes=5), EXPIRY_NOW) is False
+
+
+def test_panel_window_expired_ignores_an_illegal_reset_and_falls_to_the_age_rule() -> None:
+  window = {"window_minutes": 10080, "utilization": 17.0, "resets_at": "not-a-timestamp"}
+
+  assert claude_accounts.panel_window_expired(window, EXPIRY_NOW - timedelta(minutes=5), EXPIRY_NOW) is False
+  assert claude_accounts.panel_window_expired(window, EXPIRY_NOW - timedelta(days=8), EXPIRY_NOW) is True
+
+
+def test_panel_window_expired_reads_a_missing_sample_as_live() -> None:
+  window = {
+      "window_minutes": 300,
+      "utilization": 91.0,
+      "resets_at": (EXPIRY_NOW - timedelta(hours=1)).isoformat(),
+  }
+
+  assert claude_accounts.panel_window_expired(window, None, EXPIRY_NOW) is False
+
+
+def test_panel_fold_drops_an_expired_window_whatever_its_utilization() -> None:
+  """Pool invariance: an expired window's number is free to vary — the headroom is
+  the dropped-window value either way (incident shape: dead 5h beside a live 7d)."""
+  fetched_at = EXPIRY_NOW - timedelta(hours=2)
+  dead = {
+      "window_minutes": 300,
+      "utilization": 91.0,
+      "resets_at": (EXPIRY_NOW - timedelta(hours=1)).isoformat(),
+  }
+  live = {
+      "window_minutes": 10080,
+      "utilization": 17.0,
+      "resets_at": (EXPIRY_NOW + timedelta(days=3)).isoformat(),
+  }
+  claude_accounts.observe_usage_panel("ext-1", {"windows": [dict(live)], "fetched_at": fetched_at.isoformat()})
+  dropped = claude_accounts.headroom("ext-1", FABLE_MODEL, now=EXPIRY_NOW)
+
+  for utilization in (0.0, 50.0, 91.0, 100.0):
+    claude_accounts.observe_usage_panel(
+        "ext-1", {
+            "windows": [dict(dead, utilization=utilization), dict(live)],
+            "fetched_at": fetched_at.isoformat(),
+        })
+    assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=EXPIRY_NOW) == pytest.approx(dropped)
+
+  assert dropped == pytest.approx(0.83)
+
+
+def test_panel_fold_all_windows_expired_falls_back_past_the_panel() -> None:
+  fetched_at = (EXPIRY_NOW - timedelta(hours=2)).isoformat()
+  dead = {
+      "window_minutes": 300,
+      "utilization": 91.0,
+      "resets_at": (EXPIRY_NOW - timedelta(hours=1)).isoformat(),
+  }
+  claude_accounts.observe_usage_panel("ext-1", {"windows": [dead], "fetched_at": fetched_at})
+
+  # No event reading: with no panel reading either, the account scores a full window.
+  assert claude_accounts.latest_reading("ext-1", FABLE_MODEL, now=EXPIRY_NOW) is None
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=EXPIRY_NOW) == 1.0
+
+  # An event reading survives as the only candidate.
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.50, 0.10), now=EXPIRY_NOW)
+  reading = claude_accounts.latest_reading("ext-1", FABLE_MODEL, now=EXPIRY_NOW)
+  assert reading is not None
+  assert reading.utilization == pytest.approx(0.50)
+
+
+def test_panel_fold_keeps_a_live_weekly_window_whose_sample_has_aged() -> None:
+  """7d semantics: a weekly reading with its reset still ahead stays live even when
+  the sample has aged hours — a week bucket does not evaporate by the hour."""
+  weekly = {
+      "window_minutes": 10080,
+      "utilization": 60.0,
+      "resets_at": (EXPIRY_NOW + timedelta(days=2)).isoformat(),
+  }
+  claude_accounts.observe_usage_panel(
+      "ext-1", {"windows": [weekly], "fetched_at": (EXPIRY_NOW - timedelta(hours=6)).isoformat()})
+
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=EXPIRY_NOW) == pytest.approx(0.40)
+
+
+# ---------------------------------------------------------------------------
 # Selection
 # ---------------------------------------------------------------------------
 

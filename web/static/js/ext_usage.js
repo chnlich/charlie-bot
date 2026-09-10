@@ -86,7 +86,12 @@ function _windowLabel(windowMinutes) {
 // A scraped reading can outlive the window it describes. Either the window's
 // reset has already passed while the sample predates it, or — decidable without
 // any reset timestamp — the reading is older than the window is long.
+// Claude readings are live queries whose samples can freeze, so the server owns
+// the judgement: each emitted claude window carries `expired: true` exactly when
+// the shared backend predicate fired at emit time, and fetched_at age alone
+// never expires a claude window here.
 function _isExpiredReading(providerData, win) {
+  if (providerData.provider === 'claude') return win.expired === true;
   if (providerData.provider !== 'codex') return false;
   const sampled = _sampledAtMs(providerData);
   if (!Number.isFinite(sampled)) return false;

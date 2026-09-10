@@ -424,6 +424,38 @@ test('renderExtUsage marks a reading older than its window as expired', () => {
   assert.ok(_field(row, '7d-bar').classList.contains('bg-slate-600'));
 });
 
+// The expiry judgement for claude is the server's: one frozen reading renders
+// live or expired exactly when the emitted window carries `expired: true` —
+// fetched_at age alone (or the browser's own clock math) never expires it.
+test('renderExtUsage expires a claude window only on the server annotation', () => {
+  const { context, strip } = loadExtUsageScript();
+
+  const stalePayload = (windows) => ({
+    provider: 'claude',
+    account: 'main',
+    windows,
+    // Stale enough to fail every codex rule: sampled 2d ago, reset passed 1h ago.
+    fetched_at: _iso(-2 * DAY),
+  });
+  const staleWindow = (extra) => Object.assign(
+    { window_minutes: 300, utilization: 91.0, resets_at: _iso(-1 * HOUR) }, extra);
+
+  context.renderExtUsage({ providers: { 'claude:main': stalePayload([staleWindow()]) } });
+  let row = _rowByKey(strip, 'claude:main');
+  assert.equal(_field(row, '5h-pct').textContent, '91%', 'no key: the stale reading still renders its number');
+  const liveSummary = _walk(strip.children[0], _byAttr('data-summary-account', 'claude:main'));
+  assert.equal(_field(liveSummary, 'summary-pct').textContent, '91%');
+
+  context.renderExtUsage({ providers: { 'claude:main': stalePayload([staleWindow({ expired: true })]) } });
+  row = _rowByKey(strip, 'claude:main');
+  assert.equal(_field(row, '5h-pct').textContent, '\u2014');
+  assert.equal(_field(row, '5h-reset').textContent, 'window reset \u2014 reading expired');
+  assert.ok(_field(row, '5h-bar').classList.contains('bg-slate-600'));
+  const expiredSummary = _walk(strip.children[0], _byAttr('data-summary-account', 'claude:main'));
+  assert.equal(_field(expiredSummary, 'summary-pct').textContent, '\u2014',
+    'the expired reading drops out of the collapsed summary');
+});
+
 test('renderExtUsage shows reading age on Codex rows only', () => {
   const { context, strip } = loadExtUsageScript();
 

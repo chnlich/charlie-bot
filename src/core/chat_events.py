@@ -15,6 +15,7 @@ from src.core.models import SessionMetadata, parse_utc_datetime, utc_now
 from src.core.ndjson import (
     append_ndjson,
     count_ndjson_lines,
+    iter_ndjson_events,
     parse_ndjson_file,
     parse_ndjson_range,
     parse_ndjson_tail,
@@ -355,16 +356,10 @@ class ChatEventStore:
     events = self._archive_events_memo.fresh(path, st)
     if events is not None:
       return events
-    events: list[dict] = []
     try:
       with open(path, encoding="utf-8") as f:
-        for line in f:
-          stripped = line.strip()
-          if stripped:
-            try:
-              events.append(orjson.loads(stripped))
-            except ValueError as e:
-              log.debug("archive_parse_skip", session_id=session_id, error=str(e))
+        events = list(
+            iter_ndjson_events(f, log_event="archive_parse_skip", log_fields={"session_id": session_id}))
     except OSError as e:
       log.debug("archive_read_failed", path=str(path), error=str(e))
       return []

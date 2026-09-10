@@ -96,9 +96,11 @@ def test_with_home_preserves_the_rest_of_the_instance(tmp_path: Path) -> None:
   home_a = tmp_path / "home-a"
   home_b = tmp_path / "home-b"
   cfg = CharlieBotConfig(
-      charliebot_home=home_a,
-      backends={"options": [{
-          "id": "one", "label": "One", "type": "cc-claude", "model": "m"
+      charliebot_home=home_a, backends={"options": [{
+          "id": "one",
+          "label": "One",
+          "type": "cc-claude",
+          "model": "m"
       }]})
   redirected = cfg.with_home(home_b)
 

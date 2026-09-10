@@ -254,14 +254,13 @@ def _cfg(home: Path, shim: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=home,
       paths={"worktree_dir": str(home / "worktrees")},
-      backends={"options": [
-          CcClaudeBackend(
-              id="fake",
-              label="Fake",
-              model="fake-model",
-              cli_binary=str(shim),
-              prompt_overlay="none")
-      ]},
+      backends={
+          "options":
+              [
+                  CcClaudeBackend(
+                      id="fake", label="Fake", model="fake-model", cli_binary=str(shim), prompt_overlay="none")
+              ]
+      },
   )
 
 
@@ -271,10 +270,13 @@ def _uncovered_transport_cfg(home: Path, shim: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=home,
       paths={"worktree_dir": str(home / "worktrees")},
-      backends={"options": [
-          CcClaudeBackend(id="fake", label="Fake", model="fake-model", cli_binary=str(shim)),
-          OpencodeBackend(id="oc", label="OC", model="oc-model", prompt_overlay="none"),
-      ]},
+      backends={
+          "options":
+              [
+                  CcClaudeBackend(id="fake", label="Fake", model="fake-model", cli_binary=str(shim)),
+                  OpencodeBackend(id="oc", label="OC", model="oc-model", prompt_overlay="none"),
+              ]
+      },
   )
 
 

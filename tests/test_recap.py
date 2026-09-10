@@ -56,12 +56,9 @@ async def test_recap_skipped_when_session_missing() -> None:
 async def test_recap_returns_empty_on_no_resolvable_preference() -> None:
   cfg = CharlieBotConfig(
       backends={
-          "options": [
-              backend_option(id="claude-haiku", label="Haiku", type="cc-claude", model="haiku"),
-          ],
+          "options": [backend_option(id="claude-haiku", label="Haiku", type="cc-claude", model="haiku"),],
           "preference": ["does-not-exist"],
-      },
-  )
+      },)
   session_mgr = AsyncMock()
   session_mgr.get_session.return_value = SessionMetadata(id="s", name="Session 1", backend="codex-session")
 

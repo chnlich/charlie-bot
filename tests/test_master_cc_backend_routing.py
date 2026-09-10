@@ -180,9 +180,7 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
 ) -> None:
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [
-          backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),
-      ]},
+      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),]},
   )
   session_meta = models.SessionMetadata(id="session-id", name="CC", backend="cc")
   option = cfg.backends.options[0]
@@ -241,9 +239,7 @@ async def test_claude_family_with_reachable_anchor_logs_resume_session_true(
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [
-          backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),
-      ]},
+      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),]},
   )
   session_meta = models.SessionMetadata(id="session-id", name="CC", backend="cc", cc_session_id="existing-session-id")
 
@@ -259,9 +255,7 @@ async def test_claude_family_with_no_anchor_logs_resume_session_false(
 ) -> None:
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [
-          backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),
-      ]},
+      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),]},
   )
   session_meta = models.SessionMetadata(id="session-id", name="CC", backend="cc")
 
@@ -277,9 +271,7 @@ async def test_native_resume_backend_with_reachable_anchor_logs_resume_session_t
 ) -> None:
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [
-          backend_option(id="oc", label="OpenCode", type="opencode", model="glm-5.2"),
-      ]},
+      backends={"options": [backend_option(id="oc", label="OpenCode", type="opencode", model="glm-5.2"),]},
   )
   session_meta = models.SessionMetadata(
       id="session-id", name="OpenCode", backend="oc", cc_session_id="existing-session-id")

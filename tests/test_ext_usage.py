@@ -888,10 +888,11 @@ def test_transform_response_preserves_claude_payload_shape() -> None:
 def test_derive_accounts_always_includes_defaults_and_dedupes_explicit_default(monkeypatch) -> None:
   cfg = CharlieBotConfig(
       accounts={
-          "claude": [
-              ClaudeAccount(label="main", config_dir=CLAUDE_DEFAULT_DIR),
-              ClaudeAccount(label="ext-1", config_dir="~/.claude-invite-1"),
-          ]
+          "claude":
+              [
+                  ClaudeAccount(label="main", config_dir=CLAUDE_DEFAULT_DIR),
+                  ClaudeAccount(label="ext-1", config_dir="~/.claude-invite-1"),
+              ]
       })
   monkeypatch.setattr(ext_usage_mod, "get_config", lambda: cfg)
 
@@ -901,8 +902,10 @@ def test_derive_accounts_always_includes_defaults_and_dedupes_explicit_default(m
   assert accounts["codex"][0] == ("main", CODEX_DEFAULT_DIR)
   assert [label for label, _ in accounts["claude"]] == ["main", "ext-1"]
   assert [label for label, _ in accounts["codex"]] == ["main"]
-  assert accounts["pool"] == {"main": CLAUDE_DEFAULT_DIR, "ext-1": os.path.abspath(os.path.expanduser(
-      "~/.claude-invite-1"))}
+  assert accounts["pool"] == {
+      "main": CLAUDE_DEFAULT_DIR,
+      "ext-1": os.path.abspath(os.path.expanduser("~/.claude-invite-1"))
+  }
 
 
 def test_derive_accounts_label_collision_skip_fail_loud(monkeypatch) -> None:
@@ -910,10 +913,11 @@ def test_derive_accounts_label_collision_skip_fail_loud(monkeypatch) -> None:
   # rather than overwriting the first.
   cfg = CharlieBotConfig(
       accounts={
-          "claude": [
-              ClaudeAccount(label="invite-1", config_dir="~/.claude-invite-1"),
-              ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1"),
-          ]
+          "claude":
+              [
+                  ClaudeAccount(label="invite-1", config_dir="~/.claude-invite-1"),
+                  ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1"),
+              ]
       })
   monkeypatch.setattr(ext_usage_mod, "get_config", lambda: cfg)
 

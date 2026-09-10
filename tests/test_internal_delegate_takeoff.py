@@ -711,7 +711,10 @@ def _build_verify_cfg(preference: list[str]) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=Path("/tmp/charliebot-test"),
       paths={"worktree_dir": "/tmp/worktrees"},
-      backends={"options": VERIFY_BACKEND_OPTIONS, "preference": preference},
+      backends={
+          "options": VERIFY_BACKEND_OPTIONS,
+          "preference": preference
+      },
   )
 
 
@@ -748,8 +751,7 @@ async def test_verify_no_backend_defaults_to_first_differing_preference(monkeypa
 @pytest.mark.asyncio
 async def test_verify_no_backend_session_backend_not_in_preference_uses_first_entry(
     monkeypatch: pytest.MonkeyPatch) -> None:
-  resolved = await _authorize_verify(
-      monkeypatch, session_backend="kimi-k2.5", preference=[OPUS_BACKEND_ID, "codex-o3"])
+  resolved = await _authorize_verify(monkeypatch, session_backend="kimi-k2.5", preference=[OPUS_BACKEND_ID, "codex-o3"])
   assert resolved == (OPUS_BACKEND_ID, OPUS_BACKEND_OPTION.model)
 
 

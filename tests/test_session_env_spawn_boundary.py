@@ -69,16 +69,19 @@ async def test_master_child_environment_carries_its_own_session_id(
   shim, dump = _install_env_dump_shim(tmp_path)
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [
-          backend_option(
-              id="fake",
-              label="Fake",
-              type="cc-claude",
-              model="fake-model",
-              cli_binary=str(shim),
-              prompt_overlay="none",
-          )
-      ]},
+      backends={
+          "options":
+              [
+                  backend_option(
+                      id="fake",
+                      label="Fake",
+                      type="cc-claude",
+                      model="fake-model",
+                      cli_binary=str(shim),
+                      prompt_overlay="none",
+                  )
+              ]
+      },
   )
   (cfg.sessions_dir / "live-session").mkdir(parents=True)
   # A server started from inside another session's shell hands down a stale id.

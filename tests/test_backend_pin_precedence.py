@@ -102,11 +102,12 @@ async def test_unresolvable_codex_pin_lands_on_none_of_several_codex_options(tmp
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={
-          "options": [
-              OPUS_BACKEND_OPTION,
-              backend_option(id="codex-alpha", label="Codex Alpha", type="codex", model="alpha"),
-              backend_option(id="codex-beta", label="Codex Beta", type="codex", model="beta"),
-          ]
+          "options":
+              [
+                  OPUS_BACKEND_OPTION,
+                  backend_option(id="codex-alpha", label="Codex Alpha", type="codex", model="alpha"),
+                  backend_option(id="codex-beta", label="Codex Beta", type="codex", model="beta"),
+              ]
       },
   )
   session_mgr = SessionManager(cfg)

@@ -444,10 +444,11 @@ async def test_maybe_respawn_verify_task_cross_models_backend_when_omitted(
       charliebot_home=tmp_path / "home",
       paths={"worktree_dir": str(tmp_path / "worktrees")},
       backends={
-          "options": [
-              backend_option(id="session-backend", label="S", type="cc-claude", model="s-model"),
-              backend_option(id="other-backend", label="O", type="cc-claude", model="o-model"),
-          ],
+          "options":
+              [
+                  backend_option(id="session-backend", label="S", type="cc-claude", model="s-model"),
+                  backend_option(id="other-backend", label="O", type="cc-claude", model="o-model"),
+              ],
           "preference": ["other-backend"],
       },
   )

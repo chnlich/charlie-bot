@@ -31,15 +31,16 @@ def _claude_sub_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       backends={
-          "options": [
-              backend_option(
-                  id="claude-sub",
-                  label="Claude Sub",
-                  type="cc-claude",
-                  model="claude-opus-4-8",
-                  cli_binary="claude-sub",
-              ),
-          ],
+          "options":
+              [
+                  backend_option(
+                      id="claude-sub",
+                      label="Claude Sub",
+                      type="cc-claude",
+                      model="claude-opus-4-8",
+                      cli_binary="claude-sub",
+                  ),
+              ],
       },
   )
 
@@ -112,9 +113,7 @@ async def test_thread_metadata_endpoint_exposes_derived_attach_fields(tmp_path: 
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       backends={
-          "options": [
-              backend_option(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),
-          ],
+          "options": [backend_option(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),],
       },
   )
   thread_mgr = ThreadManager(cfg)
@@ -153,9 +152,7 @@ async def test_thread_metadata_endpoint_attach_mode_serves_only_the_pair(tmp_pat
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       backends={
-          "options": [
-              backend_option(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),
-          ],
+          "options": [backend_option(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),],
       },
   )
   thread_mgr = ThreadManager(cfg)

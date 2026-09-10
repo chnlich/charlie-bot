@@ -63,8 +63,8 @@ def _codex_home_under_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pa
   return home
 
 
-def _write_codex_rollout(codex_home: Path, native_thread_id: str, lines: list[dict]) -> None:
-  rollout_dir = codex_home / "sessions" / "2026" / "03" / "31"
+def _write_codex_rollout(home: Path, native_thread_id: str, lines: list[dict]) -> None:
+  rollout_dir = home / "sessions" / "2026" / "03" / "31"
   rollout_dir.mkdir(parents=True, exist_ok=True)
   rollout_path = rollout_dir / f"rollout-2026-03-31T20-42-51-{native_thread_id}.jsonl"
   rollout_path.write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")

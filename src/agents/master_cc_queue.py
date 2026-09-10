@@ -305,7 +305,7 @@ async def run_message(
   # tui-cli sessions are interactive terminal sessions: messages flow through
   # tmux, not the SDK. Skip the master agent entirely so we never spawn a
   # claude SDK subprocess for them.
-  backend_id = session_meta.backend or (cfg.backend_options[0].id if cfg.backend_options else "")
+  backend_id = session_meta.backend or (cfg.backends.options[0].id if cfg.backends.options else "")
   backend_lookup = cfg.get_backend_option(backend_id)
   if backend_lookup is not None and backend_lookup.type == BackendType.TUI_CLI:
     log.info("master_cc_skip_tui_backend", session=session_meta.id, backend=backend_id)

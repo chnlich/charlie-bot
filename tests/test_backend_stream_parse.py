@@ -11,6 +11,10 @@ existing raise-on-malformed contract, only the parser moves.
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+from typing import Any
+
 import pytest
 from test_opencode_backend import _build_backend, _FakeSseResponse
 
@@ -50,97 +54,53 @@ async def test_iter_ndjson_events_parses_and_skips() -> None:
   assert [event["seq"] for event in events] == [1, 3]
 
 
-@pytest.mark.asyncio
-async def test_tail_follow_events_parses_and_skips() -> None:
-  import tempfile
-  from pathlib import Path
-
+async def _collect_tail_events(raw_bytes: bytes, **kwargs: Any) -> list[dict]:
+  """Write *raw_bytes* as the raw log and return every event tail_follow_events yields."""
   with tempfile.TemporaryDirectory() as work:
     raw = Path(work) / "agent.raw.ndjson"
-    raw.write_bytes(b"".join(_LINES))
-    seen: list[dict] = []
+    raw.write_bytes(raw_bytes)
+    return [
+        event async for event in tail_follow_events(
+            raw,
+            translate=lambda event: [event],
+            is_alive=lambda: False,
+            **kwargs,
+        )
+    ]
 
-    async for event in tail_follow_events(
-        raw,
-        translate=lambda event: [event],
-        is_alive=lambda: False,
-        post_result_timeout=60.0,
-    ):
-      seen.append(event)
 
-  assert [event["seq"] for event in seen] == [1, 3]
+@pytest.mark.asyncio
+async def test_tail_follow_events_parses_and_skips() -> None:
+  events = await _collect_tail_events(b"".join(_LINES), post_result_timeout=60.0)
+  assert [event["seq"] for event in events] == [1, 3]
 
 
 @pytest.mark.asyncio
 async def test_tail_follow_events_replays_from_offset() -> None:
   """The re-attach shape: a restart resumes at the recorded byte offset."""
-  import tempfile
-  from pathlib import Path
-
-  with tempfile.TemporaryDirectory() as work:
-    raw = Path(work) / "agent.raw.ndjson"
-    raw.write_bytes(b"".join(_LINES))
-    seen: list[dict] = []
-
-    async for event in tail_follow_events(
-        raw,
-        translate=lambda event: [event],
-        is_alive=lambda: False,
-        start_offset=_ASSISTANT_LINE_BYTES,
-        post_result_timeout=60.0,
-    ):
-      seen.append(event)
+  events = await _collect_tail_events(b"".join(_LINES), start_offset=_ASSISTANT_LINE_BYTES, post_result_timeout=60.0)
 
   # The NaN-bearing line lands in this range and skips as malformed (the
   # parser boundary the funnels adopt), so only the result line survives.
-  assert [event["seq"] for event in seen] == [3]
+  assert [event["seq"] for event in events] == [3]
 
 
 @pytest.mark.asyncio
 async def test_tail_follow_events_carries_partial_line_across_chunks() -> None:
   """A line straddling the 64 KB read boundary yields exactly once: the
   trailing partial is carried into the next chunk, never processed half."""
-  import tempfile
-  from pathlib import Path
-
-  with tempfile.TemporaryDirectory() as work:
-    raw = Path(work) / "agent.raw.ndjson"
-    payload = b'{"type": "assistant", "seq": 9, "pad": "' + b"x" * 2000 + b'"}\n'
-    raw.write_bytes(b"\n" * 65530 + payload)
-    seen: list[dict] = []
-
-    async for event in tail_follow_events(
-        raw,
-        translate=lambda event: [event],
-        is_alive=lambda: False,
-        post_result_timeout=60.0,
-    ):
-      seen.append(event)
-
-  assert [event["seq"] for event in seen] == [9]
+  payload = b'{"type": "assistant", "seq": 9, "pad": "' + b"x" * 2000 + b'"}\n'
+  events = await _collect_tail_events(b"\n" * 65530 + payload, post_result_timeout=60.0)
+  assert [event["seq"] for event in events] == [9]
 
 
 @pytest.mark.asyncio
 async def test_tail_follow_events_drops_torn_final_line() -> None:
   """A final line the producer never finished stays unprocessed (the torn
   final write replays as at most a duplicate — never a loss)."""
-  import tempfile
-  from pathlib import Path
-
-  with tempfile.TemporaryDirectory() as work:
-    raw = Path(work) / "agent.raw.ndjson"
-    raw.write_bytes(b'{"type": "assistant", "seq": 1}\n{"type": "assistant", "seq": 2')
-    seen: list[dict] = []
-
-    async for event in tail_follow_events(
-        raw,
-        translate=lambda event: [event],
-        is_alive=lambda: False,
-        post_result_timeout=60.0,
-    ):
-      seen.append(event)
-
-  assert [event["seq"] for event in seen] == [1]
+  torn = b'{"type": "assistant", "seq": 1}\n{"type": "assistant", "seq": 2'
+  events = await _collect_tail_events(torn, post_result_timeout=60.0)
+  assert [event["seq"] for event in events] == [1]
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,9 @@ from conftest import (
     CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
     FLAG_LIKE_PROMPT,
     RUNS_READ_PID_STAT_PATCH_TARGET,
+    backend_option,
     build_cli_backend,
+    stub_credentials,
 )
 from pydantic import ValidationError
 
@@ -394,34 +396,29 @@ async def test_run_temp_transport_dir_exists_at_hook_and_removed_after(
 
 
 # ---------------------------------------------------------------------------
-# BackendOption.context_window
+# Backend entry context_window
 # ---------------------------------------------------------------------------
 
 
 def test_backend_option_defaults_context_window_to_none() -> None:
-  option = BackendOption(id="cc-k3-test", label="t", type="charlie-code", model="test-model")
+  option = backend_option(id="cc-k3-test", label="t", type="charlie-code", model="test-model")
   assert option.context_window is None
 
 
 def test_backend_option_accepts_positive_context_window() -> None:
-  option = BackendOption(id="cc-k3-test", label="t", type="charlie-code", model="test-model", context_window=262144)
+  option = backend_option(id="cc-k3-test", label="t", type="charlie-code", model="test-model", context_window=262144)
   assert option.context_window == 262144
 
 
 @pytest.mark.parametrize("bad", [0, -1])
 def test_backend_option_rejects_nonpositive_context_window(bad: int) -> None:
   with pytest.raises(ValidationError):
-    BackendOption(id="cc-k3-test", label="t", type="charlie-code", model="test-model", context_window=bad)
+    backend_option(id="cc-k3-test", label="t", type="charlie-code", model="test-model", context_window=bad)
 
 
 # ---------------------------------------------------------------------------
-# BackendOption.api_key -> CHARLIE_CODE_API_KEY injection
+# CharlieCodeBackend api_key -> CHARLIE_CODE_API_KEY injection
 # ---------------------------------------------------------------------------
-
-
-def test_backend_option_defaults_api_key_to_none() -> None:
-  option = BackendOption(id="cc-test", label="t", type="charlie-code", model="test-model")
-  assert option.api_key is None
 
 
 def test_prepare_env_injects_api_key_when_configured(monkeypatch) -> None:
@@ -450,7 +447,6 @@ def test_prepare_env_without_api_key_leaves_env_untouched(monkeypatch) -> None:
 @pytest.mark.parametrize(
     ("field", "value", "attr"), [
         ("context_window", 262144, "_context_window"),
-        ("api_key", "test-api-key-placeholder", "_api_key"),
     ])
 def test_registry_propagates_option_fields_into_charlie_code_backend(
     monkeypatch, field: str, value: object, attr: str) -> None:
@@ -458,7 +454,7 @@ def test_registry_propagates_option_fields_into_charlie_code_backend(
       CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/charlie-code",
   )
-  option = BackendOption(
+  option = backend_option(
       id="cc-k3-test",
       label="t",
       type="charlie-code",
@@ -471,6 +467,28 @@ def test_registry_propagates_option_fields_into_charlie_code_backend(
 
   assert isinstance(backend, CharlieCodeBackend)
   assert getattr(backend, attr) == value
+
+
+def test_registry_resolves_credential_into_charlie_code_api_key(monkeypatch) -> None:
+  """credential: <section> reads the api_key from credentials; the value lands on the backend's api_key."""
+  monkeypatch.setattr(
+      CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+      lambda name, fallback: "/usr/bin/charlie-code",
+  )
+  stub_credentials({"test-cc": {"api_key": "test-api-key-placeholder"}})
+  option = backend_option(
+      id="cc-k3-test",
+      label="t",
+      type="charlie-code",
+      model="openai/test-model",
+      api_base="http://test.invalid/v1",
+      credential="test-cc",
+  )
+
+  backend = build_backend(option, CharlieBotConfig())
+
+  assert isinstance(backend, CharlieCodeBackend)
+  assert backend._api_key == "test-api-key-placeholder"
 
 
 def test_api_base_required(monkeypatch) -> None:

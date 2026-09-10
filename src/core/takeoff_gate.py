@@ -80,18 +80,29 @@ def check_takeoff_gate(
   effective_now = effective_now.astimezone(UTC)
 
   events = session_mgr.load_chat_events_sync(session_id)
+  # Backward scan. The authorization verdict reads only two answers: the takeoff
+  # phrase in the file-last real user message, and the file-last parseable
+  # pre-takeoff stamp. A forward walk overwrites both with every later message
+  # of their kind, so once the backward scan has seen the file-last of a kind,
+  # no file-older message can change either answer — it stops there. The
+  # delegation target is the busiest master session, so the tail after its last
+  # user message is one turn's length while the file grows without bound.
   latest_user_has_takeoff = False
   latest_pre_takeoff_at: datetime | None = None
-  for event in events:
+  seen_latest_user = False
+  for event in reversed(events):
     if not _is_real_user_message(event):
       continue
-    content = event.get("content")
-    normalized = _normalize_takeoff_content(content)
-    latest_user_has_takeoff = _TAKEOFF_PHRASE in normalized
-    if _PRE_TAKEOFF_PHRASE in normalized:
+    normalized = _normalize_takeoff_content(event.get("content"))
+    if not seen_latest_user:
+      seen_latest_user = True
+      latest_user_has_takeoff = _TAKEOFF_PHRASE in normalized
+    if latest_pre_takeoff_at is None and _PRE_TAKEOFF_PHRASE in normalized:
       issued_at = _parse_pre_takeoff_timestamp(event, session_id)
       if issued_at is not None:
         latest_pre_takeoff_at = issued_at
+    if seen_latest_user and (latest_user_has_takeoff or latest_pre_takeoff_at is not None):
+      break
 
   pre_takeoff_active = (
       latest_pre_takeoff_at is not None and

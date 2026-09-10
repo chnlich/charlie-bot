@@ -62,6 +62,11 @@ def backend_option(**kwargs: Any) -> models.BackendBase:
   return models.BACKEND_OPTION_ADAPTER.validate_python(kwargs)
 
 
+def fake_backends() -> dict[str, list[models.BackendBase]]:
+  """One cc-claude entry so SessionManager.create_session has a default backend."""
+  return {"options": [backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model")]}
+
+
 @pytest.fixture(autouse=True)
 def _stub_headless_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
   """The suite's renderer is the write_stub_chrome shell script (answers --dump-dom only); give the drive seam that shape."""
@@ -1145,6 +1150,7 @@ def build_slack_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       slack={"allowed_user_ids": ["U_ALLOWED"]},
+      backends=fake_backends(),
   )
 
 
@@ -1232,7 +1238,7 @@ def build_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       paths={"worktree_dir": str(tmp_path / "worktrees")},
-      backends={"options": [backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model")]},
+      backends=fake_backends(),
   )
 
 
@@ -1503,9 +1509,15 @@ def stub_credentials(sections: dict[str, dict[str, str | int]]) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_credentials() -> Iterator[None]:
-  """Reset the config/credentials caches before and after every test, so no test sees another
-  test's stub or the host's real credentials file."""
+def _isolate_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+  """Every test runs under its own empty profile home, so a code path that calls the real
+  get_config() loads defaults instead of the host's ~/.charliebot; a test that asserts
+  default-home behavior deletes the variable itself, as temp_home does. Autouse fixtures run
+  before requested ones, so temp_home (deletes the variable, points HOME at a tmp dir) and
+  profile_home (sets it) keep working unchanged."""
+  profile = tmp_path / "profile"
+  profile.mkdir()
+  monkeypatch.setenv(core_config.CHARLIEBOT_HOME_ENV, str(profile))
   reset_config_caches()
   yield
   reset_config_caches()

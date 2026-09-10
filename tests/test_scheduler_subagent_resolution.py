@@ -14,7 +14,7 @@ from src.core.spawner import resolve_requested_subagent_backend_model
 def _build_cfg(options: list[BackendOption]) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=Path("/tmp/charliebot-test"),
-      backend_options=options,
+      backends={"options": options},
   )
 
 
@@ -75,7 +75,7 @@ async def test_session_default_raises_when_no_backend_options() -> None:
   session = SessionMetadata(name="s", backend="claude-opus-4.6")
   mgr = _mock_session_mgr(session)
 
-  with pytest.raises(ValueError, match="configured backend_options entry"):
+  with pytest.raises(ValueError, match="configured backends.options entry"):
     await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend=None)
 
 
@@ -88,7 +88,7 @@ async def test_requested_backend_raises_for_unknown_typo() -> None:
   session = SessionMetadata(name="s", backend="claude-opus-4.7")
   mgr = _mock_session_mgr(session)
 
-  with pytest.raises(ValueError, match="is not in backend_options"):
+  with pytest.raises(ValueError, match="is not in backends.options"):
     await resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend="missing-backend")
 
 

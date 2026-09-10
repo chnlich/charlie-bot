@@ -116,7 +116,6 @@ from src.core import event_types as ET
 from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_SESSION_META, CODEX_TOKEN_COUNT, CODEX_TURN_CONTEXT
 from src.core.config import get_config
 from src.core.json_utils import write_json_atomically
-from src.core.models import BackendType
 
 DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
@@ -220,19 +219,14 @@ class _SourceAggregate(NamedTuple):
 def discover_homes(claude_default: Path, codex_default: Path) -> tuple[dict[str, Path], dict[str, Path]]:
   """Claude config dirs and Codex homes from config.yaml plus the on-disk defaults.
 
-  Reading the backend options keeps a newly added subscription in the tally without an edit here;
-  the defaults are always included.
+  Reading the account list keeps a newly added pool account in the tally without an edit here;
+  the default is always included, and codex always runs from its default home.
   """
   cfg = get_config()
   claude: set[Path] = {claude_default}
-  codex: set[Path] = {codex_default}
-  for account in cfg.claude_accounts:
+  for account in cfg.accounts.claude:
     claude.add(Path(account.config_dir).expanduser())
-  for opt in cfg.backend_options:
-    if opt.type == BackendType.CC_CLAUDE and opt.claude_config_dir:
-      claude.add(Path(opt.claude_config_dir).expanduser())
-    elif opt.type == BackendType.CODEX and opt.codex_home:
-      codex.add(Path(opt.codex_home).expanduser())
+  codex: set[Path] = {codex_default}
 
   claude_map = {_account_label(p, ".claude"): p for p in sorted(claude) if (p / "projects").is_dir()}
   codex_map = {_account_label(p, ".codex"): p for p in sorted(codex) if (p / "sessions").is_dir()}

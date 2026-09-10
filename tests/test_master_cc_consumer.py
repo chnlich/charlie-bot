@@ -14,6 +14,7 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
     TerminateFlagBackend,
+    backend_option,
     compact_boundary_event,
     drain_session_consumer,
     fresh_master_state,
@@ -36,7 +37,6 @@ from src.core import runs, thinking_state
 from src.core import sessions as sessions_module
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-    BackendOption,
     CreateSessionRequest,
     MasterRunRecord,
     SessionCallbacks,
@@ -87,7 +87,7 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
 def _make_consumer_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
-      backend_options=[BackendOption(id="fake", label="Fake", type="codex")],
+      backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")]},
   )
 
 
@@ -479,7 +479,7 @@ async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
   patch_instructions_content(monkeypatch)
   monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
 
-  item = make_work_item(cfg, meta, cfg.backend_options[0], user_content="next round", callbacks=session_mgr.callbacks())
+  item = make_work_item(cfg, meta, cfg.backends.options[0], user_content="next round", callbacks=session_mgr.callbacks())
   await master_cc._run_cc(item)
 
   events = session_mgr.load_chat_events_sync(session.id)

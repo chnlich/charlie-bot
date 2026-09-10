@@ -40,6 +40,7 @@ from src.core.message_aggregator import (
     _model_fallback_notice_msg,
 )
 from src.core.models import (
+    BackendOption,
     CreateSessionRequest,
     MasterRunRecord,
     SessionMetadata,

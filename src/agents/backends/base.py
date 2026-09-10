@@ -238,6 +238,22 @@ def make_context_reading_event(
   }
 
 
+def make_compact_boundary_event(trigger: str, pre_tokens: int | None) -> dict:
+  """Build a CC-compatible system event marking a compaction crossing.
+
+  The payload key (``compact_metadata``) carries the trigger and the token
+  count the compaction crossed; src/core/event_types.py owns the wire contract.
+  """
+  return {
+      "type": ET.SYSTEM,
+      "subtype": ET.COMPACT_BOUNDARY,
+      ET.COMPACT_METADATA: {
+          "trigger": trigger,
+          ET.COMPACT_PRE_TOKENS: pre_tokens,
+      },
+  }
+
+
 async def iter_ndjson_events(stdout: asyncio.StreamReader) -> AsyncIterator[dict]:
   """Yield the JSON objects of an NDJSON stream.
 

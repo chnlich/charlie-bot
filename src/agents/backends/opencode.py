@@ -16,6 +16,7 @@ from src.agents.backends.base import (
     SKIP_PERMISSIONS_FLAG,
     AgentBackend,
     iter_ndjson_events,
+    make_compact_boundary_event,
     make_error_event,
     make_result_event,
     make_text_event,
@@ -538,16 +539,7 @@ class OpenCodeBackend(AgentBackend):
         if already_registered:
           return []
         pre_tokens = self._last_step_tokens["input"] if self._last_step_tokens is not None else None
-        return [
-            {
-                "type": ET.SYSTEM,
-                "subtype": ET.COMPACT_BOUNDARY,
-                ET.COMPACT_METADATA: {
-                    "trigger": "auto",
-                    ET.COMPACT_PRE_TOKENS: pre_tokens
-                },
-            }
-        ]
+        return [make_compact_boundary_event("auto", pre_tokens)]
       if info["role"] != "assistant":
         return []
       translated: list[dict] = []

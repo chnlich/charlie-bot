@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_ID, SYNTHETIC_MODEL
+from conftest import OPUS_BACKEND_ID, SYNTHETIC_MODEL, backend_option
 from conftest import codex_token_count_event as _codex_token_count_envelope
 from conftest import compact_boundary_event as _compact_boundary_event
 
@@ -16,22 +16,25 @@ from src.agents.backends.claude_code import (
     _reset_declared_window_warnings_for_tests,
     headless_claude_declared_window,
 )
+from src.core import codex_usage
 from src.core import event_types as ET
 from src.core import session_usage
 from src.core.codex_usage import _extract_codex_rollout_usage_event
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption, SessionMetadata
+from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
 
 
 def _build_cfg(tmp_path: Path, **codex_kwargs) -> CharlieBotConfig:
-  codex_opt = BackendOption(id="codex-test", label="Codex", type="codex", model="codex-test-model", **codex_kwargs)
+  codex_opt = backend_option(id="codex-test", label="Codex", type="codex", model="codex-test-model", **codex_kwargs)
   return CharlieBotConfig(
       charliebot_home=tmp_path,
-      backend_options=[
-          BackendOption(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude", model="claude-opus-4-6"),
-          codex_opt,
-      ],
+      backends={
+          "options": [
+              backend_option(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude", model="claude-opus-4-6"),
+              codex_opt,
+          ]
+      },
   )
 
 
@@ -49,6 +52,15 @@ def _session_rig(tmp_path: Path, session_id: str, name: str, backend: str) -> tu
   session_mgr = SessionManager(_build_cfg(tmp_path))
   meta = SessionMetadata(id=session_id, name=name, backend=backend)
   return session_mgr, meta
+
+
+@pytest.fixture(autouse=True)
+def _codex_home_under_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+  """Pin the codex resolver's default home under tmp_path: codex runs from the default
+  home, so the rollout tree the tests seed is ``<tmp>/codex-home/sessions``."""
+  home = tmp_path / "codex-home"
+  monkeypatch.setattr(codex_usage, "_DEFAULT_CODEX_HOME", home)
+  return home
 
 
 def _write_codex_rollout(codex_home: Path, native_thread_id: str, lines: list[dict]) -> None:
@@ -93,9 +105,10 @@ def _codex_token_count_event(
 
 
 def _seed_codex_session(
-    session_mgr: SessionManager, *, session_id: str, name: str, backend: str, native_thread_id: str, codex_home: Path,
+    session_mgr: SessionManager, *, session_id: str, name: str, backend: str, native_thread_id: str,
     turn_model: str, token_event: dict) -> SessionMetadata:
-  """Write the session metadata, a filler user event, and a one-turn codex rollout."""
+  """Write the session metadata, a filler user event, and a one-turn codex rollout under the
+  default codex home the autouse fixture pins."""
   meta = SessionMetadata(id=session_id, name=name, backend=backend, cc_session_id=native_thread_id)
   _write_session(session_mgr, meta, [
       {
@@ -104,7 +117,7 @@ def _seed_codex_session(
           "timestamp": "2026-03-31T20:42:52Z"
       },
   ])
-  _write_codex_rollout(codex_home, native_thread_id, [
+  _write_codex_rollout(codex_usage._DEFAULT_CODEX_HOME, native_thread_id, [
       _codex_turn_context(turn_model),
       token_event,
   ])
@@ -973,27 +986,26 @@ async def test_codex_tier_not_consulted_for_non_codex_backend(tmp_path: Path, mo
 
 @pytest.mark.asyncio
 async def test_codex_rollout_resolves_via_other_backend_when_session_backend_absent(tmp_path: Path,) -> None:
-  # The session's own backend ("codex-old") is absent from config; another
-  # configured codex backend points at the tree holding the rollout.
+  # The session's own backend ("codex-old") is absent from config; another codex
+  # backend is configured, and the rollout lives in the default codex home.
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path,
-      backend_options=[
-          BackendOption(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude", model="claude-opus-4-6"),
-          BackendOption(
-              id="codex-new", label="Codex New", type="codex", model="gpt-5.5",
-              codex_home=str(tmp_path / "codex-tree")),
-      ],
+      backends={
+          "options": [
+              backend_option(id=OPUS_BACKEND_ID, label="Claude", type="cc-claude", model="claude-opus-4-6"),
+              backend_option(id="codex-new", label="Codex New", type="codex", model="gpt-5.5"),
+          ]
+      },
   )
   session_mgr = SessionManager(cfg)
   # "codex-old" is absent from config but starts with "codex", so is_codex_backend
-  # admits it via the prefix fallback while rollout lookup walks the other backend's tree.
+  # admits it via the prefix fallback while rollout lookup walks the default home.
   meta = _seed_codex_session(
       session_mgr,
       session_id="session-codex-old",
       name="Codex Old Backend",
       backend="codex-old",
       native_thread_id="019d45a2-836d-7552-a54f-3c6c5511e502",
-      codex_home=tmp_path / "codex-tree",
       turn_model="gpt-5.5",
       token_event=_codex_token_count_event(
           timestamp="2026-03-31T20:43:12.454Z",
@@ -1023,14 +1035,14 @@ async def test_codex_rollout_resolves_via_other_backend_when_session_backend_abs
 @pytest.mark.asyncio
 async def test_codex_unconfigured_compaction_logs_no_warning(tmp_path: Path, capsys) -> None:
   # _build_cfg creates the codex backend WITHOUT model_auto_compact_token_limit.
-  session_mgr = SessionManager(_build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree")))
+  session_mgr = SessionManager(_build_cfg(tmp_path))
   meta = _seed_codex_session(
       session_mgr,
       session_id="session-codex-unconfigured",
       name="Codex Unconfigured",
       backend="codex-test",
       native_thread_id="019d45a2-836d-7552-a54f-3c6c5511e5ee",
-      codex_home=tmp_path / "codex-tree",
+
       turn_model="gpt-5.5",
       token_event=_codex_token_count_event(
           timestamp="2026-03-31T20:43:12.454Z",
@@ -1061,14 +1073,14 @@ async def test_codex_unconfigured_compaction_logs_no_warning(tmp_path: Path, cap
 @pytest.mark.asyncio
 async def test_codex_context_compact_at_uses_auto_compact_limit_when_configured(tmp_path: Path) -> None:
   session_mgr = SessionManager(
-      _build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree"), model_auto_compact_token_limit=180_000))
+      _build_cfg(tmp_path, model_auto_compact_token_limit=180_000))
   meta = _seed_codex_session(
       session_mgr,
       session_id="session-autocompact",
       name="Auto Compact",
       backend="codex-test",
       native_thread_id="019d26e4-be1c-7171-a3fd-6f1ab10662de",
-      codex_home=tmp_path / "codex-tree",
+
       turn_model="gpt-5.5",
       token_event=_codex_token_count_event(
           timestamp="2026-03-25T21:32:09.989Z",
@@ -1131,14 +1143,14 @@ _CODEX_NATIVE_COST_ROWS = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("turn_model, expected_cost", _CODEX_NATIVE_COST_ROWS)
 async def test_codex_native_cost_by_turn_model(tmp_path: Path, turn_model: str, expected_cost: object) -> None:
-  session_mgr = SessionManager(_build_cfg(tmp_path, codex_home=str(tmp_path / "codex-tree")))
+  session_mgr = SessionManager(_build_cfg(tmp_path))
   meta = _seed_codex_session(
       session_mgr,
       session_id="session-codex-cost",
       name="Codex Cost Session",
       backend="codex-test",
       native_thread_id="019d9f9e-5d7a-7f44-81a8-e9cb8261a51d",
-      codex_home=tmp_path / "codex-tree",
+
       turn_model=turn_model,
       token_event=_codex_token_count_event(
           timestamp="2026-03-31T20:43:12.454Z",

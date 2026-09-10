@@ -11,7 +11,7 @@ from pathlib import Path
 
 from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
-from src.core.ndjson import iter_ndjson_events_from_end
+from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events_from_end
 from src.core.threads import ThreadManager
 
 # ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ def _resolve_final_report(events_path: Path) -> str:
   """
   assistant_text: str | None = None
   seen_result = False
-  for event in iter_ndjson_events_from_end(events_path, log_event="ndjson_parse_skip", log_fields={}):
+  for event in iter_ndjson_events_from_end(events_path, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}):
     event_type = event.get("type")
     if assistant_text is None and event_type == ET.ASSISTANT:
       message = event.get("message") if isinstance(event.get("message"), dict) else None

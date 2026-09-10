@@ -294,7 +294,7 @@ class Worker:
     if decision == claude_relay.LOGIN_FAILED:
       claude_accounts.record_auth_failure(current.label)
       log.error(
-          "claude_account_login_required",
+          ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
           thread=self._thread.id,
           account=current.label,
           config_dir=current.config_dir,

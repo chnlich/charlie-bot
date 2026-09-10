@@ -139,7 +139,9 @@ RATE_LIMIT_INFO = "rate_limit_info"
 # lost its credentials or failed to authenticate and needs an interactive
 # `claude /login` in ``config_dir``. Fields: account, config_dir, reason
 # ("auth_failed" | "empty_credentials"). The chat renders it account-free; the
-# account and directory are for the server log and the usage panel.
+# account and directory are for the server log and the usage panel. The emit
+# sites also label their server-log lines with this constant, so the chat event
+# type and the log label stay the same string.
 CLAUDE_ACCOUNT_LOGIN_REQUIRED = "claude_account_login_required"
 
 # -- Session backend switching ----------------------------------------------

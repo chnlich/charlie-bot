@@ -28,6 +28,7 @@ import structlog
 
 from src.agents import master_cc_state
 from src.core import claude_accounts, claude_compaction, claude_relay
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, ClaudeAccount, SessionMetadata
 
@@ -138,7 +139,7 @@ async def report_login_failure(
   """Mark *account* unhealthy for the cooldown and tell the operator (account-free in chat)."""
   claude_accounts.record_auth_failure(account.label, now)
   log.error(
-      "claude_account_login_required",
+      ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
       session=item.session_meta.id,
       account=account.label,
       config_dir=account.config_dir,
@@ -152,7 +153,7 @@ async def report_empty_credentials(cfg: CharlieBotConfig, item: master_cc_state.
     present = claude_accounts.credentials_present(account)
     if claude_accounts.login_notice_due(account.label, unhealthy=not present):
       log.error(
-          "claude_account_login_required",
+          ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
           session=item.session_meta.id,
           account=account.label,
           config_dir=account.config_dir,

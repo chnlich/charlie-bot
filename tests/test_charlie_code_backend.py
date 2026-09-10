@@ -19,7 +19,6 @@ from src.agents.backends.charlie_code import CharlieCodeBackend
 from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import BackendOption
 
 
 def _build_backend(monkeypatch, **kwargs) -> CharlieCodeBackend:

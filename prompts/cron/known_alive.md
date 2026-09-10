@@ -271,34 +271,6 @@ Known-alive symbols:
   `("has-session", "-t", "charliebot-terminal")` with no `check=`, so deleting the parameter
   stays green; the mirror keeps the stub a faithful drop-in. Vulture flags it at 100%
   confidence as an unused variable.
-- `aigw_api_key`, `feishu_app_id`, `feishu_app_secret`, `feishu_refresh_token`,
-  `feishu_user_access_token`, `gemini_api_key`, `gemini_model`, `google_client_id`,
-  `google_client_secret`, `google_docs_client_id`, `google_docs_client_secret`,
-  `google_docs_default_folder_id`, `google_docs_refresh_token`, `google_refresh_token`,
-  `linear_api_key`, `slack_user_token`, `twitter_api_key`, `twitter_api_secret`,
-  `twitter_access_token`, `twitter_access_token_secret`, `public_base_url`
-  (`src/core/config.py`, `CharlieBotConfig` fields) — yaml keys hosts carry in
-  `config.yaml` / `config.d/*.yaml`, kept deliberately: consumers read the raw yaml outside
-  this repo. Ten of the twenty-one are quoted by name in the skill files that read them
-  (`skills/feishu/SKILL.md`, `skills/gmail/SKILL.md`, `skills/google-sheets/SKILL.md`,
-  `skills/google-docs/SKILL.md`, `skills/linear/SKILL.md`, `skills/slack/SKILL.md`); the
-  other eleven — `aigw_api_key`, `gemini_api_key`, `gemini_model`, `google_docs_client_id`,
-  `google_docs_client_secret`, `google_docs_refresh_token`, the four `twitter_*` keys, and
-  `public_base_url` — have no in-repo script consumer (`gemini_api_key`'s remaining prose
-  surface is the token-usage page's coverage note, plus the config template's design note
-  through the `gemini_/` prefix set; `aigw_api_key` surfaces only in its own field
-  comment). The four
-  `twitter_*` keys are read by the host-only `x-posting` skill, which is not mirrored into
-  `skills/`, so no in-repo grep can reach it; they were deleted on zero-match evidence in
-  PR #455 and that broke startup for every command going through `load_config()`. For this
-  whole block, an absent in-repo consumer is not evidence: the consumer is out of repo by
-  construction, so the zero-match bar of `code_health.md` Step 3 can never clear it. The
-  fields exist so `extra='forbid'` keeps those host files loadable — the
-  block comment directly above the fields in `config.py` states this for the whole set.
-  `test_declared_integration_keys_round_trip` (`tests/test_config_fragments.py`) pins the
-  full set by name. Nothing in the repo attribute-reads the values, so vulture flags
-  every field as an unused variable. Same kept-deliberately class as the `backlog_label`
-  entry above.
 - `panel-summary`, `panel-details`, `panel-roofline`, `panel-source`, `panel-session`,
   `panel-raw` (`web/templates/ncu.html`, the six tab-panel element ids) — reached by
   string construction: the inline tab switcher activates panels with

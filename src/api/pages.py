@@ -215,7 +215,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent.parent.parent / 
 
 
 @router.get("/api/auth/status")
-async def auth_status(cfg: CharlieBotConfig = Depends(get_config)) -> JSONResponse:
+async def auth_status() -> JSONResponse:
   """Return whether access-key authentication is enabled."""
   return JSONResponse({"auth_enabled": bool(str(get_credentials().get("charliebot", "access_key") or ""))})
 

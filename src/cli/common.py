@@ -27,7 +27,7 @@ import requests
 
 from src.agents.backends.base import SESSION_ID_ENV_VAR
 from src.core.buildinfo import read_repo_head_sha
-from src.core.config import CharlieBotConfig, get_config
+from src.core.config import CharlieBotConfig, get_config, get_credentials
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
@@ -49,12 +49,14 @@ TASK_SPEC_REQUIRED_HEADINGS = (
 def internal_api_auth_headers(cfg: CharlieBotConfig) -> dict[str, str]:
   """Authorization header for internal-API calls.
 
-  Returns a Bearer header when ``charliebot_access_key`` is configured so the
-  internal CLIs authenticate against the auth middleware; returns no header when
-  the key is empty (the middleware is a no-op in that case).
+  Returns a Bearer header when the access key is configured — it lives in
+  credentials.yaml under ``charliebot.access_key`` — so the internal CLIs
+  authenticate against the auth middleware; returns no header when the key is
+  empty (the middleware is a no-op in that case).
   """
-  if cfg.charliebot_access_key:
-    return {"Authorization": f"Bearer {cfg.charliebot_access_key}"}
+  access_key = get_credentials().get("charliebot", "access_key")
+  if access_key:
+    return {"Authorization": f"Bearer {access_key}"}
   return {}
 
 

@@ -1,6 +1,7 @@
 """CLI: inspect and (only with --yes) purge the worktree quarantine trash.
 
-The startup sweep moves stale failed worktrees into `<worktree_dir>/.trash/`; nothing
+The startup sweep moves stale failed worktrees into `<worktree_dir>/.trash/`
+(`cfg.paths.worktree_dir`); nothing
 ever hard-deletes them automatically. This command lists what is there and, only when
 `--yes` is passed, removes it. Root-owned entries are reported (with the manual `sudo rm`
 to run) and never escalated automatically.
@@ -26,7 +27,7 @@ def main() -> None:
   args = parser.parse_args()
 
   cfg = get_config()
-  trash_path = trash_dir(cfg.worktree_dir)
+  trash_path = trash_dir(cfg.paths.worktree_dir)
   entries = list_trash_entries(trash_path)
 
   if not entries:

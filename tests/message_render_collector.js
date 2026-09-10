@@ -17,7 +17,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const { fetchUrl, worstChatFile } = require('./stream_collector_common');
+const { fetchUrl, worstPageCorpus, assistantTexts } = require('./stream_collector_common');
 const { buildRendererContext } = require('./renderer_vm_context');
 
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
@@ -29,37 +29,14 @@ function readJs(name) {
   return fs.readFileSync(path.join(CHECKOUT, 'web/static/js', name), 'utf8');
 }
 
-// Worst page corpus: from the live chat file carrying the most bytes, the
-// largest assistant/user/worker-summary/plan bodies — the page a re-entry of
-// the heaviest session re-renders.
-function pageCorpus() {
-  const worst = worstChatFile();
-  if (!worst) throw new Error('no on-disk live chat file');
-  const { p: best, size: bestSize } = worst;
-
-  const texts = [];
-  for (const line of fs.readFileSync(best, 'utf8').split('\n')) {
-    if (!line) continue;
-    let ev;
-    try {
-      ev = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const type = ev.type;
-    if (type === 'assistant') {
-      const blocks = Array.isArray(ev.message?.content) ? ev.message.content : [];
-      for (const block of blocks) {
-        if (block?.type === 'text' && typeof block.text === 'string' && block.text) texts.push(block.text);
-      }
-    } else if ((type === 'user' || type === 'worker_summary' || type === 'plan')
-        && typeof ev.content === 'string' && ev.content) {
-      texts.push(ev.content);
-    }
+// The bodies one event contributes to the page corpus: assistant text blocks
+// plus the string bodies of user/worker_summary/plan events — the page a
+// re-entry of the heaviest session re-renders.
+function pageBodyTexts(ev) {
+  if (ev.type === 'user' || ev.type === 'worker_summary' || ev.type === 'plan') {
+    return typeof ev.content === 'string' && ev.content ? [ev.content] : [];
   }
-  if (!texts.length) throw new Error('no message bodies in the worst live chat file');
-  texts.sort((a, b) => b.length - a.length);
-  return { file: best, fileSize: bestSize, page: texts.slice(0, PAGE_MESSAGES) };
+  return assistantTexts(ev);
 }
 
 async function loadContext(hljsSource) {
@@ -72,7 +49,7 @@ async function loadContext(hljsSource) {
 }
 
 (async () => {
-  const { file, fileSize, page } = pageCorpus();
+  const { file, fileSize, page } = worstPageCorpus(pageBodyTexts, PAGE_MESSAGES);
   const pageBytes = page.reduce((sum, t) => sum + t.length, 0);
   const digest = crypto.createHash('sha1').update(page.join('\u0000')).digest('hex').slice(0, 12);
   const hljsSource = await fetchUrl(HLJS_URL);

@@ -43,7 +43,8 @@ def _worktree_paths(tmp_path_factory: pytest.TempPathFactory) -> None:
 def _build_cfg(
     *,
     options: list[BackendOption] | None = None,
-    preference: list[str] | None = None,) -> CharlieBotConfig:
+    preference: list[str] | None = None,
+) -> CharlieBotConfig:
   """A config rooted at /tmp whose worktrees live in the module-scoped dir; backends.options
   defaults to the conftest trio, overridable with *options*, and *preference* sets
   backends.preference when non-empty."""

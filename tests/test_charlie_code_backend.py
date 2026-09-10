@@ -443,10 +443,9 @@ def test_prepare_env_without_api_key_leaves_env_untouched(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("field", "value", "attr"), [
-        ("context_window", 262144, "_context_window"),
-    ])
+@pytest.mark.parametrize(("field", "value", "attr"), [
+    ("context_window", 262144, "_context_window"),
+])
 def test_registry_propagates_option_fields_into_charlie_code_backend(
     monkeypatch, field: str, value: object, attr: str) -> None:
   monkeypatch.setattr(

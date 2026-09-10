@@ -51,9 +51,7 @@ async def _run_cc_with_backend(
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={
-          "options": [
-              backend_option(id="fake", label="Fake", type="codex", model="o3", prompt_overlay="none"),
-          ],
+          "options": [backend_option(id="fake", label="Fake", type="codex", model="o3", prompt_overlay="none"),],
       },
   )
   callbacks = mock_session_callbacks()

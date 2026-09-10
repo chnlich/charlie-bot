@@ -34,12 +34,13 @@ def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path]:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={
-          "options": [
-              backend_option(id="claude-opus-5", label="Opus 5", type="cc-claude", model="claude-opus-5"),
-              backend_option(id="claude-fable-5", label="Fable 5", type="cc-claude", model="claude-fable-5"),
-              backend_option(id="invite-opus", label="Invite Opus", type="cc-claude", model="claude-opus-4-6"),
-              CODEX_BACKEND_OPTION,
-          ]
+          "options":
+              [
+                  backend_option(id="claude-opus-5", label="Opus 5", type="cc-claude", model="claude-opus-5"),
+                  backend_option(id="claude-fable-5", label="Fable 5", type="cc-claude", model="claude-fable-5"),
+                  backend_option(id="invite-opus", label="Invite Opus", type="cc-claude", model="claude-opus-4-6"),
+                  CODEX_BACKEND_OPTION,
+              ]
       },
   )
   return cfg, config_a
@@ -51,8 +52,7 @@ def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path]:
 
 
 @pytest.mark.parametrize("tgt_id", ["claude-opus-5", "claude-fable-5", "codex-o3"])
-def test_guard_is_exactly_transcript_reachability(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tgt_id: str) -> None:
+def test_guard_is_exactly_transcript_reachability(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tgt_id: str) -> None:
   """allowed(cur, tgt) holds exactly when _resolve_resume_id(tgt) re-finds the transcript.
 
   A transcript written under the process login dir ($CLAUDE_CONFIG_DIR) is

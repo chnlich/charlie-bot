@@ -13,6 +13,7 @@ import html as _html
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from itertools import chain
 from typing import Iterable
 
 _IGNORED_TAGS = frozenset({"head", "style", "script", "template", "noscript", "title"})
@@ -602,16 +603,10 @@ def _ghost_parent(root: _Node, leaves: list[_Leaf], index: int, old: _Leaf) -> _
   if wanted is None:
     return None
   candidates = ([root] if root.tag == wanted.tag else []) + list(_descendant_nodes(root))
-  for candidate_index in range(index, len(leaves)):
-    candidate = leaves[candidate_index].element
-    current = candidate.parent
-    while current is not None:
-      if current.tag == wanted.tag:
-        return current
-      current = current.parent
-  for candidate_index in range(min(index - 1, len(leaves) - 1), -1, -1):
-    candidate = leaves[candidate_index].element
-    current = candidate.parent
+  # Scan order is load-bearing: leaves at/after the cut come first, then earlier leaves
+  # backward, and the first tagged ancestor found in that order becomes the ghost's parent.
+  for scan_index in chain(range(index, len(leaves)), range(min(index - 1, len(leaves) - 1), -1, -1)):
+    current = leaves[scan_index].element.parent
     while current is not None:
       if current.tag == wanted.tag:
         return current

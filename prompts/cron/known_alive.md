@@ -416,8 +416,3 @@ Known-alive symbols:
   whole-repo matches outside the three definitions, so vulture flags each as an unused
   method. Same framework-registered class as the `check_prompt_or_handler_or_loop` entry
   above.
-- `debug` (`web/static/js/chat/turn-engine.js`, on the `Chat.TurnEngine` namespace object) —
-  browser-console debugging aid: no code anywhere in `web/` or the templates calls it (a
-  zero-reference scan of the namespace's method shorthands flags only it), but its caller is a
-  human typing `Chat.TurnEngine.debug(container)` in devtools, which no static scan can see. It
-  returns one engine's window/offset/segment stats for the chat virtualizer. Kept deliberately.

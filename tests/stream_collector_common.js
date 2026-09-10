@@ -48,8 +48,16 @@ function largestAssistantDraft(accept) {
   return best;
 }
 
+// An assistant event's text-block bodies: the non-empty strings of its message
+// content blocks of type text.
+function assistantTexts(ev) {
+  if (ev.type !== 'assistant' || !ev.message) return [];
+  const blocks = Array.isArray(ev.message.content) ? ev.message.content : [];
+  return blocks.flatMap((b) => (b?.type === 'text' && typeof b.text === 'string' && b.text ? [b.text] : []));
+}
+
 // The live chat file carrying the most bytes, as { p, size }; null when the
-// live tree holds no chat file. The caller decides which bodies to extract.
+// live tree holds no chat file.
 function worstChatFile() {
   const root = path.join(process.env.HOME, '.charliebot', 'sessions');
   let best = null;
@@ -70,4 +78,29 @@ function worstChatFile() {
   return best ? { p: best, size: bestSize } : null;
 }
 
-module.exports = { fetchUrl, largestAssistantDraft, worstChatFile };
+// The worst live chat file's message page: the pageMessages largest bodies its
+// events carry, as { file, fileSize, page }; throws when the live tree holds no
+// chat file or the worst file carries no body. bodyTexts(event) returns the
+// bodies one event contributes (possibly none), so each collector pins the
+// event shapes its metric walks.
+function worstPageCorpus(bodyTexts, pageMessages) {
+  const worst = worstChatFile();
+  if (!worst) throw new Error('no on-disk live chat file');
+  const { p: best, size: bestSize } = worst;
+  const texts = [];
+  for (const line of fs.readFileSync(best, 'utf8').split('\n')) {
+    if (!line) continue;
+    let ev;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    for (const text of bodyTexts(ev)) texts.push(text);
+  }
+  if (!texts.length) throw new Error('no message bodies in the worst live chat file');
+  texts.sort((a, b) => b.length - a.length);
+  return { file: best, fileSize: bestSize, page: texts.slice(0, pageMessages) };
+}
+
+module.exports = { fetchUrl, largestAssistantDraft, assistantTexts, worstPageCorpus };

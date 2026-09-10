@@ -17,11 +17,11 @@ _LOG_PATCH_TARGET = "src.core.master_trigger.log"
 def _build_cfg() -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=Path("/tmp/charliebot-test"),
-      worktree_dir="/tmp/worktrees",
-      backend_options=[
+      paths={"worktree_dir": "/tmp/worktrees"},
+      backends={"options": [
           OPUS_BACKEND_OPTION,
           CODEX_BACKEND_OPTION,
-      ],
+      ]},
   )
 
 

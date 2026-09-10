@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import subprocess
 import time
 import types
 from collections.abc import Callable
@@ -33,6 +34,7 @@ from src.core.models import ClaudeAccount
 _fresh_unknown_limit_shape_registry = fresh_state_fixture(ext_usage_mod._reset_unknown_limit_shapes_for_tests)
 _fresh_credential_read_warning_registry = fresh_state_fixture(ext_usage_mod._reset_credential_read_warnings_for_tests)
 _fresh_usage_cache = fresh_state_fixture(ext_usage_mod._cached_usage.clear)
+_fresh_user_agent_cache = fresh_state_fixture(ext_usage_mod._reset_user_agent_for_tests)
 
 
 def _build_token_count_event(
@@ -1989,3 +1991,121 @@ async def test_claude_renewal_succeeds_but_retried_get_401_reports_auth_rejected
   assert await provider.fetch() is None
   assert provider.last_error == "auth rejected"
   assert provider._backoff_until > time.time()
+
+
+# ---------------------------------------------------------------------------
+# User-Agent resolution: both OAuth consumers (usage GET and refresh POST)
+# share one runtime-probed claude-code/<version>; any probe failure falls
+# back to the pinned constant with a loud warning, resolved once per process.
+# ---------------------------------------------------------------------------
+
+
+def _capture_user_agent_resolutions(monkeypatch) -> list[dict]:
+  """Record every log call at the two levels the resolution event can take."""
+  events: list[dict] = []
+
+  def record(level: str):
+
+    def sink(event, **kw) -> None:
+      events.append({"level": level, "event": event, **kw})
+
+    return sink
+
+  monkeypatch.setattr(ext_usage_mod.log, "info", record("info"))
+  monkeypatch.setattr(ext_usage_mod.log, "warning", record("warning"))
+  return events
+
+
+def _arm_user_agent_probe(
+    monkeypatch,
+    *,
+    stdout: bytes = b"",
+    returncode: int = 0,
+    error: Exception | None = None,
+) -> list[tuple[list[str], dict]]:
+  """Arm the probe: clear the cache and script a fake ``subprocess.run``.
+
+  Returns the recorded calls so a test can assert the exact subprocess
+  mechanism (argv, capture, timeout, no shell) and that it ran only once.
+  """
+  ext_usage_mod._user_agent_cache = None
+  calls: list[tuple[list[str], dict]] = []
+
+  def fake_run(args, **kwargs):
+    calls.append((list(args), kwargs))
+    if error is not None:
+      raise error
+    return subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr=b"")
+
+  monkeypatch.setattr(ext_usage_mod.subprocess, "run", fake_run)
+  return calls
+
+
+def _user_agent_resolution_events(events: list[dict]) -> list[dict]:
+  return [event for event in events if event["event"] == "ext_usage_user_agent_resolved"]
+
+
+@pytest.mark.asyncio
+async def test_claude_requests_carry_the_probed_cli_version(monkeypatch, tmp_path) -> None:
+  """Usage GET and refresh POST share the probed version, probed exactly once."""
+  fake = _FakeUsageHTTP([401, 200, 200])
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+  events = _capture_user_agent_resolutions(monkeypatch)
+  probe_calls = _arm_user_agent_probe(monkeypatch, stdout=b"2.9.9 (Claude Code)")
+
+  await provider.fetch()
+  await provider.fetch()
+
+  assert fake.gets[0]["headers"]["User-Agent"] == "claude-code/2.9.9"
+  assert fake.posts[0]["headers"]["User-Agent"] == "claude-code/2.9.9"
+  # The probe mechanism, exactly as pinned: fixed argv, captured output, 5s
+  # timeout, no shell -- and only one subprocess across both requests.
+  assert probe_calls == [(["claude", "--version"], {"capture_output": True, "timeout": 5})]
+  assert _user_agent_resolution_events(events) == [
+      {"level": "info", "event": "ext_usage_user_agent_resolved", "version": "2.9.9", "source": "probe"}
+  ]
+
+
+@pytest.mark.asyncio
+async def test_user_agent_probe_missing_binary_falls_back_with_warning(monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([200])
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+  events = _capture_user_agent_resolutions(monkeypatch)
+  _arm_user_agent_probe(monkeypatch, error=FileNotFoundError(2, "No such file or directory: 'claude'"))
+
+  await provider.fetch()
+
+  assert fake.gets[0]["headers"]["User-Agent"] == "claude-code/2.1.219"
+  assert _user_agent_resolution_events(events) == [
+      {"level": "warning", "event": "ext_usage_user_agent_resolved", "version": "2.1.219", "source": "fallback"}
+  ]
+
+
+@pytest.mark.asyncio
+async def test_user_agent_probe_nonzero_exit_falls_back_with_warning(monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([200])
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+  events = _capture_user_agent_resolutions(monkeypatch)
+  _arm_user_agent_probe(monkeypatch, returncode=1)
+
+  await provider.fetch()
+
+  assert fake.gets[0]["headers"]["User-Agent"] == "claude-code/2.1.219"
+  assert _user_agent_resolution_events(events) == [
+      {"level": "warning", "event": "ext_usage_user_agent_resolved", "version": "2.1.219", "source": "fallback"}
+  ]
+
+
+@pytest.mark.asyncio
+async def test_user_agent_probe_unparseable_output_falls_back_with_warning(monkeypatch, tmp_path) -> None:
+  fake = _FakeUsageHTTP([200])
+  provider = _claude_provider(monkeypatch, tmp_path, fake)
+  events = _capture_user_agent_resolutions(monkeypatch)
+  _arm_user_agent_probe(monkeypatch, stdout=b"claude is unavailable right now")
+
+  await provider.fetch()
+
+  assert fake.gets[0]["headers"]["User-Agent"] == "claude-code/2.1.219"
+  assert _user_agent_resolution_events(events) == [
+      {"level": "warning", "event": "ext_usage_user_agent_resolved", "version": "2.1.219", "source": "fallback"}
+  ]

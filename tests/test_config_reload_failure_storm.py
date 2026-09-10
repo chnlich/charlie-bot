@@ -44,23 +44,22 @@ def _seed_good_config() -> None:
 _UTIME_TICK = [0]
 
 
-def _write_broken(home, name: str, key: str) -> None:
-  """One fragment declaring a key the model does not declare — the observed
+def _write_broken(home, key: str) -> None:
+  """config.yaml declaring a key the model does not declare — the observed
   burst's error shape (unknown config key(s) ...). Each write takes a distinct
   forced mtime: same-size rewrites land inside one float-mtime tick otherwise,
   the fingerprint's documented blind spot, and the reload the test intends to
   trigger never runs."""
   _UTIME_TICK[0] += 1
-  fragment = home / "config.d" / name
-  fragment.parent.mkdir(parents=True, exist_ok=True)
-  fragment.write_text(f"{key}: 1\n", encoding="utf-8")
-  os.utime(fragment, (_UTIME_TICK[0], _UTIME_TICK[0]))
+  path = home / "config.yaml"
+  path.write_text(f"{key}: 1\n", encoding="utf-8")
+  os.utime(path, (_UTIME_TICK[0], _UTIME_TICK[0]))
 
 
 def test_broken_steady_state_parses_once_and_warns_once(profile_home, reload_log, counted_loads) -> None:
   """With the corpus broken and unchanged, 60 calls pay one parse and one line."""
   _seed_good_config()
-  _write_broken(profile_home, "broken.yaml", "unknown_m53_key")
+  _write_broken(profile_home, "unknown_m53_key")
 
   cached = core_config.get_config()
   assert len(counted_loads) == 2  # the seed load plus the onset parse
@@ -71,15 +70,15 @@ def test_broken_steady_state_parses_once_and_warns_once(profile_home, reload_log
 
 
 def test_same_error_across_a_fingerprint_move_stays_one_line(profile_home, reload_log, counted_loads) -> None:
-  """A rewritten fragment with the same unknown key moves the fingerprint —
+  """A rewritten config.yaml with the same unknown key moves the fingerprint —
   the reload must re-run (freshness) while the alarm it re-fires stays one
   line: the burst's exact shape."""
   _seed_good_config()
-  _write_broken(profile_home, "broken.yaml", "unknown_m53_key")
+  _write_broken(profile_home, "unknown_m53_key")
   core_config.get_config()
   assert len(counted_loads) == 2 and len(reload_log) == 1  # seed load + onset parse
 
-  _write_broken(profile_home, "broken.yaml", "unknown_m53_key")  # same key, moved mtime
+  _write_broken(profile_home, "unknown_m53_key")  # same key, moved mtime
   core_config.get_config()
   assert len(counted_loads) == 3
   assert [r["event"] for r in reload_log] == ["config_reload_failed"]
@@ -92,11 +91,11 @@ def test_same_error_across_a_fingerprint_move_stays_one_line(profile_home, reloa
 def test_changed_error_earns_a_new_line(profile_home, reload_log, counted_loads) -> None:
   """A reload that fails differently reports the new failure."""
   _seed_good_config()
-  _write_broken(profile_home, "broken.yaml", "unknown_m53_key")
+  _write_broken(profile_home, "unknown_m53_key")
   core_config.get_config()
   assert len(counted_loads) == 2 and len(reload_log) == 1
 
-  _write_broken(profile_home, "other.yaml", "another_unknown_key")  # fingerprint moves, still broken
+  _write_broken(profile_home, "another_unknown_key")  # fingerprint moves, still broken
   core_config.get_config()
   assert len(counted_loads) == 3
   assert [r["event"] for r in reload_log] == ["config_reload_failed"] * 2
@@ -109,9 +108,8 @@ def test_changed_error_earns_a_new_line(profile_home, reload_log, counted_loads)
 
 def _touch_config(home) -> None:
   """Give the home a config.yaml with a fresh forced mtime so the next
-  fingerprint differs from the cached one — deleting a fragment alone can
-  return the corpus to the exact fingerprint the cached config was loaded
-  under, which is no reload at all. An empty file loads clean on defaults."""
+  fingerprint differs from the cached one; an empty file loads clean on
+  defaults."""
   _UTIME_TICK[0] += 1
   path = home / "config.yaml"
   path.write_text("", encoding="utf-8")
@@ -122,24 +120,23 @@ def test_recovery_rearms_the_warning(profile_home, reload_log, counted_loads) ->
   """A load that succeeds clears the registry: a later relapse is a new onset
   and earns one new line."""
   _seed_good_config()
-  _write_broken(profile_home, "broken.yaml", "unknown_m53_key")
+  _write_broken(profile_home, "unknown_m53_key")
   core_config.get_config()
   assert len(reload_log) == 1
 
-  (profile_home / "config.d" / "broken.yaml").unlink()  # recovery: success logs nothing
   _touch_config(profile_home)
   recovered = core_config.get_config()
   assert len(reload_log) == 1
   assert core_config.get_config() is recovered
 
-  _write_broken(profile_home, "broken.yaml", "unknown_m53_key")  # relapse
+  _write_broken(profile_home, "unknown_m53_key")  # relapse
   core_config.get_config()
   assert len(reload_log) == 2
 
 
 def test_startup_with_broken_config_still_raises(profile_home, reload_log) -> None:
   """No cached config means nothing to fall back to: the raise survives."""
-  _write_broken(profile_home, "broken.yaml", "unknown_m53_key")
+  _write_broken(profile_home, "unknown_m53_key")
   core_config._config = None
   core_config._config_mtime = 0.0
   core_config._config_failed_mtime = None
@@ -152,7 +149,7 @@ def test_reset_config_caches_clears_the_failed_state(profile_home, reload_log) -
   from tests import conftest as conftest_mod
 
   _seed_good_config()
-  _write_broken(profile_home, "broken.yaml", "unknown_m53_key")
+  _write_broken(profile_home, "unknown_m53_key")
   core_config.get_config()
   assert core_config._config_failed_mtime is not None
   assert core_config._config_reload_errors_seen

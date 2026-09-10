@@ -388,11 +388,6 @@ Known-alive symbols:
   the arity and `uri` must stay; deleting it makes the stub raise TypeError. Vulture flags it at
   100% confidence as an unused variable. Same arity-fixed stub-parameter class as the
   `chrome`/`art` entry above.
-- `_clean_probe_state` (`tests/test_probe_single_walk.py`), `_reset_declared_window_warnings`
-  (`tests/test_session_usage.py`), `_clear_jsonl_memo` (`tests/test_tui_backend.py`) —
-  `@pytest.fixture(autouse=True)` fixtures; pytest invokes them around every test in their
-  module with no in-file reference, so vulture flags each as an unused function. Same
-  autouse class as `_stub_headless_renderer` above.
 - `_isolate_profile` (`tests/conftest.py`) — `@pytest.fixture(autouse=True)` in conftest,
   so pytest applies it to every test in the tree with no in-file reference: it pins
   `CHARLIEBOT_HOME` at a fresh temp profile and resets the config caches around each

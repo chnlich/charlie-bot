@@ -758,6 +758,8 @@ async def _probe_user_agent() -> tuple[str, str]:
     proc = await asyncio.to_thread(subprocess.run, ["claude", "--version"], capture_output=True, timeout=5)
   except (OSError, subprocess.SubprocessError):
     return USER_AGENT_FALLBACK, "fallback"
+  if proc.returncode != 0:
+    return USER_AGENT_FALLBACK, "fallback"
   version = _extract_cli_version(proc.stdout.decode(errors="replace"))
   if version is None:
     return USER_AGENT_FALLBACK, "fallback"

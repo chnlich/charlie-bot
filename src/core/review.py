@@ -22,7 +22,7 @@ from src.core.models import (
     ThreadMetadata,
     backend_type_allows_missing_model,
 )
-from src.core.ndjson import iter_ndjson_events, parse_ndjson_file
+from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events, parse_ndjson_file
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager, thread_events_log_path
@@ -161,7 +161,7 @@ def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:
   if not chat_log.exists():
     return None
   with open(chat_log, encoding="utf-8") as stream:
-    for event in iter_ndjson_events(stream, log_event="ndjson_parse_skip", log_fields={}):
+    for event in iter_ndjson_events(stream, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}):
       if event.get("type") == ET.TASK_DELEGATED and event.get("thread_id") == thread_id:
         value = event.get("description")
         if isinstance(value, str):

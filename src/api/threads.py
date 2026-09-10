@@ -31,7 +31,7 @@ from src.core.models import (
     ThreadStatus,
     WorkerEvent,
 )
-from src.core.ndjson import iter_ndjson_events
+from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
 from src.core.process import kill_process_group
 from src.core.sidebar_state import session_revision
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME, ThreadManager, iter_thread_meta_stats
@@ -471,7 +471,7 @@ def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
       complete_end = window.rfind(b"\n") + 1
       if complete_end:
         raw_events = list(
-            iter_ndjson_events(window[:complete_end].split(b"\n"), log_event="ndjson_parse_skip", log_fields={}))
+            iter_ndjson_events(window[:complete_end].split(b"\n"), log_event=PARSE_SKIP_LOG_EVENT, log_fields={}))
         _append_worker_events(raw_events, entry.events, entry.tool_id_to_name)
         entry.offset += complete_end
     _thread_events_cache.store(key, entry)

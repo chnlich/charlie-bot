@@ -9,25 +9,18 @@
 const crypto = require('node:crypto');
 
 const { buildStreamHarness } = require('./stream_render_harness');
-const { fetchUrl, largestAssistantDraft } = require('./stream_collector_common');
+const {
+  fetchUrl,
+  largestAssistantDraft,
+  timedReplays,
+  finalFrameParity,
+  REPLAY_DELTA_BYTES,
+  REPLAY_TICK_MS,
+} = require('./stream_collector_common');
 
 const MARKED_URL = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
 const HLJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js';
 const BARE_FENCE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/m;
-
-// One replay: 200-byte deltas at a 40 ms virtual cadence; timers drain against
-// the virtual clock, so wall time covers only render work.
-function replay(markedSrc, text, harnessOptions) {
-  const h = buildStreamHarness(markedSrc, harnessOptions);
-  const deltas = Math.ceil(text.length / 200);
-  h.showStreaming({ content: '' });
-  for (let i = 1; i <= deltas; i++) {
-    h.showStreaming({ content: text.slice(0, i * 200) });
-    h.advance(40);
-  }
-  h.advance(200);
-  return h.stats();
-}
 
 (async () => {
   // The corpus is the largest assistant text block that contains a bare
@@ -43,27 +36,12 @@ function replay(markedSrc, text, harnessOptions) {
     return probe.context.hljs.listLanguages().length;
   })();
 
-  replay(markedSrc, text, harnessOptions); // cold pass, as at the first streamed turn after a page load; not timed
-  const times = [];
-  let renders = 0, finalHtml = '';
-  for (let r = 0; r < 5; r++) {
-    const s = replay(markedSrc, text, harnessOptions);
-    times.push(s.paintMs);
-    renders = s.frames.length;
-    finalHtml = s.frames[s.frames.length - 1];
-  }
-  times.sort((a, b) => a - b);
-
-  // Parity: the last painted frame must equal a direct full-draft render
-  // through the same real-hljs context, so a cache hit's bytes are pinned to
-  // a cold render's bytes.
-  const probe = buildStreamHarness(markedSrc, harnessOptions);
-  const reference = probe.context.marked.parse(probe.context.fixNestedFences(text));
+  const { times, renders, finalHtml } = timedReplays(markedSrc, text, { harnessOptions, leadEmptyPaint: true });
   console.log(
-    `${(text.length / 1024).toFixed(1)} KB draft (sha1 ${digest}), ${Math.ceil(text.length / 200)} deltas ` +
-    `at 40 ms virtual cadence, ${renders} paints, hljs 11.9.0 common build (${languages} languages); ` +
+    `${(text.length / 1024).toFixed(1)} KB draft (sha1 ${digest}), ${Math.ceil(text.length / REPLAY_DELTA_BYTES)} deltas ` +
+    `at ${REPLAY_TICK_MS} ms virtual cadence, ${renders} paints, hljs 11.9.0 common build (${languages} languages); ` +
     `paint-work median ${(times[2] / 1000).toFixed(3)} s, max ${(times[4] / 1000).toFixed(3)} s; ` +
-    `final-frame parity ${finalHtml === reference}`
+    `final-frame parity ${finalFrameParity(markedSrc, text, finalHtml, { harnessOptions })}`
   );
 })().catch((err) => {
   console.error(err);

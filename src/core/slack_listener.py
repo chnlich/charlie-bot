@@ -283,8 +283,8 @@ def _load_prompt_doc(repo_root: Path, name: str, *, likely_cause: str) -> str:
 
   No caching, so an edit takes effect on the next summon. A missing or
   unreadable doc raises a ValueError naming the path and its most likely cause
-  (mirrors the worker-prompt loader in src/core/spawner.py); a prompt without
-  the doc is never built.
+  (mirrors the worker-prompt loader in src/core/spawner_prompt.py); a prompt
+  without the doc is never built.
   """
   path = repo_root / "prompts" / name
   try:

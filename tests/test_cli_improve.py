@@ -3,7 +3,13 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from conftest import assert_cli_reject, capture_create_logged_task, make_json_response, patched_cli_post
+from conftest import (
+    assert_cli_reject,
+    capture_create_logged_task,
+    make_json_response,
+    make_sessions_dir_config,
+    patched_cli_post,
+)
 from conftest import setup_session_cwd as _setup_session_cwd
 from pydantic import ValidationError
 
@@ -17,14 +23,6 @@ _INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.api.internal.resol
 _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET = "src.api.internal.reserve_loop_state"
 
 
-def _mock_config(tmp_path: Path):
-  """Create a mock config with sessions_dir."""
-  cfg = MagicMock()
-  cfg.sessions_dir = tmp_path / "sessions"
-  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  return cfg
-
-
 def _improve_argv(session_id: str | None, repo: str, goal_file: Path, *extra: str) -> list[str]:
   """sys.argv stand-in for improve main(): the session/repo/goal-file wiring every test shares."""
   argv = ["improve"]
@@ -36,9 +34,7 @@ def _improve_argv(session_id: str | None, repo: str, goal_file: Path, *extra: st
 
 def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """main() reads --goal-file and posts its content to /api/internal/improve."""
-  cfg = _mock_config(tmp_path)
-  cfg.sessions_dir = tmp_path / "fake_sessions"
-  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+  cfg = make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
 
   goal_file = tmp_path / "goal.md"
@@ -66,9 +62,7 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
 
 def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """main() reads optional --plan-file and includes it in the improve payload."""
-  cfg = _mock_config(tmp_path)
-  cfg.sessions_dir = tmp_path / "fake_sessions"
-  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+  cfg = make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
 
   goal_file = tmp_path / "goal.md"
@@ -89,9 +83,7 @@ def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.
 
 def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """main() exits with code 1 on request failure."""
-  cfg = _mock_config(tmp_path)
-  cfg.sessions_dir = tmp_path / "fake_sessions"
-  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+  cfg = make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
 
   goal_file = tmp_path / "goal.md"

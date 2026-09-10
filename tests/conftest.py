@@ -564,6 +564,17 @@ async def make_parent(mgr: SessionManager, *, name: str = "Parent") -> str:
   return parent.id
 
 
+def make_sessions_dir_config(tmp_path: Path) -> MagicMock:
+  """A MagicMock config for patched CLI ``get_config`` calls: ``sessions_dir`` points at a created
+  dir under tmp_path. Callers rely on the sessions root existing while the test's cwd (tmp_path
+  itself) sits outside it, so session resolution reads the cwd as sessionless. The dir name is
+  arbitrary and no test reads it back."""
+  cfg = MagicMock()
+  cfg.sessions_dir = tmp_path / "fake_sessions"
+  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+  return cfg
+
+
 def setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> MagicMock:
   """Build a session dir tree at <tmp_path>/sessions/<sid> and chdir into it; the returned mock cfg is
   what the tests patch into src.cli.common.get_config."""

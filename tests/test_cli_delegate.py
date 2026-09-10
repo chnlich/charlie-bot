@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-from conftest import assert_cli_reject, assert_cli_reject_exit2, patched_cli_post
+from conftest import assert_cli_reject, assert_cli_reject_exit2, make_sessions_dir_config, patched_cli_post
 from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.delegate import main
@@ -31,13 +31,6 @@ def _repo_argv(repo: str, task_spec_file: Path, *extra: str, session: str | None
       "--keep-worktree",
       "0",
   ]
-
-
-def _mock_config(tmp_path: Path):
-  cfg = MagicMock()
-  cfg.sessions_dir = tmp_path / "fake_sessions"
-  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  return cfg
 
 
 def _task_spec(source_line: str = "- (none)") -> str:
@@ -108,7 +101,7 @@ def test_main_rejects_explicit_session_against_session_env(
 
 
 def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _mock_config(tmp_path)
+  cfg = make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
   task_spec = task_spec_file.read_text()
@@ -139,7 +132,7 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypa
 
 def test_main_prints_async_wake_up_hint_to_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _mock_config(tmp_path)
+  cfg = make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
@@ -154,7 +147,7 @@ def test_main_prints_async_wake_up_hint_to_stderr(
 
 @pytest.mark.parametrize("task_type", ["implement", "quick-edit", "script-run"])
 def test_main_task_type_lands_in_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_type: str) -> None:
-  cfg = _mock_config(tmp_path)
+  cfg = make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
@@ -172,7 +165,7 @@ def test_main_task_type_lands_in_payload(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _mock_config(tmp_path)
+  cfg = make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
@@ -319,7 +312,7 @@ def test_main_help_states_backend_omission_rule(capsys: pytest.CaptureFixture[st
 
 
 def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _mock_config(tmp_path)
+  cfg = make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
   reviewer_context_file = tmp_path / "reviewer_context.md"
@@ -374,7 +367,7 @@ def test_main_rejects_omitted_required_flag(
 def test_main_rejects_removed_legacy_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], legacy_flag: str,
     legacy_value: str) -> None:
-  cfg = _mock_config(tmp_path)
+  cfg = make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
@@ -391,7 +384,7 @@ def test_main_rejects_removed_legacy_flag(
 
 def test_main_rejects_invalid_task_type(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _mock_config(tmp_path)
+  cfg = make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
@@ -406,7 +399,7 @@ def test_main_rejects_invalid_task_type(
 
 def test_main_rejects_legacy_require_review_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _mock_config(tmp_path)
+  cfg = make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 
@@ -422,7 +415,7 @@ def test_main_rejects_legacy_require_review_flag(
 
 
 def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _mock_config(tmp_path)
+  cfg = make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   task_spec_file = _write_task_spec(tmp_path)
 

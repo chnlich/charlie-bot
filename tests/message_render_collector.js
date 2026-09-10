@@ -17,7 +17,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const { fetchUrl } = require('./stream_collector_common');
+const { fetchUrl, worstChatFile } = require('./stream_collector_common');
 const { buildRendererContext } = require('./renderer_vm_context');
 
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
@@ -29,27 +29,13 @@ function readJs(name) {
   return fs.readFileSync(path.join(CHECKOUT, 'web/static/js', name), 'utf8');
 }
 
-// Worst page corpus: the live chat file carrying the most bytes; from it the
+// Worst page corpus: from the live chat file carrying the most bytes, the
 // largest assistant/user/worker-summary/plan bodies — the page a re-entry of
 // the heaviest session re-renders.
 function pageCorpus() {
-  const root = path.join(process.env.HOME, '.charliebot', 'sessions');
-  let best = null;
-  let bestSize = -1;
-  for (const d of fs.readdirSync(root)) {
-    const p = path.join(root, d, 'data', 'chat_events.jsonl');
-    let size;
-    try {
-      size = fs.statSync(p).size;
-    } catch {
-      continue;
-    }
-    if (size > bestSize) {
-      best = p;
-      bestSize = size;
-    }
-  }
-  if (!best) throw new Error('no on-disk live chat file');
+  const worst = worstChatFile();
+  if (!worst) throw new Error('no on-disk live chat file');
+  const { p: best, size: bestSize } = worst;
 
   const texts = [];
   for (const line of fs.readFileSync(best, 'utf8').split('\n')) {

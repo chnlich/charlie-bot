@@ -13,7 +13,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { fetchUrl, largestAssistantDraft } = require('./stream_collector_common');
+const { fetchUrl, largestAssistantDraft, worstChatFile } = require('./stream_collector_common');
 const { buildStreamHarness } = require('./stream_render_harness');
 
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
@@ -45,21 +45,12 @@ const KATEX_OPTS = {
   throwOnError: false,
 };
 
-// The worst message page: the live chat file carrying the most bytes, its 40
-// largest assistant text blocks (the M60 corpus).
+// The worst message page: its 40 largest assistant text blocks (the M60
+// corpus) of the live chat file carrying the most bytes.
 function pageCorpus() {
-  const root = path.join(process.env.HOME, '.charliebot', 'sessions');
-  let best = null;
-  let bestSize = -1;
-  for (const d of fs.readdirSync(root)) {
-    const p = path.join(root, d, 'data', 'chat_events.jsonl');
-    const size = fs.existsSync(p) ? fs.statSync(p).size : -1;
-    if (size > bestSize) {
-      best = p;
-      bestSize = size;
-    }
-  }
-  if (!best) throw new Error('no on-disk live chat file');
+  const worst = worstChatFile();
+  if (!worst) throw new Error('no on-disk live chat file');
+  const { p: best, size: bestSize } = worst;
   const texts = [];
   for (const line of fs.readFileSync(best, 'utf8').split('\n')) {
     let ev;

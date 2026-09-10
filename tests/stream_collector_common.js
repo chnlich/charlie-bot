@@ -48,4 +48,26 @@ function largestAssistantDraft(accept) {
   return best;
 }
 
-module.exports = { fetchUrl, largestAssistantDraft };
+// The live chat file carrying the most bytes, as { p, size }; null when the
+// live tree holds no chat file. The caller decides which bodies to extract.
+function worstChatFile() {
+  const root = path.join(process.env.HOME, '.charliebot', 'sessions');
+  let best = null;
+  let bestSize = -1;
+  for (const d of fs.readdirSync(root)) {
+    const p = path.join(root, d, 'data', 'chat_events.jsonl');
+    let size;
+    try {
+      size = fs.statSync(p).size;
+    } catch {
+      continue;
+    }
+    if (size > bestSize) {
+      best = p;
+      bestSize = size;
+    }
+  }
+  return best ? { p: best, size: bestSize } : null;
+}
+
+module.exports = { fetchUrl, largestAssistantDraft, worstChatFile };

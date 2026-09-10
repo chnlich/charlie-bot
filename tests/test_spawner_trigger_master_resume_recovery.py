@@ -116,7 +116,6 @@ async def test_stale_resume_id_retries_once_without_resume_and_does_not_persist(
   assert call_backend_options[0] is call_backend_options[1]
   assert call_flags == [(True, True), (True, True)]
   assert session_mgr._meta is not None
-  # trigger_master no longer persists the anchor; the consumer owns it.
   assert session_mgr._meta.cc_session_id == "stale-id"
   assert not session_mgr.persisted_cc_session_ids
   assert not session_mgr.saved_metas
@@ -245,7 +244,6 @@ async def test_scheduled_task_auto_trigger_uses_session_backend(monkeypatch: pyt
   assert [option.id for option in call_backend_options] == [OPUS_BACKEND_ID]
   assert [option.model for option in call_backend_options] == [OPUS_BACKEND_OPTION.model]
   assert call_summaries[0].startswith("[Auto-triggered scheduled task result for 'nightly']")
-  # trigger_master no longer persists the anchor; the consumer owns it.
   assert not session_mgr.persisted_cc_session_ids
   assert session_mgr._meta is not None
   assert session_mgr._meta.cc_session_id is None

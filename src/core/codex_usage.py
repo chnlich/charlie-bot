@@ -27,7 +27,6 @@ CODEX_TURN_CONTEXT = "turn_context"
 CODEX_EVENT_MSG = "event_msg"
 CODEX_TOKEN_COUNT = "token_count"
 
-# Default codex home searched last in the candidate directory list.
 _DEFAULT_CODEX_HOME = Path.home() / ".codex"
 
 

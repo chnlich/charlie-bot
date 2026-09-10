@@ -1,5 +1,6 @@
 """Schema and loader gates for the sectioned CharlieBotConfig."""
 
+import asyncio
 import json
 import os
 import re
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 
 from src.core import config as config_module
 from src.core.config import CHARLIEBOT_HOME_ENV, CREDENTIALS_PREFIX, LEGACY_KEYS, CharlieBotConfig
+from src.core.init_seed import init_charliebot_home
 from src.core.models import BACKEND_CLASSES
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "config_legacy.yaml"
@@ -212,3 +214,49 @@ def test_credentials_example_covers_every_credentials_legacy_key():
     section, key = location.split(".", 1)
     assert section in example, old_key
     assert key in example[section], old_key
+
+
+EXAMPLE_PATH = Path(__file__).resolve().parents[1] / "configs" / "config.example.yaml"
+
+STARTER_BACKEND_IDS = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-tui"]
+
+
+def test_example_config_loads_to_the_model_default(tmp_path, monkeypatch):
+  """The shipped example is the default config: loading it equals constructing
+  CharlieBotConfig, modulo backends.options (the example ships the four starter
+  entries where the model default is empty)."""
+  home = tmp_path / "home"
+  home.mkdir()
+  (home / "config.yaml").write_bytes(EXAMPLE_PATH.read_bytes())
+  monkeypatch.setenv(CHARLIEBOT_HOME_ENV, str(home))
+  loaded = config_module.load_config()
+  loaded_dump = loaded.model_dump()
+  default_dump = CharlieBotConfig(charliebot_home=home).model_dump()
+  loaded_dump["backends"]["options"] = None
+  default_dump["backends"]["options"] = None
+  assert loaded_dump == default_dump
+  assert [option.id for option in loaded.backends.options] == STARTER_BACKEND_IDS
+
+
+def test_example_config_is_block_style():
+  """No inline mappings and no non-empty inline lists outside comment lines."""
+  for line in EXAMPLE_PATH.read_text(encoding="utf-8").splitlines():
+    if line.strip().startswith("#"):
+      continue
+    assert not re.search(r"\{|\[[^\]]", line), line
+
+
+def test_init_charliebot_home_seeds_config_and_credentials(tmp_path, monkeypatch):
+  """A fresh home gets config.yaml byte-equal to the example and credentials.yaml
+  from the repo template, owner-readable only, loading as empty sections."""
+  home = tmp_path / "home"
+  home.mkdir()
+  monkeypatch.setenv(CHARLIEBOT_HOME_ENV, str(home))
+  fake_cfg = CharlieBotConfig(charliebot_home=home)
+  monkeypatch.setattr("src.core.init_seed.get_config", lambda: fake_cfg)
+  asyncio.run(init_charliebot_home())
+  credentials_path = home / "credentials.yaml"
+  assert credentials_path.exists()
+  assert credentials_path.stat().st_mode & 0o777 == 0o600
+  assert config_module.load_credentials().sections == {}
+  assert (home / "config.yaml").read_bytes() == EXAMPLE_PATH.read_bytes()

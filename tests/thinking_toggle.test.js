@@ -1,10 +1,12 @@
 // ---------------------------------------------------------------------------
-// thinkingToggleHtml (chat/shared.js) single-sources the collapsed "Thinking…"
-// block for the chat assistant bubble (chat/rendering.js), the live streaming
-// draft (usage.js), and the workers thread events (workers.js). These tests
-// pin the emitted markup through all three real renderers: the inline onclick
-// swap, the button/hidden-div classes, the escaped thinking text, and each
-// site's id choice.
+// chat/shared.js single-sources the collapsed "Thinking…" toggle:
+// thinkingButtonHtml owns the flip button, thinkingToggleHtml composes it with
+// the chat-palette hidden div for the chat assistant bubble (chat/rendering.js)
+// and the live streaming draft (usage.js), and workers.js composes the same
+// button with its own palette div for thread events. These tests pin the
+// emitted markup through all three real renderers: the inline onclick swap,
+// the button/hidden-div classes, the escaped thinking text, and each site's id
+// choice.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');

@@ -91,7 +91,17 @@ def test_merge_endpoint_surfaces_corrupt_json_error(client: TestClient, tmp_path
   corrupt.write_text("{broken", encoding="utf-8")
   response = client.get("/perfetto/merged", params={"trace": str(corrupt)})
   assert response.status_code == 500
-  assert "Expecting property name" in response.json()["detail"]
+  assert "unexpected character" in response.json()["detail"]
+
+
+def test_direct_pass_rejects_non_finite_literals(client: TestClient, tmp_path: Path) -> None:
+  """The direct pass shares the merge path's JSON boundary: a NaN literal stdlib json accepts
+  fails the build loudly instead of reaching the cache — a literal Perfetto cannot render."""
+  non_finite = tmp_path / "nonfinite.json"
+  non_finite.write_text('{"traceEvents": [{"ph": "X", "dur": NaN}]}', encoding="utf-8")
+  response = client.get("/perfetto/merged", params={"trace": str(non_finite)})
+  assert response.status_code == 500
+  assert not list(pages._perfetto_merge_cache_dir().glob("*.json.gz"))
 
 
 def test_direct_pass_gzip_decompresses_to_identical_bytes(client: TestClient, tmp_path: Path) -> None:

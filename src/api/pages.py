@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
+import orjson
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -430,9 +431,12 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
   Peaks around 2.25 GB RSS for a 525.8 MB file (same order as the merge path's per-input
   orjson.loads) and reads the source file a second time, after validation, to compress it.
   Compression level is the merge path's: one build per cache key, viewer-fetched whole.
+  Validation parses with orjson, the parser the merge path's build already parses with, so
+  both serve shapes share one JSON boundary: the NaN/Infinity literals stdlib json accepts
+  fail the build loudly here too — a literal Perfetto cannot render must not reach the cache.
   """
   with path.open("rb") as validate_file:
-    json.load(validate_file)
+    orjson.loads(validate_file.read())
   with (path.open("rb") as source_file, open(out_path, "wb") as
         raw_output, gzip.GzipFile(fileobj=raw_output, mode="wb", compresslevel=_MERGE_COMPRESSLEVEL) as gzip_output):
     shutil.copyfileobj(source_file, gzip_output, length=65536)

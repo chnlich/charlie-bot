@@ -15,6 +15,8 @@ import socket
 import sys
 from typing import Any
 
+from src.core.timeouts import CLAUDE_SUB_HOOK_SOCKET_TIMEOUT
+
 
 def _terminate_parent_group() -> None:
   parent_pid = os.getppid()
@@ -39,7 +41,7 @@ def _send_request(socket_path: str, token: str, gate: bool, payload: dict[str, A
       "payload": payload,
   }
   with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-    client.settimeout(30.0)
+    client.settimeout(CLAUDE_SUB_HOOK_SOCKET_TIMEOUT)
     client.connect(socket_path)
     client.sendall((json.dumps(envelope, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
     response = b""

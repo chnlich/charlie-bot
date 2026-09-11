@@ -94,6 +94,16 @@ HTTP_MODEL_DOWNLOAD_TIMEOUT = 60  # seconds
 SSH_LAUNCH_TIMEOUT = 30  # seconds
 
 # ---------------------------------------------------------------------------
+# Claude-sub hook bridge (unix socket)
+# ---------------------------------------------------------------------------
+
+# Whole round trip of the claude-sub command-hook helper over its unix socket:
+# connect, sendall, and the one-line response recv. The bridge answers from an
+# in-process queue, so a healthy round trip is milliseconds; the bound only
+# caps how long a hung bridge can stall Claude's hook.
+CLAUDE_SUB_HOOK_SOCKET_TIMEOUT = 30.0  # seconds
+
+# ---------------------------------------------------------------------------
 # Session websocket (browser push channel)
 # ---------------------------------------------------------------------------
 

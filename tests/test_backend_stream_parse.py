@@ -2,11 +2,11 @@
 
 The stream-side parse funnels — the spawned-stdout NDJSON reader and the
 raw-log tail-follow loop — ride orjson under the ndjson reader skip contract's
-boundary: a line that strips to empty is invisible, a line the parser rejects
-yields nothing, and the stdlib json NaN/Infinity extensions plus double-
-overflow floats skip as malformed. Machine-written stream lines carry none of
-those literals; the opencode SSE and anthropic-proxy readers keep their
-existing raise-on-malformed contract, only the parser moves.
+boundary: an empty or whitespace-only line is invisible, a line the parser
+rejects yields nothing, and the stdlib json NaN/Infinity extensions plus
+double-overflow floats skip as malformed. Machine-written stream lines carry
+none of those literals; the opencode SSE and anthropic-proxy readers keep
+their existing raise-on-malformed contract, only the parser moves.
 """
 
 from __future__ import annotations

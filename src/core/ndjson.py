@@ -64,9 +64,10 @@ PARSE_SKIP_LOG_EVENT = "ndjson_parse_skip"
 def parse_ndjson_line(line: str | bytes, *, log_event: str, log_fields: dict[str, Any]) -> dict | None:
   """Parse one line under the NDJSON reader skip contract, or None when the line skips.
 
-  The one definition of the NDJSON reader skip contract: a line that strips to
-  empty is invisible, and a line the parser rejects logs *log_event* (plus
-  *log_fields* and the parse error) at debug level and answers None. The parse
+  The one definition of the NDJSON reader skip contract: an empty or
+  whitespace-only line is invisible, and a line the parser rejects logs
+  *log_event* (plus *log_fields* and the parse error) at debug level and
+  answers None. The parse
   rides the raw line — orjson ignores surrounding whitespace, so no strip copy
   runs — and a bytes line the strict parse rejects gets one errors="replace"
   decode before the verdict: a torn multibyte char parses as U+FFFD, hard
@@ -188,8 +189,9 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
 def iter_ndjson_events_from_end(path: Path, *, log_event: str, log_fields: dict[str, Any]) -> Iterator[dict]:
   """Yield the JSON objects parsed from *path*, newest line first.
 
-  Same skip contract as :func:`iter_ndjson_events` (a line that strips to
-  empty is invisible, a line the parser rejects logs and yields nothing).
+  Same skip contract as :func:`iter_ndjson_events` (an empty or
+  whitespace-only line is invisible, a line the parser rejects logs and
+  yields nothing).
   _TAIL_WINDOW_SIZE segments from the end walk lines backwards, the segment's
   left-truncated first line carried into the next older segment, so a consumer
   that stops early never reads the bytes past its answer. A missing file

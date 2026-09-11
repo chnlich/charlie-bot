@@ -4,17 +4,23 @@
 let renameSessionId = null;
 let sessionActionModalState = null;
 
-function startRename(e, id, currentName) {
+function startRename(e, id) {
   e.preventDefault();
   e.stopPropagation();
-  renameSessionId = id;
   const link = document.getElementById('session-' + id);
-  const rect = link.getBoundingClientRect();
+  const header = document.getElementById('header-session-name');
+  const linkRect = link ? link.getBoundingClientRect() : null;
+  const linkUsable = !!(linkRect && linkRect.width);
+  const anchor = linkUsable ? link : header;
+  const valueEl = linkUsable && link.querySelector('.session-name') || header;
+  if (!anchor || !valueEl) return;
+  renameSessionId = id;
+  const rect = anchor.getBoundingClientRect();
   const input = document.getElementById('rename-input');
   input.style.top = rect.top + 'px';
   input.style.left = rect.left + 'px';
   input.style.width = rect.width + 'px';
-  input.value = currentName;
+  input.value = valueEl.textContent;
   input.classList.remove('hidden');
   input.focus();
   input.select();

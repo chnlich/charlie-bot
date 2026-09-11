@@ -434,7 +434,6 @@ function renderSessionView(data) {
   const headerName = document.getElementById('header-session-name');
   if (headerName) {
     headerName.textContent = session.name;
-    headerName.setAttribute('onclick', "startRename(event, '" + session.id + "', '" + escapeHtml(session.name).replace(/'/g, "\\'") + "')");
   }
 
   // Update backend badge

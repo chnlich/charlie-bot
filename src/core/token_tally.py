@@ -496,9 +496,9 @@ def _adopt_stored_partial(key: str, doc: dict) -> _OpencodePartial | None:
 
   Adoption applies only while the registry holds no partial for the key: an in-process
   partial is always the fresher one, and overwriting it with the document's older buckets
-  would regress the served tally. None means the caller replays instead of adjusting —
-  either the registry already holds a partial, or the document carries none (a v1 entry,
-  per _partial_from_doc).
+  would regress the served tally. None means nothing was adopted — either the registry
+  already holds a partial, or the document carries none (a v1 entry, per _partial_from_doc)
+  — and the caller then works from whatever the registry holds after its scan.
   """
   if _opencode_partials.get(key) is not None:
     return None

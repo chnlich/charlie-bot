@@ -512,26 +512,29 @@ class OpenCodeBackend(AgentBackend):
       raise RuntimeError(f"OpenCode prompt_async returned HTTP {response.status_code}: {response.text}")
 
   async def _iter_sse_events(self, response: httpx.Response) -> AsyncIterator[dict]:
-    data_lines: list[str] = []
-    async for line in iter_sse_lines(response):
-      if line == "":
+    data_lines: list[bytes] = []
+    # Byte-mode lines: orjson parses the wire's UTF-8 bytes natively, so the
+    # per-line decode the default mode pays never runs on this hot funnel.
+    async for line in iter_sse_lines(
+        response, lines_as_bytes=True):
+      if line == b"":
         if not data_lines:
           continue
-        payload = "\n".join(data_lines)
+        payload = b"\n".join(data_lines)
         data_lines = []
         yield orjson.loads(payload)
         continue
-      if line.startswith("data:"):
-        data_lines.append(line[len("data:"):].lstrip())
+      if line.startswith(b"data:"):
+        data_lines.append(line[len(b"data:"):].lstrip())
         continue
-      if line.startswith(":"):
+      if line.startswith(b":"):
         continue
-      if ":" in line:
-        log.debug("opencode_sse_field_ignored", field=line.split(":", 1)[0])
+      if b":" in line:
+        log.debug("opencode_sse_field_ignored", field=line.split(b":", 1)[0].decode("utf-8", errors="replace"))
         continue
-      log.debug("opencode_sse_line_ignored", line=line)
+      log.debug("opencode_sse_line_ignored", line=line.decode("utf-8", errors="replace"))
     if data_lines:
-      yield orjson.loads("\n".join(data_lines))
+      yield orjson.loads(b"\n".join(data_lines))
 
   async def _with_sse_progress_watchdog(self, sse_events: AsyncIterator[dict]) -> AsyncIterator[dict]:
     """Fail the turn when no session progress arrives within OPENCODE_SSE_PROGRESS_TIMEOUT.

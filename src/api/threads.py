@@ -47,6 +47,9 @@ router = APIRouter()
 # text reaches the modal through the description_full_len click-fetch.
 _LIST_DESCRIPTION_CAP = 100
 
+# One wire sentence for every thread-missing 404, whatever the endpoint raised it.
+_THREAD_NOT_FOUND_DETAIL = "Thread not found"
+
 # Parsed-meta memo behind the thread-detail endpoint. The endpoint reads the
 # meta without mutating it, so the memoized instance is shared read-only
 # (mutating callers go through ThreadManager.get_thread, which re-reads). Every
@@ -404,7 +407,7 @@ async def get_thread(
   """
   meta = await _detail_thread_meta(thread_mgr, session_id, thread_id)
   if not meta:
-    raise HTTPException(status_code=404, detail="Thread not found")
+    raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)
   attach_command = build_attach_command(meta, cfg)
   attach_available = await _attach_available(meta, cfg)
   if attach:
@@ -587,7 +590,7 @@ async def cancel_thread(
   """Cancel a running thread (sends SIGTERM to the subprocess via streaming manager)."""
   thread = await thread_mgr.get_thread(session_id, thread_id)
   if not thread:
-    raise HTTPException(status_code=404, detail="Thread not found")
+    raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)
 
   if thread.pid:
     kill_process_group(thread.pid)

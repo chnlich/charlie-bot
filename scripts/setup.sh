@@ -91,7 +91,7 @@ for item in seed_default_cron_tasks(cfg, dry_run=dry):
     print(f"  cron {item['name']}: {item['status']}")
 
 # Effective scheduled task list: name / cron / resolved timezone / resolved
-# backend. If backend resolution raises (e.g. empty backend_options on a fresh
+# backend. If backend resolution raises (e.g. empty backends.options on a fresh
 # host), print the reason instead of aborting setup.
 print("  effective scheduled tasks:")
 tasks = get_scheduled_tasks()

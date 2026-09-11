@@ -60,7 +60,8 @@ class CharlieCodeBackend(AgentBackend):
     super().__init__(model=model, **kwargs)
     self._api_base = api_base
     if not self._api_base:
-      raise ValueError("charlie-code backend requires api_base (set backend_options[].api_base in config.yaml)")
+      raise ValueError(
+          "charlie-code backend requires api_base (set api_base on its backends.options entry in config.yaml)")
     self._context_window = context_window
     self._api_key = api_key
     self._bin = resolve_binary("charlie-code", USER_LOCAL_BIN)

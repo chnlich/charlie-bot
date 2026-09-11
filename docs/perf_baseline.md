@@ -523,14 +523,19 @@ EOF
 
 M11 — backlog read endpoints' status codes. This host configures no
 `ui.backlog_repos`, so both GETs read the empty-state path, and every 500 arrives
-with a ~30-line ASGI traceback in the server log (the line the 5xx count below
-matches). Evidence while the live server runs older code is a scratch-instance
+with a ~30-line ASGI traceback in the server log beside its structured
+`http_request … status=500` line (the line the 5xx count below matches — the
+server switched from uvicorn's `"GET … HTTP/1.1" 500` access-log shape to these
+structured lines, which the count must follow). The count appends `|| [ $? -eq 1 ]`
+because `grep -c` exits 1 on the healthy zero count: a real grep failure (exit 2)
+stays loud, a zero count exits clean. Evidence while the live server runs older
+code is a scratch-instance
 A/B (scratch `CHARLIEBOT_HOME`, TestClient against before and after code), the
 same shape as the M7 protocol.
 
 ```bash
 KEY=$(awk '/^charliebot:/{f=1;next} f&&/^  access_key:/{print $2;exit}' ~/.charliebot/credentials.yaml); for p in /api/backlog /api/backlog/history; do curl -s -o /dev/null -w "$p %{http_code}\n" -H "Authorization: Bearer $KEY" "http://127.0.0.1:18498$p"; done
-LOG=$(ls -1t /tmp/charliebot-logs/server_*.log | head -1); grep -c "GET /api/backlog HTTP/1.1\" 500" "$LOG"
+LOG=$(ls -1t /tmp/charliebot-logs/server_*.log | head -1); grep -c "path=/api/backlog status=500" "$LOG" || [ $? -eq 1 ]
 ```
 
 M12 — ext-usage poller codex usage scrape, steady state. The scrape reads each account's

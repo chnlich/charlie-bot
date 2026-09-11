@@ -183,6 +183,44 @@ async def test_thread_metadata_endpoint_attach_mode_serves_only_the_pair(tmp_pat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("backend_type", "option_fields"),
+    [
+        ("cc-claude", {"model": "fake-model"}),
+        ("cc-kimi", {"model": "fake-model", "credential": "fake-key"}),
+        ("cc-openai-compatible", {"model": "fake-model", "api_base": "http://127.0.0.1:9"}),
+        ("codex", {"model": "fake-model"}),
+        ("charlie-code", {"model": "fake-model"}),
+        ("gemini", {"model": "fake-model"}),
+        ("opencode", {"model": "fake-model"}),
+        ("antigravity", {}),
+        ("tui-cli", {}),
+    ],
+)
+async def test_thread_detail_endpoint_serves_every_configured_backend_type(
+    backend_type: str, option_fields: dict, tmp_path: Path
+) -> None:
+  """Every member of the backend-option union must serve the detail endpoint.
+
+  ``cli_binary`` is declared on the cc-claude and tui-cli option models only; a
+  bare attribute read off the union raises AttributeError and 500s both the
+  full-row response and the 5 s attach-mode poll.
+  """
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "home",
+      backends={"options": [backend_option(id="opt", label="Opt", type=backend_type, **option_fields)],},
+  )
+  thread_mgr = ThreadManager(cfg)
+  thread = _thread(backend="opt", session_id="session-id")
+  await thread_mgr.save_metadata(thread)
+
+  with _build_client(cfg, thread_mgr) as client:
+    url = f"/api/threads/{thread.session_id}/threads/{thread.id}"
+    assert client.get(url).status_code == 200
+    assert client.get(f"{url}?attach=1").status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_thread_metadata_endpoint_serves_a_rewritten_row(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
   thread_mgr = ThreadManager(cfg)

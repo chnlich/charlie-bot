@@ -1415,6 +1415,20 @@ def publish_via_tmp_rename(path: Path, text: str, tmp_name: str) -> None:
   os.replace(tmp, path)
 
 
+def publish_same_size_rewrite(path: Path, text: str, tmp_name: str) -> None:
+  """Publish a rewrite that keeps the byte size fixed, then move mtime_ns, so a memo keyed on
+  (mtime_ns, size) must answer on the mtime half alone. A suite whose rewrites all change size
+  could pass on the size half while the mtime half was broken; this move is the one that would
+  catch it. The utime bump keeps the mtime move deterministic.
+  """
+  assert len(text.encode("utf-8")) == path.stat().st_size, (
+      f"{path}: rewrite must keep the byte size fixed; a size change moves the memo's size half "
+      "and the mtime half goes untested")
+  publish_via_tmp_rename(path, text, tmp_name)
+  st = path.stat()
+  os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+
+
 def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, Scheduler]:
   """Real cfg/session_mgr/scheduler trio for scheduler and cron-task tests; the scheduler holds the
   process-wide SessionManager because a private instance keeps its own chat-event cache and its

@@ -13,7 +13,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import count_path_read_text, fresh_state_fixture, make_home_config, publish_via_tmp_rename
+from conftest import (
+    count_path_read_text,
+    fresh_state_fixture,
+    make_home_config,
+    publish_same_size_rewrite,
+    publish_via_tmp_rename,
+)
 
 from src.core.config import CharlieBotConfig
 from src.core.sessions import (
@@ -76,20 +82,13 @@ def test_rereads_after_atomic_rewrite(tmp_path: Path) -> None:
 
 
 def test_rereads_after_same_size_rewrite(tmp_path: Path) -> None:
-  """Same byte size, new mtime_ns: the key's mtime half must move the verdict.
-
-  A content change that keeps the size constant exercises mtime_ns alone —
-  without this, a suite whose rewrites all change size could pass on the size
-  half while the mtime half was broken.
-  """
+  """Same byte size, new mtime_ns: the key's mtime half must move the verdict."""
   cfg = make_home_config(tmp_path)
   triggers_dir = cfg.sessions_dir / "s1" / "triggers"
   path = _write_trigger(cfg, "s1", _pending("t1", 10))
   first = _probe(triggers_dir)[1]
 
-  publish_via_tmp_rename(path, json.dumps(_pending("t1", 30)), "trigger.json.memo-test")
-  st = path.stat()
-  os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+  publish_same_size_rewrite(path, json.dumps(_pending("t1", 30)), "trigger.json.memo-test")
   second = _probe(triggers_dir)[1]
   assert second is not None and first is not None and second > first
 

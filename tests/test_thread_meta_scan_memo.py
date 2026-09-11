@@ -16,6 +16,7 @@ from conftest import (
     count_path_read_text,
     fresh_state_fixture,
     make_home_config,
+    publish_same_size_rewrite,
     publish_via_tmp_rename,
     write_thread_meta,
 )
@@ -60,21 +61,14 @@ def test_rereads_after_atomic_rewrite(tmp_path: Path) -> None:
 
 
 def test_rereads_after_same_size_rewrite(tmp_path: Path) -> None:
-  """Same byte size, new mtime_ns: the key's mtime half must move the verdict.
-
-  A content change that keeps the size constant exercises mtime_ns alone —
-  without this, a suite whose rewrites all change size could pass on the size
-  half while the mtime half was broken.
-  """
+  """Same byte size, new mtime_ns: the key's mtime half must move the verdict."""
   cfg = make_home_config(tmp_path)
   threads_dir = cfg.sessions_dir / "s1" / "threads"
   path = write_thread_meta(cfg, "s1", {"id": "t1", "status": "completed", "note": "aaaa"})
   assert [m["note"] for m in _scan(threads_dir)] == ["aaaa"]
 
   payload = json.dumps({"id": "t1", "status": "completed", "note": "bbbb"})
-  publish_via_tmp_rename(path, payload, "metadata.json.memo-test")
-  st = path.stat()
-  os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+  publish_same_size_rewrite(path, payload, "metadata.json.memo-test")
   assert [m["note"] for m in _scan(threads_dir)] == ["bbbb"]
 
 

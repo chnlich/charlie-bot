@@ -9,7 +9,6 @@ at the recorded cursor without the agent noticing anything.
 """
 
 import asyncio
-import contextlib
 import os
 import shutil
 import signal

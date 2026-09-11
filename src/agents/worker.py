@@ -21,7 +21,8 @@ from src.core import claude_accounts, claude_compaction, claude_relay, runs
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, BackendType, ClaudeAccount, ThreadMetadata
-from src.core.ndjson import append_ndjson, write_all as _write_all
+from src.core.ndjson import append_ndjson
+from src.core.ndjson import write_all as _write_all
 from src.core.process import kill_group_escalating
 from src.core.session_usage import _prompt_token_sum
 from src.core.streaming import handle_compaction_events, streaming_manager

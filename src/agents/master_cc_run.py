@@ -27,11 +27,11 @@ from src.core.latex import check_tex_changed, clear_snapshot
 from src.core.memory import assemble_master
 from src.core.models import (
     PROJECT_ROLE,
+    SESSION_ID_ENV_VAR,
     BackendOption,
     BackendType,
     ClaudeAccount,
     MasterRunRecord,
-    SESSION_ID_ENV_VAR,
     SessionCallbacks,
     SessionMetadata,
     backend_type_allows_missing_model,

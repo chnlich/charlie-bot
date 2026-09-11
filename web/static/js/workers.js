@@ -22,8 +22,21 @@ async function fetchAndRenderEvents(threadId, sessionId) {
     fetch(`/api/threads/${sessionId}/threads/${threadId}?attach=1`)
   ]);
   const payload = await eventsRes.json();
-  const metadata = await metadataRes.json();
-  renderAttachCommand(threadId, metadata);
+  // A failed detail fetch must not abort the events render: a non-JSON body
+  // (e.g. a plain-text 500) throws in .json(). Both failure forms skip the bar
+  // update — the bar keeps its previous state — and log the parse failure; the
+  // events render below stays unconditional.
+  if (metadataRes.ok) {
+    let metadata;
+    try {
+      metadata = await metadataRes.json();
+    } catch (err) {
+      console.warn('Attach metadata parse failed:', err);
+    }
+    if (metadata) {
+      renderAttachCommand(threadId, metadata);
+    }
+  }
   if (payload.reset || known === 0) {
     renderThreadEvents(threadId, payload.events);
   } else {

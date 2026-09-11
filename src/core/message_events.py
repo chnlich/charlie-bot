@@ -12,6 +12,17 @@ from src.core import event_types as ET
 _ATTACHED_FILES_MARKER = "\n\n[Attached files]\n"
 
 
+def _filename_from_path(path: str) -> str:
+  """Display filename for an attachment path.
+
+  Both attachment spellings — the structured ``uploaded_files`` refs and the
+  legacy footer lines — must derive the same filename for the same path, so
+  the derivation lives here. A path with no final segment ("", "/") comes
+  back unchanged.
+  """
+  return path.replace("\\", "/").rstrip("/").split("/")[-1] or path
+
+
 def serialize_uploaded_files(uploaded_files: list[object] | None) -> list[dict]:
   """Convert uploaded-file models or dicts into JSON-serializable dicts."""
   serialized: list[dict] = []
@@ -21,8 +32,7 @@ def serialize_uploaded_files(uploaded_files: list[object] | None) -> list[dict]:
     elif isinstance(uploaded_file, dict):
       serialized.append(uploaded_file)
     elif isinstance(uploaded_file, str):
-      filename = uploaded_file.replace("\\", "/").rstrip("/").split("/")[-1] or uploaded_file
-      serialized.append({"filename": filename, "path": uploaded_file})
+      serialized.append({"filename": _filename_from_path(uploaded_file), "path": uploaded_file})
     else:
       raise TypeError(f"Unsupported uploaded file payload: {type(uploaded_file)!r}")
   return serialized
@@ -44,8 +54,7 @@ def strip_attached_files_block(content: str) -> tuple[str, list[dict]]:
     path = line[2:].strip()
     if not path:
       return content, []
-    filename = path.replace("\\", "/").rstrip("/").split("/")[-1] or path
-    uploaded_files.append({"filename": filename, "path": path})
+    uploaded_files.append({"filename": _filename_from_path(path), "path": path})
 
   return body, uploaded_files
 

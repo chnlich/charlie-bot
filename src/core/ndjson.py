@@ -226,6 +226,13 @@ def parse_ndjson_range(path: Path, start: int, end: int) -> tuple[list[dict], bo
   return events, start > 0
 
 
+def write_all(fd: int, data: bytes) -> None:
+  """Write all of *data* to *fd*: a short write keeps going, never a torn line."""
+  view = memoryview(data)
+  while view:
+    view = view[os.write(fd, view):]
+
+
 def _append_ndjson_sync(path: Path, line: str) -> None:
   """One open(O_APPEND)+write+close per append.
 
@@ -235,11 +242,9 @@ def _append_ndjson_sync(path: Path, line: str) -> None:
   keeps the io stack's write-all contract: a short write keeps going instead
   of publishing a torn line.
   """
-  view = memoryview(line.encode("utf-8"))
   fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
   try:
-    while view:
-      view = view[os.write(fd, view):]
+    write_all(fd, line.encode("utf-8"))
     os.fdatasync(fd)  # durable before close: a hard VM kill must not leave a size-without-data NUL hole
   finally:
     os.close(fd)

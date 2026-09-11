@@ -9,7 +9,6 @@ at the recorded cursor without the agent noticing anything.
 """
 
 import asyncio
-import contextlib
 import os
 import shutil
 import signal
@@ -20,12 +19,12 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-import aiofiles
 import orjson
 import structlog
 
 from src.core import event_types as ET
 from src.core import runs
+from src.core.ndjson import write_all
 from src.core.process import kill_process_group, make_pdeathsig_kill_preexec
 from src.core.timeouts import (
     NO_OUTPUT_REPORT_THRESHOLD,
@@ -36,6 +35,14 @@ log = structlog.get_logger()
 
 DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
 _STDERR_TAIL_BYTES = 64 * 1024
+
+
+async def _tee_stderr_chunk(fd: int, chunk: bytes) -> None:
+  # One executor hop per chunk: aiofiles' write+flush pair costs two round-trips
+  # on the streamed-turn path (the M82 events-append finding). The fd carries no
+  # fdatasync — the stderr log is a diagnostic stream, not the chat funnel.
+  await asyncio.to_thread(write_all, fd, chunk)
+
 
 # The flag that suppresses the CLI's interactive permission prompt. Its
 # spelling is fixed by the vendor CLI contract, not by this repo, so every
@@ -755,19 +762,22 @@ class AgentBackend(ABC):
     tail is always up to date for `self.stderr_text`.
     """
     assert self._proc is not None and self._proc.stderr is not None
-    stderr_log_cm = (
-        aiofiles.open(stderr_log_path, "wb") if stderr_log_path is not None else contextlib.nullcontext(None))
-    async with stderr_log_cm as stderr_log:
+    # The open truncates like the "wb" mode it replaces, so a run's log starts
+    # empty for its tail -f readers.
+    fd = os.open(stderr_log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666) if stderr_log_path is not None else None
+    try:
       while True:
         chunk = await self._proc.stderr.read(8192)
         if not chunk:
           break
-        if stderr_log is not None:
-          await stderr_log.write(chunk)
-          await stderr_log.flush()
+        if fd is not None:
+          await _tee_stderr_chunk(fd, chunk)
         self._stderr_tail.extend(chunk)
         if len(self._stderr_tail) > _STDERR_TAIL_BYTES:
           del self._stderr_tail[:len(self._stderr_tail) - _STDERR_TAIL_BYTES]
+    finally:
+      if fd is not None:
+        os.close(fd)
 
   async def _finish_stdin_task(self, timeout: float) -> Exception | None:
     """Flush the stdin-prompt writer; return its error (if any) for the caller to raise."""

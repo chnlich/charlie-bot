@@ -98,6 +98,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M86 delegation takeoff-gate scan, delegation-flow shape | M86 collector below | seconds per `check_takeoff_gate` call, worst live chat corpus, one authorized user message appended (the corpus-as-it-stands round is the parity witness) | median < 0.001 s | — (introduced with its first history row) |
 | M87 opencode abort client round-trip | M87 collector below | seconds per `_abort_session` call against a local stub serve (the per-turn cleanup POST, and the run-start client pays the same construction; loop lag reads the 5 ms ticker floor like M14) | wall median < 0.005 s | — (introduced with its first history row) |
 | M88 perfetto direct-pass build, worst on-disk trace corpus | M88 collector below | seconds per `_build_direct_pass_gzip` build (validate + stream-compress), largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 6 s | — (introduced with its first history row) |
+| M89 backend stderr tee, per chunk | M89 collector below | seconds per 8 KB chunk tee to the run's stderr.log, the streamed-turn pump shape | median < 0.0002 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -5543,10 +5544,60 @@ subprocess.run(["rm", "-rf", str(work)], check=True)
 EOF
 ```
 
+M89 — backend stderr tee, per chunk. Every covered backend's run tees subprocess stderr to the
+run's stderr.log (0.6-4 MB on disk per run) through the streamed loop's per-chunk write before
+the in-memory tail update, and the tee's executor-hop count is invisible to the HTTP probes
+above. The collector drives the per-chunk tee exactly as the pump issues it — a scratch
+stderr.log under /tmp, 8 KB chunks, one warm pass then 50 timed tees — dispatching on the
+checkout (the pre-fix aiofiles write+flush pair vs the one-hop helper; the dispatch reads the
+module), the same shape as the M82 protocol. Evidence points the same collector at the before
+and after checkouts (``CHECKOUT`` at each root):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, tempfile, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+import src.agents.backends.base as base_mod
+
+chunk = b"x" * 8192
+path = os.path.join(tempfile.mkdtemp(prefix="m89-stderr-tee-"), "stderr.log")
+
+async def main():
+    tee = getattr(base_mod, "_tee_stderr_chunk", None)
+    if tee is not None:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+        async def one():
+            await tee(fd, chunk)
+    else:
+        import aiofiles
+        f = await aiofiles.open(path, "wb")
+        async def one():
+            await f.write(chunk)
+            await f.flush()
+    for _ in range(5):
+        await one()  # warm, as a run's first stderr bytes; not timed
+    times = []
+    for _ in range(50):
+        t0 = time.perf_counter()
+        await one()
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    if tee is None:
+        await f.close()
+    else:
+        os.close(fd)
+    print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: stderr tee chunk "
+          f"median {times[24] * 1e6:.0f} us, max {times[-1] * 1e6:.0f} us over 50")
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-11 | this PR | M89 stderr tee chunk median 161/162/141/148/150 → 114/127/104/99/91 us, −22 % to −39 %, every paired round faster (five interleaved rounds of the new collector at load 1.18 one-minute, main checkout before vs branch worktree after back-to-back; a quieter first pass read 209 → 93 us, −55 %, and one round of an earlier series landed 173 → 229 us under a load spike the later series excludes); component attribution: the after arm sits at the one to_thread round-trip floor (91-127 us against the ~67-104 us no-op round-trip the M34/M52/M82 rows document), so aiofiles' second hop was the whole gap; live-scale corroboration: on-disk stderr.log volumes 0.6-4 MB per run mean 75-490 chunks per run, so the removed hop is ~7-55 ms of executor time per run off the pool every poll and chat append shares; no-regression re-measure interleaved ×2: M82 events-log append 76/73 → 74/74 us (the sibling consumer of the now-shared write_all); 5-passed backend-logging suite plus the new write-all contract test | every covered backend's run teed subprocess stderr through aiofiles' write+flush pair — two executor round-trips per 8 KB chunk on the default pool — while the read half is a native asyncio stream and the write lands through one asyncio.to_thread hop around the shared write-all loop (the M82 events-append pattern, now single-homed in src.core.ndjson.write_all alongside the fdatasync append's own loop); the open keeps the "wb" truncate so a run's log starts empty for its tail -f readers, the in-memory 64 KB tail update stays on-loop, and there is no durability change — the stderr log is a diagnostic stream and carried no fdatasync; M89 definition and healthy range introduced with this PR |
 | 2026-09-10 | this PR | M53 broken steady state, repaired collector: onset 1 warning + 1 re-parse, steady state 0 warnings / 0 re-parses over 60 calls, fingerprint-move round 1 re-parse / 0 new warnings, call wall median 0.00 ms max 0.03 ms (back-to-back arms at load 0.78-0.96 one-minute, scratch CHARLIEBOT_HOME, live home untouched); before — the stale collector read vacuously: onset 0 warnings / 0 re-parses, steady 0/0, fingerprint-move round 0/0 (the broken corpus never broke anything, so every reading since the sectioned config proved nothing); the sweep's other 85 standing collectors all read inside their healthy ranges this round (load 0.66-1.03 one-minute across the sweep) | the 2026-09-09 config-schema series moved the whole sectioned mapping into config.yaml, leaving config.d/ to cron.d/ only: load_config now rejects a config.d/*.yaml fragment outright, and the reload fingerprint stats exactly config.yaml — so the M53 collector's broken-corpus shape (a fragment declaring an unknown key) could never fire the reload it exists to exercise: the fragment is not config, and writing it moves no fingerprint stat; the key now goes into config.yaml itself, restoring the collector's contract — onset 1 warning + 1 parse (the warn-once registry's first sighting), steady state 0/0 on the recorded failed fingerprint, and a fingerprint move re-parses once with no new warning; collector command only, no product code |
 | 2026-09-10 | this PR | M7 restart-cold collect median 2.58 s → 0.93 s, −64 %, maxima 2.56-2.67 → 0.43-0.96 s (three interleaved prime+timed rounds of the new collector — each arm primes its own document seconds before its timed run, main checkout before vs branch worktree after back-to-back, live corpora read-only during an active turn's churn at load 2.0-2.1 one-minute; scanned bytes 58.0 → 0.0 MB — the db's whole 121k-row data-blob corpus re-read per restart vs only the rows that moved since the document was written; rows digests agree across 4 of 6 arms, the drift is the live turn appending between arms); component attribution on the pre-fix arm: `_scan_opencode_rows` 1.95 s of the 2.84 s collect (the json_extract pass measured standalone 1135 ms over 121k rows, `_opencode_row` parse 0.59 s, replay fold 0.26 s); no-regression re-measures interleaved ×2: M7 changed-round 0.041/0.041/0.041/0.042 s medians (verbatim harness, rows digest identical), M80 churn 0.0037/0.0030/0.0032/0.0032 s with rows digest 8efb9506fc07 identical across all four arms — the v2 document's orjson save rides those rounds (dump 28 ms vs stdlib 176 ms measured on the 20.8 MB document, which the rows map grows from 14.7 MB); 5043-passed suite plus 5 new tests (seed+diff blob-free round, moved-row recount with insert+in-place-upsert deltas, stored-partial adoption without replay, v1 records entry serve, NaN document cold-rebuild note) and 2 re-pins (the persisted entry shape, the stored-partial adoption contract) | the persisted document held the opencode db's records but not their row keys, so a process restart — the doc's whole purpose — could not tell which rows had moved and re-read every contributing row's data blob through the json_extract scan (2.26 s of the 2.84 s collect, once per server start); the entry now persists the row memo's map (id → [time_updated, record]) plus the partial, and the restart-cold advance seeds the memo from it and diffs one key pass against the live table — the same per-row diff the warm incremental path runs, so the restart cost drops to the key scan plus the moved rows' fetches; the document reads and writes through orjson (the M78 parser-swap precedent, machine-written JSON, load 237 → 177 ms and dump 176 → 28 ms on the grown document, NaN literals now fail loud into the existing unreadable-document cold-rebuild note), v1 documents still serve through the records replay until their first scan-path store rewrites them; M7 restart-cold definition, collector and healthy range introduced with this PR |
 | 2026-09-10 | this PR | M19 framing median 18.20/17.90/17.88 → 3.00/3.27/3.28/2.94/3.14/3.10 ms, −82 % to −84 %, maxima 17.98-18.78 → 2.99-3.48 ms (six interleaved rounds of the collector — main checkout's str path before vs branch worktree's byte mode after, back-to-back, 16 MB payload / 16 KB chunks / ~1 MB frames, 32 lines both arms, synthetic read-only, every paired round faster at load 1.42/1.39/1.12 one-minute; component attribution: the per-chunk UTF-8 decode the str path paid measured standalone at 8.69 ms per 16 MB; str-mode no-regression witness: branch 13.24/12.84 ms vs main 18.03/17.85 ms interleaved ×2 — the per-line decode replaced the incremental chunk decoder and is itself cheaper); 5036-passed suite plus 8 new byte-mode tests (mode parity on every two-way split and 50-round random chunkings ×3 corpus shapes, multibyte split reassembly, raw splitline-boundary bytes, unterminated-tail and trailing-CR flush, invalid-UTF8 raw pass-through with the parse-side raise pinned) | the framer decoded every byte chunk to str on the event loop before both SSE consumers immediately JSON-parsed the completed lines — orjson parses the wire's UTF-8 bytes natively, so the decode was pure overhead on the funnel that carries every opencode turn and proxied anthropic call; `iter_sse_lines` gains the byte mode (framing runs on raw bytes; the terminators are ASCII so a multibyte character can never be split), the default str mode keeps the errors="replace" contract per completed line (itself cheaper than the old incremental chunk decode), and the boundary change is deliberate and test-pinned: in the byte mode an invalid UTF-8 byte reaches the consumers' JSON parse and raises there (the SSE readers' existing malformed-JSON class) instead of degrading to U+FFFD; M19 collector now drives the production byte mode and the healthy range recalibrated median < 0.2 s → < 0.010 s with this PR — the old line sat 6x above the new readings |

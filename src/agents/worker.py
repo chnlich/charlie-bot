@@ -404,10 +404,14 @@ class Worker:
 
   async def _process_event(self, event_data: dict, fd: int) -> None:
     """Write event to disk log and broadcast to WebSocket subscribers."""
-    # Detect quota exhaustion errors
+    # Detect quota exhaustion errors. The payload copies ride only the type the
+    # pattern check reads: str() reprs the whole message dict and lower() copies
+    # it per streamed event, while QUOTA_ERROR_PATTERNS can only match on ERROR.
     event_type = event_data.get("type", "")
-    event_message = str(event_data.get("message", "")).lower()
-    event_content = str(event_data.get("content", "")).lower()
+    event_message = event_content = ""
+    if event_type == ET.ERROR:
+      event_message = str(event_data.get("message", "")).lower()
+      event_content = str(event_data.get("content", "")).lower()
 
     # Ensure all persisted events carry a stable event-time.
     if not event_data.get("timestamp"):

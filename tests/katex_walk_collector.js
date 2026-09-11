@@ -14,12 +14,17 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { fetchUrl, largestAssistantDraft, worstPageCorpus, assistantTexts } = require('./stream_collector_common');
+const {
+  fetchUrl,
+  HLJS_URL,
+  largestAssistantDraft,
+  worstPageCorpus,
+  assistantTexts,
+} = require('./stream_collector_common');
 const { buildStreamHarness } = require('./stream_render_harness');
 const { MARKED_URL } = require('./marked_renderer_harness');
 
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
-const HLJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js';
 const KATEX_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js';
 const AUTO_URL = 'https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js';
 const PAGE_MESSAGES = 40;

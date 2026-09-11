@@ -12,6 +12,7 @@ const { buildStreamHarness } = require('./stream_render_harness');
 const { MARKED_URL } = require('./marked_renderer_harness');
 const {
   fetchUrl,
+  HLJS_URL,
   largestAssistantDraft,
   timedReplays,
   finalFrameParity,
@@ -19,7 +20,6 @@ const {
   REPLAY_TICK_MS,
 } = require('./stream_collector_common');
 
-const HLJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js';
 const BARE_FENCE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/m;
 
 (async () => {

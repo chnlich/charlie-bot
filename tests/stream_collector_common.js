@@ -11,6 +11,11 @@ const path = require('node:path');
 
 const { buildStreamHarness } = require('./stream_render_harness');
 
+// The highlight.js build the chat page serves (web/templates/index.html); the
+// collectors' numbers stay comparable only while they highlight through the
+// browser's build, so bump it with the template.
+const HLJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js';
+
 function fetchUrl(url) {
   return new Promise((resolve, reject) => {
     https.get(url, (res) => {
@@ -153,6 +158,7 @@ function finalFrameParity(markedSrc, text, finalHtml, { harnessOptions } = {}) {
 }
 
 module.exports = {
+  HLJS_URL,
   fetchUrl,
   largestAssistantDraft,
   assistantTexts,

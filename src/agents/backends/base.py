@@ -633,8 +633,11 @@ class AgentBackend(ABC):
     if self._on_spawn is not None:
       await self._on_spawn(self._proc.pid)
 
-  async def run(
-      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     """Spawn the agent subprocess and yield parsed NDJSON event dicts.
 
     Template method: calls _prepare_cwd() -> transport-dir resolution ->

@@ -201,8 +201,11 @@ class OpenCodeBackend(AgentBackend):
         },
     }
 
-  async def run(
-      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     """Drive OpenCode through its per-run HTTP server and SSE event stream.
 
     A failed attempt whose drained stderr tail carries the SQLite lock
@@ -233,9 +236,8 @@ class OpenCodeBackend(AgentBackend):
         self._server_url = await self._read_server_url(stdout_log_path)
         self._stdout_task = asyncio.create_task(self._stream_stdout(stdout_log_path))
 
-        async with httpx.AsyncClient(
-            base_url=self._server_url, timeout=OPENCODE_HTTP_API_TIMEOUT, verify=_SERVE_SSL_CONTEXT
-        ) as client:
+        async with httpx.AsyncClient(base_url=self._server_url, timeout=OPENCODE_HTTP_API_TIMEOUT,
+                                     verify=_SERVE_SSL_CONTEXT) as client:
           await self._check_health(client)
           self._model_limit = await self._fetch_model_limit(client)
           self._session_id = self._resume_session_id or await self._create_session(client)
@@ -500,7 +502,10 @@ class OpenCodeBackend(AgentBackend):
             },
             # Text part first (the prompt string, unchanged), then one file
             # part per readable image attachment in reference order.
-            "parts": [{"type": "text", "text": prompt}, *_image_file_parts(uploaded_files)],
+            "parts": [{
+                "type": "text",
+                "text": prompt
+            }, *_image_file_parts(uploaded_files)],
         },
     )
     if response.status_code != 204:
@@ -748,9 +753,8 @@ class OpenCodeBackend(AgentBackend):
     if self._server_url is None or self._session_id is None:
       return
     try:
-      async with httpx.AsyncClient(
-          base_url=self._server_url, timeout=OPENCODE_ABORT_TIMEOUT, verify=_SERVE_SSL_CONTEXT
-      ) as client:
+      async with httpx.AsyncClient(base_url=self._server_url, timeout=OPENCODE_ABORT_TIMEOUT,
+                                   verify=_SERVE_SSL_CONTEXT) as client:
         response = await client.post(f"/session/{self._session_id}/abort")
         response.raise_for_status()
     except Exception as e:

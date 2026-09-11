@@ -73,8 +73,11 @@ class AntigravityCliBackend(AgentBackend):
       return None
     return data
 
-  async def run(
-      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     """Run the final-only CLI mode and translate the JSON envelope into CC events.
 
     uploaded_files is accepted for signature parity with the base run() and

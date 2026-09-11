@@ -20,11 +20,11 @@ from src.agents.backends.pty_common import (
     tmux_session_name,
 )
 from src.api.deps import get_config_on_loop, get_thread_manager, get_trigger_manager
-from src.api.message_utils import extract_text_from_message, extract_tool_result_text
 from src.api.responses import FastJsonResponse
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.memo import BoundedMemo, StatSignatureMemo
+from src.core.message_aggregator import extract_text_from_message, extract_tool_result_text
 from src.core.models import (
     BackendType,
     ThreadMetadata,

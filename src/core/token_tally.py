@@ -575,14 +575,14 @@ _TAIL_WINDOW = 8192
 _PARSE_CHUNK = 1 << 22
 
 
-def _parse_lines(fh: BinaryIO, markers: tuple[bytes, ...]) -> tuple[list[dict], int, int]:
+def _parse_lines(fh: BinaryIO, markers: tuple[bytes, ...]) -> tuple[list[dict], int]:
   """Parse the marker lines from *fh*'s current position to EOF.
 
-  Returns (objects, bytes read, consumed byte offset), objects in file order. Only complete
-  lines parse: a trailing fragment without its newline is left for the round whose read
-  covers it whole, and the bytes count is the consumed offset — every complete line's bytes,
-  which is what the read paid. A marker hit in the trailing fragment waits in the remainder
-  for the next chunk; an unparseable marker line is dropped.
+  Returns (objects, consumed byte offset), objects in file order. Only complete lines parse:
+  a trailing fragment without its newline is left for the round whose read covers it whole.
+  The consumed offset is every complete line's byte span — which is what the read paid. A
+  marker hit in the trailing fragment waits in the remainder for the next chunk; an
+  unparseable marker line is dropped.
   """
   objects: list[dict] = []
   consumed = 0
@@ -610,24 +610,23 @@ def _parse_lines(fh: BinaryIO, markers: tuple[bytes, ...]) -> tuple[list[dict], 
         objects.append(json.loads(data[start:data.find(b"\n", start) + 1].decode("utf-8", errors="replace")))
       except ValueError:
         continue
-  return objects, consumed, consumed
+  return objects, consumed
 
 
-def _prefiltered_jsonl(path: str, markers: tuple[bytes, ...]) -> tuple[list, list[dict], int, int]:
+def _prefiltered_jsonl(path: str, markers: tuple[bytes, ...]) -> tuple[list, list[dict], int]:
   """Parse one jsonl into the objects whose raw line carries any *markers* substring.
 
-  Returns (signature, objects, bytes read, consumed byte offset), objects in file order. The
-  signature is taken before the read: a concurrent append mid-read then necessarily outdates
-  the stored sig and the next lookup re-scans, so a partial or extended read can never be
-  served later as if complete. *consumed* is the offset the parse actually stopped at — the
-  end of the last complete line — which the append-tail fast path continues from; it can sit
-  past the signature's size when the writer appended mid-read. Every line counts toward the
-  bytes; an unparseable line is dropped.
+  Returns (signature, objects, consumed byte offset), objects in file order. The signature is
+  taken before the read: a concurrent append mid-read then necessarily outdates the stored
+  sig and the next lookup re-scans, so a partial or extended read can never be served later
+  as if complete. *consumed* is the offset the parse actually stopped at — the end of the
+  last complete line — which the append-tail fast path continues from; it can sit past the
+  signature's size when the writer appended mid-read. An unparseable line is dropped.
   """
   st = os.stat(path)
   with open(path, "rb") as fh:
-    objects, nbytes, consumed = _parse_lines(fh, markers)
-  return [st.st_mtime_ns, st.st_size], objects, nbytes, consumed
+    objects, consumed = _parse_lines(fh, markers)
+  return [st.st_mtime_ns, st.st_size], objects, consumed
 
 
 def _boundary_guard(path: str, end: int) -> list | None:
@@ -648,16 +647,16 @@ def _boundary_guard(path: str, end: int) -> list | None:
   return [window, hashlib.sha256(raw).hexdigest()]
 
 
-def _tail_parse(path: str, entry: dict, markers: tuple[bytes, ...]) -> tuple[list[dict], int, list, int] | None:
+def _tail_parse(path: str, entry: dict, markers: tuple[bytes, ...]) -> tuple[list[dict], list, int] | None:
   """Parse the lines appended since *entry*'s parse, or None when the prefix is unproven.
 
-  Returns (objects, bytes read, signature, new consumed offset). The prefix proof is the
-  entry's own guard: the stored window must re-hash equal and end on a newline (the stored
-  offset only ever follows a complete line, so a mid-line boundary — a replaced or truncated
-  prefix — fails the check), and the file must have grown past the parsed offset with no
-  mtime rewind. The signature is taken before the read, the same contract
-  _prefiltered_jsonl runs under. The trailing partial line stays unparsed; the round whose
-  tail covers it whole parses it.
+  Returns (objects, signature, new consumed offset). The prefix proof is the entry's own
+  guard: the stored window must re-hash equal and end on a newline (the stored offset only
+  ever follows a complete line, so a mid-line boundary — a replaced or truncated prefix —
+  fails the check), and the file must have grown past the parsed offset with no mtime
+  rewind. The signature is taken before the read, the same contract _prefiltered_jsonl runs
+  under. The trailing partial line stays unparsed; the round whose tail covers it whole
+  parses it.
   """
   sig, guard, end = entry.get("sig"), entry.get("guard"), entry.get("end")
   if not sig or not guard or not isinstance(end, int):
@@ -672,8 +671,8 @@ def _tail_parse(path: str, entry: dict, markers: tuple[bytes, ...]) -> tuple[lis
     if len(prefix) != window or prefix[-1:] != b"\n" or hashlib.sha256(prefix).hexdigest() != guard[1]:
       return None
     fh.seek(end)
-    objects, nbytes, consumed = _parse_lines(fh, markers)
-  return objects, nbytes, [st.st_mtime_ns, st.st_size], end + consumed
+    objects, consumed = _parse_lines(fh, markers)
+  return objects, [st.st_mtime_ns, st.st_size], end + consumed
 
 
 def _claude_records(recs: list[dict], seen: set) -> tuple[list[list], int]:
@@ -720,16 +719,16 @@ def _claude_file_contribution(path: str, prev: dict | None = None) -> tuple[dict
   if prev is not None:
     tail = _tail_parse(path, prev, _CLAUDE_MARKERS)
     if tail is not None:
-      recs, nbytes, sig, end = tail
+      recs, sig, end = tail
       records, dupes = _claude_records(recs, {rec[0] for rec in prev["records"]})
       entry = {"sig": sig, "records": prev["records"] + records, "dupes": prev.get("dupes", 0) + dupes, "end": end}
       entry["guard"] = _boundary_guard(path, end)
-      return entry, nbytes
-  sig, recs, nbytes, end = _prefiltered_jsonl(path, _CLAUDE_MARKERS)
+      return entry, end - prev["end"]
+  sig, recs, end = _prefiltered_jsonl(path, _CLAUDE_MARKERS)
   records, dupes = _claude_records(recs, set())
   entry = {"sig": sig, "records": records, "dupes": dupes, "end": end}
   entry["guard"] = _boundary_guard(path, end)
-  return entry, nbytes
+  return entry, end
 
 
 class _FilePartial(NamedTuple):
@@ -977,7 +976,7 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
   if prev is not None:
     tail = _tail_parse(path, prev, _CODEX_MARKERS)
     if tail is not None:
-      recs, nbytes, sig, end = tail
+      recs, sig, end = tail
       records: list[list] = []
       walked, final_total, model = _codex_records(recs, prev.get("model_ctx"), records)
       total_walked = prev.get("walked", 0) + walked
@@ -994,8 +993,8 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
           "end": end
       }
       entry["guard"] = _boundary_guard(path, end)
-      return entry, nbytes
-  sig, recs, nbytes, end = _prefiltered_jsonl(path, _CODEX_MARKERS)
+      return entry, end - prev["end"]
+  sig, recs, end = _prefiltered_jsonl(path, _CODEX_MARKERS)
   meta = next((rec for rec in recs if rec.get("type") == CODEX_SESSION_META), None)
   mp = (meta or {}).get("payload") or {}
   source = json.dumps(mp.get("source") or {})
@@ -1022,7 +1021,7 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
       "end": end
   }
   entry["guard"] = _boundary_guard(path, end)
-  return entry, nbytes
+  return entry, end
 
 
 def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -> None:

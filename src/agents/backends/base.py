@@ -36,17 +36,11 @@ DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
 _STDERR_TAIL_BYTES = 64 * 1024
 
 
-async def _tee_stderr_chunk(fd: int, chunk: bytes) -> None:
-  # One executor hop per chunk: aiofiles' write+flush pair costs two round-trips
-  # on the streamed-turn path (the M82 events-append finding). The fd carries no
-  # fdatasync — the stderr log is a diagnostic stream, not the chat funnel.
-  await asyncio.to_thread(write_all, fd, chunk)
-
-
-async def _write_stdout_chunk(fd: int, chunk: bytes) -> None:
-  # The stderr tee's rule applied to the stdout pumps: one executor hop per
-  # chunk or startup line, the fd held for the attempt. Same no-fdatasync
-  # diagnostic-stream ground as _tee_stderr_chunk.
+# One executor hop per chunk, on the stderr tee and the stdout pumps alike:
+# aiofiles' write+flush pair costs two round-trips on the streamed-turn path.
+# No fdatasync on the fd — these logs are diagnostic streams, not the chat
+# funnel.
+async def _write_chunk(fd: int, chunk: bytes) -> None:
   await asyncio.to_thread(write_all, fd, chunk)
 
 
@@ -811,7 +805,7 @@ class AgentBackend(ABC):
         if not chunk:
           break
         if fd is not None:
-          await _tee_stderr_chunk(fd, chunk)
+          await _write_chunk(fd, chunk)
         self._stderr_tail.extend(chunk)
         if len(self._stderr_tail) > _STDERR_TAIL_BYTES:
           del self._stderr_tail[:len(self._stderr_tail) - _STDERR_TAIL_BYTES]

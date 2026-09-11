@@ -27,7 +27,7 @@ from starlette.responses import Response
 from src.api.code_server import is_code_server_available
 from src.api.deps import SESSION_NOT_FOUND_DETAIL, get_session_manager
 from src.api.message_utils import build_session_bootstrap_data
-from src.api.sessions import _bootstrap_payload
+from src.api.sessions import _bootstrap_payload, _default_backend_id
 from src.core.config import CharlieBotConfig, get_config, get_credentials
 from src.core.models import SessionStatus
 from src.core.ncu_parsing import NcuParseError, parse_ncu_report
@@ -759,11 +759,8 @@ async def index(
   elif session is None and sessions:
     return RedirectResponse(f"/?session={sessions[0].id}")
 
-  active_backend = active_session.backend if active_session else (
-      cfg.backends.options[0].id if cfg.backends.options else "claude")
+  active_backend = active_session.backend if active_session else _default_backend_id(cfg)
   active_backend_opt = cfg.get_backend_option(active_backend)
-  if active_backend_opt is not None:
-    active_backend = active_backend_opt.id
   active_backend_label = active_backend_opt.label if active_backend_opt else active_backend
   active_backend_type = active_backend_opt.type if active_backend_opt else ""
 

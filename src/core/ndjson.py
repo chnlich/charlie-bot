@@ -66,17 +66,26 @@ def parse_ndjson_line(line: str | bytes, *, log_event: str, log_fields: dict[str
 
   The one definition of the NDJSON reader skip contract: a line that strips to
   empty is invisible, and a line the parser rejects logs *log_event* (plus
-  *log_fields* and the parse error) at debug level and answers None. The parser
-  is orjson, ~2x stdlib json.loads per line measured on the live corpora;
-  orjson rejects the stdlib json NaN/Infinity extensions and float literals
-  that overflow a double (those lines skip as malformed), and ints at or
-  beyond 2**64 parse as float where stdlib keeps exact precision.
+  *log_fields* and the parse error) at debug level and answers None. The parse
+  rides the raw line — orjson ignores surrounding whitespace, so no strip copy
+  runs — and a bytes line the strict parse rejects gets one errors="replace"
+  decode before the verdict: a torn multibyte char parses as U+FFFD, hard
+  corruption skips as malformed. The parser is orjson, ~2x stdlib json.loads
+  per line measured on the live corpora; orjson rejects the stdlib json
+  NaN/Infinity extensions and float literals that overflow a double (those
+  lines skip as malformed), and ints at or beyond 2**64 parse as float where
+  stdlib keeps exact precision.
   """
-  stripped = line.strip()
-  if not stripped:
+  if not line or line.isspace():
     return None
   try:
-    return orjson.loads(stripped)
+    return orjson.loads(line)
+  except ValueError as e:
+    if not isinstance(line, bytes):
+      log.debug(log_event, error=str(e), **log_fields)
+      return None
+  try:
+    return orjson.loads(line.decode("utf-8", errors="replace"))
   except ValueError as e:
     log.debug(log_event, error=str(e), **log_fields)
     return None

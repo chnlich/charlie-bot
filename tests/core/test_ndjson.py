@@ -134,6 +134,27 @@ def test_parse_ndjson_line_accepts_bytes_lines() -> None:
   assert parse_ndjson_line(line, log_event="t", log_fields={}) == {"text": "引数"}
 
 
+def test_parse_ndjson_line_bytes_torn_multibyte_parses_as_replacement_char() -> None:
+  # orjson rejects invalid UTF-8 before the JSON structure: the contract's
+  # replace fallback decides the line, so a torn multibyte char inside an
+  # otherwise valid line parses as U+FFFD instead of skipping as malformed.
+  line = b'{"text": "ok\xff"}'
+  assert parse_ndjson_line(line, log_event="t", log_fields={}) == {"text": "ok\ufffd"}
+
+
+def test_parse_ndjson_line_bytes_hard_corruption_skips() -> None:
+  # A line the replace decode cannot rescue (invalid UTF-8 AND broken JSON)
+  # skips as malformed, like any rejected line.
+  assert parse_ndjson_line(b'{"text": "ok\xff', log_event="t", log_fields={}) is None
+
+
+def test_parse_ndjson_line_bytes_whitespace_only_skips_without_strip_copy() -> None:
+  # The blank check is isspace on the raw line (ASCII whitespace for bytes);
+  # orjson's own whitespace tolerance covers a padded line without a copy.
+  assert parse_ndjson_line(b"   \n", log_event="t", log_fields={}) is None
+  assert parse_ndjson_line(b'  {"i": 1}  ', log_event="t", log_fields={}) == {"i": 1}
+
+
 def test_parse_ndjson_line_logs_skip_event_with_fields() -> None:
   # A rejected parse logs log_event at debug level carrying the pass-through
   # fields and the parse error, so the log still says which reader skipped.

@@ -1881,10 +1881,10 @@ async def test_run_threads_uploaded_files_into_prompt_parts(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_stdout_startup_line_and_stream_land_through_one_fd(tmp_path: Path) -> None:
+async def test_stdout_startup_line_and_stream_land_through_one_fd(monkeypatch, tmp_path: Path) -> None:
   """The run's stdout fd serves both phases: the startup URL line and the
   stream chunks append through the one held fd, and closing twice is a no-op."""
-  backend = OpenCodeBackend(model="provider/model")
+  backend = _build_backend(monkeypatch, model="provider/model")
   backend._proc = _StubServeProcess([])
   backend._stdout_fd = backend._open_stdout_log(tmp_path / "stdout.log")
 

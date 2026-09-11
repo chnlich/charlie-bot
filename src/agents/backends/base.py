@@ -270,8 +270,8 @@ async def iter_ndjson_events(stdout: asyncio.StreamReader) -> AsyncIterator[dict
   """Yield the JSON objects of an NDJSON stream.
 
   Lines decode as UTF-8 with replacement, then ride the ndjson reader skip
-  contract (:func:`parse_ndjson_line`): blank lines and lines that do not
-  parse as JSON log and yield nothing. The stream funnels parse
+  contract (:func:`parse_ndjson_line`): a blank line yields nothing, and a
+  line the parser rejects logs and yields nothing. The stream funnels parse
   machine-written JSON, which carries none of the skip boundary's literals.
   """
   async for raw_line in stdout:

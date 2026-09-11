@@ -27,8 +27,10 @@ from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.message_aggregator import extract_text_from_message, extract_tool_result_text
 from src.core.models import (
     BackendType,
+    CcClaudeBackend,
     ThreadMetadata,
     ThreadStatus,
+    TuiCliBackend,
     WorkerEvent,
 )
 from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
@@ -90,7 +92,12 @@ def _backend_dispatch(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -> _
   if cfg is not None:
     option = cfg.get_backend_option(thread.backend)
     if option is not None:
-      return _BackendDispatch(type=option.type, cli_binary=option.cli_binary)
+      # cli_binary is declared on the cc-claude and tui-cli option models only;
+      # every other member of the discriminated union must read None — a bare
+      # attribute read raises AttributeError on pydantic's extra='forbid' models.
+      return _BackendDispatch(
+          type=option.type,
+          cli_binary=option.cli_binary if isinstance(option, (CcClaudeBackend, TuiCliBackend)) else None)
   return _BackendDispatch(type=thread.backend)
 
 

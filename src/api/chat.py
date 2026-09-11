@@ -13,12 +13,12 @@ from src.api.deps import get_session_manager, require_found, require_session
 from src.api.message_utils import (
     build_agent_input_content,
     build_user_event,
-    serialize_uploaded_files,
 )
 from src.core import event_types as ET
 from src.core.autonamer import is_default_session_name, maybe_auto_name
 from src.core.config import CharlieBotConfig, get_config
 from src.core.message_aggregator import extract_text_from_message
+from src.core.message_events import serialize_uploaded_files
 from src.core.models import (
     BackendType,
     SendMessageRequest,

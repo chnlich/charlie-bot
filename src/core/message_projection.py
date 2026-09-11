@@ -29,11 +29,8 @@ interval may still rewrite.
 
 import bisect
 
-from src.api.message_utils import (
-    _stable_history_projection,
-    stable_closed_prefix_len,
-)
 from src.core.message_aggregator import MessageAggregator
+from src.core.message_events import _stable_history_projection, stable_closed_prefix_len
 
 __all__ = ["MessageProjection"]
 

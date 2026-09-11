@@ -38,9 +38,8 @@ _LIVE_RANGE_MEMO_LIMIT = 4
 # file when the window does not reach the file's first line; a span past the
 # byte cap is read once by the full build instead, which then serves every
 # later window from memory. The walk accumulates 512 KiB segments from the
-# end (the iter_ndjson_events_from_end tail-window size, _TAIL_WINDOW_SIZE)
-# and stops on a raw terminator
-# count one line above the target plus the possibly cut head segment.
+# end (the iter_ndjson_events_from_end tail-window size, _TAIL_WINDOW_SIZE);
+# the walk's stop rule lives on _walk_tail_line_texts.
 _WALK_BYTE_BUDGET = 32 * 1024 * 1024
 _WALK_CHUNK_BYTES = 512 * 1024
 

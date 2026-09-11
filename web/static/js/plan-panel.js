@@ -625,6 +625,16 @@ const planPanel = (() => {
 
   // -- Selection ----------------------------------------------------------
 
+  // The four panels every selection mutation repaints afterward. The action
+  // bar render is async and generation-guarded; these paths fire it without
+  // awaiting, and refresh() awaits it on its own path.
+  function _renderSelectionPanels() {
+    _renderStaleNotice();
+    _renderDiffToggle();
+    _renderViewer();
+    _renderActionBar();
+  }
+
   function selectPlan(planId) {
     _selectedPlanId = planId != null ? Number(planId) : null;
     var plan = _findPlan(_selectedPlanId);
@@ -632,19 +642,13 @@ const planPanel = (() => {
     _selectedVersion = lv ? lv.v : null;
     _diffEnabled = hasPredecessor(plan, _selectedVersion);
     _renderVersionSwitcher();
-    _renderStaleNotice();
-    _renderDiffToggle();
-    _renderViewer();
-    _renderActionBar();
+    _renderSelectionPanels();
   }
 
   function selectVersion(version) {
     _selectedVersion = version != null ? Number(version) : null;
     _diffEnabled = hasPredecessor(_findPlan(_selectedPlanId), _selectedVersion);
-    _renderStaleNotice();
-    _renderDiffToggle();
-    _renderViewer();
-    _renderActionBar();
+    _renderSelectionPanels();
   }
 
   function openPlan(planId, v) {
@@ -657,10 +661,7 @@ const planPanel = (() => {
     _diffEnabled = plan ? hasPredecessor(plan, _selectedVersion) : null;
     _renderSelector();
     _renderVersionSwitcher();
-    _renderStaleNotice();
-    _renderDiffToggle();
-    _renderViewer();
-    _renderActionBar();
+    _renderSelectionPanels();
   }
 
   // Toggle click handler (the checkbox's onchange). Flipping changes the

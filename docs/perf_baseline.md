@@ -97,6 +97,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M85 verify-finalize report read, steady state | M85 collector below | seconds per `read_verify_final_report` call, worst on-disk worker log | median < 0.005 s | — (introduced with its first history row) |
 | M86 delegation takeoff-gate scan, delegation-flow shape | M86 collector below | seconds per `check_takeoff_gate` call, worst live chat corpus, one authorized user message appended (the corpus-as-it-stands round is the parity witness) | median < 0.001 s | — (introduced with its first history row) |
 | M87 opencode abort client round-trip | M87 collector below | seconds per `_abort_session` call against a local stub serve (the per-turn cleanup POST, and the run-start client pays the same construction; loop lag reads the 5 ms ticker floor like M14) | wall median < 0.005 s | — (introduced with its first history row) |
+| M88 perfetto direct-pass build, worst on-disk trace corpus | M88 collector below | seconds per `_build_direct_pass_gzip` build (validate + stream-compress), largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 6 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -5454,10 +5455,67 @@ server.shutdown()
 EOF
 ```
 
+M88 — perfetto direct-pass build, worst on-disk trace corpus. The first view of a single
+Chrome-JSON trace (``/perfetto/merged?trace=<file>``, single input, not slim) runs
+``_build_direct_pass_gzip``: a full parse validating the file, then a stream-compress of the
+original bytes — so the build wall is user-visible first-view latency (the cache answers repeat
+views). The cost is background executor work invisible to HTTP probes, so the collector times
+the build over the largest Chrome-JSON trace on disk (read-only; scratch output under /tmp),
+from the checkout under test: one cold pass, as at the first view of a corpus, then three timed
+builds. The trace roots are the host's documented trace homes (~/data, ~/scripts); no
+qualifying file prints nothing and the round treats the metric as unmeasured. Evidence while
+the live server runs older code points the same collector at the branch checkout (``CHECKOUT``
+at the worktree root), the same shape as the M66 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, subprocess, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.api.pages import _build_direct_pass_gzip
+
+# Worst direct-pass corpus: the largest Chrome-JSON *.json trace under the documented
+# trace roots (~/data, ~/scripts) — the M66 resolution rule; the single-trace first-view
+# build reads and validates exactly this file.
+best, best_n = None, -1
+for root in (Path.home() / "data", Path.home() / "scripts"):
+    if not root.is_dir():
+        continue
+    for p in root.rglob("*.json"):
+        try:
+            n = p.stat().st_size
+        except OSError:
+            continue
+        if n <= best_n:
+            continue
+        with p.open("rb") as f:
+            prefix = f.read(64).lstrip(b" \t\n\r")
+        if prefix[:1] in (b"{", b"["):
+            best, best_n = p, n
+if best is None:
+    raise SystemExit(0)
+print(f"worst direct-pass corpus: {best}, {best_n / 1e6:.1f} MB")
+
+work = Path(tempfile.mkdtemp(prefix="m88-direct-pass-", dir="/tmp"))
+out = work / "direct.json.gz"
+
+_build_direct_pass_gzip(best, out)  # cold pass, as at the first view of a corpus; not timed
+times = []
+for _ in range(3):
+    t0 = time.perf_counter()
+    _build_direct_pass_gzip(best, out)
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"direct-pass build median {times[1]:.2f} s, max {times[-1]:.2f} s over 3; artifact {out.stat().st_size / 1e6:.1f} MB.gz")
+subprocess.run(["rm", "-rf", str(work)], check=True)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-10 | this PR | M88 direct-pass build median 5.28/5.07/5.23 s → 3.93/3.95/3.90 s, −23 % to −26 %, maxima 5.40/5.09/5.25 → 4.15/3.96/3.92 s (three interleaved rounds of the new collector, main checkout before vs branch worktree after back-to-back, 307.3 MB worst on-disk trace /home/chaoli/data/hayden_243809_traces/step000110/trace_rank008_step000110.json, scratch output under /tmp, live home read-only, every paired round faster at load 1.0-2.0 one-minute; artifact 23.8 MB.gz identical across arms; component attribution: the validation parse measured standalone on the same corpus 4.22 s stdlib json.load → 2.56 s orjson including the 0.21 s read; live-log corroboration: two 5.7-6.4 s direct-pass builds and one 19.5 s two-rank merge in today's 7 h server log); 5015-passed suite plus 2 test changes — the corrupt-JSON assertion re-pinned to the orjson message and the NaN-boundary rejection pinned by a new test | the single-trace first-view build validated parseability with stdlib json.load — the slowest parser available, its result discarded before the stream-compress re-read — while the merge path's build has parsed with orjson since the M66 swap (2.56 s vs 4.22 s on the same corpus); the validation now parses with orjson, cutting the build's dominant slice ~40 % and giving both serve shapes one JSON boundary: NaN/Infinity literals stdlib accepts fail the direct-pass build loudly (the merge path's existing rejection) instead of gzipping a literal Perfetto cannot render into the cache; M88 definition and healthy range introduced with this PR |
 | 2026-09-10 | this PR | M87 `_abort_session` wall median 22.3/22.5/20.9 ms → 2.2/1.8/1.9 ms, −90 % to −92 %, maxima 27.4-30.5 → 2.2-2.9 ms (three interleaved rounds of the new collector — the run-start client pays the same construction — over a local stub serve, main checkout before vs branch worktree after back-to-back at load 1.75-2.51 one-minute; loop-lag maxima 6.4-7.1 → 5.8-6.0 ms at the ~5 ms ticker floor; component attribution: `ssl.create_default_context` 18.3 ms of the per-call client construction measured standalone, httpx.AsyncClient construct+POST+close 20.54 ms median → 1.65 ms with the prebuilt context; live-server attribution: py-spy over the running instance carried `create_ssl_context` under the opencode backend's `_abort_session`/run-start client at 43 of 893 samples in a 30 s window while an opencode master turn ended); 5013-passed suite plus 1 new construction-contract test | every opencode turn (master runs and opencode workers) built two fresh httpx.AsyncClients per run — one at run start, one at the cleanup abort — and each construction built a default SSL context (~20 ms of event-loop CPU, the CA-set load) although the serve URL is plain localhost HTTP that never uses TLS; both constructions now pass one process-wide prebuilt context (`_SERVE_SSL_CONTEXT`), the per-call client lifecycle unchanged; M87 definition and healthy range introduced with this PR |
 | 2026-09-10 | this PR | M36 full-poll body 214877 → 154388 B, −28 %, back inside the < 200 KB range (three interleaved rounds of the verbatim collector, 429-row / 3777 KB worst worker-list corpus of session dfe393f7, live state read-only, main checkout before vs branch worktree after back-to-back at load 2.04-2.12, body byte-identical across all six arms; full poll median 1.95/2.19/2.07 → 1.88/1.95/1.91 ms, conditional 204 0 B unchanged; no-regression re-measures interleaved ×2: M63 /view body 231488 → 170999 B with handler median 1.27/1.28 → 0.98/0.95 ms, M68 marked rebuild 4.50/4.60 → 4.80/4.66 ms, M59 full row 1.93/2.00 → 1.86/2.19 ms with body 59259 B identical; 5009-passed suite) | every delegation-heavy row shipped a 240-char description prefix — 52 % of the 429-row body — while the card paints one CSS-truncated line and the full-text modal fetches the thread row on click; the cap drops to 100 chars, one text-sm line at ~700 px, so every visible character still ships and longer text reaches the modal through the existing description_full_len click-fetch; the corpus's thread count grows without bound (266 rows at the 2026-09-02 calibration, 429 today), so the body range stays honest only with the per-row payload bounded |
 | 2026-09-10 | this PR | M10/M15/M48/M73/M70 standing collectors: before — five of 86 crashed in the round's sweep (M10/M15/M48/M73 IndexError at `create_session`'s `backends.options[0]` on the scratch config, M70 AssertionError "artifact-comments injection missing"), no readings; after (repaired commands, main checkout, load 1.78/1.87/1.44) — M10 3000 save_metadata calls / 25774 concurrent reads, 0 torn; M15 3000 _write_cache_entry calls / 425724 concurrent reads, 0 torn; M48 0 search_read_failed lines over 60 scans; M73 amend-validation loop-lag median 0.0058 s / wall median 0.0369 s (14 KB plan page); M70 repeat-view median 0.0026 s, body 1084806 B (injection present) | the 2026-09-09 config-schema series changed the two contracts the five collectors' scratch fixtures leaned on without updating them: 77e1e405 moved the default session backend to the sectioned `backends.options`, whose default is empty (the old flat `backend_options` carried a built-in claude-opus entry), so any `create_session` on a bare scratch config IndexErrors — the suite's own fixtures already pass `backends={"options": […]}`, the baseline's four did not; 126d4cd8 moved the files routes' access-key read from the monkeypatchable `get_config()` to the env-scoped `get_credentials()`, so M70's uncredentialed TestClient request was checked against the live key and served the clean page; the repair seeds one backend option in the four scratch configs (the conftest fixture shape, no behavior change — the metrics are orthogonal to backend choice) and gives M70 the M65 isolation shape (snapshot-seeded credentials.yaml with an empty access key plus `CHARLIEBOT_HOME` pointed at the snapshot before any request); collector commands only, no product code |

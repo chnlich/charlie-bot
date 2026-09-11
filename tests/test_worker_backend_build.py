@@ -1,6 +1,7 @@
 """Worker._build_backend: the two construction contracts, family level.
 
-``_build_backend`` has two call shapes, distinguished by ``on_spawn``:
+``_build_backend`` makes one registry construction call; ``on_spawn`` picks
+the failure policy wrapped around it:
 
 - ``on_spawn=None`` (restart recovery's drain) builds a translate-only parser.
   It must succeed for every backend type the registry can build, even on a host

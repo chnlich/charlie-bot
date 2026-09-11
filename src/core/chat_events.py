@@ -14,6 +14,7 @@ from src.core.json_utils import atomic_write_text
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import SessionMetadata, parse_utc_datetime, utc_now
 from src.core.ndjson import (
+    _TAIL_WINDOW_SIZE,
     append_ndjson,
     count_ndjson_lines,
     iter_ndjson_events,
@@ -38,11 +39,11 @@ _LIVE_RANGE_MEMO_LIMIT = 4
 # A from-the-end walk serves a live-half window without reading the whole
 # file when the window does not reach the file's first line; a span past the
 # byte cap is read once by the full build instead, which then serves every
-# later window from memory. The walk accumulates 512 KiB segments from the
-# end (the iter_ndjson_events_from_end tail-window size, _TAIL_WINDOW_SIZE);
-# the walk's stop rule lives on _walk_tail_line_texts.
+# later window from memory. The walk chunk is the iter_ndjson_events_from_end
+# tail-window size itself, so both from-the-end readers move through the file
+# in the same segment; the walk's stop rule lives on _walk_tail_line_texts.
 _WALK_BYTE_BUDGET = 32 * 1024 * 1024
-_WALK_CHUNK_BYTES = 512 * 1024
+_WALK_CHUNK_BYTES = _TAIL_WINDOW_SIZE
 
 
 def chat_events_path(session_dir: Path) -> Path:
@@ -106,10 +107,10 @@ def _walk_tail_line_texts(path: Path, size: int, count: int) -> tuple[list[str],
 
   Returns None when the walked span exceeds _WALK_BYTE_BUDGET or the range
   holds fewer lines than asked; the caller falls back to the full build. The
-  walk reads 512 KiB segments from the end and stops once a raw terminator
-  count bounds the target from above — one line for the possibly cut head
-  segment of a mid-range walk, one more because a ``\\r\\n`` pair counts
-  twice — then one exact raw scan locates the line starts.
+  walk reads _WALK_CHUNK_BYTES segments from the end and stops once a raw
+  terminator count bounds the target from above — one line for the possibly
+  cut head segment of a mid-range walk, one more because a ``\\r\\n`` pair
+  counts twice — then one exact raw scan locates the line starts.
   """
   if count <= 0:
     return [], size, True

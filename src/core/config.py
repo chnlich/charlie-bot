@@ -445,7 +445,7 @@ class CharlieBotConfig(BaseModel):
   errors naming it instead of being silently dropped (same rationale as
   :class:`ScheduledTaskConfig`). ``model_construct`` is overridden for the same
   reason: pydantic 2.12.5 drops unknown construct kwargs silently even under
-  forbid. Copy-style home redirection goes through :meth:`with_home`.
+  forbid.
   """
 
   model_config = ConfigDict(extra='forbid')
@@ -486,24 +486,6 @@ class CharlieBotConfig(BaseModel):
     if unknown:
       raise TypeError(f"{cls.__name__}.model_construct() got unexpected keyword argument(s): " + ", ".join(unknown))
     return super().model_construct(_fields_set, **values)
-
-  def with_home(self, path: str | Path) -> "CharlieBotConfig":
-    """Return a copy of this config with ``charliebot_home`` redirected to *path*.
-
-    This is the supported copy-style redirection entry point: it expands ``~``,
-    rejects a relative path (the same rule as :func:`charliebot_home_dir`), and
-    returns a new instance via ``model_copy`` updating exactly ``charliebot_home``.
-    Every derived Path property then resolves under the new home, nested models
-    are preserved by reference, and the original instance is untouched. Instance
-    fields have no setters, so in-place redirection was never possible anyway.
-
-    Redirect through this method instead of constructing or copying by hand —
-    the unknown-kwarg gates above make any miss raise at the call site.
-    """
-    home = Path(path).expanduser()
-    if not home.is_absolute():
-      raise ValueError(f"with_home() requires an absolute path or a '~' path; got {path!r}")
-    return self.model_copy(update={"charliebot_home": home})
 
   @property
   def subprocess_buffer_limit(self) -> int:

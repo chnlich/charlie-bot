@@ -89,8 +89,15 @@ it does.
 #### Vocabulary
 
 - Prefer the reader's established term over a coined description.
-- Gloss a coined term at first occurrence, and re-hint its meaning when it recurs
-  far from its gloss.
+- The reader knows the domain and not the project: general engineering and ML vocabulary
+  (PyTorch, SLURM, git, GPU architecture) and every term the user wrote in the exchange stand
+  as the reader's own words; a project term, a term the page coins, an opaque identifier (per
+  the Naming section), and a person named by role each carry a gloss.
+- A gloss lives in the sentence of the term's first occurrence, as a parenthetical or a colon
+  clause, and re-hints in half a sentence when the term recurs far from that sentence; a term
+  the page quotes as an object of discussion is a mention and stands as quoted. Each gloss has
+  that one home, the sentence the reader is in when the term arrives, so a definition list or
+  table elsewhere on the page reads as that gloss moved away from its reader.
 
 #### Evidence
 

@@ -95,8 +95,8 @@ Cold-read gate: the page first passes its genre's mechanical DOM assertions, the
 zero-context model pass reads the file alone and answers seven questions: (1) the
 problem, (2) the conclusion and its epistemic state, (3) what is asked of the reader,
 (4) the section where the problem first became clear, (5) up to five re-read points,
-(6) whether the page answers the trigger quoted in the prompt, and (7) the terms,
-abbreviations, or names the page uses without explaining. Ship when answers (1)
+(6) whether the page answers the trigger quoted in the prompt, and (7) the project terms whose
+gloss is missing at first use, read for the Vocabulary rule's reader (prompts/master.md). Ship when answers (1)
 through (3) match the author's intent, (4) names the first content section, the
 epistemic state in (2) matches the page's own labels, (6) is a yes on every part of
 the trigger message, and (7) is none; for plan and understanding pages, (3) names the

@@ -91,11 +91,11 @@
       belong to the source: cite them by path, so the plan stays right when the code moves. Keep content
       in semantic blocks so inline comments can anchor to useful units.
 
-      Treat the plan artifact as the reader's only session context: a reader with no prior conversation or
-      project background must be able to understand and judge it on a first read. Introduce every project-
-      specific term, phase, and run by its role before later sections rely on it, and name each with a self-
-      describing slug per prompts/master.md's Naming section: here ordinal labels only order adjacent rows inside
-      a single list or table, and every other reference goes by the slug. Names escape into branches, specs, and
+      Treat the plan artifact as the reader's only session context: the reader knows the domain and not the
+      project (the Vocabulary rule in prompts/master.md's Writing Style section, which also fixes where a gloss
+      sits) and must be able to understand and judge the page on a first read. Name each project-specific term,
+      phase, and run with a self-describing slug per prompts/master.md's Naming section: here ordinal labels only
+      order adjacent rows inside a single list or table, and every other reference goes by the slug. Names escape into branches, specs, and
       reports that live beyond the introduction's reach, so anything referenced outside the artifact goes by its
       slug. Code identifiers locate an explanation; the explanation itself stays in prose.
 
@@ -137,9 +137,9 @@
                     the question (p.q with span.fn number), recommendation (p.rec), and one-line tradeoff
                     (p.trade). Every open item also carries a folded explainer, a details.details-layer block
                     collapsed by default, so the reader can verify the recommendation from the block alone while
-                    the decision surface stays short: it retells the decision from scratch, glosses each term at
-                    first use, walks the causal chain through one worked example small enough to check by hand,
-                    and anchors each fact to its source. A resolved item keeps only the question and resolution
+                    the decision surface stays short: it retells the decision from scratch, glosses per the
+                    Vocabulary rule (prompts/master.md), walks the causal chain through one worked example small
+                    enough to check by hand, and anchors each fact to its source. A resolved item keeps only the question and resolution
                     (p.resolved); never record rejected alternatives. When nothing needs judging, keep one line
                     stating there are no open trade-offs.
       6. Other Details — a collapsed details.details-layer. Use one li per autonomous implementation decision,

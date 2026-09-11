@@ -8,7 +8,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const {readStatic} = require('./read_static');
-const {loadGroups, row} = require('./sidebar_groups_context_stub');
+const {loadGroups} = require('./sidebar_groups_context_stub');
 
 const NAMESPACE_JS = readStatic('sidebar/namespace.js');
 const MODALS_JS = readStatic('sidebar/modals.js');

@@ -18,6 +18,9 @@ _CODE_SERVER_HOST = "127.0.0.1"
 _CONNECT_TIMEOUT_SEC = 0.2
 _START_TIMEOUT_SEC = 5.0
 _POLL_INTERVAL_SEC = 0.2
+# One client-visible spelling for both 503 raisers below (spawn failure and
+# the failed wait-for-listen), so tests and greps pin a single home.
+_START_FAILURE_DETAIL = "failed to start code-server"
 
 
 def _resolve_code_server_executable(cfg: CharlieBotConfig) -> str | None:
@@ -81,7 +84,7 @@ def open_code_server(
       process = _start_code_server(binary, config_path)
     except OSError as exc:
       log.exception("code_server_start_failed")
-      raise HTTPException(status_code=503, detail="failed to start code-server") from exc
+      raise HTTPException(status_code=503, detail=_START_FAILURE_DETAIL) from exc
 
     deadline = time.monotonic() + _START_TIMEOUT_SEC
     while time.monotonic() < deadline:
@@ -93,6 +96,6 @@ def open_code_server(
       time.sleep(_POLL_INTERVAL_SEC)
 
     if not _is_listening(port):
-      raise HTTPException(status_code=503, detail="failed to start code-server")
+      raise HTTPException(status_code=503, detail=_START_FAILURE_DETAIL)
 
   return {"port": port, "folder": str(folder_path)}

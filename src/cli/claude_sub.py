@@ -39,6 +39,7 @@ from src.cli.claude_sub_bridge import (
     PromptDelivery,
 )
 from src.core import event_types as ET
+from src.core.claude_accounts import CREDENTIALS_FILE
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, charliebot_home_dir
 from src.core.json_utils import write_json_atomically
 from src.core.process import kill_process_group
@@ -323,7 +324,7 @@ def _claude_user_config_paths() -> tuple[Path, Path, Path, Path]:
   return (
       root / ".claude.json",
       settings_root / "settings.json",
-      settings_root / ".credentials.json",
+      settings_root / CREDENTIALS_FILE,
       settings_root / "remote-settings.json",
   )
 
@@ -390,7 +391,7 @@ def _prepare_session_config(session_id: str, cwd: Path) -> Path:
     _copy_session_file(settings_source, config_dir / "settings.json", "user Claude settings")
   if remote_source.is_file() and not (config_dir / "remote-settings.json").exists():
     _copy_session_file(remote_source, config_dir / "remote-settings.json", "Claude remote settings")
-  credentials_target = config_dir / ".credentials.json"
+  credentials_target = config_dir / CREDENTIALS_FILE
   if not credentials_target.exists():
     if not credentials_source.is_file():
       raise ClaudeSubError(f"Claude subscription credentials are missing: {credentials_source}")

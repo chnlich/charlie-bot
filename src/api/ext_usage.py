@@ -351,7 +351,7 @@ class _UsageInstance:
 
 def _create_provider(provider: str, label: str, dir_path: str) -> ClaudeUsageProvider | CodexUsageProvider:
   if provider == "claude":
-    return ClaudeUsageProvider(label, Path(dir_path) / ".credentials.json")
+    return ClaudeUsageProvider(label, Path(dir_path) / claude_accounts.CREDENTIALS_FILE)
   if provider == "codex":
     return CodexUsageProvider(label, dir_path)
   raise ValueError(f"unknown usage provider: {provider!r}")

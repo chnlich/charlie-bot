@@ -19,12 +19,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-import orjson
 import structlog
 
 from src.core import event_types as ET
 from src.core import runs
-from src.core.ndjson import write_all
+from src.core.ndjson import parse_ndjson_line, write_all
 from src.core.process import kill_process_group, make_pdeathsig_kill_preexec
 from src.core.timeouts import (
     NO_OUTPUT_REPORT_THRESHOLD,
@@ -270,20 +269,16 @@ def make_compact_boundary_event(trigger: str, pre_tokens: int | None) -> dict:
 async def iter_ndjson_events(stdout: asyncio.StreamReader) -> AsyncIterator[dict]:
   """Yield the JSON objects of an NDJSON stream.
 
-  Lines decode as UTF-8 with replacement; blank lines and lines that do not
-  parse as JSON are skipped. The parser is orjson (the ndjson reader skip
-  contract's boundary: NaN/Infinity literals and double-overflow floats skip
-  as malformed, ints at or beyond 2**64 parse as float); the stream funnels
-  parse machine-written JSON, which carries none of those literals.
+  Lines decode as UTF-8 with replacement, then ride the ndjson reader skip
+  contract (:func:`parse_ndjson_line`): a blank line yields nothing, and a
+  line the parser rejects logs and yields nothing. The stream funnels parse
+  machine-written JSON, which carries none of the skip boundary's literals.
   """
   async for raw_line in stdout:
-    line = raw_line.decode("utf-8", errors="replace").strip()
-    if not line:
-      continue
-    try:
-      yield orjson.loads(line)
-    except ValueError:
-      continue
+    event = parse_ndjson_line(
+        raw_line.decode("utf-8", errors="replace"), log_event="backend_line_not_json", log_fields={})
+    if event is not None:
+      yield event
 
 
 def _clamp_event_timestamp(translated: dict, mtime: float) -> None:
@@ -380,13 +375,9 @@ async def tail_follow_events(
           raw_line = chunk[start:nl]
           start = nl + 1
           offset += len(raw_line) + 1
-          line = raw_line.decode("utf-8", errors="replace").strip()
-          if not line:
-            continue
-          try:
-            event = orjson.loads(line)
-          except ValueError as e:
-            log.debug("backend_line_not_json", error=str(e))
+          event = parse_ndjson_line(
+              raw_line.decode("utf-8", errors="replace"), log_event="backend_line_not_json", log_fields={})
+          if event is None:
             continue
           mtime = os.fstat(f.fileno()).st_mtime
           for translated in translate(event):

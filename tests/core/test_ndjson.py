@@ -22,6 +22,7 @@ from src.core.ndjson import (
     iter_ndjson_events,
     iter_ndjson_events_from_end,
     parse_ndjson_file,
+    parse_ndjson_line,
     parse_ndjson_tail,
     parse_ndjson_tail_parseable,
 )
@@ -114,6 +115,37 @@ def test_iter_ndjson_events_coerces_64bit_ints_to_float() -> None:
   assert exact == [{"a": 18446744073709551615}]
   assert coerced == [{"a": 1.8446744073709552e19}]
   assert isinstance(coerced[0]["a"], float)
+
+
+def test_parse_ndjson_line_applies_the_skip_contract_per_line() -> None:
+  # The one-line contract home: a blank (or whitespace-only) line and a line
+  # the parser rejects (including the orjson NaN/Infinity boundary) answer
+  # None; a parseable line answers its dict.
+  assert parse_ndjson_line('{"i": 1}', log_event="t", log_fields={}) == {"i": 1}
+  assert parse_ndjson_line('  {"i": 1}  ', log_event="t", log_fields={}) == {"i": 1}
+  assert parse_ndjson_line("", log_event="t", log_fields={}) is None
+  assert parse_ndjson_line("   \n", log_event="t", log_fields={}) is None
+  assert parse_ndjson_line("{not json", log_event="t", log_fields={}) is None
+  assert parse_ndjson_line('{"a": NaN}', log_event="t", log_fields={}) is None
+
+
+def test_parse_ndjson_line_accepts_bytes_lines() -> None:
+  line = json.dumps({"text": "引数"}).encode("utf-8")
+  assert parse_ndjson_line(line, log_event="t", log_fields={}) == {"text": "引数"}
+
+
+def test_parse_ndjson_line_logs_skip_event_with_fields() -> None:
+  # A rejected parse logs log_event at debug level carrying the pass-through
+  # fields and the parse error, so the log still says which reader skipped.
+  from structlog.testing import capture_logs
+
+  with capture_logs() as logs:
+    assert parse_ndjson_line("{not json", log_event="probe_skip", log_fields={"reader": "probe"}) is None
+  entries = [entry for entry in logs if entry.get("event") == "probe_skip"]
+  assert len(entries) == 1
+  assert entries[0]["log_level"] == "debug"
+  assert entries[0]["reader"] == "probe"
+  assert entries[0]["error"]
 
 
 def test_parse_ndjson_file_applies_the_skip_contract(tmp_path: Path) -> None:

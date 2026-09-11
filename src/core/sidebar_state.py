@@ -79,8 +79,12 @@ def mark_sidebar_dirty(session_id: str, path: str | None = None) -> None:
   if path is not None:
     paths = _marked_paths.setdefault(session_id, set())
     if len(paths) >= _MARKED_PATHS_CAP:
+      # The burst outran the cap: drop every pending path, the newest included,
+      # so the next poll finds no paths and full-walks — re-proving all row
+      # sources at once, the proof a partially-taken set cannot give.
       paths.clear()
-    paths.add(path)
+    else:
+      paths.add(path)
 
 
 def take_marked_paths(session_id: str) -> list[str]:

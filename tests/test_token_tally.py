@@ -990,7 +990,8 @@ def test_source_walk_round_persists_moved_opencode_rows(tmp_path: Path) -> None:
 
   entry = json.loads(cache.read_text())["sources"]["opencode"][str(db)]
   assert entry["sig"] != sig_before
-  assert sum(row[1][3] for row in entry["rows"].values() if row[1] is not None) == 5 + 100  # in_fresh: both rows' inputs
+  rows_in_fresh = sum(row[1][3] for row in entry["rows"].values() if row[1] is not None)
+  assert rows_in_fresh == 5 + 100  # in_fresh: both rows' inputs
   con.close()
 
 

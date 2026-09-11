@@ -287,18 +287,33 @@ function renderStarButton(s, activeBtnClass) {
   </button>`;
 }
 
-function renderRenameButton(s, activeBtnClass) {
-  return `<button onclick="event.preventDefault(); event.stopPropagation(); startRename(event, '${s.id}')"
-          class="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Rename">
-    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${PENCIL_SVG_PATH}</svg>
+// The one hover-revealed icon button frame for the session row's plain
+// actions: a markup change lands here, not in one renderer. The star's
+// dynamic fill and id, the cron gear's guard, and the set-group button's
+// data attribute stay at their own renderers.
+function renderRowActionButton(onclick, colorClass, title, svgBody, activeBtnClass) {
+  return `<button onclick="${onclick}"
+          class="opacity-0 group-hover:opacity-100 p-1 ${colorClass} transition-opacity flex-shrink-0 ${activeBtnClass}" title="${title}">
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${svgBody}</svg>
   </button>`;
 }
 
+function renderRenameButton(s, activeBtnClass) {
+  return renderRowActionButton(
+      `event.preventDefault(); event.stopPropagation(); startRename(event, '${s.id}')`,
+      'hover:text-blue-400',
+      'Rename',
+      PENCIL_SVG_PATH,
+      activeBtnClass);
+}
+
 function renderArchiveButton(s, activeBtnClass) {
-  return `<button onclick="event.preventDefault(); event.stopPropagation(); archiveSession('${s.id}')"
-          class="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Archive">
-    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${TRASH_SVG_PATH}</svg>
-  </button>`;
+  return renderRowActionButton(
+      `event.preventDefault(); event.stopPropagation(); archiveSession('${s.id}')`,
+      'hover:text-red-400',
+      'Archive',
+      TRASH_SVG_PATH,
+      activeBtnClass);
 }
 
 // Renders '' for a falsy taskName: the caller's show-guard stays visible in
@@ -769,14 +784,18 @@ function renderSessionItem(s, filter, options = {}) {
       ${ratingBadge}
       ${renderStarButton(s, activeBtnClass)}
       ${groupBtn}
-      <button onclick="event.preventDefault(); event.stopPropagation(); unarchiveSession('${s.id}')"
-              class="opacity-0 group-hover:opacity-100 p-1 hover:text-green-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Unarchive">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"/></svg>
-      </button>
-      <button onclick="event.preventDefault(); event.stopPropagation(); confirmDeletePermanently('${s.id}')"
-              class="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-red-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Delete permanently">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${TRASH_SVG_PATH}</svg>
-      </button>`;
+      ${renderRowActionButton(
+          `event.preventDefault(); event.stopPropagation(); unarchiveSession('${s.id}')`,
+          'hover:text-green-400',
+          'Unarchive',
+          '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"/>',
+          activeBtnClass)}
+      ${renderRowActionButton(
+          `event.preventDefault(); event.stopPropagation(); confirmDeletePermanently('${s.id}')`,
+          'text-slate-500 hover:text-red-400',
+          'Delete permanently',
+          TRASH_SVG_PATH,
+          activeBtnClass)}`;
   } else {
     actions = `
       ${renderStarButton(s, activeBtnClass)}

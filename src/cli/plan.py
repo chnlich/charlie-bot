@@ -28,6 +28,7 @@ from src.cli.common import (
 )
 from src.core import plan_diff
 from src.core.models import PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES
+from src.core.plans import require_plan
 
 _PLAN_REMINDER = (
     "A read-only verify delegation runs, and its adequacy findings are reported alongside "
@@ -176,9 +177,7 @@ def _resolve_diff_plan(plans: list[dict], args: argparse.Namespace) -> tuple[dic
   diff against its predecessor and defaults to the latest; version 1 has no predecessor.
   """
   if args.plan is not None:
-    plan = next((p for p in plans if p.get("id") == args.plan), None)
-    if plan is None:
-      raise ValueError(f"plan {args.plan} not found in session")
+    plan = require_plan(plans, args.plan)
   else:
     if not plans:
       raise ValueError("session has no plans; nothing to diff")

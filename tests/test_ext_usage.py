@@ -2062,7 +2062,12 @@ async def test_claude_requests_carry_the_probed_cli_version(monkeypatch, tmp_pat
   # timeout, no shell -- and only one subprocess across both requests.
   assert probe_calls == [(["claude", "--version"], {"capture_output": True, "timeout": 5})]
   assert _user_agent_resolution_events(events) == [
-      {"level": "info", "event": "ext_usage_user_agent_resolved", "version": "2.9.9", "source": "probe"}
+      {
+          "level": "info",
+          "event": "ext_usage_user_agent_resolved",
+          "version": "2.9.9",
+          "source": "probe"
+      }
   ]
 
 
@@ -2096,5 +2101,10 @@ async def test_user_agent_probe_failure_falls_back_with_warning(monkeypatch, tmp
 
   assert fake.gets[0]["headers"]["User-Agent"] == "claude-code/2.1.219"
   assert _user_agent_resolution_events(events) == [
-      {"level": "warning", "event": "ext_usage_user_agent_resolved", "version": "2.1.219", "source": "fallback"}
+      {
+          "level": "warning",
+          "event": "ext_usage_user_agent_resolved",
+          "version": "2.1.219",
+          "source": "fallback"
+      }
   ]

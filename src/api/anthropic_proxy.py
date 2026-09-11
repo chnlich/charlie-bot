@@ -451,11 +451,11 @@ async def _iter_anthropic_sse(upstream: httpx.Response, model: str) -> AsyncIter
     for event, data in translator.start_events():
       yield _sse_event(event, data)
 
-    async for line in iter_sse_lines(upstream):
-      if not line.startswith("data:"):
+    async for line in iter_sse_lines(upstream, lines_as_bytes=True):
+      if not line.startswith(b"data:"):
         continue
-      raw = line[len("data:"):].strip()
-      if raw == "[DONE]":
+      raw = line[len(b"data:"):].strip()
+      if raw == b"[DONE]":
         break
       if not raw:
         continue

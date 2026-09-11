@@ -7,7 +7,6 @@ cut mid-string and ``json.loads`` fails with "Unterminated string". This module
 frames lines on the SSE terminators only: CRLF, LF, CR.
 """
 
-import codecs
 import re
 from collections.abc import AsyncIterator
 from typing import Any
@@ -48,49 +47,51 @@ def split_sse_lines(buffer: str, *, final: bool, scanned_to: int = 0) -> tuple[l
 
 
 class _ChunkedFramer:
-  """Incremental SSE framing over decoded text chunks with O(bytes) total work.
+  """Incremental SSE framing over byte chunks with O(bytes) total work.
 
   ``pieces`` carries the current partial line as a fragment list; its
   concatenation holds no resolved terminator and may end with one held-back
-  CR. Each search covers the new chunk only and runs at str.find's memchr
+  CR. Each search covers the new chunk only and runs at bytes.find's memchr
   speed — the alternation regex pays the re engine instead, 0.087 s per 16 MB
   measured on this host. Each emitted line is joined once; concatenating the
   accumulated remainder per chunk costs O(bytes x chunks per frame). Framing
   semantics (terminator set, held-back trailing CR, final flush) follow
-  :func:`split_sse_lines`.
+  :func:`split_sse_lines`. The terminators are ASCII, so byte-level framing
+  can never split a UTF-8 multibyte character: every continuation byte sits
+  at 0x80 or above.
   """
 
   def __init__(self) -> None:
-    self.pieces: list[str] = []
+    self.pieces: list[bytes] = []
 
-  def feed(self, text: str, *, final: bool) -> list[str]:
-    """Consume one decoded chunk and return the lines it completes.
+  def feed(self, text: bytes, *, final: bool) -> list[bytes]:
+    """Consume one byte chunk and return the lines it completes.
 
     Callers pass ``final=False`` only with non-empty *text*: an empty chunk
     carries no new data, so it must never resolve a held-back CR. With
     ``final=True`` a trailing CR counts as a full terminator and the
     unterminated tail stays in ``pieces`` for the caller's closing join.
     """
-    lines: list[str] = []
+    lines: list[bytes] = []
     start = 0
-    if self.pieces and self.pieces[-1].endswith("\r"):
+    if self.pieces and self.pieces[-1].endswith(b"\r"):
       # The CR held back from the previous chunk resolves on the first
-      # character here: a leading LF pairs with it, anything else leaves it a
+      # byte here: a leading LF pairs with it, anything else leaves it a
       # lone CR terminator. Either way the line ends at its start.
       self.pieces[-1] = self.pieces[-1][:-1]
-      lines.append("".join(self.pieces))
+      lines.append(b"".join(self.pieces))
       self.pieces.clear()
-      if text.startswith("\n"):
+      if text.startswith(b"\n"):
         start = 1
     end = len(text)
-    if not final and end > start and text[end - 1] == "\r":
+    if not final and end > start and text[end - 1] == 0x0D:
       end -= 1
     # The next CR's position is cached across emitted lines: a per-line CR
     # find would re-scan the whole chunk remainder per line on CR-free
     # streams — O(bytes x lines) instead of O(bytes).
-    cr = text.find("\r", start, end)
+    cr = text.find(b"\r", start, end)
     while True:
-      i_lf = text.find("\n", start, end)
+      i_lf = text.find(b"\n", start, end)
       if i_lf == -1:
         if cr == -1:
           break
@@ -99,7 +100,7 @@ class _ChunkedFramer:
         term_at, step = i_lf, 1
       else:
         term_at = cr
-        step = 2 if cr + 1 < len(text) and text[cr + 1] == "\n" else 1
+        step = 2 if cr + 1 < len(text) and text[cr + 1] == 0x0A else 1
       if self.pieces:
         # The tail joins with the pieces instead of concatenating onto the
         # join's fresh result: a concat on a just-allocated large string
@@ -108,33 +109,39 @@ class _ChunkedFramer:
         # same pieces), which once per multi-hundred-KB frame is the
         # framer's dominant cost.
         self.pieces.append(text[start:term_at])
-        lines.append("".join(self.pieces))
+        lines.append(b"".join(self.pieces))
         self.pieces.clear()
       else:
         lines.append(text[start:term_at])
       start = term_at + step
       if cr != -1 and cr < start:
-        cr = text.find("\r", start, end)
+        cr = text.find(b"\r", start, end)
     if start < len(text):
       self.pieces.append(text[start:])
     return lines
 
 
-async def iter_sse_lines(response: Any) -> AsyncIterator[str]:
+async def iter_sse_lines(response: Any, *, lines_as_bytes: bool = False) -> AsyncIterator[str | bytes]:
   """Yield SSE lines from ``response.aiter_bytes()`` framed on CRLF/LF/CR only.
 
-  Decodes incrementally as UTF-8 with ``errors="replace"`` (parity with httpx's
-  TextDecoder), so a multibyte character split across byte chunks survives.
+  The default mode decodes each completed line as UTF-8 with
+  ``errors="replace"`` (parity with httpx's TextDecoder), so a multibyte
+  character split across byte chunks survives and invalid bytes degrade to
+  U+FFFD. ``lines_as_bytes=True`` yields the wire's raw bytes instead: the
+  framing never splits a multibyte character (the terminators are ASCII), so
+  the consumer's JSON parse sees the reassembled characters — and an invalid
+  byte raises at that parse instead of degrading. The per-chunk UTF-8 decode
+  the default mode pays is the framer's largest cost (8.7 ms per 16 MB
+  measured), which the byte mode exists to skip on the JSON-parse consumers.
   """
-  decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
   framer = _ChunkedFramer()
   async for chunk in response.aiter_bytes():
-    text = decoder.decode(chunk)
-    if not text:
+    if not chunk:
       continue
-    for line in framer.feed(text, final=False):
-      yield line
-  for line in framer.feed(decoder.decode(b"", final=True), final=True):
-    yield line
+    for line in framer.feed(chunk, final=False):
+      yield line if lines_as_bytes else line.decode("utf-8", errors="replace")
+  for line in framer.feed(b"", final=True):
+    yield line if lines_as_bytes else line.decode("utf-8", errors="replace")
   if framer.pieces:
-    yield "".join(framer.pieces)
+    tail = b"".join(framer.pieces)
+    yield tail if lines_as_bytes else tail.decode("utf-8", errors="replace")

@@ -3,6 +3,7 @@
 import json
 import random
 
+import orjson
 import pytest
 from conftest import FakeChunkedResponse
 
@@ -245,3 +246,85 @@ async def test_large_frame_spanning_many_chunks_frames_like_one_buffer() -> None
   raw = (frame + "\r\n\r\n" + frame + "\n\n").encode()
   chunks = [raw[i:i + 4096] for i in range(0, len(raw), 4096)]
   assert await _drain_lines(chunks) == [frame, "", frame, ""]
+
+
+# ---------------------------------------------------------------------------
+# Byte mode (lines_as_bytes=True) — the production SSE consumers' shape.
+# ---------------------------------------------------------------------------
+
+
+async def _drain_lines_bytes(chunks: list[bytes]) -> list[bytes]:
+  return [line async for line in iter_sse_lines(FakeChunkedResponse(chunks), lines_as_bytes=True)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminator", [b"\n", b"\r\n", b"\r"])
+async def test_byte_mode_frames_every_terminator_form(terminator: bytes) -> None:
+  assert await _drain_lines_bytes([b"data: x" + terminator + b"data: y" + terminator]) == [b"data: x", b"data: y"]
+
+
+@pytest.mark.asyncio
+async def test_byte_mode_matches_str_mode_on_every_two_way_split() -> None:
+  stream = "data: a\r\ndata: b\ndata: c\r\r\n\n"
+  wire = stream.encode()
+  for cut in range(len(wire) + 1):
+    chunks = [wire[:cut], wire[cut:]]
+    assert await _drain_lines_bytes(chunks) == [line.encode() for line in await _drain_lines(chunks)], cut
+
+
+@pytest.mark.asyncio
+async def test_byte_mode_frames_random_chunkings_like_str_mode() -> None:
+  rng = random.Random(20260910)
+  streams = [
+      "data: a\r\ndata: b\ndata: c\r\r\n\ndata: caf\u00e9\r\ntail",
+      "".join(f"data: token-{i}\n" for i in range(200)) + "data: [done]",
+      "data: " + "\u2028 \x85 \u2029 ".join(f"tok{i}" for i in range(50)) + "\n\n",
+  ]
+  for stream in streams:
+    wire = stream.encode()
+    for _ in range(50):
+      cuts = sorted(rng.sample(range(1, len(wire)), 8))
+      bounds = [0, *cuts, len(wire)]
+      chunks = [wire[a:b] for a, b in zip(bounds, bounds[1:], strict=False)]
+      assert await _drain_lines_bytes(chunks) == [line.encode() for line in await _drain_lines(chunks)]
+
+
+@pytest.mark.asyncio
+async def test_byte_mode_reassembles_multibyte_character_split_across_chunks() -> None:
+  line = "data: caf\u00e9"
+  wire = (line + "\n").encode()
+  cut = wire.index(b"\xc3") + 1
+  assert await _drain_lines_bytes([wire[:cut], wire[cut:]]) == [line.encode()]
+
+
+@pytest.mark.asyncio
+async def test_byte_mode_holds_raw_splitline_boundary_bytes_inside_lines() -> None:
+  # U+2028/U+0085 ride inside the line's bytes: neither their UTF-8 encoding
+  # nor any continuation byte contains the ASCII terminators.
+  payload = 'data: a\u2028b\x85c\n\n'.encode()
+  assert await _drain_lines_bytes([payload]) == ["data: a\u2028b\x85c".encode(), b""]
+
+
+@pytest.mark.asyncio
+async def test_byte_mode_flushes_unterminated_final_line_and_trailing_cr() -> None:
+  assert await _drain_lines_bytes([b"data: tail"]) == [b"data: tail"]
+  assert await _drain_lines_bytes([b"data: tail\r"]) == [b"data: tail"]
+
+
+@pytest.mark.asyncio
+async def test_byte_mode_preserves_invalid_utf8_bytes_for_the_parser() -> None:
+  # The deliberate boundary: the byte mode never decodes, so an invalid byte
+  # reaches the consumer's JSON parse and raises there (the SSE readers'
+  # malformed-JSON class) instead of degrading to U+FFFD.
+  assert await _drain_lines_bytes([b"data: \xff\n"]) == [b"data: \xff"]
+  with pytest.raises(orjson.JSONDecodeError):
+    orjson.loads(b"data: \xff".removeprefix(b"data: "))
+
+
+@pytest.mark.asyncio
+async def test_byte_mode_large_frame_spanning_many_chunks_matches_str_mode() -> None:
+  frame = "data: " + "x" * 100_000
+  raw = (frame + "\r\n\r\n" + frame + "\n\n").encode()
+  chunks = [raw[i:i + 4096] for i in range(0, len(raw), 4096)]
+  expected = [frame.encode(), b"", frame.encode(), b""]
+  assert await _drain_lines_bytes(chunks) == expected

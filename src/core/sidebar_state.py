@@ -57,11 +57,39 @@ _poll_count = 0
 # a :class:`RevisionSweepGate` and skip the proof while it stands.
 _revisions: dict[str, int] = {}
 
+# session id -> row-source paths the writers marked since the last take. The
+# workers-panel list poll proves its stored body against exactly these files
+# (one stat per mark) instead of re-walking every row-source file; a mark
+# without a path, or a taken-and-dropped race, leaves the poll on the full
+# walk. Capped per session: an overflowing burst clears the set, and the next
+# proof full-walks — the same verdict an empty set gets.
+_MARKED_PATHS_CAP = 64
+_marked_paths: dict[str, set[str]] = {}
 
-def mark_sidebar_dirty(session_id: str) -> None:
-  """Flag *session_id*'s probed sidebar state for re-probe on the next poll."""
+
+def mark_sidebar_dirty(session_id: str, path: str | None = None) -> None:
+  """Flag *session_id*'s probed sidebar state for re-probe on the next poll.
+
+  *path* is the row-source file the caller just published through its atomic
+  rename (thread metadata.json) — the list poll's incremental proof stats
+  exactly the marked paths, so the mark must follow the rename.
+  """
   _dirty.add(session_id)
   _revisions[session_id] = _revisions.get(session_id, 0) + 1
+  if path is not None:
+    paths = _marked_paths.setdefault(session_id, set())
+    if len(paths) >= _MARKED_PATHS_CAP:
+      # The burst outran the cap: drop every pending path, the newest included,
+      # so the next poll finds no paths and full-walks — re-proving all row
+      # sources at once, the proof a partially-taken set cannot give.
+      paths.clear()
+    else:
+      paths.add(path)
+
+
+def take_marked_paths(session_id: str) -> list[str]:
+  """Consume the row-source paths marked since the last take."""
+  return list(_marked_paths.pop(session_id, ()))
 
 
 def session_revision(session_id: str) -> int:
@@ -97,9 +125,25 @@ class RevisionSweepGate:
     self._gates[session_id] = (revision, gate[1] + 1)
     return True
 
-  def mark_proven(self, session_id: str, revision: int) -> None:
-    """Store a fresh proof taken at *revision*, resetting the sweep countdown."""
-    self._gates[session_id] = (revision, 0)
+  def mark_proven(self, session_id: str, revision: int, reset_sweep: bool = True) -> None:
+    """Store a fresh proof taken at *revision*, resetting the sweep countdown.
+
+    *reset_sweep=False* (the list poll's incremental proof, which covered only
+    the marked files) advances the countdown by this poll instead: the full-walk
+    sweep still arrives on its schedule under continuous marked polls.
+    """
+    count = 0 if reset_sweep else self._gates.get(session_id, (revision, 0))[1] + 1
+    self._gates[session_id] = (revision, count)
+
+  def marked_since_proof(self, session_id: str, revision: int) -> bool:
+    """True when a proof stands for an older revision and the sweep is not due.
+
+    The list poll's incremental branch requires both: a mark moved the revision
+    since the proof (the marked paths say where), and the countdown still
+    stands, so the scheduled full walk is never postponed by marked polls.
+    """
+    gate = self._gates.get(session_id)
+    return gate is not None and gate[0] != revision and gate[1] + 1 < self._sweep_every
 
   def drop(self, session_id: str) -> None:
     """Forget the session's proof (its stored value failed the walk)."""
@@ -170,9 +214,10 @@ def register_poll(force: bool) -> bool:
 
 
 def reset_for_tests() -> None:
-  """Clear the dirty set, the snapshot, the probe signatures, and the poll counter (tests only)."""
+  """Clear the dirty set, the snapshot, the probe signatures, the marked paths, and the poll counter (tests only)."""
   global _poll_count
   _dirty.clear()
   _snapshot.clear()
   _probe_signatures.clear()
+  _marked_paths.clear()
   _poll_count = 0

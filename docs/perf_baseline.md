@@ -77,7 +77,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M65 big-page gzip event-loop stall, whole-body JSON response | M65 collector below | seconds of loop lag + wall per 200-message events-page fetch through the real app stack (gzip + auth middleware), worst on-disk live chat corpus (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.012 s | — (introduced with its first history row) |
 | M66 perfetto merged-trace build wall, worst on-disk trace corpus | M66 collector below | seconds per `merge_traces` build, largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 8 s | — (introduced with its first history row) |
 | M67 sidebar deep-probe trigger scan, steady state | M67 collector below | seconds per `pending_trigger_state_sync` call, worst on-disk trigger corpus | median < 0.00005 s | — (introduced with its first history row) |
-| M68 worker-list marked changed-poll rebuild | M68 collector below | seconds per body rebuild after one writer mark, worst on-disk thread-metadata corpus; the unchanged poll and its conditional are M36's shapes | median < 0.007 s | — (introduced with its first history row) |
+| M68 worker-list marked changed-poll rebuild | M68 collector below | seconds per body rebuild after one writer mark, worst on-disk thread-metadata corpus; the unchanged poll and its conditional are M36's shapes | median < 0.005 s | — (introduced with its first history row) |
 | M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
 | M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.010 s | — (introduced with its first history row) |
 | M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.006 s | — (introduced with its first history row) |
@@ -3967,11 +3967,16 @@ session's workers panel takes the list body's rebuild path instead of the M36
 memo hit. The rebuild's shape is one writer mark plus one poll; the collector
 copies the session whose threads directory carries the most metadata bytes into
 a scratch `CHARLIEBOT_HOME` under /tmp (live home read once for the copy, never
-written), wires the copy through the `get_config` dependency the way the
-server's dependency singletons are, and drives the marked shape: one cold
-build, one memo-hit poll, then eight rounds of (one atomic metadata rewrite +
-`mark_sidebar_dirty`, one timed request) — every timed request a genuine
-rebuild. The unchanged-poll steady state has no row here; M36 owns it.
+written), wires the copy through the config dependency the endpoint resolves
+(`get_config_on_loop` — overriding `get_config` alone leaves the endpoint on
+the live home, where the scratch rewrites are invisible and no rebuild ever
+happens; the pre-repair collector measured walk-plus-memo-serve, the vacuous
+class), and drives the marked shape: one cold build, one memo-hit poll, then
+eight rounds of (one atomic metadata rewrite + the writer funnel's
+`mark_sidebar_dirty` with the published path, one timed request) — every timed
+request a genuine rebuild, answered by the incremental proof the writers'
+path-carrying marks enable. The unchanged-poll steady state has no row here;
+M36 owns it.
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
@@ -3980,7 +3985,7 @@ from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from src.api.deps import get_config, get_thread_manager, get_trigger_manager
+from src.api.deps import get_config, get_config_on_loop, get_thread_manager, get_trigger_manager
 from src.api.threads import router as threads_router
 from src.core.config import CharlieBotConfig
 from src.core.sessions import SessionManager
@@ -4009,6 +4014,7 @@ app.include_router(threads_router, prefix="/api/threads")
 app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
 app.dependency_overrides[get_trigger_manager] = lambda: trigger_mgr
 app.dependency_overrides[get_config] = lambda: cfg
+app.dependency_overrides[get_config_on_loop] = lambda: cfg
 client = TestClient(app)
 url = f"/api/threads/{SID}/list"
 
@@ -4022,7 +4028,7 @@ def dirty(i):
     tmp = victim.with_name("metadata.json.m68probe")
     tmp.write_text(victim.read_text(encoding="utf-8"), encoding="utf-8")
     os.replace(tmp, victim)
-    mark_sidebar_dirty(SID)  # the writer funnel's mark: every real writer calls this
+    mark_sidebar_dirty(SID, str(victim))  # the writer funnel's mark: the published path rides it
 
 dirty(0)
 times = []

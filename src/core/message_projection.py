@@ -36,7 +36,11 @@ __all__ = ["MessageProjection"]
 
 
 def _fold_messages(agg: MessageAggregator, events: list[dict], base: int) -> tuple[list[dict], list[int]]:
-  """Fold *events* through *agg*; return (messages, separator positions relative to *base*)."""
+  """Fold *events* through *agg*; return (messages, separator positions as indices into *messages*).
+
+  *base* is the event-stream ordinal *agg* should attribute the first of *events* to; the
+  returned separator positions carry no *base* offset and anchor to no stream coordinate.
+  """
   msgs: list[dict] = []
   seps: list[int] = []
   for delta in agg.feed_indexed([(base + idx, ev) for idx, ev in _stable_history_projection(events)]):

@@ -753,7 +753,7 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
   prompt = backends["beta"].calls[0]["prompt"]
   assert artifact.read_text(encoding="utf-8") in prompt
   assert '"where are we?"' in prompt
-  assert "(7) List every term" in prompt
+  assert "(7) Read as an engineer who knows the domain" in prompt
   assert "<trigger message verbatim>" not in prompt
   assert backends["beta"].calls[0]["timeout"] == artifact_check.ARTIFACT_PROBE_TIMEOUT == 300.0
 

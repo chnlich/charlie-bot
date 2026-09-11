@@ -2,7 +2,6 @@
 
 import asyncio
 import copy
-import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -14,18 +13,19 @@ from pydantic import BaseModel, ConfigDict
 from src.api.deps import bad_request, get_session_manager
 from src.api.responses import FastJsonResponse
 from src.core.config import (
-    CharlieBotConfig,
-    ScheduledTaskConfig,
-    ScheduledTaskFields,
-    _load_cron_file,
-    _validate_cron_body,
-    cron_dir,
-    cron_path,
-    get_config,
-    get_scheduled_task_errors,
-    get_scheduled_tasks,
-    master_task_project_error,
-    require_backend_option,
+  CharlieBotConfig,
+  ScheduledTaskConfig,
+  ScheduledTaskFields,
+  _load_cron_file,
+  _valid_cron_name,
+  _validate_cron_body,
+  cron_dir,
+  cron_path,
+  get_config,
+  get_scheduled_task_errors,
+  get_scheduled_tasks,
+  master_task_project_error,
+  require_backend_option,
 )
 from src.core.models import SessionMetadata
 from src.core.scheduler import scheduled_task_session_binding
@@ -34,8 +34,6 @@ from src.core.yaml_utils import load_yaml, save_yaml
 
 log = structlog.get_logger()
 router = APIRouter()
-
-_CRON_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 # Wire sentence of the cron editor's 404 for a missing task file. Both raisers
 # (apply_task_yaml_update's pre-flight, which the cron PUT route and the
@@ -68,6 +66,12 @@ def _read_cron_yaml(name: str) -> dict:
 
 def _write_cron_yaml(name: str, data: dict) -> None:
   save_yaml(cron_path(name), data)
+
+
+def _validate_cron_name(name: str) -> None:
+  """Raise the routes' 400 unless *name* passes :func:`src.core.config._valid_cron_name`, the rule's one home."""
+  if not _valid_cron_name(name):
+    raise HTTPException(status_code=400, detail=f'invalid cron name: {name!r}')
 
 
 def _validate_backend_id(backend: str | None, cfg: CharlieBotConfig) -> None:
@@ -256,8 +260,7 @@ async def update_cron_task(
     cfg: CharlieBotConfig = Depends(get_config),
     session_mgr: SessionManager = Depends(get_session_manager),
 ) -> dict:
-  if not _CRON_NAME_RE.fullmatch(name):
-    raise HTTPException(status_code=400, detail=f'invalid cron task name: {name!r}')
+  _validate_cron_name(name)
   candidate, _ = await apply_task_yaml_update(name, req, cfg, session_mgr)
   return candidate
 
@@ -265,8 +268,7 @@ async def update_cron_task(
 @router.post('/tasks')
 async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_config)) -> dict:
   """Add a new scheduled job as its own config.d/cron.d/<name>.yaml file."""
-  if not _CRON_NAME_RE.fullmatch(req.name):
-    raise HTTPException(status_code=400, detail=f'invalid cron name: {req.name!r}')
+  _validate_cron_name(req.name)
   _validate_backend_id(req.backend, cfg)
   if project_error := master_task_project_error(req.mode, req.project):
     raise HTTPException(status_code=400, detail=project_error)
@@ -298,8 +300,7 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
 @router.delete('/tasks/{name}')
 async def delete_cron_task(name: str, session_mgr: SessionManager = Depends(get_session_manager)) -> dict:
   """Remove a job by archiving its dedicated sessions, then unlinking its config.d/cron.d/<name>.yaml."""
-  if not _CRON_NAME_RE.fullmatch(name):
-    raise HTTPException(status_code=400, detail=f'invalid cron name: {name!r}')
+  _validate_cron_name(name)
   path = cron_path(name)
   if not path.exists():
     raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND_DETAIL.format(name))

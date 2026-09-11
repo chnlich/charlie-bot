@@ -108,3 +108,14 @@ async def require_session(
 ) -> SessionMetadata:
   """Fetch a session or raise 404. Use as a FastAPI dependency."""
   return require_found(await session_mgr.get_session(session_id))
+
+
+def bad_request(exc: Exception) -> HTTPException:
+  """Build the one expected-failure spelling: HTTP 400 whose detail is the exception's message.
+
+  Route handlers raise this from the except clauses that translate a domain
+  failure (backend resolution for the spawn/plan/fork/elone routes, cron-task
+  backend validation, trigger scheduling, the openai-compatible proxy's
+  request translation); raising keeps the ``from e`` chain intact.
+  """
+  return HTTPException(status_code=400, detail=str(exc))

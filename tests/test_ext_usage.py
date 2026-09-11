@@ -31,8 +31,8 @@ from src.api.ext_usage import (
 from src.core.config import CharlieBotConfig
 from src.core.models import ClaudeAccount
 
-_fresh_unknown_limit_shape_registry = fresh_state_fixture(ext_usage_mod._reset_unknown_limit_shapes_for_tests)
-_fresh_credential_read_warning_registry = fresh_state_fixture(ext_usage_mod._reset_credential_read_warnings_for_tests)
+_fresh_unknown_limit_shape_registry = fresh_state_fixture(ext_usage_mod._UNKNOWN_LIMIT_SHAPES_SEEN.clear)
+_fresh_credential_read_warning_registry = fresh_state_fixture(ext_usage_mod._CREDENTIAL_READ_WARNINGS_SEEN.clear)
 _fresh_usage_cache = fresh_state_fixture(ext_usage_mod._cached_usage.clear)
 _fresh_user_agent_cache = fresh_state_fixture(ext_usage_mod._reset_user_agent_for_tests)
 

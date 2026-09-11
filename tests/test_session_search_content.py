@@ -14,7 +14,7 @@ from src.core import thinking_state
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 
-_fresh_search_read_failure_registry = fresh_state_fixture(sessions_mod._reset_search_read_failures_for_tests)
+_fresh_search_read_failure_registry = fresh_state_fixture(sessions_mod._SEARCH_READ_FAILURES_SEEN.clear)
 
 
 async def _session_with_chat_content(session_mgr: SessionManager, body: str, name: str) -> SessionMetadata:
@@ -275,7 +275,7 @@ async def test_content_search_missing_chat_file_logs_once_per_failure(
     assert await mgr.search_sessions("absent") == []
   assert events == ["search_read_failed"]
 
-  sessions_mod._reset_search_read_failures_for_tests()
+  sessions_mod._SEARCH_READ_FAILURES_SEEN.clear()
   assert await mgr.search_sessions("absent") == []
   assert events == ["search_read_failed", "search_read_failed"]
 

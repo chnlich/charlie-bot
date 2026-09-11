@@ -10,11 +10,11 @@ from conftest import compact_boundary_event as _compact_boundary_event
 
 from src.agents.backends.base import make_context_reading_event
 from src.agents.backends.claude_code import (
-    CLAUDE_COMPACT_CONTEXT_RESERVE,
-    CLAUDE_COMPACT_OUTPUT_RESERVE,
-    HEADLESS_CLAUDE_DEFAULT_ENV,
-    _reset_declared_window_warnings_for_tests,
-    headless_claude_declared_window,
+  _DECLARED_WINDOW_WARNINGS_SEEN,
+  CLAUDE_COMPACT_CONTEXT_RESERVE,
+  CLAUDE_COMPACT_OUTPUT_RESERVE,
+  HEADLESS_CLAUDE_DEFAULT_ENV,
+  headless_claude_declared_window,
 )
 from src.core import codex_usage, session_usage
 from src.core import event_types as ET
@@ -493,7 +493,7 @@ async def test_public_entry_point_has_no_events_parameter(tmp_path: Path) -> Non
 @pytest.fixture(autouse=True)
 def _reset_declared_window_warnings() -> None:
   """Restore the warn-once registry's process-start state around every test."""
-  _reset_declared_window_warnings_for_tests()
+  _DECLARED_WINDOW_WARNINGS_SEEN.clear()
 
 
 @pytest.fixture

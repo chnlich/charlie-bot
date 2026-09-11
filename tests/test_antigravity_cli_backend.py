@@ -318,12 +318,14 @@ printf '%s' '{"status":"SUCCESS","conversation_id":"conv-abc","response":"hi","u
   backend = AntigravityCliBackend()
 
   events = [
-      event
-      async for event in backend.run(
+      event async for event in backend.run(
           "hello from CharlieBot",
           str(tmp_path),
           {"PATH": "/usr/bin:/bin"},
-          uploaded_files=[{"filename": "pic.png", "path": str(tmp_path / "pic.png")}],
+          uploaded_files=[{
+              "filename": "pic.png",
+              "path": str(tmp_path / "pic.png")
+          }],
       )
   ]
 

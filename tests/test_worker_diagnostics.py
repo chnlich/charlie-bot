@@ -27,7 +27,11 @@ class _FakeBackend(AgentBackend):
   def _build_command(self, prompt: str) -> list[str]:  # pragma: no cover - never spawned
     return ["true"]
 
-  async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:  # type: ignore[override]
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     if self._on_spawn is not None:
       await self._on_spawn(12345)
     if False:  # pragma: no cover - keeps method an async generator

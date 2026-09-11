@@ -9,9 +9,10 @@ function formatUsageCostValue(cost) {
   return cost == null ? 'N/A' : '$' + cost.toFixed(2);
 }
 
-// Each stream delta carries the whole accumulated draft, so a per-delta paint costs
-// O(deltas x draft) (the marked re-parse dominates). Coalescing bounds the paint
-// rate: the leading edge keeps first paint immediate, the trailing edge lands the last draft.
+// Each stream delta carries the whole accumulated draft; the paint re-renders
+// it on a coalesced cadence (the incremental parse in markdown-renderer.js
+// re-lexes only the tail after the last safe block boundary). The leading
+// edge keeps first paint immediate, the trailing edge lands the last draft.
 const STREAM_RENDER_MS = 200;
 let streamRenderedAt = -STREAM_RENDER_MS;
 let streamRenderTimer = null;
@@ -76,6 +77,9 @@ function hideStreaming() {
     streamRenderTimer = null;
   }
   streamPendingDraft = null;
+  // The incremental parse state is bound to one streamed draft; the next
+  // stream starts from a fresh full parse.
+  streamParseState = null;
   document.getElementById('streaming-msg').classList.add('hidden');
   document.getElementById('streaming-content').innerHTML = '';
 }

@@ -52,6 +52,10 @@ function scanFences(lines) {
 }
 
 function fixNestedFences(md) {
+  // The scanner matches only fence lines (three or more backticks or tildes
+  // at a line's start), so a draft carrying neither character run is identity
+  // before the split-scan-join pass runs.
+  if (md.indexOf('```') === -1 && md.indexOf('~~~') === -1) return md;
   var lines = md.split('\n');
   return applyFenceUpgrades(lines, scanFences(lines));
 }
@@ -154,10 +158,86 @@ function endsOnClosingFence(raw) {
 // Promise.all — ~215k promise allocations per replay on the 98 KB draft
 // corpus), then render those same token objects, so the renderer's identity
 // check sees what was recorded.
+//
+// The parse is incremental across paints: the frozen prefix's HTML carries
+// forward, and only the tail after the last safe boundary re-lexes. A
+// boundary is safe when a blank line ends it and nothing can cross the blank:
+// a list continues across blank lines and a code block's unterminated fence
+// runs to EOF, so a cut may follow a `space` token only when the token before
+// it is neither. Reference definitions resolve document-wide, so the first
+// paint whose new text carries one re-parses whole from then on (hasDefs) —
+// a frozen prefix could not resolve a tail reference the full parse resolves.
+var streamParseState = null;
+var STREAM_REF_DEF_RE = /^[ \t]{0,3}\[[^\]\n]+\]:/m;
+
+function streamSafeCut(tokens, source, base) {
+  // Latest absolute end offset of a `space` token whose preceding token is
+  // neither a list nor a code block, or -1. Token raws do not tile the input —
+  // a link reference definition is consumed into tokens.links with no token
+  // emitted — so offsets come from locating each raw in the source, not from
+  // summing lengths.
+  var cursor = base;
+  var cut = -1;
+  var index = -1;
+  for (var i = 0; i < tokens.length; i++) {
+    var found = source.indexOf(tokens[i].raw, cursor);
+    if (found < 0) return { cut: -1, index: -1 };
+    var end = found + tokens[i].raw.length;
+    // A cut is only safe at a line start: a blank line's trailing spaces can
+    // carry the next line's indentation (a partially streamed `    code`
+    // indent lexes as a code block from the line start but as a paragraph
+    // from three spaces in), so a space token that stops mid-line never cuts.
+    if (i > 0 && tokens[i].type === 'space' && tokens[i].raw.slice(-1) === '\n') {
+      var prev = tokens[i - 1].type;
+      if (prev !== 'list' && prev !== 'code') {
+        cut = end;
+        index = i + 1;
+      }
+    }
+    cursor = end;
+  }
+  return { cut: cut, index: index };
+}
+
 function parseStreamDraft(fixed) {
   if (streamPaintCodeTokens === null) return marked.parse(fixed);
+  var state = streamParseState;
+  if (state !== null && !state.hasDefs && fixed.startsWith(state.fixed)) {
+    var tail = fixed.slice(state.cut);
+    if (!STREAM_REF_DEF_RE.test(tail)) {
+      var tailTokens = marked.lexer(tail);
+      recordCodeTokens(tailTokens);
+      var html = state.html;
+      var cut = streamSafeCut(tailTokens, fixed, state.cut);
+      if (cut.cut < 0) {
+        streamParseState = { fixed: fixed, cut: state.cut, html: state.html, hasDefs: false };
+        html += tailTokens.length ? marked.parser(tailTokens) : '';
+      } else {
+        // The absorbed span renders a second time into the frozen prefix; its
+        // code blocks are never the recorder's last token (a cut's space token
+        // follows a non-code token), so the identity skip cannot hide them.
+        var absorbed = tailTokens.slice(0, cut.index);
+        absorbed.links = tailTokens.links;
+        streamParseState = { fixed: fixed, cut: cut.cut, html: state.html + marked.parser(absorbed), hasDefs: false };
+        html += marked.parser(tailTokens);
+      }
+      return html;
+    }
+  }
   var tokens = marked.lexer(fixed);
   recordCodeTokens(tokens);
+  var fullCut = streamSafeCut(tokens, fixed, 0);
+  var hasDefs = STREAM_REF_DEF_RE.test(fixed);
+  if (fullCut.cut >= 0) {
+    // The state carries the rendered prefix, so the next paint is the frozen
+    // HTML plus the tail's render. The prefix re-render hits the highlight
+    // cache the full render just filled.
+    var prefix = tokens.slice(0, fullCut.index);
+    prefix.links = tokens.links;
+    streamParseState = { fixed: fixed, cut: fullCut.cut, html: marked.parser(prefix), hasDefs: hasDefs };
+  } else {
+    streamParseState = null;
+  }
   return marked.parser(tokens);
 }
 

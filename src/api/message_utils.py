@@ -8,11 +8,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from src.core import event_types as ET
-from src.core.message_aggregator import (
-    MessageAggregator,
-    extract_text_from_message,
-    extract_tool_result_text,
-)
+from src.core.message_aggregator import MessageAggregator
 
 if TYPE_CHECKING:
   from src.core.models import SessionMetadata
@@ -22,9 +18,6 @@ log = structlog.get_logger()
 
 _ATTACHED_FILES_MARKER = "\n\n[Attached files]\n"
 
-# Re-export so existing call sites (src.core.spawner_events, src.core.improve_command,
-# src.core.verify_trailer, src.api.chat, src.api.threads) keep importing the
-# extract_* helpers from this module.
 __all__ = [
     "SessionBootstrapData",
     "SessionViewData",
@@ -36,8 +29,6 @@ __all__ = [
     "build_user_event",
     "events_to_messages",
     "events_to_view",
-    "extract_text_from_message",
-    "extract_tool_result_text",
     "normalize_user_message_event",
     "serialize_uploaded_files",
     "strip_attached_files_block",

@@ -4,9 +4,9 @@ import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
 from src.core.config import HOUSE_TIMEZONE
+from src.core.message_aggregator import extract_text_from_message
 from src.core.models import ThreadMetadata
 from src.core.ndjson import parse_ndjson_tail_parseable
 from src.core.threads import ThreadManager

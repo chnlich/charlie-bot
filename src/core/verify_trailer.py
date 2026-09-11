@@ -9,8 +9,8 @@ import asyncio
 import re
 from pathlib import Path
 
-from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
+from src.core.message_aggregator import extract_text_from_message
 from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events_from_end
 from src.core.threads import ThreadManager
 

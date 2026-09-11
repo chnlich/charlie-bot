@@ -181,7 +181,7 @@ def iter_ndjson_events_from_end(path: Path, *, log_event: str, log_fields: dict[
 
   Same skip contract as :func:`iter_ndjson_events` (a line that strips to
   empty is invisible, a line the parser rejects logs and yields nothing).
-  512 KiB segments from the end walk lines backwards, the segment's
+  _TAIL_WINDOW_SIZE segments from the end walk lines backwards, the segment's
   left-truncated first line carried into the next older segment, so a consumer
   that stops early never reads the bytes past its answer. A missing file
   yields nothing.

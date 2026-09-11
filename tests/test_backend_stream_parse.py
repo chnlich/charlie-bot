@@ -54,6 +54,16 @@ async def test_iter_ndjson_events_parses_and_skips() -> None:
   assert [event["seq"] for event in events] == [1, 3]
 
 
+@pytest.mark.asyncio
+async def test_iter_ndjson_events_torn_bytes_parse_as_replacement_char() -> None:
+  """A complete line carrying a torn multibyte char parses as U+FFFD through
+  the skip contract's replace fallback; the funnel never decodes valid lines."""
+  lines = [b'{"type": "assistant", "seq": 1, "note": "ok\xff"}\n', b'{"type": "result", "seq": 2}\n']
+  events = [event async for event in iter_ndjson_events(_LineReader(lines))]
+  assert events[0]["note"] == "ok\ufffd"
+  assert [event["seq"] for event in events] == [1, 2]
+
+
 async def _collect_tail_events(raw_bytes: bytes, **kwargs: Any) -> list[dict]:
   """Write *raw_bytes* as the raw log and return every event tail_follow_events yields."""
   with tempfile.TemporaryDirectory() as work:

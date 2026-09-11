@@ -306,14 +306,12 @@ def make_context_compact_failed_event(error: str | None, model: str | None) -> d
 async def iter_ndjson_events(stdout: asyncio.StreamReader) -> AsyncIterator[dict]:
   """Yield the JSON objects of an NDJSON stream.
 
-  Lines decode as UTF-8 with replacement, then ride the ndjson reader skip
-  contract (:func:`parse_ndjson_line`): a blank line yields nothing, and a
-  line the parser rejects logs and yields nothing. The stream funnels parse
-  machine-written JSON, which carries none of the skip boundary's literals.
+  Raw byte lines ride :func:`parse_ndjson_line` directly: orjson parses the
+  wire's UTF-8 bytes natively, so a valid line pays no decode pass, and the
+  contract's replace fallback inside the parse decides torn bytes.
   """
   async for raw_line in stdout:
-    event = parse_ndjson_line(
-        raw_line.decode("utf-8", errors="replace"), log_event="backend_line_not_json", log_fields={})
+    event = parse_ndjson_line(raw_line, log_event="backend_line_not_json", log_fields={})
     if event is not None:
       yield event
 
@@ -419,8 +417,7 @@ async def tail_follow_events(
           raw_line = bytes(memoryview(buf)[consumed:nl])
           consumed = scanned = nl + 1
           offset += len(raw_line) + 1
-          event = parse_ndjson_line(
-              raw_line.decode("utf-8", errors="replace"), log_event="backend_line_not_json", log_fields={})
+          event = parse_ndjson_line(raw_line, log_event="backend_line_not_json", log_fields={})
           if event is None:
             continue
           mtime = os.fstat(f.fileno()).st_mtime

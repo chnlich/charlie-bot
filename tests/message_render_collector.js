@@ -17,12 +17,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const { fetchUrl, worstPageCorpus, assistantTexts } = require('./stream_collector_common');
+const { fetchUrl, HLJS_URL, worstPageCorpus, assistantTexts } = require('./stream_collector_common');
 const { buildRendererContext } = require('./renderer_vm_context');
 const { MARKED_URL } = require('./marked_renderer_harness');
 
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
-const HLJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js';
 const PAGE_MESSAGES = 40;
 
 function readJs(name) {

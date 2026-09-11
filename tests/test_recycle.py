@@ -22,6 +22,7 @@ from src.api.message_utils import build_session_bootstrap_data, build_session_vi
 from src.api.sessions import get_session_events_page
 from src.core import event_types as ET
 from src.core.models import ThreadMetadata, ThreadStatus
+from src.core.ndjson import count_ndjson_lines
 
 
 def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, completed_at: datetime | None) -> None:
@@ -413,6 +414,218 @@ async def test_live_range_counts_physical_lines(tmp_path: Path) -> None:
   assert [e["content"] for e in got] == ["f0_first"]
   got, _ = mgr.load_chat_events_range(session.id, 5, 10)
   assert [e["content"] for e in got] == ["f0_first", "f1", "f2"]
+
+
+class _CountingByteReader:
+  """open() wrapper recording every read()'s byte count into a shared tally."""
+
+  def __init__(self, inner: IO[bytes], reads: list[int]) -> None:
+    self._inner = inner
+    self._reads = reads
+
+  def read(self, *args: Any, **kwargs: Any) -> bytes:
+    data: bytes = self._inner.read(*args, **kwargs)
+    self._reads.append(len(data))
+    return data
+
+  def seek(self, *args: Any, **kwargs: Any) -> int:
+    return self._inner.seek(*args, **kwargs)
+
+  def __enter__(self) -> "_CountingByteReader":
+    self._inner.__enter__()
+    return self
+
+  def __exit__(self, *args: Any, **kwargs: Any) -> bool:
+    return bool(self._inner.__exit__(*args, **kwargs))
+
+
+def _count_reads_of(live_path: Path, real_open: Any, reads: list[int]) -> Any:
+  """A builtins.open patch tallying byte reads of *live_path* into *reads*."""
+
+  def counting_open(file: Any, *args: Any, **kwargs: Any) -> IO[bytes] | _CountingByteReader:
+    handle = real_open(file, *args, **kwargs)
+    if str(file) == str(live_path):
+      return _CountingByteReader(handle, reads)
+    return handle
+
+  return counting_open
+
+
+@pytest.mark.asyncio
+async def test_live_range_walk_serves_tail_window_without_full_read(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
+  _append_events(
+      live_path,
+      [{
+          "type": "user",
+          "content": f"f{i}",
+          "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
+      } for i in range(3, 9)])
+  file_size = live_path.stat().st_size
+  count_ndjson_lines(live_path)  # the bootstrap's tail read warms the count memo first
+
+  real_open = open
+  reads: list[int] = []
+  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)), \
+          patch("src.core.chat_events._WALK_CHUNK_BYTES", 64):
+    got, has_more = mgr.load_chat_events_range(session.id, 9, 11)
+  # The walk read the window's tail span, not the whole file.
+  assert 0 < sum(reads) < file_size
+  assert [e["content"] for e in got] == ["f4", "f5"]
+  assert has_more is True
+
+  # The walked suffix entry serves the repeat with zero file bytes.
+  reads.clear()
+  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)):
+    again, _ = mgr.load_chat_events_range(session.id, 9, 11)
+  assert reads == []
+  assert [e["content"] for e in again] == ["f4", "f5"]
+
+
+@pytest.mark.asyncio
+async def test_live_range_backward_extension_serves_scroll_below_walked_window(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
+  _append_events(
+      live_path,
+      [{
+          "type": "user",
+          "content": f"f{i}",
+          "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
+      } for i in range(3, 9)])
+  file_size = live_path.stat().st_size
+  count_ndjson_lines(live_path)
+
+  first, _ = mgr.load_chat_events_range(session.id, 9, 11)
+  assert [e["content"] for e in first] == ["f4", "f5"]
+
+  real_open = open
+  reads: list[int] = []
+  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)), \
+          patch("src.core.chat_events._WALK_CHUNK_BYTES", 64):
+    second, _ = mgr.load_chat_events_range(session.id, 7, 9)
+  # The backward extension read the page's span, not the whole file.
+  assert 0 < sum(reads) < file_size
+  assert [e["content"] for e in second] == ["f2", "f3"]
+
+  reads.clear()
+  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)):
+    repeat, _ = mgr.load_chat_events_range(session.id, 7, 9)
+  assert reads == []
+  assert [e["content"] for e in repeat] == ["f2", "f3"]
+
+
+@pytest.mark.asyncio
+async def test_live_range_walk_delete_race_returns_empty_page(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
+  _append_events(live_path, [{
+      "type": "user",
+      "content": "f3",
+      "timestamp": (cutoff + timedelta(days=2)).isoformat()
+  }])
+  count_ndjson_lines(live_path)
+
+  def delete_mid_count(path: Path) -> int:
+    path.unlink()
+    raise FileNotFoundError(2, "No such file or directory")
+
+  # A delete landing inside the walk's count bracket must not escape as an
+  # exception; the old whole-file build's guarded open returned an empty page.
+  with patch("src.core.chat_events.count_ndjson_lines", side_effect=delete_mid_count):
+    got, _has_more = mgr.load_chat_events_range(session.id, 6, 8)
+  assert got == []
+
+
+@pytest.mark.asyncio
+async def test_live_range_walk_matches_full_build_across_line_shapes(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  await recycle_archive_cutoff_events(mgr, session.id)
+  live_path = mgr.get_chat_events_path(session.id)
+  # blank and malformed lines consume an index, a CRLF pair terminates one
+  # line, and the final line carries no newline.
+  live_path.write_bytes(
+      b'{"content": "a0"}\n'
+      b"\n"
+      b"{bad json\n"
+      b'{"content": "a1"}\r\n'
+      b'{"content": "a2"}\n'
+      b'{"content": "a3"}')
+  count_ndjson_lines(live_path)
+  spec: list[str | None] = ["a0", None, None, "a1", "a2", "a3"]
+
+  # The full build covers every index; the walk-built windows must match it.
+  for start, end in [(6, 7), (7, 9), (8, 10), (6, 10), (9, 12), (11, 14), (7, 7)]:
+    got, has_more = mgr.load_chat_events_range(session.id, start, end)
+    rel0, rel1 = start - 5, end - 5
+    expected = [c for c in spec[max(0, rel0):max(0, rel1)] if c is not None]
+    assert [e["content"] for e in got] == expected, (start, end)
+    assert has_more is (start > 0)
+
+
+@pytest.mark.asyncio
+async def test_live_range_walk_budget_falls_back_to_full_build(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
+  _append_events(
+      live_path,
+      [{
+          "type": "user",
+          "content": f"f{i}",
+          "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
+      } for i in range(3, 9)])
+  file_size = live_path.stat().st_size
+  count_ndjson_lines(live_path)
+
+  real_open = open
+  reads: list[int] = []
+  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)), \
+          patch("src.core.chat_events._WALK_BYTE_BUDGET", 128), \
+          patch("src.core.chat_events._WALK_CHUNK_BYTES", 64):
+    got, _ = mgr.load_chat_events_range(session.id, 9, 11)
+  # The over-budget span fell back to the full build, which read the file once.
+  assert sum(reads) >= file_size
+  assert [e["content"] for e in got] == ["f4", "f5"]
+
+
+@pytest.mark.asyncio
+async def test_live_range_walk_entry_extends_after_append(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
+  _append_events(
+      live_path,
+      [{
+          "type": "user",
+          "content": f"f{i}",
+          "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
+      } for i in range(3, 9)])
+  count_ndjson_lines(live_path)
+
+  first, _ = mgr.load_chat_events_range(session.id, 9, 11)
+  assert [e["content"] for e in first] == ["f4", "f5"]
+
+  stamp = (cutoff + timedelta(days=2, hours=9)).isoformat()
+  appended = json.dumps({
+      "type": "user",
+      "content": "f9",
+      "timestamp": stamp
+  }) + "\n"
+  _append_events(live_path, [{"type": "user", "content": "f9", "timestamp": stamp}])
+
+  real_open = open
+  reads: list[int] = []
+  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)):
+    after, _ = mgr.load_chat_events_range(session.id, 9, 15)
+  # The extension parsed the appended tail only.
+  assert reads == [len(appended.encode("utf-8"))]
+  assert [e["content"] for e in after] == ["f4", "f5", "f6", "f7", "f8", "f9"]
+
+  reads.clear()
+  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)):
+    repeat, _ = mgr.load_chat_events_range(session.id, 9, 15)
+  assert reads == []
+  assert [e["content"] for e in repeat] == ["f4", "f5", "f6", "f7", "f8", "f9"]
 
 
 @pytest.mark.asyncio

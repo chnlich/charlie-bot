@@ -1,5 +1,6 @@
 """Chat event persistence for CharlieBot sessions."""
 
+import os
 import uuid
 from collections.abc import Callable
 from datetime import datetime
@@ -33,6 +34,15 @@ _ARCHIVE_MEMO_LIMIT = 16
 # parse_ndjson_range numbers ranges over physical lines (blank and malformed
 # lines consume an index).
 _LIVE_RANGE_MEMO_LIMIT = 4
+# A from-the-end walk serves a live-half window without reading the whole
+# file when the window does not reach the file's first line; a span past the
+# byte cap is read once by the full build instead, which then serves every
+# later window from memory. The walk accumulates 512 KiB segments from the
+# end (the iter_ndjson_events_from_end tail-window size, _TAIL_WINDOW_SIZE)
+# and stops on a raw terminator
+# count one line above the target plus the possibly cut head segment.
+_WALK_BYTE_BUDGET = 32 * 1024 * 1024
+_WALK_CHUNK_BYTES = 512 * 1024
 
 
 def chat_events_path(session_dir: Path) -> Path:
@@ -57,6 +67,86 @@ def _universal_newline_segments(buf: bytes) -> tuple[list[str], bool]:
   if ends_with_newline:
     segments.pop()
   return segments, ends_with_newline
+
+
+def _raw_line_spans(buf: bytes) -> tuple[list[tuple[int, int]], bool]:
+  """Split *buf* into physical-line raw byte spans the way the PEP 278 translation would, and
+  say whether the content ends on a line boundary.
+
+  ``\\r\\n`` and lone ``\\r`` terminate a line exactly as ``\\n`` does, so each span's decoded
+  text equals the segment _universal_newline_segments would produce for the same bytes, while
+  the spans keep raw offsets — what lets a from-the-end walk record where its covered content
+  begins.
+  """
+  spans: list[tuple[int, int]] = []
+  start = 0
+  pos = 0
+  n = len(buf)
+  while True:
+    i = buf.find(b"\n", pos)
+    j = buf.find(b"\r", pos)
+    if i == -1 and j == -1:
+      break
+    if j != -1 and (i == -1 or j < i):
+      spans.append((start, j))
+      pos = j + 2 if j + 1 < n and buf[j + 1] == 10 else j + 1
+    else:
+      spans.append((start, i))
+      pos = i + 1
+    start = pos
+  ends = start == n
+  if not ends:
+    spans.append((start, n))
+  return spans, ends
+
+
+def _walk_tail_line_texts(path: Path, size: int, count: int) -> tuple[list[str], int, bool] | None:
+  """Return the last *count* physical lines of the byte range ``[0, size)`` as decoded text,
+  with the raw offset where they begin and whether the range ends on a line boundary.
+
+  Returns None when the walked span exceeds _WALK_BYTE_BUDGET or the range
+  holds fewer lines than asked; the caller falls back to the full build. The
+  walk reads 512 KiB segments from the end and stops once a raw terminator
+  count bounds the target from above — one line for the possibly cut head
+  segment of a mid-range walk, one more because a ``\\r\\n`` pair counts
+  twice — then one exact raw scan locates the line starts.
+  """
+  if count <= 0:
+    return [], size, True
+  parts: list[bytes] = []
+  accumulated = 0
+  bound = 0
+  pos = size
+  spans: list[tuple[int, int]] = []
+  ends = True
+  try:
+    with open(path, "rb") as f:
+      while True:
+        if bound >= count + 2 or pos == 0:
+          # parts hold the segments newest-first (each read extends backward);
+          # the join restores file order.
+          buf = b"".join(reversed(parts))
+          spans, ends = _raw_line_spans(buf)
+          complete = len(spans) - (1 if pos > 0 else 0)
+          if complete >= count:
+            break
+          if pos == 0:
+            return None
+        if accumulated > _WALK_BYTE_BUDGET:
+          return None
+        step = min(_WALK_CHUNK_BYTES, pos)
+        pos -= step
+        f.seek(pos)
+        chunk = f.read(step)
+        bound += chunk.count(b"\n") + chunk.count(b"\r")
+        accumulated += step
+        parts.append(chunk)
+  except OSError as e:
+    log.debug("live_range_read_failed", path=str(path), error=str(e))
+    return None
+  take = spans[len(spans) - count:]
+  texts = [buf[s:e].decode("utf-8") for s, e in take]
+  return texts, pos + take[0][0], ends
 
 
 def _live_range_event(segment: str, session_id: str) -> dict | None:
@@ -152,13 +242,18 @@ class ChatEventStore:
     # own signature.
     self._archive_files_memo: StatSignatureMemo[Path, list[Path]] = StatSignatureMemo(_ARCHIVE_MEMO_LIMIT)
     # Live-file range memo: path -> (mtime_ns, size, inode, per-physical-line
-    # events with None holes for blank/malformed lines, covered byte size,
-    # ends on a line boundary). Gated to archive_offset > 0 sessions:
+    # events with None holes for blank/malformed lines, covered byte end,
+    # ends on a line boundary, first covered line index, covered byte start).
+    # The covered lines span [first covered line index, the file's last line]
+    # over raw bytes [covered byte start, covered byte end); a cold read
+    # walks only the requested window's span from the end and later windows
+    # extend the coverage backward page by page, so a scroll never parses
+    # bytes its pages do not need. Gated to archive_offset > 0 sessions:
     # unarchived sessions paginate through the message projection, so their
-    # range callers (recap extract, bulk reads) would pay a whole-file parse to
-    # retain a list a moving divider never reuses.
-    self._live_range_memo: BoundedMemo[Path, tuple[int, int, int, list[dict | None], int,
-                                                   bool]] = BoundedMemo(_LIVE_RANGE_MEMO_LIMIT)
+    # range callers (recap extract, bulk reads) would pay a whole-file parse
+    # to retain a list a moving divider never reuses.
+    self._live_range_memo: BoundedMemo[Path, tuple[int, int, int, list[dict | None], int, bool, int,
+                                                   int]] = BoundedMemo(_LIVE_RANGE_MEMO_LIMIT)
 
   @property
   def events_cache(self) -> dict[str, list[dict]]:
@@ -255,8 +350,8 @@ class ChatEventStore:
       rel_start = start - archive_offset
       rel_end = end - archive_offset
       if archive_offset > 0:
-        lines = self._live_range_lines(live_path, session_id)
-        return [e for e in lines[rel_start:rel_end] if e is not None], start > 0
+        lines, line_start = self._live_range_lines(live_path, session_id, rel_start, rel_end)
+        return [e for e in lines[rel_start - line_start:rel_end - line_start] if e is not None], start > 0
       cached = self._events_cache.get(session_id)
       if cached is not None:
         # Unarchived: the global index is the cache's own parsed-event index.
@@ -273,8 +368,8 @@ class ChatEventStore:
       return events, start > 0
     archive_events = self._load_archive_range(session_id, start, archive_offset)
     live_end = end - archive_offset
-    lines = self._live_range_lines(live_path, session_id)
-    live_events = [e for e in lines[:live_end] if e is not None]
+    lines, line_start = self._live_range_lines(live_path, session_id, 0, live_end)
+    live_events = [e for e in lines[:live_end - line_start] if e is not None]
     return archive_events + live_events, start > 0
 
   def read_archive_offset_sync(self, session_id: str) -> int:
@@ -365,56 +460,122 @@ class ChatEventStore:
     self._archive_events_memo.record(path, st, events)
     return events
 
-  def _live_range_lines(self, path: Path, session_id: str) -> list[dict | None]:
-    """Return the live file's per-physical-line parsed events, memoized on (mtime_ns, size).
+  def _live_range_lines(self, path: Path, session_id: str, rel_start: int,
+                        rel_end: int) -> tuple[list[dict | None], int]:
+    """Return the live file's parsed events covering physical-line indices ``[rel_start,
+    rel_end)``, with the index the returned list starts at.
 
     A scroll through an archived session's live half re-enters here on every
-    page turn; the memo keeps an unchanged file at one stat per turn. An
-    appended line re-parses only the appended tail: chat files mutate only by
-    append between archive rewrites, and a rewrite publishes through
-    ``os.replace`` and so swaps the inode, so a same-inode size growth extends
-    the previous parse from the byte offset its content actually covers. An
-    entry whose read raced a landing append keys its pre-read stat, so it is
-    reachable only through that covered offset, never as a hit for newer bytes.
-    A covered content ending mid-line blocks extension until a full re-parse
-    lands on a line boundary, so a completed append is never glued onto a
-    half-parsed last line. An unreadable file logs and contributes nothing, the
-    pre-memo reader's behavior on open failure.
+    page turn; the memo keeps an unchanged covered span at one stat per turn.
+    A cold read walks only the requested window's span of bytes from the end
+    and stores it as the entry's covered suffix, so the first page into a
+    session parses one page of events, not the file; a later window below the
+    covered start extends the coverage backward by the same walk, and a span
+    past _WALK_BYTE_BUDGET falls back to the full build, which reads the file
+    once and covers every index.
+
+    Chat files mutate only by append between archive rewrites, and a rewrite
+    publishes through ``os.replace`` and so swaps the inode, so a same-inode
+    size growth extends the previous parse from the byte offset its content
+    actually covers. An entry whose read raced a landing append keys its
+    pre-read stat, so it is reachable only through that covered offset, never
+    as a hit for newer bytes. A covered content ending mid-line blocks
+    extension until a full re-parse lands on a line boundary, so a completed
+    append is never glued onto a half-parsed last line. An unreadable file
+    logs and contributes nothing, the pre-memo reader's behavior on open
+    failure.
     """
     try:
       st = path.stat()
     except OSError as e:
       log.debug("live_range_read_failed", path=str(path), error=str(e))
-      return []
+      return [], rel_start
     memo = self._live_range_memo.get(path)
+    if memo is not None and not (memo[0] == st.st_mtime_ns and memo[1] == st.st_size) \
+            and memo[2] == st.st_ino and st.st_size >= memo[4] and memo[5]:
+      memo = self._extend_lines_forward(path, session_id, st, memo)
     if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
-      return memo[3]
-    extend_from = (memo[3], memo[4]) if (
-        memo is not None and memo[2] == st.st_ino and st.st_size >= memo[4] and memo[5]) else None
-    if extend_from is not None:
-      base_lines, covered = extend_from
-      buf = None
-      try:
-        with open(path, "rb") as f:
-          f.seek(covered)
-          buf = f.read()
-      except OSError as e:
-        log.debug("live_range_read_failed", path=str(path), error=str(e))
-      if buf is not None:
-        segments, ends = _universal_newline_segments(buf)
-        lines = base_lines + [_live_range_event(segment, session_id) for segment in segments]
-        self._live_range_memo.store(path, (st.st_mtime_ns, st.st_size, st.st_ino, lines, covered + len(buf), ends))
-        return lines
+      if rel_start >= memo[6]:
+        return memo[3], memo[6]
+      if rel_start > 0:
+        extended = self._extend_lines_backward(path, session_id, memo, rel_start)
+        if extended is not None:
+          return extended
+    elif rel_start > 0:
+      built = self._build_lines_walk(path, session_id, st, rel_start)
+      if built is not None:
+        return built
     try:
       with open(path, "rb") as f:
         buf = f.read()
     except OSError as e:
       log.debug("live_range_read_failed", path=str(path), error=str(e))
-      return []
+      return [], rel_start
     segments, ends = _universal_newline_segments(buf)
     lines = [_live_range_event(segment, session_id) for segment in segments]
-    self._live_range_memo.store(path, (st.st_mtime_ns, st.st_size, st.st_ino, lines, len(buf), ends))
-    return lines
+    self._live_range_memo.store(path, (st.st_mtime_ns, st.st_size, st.st_ino, lines, len(buf), ends, 0, 0))
+    return lines, 0
+
+  def _extend_lines_forward(self, path: Path, session_id: str, st: os.stat_result,
+                            memo: tuple) -> tuple:
+    """Parse an appended tail onto the covered lines of a same-inode grown file."""
+    buf = None
+    try:
+      with open(path, "rb") as f:
+        f.seek(memo[4])
+        buf = f.read()
+    except OSError as e:
+      log.debug("live_range_read_failed", path=str(path), error=str(e))
+    if buf is None:
+      return memo
+    segments, ends = _universal_newline_segments(buf)
+    lines = memo[3] + [_live_range_event(segment, session_id) for segment in segments]
+    entry = (st.st_mtime_ns, st.st_size, st.st_ino, lines, memo[4] + len(buf), ends, memo[6], memo[7])
+    self._live_range_memo.store(path, entry)
+    return entry
+
+  def _extend_lines_backward(self, path: Path, session_id: str, memo: tuple,
+                             rel_start: int) -> tuple[list[dict | None], int] | None:
+    """Prepend the lines ``[rel_start, covered start)`` to a suffix entry by walking backward
+    from the covered content's first byte; None when the span exceeds the byte budget."""
+    walked = _walk_tail_line_texts(path, memo[7], memo[6] - rel_start)
+    if walked is None:
+      return None
+    texts, byte_start, _ = walked
+    prefix = [_live_range_event(text, session_id) for text in texts]
+    lines = prefix + memo[3]
+    self._live_range_memo.store(path, (memo[0], memo[1], memo[2], lines, memo[4], memo[5], rel_start, byte_start))
+    return lines, rel_start
+
+  def _build_lines_walk(self, path: Path, session_id: str, st: os.stat_result,
+                        rel_start: int) -> tuple[list[dict | None], int] | None:
+    """Build the memo from the end: walk the last ``total - rel_start`` physical lines of
+    ``[0, st.st_size)`` and store them as the entry's covered suffix.
+
+    Returns None when the stat bracket around the line count moved (the walk
+    would index a snapshot the count does not describe) or the span exceeds
+    the byte budget; the caller full-builds.
+    """
+    try:
+      total = count_ndjson_lines(path)
+      after = path.stat()
+    except OSError as e:
+      # A delete landing mid-call leaves the bracket unanswerable; None falls
+      # to the full build, whose guarded open returns an empty page.
+      log.debug("live_range_read_failed", path=str(path), error=str(e))
+      return None
+    if (after.st_mtime_ns, after.st_size, after.st_ino) != (st.st_mtime_ns, st.st_size, st.st_ino):
+      return None
+    count = total - rel_start
+    if count <= 0:
+      return [], rel_start
+    walked = _walk_tail_line_texts(path, st.st_size, count)
+    if walked is None:
+      return None
+    texts, byte_start, ends = walked
+    lines = [_live_range_event(text, session_id) for text in texts]
+    self._live_range_memo.store(path, (st.st_mtime_ns, st.st_size, st.st_ino, lines, st.st_size, ends, rel_start, byte_start))
+    return lines, rel_start
 
   def _chat_events_path(self, session_id: str) -> Path:
     return chat_events_path(self._session_dir(session_id))

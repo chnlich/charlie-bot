@@ -13,7 +13,7 @@
   let editorBody = null;
   let drag = null;
   let sending = false;
-  let toast = null;
+  const showToast = createCommentToast(PREFIX, (node) => document.body.appendChild(node), 2400);
 
   let querySessionId = new URLSearchParams(window.location.search).get('session');
   querySessionId = querySessionId ? querySessionId.trim() : null;
@@ -441,20 +441,6 @@
     editorBody = null;
   }
 
-  // Every inline comment editor shares one key contract: Escape cancels,
-  // Ctrl/Meta+Enter submits, and both keys consume the event.
-  function bindEditorKeys(textarea, onCancel, onSubmit) {
-    textarea.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onCancel();
-      } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-        event.preventDefault();
-        onSubmit();
-      }
-    });
-  }
-
   function dragTargetFromEvent(event) {
     const cell = event.target.closest('.d2h-code-linenumber, .d2h-code-side-linenumber');
     if (!cell) return null;
@@ -753,18 +739,5 @@
       refreshTray();
       showToast(error.message, true);
     }
-  }
-
-  function showToast(message, isError) {
-    if (toast) toast.remove();
-    const node = document.createElement('div');
-    node.className = `${PREFIX}-toast${isError ? ` ${PREFIX}-toast-error` : ''}`;
-    node.textContent = message;
-    document.body.appendChild(node);
-    toast = node;
-    window.setTimeout(() => {
-      node.remove();
-      if (toast === node) toast = null;
-    }, 2400);
   }
 })();

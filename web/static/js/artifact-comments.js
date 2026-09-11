@@ -70,7 +70,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     var trigger = null;
     var dock = null;
     var popover = null;
-    var toast = null;
+    var showToast = createCommentToast(GLOBAL_PREFIX, injectRoot, 2200);
     var pending = [];
     var tray = null;
     var trayHeader = null;
@@ -698,19 +698,6 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       error.style.display = 'block';
     }
 
-    function showToast(message, isError) {
-      if (toast && toast.parentNode) toast.parentNode.removeChild(toast);
-      var node = document.createElement('div');
-      toast = node;
-      node.className = GLOBAL_PREFIX + '-toast' + (isError ? ' ' + GLOBAL_PREFIX + '-toast-error' : '');
-      node.textContent = message;
-      injectRoot(node);
-      window.setTimeout(function() {
-        if (node.parentNode) node.parentNode.removeChild(node);
-        if (toast === node) toast = null;
-      }, 2200);
-    }
-
     function buildCommentEntry(quote, context, comment) {
       if (quote === '') {
         return ('\u25B8 ' + context).split('\n').concat(('\u21B3 ' + comment).split('\n'));
@@ -1051,17 +1038,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
         refreshTray();
       }
 
-      textarea.addEventListener('keydown', function(event) {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          cancel();
-          return;
-        }
-        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-          event.preventDefault();
-          save();
-        }
-      });
+      bindEditorKeys(textarea, cancel, save);
       textarea.addEventListener('blur', save);
       draftNode.parentNode.replaceChild(textarea, draftNode);
       textarea.focus();

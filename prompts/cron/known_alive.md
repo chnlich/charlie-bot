@@ -126,7 +126,8 @@ Known-alive symbols:
   either parameter makes the stub raise TypeError when the gate calls it. Vulture flags the
   unused parameter at 100% confidence as an unused variable.
 - The `if False: yield {}` lines in `tests/test_chat_cancel.py`, `tests/test_master_cc_consumer.py`,
-  `tests/test_master_cc_voice.py`, and `tests/test_worker_diagnostics.py` are flagged as
+  `tests/conftest.py` (`CapturingBackend`, the shared master-cc round double), and
+  `tests/test_worker_diagnostics.py` are flagged as
   100%-confidence unsatisfiable `if` conditions; the unreachable branch is what keeps each fake
   backend's `run()` an async generator (the consumer's `async for` would TypeError a plain
   coroutine), as each site's inline comment states. The condition is the point; nothing to

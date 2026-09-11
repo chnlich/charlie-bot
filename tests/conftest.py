@@ -635,6 +635,15 @@ def make_home_config(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home", backends={"options": [OPUS_BACKEND_OPTION]})
 
 
+def build_master_cc_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig rooted at tmp_path/".charliebot" with one fake codex backend registered: the
+  shape the master-cc round tests drive run_message, replay_user_message, and _run_cc against."""
+  return CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")]},
+  )
+
+
 def make_session_mgr(tmp_path: Path) -> SessionManager:
   """SessionManager over a SimpleNamespace cfg whose sessions_dir is tmp_path/"sessions"; a test
   needing a richer cfg builds its own."""
@@ -1918,6 +1927,25 @@ class FakeBackend(TerminateFlagBackend):
     yield backend_base.make_result_event()
 
 
+class CapturingBackend(TerminateFlagBackend):
+  """AgentBackend double that records each run() call instead of yielding events.
+
+  Callers install it through a patched build_backend on the master-cc round path and assert on
+  `calls`: one dict per run() carrying the prompt and the uploaded_files the round passed.
+  """
+
+  exit_code = 0
+  stderr_text = ""
+
+  def __init__(self) -> None:
+    self.calls: list[dict] = []
+
+  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
+    self.calls.append({"prompt": prompt, "uploaded_files": uploaded_files})
+    if False:
+      yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine
+
+
 def _instructions_content_stub(
     session_meta: models.SessionMetadata, cfg: CharlieBotConfig, prompt_overlay: str | None) -> str:
   return "instructions"
@@ -1926,6 +1954,38 @@ def _instructions_content_stub(
 def patch_instructions_content(monkeypatch: pytest.MonkeyPatch) -> None:
   """Patch the master-cc instructions builder to return the fixed string "instructions"."""
   monkeypatch.setattr(master_cc_run, "_build_instructions_content", _instructions_content_stub)
+
+
+async def run_captured_round(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    session_id: str,
+    name: str,
+    backend: CapturingBackend,
+    drive: Callable[[CharlieBotConfig, models.SessionMetadata, models.SessionCallbacks], Awaitable[None]],
+) -> models.SessionCallbacks:
+  """Drive one master-cc round through `drive` with the backend captured: build_backend returns
+  `backend`, the instructions builder is stubbed, broadcasts are silenced, and the SessionManager
+  double reports no running tasks. Drains the consumer before returning, so the round's
+  persist/broadcast work is observable on the returned callbacks; master-cc state resets on
+  entry and exit.
+  """
+  cfg = build_master_cc_cfg(tmp_path)
+  meta = models.SessionMetadata(id=session_id, name=name, backend="fake")
+  callbacks = mock_session_callbacks()
+  async with fresh_master_state(meta.id):
+    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **kw: backend)
+    patch_instructions_content(monkeypatch)
+    workers_mock = MagicMock()
+    workers_mock._has_running_tasks = AsyncMock(return_value=False)
+    with (
+        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
+        patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
+    ):
+      await drive(cfg, meta, callbacks)
+      await drain_session_consumer(meta.id, timeout=5)
+  return callbacks
 
 
 @contextlib.contextmanager

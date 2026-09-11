@@ -38,6 +38,7 @@ from test_restart_recovery_e2e import _launch_driver
 
 from src.agents.backends.base import AgentBackend
 from src.core import runs
+from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, ThreadStatus, utc_now
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
@@ -86,6 +87,37 @@ async def test_pid_start_missing_running_worker_never_false_failed(
   assert _recovery_reports(home, ids["session"]) == []
 
 
+async def _uncovered_thread(
+    home: Path,
+    *,
+    name: str,
+    prompt: str,
+    pid: int,
+    pid_start: str | None,
+) -> tuple[CharlieBotConfig, dict]:
+  """Build the uncovered-backend running thread both legs share: a RUNNING thread
+  on the fake-oc backend whose raw log holds assistant output with no result event
+  yet. ``pid``/``pid_start`` are the leg's only lever: pinned they make the death
+  provable, scrubbed they leave it unverifiable."""
+  cfg = build_recovery_cfg(home)
+  session_mgr = SessionManager(cfg)
+  thread_mgr = ThreadManager(cfg)
+  session_meta = await session_mgr.create_session(CreateSessionRequest(name=name))
+  thread = await thread_mgr.create_thread(session_meta, prompt)
+  thread.status = ThreadStatus.RUNNING
+  thread.backend = "fake-oc"
+  thread.model = "fake-model"
+  thread.pid = pid
+  thread.pid_start = pid_start
+  thread.started_at = utc_now()
+  await thread_mgr.save_metadata(thread)
+  data_dir = home / "sessions" / session_meta.id / "threads" / thread.id / "data"
+  data_dir.mkdir(parents=True, exist_ok=True)
+  (data_dir / runs.RAW_LOG_NAME).write_text(
+      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n', encoding="utf-8")
+  return cfg, {"session": session_meta.id, "thread": thread.id}
+
+
 @pytest.mark.asyncio
 async def test_uncovered_effective_alive_run_reported_not_attached(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,25 +125,8 @@ async def test_uncovered_effective_alive_run_reported_not_attached(
   uncovered-alive; recovery emits exactly one report and mounts nothing —
   the thread is left running and untouched."""
   home = tmp_path / "home"
-  cfg = build_recovery_cfg(home)
-  session_mgr = SessionManager(cfg)
-  thread_mgr = ThreadManager(cfg)
-  session_meta = await session_mgr.create_session(CreateSessionRequest(name="uncovered-alive"))
-  thread = await thread_mgr.create_thread(session_meta, "uncovered task")
-  thread.status = ThreadStatus.RUNNING
-  thread.backend = "fake-oc"
-  thread.model = "fake-model"
-  thread.pid = 4242
-  thread.pid_start = None  # the scrubbed-input shape: death unverifiable
-  thread.started_at = utc_now()
-  await thread_mgr.save_metadata(thread)
-  ids = {"session": session_meta.id, "thread": thread.id}
-
-  # The run's raw log exists and holds no result event yet.
-  data_dir = home / "sessions" / session_meta.id / "threads" / thread.id / "data"
-  data_dir.mkdir(parents=True, exist_ok=True)
-  (data_dir / runs.RAW_LOG_NAME).write_text(
-      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n', encoding="utf-8")
+  # The scrubbed-input shape: no pid_start, so death is unverifiable.
+  cfg, ids = await _uncovered_thread(home, name="uncovered-alive", prompt="uncovered task", pid=4242, pid_start=None)
 
   recovered, alive_at_reattach, _master_wakes, outcomes = await _recover(monkeypatch, home, cfg=cfg)
 
@@ -134,25 +149,10 @@ async def test_uncovered_dead_pinned_worker_finalized_failed_with_reason(
   with the transport reason, drains the run's pending output, and finalizes
   the thread failed with that reason carried into the worker summary."""
   home = tmp_path / "home"
-  cfg = build_recovery_cfg(home)
-  session_mgr = SessionManager(cfg)
-  thread_mgr = ThreadManager(cfg)
-  session_meta = await session_mgr.create_session(CreateSessionRequest(name="uncovered-dead"))
-  thread = await thread_mgr.create_thread(session_meta, "uncovered dead task")
-  thread.status = ThreadStatus.RUNNING
-  thread.backend = "fake-oc"
-  thread.model = "fake-model"
-  thread.pid = 999999  # dead: no /proc/999999 entry
-  thread.pid_start = "1"  # pinned at spawn: the death above is provable
-  thread.started_at = utc_now()
-  await thread_mgr.save_metadata(thread)
-  ids = {"session": session_meta.id, "thread": thread.id}
-
-  # Pending work the dead server never drained: output without a result event.
-  data_dir = home / "sessions" / session_meta.id / "threads" / thread.id / "data"
-  data_dir.mkdir(parents=True, exist_ok=True)
-  (data_dir / runs.RAW_LOG_NAME).write_text(
-      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n', encoding="utf-8")
+  # The provably-dead pin: pid 999999 has no /proc entry, and pid_start pinned
+  # at spawn is what makes that death provable rather than unverifiable.
+  cfg, ids = await _uncovered_thread(
+      home, name="uncovered-dead", prompt="uncovered dead task", pid=999999, pid_start="1")
 
   recovered, alive_at_reattach, _master_wakes, outcomes = await _recover(monkeypatch, home, cfg=cfg)
 

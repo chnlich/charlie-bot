@@ -10,6 +10,15 @@ const vm = require('node:vm');
 
 const { hljsStub } = require('./hljs_stub');
 
+// Fake marked for behavior tests: parse marks its input so frames stay
+// deterministic; the Renderer/use surface is what markdown-renderer.js touches
+// at load, and the lexer/parser pair is what parseStreamDraft's recorder path
+// drives.
+const FAKE_MARKED_SRC =
+  'globalThis.marked = { Renderer: function() { return {}; }, use() {}, parse: (s) => `<p>${s}</p>`, ' +
+  'lexer: (s) => [{ type: "paragraph", raw: s, text: s }], ' +
+  'parser: (tokens) => tokens.map((t) => `<p>${t.text}</p>`).join("") };';
+
 // CHECKOUT overrides the code under test (the M33 A/B protocol); the default is
 // this harness's own repo root so behavior tests exercise their own checkout.
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
@@ -84,4 +93,4 @@ function buildStreamHarness(markedSource, options = {}) {
   return { context, showStreaming, advance, stats: () => ({ paintMs, timerCount: timers.size, frames }) };
 }
 
-module.exports = { buildStreamHarness };
+module.exports = { buildStreamHarness, FAKE_MARKED_SRC };

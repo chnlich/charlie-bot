@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import orjson
 import structlog
 
 from src.agents.backends.base import (
@@ -55,11 +56,24 @@ def _clamp_ts(clamp_to: datetime | None) -> str:
   return now.isoformat()
 
 
+def _event_line(event: dict) -> str:
+  """Serialize one persisted worker event to its log line."""
+  # orjson because the per-event serialization rides the streamed-turn head
+  # (the collector's worst-single-event reading); every reader JSON-parses the
+  # log per line, so the compact UTF-8 byte form is inert. Every persisted
+  # event is a machine-built dict of JSON-parsed values — str keys only.
+  return orjson.dumps(event).decode("utf-8") + "\n"
+
+
 async def _append_event_line(fd: int, line: str) -> None:
-  # One executor hop per event: aiofiles' write+flush pair costs two round-trips
-  # on the streamed-turn path. The fd carries no fdatasync — the events log is a
-  # diagnostic stream, not the fdatasync-durable chat funnel (append_ndjson).
-  await asyncio.to_thread(_write_all, fd, line.encode("utf-8"))
+  # On-loop write: the events log is page-cached and append-only, so os.write
+  # costs single-digit microseconds on a typical event and its worst case is
+  # the write itself (~90 us per 100 KB). The executor hop bought no
+  # durability — the fd carries no fdatasync; the events log is a diagnostic
+  # stream, not the fdatasync-durable chat funnel (append_ndjson) — and cost a
+  # scheduler round-trip per event whose wakeup under load can spike to
+  # milliseconds, the streamed-turn head this append rides.
+  _write_all(fd, line.encode("utf-8"))
 
 
 class Worker:
@@ -336,7 +350,7 @@ class Worker:
   async def _persist_and_broadcast(self, fd: int, event: dict) -> None:
     if not event.get("timestamp"):
       event["timestamp"] = datetime.now(UTC).isoformat()
-    await _append_event_line(fd, json.dumps(event) + "\n")
+    await _append_event_line(fd, _event_line(event))
     await streaming_manager.broadcast(self._thread.id, event)
 
   def _raw_log_path(self) -> Path:
@@ -435,7 +449,7 @@ class Worker:
             resets_at=resets_at,
             account=self._claude_account.label if self._claude_account is not None else None)
         if self._relay_watch is None:
-          await _append_event_line(fd, json.dumps(event_data) + "\n")
+          await _append_event_line(fd, _event_line(event_data))
           raise QuotaExhaustedException(f"Rate limited ({rate_type}), resets at {resets_at}")
 
     if event_type == ET.ASSISTANT:
@@ -445,17 +459,17 @@ class Worker:
         self._context_tokens = _prompt_token_sum(usage)
 
     if event_type == ET.ERROR and any(p in event_message or p in event_content for p in QUOTA_ERROR_PATTERNS):
-      await _append_event_line(fd, json.dumps(event_data) + "\n")
+      await _append_event_line(fd, _event_line(event_data))
       raise QuotaExhaustedException(event_data.get("message", "Quota exhausted"))
 
     # Write to disk
-    await _append_event_line(fd, json.dumps(event_data) + "\n")
+    await _append_event_line(fd, _event_line(event_data))
 
     # Broadcast to WebSocket subscribers
     await streaming_manager.broadcast(self._thread.id, event_data)
 
     async def _persist_and_broadcast(evt: dict) -> None:
-      await _append_event_line(fd, json.dumps(evt) + "\n")
+      await _append_event_line(fd, _event_line(evt))
       await streaming_manager.broadcast(self._thread.id, evt)
 
     await handle_compaction_events(

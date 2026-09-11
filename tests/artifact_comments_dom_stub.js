@@ -99,6 +99,10 @@ function makeElement() {
       child.parentElement = null;
       return child;
     },
+    // Element.remove() semantics, routed through removeChild for the same bookkeeping.
+    remove() {
+      if (this.parentNode) this.parentNode.removeChild(this);
+    },
     addEventListener(type, handler) {
       if (!this._listeners[type]) this._listeners[type] = [];
       this._listeners[type].push(handler);

@@ -13,8 +13,7 @@ const {
   REPLAY_DELTA_BYTES,
   REPLAY_TICK_MS,
 } = require('./stream_collector_common');
-
-const MARKED_URL = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
+const { MARKED_URL } = require('./marked_renderer_harness');
 
 (async () => {
   const text = largestAssistantDraft(() => true);

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { loadRendererContext } = require('./marked_renderer_harness');
+const { loadRendererContext, MARKED_URL } = require('./marked_renderer_harness');
 
 // hljs stand-in whose output visibly marks the path taken: HL[AUTO]/HL[LANG]
 // prefix the input, so a skipped block (escaped-plain) and a highlighted block
@@ -119,7 +119,7 @@ test('a throwing parse clears the recorder so later renders never skip', async (
   // recorder window, so a parse that throws mid-render must leave it null.
   const { buildStreamHarness } = require('./stream_render_harness');
   const { fetchUrl } = require('./stream_collector_common');
-  const markedSrc = await fetchUrl('https://cdn.jsdelivr.net/npm/marked/marked.min.js');
+  const markedSrc = await fetchUrl(MARKED_URL);
   const h = buildStreamHarness(markedSrc, {});
   h.context.hljs.highlightAuto = () => { throw new Error('boom'); };
   // A completed bare block (auto path, throws) followed by an open fence.

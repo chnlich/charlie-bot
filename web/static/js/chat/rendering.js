@@ -49,6 +49,9 @@ function renderToolActivity(tools) {
       } else {
         outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-all">' + escapeHtml(outText) + '</pre>';
       }
+      if (tool.output_truncated) {
+        outputHtml += '<div class="mt-1 text-xs text-slate-500">output truncated &mdash; full text in the session\'s raw events</div>';
+      }
     }
     var borderCls = i > 0 ? 'border-t border-slate-600/50 ' : '';
     var truncCls = (limit > 0 && text.length > limit) ? '' : 'truncate ';

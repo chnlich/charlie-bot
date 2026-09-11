@@ -87,6 +87,14 @@ def _utc_now_iso() -> str:
   return utc_now().isoformat()
 
 
+def require_plan(plans: list[dict], plan_id: int) -> dict:
+  """Return the plan with this id in a registry plans list; absence raises the not-found contract."""
+  plan = next((p for p in plans if p.get("id") == plan_id), None)
+  if plan is None:
+    raise ValueError(f"plan {plan_id} not found in session")
+  return plan
+
+
 # ---------------------------------------------------------------------------
 # Schema projection — the canonical field set the registry persists and emits
 # ---------------------------------------------------------------------------
@@ -335,17 +343,9 @@ class PlanRegistryManager:
       raise ValueError(f"file {file!r} already bound to plan {existing_file[0]} v{existing_file[1]}")
     return file_relative
 
-  def _get_plan(self, data: dict, plan_id: int) -> dict | None:
-    for plan in data["plans"]:
-      if plan["id"] == plan_id:
-        return plan
-    return None
-
   def _require_open_plan(self, data: dict, plan_id: int) -> dict:
     """Return the named plan, raising when it is missing or closed."""
-    plan = self._get_plan(data, plan_id)
-    if plan is None:
-      raise ValueError(f"plan {plan_id} not found in session")
+    plan = require_plan(data["plans"], plan_id)
     if plan.get("closed") is not None:
       raise ValueError(f"plan {plan_id} is closed ({plan['closed']['as']!r})")
     return plan
@@ -457,9 +457,7 @@ class PlanRegistryManager:
       raise ValueError(f"--as must be {'|'.join(PLAN_CLOSE_MODES)}, got {close_as!r}")
     async with self._lock_for(session_id):
       data = await self._load(session_id)
-      plan = self._get_plan(data, plan_id)
-      if plan is None:
-        raise ValueError(f"plan {plan_id} not found in session")
+      plan = require_plan(data["plans"], plan_id)
       if plan.get("closed") is not None:
         raise ValueError(f"plan {plan_id} is already closed ({plan['closed']['as']!r})")
       plan["closed"] = {"as": close_as, "at": _utc_now_iso()}

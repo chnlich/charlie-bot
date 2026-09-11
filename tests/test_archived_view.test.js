@@ -8,7 +8,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
-const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, makeSessionMeta } = require('./session_context_stub');
+const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext,
+  makeSessionMeta } = require('./session_context_stub');
 
 function makeArchivedSession(id, overrides = {}) {
   return makeSessionMeta(id, {status: 'archived', rating: null, ...overrides});

@@ -74,12 +74,18 @@ Vocabulary:
               "check", "model_ctx", "is_root", "final_total", "walked", "end", "guard"}`` for a
               Codex file (check is the root-session self-check pair ``[walked, final_total]``
               or None; the tail round carries the model context, rootness and self-check state
-              the prefix settled), ``{"sig", "records"}`` for the opencode db
-  records     Claude: ``[key, model, ts, in_fresh, cache_write, cache_read, output]`` per
-              response, replay-deduped within the file; Codex: ``[model, ts, in_fresh,
-              cache_read, output]`` per token_count event, model resolved by file position;
-              opencode: ``[model, account, ts, in_fresh, cache_write, cache_read, output]`` per
-              assistant message with token counts
+              the prefix settled), ``{"sig", "rows", "partial"}`` for the opencode db
+   rows       the opencode db's per-row map, ``{message id: [time_updated, record or None]}`` —
+              the row memo's persisted form. A process restart rebuilds the row memo from it
+              and diffs one key pass against the live table, so the restart-cold collect
+              fetches only rows that moved since the document was written instead of
+              re-reading every data blob
+   records    Claude: ``[key, model, ts, in_fresh, cache_write, cache_read, output]`` per
+               response, replay-deduped within the file; Codex: ``[model, ts, in_fresh,
+               cache_read, output]`` per token_count event, model resolved by file position;
+               opencode v1 entries: ``[model, account, ts, in_fresh, cache_write, cache_read,
+               output]`` per assistant message with token counts (v2 entries carry the same
+               records as the values of ``rows``)
 Cross-file replay dedupe happens at merge (first record wins in walk order), which composed
 with within-file first-wins gives exactly the global first-wins a cacheless scan computes.
 
@@ -112,10 +118,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, NamedTuple
 
+import orjson
+
 from src.core import event_types as ET
 from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_SESSION_META, CODEX_TOKEN_COUNT, CODEX_TURN_CONTEXT
 from src.core.config import get_config
-from src.core.json_utils import write_json_atomically
+from src.core.json_utils import atomic_write_stream
 
 DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
@@ -254,7 +262,7 @@ class TallyCache:
   therefore holds only files seen this run — deleted logs drop out without a separate sweep.
   """
 
-  SCHEMA_VERSION = 1
+  SCHEMA_VERSION = 2
 
   def __init__(self, sources: dict[str, dict[str, dict]]) -> None:
     self._sources = sources
@@ -262,15 +270,19 @@ class TallyCache:
 
   @classmethod
   def load(cls, path: Path, notes: list[str]) -> TallyCache:
-    """Read the persisted document; an unreadable or stale-schema file starts a cold cache."""
+    """Read the persisted document; an unreadable or stale-schema file starts a cold cache.
+
+    Version 1 documents (records-only opencode entries) still serve: their entries fall back
+    to the replay paths, and the first save rewrites them in the current shape.
+    """
     try:
-      doc = json.loads(path.read_text())
+      doc = orjson.loads(path.read_bytes())
     except FileNotFoundError:
       doc = None
     except (OSError, ValueError) as exc:
       notes.append(f"Tally cache: unreadable {path} ({exc}); rebuilt from the logs")
       doc = None
-    if not isinstance(doc, dict) or doc.get("version") != cls.SCHEMA_VERSION:
+    if not isinstance(doc, dict) or doc.get("version") not in (1, cls.SCHEMA_VERSION):
       return cls({})
     return cls(doc.get("sources", {}))
 
@@ -279,7 +291,8 @@ class TallyCache:
     if self._next == self._sources:
       return
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_json_atomically(path, {"version": self.SCHEMA_VERSION, "sources": self._next})
+    payload = orjson.dumps({"version": self.SCHEMA_VERSION, "sources": self._next})
+    atomic_write_stream(path, lambda stream: stream.write(payload))
 
   def lookup_sig(self, source: str, key: str, sig: list) -> dict | None:
     """The cached entry for *key* when its stored signature equals *sig*, else None.
@@ -437,6 +450,46 @@ def _snapshot_opencode_partial(t: _Tally, count: int) -> _OpencodePartial:
           k: tuple(v) for k, v in t.span.items() if k[0] == "opencode"
       },
       count=count)
+
+
+def _partial_to_doc(partial: _OpencodePartial) -> dict:
+  """The partial's persisted form. The bucket keys are tuples in memory; the document nests
+  them by model (then account) so the JSON encoding stays collision-free without a separator
+  convention model names would have to honor."""
+  accounts: dict[str, dict] = {}
+  for (_, model, account), bucket in partial.by_account.items():
+    accounts.setdefault(model, {})[account] = bucket
+  return {
+      "by_model": {model: bucket for (_, model), bucket in partial.by_model.items()},
+      "by_account": accounts,
+      "span": {model: list(pair) for (_, model), pair in partial.span.items()},
+      "count": partial.count,
+  }
+
+
+def _partial_from_doc(doc: object) -> _OpencodePartial | None:
+  """The stored partial back as buckets, or None when the entry carries none (a v1 entry, or
+  a document from before the field existed). Absent means the next merge replays instead of
+  adjusting — the same contract an in-process partial absence follows."""
+  if not isinstance(doc, dict):
+    return None
+  return _OpencodePartial(
+      by_model={("opencode", model): bucket for model, bucket in doc["by_model"].items()},
+      by_account={
+          ("opencode", model, account): bucket
+          for model, buckets in doc["by_account"].items() for account, bucket in buckets.items()
+      },
+      span={("opencode", model): tuple(pair) for model, pair in doc["span"].items()},
+      count=doc["count"])
+
+
+def _entry_records(entry: dict) -> list:
+  """The entry's records under either entry shape: v2's ``rows`` map values, or the v1
+  ``records`` list the first save rewrites."""
+  rows = entry.get("rows")
+  if rows is not None:
+    return [row[1] for row in rows.values() if row[1] is not None]
+  return entry["records"]
 
 
 class _OpencodeScan(NamedTuple):
@@ -1051,13 +1104,17 @@ def _opencode_db_signature(db: Path) -> list | None:
   return [st.st_mtime_ns, st.st_size, wal_sig]
 
 
-def _advance_opencode_rows(db: Path) -> _OpencodeScan:
+def _advance_opencode_rows(db: Path, seed: dict | None = None) -> _OpencodeScan:
   """Advance the db's row memo to its message table's current rows, bumping the epoch when any
   row moved. Read-only: the scan never writes. Absent or unreadable dbs advance nothing and
   return ``ok=False``. A warm memo first checks the proof aggregates: unchanged (count, sum)
   proves every row move the aggregates can see is absent and the scan is skipped — a weaker
   proof than the key scan's per-id diff (see the probe comment), traded for not reading
   85k keys on the WAL-noise rounds that are the steady state this gate exists for.
+
+  *seed* is the persisted document's ``rows`` map for this db. A cold memo seeded from it
+  skips the whole-blob cold scan: the memo starts at the document's rows and the warm key
+  diff fetches only rows that moved since the document was written.
   """
   key = str(db)
   sig = _opencode_db_signature(db)
@@ -1065,8 +1122,13 @@ def _advance_opencode_rows(db: Path) -> _OpencodeScan:
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
       memo = _opencode_row_memos.setdefault(key, {})
+      # A seeded cold memo has no stored probe to check against, so it skips the gate's probe
+      # read and takes the same post-scan probe the cold-memo path computes.
+      seeded = not memo and seed is not None
+      if seeded:
+        memo.update({mid: (row[0], row[1]) for mid, row in seed.items()})
       con.execute("begin")  # one snapshot: the stored proof must describe the scanned state
-      probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone()) if memo else None
+      probe = None if seeded else (tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone()) if memo else None)
       if probe is not None and _opencode_probes.get(key) == probe:
         con.commit()
         return _OpencodeScan(sig, _opencode_row_epochs.get(key, 0), 0, True, None, [])
@@ -1143,9 +1205,14 @@ def _merge_opencode(
     epoch = _opencode_row_epochs.get(key, 0)
     partial = _opencode_partials.get(key)
     if partial is None:
-      # Process start: no partial exists yet, so one replay builds it and the next
-      # entry-served merge adopts.
-      records = entry["records"]
+      # Process start: adopt the entry's stored partial when it carries one, so the served
+      # buckets never replay the records; one replay builds the partial only for a v1 entry.
+      stored = _partial_from_doc(entry.get("partial"))
+      if stored is not None:
+        _opencode_partials[key] = stored
+        partial = stored
+    if partial is None:
+      records = _entry_records(entry)
       _replay_opencode_records(t, records)
       count = len(records)
       _opencode_partials[key] = _snapshot_opencode_partial(t, count)
@@ -1154,7 +1221,15 @@ def _merge_opencode(
     t.notes.append(f"opencode: {count:,} assistant messages with token counts")
     return sig, epoch, from_scan
   if scan is None:
-    scan = _advance_opencode_rows(db)
+    seed = None
+    prev = cache.prev("opencode", key) if cache is not None else None
+    if prev is not None:
+      seed = prev.get("rows")
+      if _opencode_partials.get(key) is None:
+        stored = _partial_from_doc(prev.get("partial"))
+        if stored is not None:
+          _opencode_partials[key] = stored
+    scan = _advance_opencode_rows(db, seed)
   if not scan.ok:
     t.notes.append(f"opencode: unreadable db: {scan.error}")
     return None, scan.epoch, False
@@ -1169,6 +1244,9 @@ def _merge_opencode(
     count = len(records)
   else:
     count = _adjust_opencode_partial(t, memo, partial, scan.deltas)
+  # The stored partial must never alias a served tally's containers, so it copies out; the
+  # store below persists it, so it lands before the entry is built.
+  _opencode_partials[key] = _snapshot_opencode_partial(t, count)
   if cache is not None and sig is not None:
     entry = cache._sources.get("opencode", {}).get(str(db))
     if entry is not None and _opencode_doc_synced.get(key):
@@ -1177,11 +1255,12 @@ def _merge_opencode(
       # rewrite the multi-MB document for a signature the next WAL write stales anyway.
       cache.store("opencode", db, entry)
     else:
-      records = [rec for _, rec in memo.values() if rec is not None]
-      cache.store("opencode", db, {"sig": sig, "records": records})
+      cache.store("opencode", db, {
+          "sig": sig,
+          "rows": {mid: (tu, rec) for mid, (tu, rec) in memo.items()},
+          "partial": _partial_to_doc(_opencode_partials[key]),
+      })
       _opencode_doc_synced[key] = True
-  # The stored partial must never alias a served tally's containers, so it copies out.
-  _opencode_partials[key] = _snapshot_opencode_partial(t, count)
   t.notes.append(f"opencode: {count:,} assistant messages with token counts")
   return sig, epoch, from_scan
 

@@ -14,29 +14,19 @@ from typing import Any
 _TERMINATOR_RE = re.compile(r"\r\n|\r|\n")
 
 
-def split_sse_lines(buffer: str, *, final: bool, scanned_to: int = 0) -> tuple[list[str], str]:
+def split_sse_lines(buffer: str, *, final: bool) -> tuple[list[str], str]:
   """Split *buffer* on the SSE terminators {CRLF, LF, CR} into (lines, remainder).
 
   A buffer ending in ``\\r`` is held back when ``final`` is false, because the
   CR may pair with a leading LF in the next chunk. With ``final=True`` a
   trailing unterminated line is flushed as a line and the remainder is empty.
-
-  ``scanned_to`` resumes the terminator search at that index; emitted lines
-  still span from the buffer start. The caller's contract: no terminator
-  begins before ``scanned_to``. A streaming caller establishes it from the
-  previous call's remainder, which is terminator-free except for a held-back
-  trailing CR, and that CR belongs to the cursor so it can pair with the next
-  chunk's leading LF. Without resumption every chunk re-searches the whole
-  accumulated remainder and framing a multi-chunk frame costs O(bytes x
-  chunks) instead of O(bytes) — seconds of event-loop time per multi-MB
-  SSE payload at network chunk sizes.
   """
   end = len(buffer)
   if not final and end and buffer[end - 1] == "\r":
     end -= 1
   lines: list[str] = []
   start = 0
-  for match in _TERMINATOR_RE.finditer(buffer, scanned_to, end):
+  for match in _TERMINATOR_RE.finditer(buffer, 0, end):
     lines.append(buffer[start:match.start()])
     start = match.end()
   if final:

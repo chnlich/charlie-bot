@@ -23,6 +23,14 @@ from collections.abc import Callable, Iterator
 from src.core import event_types as ET
 from src.core.message_events import normalize_user_message_event
 
+# One message's ``tools`` array rides every render path: each page payload
+# (bootstrap, events, view), each ``stream`` delta snapshot re-serializes the
+# whole buffered draft, so an uncapped tool output turns one big tool_result
+# into megabytes on every delta and every switch back to the session. The cap
+# bounds the rendered text; the persisted event keeps the full content (raw
+# download, fork reference, review scans all read it there).
+TOOL_OUTPUT_RENDER_CAP = 20000
+
 
 def _join_blocks(msg: dict | None, block_type: str) -> str:
   """Join the ``block_type`` field of every ``block_type``-typed content block."""
@@ -387,8 +395,10 @@ class MessageAggregator:
           if isinstance(block, dict) and block.get("type") == "tool_result":
             text = extract_tool_result_text(block)
             if self._tools_buf:
-              self._tools_buf[-1]["output"] = text
+              self._tools_buf[-1]["output"] = text[:TOOL_OUTPUT_RENDER_CAP]
               self._tools_buf[-1]["is_error"] = bool(block.get("is_error", False))
+              if len(text) > TOOL_OUTPUT_RENDER_CAP:
+                self._tools_buf[-1]["output_truncated"] = True
         delta = self._stream_delta()
         if delta is not None:
           yield delta
@@ -493,7 +503,10 @@ class MessageAggregator:
     if t == ET.TOOL_RESULT:
       if not self._tools_buf:
         return
-      self._tools_buf[-1]['output'] = ev.get('content', '')
+      content = ev.get('content', '')
+      self._tools_buf[-1]['output'] = content[:TOOL_OUTPUT_RENDER_CAP] if isinstance(content, str) else content
+      if isinstance(content, str) and len(content) > TOOL_OUTPUT_RENDER_CAP:
+        self._tools_buf[-1]['output_truncated'] = True
       self._tools_buf[-1]['is_error'] = bool(ev.get('is_error', False))
       self._last_event_idx = idx
       delta = self._stream_delta()

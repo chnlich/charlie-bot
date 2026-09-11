@@ -13,19 +13,19 @@ from pydantic import BaseModel, ConfigDict
 from src.api.deps import bad_request, get_session_manager
 from src.api.responses import FastJsonResponse
 from src.core.config import (
-  CharlieBotConfig,
-  ScheduledTaskConfig,
-  ScheduledTaskFields,
-  _load_cron_file,
-  _valid_cron_name,
-  _validate_cron_body,
-  cron_dir,
-  cron_path,
-  get_config,
-  get_scheduled_task_errors,
-  get_scheduled_tasks,
-  master_task_project_error,
-  require_backend_option,
+    CharlieBotConfig,
+    ScheduledTaskConfig,
+    ScheduledTaskFields,
+    _load_cron_file,
+    _valid_cron_name,
+    _validate_cron_body,
+    cron_dir,
+    cron_path,
+    get_config,
+    get_scheduled_task_errors,
+    get_scheduled_tasks,
+    master_task_project_error,
+    require_backend_option,
 )
 from src.core.models import SessionMetadata
 from src.core.scheduler import scheduled_task_session_binding

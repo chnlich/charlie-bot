@@ -273,6 +273,54 @@ def test_single_event_and_batch_flush_produce_valid_payload(tmp_path: Path) -> N
   assert [event["name"] for event in events if event.get("name", "").startswith("evt-")] == ["evt-0"]
 
 
+def test_mixed_tid_forms_are_one_thread(tmp_path: Path) -> None:
+  # The walk probes a raw-value map with a str-keyed fallback, so int 7 and "7"
+  # still resolve to one thread: whichever form arrived first allocated, the
+  # other rides its str key, and thread_name is emitted once.
+  trace = tmp_path / "trace.json"
+  _write_trace(trace, [
+      {
+          "ph": "M",
+          "pid": 7,
+          "name": "process_labels",
+          "args": {
+              "labels": "CPU"
+          }
+      },
+      {
+          "ph": "X",
+          "pid": 7,
+          "tid": 7,
+          "name": "int-form",
+          "ts": 1
+      },
+      {
+          "ph": "X",
+          "pid": 7,
+          "tid": "7",
+          "name": "str-form",
+          "ts": 2
+      },
+      {
+          "ph": "X",
+          "pid": 7,
+          "tid": 7,
+          "name": "int-again",
+          "ts": 3
+      },
+  ])
+  output = tmp_path / "merged.json.gz"
+
+  merge_traces([trace], output, slim=False)
+
+  events = _read_merged(output)
+  by_name = {event["name"]: event for event in events if event.get("name")}
+  assert by_name["int-form"]["tid"] == by_name["str-form"]["tid"]
+  assert by_name["int-again"]["tid"] == by_name["int-form"]["tid"]
+  thread_names = [event for event in events if event.get("name") == "thread_name"]
+  assert [event["args"]["name"] for event in thread_names] == ["trace/7"]
+
+
 def test_cjk_payload_parses_identically(tmp_path: Path) -> None:
   # orjson has no ensure_ascii mode: non-ASCII rides raw UTF-8 in the payload.
   # The parsed payload must equal the source event regardless.

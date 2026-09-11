@@ -41,9 +41,11 @@ log = structlog.get_logger()
 
 router = APIRouter()
 
-# Cap on the description prefix shipped in the workers-panel list rows;
-# generously past the one truncated line the card paints at any sidebar width.
-_LIST_DESCRIPTION_CAP = 240
+# Cap on the description prefix shipped in the workers-panel list rows; the
+# card paints one CSS-truncated line (overflow hidden + ellipsis), so 100 chars
+# — a text-sm line at ~700 px — already exceeds what any width shows. Longer
+# text reaches the modal through the description_full_len click-fetch.
+_LIST_DESCRIPTION_CAP = 100
 
 # Parsed-meta memo behind the thread-detail endpoint. The endpoint reads the
 # meta without mutating it, so the memoized instance is shared read-only

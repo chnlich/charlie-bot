@@ -3129,8 +3129,8 @@ warn-once registry, one line per error string per process, cleared on a
 successful load so a relapse earns one new line. The cost is per-request work
 invisible to the standing probes while the corpus is broken (a state the live
 host entered for a 2 h window), so the collector seeds a good config in a
-scratch `CHARLIEBOT_HOME`, breaks it with a fragment declaring a key the
-model does not declare (the burst's error shape), and drives `get_config`:
+scratch `CHARLIEBOT_HOME`, breaks it with a key the model does not declare
+(the burst's error shape), and drives `get_config`:
 one onset pass, as at the first call after the corpus breaks, then 60 timed
 steady-state calls asserting the served instance's identity, then one
 fingerprint-move round asserting the freshness survived. Evidence points the
@@ -3144,8 +3144,11 @@ from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.core import config as core_config
 
-# Broken-config corpus: config.yaml plus one fragment declaring a key the model
-# does not declare — the live burst's error shape (unknown config key(s) ...).
+# Broken-config corpus: config.yaml carrying one key the model does not
+# declare — the live burst's error shape (unknown config key(s) ...). The key
+# goes into config.yaml itself: the reload fingerprint stats exactly that file
+# (mtime, size), and since the sectioned config config.d/ holds only cron.d/,
+# a fragment there is rejected outright and can never move the fingerprint.
 # Scratch CHARLIEBOT_HOME; the live home is never read or written here.
 work = Path(tempfile.mkdtemp(prefix="m53-reload-"))
 home = work / "home"
@@ -3157,7 +3160,7 @@ core_config._config = None
 core_config._config_mtime = 0.0
 cached = core_config.get_config()  # seed: the running server's last-good config; not timed
 
-(home / "config.d" / "broken.yaml").write_text("unknown_m53_key: 1\n", encoding="utf-8")
+(home / "config.yaml").write_text("unknown_m53_key: 1\n", encoding="utf-8")
 
 warns = []
 parses = []
@@ -3175,7 +3178,7 @@ try:
         times.append(time.perf_counter() - t0)
         assert got is cached, "served config identity changed across a broken steady state"
     steady_warns, steady_parses = len(warns), len(parses)
-    os.utime(home / "config.d" / "broken.yaml", (0, 0))  # fingerprint move: freshness must survive
+    os.utime(home / "config.yaml", (0, 0))  # fingerprint move: freshness must survive
     core_config.get_config()
     moved_warns, moved_parses = len(warns) - steady_warns, len(parses) - steady_parses
 finally:
@@ -5544,6 +5547,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-10 | this PR | M53 broken steady state, repaired collector: onset 1 warning + 1 re-parse, steady state 0 warnings / 0 re-parses over 60 calls, fingerprint-move round 1 re-parse / 0 new warnings, call wall median 0.00 ms max 0.03 ms (back-to-back arms at load 0.78-0.96 one-minute, scratch CHARLIEBOT_HOME, live home untouched); before — the stale collector read vacuously: onset 0 warnings / 0 re-parses, steady 0/0, fingerprint-move round 0/0 (the broken corpus never broke anything, so every reading since the sectioned config proved nothing); the sweep's other 85 standing collectors all read inside their healthy ranges this round (load 0.66-1.03 one-minute across the sweep) | the 2026-09-09 config-schema series moved the whole sectioned mapping into config.yaml, leaving config.d/ to cron.d/ only: load_config now rejects a config.d/*.yaml fragment outright, and the reload fingerprint stats exactly config.yaml — so the M53 collector's broken-corpus shape (a fragment declaring an unknown key) could never fire the reload it exists to exercise: the fragment is not config, and writing it moves no fingerprint stat; the key now goes into config.yaml itself, restoring the collector's contract — onset 1 warning + 1 parse (the warn-once registry's first sighting), steady state 0/0 on the recorded failed fingerprint, and a fingerprint move re-parses once with no new warning; collector command only, no product code |
 | 2026-09-10 | this PR | M7 restart-cold collect median 2.58 s → 0.93 s, −64 %, maxima 2.56-2.67 → 0.43-0.96 s (three interleaved prime+timed rounds of the new collector — each arm primes its own document seconds before its timed run, main checkout before vs branch worktree after back-to-back, live corpora read-only during an active turn's churn at load 2.0-2.1 one-minute; scanned bytes 58.0 → 0.0 MB — the db's whole 121k-row data-blob corpus re-read per restart vs only the rows that moved since the document was written; rows digests agree across 4 of 6 arms, the drift is the live turn appending between arms); component attribution on the pre-fix arm: `_scan_opencode_rows` 1.95 s of the 2.84 s collect (the json_extract pass measured standalone 1135 ms over 121k rows, `_opencode_row` parse 0.59 s, replay fold 0.26 s); no-regression re-measures interleaved ×2: M7 changed-round 0.041/0.041/0.041/0.042 s medians (verbatim harness, rows digest identical), M80 churn 0.0037/0.0030/0.0032/0.0032 s with rows digest 8efb9506fc07 identical across all four arms — the v2 document's orjson save rides those rounds (dump 28 ms vs stdlib 176 ms measured on the 20.8 MB document, which the rows map grows from 14.7 MB); 5043-passed suite plus 5 new tests (seed+diff blob-free round, moved-row recount with insert+in-place-upsert deltas, stored-partial adoption without replay, v1 records entry serve, NaN document cold-rebuild note) and 2 re-pins (the persisted entry shape, the stored-partial adoption contract) | the persisted document held the opencode db's records but not their row keys, so a process restart — the doc's whole purpose — could not tell which rows had moved and re-read every contributing row's data blob through the json_extract scan (2.26 s of the 2.84 s collect, once per server start); the entry now persists the row memo's map (id → [time_updated, record]) plus the partial, and the restart-cold advance seeds the memo from it and diffs one key pass against the live table — the same per-row diff the warm incremental path runs, so the restart cost drops to the key scan plus the moved rows' fetches; the document reads and writes through orjson (the M78 parser-swap precedent, machine-written JSON, load 237 → 177 ms and dump 176 → 28 ms on the grown document, NaN literals now fail loud into the existing unreadable-document cold-rebuild note), v1 documents still serve through the records replay until their first scan-path store rewrites them; M7 restart-cold definition, collector and healthy range introduced with this PR |
 | 2026-09-10 | this PR | M19 framing median 18.20/17.90/17.88 → 3.00/3.27/3.28/2.94/3.14/3.10 ms, −82 % to −84 %, maxima 17.98-18.78 → 2.99-3.48 ms (six interleaved rounds of the collector — main checkout's str path before vs branch worktree's byte mode after, back-to-back, 16 MB payload / 16 KB chunks / ~1 MB frames, 32 lines both arms, synthetic read-only, every paired round faster at load 1.42/1.39/1.12 one-minute; component attribution: the per-chunk UTF-8 decode the str path paid measured standalone at 8.69 ms per 16 MB; str-mode no-regression witness: branch 13.24/12.84 ms vs main 18.03/17.85 ms interleaved ×2 — the per-line decode replaced the incremental chunk decoder and is itself cheaper); 5036-passed suite plus 8 new byte-mode tests (mode parity on every two-way split and 50-round random chunkings ×3 corpus shapes, multibyte split reassembly, raw splitline-boundary bytes, unterminated-tail and trailing-CR flush, invalid-UTF8 raw pass-through with the parse-side raise pinned) | the framer decoded every byte chunk to str on the event loop before both SSE consumers immediately JSON-parsed the completed lines — orjson parses the wire's UTF-8 bytes natively, so the decode was pure overhead on the funnel that carries every opencode turn and proxied anthropic call; `iter_sse_lines` gains the byte mode (framing runs on raw bytes; the terminators are ASCII so a multibyte character can never be split), the default str mode keeps the errors="replace" contract per completed line (itself cheaper than the old incremental chunk decode), and the boundary change is deliberate and test-pinned: in the byte mode an invalid UTF-8 byte reaches the consumers' JSON parse and raises there (the SSE readers' existing malformed-JSON class) instead of degrading to U+FFFD; M19 collector now drives the production byte mode and the healthy range recalibrated median < 0.2 s → < 0.010 s with this PR — the old line sat 6x above the new readings |
 | 2026-09-10 | this PR | M88 direct-pass build median 5.28/5.07/5.23 s → 3.93/3.95/3.90 s, −23 % to −26 %, maxima 5.40/5.09/5.25 → 4.15/3.96/3.92 s (three interleaved rounds of the new collector, main checkout before vs branch worktree after back-to-back, 307.3 MB worst on-disk trace /home/chaoli/data/hayden_243809_traces/step000110/trace_rank008_step000110.json, scratch output under /tmp, live home read-only, every paired round faster at load 1.0-2.0 one-minute; artifact 23.8 MB.gz identical across arms; component attribution: the validation parse measured standalone on the same corpus 4.22 s stdlib json.load → 2.56 s orjson including the 0.21 s read; live-log corroboration: two 5.7-6.4 s direct-pass builds and one 19.5 s two-rank merge in today's 7 h server log); 5015-passed suite plus 2 test changes — the corrupt-JSON assertion re-pinned to the orjson message and the NaN-boundary rejection pinned by a new test | the single-trace first-view build validated parseability with stdlib json.load — the slowest parser available, its result discarded before the stream-compress re-read — while the merge path's build has parsed with orjson since the M66 swap (2.56 s vs 4.22 s on the same corpus); the validation now parses with orjson, cutting the build's dominant slice ~40 % and giving both serve shapes one JSON boundary: NaN/Infinity literals stdlib accepts fail the direct-pass build loudly (the merge path's existing rejection) instead of gzipping a literal Perfetto cannot render into the cache; M88 definition and healthy range introduced with this PR |

@@ -288,7 +288,7 @@ function renderStarButton(s, activeBtnClass) {
 }
 
 function renderRenameButton(s, activeBtnClass) {
-  return `<button onclick="event.preventDefault(); event.stopPropagation(); startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
+  return `<button onclick="event.preventDefault(); event.stopPropagation(); startRename(event, '${s.id}')"
           class="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Rename">
     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${PENCIL_SVG_PATH}</svg>
   </button>`;
@@ -346,7 +346,7 @@ function renderScheduledSessionItem(s, options = {}) {
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
   return `<a href="/?session=${s.id}&filter=scheduled"
      class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"
-     ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
+     ondblclick="startRename(event, '${s.id}')"
      onclick="event.preventDefault(); switchSession('${s.id}')"
      id="session-${s.id}"${extraAttrs}>
     ${renderSessionIndicators(s)}
@@ -794,7 +794,7 @@ function renderSessionItem(s, filter, options = {}) {
     ${renderTuiStatusDot(s)}`;
   return `<a href="/?session=${s.id}&filter=${filter}"
      class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"
-     ondblclick="startRename(event, '${s.id}', '${escapeHtml(s.name)}')"
+     ondblclick="startRename(event, '${s.id}')"
      onclick="event.preventDefault(); switchSession('${s.id}')"
      id="session-${s.id}"${extraAttrs}>
     ${indicators}

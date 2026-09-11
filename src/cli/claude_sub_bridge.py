@@ -16,6 +16,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
+from src.agents.backends.base import make_context_compacted_event
 from src.core import event_types as ET
 
 
@@ -340,17 +341,12 @@ class HookTurnState:
     if trigger not in _POST_COMPACT_TRIGGERS:
       raise HookProtocolError(f"unknown PostCompact trigger '{trigger}'")
     _required_string(payload, "compact_summary")
-    event: dict[str, Any] = {
-        "type": ET.CONTEXT_COMPACTED,
-        "trigger": trigger,
-        ET.COMPACT_PRE_TOKENS: payload.get("pre_tokens"),
-    }
+    pre_tokens: int | float | None = None
     if "pre_tokens" in payload:
       pre_tokens = payload["pre_tokens"]
       if not isinstance(pre_tokens, (int, float)):
         raise HookProtocolError("PostCompact pre_tokens must be numeric when present")
-      event[ET.COMPACT_PRE_TOKENS] = pre_tokens
-    return [event]
+    return [make_context_compacted_event(trigger, pre_tokens, model=None)]
 
   def _handle_stop(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
     self._validate_current_turn("Stop", payload)

@@ -95,6 +95,16 @@ async def test_tail_follow_events_carries_partial_line_across_chunks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tail_follow_events_carries_multimegabyte_line_across_chunks() -> None:
+  """A line spanning many 64 KB read boundaries yields exactly once: the carry
+  accumulates the read chunks and completes from one scan, so the cost stays
+  linear in the line's bytes (the live raw log carries multi-MB events)."""
+  payload = b'{"type": "assistant", "seq": 9, "pad": "' + b"x" * (1024 * 1024) + b'"}\n'
+  events = await _collect_tail_events(payload, post_result_timeout=60.0)
+  assert [event["seq"] for event in events] == [9]
+
+
+@pytest.mark.asyncio
 async def test_tail_follow_events_drops_torn_final_line() -> None:
   """A final line the producer never finished stays unprocessed (the torn
   final write replays as at most a duplicate — never a loss)."""

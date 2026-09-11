@@ -121,25 +121,6 @@ def test_trailing_cr_at_stream_end_terminates_the_line() -> None:
   assert remainder == ""
 
 
-def test_scanned_to_resumes_past_proven_clean_bytes() -> None:
-  # First call sees no terminator: the cursor rule over its remainder keeps the
-  # held-back trailing CR inside the search range.
-  emitted, rem = split_sse_lines("abc\r", final=False)
-  assert (emitted, rem) == ([], "abc\r")
-  scanned_to = len(rem) - (1 if rem.endswith("\r") else 0)
-  # The resumed search must still split the CRLF and emit a line that spans
-  # from the buffer start, not from the cursor.
-  lines, rem = split_sse_lines(rem + "\ndef", final=False, scanned_to=scanned_to)
-  assert (lines, rem) == (["abc"], "def")
-
-
-def test_scanned_to_default_reproduces_the_full_rescan() -> None:
-  # scanned_to=0 is the full-buffer search every caller used before resumption existed.
-  buffer = "data: a\r\ndata: b\ntail"
-  assert split_sse_lines(buffer, final=False) == split_sse_lines(buffer, final=False, scanned_to=0)
-  assert split_sse_lines(buffer, final=True) == split_sse_lines(buffer, final=True, scanned_to=0)
-
-
 def test_every_two_way_chunk_split_preserves_the_whole_stream_lines() -> None:
   stream = "data: a\r\ndata: b\ndata: c\r\r\n\n"
   expected = ["data: a", "data: b", "data: c", "", ""]

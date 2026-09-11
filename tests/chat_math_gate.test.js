@@ -1,14 +1,10 @@
 'use strict';
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { buildStreamHarness } = require('./stream_render_harness');
+const { buildStreamHarness, FAKE_MARKED_SRC } = require('./stream_render_harness');
 
-// Fake marked keeps the parse deterministic; the gate under test wraps the
-// renderMathInElement call, not the parse.
-const FAKE_MARKED_SRC =
-  'globalThis.marked = { Renderer: function() { return {}; }, use() {}, parse: (s) => `<p>${s}</p>`, ' +
-  'lexer: (s) => [{ type: "paragraph", raw: s, text: s }], ' +
-  'parser: (tokens) => tokens.map((t) => `<p>${t.text}</p>`).join("") };';
+// The gate wraps the renderMathInElement call, not the parse, so the shared
+// fake's parse output is never read here.
 
 function loadRenderer() {
   const h = buildStreamHarness(FAKE_MARKED_SRC);

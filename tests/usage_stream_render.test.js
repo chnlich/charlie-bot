@@ -1,13 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { buildStreamHarness } = require('./stream_render_harness');
-// Fake marked keeps the behavior tests deterministic: parse marks its input; the
-// Renderer/use surface is what markdown-renderer.js touches at load, and the
-// lexer/parser pair is what parseStreamDraft's recorder path drives.
-const FAKE_MARKED_SRC =
-  'globalThis.marked = { Renderer: function() { return {}; }, use() {}, parse: (s) => `<p>${s}</p>`, ' +
-  'lexer: (s) => [{ type: "paragraph", raw: s, text: s }], ' +
-  'parser: (tokens) => tokens.map((t) => `<p>${t.text}</p>`).join("") };';
+const { buildStreamHarness, FAKE_MARKED_SRC } = require('./stream_render_harness');
 
 function loadUsage() {
   const h = buildStreamHarness(FAKE_MARKED_SRC);

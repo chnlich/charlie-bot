@@ -516,8 +516,7 @@ class ChatEventStore:
     self._live_range_memo.store(path, (st.st_mtime_ns, st.st_size, st.st_ino, lines, len(buf), ends, 0, 0))
     return lines, 0
 
-  def _extend_lines_forward(self, path: Path, session_id: str, st: os.stat_result,
-                            memo: tuple) -> tuple:
+  def _extend_lines_forward(self, path: Path, session_id: str, st: os.stat_result, memo: tuple) -> tuple:
     """Parse an appended tail onto the covered lines of a same-inode grown file."""
     buf = None
     try:
@@ -574,7 +573,8 @@ class ChatEventStore:
       return None
     texts, byte_start, ends = walked
     lines = [_live_range_event(text, session_id) for text in texts]
-    self._live_range_memo.store(path, (st.st_mtime_ns, st.st_size, st.st_ino, lines, st.st_size, ends, rel_start, byte_start))
+    self._live_range_memo.store(
+        path, (st.st_mtime_ns, st.st_size, st.st_ino, lines, st.st_size, ends, rel_start, byte_start))
     return lines, rel_start
 
   def _chat_events_path(self, session_id: str) -> Path:

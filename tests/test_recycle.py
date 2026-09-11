@@ -456,12 +456,13 @@ async def test_live_range_walk_serves_tail_window_without_full_read(tmp_path: Pa
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
   _append_events(
-      live_path,
-      [{
-          "type": "user",
-          "content": f"f{i}",
-          "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
-      } for i in range(3, 9)])
+      live_path, [
+          {
+              "type": "user",
+              "content": f"f{i}",
+              "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
+          } for i in range(3, 9)
+      ])
   file_size = live_path.stat().st_size
   count_ndjson_lines(live_path)  # the bootstrap's tail read warms the count memo first
 
@@ -488,12 +489,13 @@ async def test_live_range_backward_extension_serves_scroll_below_walked_window(t
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
   _append_events(
-      live_path,
-      [{
-          "type": "user",
-          "content": f"f{i}",
-          "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
-      } for i in range(3, 9)])
+      live_path, [
+          {
+              "type": "user",
+              "content": f"f{i}",
+              "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
+          } for i in range(3, 9)
+      ])
   file_size = live_path.stat().st_size
   count_ndjson_lines(live_path)
 
@@ -520,11 +522,7 @@ async def test_live_range_backward_extension_serves_scroll_below_walked_window(t
 async def test_live_range_walk_delete_race_returns_empty_page(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-  _append_events(live_path, [{
-      "type": "user",
-      "content": "f3",
-      "timestamp": (cutoff + timedelta(days=2)).isoformat()
-  }])
+  _append_events(live_path, [{"type": "user", "content": "f3", "timestamp": (cutoff + timedelta(days=2)).isoformat()}])
   count_ndjson_lines(live_path)
 
   def delete_mid_count(path: Path) -> int:
@@ -569,12 +567,13 @@ async def test_live_range_walk_budget_falls_back_to_full_build(tmp_path: Path) -
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
   _append_events(
-      live_path,
-      [{
-          "type": "user",
-          "content": f"f{i}",
-          "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
-      } for i in range(3, 9)])
+      live_path, [
+          {
+              "type": "user",
+              "content": f"f{i}",
+              "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
+          } for i in range(3, 9)
+      ])
   file_size = live_path.stat().st_size
   count_ndjson_lines(live_path)
 
@@ -594,23 +593,20 @@ async def test_live_range_walk_entry_extends_after_append(tmp_path: Path) -> Non
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
   _append_events(
-      live_path,
-      [{
-          "type": "user",
-          "content": f"f{i}",
-          "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
-      } for i in range(3, 9)])
+      live_path, [
+          {
+              "type": "user",
+              "content": f"f{i}",
+              "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
+          } for i in range(3, 9)
+      ])
   count_ndjson_lines(live_path)
 
   first, _ = mgr.load_chat_events_range(session.id, 9, 11)
   assert [e["content"] for e in first] == ["f4", "f5"]
 
   stamp = (cutoff + timedelta(days=2, hours=9)).isoformat()
-  appended = json.dumps({
-      "type": "user",
-      "content": "f9",
-      "timestamp": stamp
-  }) + "\n"
+  appended = json.dumps({"type": "user", "content": "f9", "timestamp": stamp}) + "\n"
   _append_events(live_path, [{"type": "user", "content": "f9", "timestamp": stamp}])
 
   real_open = open

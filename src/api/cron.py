@@ -37,6 +37,13 @@ router = APIRouter()
 
 _CRON_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
+# Wire sentence of the cron editor's 404 for a missing task file. Both raisers
+# (apply_task_yaml_update's pre-flight, which the cron PUT route and the
+# sessions write-through switch share, and delete_cron_task) must carry the
+# same bytes: tests/test_sessions_api_backend_switch.py and
+# tests/test_cron_delete.py pin each one.
+_TASK_NOT_FOUND_DETAIL = 'Task "{}" not found'
+
 # get_next is a pure function of (cron, timezone, now), and its answer stays
 # valid until the fire time it names: no occurrence can land between the
 # compute instant and that first next fire. Task count bounds the map.
@@ -208,7 +215,7 @@ async def apply_task_yaml_update(
   """
   path = cron_path(name)
   if not path.exists():
-    raise HTTPException(status_code=404, detail=f'Task "{name}" not found')
+    raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND_DETAIL.format(name))
   if 'backend' in req.model_fields_set:
     _validate_backend_id(req.backend, cfg)
   # A syntax-error or otherwise unparseable file body must surface as a 409 with
@@ -295,7 +302,7 @@ async def delete_cron_task(name: str, session_mgr: SessionManager = Depends(get_
     raise HTTPException(status_code=400, detail=f'invalid cron name: {name!r}')
   path = cron_path(name)
   if not path.exists():
-    raise HTTPException(status_code=404, detail=f'Task "{name}" not found')
+    raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND_DETAIL.format(name))
   # Archive before unlink, mirroring the PUT route's rotate-then-write order: a
   # failed unlink leaves the task alive and the next tick's get-or-create
   # self-heals a fresh generation.

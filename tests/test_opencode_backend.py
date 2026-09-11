@@ -1689,9 +1689,18 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch, tmp_path: 
 
     async def get(self, path: str) -> _StubHttpResponse:
       if path == "/config/providers":
-        return _StubHttpResponse(200, {"providers": [
-            {"id": "provider", "models": {"model": {"limit": {"context": 10, "output": 10}}}},
-        ]})
+        return _StubHttpResponse(
+            200, {"providers": [{
+                "id": "provider",
+                "models": {
+                    "model": {
+                        "limit": {
+                            "context": 10,
+                            "output": 10
+                        }
+                    }
+                }
+            },]})
       return _StubHttpResponse(200)
 
     async def post(self, path: str, json: dict | None = None) -> _StubHttpResponse:
@@ -1702,12 +1711,14 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch, tmp_path: 
       return _StubHttpResponse(200)
 
     def stream(self, method: str, path: str, timeout=None) -> _FakeStreamContextManager:
-      return _FakeStreamContextManager(_FakeDelayedStreamResponse([
-          (0.0, 'data: {"type": "server.connected", "properties": {}}'),
-          (0.0, ""),
-          (0.0, 'data: {"type": "session.idle", "properties": {"sessionID": "session-1"}}'),
-          (0.0, ""),
-      ]))
+      return _FakeStreamContextManager(
+          _FakeDelayedStreamResponse(
+              [
+                  (0.0, 'data: {"type": "server.connected", "properties": {}}'),
+                  (0.0, ""),
+                  (0.0, 'data: {"type": "session.idle", "properties": {"sessionID": "session-1"}}'),
+                  (0.0, ""),
+              ]))
 
   monkeypatch.setattr("src.agents.backends.opencode.httpx.AsyncClient", _KwargsClient)
   backend = _build_backend(monkeypatch, model="provider/model")
@@ -1774,8 +1785,14 @@ async def test_send_prompt_text_part_first_then_file_parts_in_ref_order(monkeypa
   uploaded_files = [
       _write_image(tmp_path, "first.png", png_payload),
       _write_image(tmp_path, "second.JPG", jpg_payload),
-      {"filename": "notes.pdf", "path": str(tmp_path / "notes.pdf")},
-      {"filename": "ghost.png", "path": str(tmp_path / "missing.png")},
+      {
+          "filename": "notes.pdf",
+          "path": str(tmp_path / "notes.pdf")
+      },
+      {
+          "filename": "ghost.png",
+          "path": str(tmp_path / "missing.png")
+      },
   ]
   client = _RecordingPostClient()
   prompt = "看这张图 🖼 tell me what you see"
@@ -1785,7 +1802,10 @@ async def test_send_prompt_text_part_first_then_file_parts_in_ref_order(monkeypa
   path, body = client.posts[0]
   assert path == "/session/session-1/prompt_async"
   assert body["parts"] == [
-      {"type": "text", "text": prompt},
+      {
+          "type": "text",
+          "text": prompt
+      },
       _expected_file_part("image/png", png_payload),
       _expected_file_part("image/jpeg", jpg_payload),
   ]
@@ -1794,11 +1814,21 @@ async def test_send_prompt_text_part_first_then_file_parts_in_ref_order(monkeypa
 def test_image_file_parts_skips_non_image_refs_silently() -> None:
   """Only image/* extensions map to a mime; pdf/txt/extensionless refs make no part."""
 
-  assert opencode_mod._image_file_parts([
-      {"filename": "notes.pdf", "path": "/uploads/notes.pdf"},
-      {"filename": "readme.txt", "path": "/uploads/readme.txt"},
-      {"filename": "noext", "path": "/uploads/noext"},
-  ]) == []
+  assert opencode_mod._image_file_parts(
+      [
+          {
+              "filename": "notes.pdf",
+              "path": "/uploads/notes.pdf"
+          },
+          {
+              "filename": "readme.txt",
+              "path": "/uploads/readme.txt"
+          },
+          {
+              "filename": "noext",
+              "path": "/uploads/noext"
+          },
+      ]) == []
 
 
 def test_image_file_parts_skips_missing_image_file_with_warning(capsys) -> None:
@@ -1830,14 +1860,20 @@ async def test_run_threads_uploaded_files_into_prompt_parts(monkeypatch, tmp_pat
   (tmp_path / "pic.png").write_bytes(payload)
 
   events = [
-      event
-      async for event in backend.run(
-          "describe this", str(tmp_path), {"PATH": "/usr/bin"},
-          uploaded_files=[{"filename": "pic.png", "path": str(tmp_path / "pic.png")}])
+      event async for event in backend.run(
+          "describe this",
+          str(tmp_path), {"PATH": "/usr/bin"},
+          uploaded_files=[{
+              "filename": "pic.png",
+              "path": str(tmp_path / "pic.png")
+          }])
   ]
 
   assert script.prompt_posts[0][1]["parts"] == [
-      {"type": "text", "text": "describe this"},
+      {
+          "type": "text",
+          "text": "describe this"
+      },
       _expected_file_part("image/png", payload),
   ]
   assert backend.exit_code == 0

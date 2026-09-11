@@ -21,8 +21,9 @@ from conftest import archive_cutoff_events as _archive_cutoff_events
 from src.api.message_utils import build_session_bootstrap_data, build_session_view_data
 from src.api.sessions import get_session_events_page
 from src.core import event_types as ET
-from src.core.models import ThreadMetadata, ThreadStatus
+from src.core.models import SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core.ndjson import count_ndjson_lines
+from src.core.sessions import SessionManager
 
 
 def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, completed_at: datetime | None) -> None:
@@ -38,6 +39,23 @@ def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, compl
   (thread_dir / "metadata.json").write_text(meta.model_dump_json(indent=2), encoding="utf-8")
   # Add a sentinel file so we can verify rmtree actually removed the dir.
   (thread_dir / "sentinel.txt").write_text("x", encoding="utf-8")
+
+
+async def _walk_rig(tmp_path: Path) -> tuple[SessionManager, SessionMetadata, Path, datetime]:
+  """One recycled session named "t" whose live log holds f0..f8: f0..f2 survive
+  recycle, f3..f8 carry timestamps past the archive cutoff. Global event index 8
+  holds f3, so a range window starting at 9 reads f4 and up."""
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
+  _append_events(
+      live_path, [
+          {
+              "type": "user",
+              "content": f"f{i}",
+              "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
+          } for i in range(3, 9)
+      ])
+  return mgr, session, live_path, cutoff
 
 
 @pytest.mark.asyncio
@@ -453,16 +471,7 @@ def _count_reads_of(live_path: Path, real_open: Any, reads: list[int]) -> Any:
 
 @pytest.mark.asyncio
 async def test_live_range_walk_serves_tail_window_without_full_read(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-  _append_events(
-      live_path, [
-          {
-              "type": "user",
-              "content": f"f{i}",
-              "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
-          } for i in range(3, 9)
-      ])
+  mgr, session, live_path, _cutoff = await _walk_rig(tmp_path)
   file_size = live_path.stat().st_size
   count_ndjson_lines(live_path)  # the bootstrap's tail read warms the count memo first
 
@@ -486,16 +495,7 @@ async def test_live_range_walk_serves_tail_window_without_full_read(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_live_range_backward_extension_serves_scroll_below_walked_window(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-  _append_events(
-      live_path, [
-          {
-              "type": "user",
-              "content": f"f{i}",
-              "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
-          } for i in range(3, 9)
-      ])
+  mgr, session, live_path, _cutoff = await _walk_rig(tmp_path)
   file_size = live_path.stat().st_size
   count_ndjson_lines(live_path)
 
@@ -564,16 +564,7 @@ async def test_live_range_walk_matches_full_build_across_line_shapes(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_live_range_walk_budget_falls_back_to_full_build(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-  _append_events(
-      live_path, [
-          {
-              "type": "user",
-              "content": f"f{i}",
-              "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
-          } for i in range(3, 9)
-      ])
+  mgr, session, live_path, _cutoff = await _walk_rig(tmp_path)
   file_size = live_path.stat().st_size
   count_ndjson_lines(live_path)
 
@@ -590,16 +581,7 @@ async def test_live_range_walk_budget_falls_back_to_full_build(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_live_range_walk_entry_extends_after_append(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-  _append_events(
-      live_path, [
-          {
-              "type": "user",
-              "content": f"f{i}",
-              "timestamp": (cutoff + timedelta(days=2, hours=i)).isoformat()
-          } for i in range(3, 9)
-      ])
+  mgr, session, live_path, cutoff = await _walk_rig(tmp_path)
   count_ndjson_lines(live_path)
 
   first, _ = mgr.load_chat_events_range(session.id, 9, 11)

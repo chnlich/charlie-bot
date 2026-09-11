@@ -21,6 +21,7 @@ the output and emits no ``message`` delta. The next ``stream`` delta
 from collections.abc import Callable, Iterator
 
 from src.core import event_types as ET
+from src.core.message_events import normalize_user_message_event
 
 
 def _join_blocks(msg: dict | None, block_type: str) -> str:
@@ -393,7 +394,6 @@ class MessageAggregator:
           yield delta
         return
       yield from self._flush_to_message_delta()
-      from src.api.message_utils import normalize_user_message_event
       normalized = normalize_user_message_event(ev)
       yield {
           "type": "message",

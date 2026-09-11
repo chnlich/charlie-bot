@@ -1474,20 +1474,21 @@ def test_restart_cold_recounts_only_moved_rows(tmp_path: Path, monkeypatch: pyte
   _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
   mid, = con.execute("select id from message where data not like '%pad%'").fetchone()
   con.execute(
-      "update message set data = ?, time_updated = time_updated + 1 where id = ?",
-      (json.dumps({
-          "role": "assistant",
-          "modelID": "oc-m",
-          "providerID": "prov",
-          "tokens": {
-              "input": 100,
-              "output": 2,
-              "cache": {
-                  "read": 0,
-                  "write": 0
-              }
-          }
-      }), mid))
+      "update message set data = ?, time_updated = time_updated + 1 where id = ?", (
+          json.dumps(
+              {
+                  "role": "assistant",
+                  "modelID": "oc-m",
+                  "providerID": "prov",
+                  "tokens": {
+                      "input": 100,
+                      "output": 2,
+                      "cache": {
+                          "read": 0,
+                          "write": 0
+                      }
+                  }
+              }), mid))
   con.commit()
 
   projected: list[str] = []
@@ -1538,14 +1539,17 @@ def test_legacy_records_entry_still_serves(tmp_path: Path) -> None:
   entry = json.loads(cache.read_text())["sources"]["opencode"][str(db)]
   legacy = {
       "version": 1,
-      "sources": {
-          "opencode": {
-              str(db): {
-                  "sig": entry["sig"],
-                  "records": [row[1] for row in entry["rows"].values() if row[1] is not None]
-              }
+      "sources":
+          {
+              "opencode":
+                  {
+                      str(db):
+                          {
+                              "sig": entry["sig"],
+                              "records": [row[1] for row in entry["rows"].values() if row[1] is not None]
+                          }
+                  }
           }
-      }
   }
   cache.write_text(json.dumps(legacy))
   tt._reset_aggregate_memo()

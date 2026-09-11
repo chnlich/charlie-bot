@@ -33,7 +33,7 @@ from src.agents.backends.opencode import (
 )
 from src.core import event_types as ET
 from src.core.streaming import handle_compaction_events
-from src.core.timeouts import OPENCODE_ABORT_TIMEOUT
+from src.core.timeouts import OPENCODE_ABORT_TIMEOUT, OPENCODE_HTTP_API_TIMEOUT
 
 
 def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
@@ -1668,10 +1668,11 @@ async def test_run_lock_failure_never_retries_after_terminate(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_per_call_clients_carry_shared_ssl_context(monkeypatch) -> None:
-  """Both per-call client constructions (run start, abort POST) pass the
-  process-wide context: httpx's default verify builds a fresh default SSL
-  context per AsyncClient, ~20 ms of event-loop CPU per call on this host."""
+async def test_per_call_clients_carry_shared_ssl_context(monkeypatch, tmp_path: Path) -> None:
+  """Both per-call client constructions — the run-start client (health through
+  the SSE stream) and the cleanup abort POST — pass the process-wide context:
+  httpx's default verify builds a fresh default SSL context per AsyncClient,
+  ~20 ms of event-loop CPU per call on this host."""
   captured: list[dict] = []
 
   class _KwargsClient:
@@ -1686,20 +1687,49 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch) -> None:
       return False
 
     async def get(self, path: str) -> _StubHttpResponse:
+      if path == "/config/providers":
+        return _StubHttpResponse(200, {"providers": [
+            {"id": "provider", "models": {"model": {"limit": {"context": 10, "output": 10}}}},
+        ]})
       return _StubHttpResponse(200)
 
     async def post(self, path: str, json: dict | None = None) -> _StubHttpResponse:
+      if path == "/session":
+        return _StubHttpResponse(200, {"id": "session-1"})
+      if path.endswith("/prompt_async"):
+        return _StubHttpResponse(204)
       return _StubHttpResponse(200)
 
-    def stream(self, method: str, path: str, timeout=None):
-      raise AssertionError("run's /event stream is not this test's subject")
+    def stream(self, method: str, path: str, timeout=None) -> _FakeStreamContextManager:
+      return _FakeStreamContextManager(_FakeDelayedStreamResponse([
+          (0.0, 'data: {"type": "server.connected", "properties": {}}'),
+          (0.0, ""),
+          (0.0, 'data: {"type": "session.idle", "properties": {"sessionID": "session-1"}}'),
+          (0.0, ""),
+      ]))
 
   monkeypatch.setattr("src.agents.backends.opencode.httpx.AsyncClient", _KwargsClient)
   backend = _build_backend(monkeypatch, model="provider/model")
-  backend._server_url = "http://127.0.0.1:4242"
-  backend._session_id = "ses-ctx"
+  monkeypatch.setattr(backend, "_read_server_url", AsyncMock(return_value="http://127.0.0.1:4242"))
+  monkeypatch.setattr(backend, "_stream_stderr", AsyncMock())
+  monkeypatch.setattr(backend, "_stream_stdout", AsyncMock())
+  process = stub_subprocess_spawn(monkeypatch, OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 4321)
+  process.returncode = 0
+  process.wait = AsyncMock(return_value=0)
 
-  await backend._abort_session()
+  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
 
-  assert captured == [{"base_url": "http://127.0.0.1:4242", "timeout": OPENCODE_ABORT_TIMEOUT,
-                       "verify": opencode_mod._SERVE_SSL_CONTEXT}]
+  assert events[0] == {"session_id": "session-1"}
+  assert backend.exit_code == 0
+  assert captured == [
+      {
+          "base_url": "http://127.0.0.1:4242",
+          "timeout": OPENCODE_HTTP_API_TIMEOUT,
+          "verify": opencode_mod._SERVE_SSL_CONTEXT,
+      },
+      {
+          "base_url": "http://127.0.0.1:4242",
+          "timeout": OPENCODE_ABORT_TIMEOUT,
+          "verify": opencode_mod._SERVE_SSL_CONTEXT,
+      },
+  ]

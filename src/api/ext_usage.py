@@ -24,7 +24,11 @@ from src.core.json_utils import write_json_atomically
 from src.core.log_once import WarnOnceRegistry
 from src.core.models import ClaudeAccount
 from src.core.streaming import streaming_manager
-from src.core.timeouts import EXT_USAGE_ROUND_GAP_SECONDS, HTTP_OAUTH_TIMEOUT
+from src.core.timeouts import (
+    EXT_USAGE_ROUND_GAP_SECONDS,
+    EXT_USAGE_VERSION_PROBE_TIMEOUT,
+    HTTP_OAUTH_TIMEOUT,
+)
 
 log = structlog.get_logger()
 
@@ -745,7 +749,8 @@ async def _probe_user_agent() -> tuple[str, str]:
   source "fallback"; only a parsed version returns source "probe".
   """
   try:
-    proc = await asyncio.to_thread(subprocess.run, ["claude", "--version"], capture_output=True, timeout=5)
+    proc = await asyncio.to_thread(
+        subprocess.run, ["claude", "--version"], capture_output=True, timeout=EXT_USAGE_VERSION_PROBE_TIMEOUT)
   except (OSError, subprocess.SubprocessError):
     return USER_AGENT_FALLBACK, "fallback"
   if proc.returncode != 0:

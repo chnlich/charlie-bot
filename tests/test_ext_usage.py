@@ -30,6 +30,7 @@ from src.api.ext_usage import (
 )
 from src.core.config import CharlieBotConfig
 from src.core.models import ClaudeAccount
+from src.core.timeouts import EXT_USAGE_VERSION_PROBE_TIMEOUT
 
 _fresh_unknown_limit_shape_registry = fresh_state_fixture(ext_usage_mod._UNKNOWN_LIMIT_SHAPES_SEEN.clear)
 _fresh_credential_read_warning_registry = fresh_state_fixture(ext_usage_mod._CREDENTIAL_READ_WARNINGS_SEEN.clear)
@@ -2058,9 +2059,17 @@ async def test_claude_requests_carry_the_probed_cli_version(monkeypatch, tmp_pat
 
   assert fake.gets[0]["headers"]["User-Agent"] == "claude-code/2.9.9"
   assert fake.posts[0]["headers"]["User-Agent"] == "claude-code/2.9.9"
-  # The probe mechanism, exactly as pinned: fixed argv, captured output, 5s
-  # timeout, no shell -- and only one subprocess across both requests.
-  assert probe_calls == [(["claude", "--version"], {"capture_output": True, "timeout": 5})]
+  # The probe mechanism, exactly as pinned: fixed argv, captured output, the
+  # timeouts.py probe budget, no shell -- and only one subprocess across both requests.
+  assert probe_calls == [
+      (
+          ["claude", "--version"],
+          {
+              "capture_output": True,
+              "timeout": EXT_USAGE_VERSION_PROBE_TIMEOUT
+          },
+      )
+  ]
   assert _user_agent_resolution_events(events) == [
       {
           "level": "info",

@@ -575,18 +575,22 @@ class CharlieBotConfig(BaseModel):
     return next((opt for opt in self.backends.options if opt.id == backend_id), None)
 
   def discover_repos(self) -> list[dict[str, str]]:
-    """Scan paths.workspace_dirs for directories containing a .git folder."""
-    repos: list[dict[str, str]] = []
+    """Scan paths.workspace_dirs (one level deep) for directories containing a .git folder.
+
+    Returns {"name", "path"} entries with resolved absolute paths, deduplicated
+    by path and sorted by name; the endpoint adapters only rename the name key.
+    """
+    found: dict[str, dict[str, str]] = {}
     for dir_str in self.paths.workspace_dirs:
       parent = Path(dir_str)
       if not parent.is_dir():
         continue
-      repos.extend(
-          {
-              "name": child.name,
-              "path": str(child)
-          } for child in sorted(parent.iterdir()) if child.is_dir() and (child / ".git").exists())
-    return repos
+      for child in parent.iterdir():
+        if not child.is_dir() or not (child / ".git").exists():
+          continue
+        path = str(child.resolve())
+        found.setdefault(path, {"name": child.name, "path": path})
+    return sorted(found.values(), key=lambda repo: repo["name"])
 
 
 def require_backend_option(cfg: CharlieBotConfig, backend_id: str, *, subject: str) -> BackendOption:

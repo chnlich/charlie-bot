@@ -363,23 +363,9 @@ async def list_branches(repo: str = Query(..., description="Full path to git rep
 
 @router.get("/repos")
 async def list_repos(cfg: CharlieBotConfig = Depends(get_config)) -> list[dict[str, str]]:
-  """Scan paths.workspace_dirs (one level deep) and return repos containing a .git folder."""
-  seen: set[str] = set()
-  repos: list[dict[str, str]] = []
-  for dir_str in cfg.paths.workspace_dirs:
-    parent = Path(dir_str).expanduser()
-    if not parent.is_dir():
-      continue
-    for child in parent.iterdir():
-      if not child.is_dir() or not (child / ".git").exists():
-        continue
-      resolved = str(child.resolve())
-      if resolved in seen:
-        continue
-      seen.add(resolved)
-      repos.append({"label": child.name, "path": resolved})
-  repos.sort(key=lambda r: r["label"])
-  return repos
+  """Return the discovered repos as {"label", "path"} for the diff page's datalist."""
+  repos = await asyncio.to_thread(cfg.discover_repos)
+  return [{"label": repo["name"], "path": repo["path"]} for repo in repos]
 
 
 @router.get("/diff/files")

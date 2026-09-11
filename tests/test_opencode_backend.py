@@ -33,6 +33,7 @@ from src.agents.backends.opencode import (
 )
 from src.core import event_types as ET
 from src.core.streaming import handle_compaction_events
+from src.core.timeouts import OPENCODE_ABORT_TIMEOUT
 
 
 def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
@@ -1664,3 +1665,41 @@ async def test_run_lock_failure_never_retries_after_terminate(monkeypatch, tmp_p
       make_error_event("lock boom"),
   ]
   assert "opencode_lock_retry" not in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_per_call_clients_carry_shared_ssl_context(monkeypatch) -> None:
+  """Both per-call client constructions (run start, abort POST) pass the
+  process-wide context: httpx's default verify builds a fresh default SSL
+  context per AsyncClient, ~20 ms of event-loop CPU per call on this host."""
+  captured: list[dict] = []
+
+  class _KwargsClient:
+
+    def __init__(self, **kwargs) -> None:
+      captured.append(kwargs)
+
+    async def __aenter__(self):
+      return self
+
+    async def __aexit__(self, *exc) -> bool:
+      return False
+
+    async def get(self, path: str) -> _StubHttpResponse:
+      return _StubHttpResponse(200)
+
+    async def post(self, path: str, json: dict | None = None) -> _StubHttpResponse:
+      return _StubHttpResponse(200)
+
+    def stream(self, method: str, path: str, timeout=None):
+      raise AssertionError("run's /event stream is not this test's subject")
+
+  monkeypatch.setattr("src.agents.backends.opencode.httpx.AsyncClient", _KwargsClient)
+  backend = _build_backend(monkeypatch, model="provider/model")
+  backend._server_url = "http://127.0.0.1:4242"
+  backend._session_id = "ses-ctx"
+
+  await backend._abort_session()
+
+  assert captured == [{"base_url": "http://127.0.0.1:4242", "timeout": OPENCODE_ABORT_TIMEOUT,
+                       "verify": opencode_mod._SERVE_SSL_CONTEXT}]

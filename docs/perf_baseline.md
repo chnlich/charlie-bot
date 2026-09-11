@@ -96,6 +96,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M84 backend stream-line parse, worst on-disk raw log | M84 collector below | seconds per full replay of the raw-log tail-follow loop and the stdout-stream NDJSON funnel over the worst on-disk raw agent log (scratch copy, live home read-only) | tail-follow median < 0.060 s; stdout-stream median < 0.010 s | — (introduced with its first history row) |
 | M85 verify-finalize report read, steady state | M85 collector below | seconds per `read_verify_final_report` call, worst on-disk worker log | median < 0.005 s | — (introduced with its first history row) |
 | M86 delegation takeoff-gate scan, delegation-flow shape | M86 collector below | seconds per `check_takeoff_gate` call, worst live chat corpus, one authorized user message appended (the corpus-as-it-stands round is the parity witness) | median < 0.001 s | — (introduced with its first history row) |
+| M87 opencode abort client round-trip | M87 collector below | seconds per `_abort_session` call against a local stub serve (the per-turn cleanup POST, and the run-start client pays the same construction; loop lag reads the 5 ms ticker floor like M14) | wall median < 0.005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -5376,6 +5377,80 @@ async def main():
     shutil.rmtree(home)
 
 asyncio.run(main())
+EOF
+```
+
+M87 — opencode abort client round-trip. `_abort_session` runs at every
+opencode turn's cleanup (and `terminate`), posting to the run's local serve;
+the run-start client (`_check_health` through the SSE stream) pays the same
+per-call construction. httpx builds a fresh default SSL context per
+AsyncClient when `verify` is left at its default — ~20 ms of event-loop CPU
+per construction on this host, paid twice per opencode turn — while the serve
+URL is plain localhost HTTP and never uses the context for TLS. The cost is
+turn-boundary event-loop work invisible to HTTP probes, so the collector
+drives the real `_abort_session` (read-only: the run's session id is a
+collector literal) against a local stub serve with a concurrent 5 ms ticker,
+from the checkout under test: one cold pass, as at the first cleanup after a
+process start, then nine timed calls. Evidence while the live server runs
+older code points the same collector at the branch checkout (`CHECKOUT` at
+the worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, threading, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.agents.backends.opencode import OpenCodeBackend
+
+class _AbortHandler(BaseHTTPRequestHandler):
+  def do_POST(self):
+    self.rfile.read(int(self.headers.get("Content-Length", 0)))
+    self.send_response(200)
+    self.end_headers()
+  def log_message(self, *args):
+    pass
+
+server = HTTPServer(("127.0.0.1", 0), _AbortHandler)
+port = server.server_address[1]
+threading.Thread(target=server.serve_forever, daemon=True).start()
+
+backend = OpenCodeBackend(model="provider/model")
+backend._server_url = f"http://127.0.0.1:{port}"
+backend._session_id = "collector"
+
+async def run_once():
+  gaps = []
+  stop = False
+  async def ticker():
+    prev = time.perf_counter()
+    while not stop:
+      await asyncio.sleep(0.005)
+      now = time.perf_counter()
+      gaps.append(now - prev)
+      prev = now
+  t = asyncio.create_task(ticker())
+  t0 = time.perf_counter()
+  await backend._abort_session()
+  wall = time.perf_counter() - t0
+  stop = True
+  await t
+  return (max(gaps) if gaps else wall), wall
+
+async def main():
+  await run_once()  # cold pass, as at the first cleanup after a process start; not timed
+  lags, walls = [], []
+  for _ in range(9):
+    lag, wall = await run_once()
+    lags.append(lag)
+    walls.append(wall)
+  lags.sort()
+  walls.sort()
+  print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: _abort_session over a local stub serve; "
+        f"loop-lag median {lags[4]*1000:.1f} ms, max {lags[-1]*1000:.1f} ms; "
+        f"wall median {walls[4]*1000:.1f} ms, max {walls[-1]*1000:.1f} ms over 9")
+
+asyncio.run(main())
+server.shutdown()
 EOF
 ```
 

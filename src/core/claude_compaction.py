@@ -33,6 +33,7 @@ from pathlib import Path
 
 import structlog
 
+from src.agents.backends.base import make_context_compact_failed_event, make_context_compacted_event
 from src.agents.backends.claude_code import (
     BASE_COMMAND,
     HEADLESS_DISALLOWED_TOOLS,
@@ -251,12 +252,7 @@ async def compact_with_sonnet(
         stderr=stderr_tail,
         **log_context,
     )
-    await persist_and_broadcast(
-        {
-            "type": ET.CONTEXT_COMPACT_FAILED,
-            "error": outcome.error,
-            "model": COMPACTION_MODEL,
-        })
+    await persist_and_broadcast(make_context_compact_failed_event(outcome.error, model=COMPACTION_MODEL))
     return False
   event_pre_tokens = pre_tokens if pre_tokens is not None else _newest_boundary_pre_tokens(transcript)
   log.info(
@@ -266,17 +262,11 @@ async def compact_with_sonnet(
       models=list(outcome.models),
       **log_context,
   )
-  await persist_and_broadcast(
-      {
-          "type": ET.CONTEXT_COMPACTED,
-          "trigger": "manual",
-          ET.COMPACT_PRE_TOKENS: event_pre_tokens,
-          "model": COMPACTION_MODEL,
-      })
+  await persist_and_broadcast(make_context_compacted_event("manual", event_pre_tokens, model=COMPACTION_MODEL))
   return True
 
 
 async def _fail(persist_and_broadcast: Callable[[dict], Awaitable[None]], log_context: dict, error: str) -> bool:
   log.warning("claude_compaction_failed", error=error, **log_context)
-  await persist_and_broadcast({"type": ET.CONTEXT_COMPACT_FAILED, "error": error, "model": COMPACTION_MODEL})
+  await persist_and_broadcast(make_context_compact_failed_event(error, model=COMPACTION_MODEL))
   return False

@@ -449,7 +449,11 @@ WRITES = 3000
 
 async def main():
     work = Path(tempfile.mkdtemp(prefix="m10-torn-read-"))
-    cfg = CharlieBotConfig(charliebot_home=work / "home")
+    # A session's default backend resolves from backends.options (empty by
+    # default since the sectioned config), so the scratch config carries one.
+    cfg = CharlieBotConfig(charliebot_home=work / "home",
+                           backends={"options": [{"id": "m10", "label": "M10", "type": "cc-claude",
+                                                  "model": "claude-opus-4-6"}]})
     sessions = SessionManager(cfg)
     threads = ThreadManager(cfg)
     session = await sessions.create_session(CreateSessionRequest(name="M10"))
@@ -646,7 +650,11 @@ WRITES = 3000
 
 async def setup():
     work = Path(tempfile.mkdtemp(prefix="m15-torn-read-"))
-    cfg = CharlieBotConfig(charliebot_home=work / "home")
+    # A session's default backend resolves from backends.options (empty by
+    # default since the sectioned config), so the scratch config carries one.
+    cfg = CharlieBotConfig(charliebot_home=work / "home",
+                           backends={"options": [{"id": "m15", "label": "M15", "type": "cc-claude",
+                                                  "model": "claude-opus-4-6"}]})
     sessions = SessionManager(cfg)
     session = await sessions.create_session(CreateSessionRequest(name="M15"))
     return work, sessions, session
@@ -2822,7 +2830,11 @@ from src.core.sessions import SessionManager
 # Corpus shape: one fresh active session whose data/ holds no live chat file
 # (a scheduled-session creation carries no events until its first turn).
 work = Path(tempfile.mkdtemp(prefix="m48-search-scan-"))
-cfg = CharlieBotConfig(charliebot_home=work / "home")
+# A session's default backend resolves from backends.options (empty by
+# default since the sectioned config), so the scratch config carries one.
+cfg = CharlieBotConfig(charliebot_home=work / "home",
+                       backends={"options": [{"id": "m48", "label": "M48", "type": "cc-claude",
+                                              "model": "claude-opus-4-6"}]})
 mgr = SessionManager(cfg)
 asyncio.run(mgr.create_session(CreateSessionRequest(name="M48")))
 
@@ -4032,7 +4044,8 @@ sampled 2026-09-06 were repeats of an already-viewed file), so each repeat paid 
 copies the largest on-disk artifact page into a scratch `CHARLIEBOT_HOME` under /tmp (live home
 read once for the copy, never written) and drives the files router through TestClient in each
 checkout's process: one cold pass, as at first artifact view, then nine timed requests, with the
-credentialed cookie the injection gate reads. Snapshot once:
+snapshot's empty access key credentialing every reader (the injection gate reads the process
+home's credentials, so the run points ``CHARLIEBOT_HOME`` at the snapshot). Snapshot once:
 
 ```bash
 /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
@@ -4052,6 +4065,7 @@ home = Path(tempfile.mkdtemp(prefix="m70-artifact-home-", dir="/tmp"))
 dst = home / "sessions" / SID / "artifacts"
 dst.mkdir(parents=True)
 shutil.copy2(best, dst / best.name)
+(home / "credentials.yaml").write_text("charliebot:\n  access_key: ''\n", encoding="utf-8")
 print(f"worst artifact: session {SID}, {best.name}, {best_n / 1e6:.2f} MB")
 print(f"export M70_HOME={home} M70_SID={SID} M70_NAME={best.name} M70_SIZE={best_n}")
 EOF
@@ -4073,6 +4087,10 @@ import src.api.files as files_mod
 home = Path(os.environ["M70_HOME"])
 SID = os.environ["M70_SID"]
 NAME = os.environ["M70_NAME"]
+# The files routes read the access key through the process home (get_credentials
+# is env-scoped, not cfg-scoped), so the process home points at the snapshot
+# before any request.
+os.environ["CHARLIEBOT_HOME"] = str(home)
 
 # Scratch wiring: the router's get_config resolves the snapshot home, never the
 # live one; the snapshot's empty access key makes every reader credentialed, so
@@ -4322,7 +4340,11 @@ chrome_bin = get_config().headless_chrome_bin
 
 # Isolation: scratch CHARLIEBOT_HOME under /tmp; live home read once for the copy, never written.
 home = Path(tempfile.mkdtemp(prefix="m73-plan-verb-home-", dir="/tmp"))
-verb_cfg = CharlieBotConfig(charliebot_home=home, headless_chrome_bin=chrome_bin)
+# A session's default backend resolves from backends.options (empty by
+# default since the sectioned config), so the scratch config carries one.
+verb_cfg = CharlieBotConfig(charliebot_home=home, headless_chrome_bin=chrome_bin,
+                            backends={"options": [{"id": "m73", "label": "M73", "type": "cc-claude",
+                                                   "model": "claude-opus-4-6"}]})
 mgr = SessionManager(verb_cfg)
 plan_mgr = PlanRegistryManager(verb_cfg, mgr)
 
@@ -5361,6 +5383,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-10 | this PR | M10/M15/M48/M73/M70 standing collectors: before — five of 86 crashed in the round's sweep (M10/M15/M48/M73 IndexError at `create_session`'s `backends.options[0]` on the scratch config, M70 AssertionError "artifact-comments injection missing"), no readings; after (repaired commands, main checkout, load 1.78/1.87/1.44) — M10 3000 save_metadata calls / 25774 concurrent reads, 0 torn; M15 3000 _write_cache_entry calls / 425724 concurrent reads, 0 torn; M48 0 search_read_failed lines over 60 scans; M73 amend-validation loop-lag median 0.0058 s / wall median 0.0369 s (14 KB plan page); M70 repeat-view median 0.0026 s, body 1084806 B (injection present) | the 2026-09-09 config-schema series changed the two contracts the five collectors' scratch fixtures leaned on without updating them: 77e1e405 moved the default session backend to the sectioned `backends.options`, whose default is empty (the old flat `backend_options` carried a built-in claude-opus entry), so any `create_session` on a bare scratch config IndexErrors — the suite's own fixtures already pass `backends={"options": […]}`, the baseline's four did not; 126d4cd8 moved the files routes' access-key read from the monkeypatchable `get_config()` to the env-scoped `get_credentials()`, so M70's uncredentialed TestClient request was checked against the live key and served the clean page; the repair seeds one backend option in the four scratch configs (the conftest fixture shape, no behavior change — the metrics are orthogonal to backend choice) and gives M70 the M65 isolation shape (snapshot-seeded credentials.yaml with an empty access key plus `CHARLIEBOT_HOME` pointed at the snapshot before any request); collector commands only, no product code |
 | 2026-09-09 | this PR | M86 delegation takeoff-gate, delegation-flow shape median 2.27/3.65/4.00 → 0.00/0.00/0.00 ms, maxima 2.73-6.46 → 0.00-0.03 ms over nine timed warm calls (three interleaved rounds of the verbatim collector, 20534-event worst live chat file of session d321b9ad, scratch CHARLIEBOT_HOME per round, live home read-only, main checkout before vs branch worktree after back-to-back at load 8.2-11.2 one-minute — a host build was spiking, so the before side's spread is load noise, and every paired round still landed ≥2 orders faster); parity witness, the corpus as it stands (blocked verdict both arms): before median 2.20/2.50/5.01 ms, after 3.73/3.73/2.34 ms, same full-walk span both sides, verdicts identical; 39-passed gate-test file plus a 400-history randomized parity test against the verbatim forward walk, full 4948-passed suite | every `/api/internal/delegate` and `/api/internal/improve` POST ran `check_takeoff_gate` as an O(full-history) forward walk, re-normalizing every real user message's whole content and overwriting the two answers the verdict reads (the file-last real user message's takeoff phrase, the file-last parseable pre-takeoff stamp) — per-delegation thread-pool time growing with the busiest master session without bound (2.2-4.0 ms at 20,534 events today, on the spawn path behind the executor pool); the scan now walks backward and stops once both answers are settled — a file-older message can never overwrite either, so the walked span is the tail after the last user message, one turn's length, while a blocked misfire (no take-off, no parseable pre-takeoff anywhere) still walks the whole file, the same span the forward form always paid; one documented divergence, diagnostic only: pre-takeoff bearers file-older than the first parseable one no longer emit `_parse_pre_takeoff_timestamp` warnings (verdict-exact, fewer warning lines) |
 | 2026-09-09 | this PR | M75 first-event catch-up loop-lag median 0.0103/0.0106/0.0102 → 0.0082/0.0087/0.0067 s, −20 % to −35 %, every paired round faster (three interleaved rounds of the verbatim collector, 20534-event worst live chat file of session d321b9ad, scratch CHARLIEBOT_HOME per round, live home read-only, main checkout before vs branch worktree after back-to-back at load 2.70-2.83 one-minute); loop-lag maxima 0.0805-0.0839 → 0.0774-0.0955 s and wall medians 0.0976-0.1010 → 0.0984-0.1130 s unchanged within noise — the residual stall is the threaded cold load's own CPU and its GC pause (component check on the same corpus: cold threaded load max ticker gap 27.9 ms with gc on vs 12.1 ms off, wall 90 vs 61 ms), outside the feed this diff slices; feed-only attribution: the unsliced on-loop feed's worst ticker hold 23.3 ms vs 6.3 ms sliced at 256 events, wall 19 → 22.6 ms; no-regression re-measures interleaved ×2: M45 catchup replay loop-lag 0.0063/0.0063 → 0.0063/0.0065 s max 0.0064-0.0065 → 0.0064-0.0068 s with digest 314dfbe9fd89 identical, M26 advance 0.15/0.15 → 0.17/0.15 ms parity True digest e94c56635194, M6 append-round 0.06/0.05 → 0.06/0.05 ms parity True; 4899-passed suite plus one new mid-feed drop test | the first persist_and_broadcast for a session after server start fed the whole caught-up corpus through the aggregator inside one threaded span — the M45 pathology's one un-sliced sibling: the pure-Python feed parked the event loop behind GIL handoffs for the feed's full span (23 ms worst hold measured on the on-loop form, on top of the load's), and the streamed turn's first delta after a restart waits behind the whole init; the feed now runs on the event loop in 256-event slices with a yield between slices (the `_CatchupWalk` shape), and the drop epoch re-check moved from once post-init to every slice boundary so a mid-init drop aborts at the next boundary instead of finishing the stale feed; the corpus load keeps its threaded hop (a cold parse is one C-heavy pass), and the slice loop re-reads the list length so an append landing mid-feed is fed like the threaded form's list iteration reached it; M75 healthy range unchanged (the reading was already inside < 0.020 s) |
 | 2026-09-09 | this PR | M74 turn-end rescan loop-lag median 0.0104/0.0105/0.0105 → 0.0085/0.0072/0.0098 s, wall median 0.0122/0.0120/0.0122 → 0.0086/0.0073/0.0099 s, −18 % to −39 %, wall maxima 0.0201-0.0209 → 0.0127-0.0158 s (three interleaved rounds of the verbatim collector, 9.9 MB / 391-line worst on-disk raw agent log of session 4fcd4c43, live home read-only, main checkout before vs branch worktree after back-to-back at load 3.0-3.1 one-minute / 2.24 five-minute, every paired round faster, 391 projected events both arms); component attribution: parse_raw_lines measured 9.76 ms of the 12.2 ms wall on the same corpus (whole split 8.26 ms, replace-decode pass 5.69 ms, orjson-on-bytes 4.68 ms — the walk+strict-bytes fast path 6.17 ms); no-regression witness on the sibling funnel: M84 tail-follow replay 11.4 → 11.6 ms, stdout-stream 5.9 → 5.3 ms, within noise, that loop untouched; parity 0 divergences over 1650 live raw logs / 186,647 lines (old inline implementation vs new, event-identical); 4940-passed suite plus 2 new contract tests (torn-multibyte U+FFFD fallback, valid final line without newline) | parse_raw_lines whole-split every raw log (one list of all 391 lines per pass) and replace-decoded every line before the parse funnel (5.7 ms per 9.9 MB) although orjson reads raw bytes directly; the walk now emits one find+slice piece per line (the M84 tail-follow walk) and the strict bytes parse is the fast path — the errors="replace" decode runs only on a line the strict parse rejects, keeping the torn-multibyte-parses-as-U+FFFD contract (pinned by a new test on a corrupted byte mid-line, the shape a truncation cannot produce) and the funnel's single skip-contract home; the change rides every claude-family master turn end (the model-attribution rescan) and the re-attach result scan (scan_result_exit and resolve_run share the helper); M74 healthy range unchanged (already inside < 0.015 s) |

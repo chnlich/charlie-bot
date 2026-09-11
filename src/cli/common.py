@@ -65,6 +65,11 @@ def exit_usage_error(message: str) -> None:
   sys.exit(2)
 
 
+def exit_error(message: str) -> NoReturn:
+  """Emit a failure as a JSON error object on stderr and exit 1 — the module docstring's failure contract."""
+  _exit_with_error({"error": message})
+
+
 def read_required_text_file(flag_name: str, file_path: str) -> str:
   """Read a required text file, exiting non-zero on a missing or empty file."""
   path = Path(file_path)
@@ -400,11 +405,7 @@ def resolve_session_id(arg_session: str | None) -> str:
     sources["cwd"] = cwd_session
 
   if not sources:
-    print(
-        json.dumps({"error": "--session required when not running from a CharlieBot session dir"}),
-        file=sys.stderr,
-    )
-    sys.exit(2)
+    exit_usage_error("--session required when not running from a CharlieBot session dir")
 
   unique_session_ids = set(sources.values())
   if len(unique_session_ids) > 1:

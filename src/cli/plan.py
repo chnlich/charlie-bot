@@ -17,7 +17,6 @@ written to stderr as a JSON error with a non-zero exit code.
 import argparse
 import json
 import os.path
-import sys
 from collections.abc import Sequence
 
 from src.cli import common as cli_common
@@ -234,8 +233,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
       result = _build_diff(session_id, args)
     except ValueError as e:
-      print(json.dumps({"error": str(e)}), file=sys.stderr)
-      sys.exit(1)
+      cli_common.exit_error(str(e))
   else:
     payload = _build_payload(args.verb, session_id, args)
     result = post_internal_api(

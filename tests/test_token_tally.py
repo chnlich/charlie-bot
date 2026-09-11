@@ -130,6 +130,19 @@ def _padded_opencode_row(pad: int) -> tuple[dict, str, str]:
   return ({"input": 100, "output": 2, "cache": {"read": 0, "write": 0}, "pad": "x" * pad}, "oc-m", "prov")
 
 
+def _spy_row_blobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+  """Install a blob-read spy on tt._opencode_row_data; returns the projected blobs."""
+  projected: list[str] = []
+  orig = tt._opencode_row_data
+
+  def spy(data: str) -> tuple[list | None, int]:
+    projected.append(data)
+    return orig(data)
+
+  monkeypatch.setattr(tt, "_opencode_row_data", spy)
+  return projected
+
+
 def _collect(claude: Claude | None, codex: Codex | None, db: Path, cache: Path | None = None):
   return collect_token_usage(
       claude_homes=claude.dirs if claude else {},
@@ -826,14 +839,7 @@ def test_opencode_row_memo_rereads_only_moved_rows(tmp_path: Path, monkeypatch: 
   assert first.scanned_bytes > 0
 
   _append_opencode(db, [_padded_opencode_row(500)])
-  projected: list[str] = []
-  orig = tt._opencode_row_data
-
-  def spy(data: str) -> tuple[list | None, int]:
-    projected.append(data)
-    return orig(data)
-
-  monkeypatch.setattr(tt, "_opencode_row_data", spy)
+  projected = _spy_row_blobs(monkeypatch)
   second = _collect(None, None, db, cache)
 
   assert len(projected) == 1 and '"input": 100' in projected[0]
@@ -1056,14 +1062,7 @@ def test_wal_move_with_new_row_still_counts(tmp_path: Path, monkeypatch: pytest.
   _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
   con.commit()
 
-  projected: list[str] = []
-  orig = tt._opencode_row_data
-
-  def spy(data: str) -> tuple[list | None, int]:
-    projected.append(data)
-    return orig(data)
-
-  monkeypatch.setattr(tt, "_opencode_row_data", spy)
+  projected = _spy_row_blobs(monkeypatch)
   second = _collect(None, None, db, cache)
   after = _row(second, "opencode", "oc-m")
 
@@ -1448,14 +1447,7 @@ def test_restart_cold_seeds_the_row_memo_from_the_document(tmp_path: Path, monke
   con.execute("insert into other values ('noise2', 'x')")
   con.commit()  # the WAL moves, so the entry's stored signature misses and the scan path runs
 
-  projected: list[str] = []
-  orig = tt._opencode_row_data
-
-  def spy(data: str) -> tuple[list | None, int]:
-    projected.append(data)
-    return orig(data)
-
-  monkeypatch.setattr(tt, "_opencode_row_data", spy)
+  projected = _spy_row_blobs(monkeypatch)
   second = _collect(None, None, db, cache)
   assert projected == []  # the seeded key diff proved every row unchanged without a blob read
   assert second.scanned_bytes == 0
@@ -1491,14 +1483,7 @@ def test_restart_cold_recounts_only_moved_rows(tmp_path: Path, monkeypatch: pyte
               }), mid))
   con.commit()
 
-  projected: list[str] = []
-  orig = tt._opencode_row_data
-
-  def spy(data: str) -> tuple[list | None, int]:
-    projected.append(data)
-    return orig(data)
-
-  monkeypatch.setattr(tt, "_opencode_row_data", spy)
+  projected = _spy_row_blobs(monkeypatch)
   second = _collect(None, None, db, cache)
   assert len(projected) == 2  # the moved pair only: the untouched rows' blobs stayed unread
   after = _row(second, "opencode", "oc-m")

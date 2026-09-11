@@ -8,6 +8,7 @@ import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
+from src.agents.backends.base import make_master_done_event, make_text_event
 from src.agents.master_cc import cancel_master, run_message
 from src.api.deps import get_session_manager, require_found, require_session
 from src.api.message_utils import (
@@ -111,9 +112,9 @@ async def send_message(
 
       if dispatch.kind == SlashDispatchKind.ERROR:
         error_text = dispatch.error or f'Failed to dispatch /{name}'
-        asst_event = {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": error_text}]}}
+        asst_event = make_text_event(error_text)
         await session_mgr.persist_and_broadcast(session_id, asst_event)
-        done_event = {"type": ET.MASTER_DONE, "exit_code": 1, ET.STILL_THINKING: False}
+        done_event = make_master_done_event(1, still_thinking=False)
         await session_mgr.persist_and_broadcast(session_id, done_event)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
@@ -122,9 +123,9 @@ async def send_message(
         out = result['stderr'] if result['exit_code'] != 0 and result['stderr'] else (
             result['stdout'] or result['stderr'] or '(no output)')
         md_out = '```\n' + out + '\n```'
-        asst_event = {"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": md_out}]}}
+        asst_event = make_text_event(md_out)
         await session_mgr.persist_and_broadcast(session_id, asst_event)
-        done_event = {"type": ET.MASTER_DONE, "exit_code": 0, ET.STILL_THINKING: False}
+        done_event = make_master_done_event(0, still_thinking=False)
         await session_mgr.persist_and_broadcast(session_id, done_event)
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
@@ -202,7 +203,7 @@ async def run_and_finalize(
     # run_message() should handle and emit failures, but keep this as a
     # last-resort guard so the UI never gets stuck in "Thinking...".
     error_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {e}"}
-    done_event = {"type": ET.MASTER_DONE, "exit_code": 1, ET.STILL_THINKING: False}
+    done_event = make_master_done_event(1, still_thinking=False)
     await session_mgr.persist_and_broadcast(meta.id, error_event)
     await session_mgr.persist_and_broadcast(meta.id, done_event)
 

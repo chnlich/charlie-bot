@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from src.agents import master_cc_run, master_cc_state
-from src.agents.backends.base import make_error_event
+from src.agents.backends.base import make_error_event, make_master_done_event
 from src.core import event_types as ET
 from src.core import runs, sidebar_state
 from src.core.config import CharlieBotConfig
@@ -199,7 +199,7 @@ async def _session_consumer(session_id: str) -> None:
           if busy_start is not None:
             thinking_seconds = int((datetime.now(UTC) - busy_start).total_seconds())
 
-        done_event = {"type": ET.MASTER_DONE, "exit_code": exit_code, ET.STILL_THINKING: still_thinking}
+        done_event = make_master_done_event(exit_code, still_thinking=still_thinking)
         if item.user_event_id:
           done_event[ET.INPUT_EVENT_ID] = item.user_event_id
         if thinking_seconds is not None:

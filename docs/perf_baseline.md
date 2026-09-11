@@ -100,6 +100,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M88 perfetto direct-pass build, worst on-disk trace corpus | M88 collector below | seconds per `_build_direct_pass_gzip` build (validate + stream-compress), largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 6 s | — (introduced with its first history row) |
 | M89 backend stderr tee, per chunk | M89 collector below | seconds per 8 KB chunk tee to the run's stderr.log, the streamed-turn pump shape | median < 0.0002 s | — (introduced with its first history row) |
 | M90 backend stdout pump, per chunk or startup line | M90 collector below | seconds per 8 KB chunk write (the streamed pump shape) and per startup line append (the run-start shape) to the covered backends' stdout.log | chunk median < 0.0002 s; line median < 0.0002 s | — (introduced with its first history row) |
+| M91 worker per-event quota-scan head, streamed-turn replay | M91 collector below | seconds per `Worker._process_event` call over a full-corpus replay of the worst on-disk worker events log — per-event median, worst single event, and the replay's total wall (scratch append target, zero-subscriber broadcast) | per-event median < 0.0002 s; worst single event < 1.0 ms; replay wall median < 0.30 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -5657,10 +5658,85 @@ asyncio.run(main())
 EOF
 ```
 
+M91 — worker per-event quota-scan head, streamed-turn replay. The worker's
+`_process_event` runs per streamed event on the worker's loop beside the append
+and broadcast; its quota-pattern check read both payload fields through
+`str().lower()` copies on every event although only ERROR events can match. The
+collector drives the real `_process_event` in file order over the worst on-disk
+worker events log (read-only) with the append pointed at a scratch log under
+/tmp (the run's held-fd shape, the M82 collector's) and the real broadcast
+manager (zero subscribers), timing each call: one cold pass, as at a run's
+first event, then five timed replays. The worst single event carries the scan
+(the corpus's biggest payload); the per-event median reads the append floor the
+M82 row documents and is expected to hold.
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, json, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.agents.worker import Worker
+from src.core.config import CharlieBotConfig
+from src.core.models import ThreadMetadata
+
+# Worst per-event corpus: the largest on-disk worker events log (read-only).
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for p in root.glob("*/threads/*/data/events.jsonl"):
+    n = p.stat().st_size
+    if n > best_n:
+        best, best_n = p, n
+events = []
+with best.open("rb") as f:
+    for line in f:
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            continue
+
+# Isolation: the append target is a scratch log under /tmp, never the live home.
+scratch = Path(tempfile.mkdtemp(prefix="m91-head-"))
+cfg = CharlieBotConfig(charliebot_home=scratch)
+log_path = scratch / "events.jsonl"
+worker = Worker(ThreadMetadata.model_construct(id="m91"), scratch, log_path, "", cfg)
+
+async def replay():
+    fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+    times = []
+    try:
+        for ev in events:
+            t0 = time.perf_counter()
+            await worker._process_event(ev, fd)
+            times.append(time.perf_counter() - t0)
+    finally:
+        os.close(fd)
+    return times
+
+async def main():
+    await replay()  # cold pass, as at a run's first event; not timed
+    walls = []
+    per_event = []
+    for _ in range(5):
+        times = await replay()
+        walls.append(sum(times))
+        per_event.extend(times)
+    walls.sort()
+    per_event.sort()
+    n = len(per_event)
+    print(f"{best_n / 1e6:.1f} MB / {len(events)}-event worst worker log; full-corpus _process_event "
+          f"replay median {walls[2]:.4f} s, max {walls[-1]:.4f} s over 5; per-event median "
+          f"{per_event[n // 2] * 1e6:.1f} us, worst single event {per_event[-1] * 1e3:.2f} ms over {n}")
+
+asyncio.run(main())
+shutil.rmtree(scratch)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-11 | this PR | M91 worker per-event quota-scan head, streamed-turn replay: worst single event 1.36/1.37/1.40 → 0.66/0.69/0.87 ms, −38 % to −53 %, every paired round faster (three interleaved rounds of the new collector — main checkout before vs branch worktree after back-to-back, 6.7 MB / 2315-event worst on-disk worker log, scratch append target, live home read-only, load 0.86-1.29 one-minute; per-event median 84-104 us both arms — the M82 append floor — and replay wall median 0.222-0.270 s both arms, within noise); component attribution, the head the diff gates — the per-event `str().lower()` copies of both payload fields — measured standalone 5.91/6.05/6.12 → 0.22/0.25/0.27 ms per corpus replay, −95 % to −96 %, every paired round faster; 5059-passed suite plus 3 new quota-scan gate tests | every streamed worker event paid a repr of its whole message dict plus lowercase copies of the message and content payloads for the quota-pattern check although only ERROR events can match — the head scaled with payload (the corpus's 642 KB tool_result event paid ~0.7 ms of scan beside its append), so the copies now ride the ERROR gate, the check's own condition, and non-ERROR events skip the stringification; M91 definition and healthy range introduced with this PR |
 | 2026-09-11 | this PR | M66 merged build median 4.82/4.79/4.80 → 4.38/4.46/4.35 s, −9 % to −11 %, maxima 4.82-4.85 → 4.35-4.48 s (three interleaved rounds of the verbatim collector — `CHECKOUT` at the main checkout before vs branch worktree after, back-to-back, 307.3 MB worst on-disk trace /home/chaoli/data/hayden_243809_traces/step000110/trace_rank008_step000110.json (1,068,461 events), scratch output under /tmp, live home read-only, every paired round faster at load 1.68-1.92 one-minute; artifact 21.5 MB.gz identical across arms; 5056-passed suite plus the mixed-tid-form contract test; component attribution: the pre-fix build's ~4.8 s reads 0.19 s file read + 2.1 s orjson parse + 1.36 s walk+batch-dumps (no-op sink) + 0.74 s level-1 gzip) | the build's per-event walk paid a `str()` on every tid-bearing event for the str-canonical sequencer probe — 0.16 s standalone on the 1,068,461-tid corpus, the same shape #1151 removed for pid — while the generational GC passes over the ~1M dicts the parse allocates and the walk mutates cost 0.3-0.6 s per build (measured gc-on vs gc-off interleaved ×2); the walk now probes a raw-value tid map beside the str-keyed sequencer map (on a raw miss the str-keyed lookup still answers, so int 7 and "7" stay one thread — pinned by a new contract test) and the build runs with GC disabled inside the spawn-context merge pool, re-enabled with one collect so cyclic leftovers never accumulate across builds in a long-lived worker; M66's corpus has grown 2.15x since the range was set (496,116 events at the 2026-09-09 landing, 1,068,461 today) and stays inside < 8 s with margin |
 | 2026-09-11 | this PR | M81 collector command repair: the verbatim command failed from any non-repo CWD (`Cannot find module '<cwd>/tests/katex_walk_collector.js'`, verified from `/tmp` and `/` — the script path was CWD-relative and the `CHECKOUT` prefix assignment it already carried does not feed same-line shell expansion, so the sweep silently lost M81 whenever its runner did not start in the checkout); repaired command runs verbatim from /tmp against both checkouts — main reading page re-render wall 1.03 ms, 0 walks, parity true (corpus sha1 7409bcd20e4c), branch reading 1.01 ms, 0 walks, identical sha1 — inside the healthy ranges, no metric movement | one-word-class fix: `node tests/…` → `; node "$CHECKOUT/tests/…"`, the statement form so the assignment lands before the expansion; collector command only, no product code |
 | 2026-09-11 | this PR | M90 stdout pump chunk median 143/155/145 → 124/96/132 us, −13 % to −38 %, and startup line median 356/383/348 → 82/75/89 us, −77 % to −80 %, every paired round faster (three interleaved rounds of the new collector at load 0.82-1.27 one-minute, main checkout before vs branch worktree after back-to-back; component attribution: the after arm sits at the one to_thread round-trip floor — 96-132 us against the ~67-104 us no-op round-trip the M34/M52/M82 rows document — so aiofiles' second hop was the chunk gap and the per-line open+close the line gap); live-scale note: this host's on-disk opencode stdout.log volumes are small (4171 run logs, p90 118 B, max 9.4 KB — 1-2 chunks plus a handful of startup lines per run), so the removed hops are ~0.2-1.1 ms of executor time per opencode run off the pool every poll and chat append shares, and the antigravity envelope pump rides the same helper; no-regression re-measures interleaved ×2: M89 stderr tee 77/78 → 78/79 us, M82 events-log append 81/96 → 72/99 us (the write_all consumers this diff leaves untouched); 5057-passed suite plus 2 new contract tests (the write-all stdout contract, the opencode fd handoff) | the opencode run teed `opencode serve`'s stdout through aiofiles — the streamed pump paid the write+flush pair per 8 KB chunk (two executor round-trips) and the startup wait paid a full open+write+flush+close per printed line (four round-trips) — while the claude-family backends' raw stdout lands through the spawn fd and the stderr tee has ridden one hop since M89; the run now holds one raw O_APPEND fd for the attempt (O_APPEND keeps the lock-retry attempts appending the way the per-line "ab" opens they replace did), both phases write through the shared one-hop helper beside _tee_stderr_chunk, and _cleanup_server closes the fd after the drained stdout task; the antigravity envelope pump rides the same helper with its fd scoped to the run and the "wb" truncate kept; no durability change — the stdout log is a diagnostic stream and carried no fdatasync; M90 definition and healthy range introduced with this PR |

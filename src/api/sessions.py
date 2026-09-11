@@ -167,6 +167,13 @@ def _backend_domain_for(backend_id: str, cfg: CharlieBotConfig) -> str | None:
   return _backend_domain(opt, cfg)
 
 
+# Wire spelling of the 400 an id outside cfg.backends.options earns: both
+# raisers in _resolve_requested_backend format the same sentence, and the
+# switch route's clone/fork wording is a distinct, deliberate spelling this
+# constant does not home.
+_UNKNOWN_BACKEND_DETAIL = "backend '{}' is not a recognized backend id; valid ids: {}"
+
+
 def _resolve_requested_backend(
     requested_backend: str | None,
     cfg: CharlieBotConfig,
@@ -202,7 +209,7 @@ def _resolve_requested_backend(
     )
     raise HTTPException(
         status_code=400,
-        detail=f"backend '{requested_backend}' is not a recognized backend id; valid ids: {sorted(valid_backend_ids)}",
+        detail=_UNKNOWN_BACKEND_DETAIL.format(requested_backend, sorted(valid_backend_ids)),
     )
 
   if resolved_fallback not in valid_backend_ids:
@@ -213,7 +220,7 @@ def _resolve_requested_backend(
     )
     raise HTTPException(
         status_code=400,
-        detail=f"backend '{resolved_fallback}' is not a recognized backend id; valid ids: {sorted(valid_backend_ids)}",
+        detail=_UNKNOWN_BACKEND_DETAIL.format(resolved_fallback, sorted(valid_backend_ids)),
     )
 
   log.info("using_fallback_backend", reason="backend_is_none", requested=None, fallback=resolved_fallback)

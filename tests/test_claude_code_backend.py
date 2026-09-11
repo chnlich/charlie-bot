@@ -218,8 +218,8 @@ def test_claude_supervisor_env_does_not_mutate_input() -> None:
 
 
 def test_pool_account_config_dir_expands_user_and_injects_env(monkeypatch: pytest.MonkeyPatch) -> None:
-  """A cc-claude entry's login dir now rides the pool account (ClaudeAccount.config_dir);
-  the backend still expands ``~`` against HOME before injecting CLAUDE_CONFIG_DIR."""
+  """A cc-claude entry's login dir rides the pool account (ClaudeAccount.config_dir);
+  the backend expands ``~`` against HOME before injecting CLAUDE_CONFIG_DIR."""
   monkeypatch.setenv("HOME", "/home/test-user")
   option = backend_option(id="cc", label="CC", type="cc-claude", model="claude-opus-4-8")
   account = ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1")

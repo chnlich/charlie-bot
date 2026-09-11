@@ -7,9 +7,9 @@ established is retried with bounded exponential backoff (the effect provably
 did not happen, so re-sending is safe); a call sent with a lost response is
 never retried — instead the CLI reads back that call's own on-disk artifact.
 
-Every failure output stays a JSON object on stderr with exit code 1, now with
-``code`` (server_unavailable / outcome_unknown / server_error) and ``effect``
-(none / unknown) fields so the caller can tell "retry safely" from "verify".
+Every failure output stays a JSON object on stderr with exit code 1 plus a
+``code`` (server_unavailable / outcome_unknown / server_error) and an ``effect``
+(none / unknown) field so the caller can tell "retry safely" from "verify".
 """
 
 import argparse

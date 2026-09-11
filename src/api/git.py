@@ -89,11 +89,19 @@ def _attributes_signature(repo_path: Path) -> tuple[int, int] | None:
   return (st.st_mtime_ns, st.st_size)
 
 
+# Wire spelling of the 400 a non-repo path earns: both raisers
+# (_resolve_repo_under_workspace and list_branches, whose acceptance conditions
+# differ deliberately) format the same sentence, and the latex route's
+# 'Not a git repo' JSON error is a distinct, deliberate spelling this constant
+# does not home.
+_NOT_A_GIT_REPO_DETAIL = "Not a git repo: {}"
+
+
 def _resolve_repo_under_workspace(repo: str, cfg: CharlieBotConfig) -> Path:
   """Validate repo path and return resolved Path; raise HTTPException(400) otherwise."""
   repo_path = Path(repo).expanduser().resolve()
   if not (repo_path / ".git").exists():
-    raise HTTPException(status_code=400, detail=f"Not a git repo: {repo}")
+    raise HTTPException(status_code=400, detail=_NOT_A_GIT_REPO_DETAIL.format(repo))
   workspace_roots = [Path(d).expanduser().resolve() for d in cfg.paths.workspace_dirs]
   if not any(repo_path.is_relative_to(root) for root in workspace_roots):
     raise HTTPException(status_code=400, detail="repo must be under configured paths.workspace_dirs")
@@ -338,7 +346,7 @@ async def list_branches(repo: str = Query(..., description="Full path to git rep
   """Return branch names for a repo, most recent first, up to 50."""
   repo_path = Path(repo).expanduser()
   if not (repo_path / ".git").exists() and not repo_path.name == ".git":
-    raise HTTPException(status_code=400, detail=f"Not a git repo: {repo}")
+    raise HTTPException(status_code=400, detail=_NOT_A_GIT_REPO_DETAIL.format(repo))
   # The endpoint deliberately accepts a path that IS a .git dir (git resolves the
   # repo from cwd); the signature walk reads <repo>/.git, so normalize to the
   # parent — same repo, same listing, one memo key.

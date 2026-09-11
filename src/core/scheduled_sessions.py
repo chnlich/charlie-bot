@@ -27,6 +27,20 @@ class ScheduledSessionStore:
   def __init__(self, session_manager: Any) -> None:
     self._session_manager = session_manager
 
+  async def _create_generation(
+      self,
+      task_name: str,
+      backend: str,
+      role: str | None,
+  ) -> SessionMetadata:
+    """Create the task's next scheduled-session generation under the canonical name.
+
+    Single home of the generation request: the first-creation and rotation paths
+    must produce identically shaped sessions (name, scheduled_task, role).
+    """
+    return await self._session_manager.create_session(
+        CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role), backend=backend)
+
   async def ensure_scheduled_session_backend(
       self,
       task_name: str,
@@ -50,8 +64,7 @@ class ScheduledSessionStore:
 
     old_session = active_sessions[0] if active_sessions else None
     if old_session is None:
-      meta = await self._session_manager.create_session(
-          CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role), backend=backend)
+      meta = await self._create_generation(task_name, backend, role)
       if group is not None:
         meta.group = group
         meta.updated_at = utc_now()
@@ -77,8 +90,7 @@ class ScheduledSessionStore:
       raise ScheduledSessionBusyError(message)
 
     await self._session_manager.archive_session(old_session.id)
-    meta = await self._session_manager.create_session(
-        CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name, role=role), backend=backend)
+    meta = await self._create_generation(task_name, backend, role)
     self.migrate_scheduler_bookkeeping(old_session, meta)
     if group is not None:
       meta.group = group

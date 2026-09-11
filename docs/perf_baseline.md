@@ -943,8 +943,9 @@ as many byte chunks as the network delivers, so when the search re-scans the
 accumulated remainder on every chunk, framing costs O(bytes × chunks) — seconds
 of blocked event-loop time per multi-MB tool payload at network chunk sizes —
 while a resumable search stays O(bytes). The production consumers read the
-byte mode (`lines_as_bytes=True`), whose lines skip the per-chunk UTF-8 decode
-the default str mode pays for their JSON parsers; the collector streams a
+byte mode (`lines_as_bytes=True`), whose lines skip the chunk decode the
+pre-byte framer paid for their JSON parsers (orjson parses the wire's UTF-8
+bytes natively); the collector streams a
 16 MB payload of ~1 MB frames (terminators at frame ends only) through the
 adapter at a fixed 16 KB chunking against the checkout's code, synthetic and
 read-only, in the byte mode the serve path runs. Evidence points the same

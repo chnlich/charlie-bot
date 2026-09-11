@@ -19,9 +19,9 @@ const vm = require('node:vm');
 
 const { fetchUrl, worstPageCorpus, assistantTexts } = require('./stream_collector_common');
 const { buildRendererContext } = require('./renderer_vm_context');
+const { MARKED_URL } = require('./marked_renderer_harness');
 
 const CHECKOUT = process.env.CHECKOUT || path.join(__dirname, '..');
-const MARKED_URL = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
 const HLJS_URL = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js';
 const PAGE_MESSAGES = 40;
 

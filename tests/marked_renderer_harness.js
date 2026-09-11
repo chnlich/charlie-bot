@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------------------
-// Marked harness shared by the chat markdown vm tests
-// (chat_single_tilde_literal.test.js, chat_url_ascii_boundary.test.js).
+// Marked harness shared by the chat markdown vm tests and the stream
+// collectors: loads the page's real marked build and renderer, and owns the
+// CDN URL both fetch — import it instead of restating it.
 // ---------------------------------------------------------------------------
 const vm = require('node:vm');
 const https = require('node:https');
@@ -73,4 +74,4 @@ async function loadStockMarked() {
   return context.marked;
 }
 
-module.exports = { loadRenderer, loadRendererContext, loadStockMarked };
+module.exports = { MARKED_URL, loadRenderer, loadRendererContext, loadStockMarked };

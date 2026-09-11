@@ -31,7 +31,7 @@ class _StderrOnlyBackend(AgentBackend):
   def _build_command(self, prompt: str) -> list[str]:
     raise AssertionError("_build_command should not be called")
 
-  async def run(self, prompt: str, cwd: str, env: dict):
+  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
     if self._terminate_before_stderr:
       await self.terminate()
     self.exit_code = 1
@@ -165,7 +165,7 @@ class _ScriptedBackend(AgentBackend):
   def _build_command(self, prompt: str) -> list[str]:
     raise AssertionError("_build_command should not be called")
 
-  async def run(self, prompt: str, cwd: str, env: dict):
+  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
     self.exit_code = 0
     self.stderr_text = ""
     for event in self._events:

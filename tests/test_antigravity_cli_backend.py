@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import inspect
 from pathlib import Path
 
 import pytest
@@ -9,6 +12,7 @@ from conftest import (
 )
 
 from src.agents.backends.antigravity_cli import AntigravityCliBackend
+from src.agents.backends.base import AgentBackend
 from src.agents.backends.registry import build_backend
 from src.core.config import CharlieBotConfig
 
@@ -297,6 +301,40 @@ def test_registry_builds_antigravity_backend(monkeypatch) -> None:
       "json",
       "--sandbox",
   ]
+
+
+@pytest.mark.asyncio
+async def test_run_accepts_uploaded_files_keyword_and_ignores_it(monkeypatch, tmp_path: Path) -> None:
+  """Signature compat with the base run()'s optional uploaded_files: an agy
+  session with attachments must not TypeError, and the keyword changes nothing
+  (the CLI has no attachment channel)."""
+  _install_fake_agy(
+      monkeypatch,
+      tmp_path,
+      """
+printf '%s' '{"status":"SUCCESS","conversation_id":"conv-abc","response":"hi","usage":{}}'
+""",
+  )
+  backend = AntigravityCliBackend()
+
+  events = [
+      event
+      async for event in backend.run(
+          "hello from CharlieBot",
+          str(tmp_path),
+          {"PATH": "/usr/bin:/bin"},
+          uploaded_files=[{"filename": "pic.png", "path": str(tmp_path / "pic.png")}],
+      )
+  ]
+
+  assert [e.get("type") for e in events] == [None, "assistant", "result"]
+  assert events[1] == assistant_text_event("hi")
+
+
+def test_base_run_uploaded_files_defaults_to_none() -> None:
+  """The base default is what keeps every existing three-positional-arg run() caller working."""
+
+  assert inspect.signature(AgentBackend.run).parameters["uploaded_files"].default is None
 
 
 @pytest.mark.asyncio

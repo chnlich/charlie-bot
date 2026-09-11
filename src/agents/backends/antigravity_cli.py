@@ -73,8 +73,14 @@ class AntigravityCliBackend(AgentBackend):
       return None
     return data
 
-  async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
-    """Run the final-only CLI mode and translate the JSON envelope into CC events."""
+  async def run(
+      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
+    """Run the final-only CLI mode and translate the JSON envelope into CC events.
+
+    uploaded_files is accepted for signature parity with the base run() and
+    ignored: the CLI has no attachment channel, so attachments ride only the
+    message's path text.
+    """
     await asyncio.to_thread(self._prepare_cwd, cwd)
     cmd = self._build_command(prompt)
     final_env = self._prepare_env(env)

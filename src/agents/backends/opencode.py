@@ -1,6 +1,7 @@
 """OpenCodeBackend wrapping the `opencode serve` HTTP/SSE API."""
 
 import asyncio
+import base64
 import json
 import os
 import re
@@ -85,6 +86,41 @@ _UNHANDLED_PART_TYPES = WarnOnceRegistry()
 # type re-fires once per unhandled frame.
 _UNHANDLED_SSE_EVENT_TYPES = WarnOnceRegistry()
 
+# Filename-extension → MIME map for prompt file parts. Image-only: other
+# attachment kinds never produce file parts and keep riding the message's
+# path text.
+_IMAGE_MIME_BY_EXT = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+}
+
+
+def _image_file_parts(uploaded_files: list[dict] | None) -> list[dict]:
+  """One OpenCode file part per readable image attachment, in reference order.
+
+  The mime comes from the filename extension via ``_IMAGE_MIME_BY_EXT``; the
+  payload is the file's bytes as a ``data:`` URL. A non-image reference is
+  skipped silently, and a missing or unreadable image file is skipped with one
+  ``log.warning`` — a broken attachment never fails the turn.
+  """
+  parts: list[dict] = []
+  for ref in uploaded_files or []:
+    filename = str(ref.get("filename", ""))
+    mime = _IMAGE_MIME_BY_EXT.get(filename.rsplit(".", 1)[-1].lower())
+    if mime is None:
+      continue
+    path = str(ref.get("path", ""))
+    try:
+      data = Path(path).read_bytes()
+    except OSError as e:
+      log.warning("opencode_attachment_unreadable", path=path, filename=filename, error=str(e))
+      continue
+    parts.append({"type": "file", "mime": mime, "url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"})
+  return parts
+
 
 class OpenCodeSseSilenceError(RuntimeError):
   """The SSE stream carried no session-id-bearing event within OPENCODE_SSE_PROGRESS_TIMEOUT."""
@@ -165,7 +201,8 @@ class OpenCodeBackend(AgentBackend):
         },
     }
 
-  async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
+  async def run(
+      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     """Drive OpenCode through its per-run HTTP server and SSE event stream.
 
     A failed attempt whose drained stderr tail carries the SQLite lock
@@ -175,6 +212,9 @@ class OpenCodeBackend(AgentBackend):
     byte-identically. The failed attempt's terminal error event is held back
     and only emitted when the failure is final, so a retried failure never
     appears in the run's event stream.
+
+    uploaded_files are the user message's image attachments; each readable
+    image rides the prompt as a file part (see ``_image_file_parts``).
     """
     self._reset_run_state()
     attempt = 0
@@ -205,7 +245,7 @@ class OpenCodeBackend(AgentBackend):
             response.raise_for_status()
             sse_events = self._with_sse_progress_watchdog(self._iter_sse_events(response))
             await self._wait_for_server_connected(sse_events)
-            await self._send_prompt(client, self._session_id, prompt)
+            await self._send_prompt(client, self._session_id, prompt, uploaded_files=uploaded_files)
 
             async for translated in self._consume_sse_events(sse_events):
               if self._failed and translated.get("type") == ET.ERROR:
@@ -446,7 +486,8 @@ class OpenCodeBackend(AgentBackend):
         return
     raise RuntimeError("OpenCode SSE stream closed before server.connected")
 
-  async def _send_prompt(self, client: httpx.AsyncClient, session_id: str, prompt: str) -> None:
+  async def _send_prompt(
+      self, client: httpx.AsyncClient, session_id: str, prompt: str, uploaded_files: list[dict] | None = None) -> None:
     if not self._model:
       raise ValueError("opencode backend requires a model")
     provider_id, model_id = self._model.split("/", 1)
@@ -457,10 +498,9 @@ class OpenCodeBackend(AgentBackend):
                 "providerID": provider_id,
                 "modelID": model_id,
             },
-            "parts": [{
-                "type": "text",
-                "text": prompt,
-            }],
+            # Text part first (the prompt string, unchanged), then one file
+            # part per readable image attachment in reference order.
+            "parts": [{"type": "text", "text": prompt}, *_image_file_parts(uploaded_files)],
         },
     )
     if response.status_code != 204:

@@ -422,7 +422,7 @@ class _NoopBackend(TerminateFlagBackend):
   exit_code = 0
   stderr_text = ""
 
-  async def run(self, prompt: str, cwd: str, env: dict):
+  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
     if False:
       yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine
 
@@ -573,7 +573,7 @@ class _EventsBackend(TerminateFlagBackend):
     self.exit_code = exit_code
     self.stderr_text = stderr_text
 
-  async def run(self, prompt: str, cwd: str, env: dict):
+  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
     for event in self.events:
       yield event
 

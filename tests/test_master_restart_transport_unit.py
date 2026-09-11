@@ -226,7 +226,7 @@ class _HungBackend:
     # Set the moment the run loop starts, before any spawn callback.
     self.run_entered = asyncio.Event()
 
-  async def run(self, prompt: str, cwd: str, env: dict):
+  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
     self.run_entered.set()
     if self._fire_spawn:
       await self.on_spawn(4242)

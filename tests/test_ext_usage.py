@@ -2067,43 +2067,30 @@ async def test_claude_requests_carry_the_probed_cli_version(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_user_agent_probe_missing_binary_falls_back_with_warning(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize(
+    "probe_kwargs",
+    [
+        {
+            "error": FileNotFoundError(2, "No such file or directory: 'claude'"),
+        },
+        # Version-looking stdout with a non-zero exit must NOT be trusted: this
+        # case fails if the probe falls through to parsing instead of the
+        # returncode branch.
+        {
+            "stdout": b"2.9.9 (Claude Code)",
+            "returncode": 1,
+        },
+        {
+            "stdout": b"claude is unavailable right now",
+        },
+    ],
+    ids=["missing-binary", "nonzero-exit", "unparseable-output"],
+)
+async def test_user_agent_probe_failure_falls_back_with_warning(monkeypatch, tmp_path, probe_kwargs) -> None:
   fake = _FakeUsageHTTP([200])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
   events = _capture_user_agent_resolutions(monkeypatch)
-  _arm_user_agent_probe(monkeypatch, error=FileNotFoundError(2, "No such file or directory: 'claude'"))
-
-  await provider.fetch()
-
-  assert fake.gets[0]["headers"]["User-Agent"] == "claude-code/2.1.219"
-  assert _user_agent_resolution_events(events) == [
-      {"level": "warning", "event": "ext_usage_user_agent_resolved", "version": "2.1.219", "source": "fallback"}
-  ]
-
-
-@pytest.mark.asyncio
-async def test_user_agent_probe_nonzero_exit_falls_back_with_warning(monkeypatch, tmp_path) -> None:
-  fake = _FakeUsageHTTP([200])
-  provider = _claude_provider(monkeypatch, tmp_path, fake)
-  events = _capture_user_agent_resolutions(monkeypatch)
-  # Version-looking stdout with a non-zero exit must NOT be trusted: this test
-  # fails if the probe falls through to parsing instead of the returncode branch.
-  _arm_user_agent_probe(monkeypatch, stdout=b"2.9.9 (Claude Code)", returncode=1)
-
-  await provider.fetch()
-
-  assert fake.gets[0]["headers"]["User-Agent"] == "claude-code/2.1.219"
-  assert _user_agent_resolution_events(events) == [
-      {"level": "warning", "event": "ext_usage_user_agent_resolved", "version": "2.1.219", "source": "fallback"}
-  ]
-
-
-@pytest.mark.asyncio
-async def test_user_agent_probe_unparseable_output_falls_back_with_warning(monkeypatch, tmp_path) -> None:
-  fake = _FakeUsageHTTP([200])
-  provider = _claude_provider(monkeypatch, tmp_path, fake)
-  events = _capture_user_agent_resolutions(monkeypatch)
-  _arm_user_agent_probe(monkeypatch, stdout=b"claude is unavailable right now")
+  _arm_user_agent_probe(monkeypatch, **probe_kwargs)
 
   await provider.fetch()
 

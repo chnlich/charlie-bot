@@ -597,7 +597,7 @@ async def get_session_view(
   view = await build_session_view_data(session_id, session_mgr, thread_rows)
   trigger_mgr = trigger_manager()
   triggers = await trigger_mgr.list_triggers(session_id)
-  active_backend = meta.backend or (cfg.backends.options[0].id if cfg.backends.options else "claude")
+  active_backend = meta.backend or _default_backend_id(cfg)
   active_backend_opt = cfg.get_backend_option(active_backend)
   active_backend_type = active_backend_opt.type if active_backend_opt else ""
   # FastJsonResponse for the message-page cost reason in get_session_events_page.

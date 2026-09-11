@@ -10,6 +10,7 @@ import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from src.api.deps import bad_request
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config, get_credentials
 from src.core.http import get_http_client
@@ -514,7 +515,7 @@ async def openai_compatible_messages(
     upstream_url = _join_openai_chat_url(option.api_base)
     headers = _upstream_headers(option.credential, backend_id)
   except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+    raise bad_request(e) from e
 
   client = get_http_client()
   model = openai_payload["model"]

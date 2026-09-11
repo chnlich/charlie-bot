@@ -7,6 +7,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import (
+    bad_request,
     get_plan_manager,
     get_session_manager,
     get_thread_manager,
@@ -114,7 +115,7 @@ async def _authorize_spawn_request(
       resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
           req.session_id, cfg, session_mgr, requested_backend=req.backend)
   except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+    raise bad_request(e) from e
 
   return meta, cfg, resolved_backend, resolved_model
 
@@ -283,7 +284,7 @@ async def schedule_trigger(
     # surface as 422 so the CLI exits with code 2.
     raise HTTPException(status_code=422, detail=str(e)) from e
   except RuntimeError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+    raise bad_request(e) from e
   log.info(
       "trigger_scheduled",
       session=req.session_id,
@@ -435,7 +436,7 @@ async def plan_present(
         base=_build_base(req),
     )
   except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+    raise bad_request(e) from e
 
 
 @router.post("/plan/amend")
@@ -456,7 +457,7 @@ async def plan_amend(
         note=req.note,
     )
   except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+    raise bad_request(e) from e
 
 
 @router.post("/plan/approve")
@@ -470,7 +471,7 @@ async def plan_approve(
   try:
     return await plan_mgr.approve(req.session_id, plan_id=req.plan_id)
   except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+    raise bad_request(e) from e
 
 
 @router.post("/plan/close")
@@ -484,4 +485,4 @@ async def plan_close(
   try:
     return await plan_mgr.close(req.session_id, req.plan_id, req.close_as)
   except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+    raise bad_request(e) from e

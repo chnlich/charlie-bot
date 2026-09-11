@@ -14,6 +14,7 @@ from starlette.responses import Response
 from src.api.cron import TaskUpdate, apply_task_yaml_update, next_run_iso
 from src.api.deps import (
     SESSION_NOT_FOUND_DETAIL,
+    bad_request,
     get_config_on_loop,
     get_plan_manager,
     get_session_manager,
@@ -794,7 +795,7 @@ async def fork_session(
   except FileNotFoundError as e:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
   except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+    raise bad_request(e) from e
 
   _start_successor_run(
       cfg,
@@ -826,7 +827,7 @@ async def elone_session(
   except SuccessionRefused as e:
     raise HTTPException(status_code=409, detail=str(e)) from e
   except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+    raise bad_request(e) from e
 
   _start_successor_run(
       cfg,

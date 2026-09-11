@@ -11,7 +11,7 @@ from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from src.api.deps import get_session_manager
+from src.api.deps import bad_request, get_session_manager
 from src.api.responses import FastJsonResponse
 from src.core.config import (
     CharlieBotConfig,
@@ -69,7 +69,7 @@ def _validate_backend_id(backend: str | None, cfg: CharlieBotConfig) -> None:
   try:
     require_backend_option(cfg, backend, subject="")
   except ValueError as e:
-    raise HTTPException(status_code=400, detail=str(e)) from e
+    raise bad_request(e) from e
 
 
 def _apply_task_update(task: dict, req: "TaskUpdate") -> dict:

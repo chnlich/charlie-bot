@@ -294,29 +294,52 @@ function loadChatContext(document) {
   return {context, nowIso};
 }
 
-test('bumpCurrentSessionToTop keeps grouped sessions inside their current group', () => {
-  const nav = new FakeElement('DIV', {id: 'session-list'});
-  const group = new FakeElement('DIV', {className: 'session-group'});
-  const toggle = new FakeElement('DIV');
-  const items = new FakeElement('DIV', {className: 'session-group-items'});
-  const before = createSession('session-b', '2026-04-01T00:00:00.000Z', 'old-b');
-  const current = createSession('session-a', '2026-04-01T01:00:00.000Z', 'old-a');
-  const after = createSession('session-c', '2026-04-01T02:00:00.000Z', 'old-c');
+// The three fixed-time rows every ordering case orders: b (oldest), a (the
+// session the context treats as current), c (newest).
+function bumpTrio() {
+  return {
+    before: createSession('session-b', '2026-04-01T00:00:00.000Z', 'old-b'),
+    current: createSession('session-a', '2026-04-01T01:00:00.000Z', 'old-a'),
+    after: createSession('session-c', '2026-04-01T02:00:00.000Z', 'old-c'),
+  };
+}
 
-  items.appendChild(before);
-  items.appendChild(current);
-  items.appendChild(after);
-  group.appendChild(toggle);
-  group.appendChild(items);
-  nav.appendChild(group);
+// One rig for the bump tests: *rows* mount under the bare session list or, with
+// grouped, under a one-group scaffold, and the context's document resolves that
+// list and the current-session row (SESSION_ID 'session-a') by id.
+function bumpRig(rows, currentRow, {grouped = false} = {}) {
+  const nav = new FakeElement('DIV', {id: 'session-list'});
+  let group = null;
+  let items = nav;
+  if (grouped) {
+    group = new FakeElement('DIV', {className: 'session-group'});
+    items = new FakeElement('DIV', {className: 'session-group-items'});
+    group.appendChild(new FakeElement('DIV'));
+    group.appendChild(items);
+    nav.appendChild(group);
+  }
+  for (const row of rows) {
+    items.appendChild(row);
+  }
 
   const {context, nowIso} = loadChatContext({
     getElementById(id) {
       if (id === 'session-list') return nav;
-      if (id === 'session-session-a') return current;
+      if (id === 'session-session-a') return currentRow;
       return null;
     },
   });
+  return {nav, group, items, context, nowIso};
+}
+
+function assertBumpedTimeRefreshed(row, nowIso) {
+  assert.equal(row.querySelector('.session-time').dataset.time, nowIso);
+  assert.equal(row.querySelector('.session-time').textContent, `relative:${nowIso}`);
+}
+
+test('bumpCurrentSessionToTop keeps grouped sessions inside their current group', () => {
+  const {before, current, after} = bumpTrio();
+  const {nav, group, items, context, nowIso} = bumpRig([before, current, after], current, {grouped: true});
 
   context.bumpCurrentSessionToTop();
 
@@ -327,27 +350,12 @@ test('bumpCurrentSessionToTop keeps grouped sessions inside their current group'
     'session-session-c',
   ]);
   assert.equal(nav.firstElementChild, group);
-  assert.equal(current.querySelector('.session-time').dataset.time, nowIso);
-  assert.equal(current.querySelector('.session-time').textContent, `relative:${nowIso}`);
+  assertBumpedTimeRefreshed(current, nowIso);
 });
 
 test('bumpCurrentSessionToTop moves flat sidebar sessions to the top-level front', () => {
-  const nav = new FakeElement('DIV', {id: 'session-list'});
-  const before = createSession('session-b', '2026-04-01T00:00:00.000Z', 'old-b');
-  const current = createSession('session-a', '2026-04-01T01:00:00.000Z', 'old-a');
-  const after = createSession('session-c', '2026-04-01T02:00:00.000Z', 'old-c');
-
-  nav.appendChild(before);
-  nav.appendChild(current);
-  nav.appendChild(after);
-
-  const {context, nowIso} = loadChatContext({
-    getElementById(id) {
-      if (id === 'session-list') return nav;
-      if (id === 'session-session-a') return current;
-      return null;
-    },
-  });
+  const {before, current, after} = bumpTrio();
+  const {nav, context, nowIso} = bumpRig([before, current, after], current);
 
   context.bumpCurrentSessionToTop();
 
@@ -357,36 +365,14 @@ test('bumpCurrentSessionToTop moves flat sidebar sessions to the top-level front
     'session-session-b',
     'session-session-c',
   ]);
-  assert.equal(current.querySelector('.session-time').dataset.time, nowIso);
-  assert.equal(current.querySelector('.session-time').textContent, `relative:${nowIso}`);
+  assertBumpedTimeRefreshed(current, nowIso);
 });
 
 test('bumpCurrentSessionToTop lands the bumped row below the group PM head row', () => {
-  const nav = new FakeElement('DIV', {id: 'session-list'});
-  const group = new FakeElement('DIV', {className: 'session-group'});
-  const toggle = new FakeElement('DIV');
-  const items = new FakeElement('DIV', {className: 'session-group-items'});
   const pmHead = createSession('pm', '2026-04-01T03:00:00.000Z', 'old-pm');
   pmHead.dataset.pmHead = '1';
-  const before = createSession('session-b', '2026-04-01T00:00:00.000Z', 'old-b');
-  const current = createSession('session-a', '2026-04-01T01:00:00.000Z', 'old-a');
-  const after = createSession('session-c', '2026-04-01T02:00:00.000Z', 'old-c');
-
-  items.appendChild(pmHead);
-  items.appendChild(before);
-  items.appendChild(current);
-  items.appendChild(after);
-  group.appendChild(toggle);
-  group.appendChild(items);
-  nav.appendChild(group);
-
-  const {context, nowIso} = loadChatContext({
-    getElementById(id) {
-      if (id === 'session-list') return nav;
-      if (id === 'session-session-a') return current;
-      return null;
-    },
-  });
+  const {before, current, after} = bumpTrio();
+  const {items, context, nowIso} = bumpRig([pmHead, before, current, after], current, {grouped: true});
 
   context.bumpCurrentSessionToTop();
 
@@ -398,32 +384,14 @@ test('bumpCurrentSessionToTop lands the bumped row below the group PM head row',
     'session-session-c',
   ]);
   assert.equal(items.firstElementChild, pmHead);
-  assert.equal(current.querySelector('.session-time').dataset.time, nowIso);
-  assert.equal(current.querySelector('.session-time').textContent, `relative:${nowIso}`);
+  assertBumpedTimeRefreshed(current, nowIso);
 });
 
 test('bumpCurrentSessionToTop does not move the current row when it is the PM head row', () => {
-  const nav = new FakeElement('DIV', {id: 'session-list'});
-  const group = new FakeElement('DIV', {className: 'session-group'});
-  const toggle = new FakeElement('DIV');
-  const items = new FakeElement('DIV', {className: 'session-group-items'});
   const pmHead = createSession('session-a', '2026-04-01T03:00:00.000Z', 'old-pm');
   pmHead.dataset.pmHead = '1';
   const other = createSession('session-b', '2026-04-01T00:00:00.000Z', 'old-b');
-
-  items.appendChild(pmHead);
-  items.appendChild(other);
-  group.appendChild(toggle);
-  group.appendChild(items);
-  nav.appendChild(group);
-
-  const {context, nowIso} = loadChatContext({
-    getElementById(id) {
-      if (id === 'session-list') return nav;
-      if (id === 'session-session-a') return pmHead;
-      return null;
-    },
-  });
+  const {items, context, nowIso} = bumpRig([pmHead, other], pmHead, {grouped: true});
 
   context.bumpCurrentSessionToTop();
 
@@ -433,8 +401,7 @@ test('bumpCurrentSessionToTop does not move the current row when it is the PM he
   ]);
   assert.equal(items.firstElementChild, pmHead);
   // The .session-time refresh runs even on the no-move path.
-  assert.equal(pmHead.querySelector('.session-time').dataset.time, nowIso);
-  assert.equal(pmHead.querySelector('.session-time').textContent, `relative:${nowIso}`);
+  assertBumpedTimeRefreshed(pmHead, nowIso);
 });
 
 // ---------------------------------------------------------------------------

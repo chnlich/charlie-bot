@@ -35,6 +35,20 @@ from src.core.message_events import _stable_history_projection, stable_closed_pr
 __all__ = ["MessageProjection"]
 
 
+def _fold_messages(agg: MessageAggregator, events: list[dict], base: int) -> tuple[list[dict], list[int]]:
+  """Fold *events* through *agg*; return (messages, separator positions relative to *base*)."""
+  msgs: list[dict] = []
+  seps: list[int] = []
+  for delta in agg.feed_indexed([(base + idx, ev) for idx, ev in _stable_history_projection(events)]):
+    if delta["type"] != "message":
+      continue
+    msg = delta["message"]
+    if msg["role"] == "separator":
+      seps.append(len(msgs))
+    msgs.append(msg)
+  return msgs, seps
+
+
 class MessageProjection:
   """Dense, ordinal-addressable view of a session's full message history.
 
@@ -107,28 +121,16 @@ class MessageProjection:
       prefix = self._region_events[:closed]
       del self._region_events[:closed]
       fed_base = self.event_count - len(self._region_events) - closed - self._offset
-      for delta in self._agg.feed_indexed([(fed_base + idx, ev) for idx, ev in _stable_history_projection(prefix)]):
-        if delta["type"] == "message":
-          msg = delta["message"]
-          if msg["role"] == "separator":
-            self._seps_final.append(len(self._committed_final))
-          self._committed_final.append(msg)
+      closed_msgs, closed_seps = _fold_messages(self._agg, prefix, fed_base)
+      self._seps_final.extend(len(self._committed_final) + pos for pos in closed_seps)
+      self._committed_final.extend(closed_msgs)
 
     view_agg = self._agg.clone()
-    region_committed: list[dict] = []
-    region_seps: list[int] = []
     region_base = self.event_count - len(self._region_events) - self._offset
-    for delta in view_agg.feed_indexed([
-        (region_base + idx, ev) for idx, ev in _stable_history_projection(self._region_events)
-    ]):
-      if delta["type"] == "message":
-        msg = delta["message"]
-        if msg["role"] == "separator":
-          region_seps.append(len(self._committed_final) + len(region_committed))
-        region_committed.append(msg)
+    region_committed, region_seps = _fold_messages(view_agg, self._region_events, region_base)
 
     self.committed = [*self._committed_final, *region_committed]
-    self.separator_ordinals = self._seps_final + region_seps
+    self.separator_ordinals = self._seps_final + [len(self._committed_final) + pos for pos in region_seps]
     self.pending_draft = view_agg.pending_draft_message()
     if self.pending_draft is not None:
       self._history: list[dict] = [*self.committed, self.pending_draft]

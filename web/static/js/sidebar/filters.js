@@ -55,12 +55,18 @@ function renderSidebarFilterPills() {
 }
 
 // Inline removal shared by archive / unarchive / delete: the list never
-// refetches — the row leaves the DOM and, when it was the session being
-// viewed, the view moves to the first remaining rendered session.
+// refetches — grouped views repaint in place from the last-rendered list
+// minus the session (preview backfill, counts and Show-all toggle resync),
+// the archived tab and the search overlay fall back to removing just the row
+// node, and when it was the session being viewed the view moves to the first
+// remaining rendered session.
 async function removeSessionRowInline(sessionId) {
-  const row = document.getElementById('session-' + sessionId);
-  if (row) row.remove();
   delete sessionUnread[sessionId];
+  const repainted = Sidebar.removeSessionFromRenderedList(sessionId);
+  if (!repainted) {
+    const row = document.getElementById('session-' + sessionId);
+    if (row) row.remove();
+  }
 
   if (SESSION_ID !== sessionId) {
     updateSidebarHighlight(SESSION_ID);

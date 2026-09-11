@@ -558,6 +558,10 @@ let pmStateCache = null;
 let pmRefreshPending = false;
 let lastGroupedRenderArgs = null;
 let lastScheduledRenderArgs = null;
+// Whether the last renderSessionList call painted the search overlay. The
+// search flow never assigns currentFilter, so this marker — not the filter
+// state — is what tells the delete path a flat search list is on screen.
+let searchListPainted = false;
 
 function scheduleProjectManagerRefresh() {
   if (pmRefreshPending) return;
@@ -803,6 +807,7 @@ function renderSessionItem(s, filter, options = {}) {
 }
 
 function renderSessionList(sessions, filter) {
+  searchListPainted = (filter === 'search');
   if (filter === 'scheduled') {
     renderGroupedScheduledList(sessions);
     return;
@@ -831,6 +836,25 @@ function renderSessionList(sessions, filter) {
   resyncSessionUnread(sessions);
   updateRelativeTimes();
   refreshTuiDots();
+}
+
+// Inline-delete repaint for the grouped views: filter the removed session out
+// of the last-rendered list and repaint in place (the PM-refresh path), so the
+// preview window backfills and counts/toggles resync — with no refetch. The
+// archived tab owns its own paginated list and the search overlay is keyed by
+// the marker above, so both keep the caller's node-only row removal (false).
+function removeSessionFromRenderedList(sessionId) {
+  if (currentFilter === 'archived' || searchListPainted) return false;
+  if (currentFilter === 'scheduled') {
+    if (!lastScheduledRenderArgs) return false;
+    renderGroupedScheduledList(lastScheduledRenderArgs.filter(s => s.id !== sessionId), {skipRefresh: true});
+    return true;
+  }
+  if (!lastGroupedRenderArgs) return false;
+  renderGroupedSessionList(
+      lastGroupedRenderArgs.sessions.filter(s => s.id !== sessionId),
+      lastGroupedRenderArgs.filter, {skipRefresh: true});
+  return true;
 }
 
 
@@ -871,6 +895,7 @@ const SIDEBAR_ONLY = {
   updateGroupLimitDom,
   renderCronErrorBadge,
   openPmSlotEditor,
+  removeSessionFromRenderedList,
   resyncSessionUnread,
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);

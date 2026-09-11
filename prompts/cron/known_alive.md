@@ -335,31 +335,6 @@ Known-alive symbols:
   `files_api._inject_artifact_ui`) joins this class: the replaced function is called with
   two positional arguments at both production call sites (src/api/files.py), so the stub
   keeps both parameters, and a tests-only vulture scan flags the unused first one.
-- `account_for_dir`, `record_auth_failure`, `observe_rate_limit`, `select`, `earliest_reset`,
-  `move_transcript` (`src/core/claude_accounts.py`) — vulture flags each as an unused function;
-  `credentials_present`, `auth_failed_recently`, `healthy`, `headroom`, `latest_reading`,
-  `TranscriptMoveError` (same file) are reached only from inside the module, so no static tool
-  flags them. Together they are the account pool's selection/relay half with zero production
-  callers: every whole-repo reference outside the module is either `tests/test_claude_accounts.py`
-  or the module's own call chain. The pool's other halves are wired (the usage-panel reading
-  write in `src/api/ext_usage.py`; the resume lookup in `src/agents/master_cc_run.py` and the
-  resume domain in `src/api/sessions.py`), and the comment above `_event_readings` assigns its
-  writes to the master and worker event loops of a run on that account. A staged feature
-  foundation, kept deliberately: the live tests reference the six flagged entry points, so no
-  Step 3 deletion bar can clear while the trigger wiring is pending.
-- `expired_cache_compaction_wanted`, `relay_compaction_wanted`, `compact_with_sonnet`
-  (`src/core/claude_compaction.py`) — vulture flags each as an unused function;
-  `is_fable` and `CompactionOutcome` (same file) are reached only from inside the module, and
-  `cache_expired`, `count_compact_boundaries`, `compaction_command`, `compaction_env` are
-  referenced only by `tests/test_claude_compaction.py`. Together they are the
-  Sonnet-compaction engine with zero production callers. The module docstring pins the intended
-  trigger moments (an account relay, a cache gone cold past the hour) and the same
-  `context_compacted` / `context_compact_failed` events the auto-compaction path already
-  renders; the rendering half is wired (`src/core/message_aggregator.py`), and
-  `AccountsConfig.claude_compaction` (composed at `CharlieBotConfig.accounts`) ships the config
-  plumbed for the trigger sites. A staged
-  feature foundation, kept deliberately; never delete on static-tool evidence while the trigger
-  wiring is pending.
 - `_nonempty`, `_relative`, `_no_explicit_null_supplement` (`src/core/project_config.py`) —
   pydantic `@field_validator` / `@model_validator` methods on `ProjectConfig`, registered with
   pydantic at class-definition time and invoked during model validation. The method names have

@@ -31,6 +31,14 @@ def utc_now() -> datetime:
 
 UtcDatetime = Annotated[datetime, BeforeValidator(ensure_utc)]
 
+# Cross-process session-identity wire name: the server writes the master's
+# session id into every spawned process env (master_cc_run._build_master_env),
+# the backend supervisors strip any inherited value, and the CLIs read it back
+# (src.cli.common.resolve_session_id). One spelling everywhere; the constant
+# lives beside the models config already imports so the CLI never pays the
+# backend stack for it.
+SESSION_ID_ENV_VAR = "CHARLIEBOT_SESSION_ID"
+
 # ---------------------------------------------------------------------------
 # Aliased types
 # ---------------------------------------------------------------------------

@@ -1,6 +1,5 @@
 """Configuration loading for CharlieBot."""
 
-import asyncio
 import json
 import os
 import re
@@ -27,7 +26,6 @@ from src.core.models import (
     ClaudeAccount,
     ClaudeCompactionConfig,
 )
-from src.core.tasks import create_logged_task
 from src.core.yaml_utils import load_yaml
 
 log = structlog.get_logger()
@@ -1337,6 +1335,12 @@ def _fire_cron_error_alert(error_names: list[str]) -> None:
   new_set = frozenset(error_names)
   if new_set == _read_cron_alert_state():
     return
+  # Lazy: both imports ride the event-loop machinery, and this module is every
+  # CLI invocation's shared core — a synchronous CLI path never reaches here.
+  import asyncio
+
+  from src.core.tasks import create_logged_task
+
   try:
     asyncio.get_running_loop()
   except RuntimeError:

@@ -178,6 +178,11 @@ def make_error_event(msg: str) -> dict:
   return {"type": ET.ERROR, "message": msg, "content": msg}
 
 
+def make_master_done_event(exit_code: int, *, still_thinking: bool) -> dict:
+  """Build the master turn-end event; its payload keys are pinned in src/core/event_types.py."""
+  return {"type": ET.MASTER_DONE, "exit_code": exit_code, ET.STILL_THINKING: still_thinking}
+
+
 def make_result_event(
     input_tokens: int = 0,
     output_tokens: int = 0,

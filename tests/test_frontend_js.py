@@ -44,6 +44,7 @@ _NODE_TESTS = [
     "terminal_b64.test.js",
     "terminal_mount.test.js",
     "test_archived_view.test.js",
+    "test_sidebar_delete_backfill.test.js",
     "test_switch_session_telemetry.test.js",
     "thinking_toggle.test.js",
     "tui_status_scope.test.js",

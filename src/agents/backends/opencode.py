@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import ssl
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -35,6 +36,13 @@ from src.core.timeouts import (
 )
 
 log = structlog.get_logger()
+
+# The serve URL is plain localhost HTTP, so no TLS ever rides these clients;
+# the context exists only because httpx builds a fresh default SSL context per
+# AsyncClient when `verify` is left at its default, and that build costs ~20 ms
+# of event-loop CPU per call here (create_default_context loads the system CA
+# set). One process-wide context makes every construction pay it once.
+_SERVE_SSL_CONTEXT = ssl.create_default_context()
 
 _SERVER_URL_RE = re.compile(r"opencode server listening on (http://127\.0\.0\.1:\d+)")
 # Handled `opencode serve` SSE event types: each frame's "type" value, fixed by the
@@ -185,7 +193,9 @@ class OpenCodeBackend(AgentBackend):
         self._server_url = await self._read_server_url(stdout_log_path)
         self._stdout_task = asyncio.create_task(self._stream_stdout(stdout_log_path))
 
-        async with httpx.AsyncClient(base_url=self._server_url, timeout=OPENCODE_HTTP_API_TIMEOUT) as client:
+        async with httpx.AsyncClient(
+            base_url=self._server_url, timeout=OPENCODE_HTTP_API_TIMEOUT, verify=_SERVE_SSL_CONTEXT
+        ) as client:
           await self._check_health(client)
           self._model_limit = await self._fetch_model_limit(client)
           self._session_id = self._resume_session_id or await self._create_session(client)
@@ -698,7 +708,9 @@ class OpenCodeBackend(AgentBackend):
     if self._server_url is None or self._session_id is None:
       return
     try:
-      async with httpx.AsyncClient(base_url=self._server_url, timeout=OPENCODE_ABORT_TIMEOUT) as client:
+      async with httpx.AsyncClient(
+          base_url=self._server_url, timeout=OPENCODE_ABORT_TIMEOUT, verify=_SERVE_SSL_CONTEXT
+      ) as client:
         response = await client.post(f"/session/{self._session_id}/abort")
         response.raise_for_status()
     except Exception as e:

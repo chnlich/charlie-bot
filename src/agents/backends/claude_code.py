@@ -92,11 +92,6 @@ def _warn_declared_window_once(event: str, *, variable: str, **fields: str) -> N
       log.warning, event, (event, variable, tuple(sorted(fields.items()))), variable=variable, **fields)
 
 
-def _reset_declared_window_warnings_for_tests() -> None:
-  """Clear the warn-once registry, restoring the process-start state."""
-  _DECLARED_WINDOW_WARNINGS_SEEN.clear()
-
-
 def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
   """Environment for a supervisor process whose children run Claude Code.
 

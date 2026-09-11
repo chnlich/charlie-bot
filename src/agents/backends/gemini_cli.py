@@ -11,6 +11,7 @@ from src.agents.backends.base import (
     make_tool_result_event,
     make_tool_use_event,
     resolve_binary,
+    strip_google_api_keys,
 )
 
 log = structlog.get_logger()
@@ -37,11 +38,7 @@ class GeminiCliBackend(AgentBackend):
     return cmd
 
   def _prepare_env(self, env: dict) -> dict:
-    """Strip API keys so the CLI uses OAuth auth instead of key-based billing."""
-    gemini_env = {**env}
-    gemini_env.pop('GEMINI_API_KEY', None)
-    gemini_env.pop('GOOGLE_API_KEY', None)
-    return gemini_env
+    return strip_google_api_keys(env)
 
   def translate_event(self, ev: dict) -> list[dict]:
     """Translate a single Gemini stream-json NDJSON event into CC-compatible event(s)."""

@@ -17,6 +17,7 @@ from src.agents.backends.base import (
     make_text_event,
     prepend_path_dir,
     resolve_binary,
+    strip_google_api_keys,
 )
 
 _SYSTEM_MESSAGE_BLOCK_RE = re.compile(r"<SYSTEM_MESSAGE>.*?</SYSTEM_MESSAGE>\s*", re.DOTALL)
@@ -56,9 +57,7 @@ class AntigravityCliBackend(AgentBackend):
     return cmd
 
   def _prepare_env(self, env: dict) -> dict:
-    antigravity_env = {**env}
-    antigravity_env.pop("GEMINI_API_KEY", None)
-    antigravity_env.pop("GOOGLE_API_KEY", None)
+    antigravity_env = strip_google_api_keys(env)
     prepend_path_dir(antigravity_env, USER_LOCAL_BIN)
     return antigravity_env
 

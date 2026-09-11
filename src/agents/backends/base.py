@@ -124,6 +124,19 @@ def prepend_path_dir(env: dict[str, str], dir_path: str) -> None:
     env["PATH"] = f"{dir_path}:{current_path}"
 
 
+def strip_google_api_keys(env: dict[str, str]) -> dict[str, str]:
+  """Return a copy of *env* with the Google API-key vars removed.
+
+  The Google CLI backends (gemini, agy) must bill through their OAuth login:
+  an inherited GEMINI_API_KEY or GOOGLE_API_KEY switches the CLI to key-based
+  billing outside the configured account.
+  """
+  stripped = dict(env)
+  stripped.pop("GEMINI_API_KEY", None)
+  stripped.pop("GOOGLE_API_KEY", None)
+  return stripped
+
+
 def build_claude_argv(
     session_id: str,
     resume: bool,

@@ -8,25 +8,11 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
-const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext } = require('./session_context_stub');
+const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext,
+  makeSessionMeta } = require('./session_context_stub');
 
 function makeArchivedSession(id, overrides = {}) {
-  return {
-    id,
-    name: `Session ${id}`,
-    group: null,
-    status: 'archived',
-    updated_at: '2026-04-02T04:00:00Z',
-    has_unread: false,
-    has_running_tasks: false,
-    has_pending_trigger: false,
-    pending_trigger_count: 0,
-    next_trigger_at: null,
-    starred: false,
-    rating: null,
-    backend: 'claude-opus-4.6',
-    ...overrides,
-  };
+  return makeSessionMeta(id, {status: 'archived', rating: null, ...overrides});
 }
 
 function makePage(sessions, {hasMore = false, groups = null} = {}) {

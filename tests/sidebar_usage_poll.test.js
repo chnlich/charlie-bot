@@ -6,7 +6,7 @@ const { readStatic } = require('./read_static');
 const { createElement } = require('./dom_element_stub');
 const { escapeHtml } = require('./escape_html_stub');
 const { baseSessionContext, buildSidebarFilterElements, buildUsageElements, createChatSidebarContext,
-  SWITCH_TELEMETRY_URL } = require('./session_context_stub');
+  makeSessionMeta, SWITCH_TELEMETRY_URL } = require('./session_context_stub');
 
 const WEBSOCKET_JS = readStatic('websocket.js');
 
@@ -88,20 +88,7 @@ function buildSessionActionElements() {
 }
 
 function makeSession(id, name, overrides = {}) {
-  return {
-    id,
-    name,
-    group: null,
-    updated_at: '2026-04-02T04:00:00Z',
-    has_unread: false,
-    has_running_tasks: false,
-    has_pending_trigger: false,
-    pending_trigger_count: 0,
-    next_trigger_at: null,
-    starred: false,
-    backend: 'claude-opus-4.6',
-    ...overrides,
-  };
+  return makeSessionMeta(id, {name, ...overrides});
 }
 
 // The grouped-sidebar fixture: a session-list nav element wired into the

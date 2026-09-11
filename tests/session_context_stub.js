@@ -119,6 +119,28 @@ function makeSidebarRow(sessionId, name) {
   });
 }
 
+// One session-metadata fixture as the sidebar wire format carries it. Only the
+// fields every sidebar harness shares live here: a harness whose fixture must
+// leave a field undefined (usage_poll reads no status/rating) or default it
+// differently (delete_backfill's Work group) passes that field in overrides —
+// it is never added to this base.
+function makeSessionMeta(id, overrides = {}) {
+  return {
+    id,
+    name: `Session ${id}`,
+    group: null,
+    updated_at: '2026-04-02T04:00:00Z',
+    has_unread: false,
+    has_running_tasks: false,
+    has_pending_trigger: false,
+    pending_trigger_count: 0,
+    next_trigger_at: null,
+    starred: false,
+    backend: 'claude-opus-4.6',
+    ...overrides,
+  };
+}
+
 // The bootstrap body switchSession renders. oldestMessageOrdinal and hasMore
 // are the two fields the pagination tests vary; everything else is the fixed
 // one-turn shape the switch flow reads.
@@ -199,6 +221,7 @@ module.exports = {
   buildUsageElements,
   SWITCH_TELEMETRY_URL,
   makeSidebarRow,
+  makeSessionMeta,
   bootstrapPayload,
   installSessionDocumentLookups,
   stubPageTimers,

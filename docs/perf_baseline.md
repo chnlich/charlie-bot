@@ -96,6 +96,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M84 backend stream-line parse, worst on-disk raw log | M84 collector below | seconds per full replay of the raw-log tail-follow loop and the stdout-stream NDJSON funnel over the worst on-disk raw agent log (scratch copy, live home read-only) | tail-follow median < 0.060 s; stdout-stream median < 0.010 s | — (introduced with its first history row) |
 | M85 verify-finalize report read, steady state | M85 collector below | seconds per `read_verify_final_report` call, worst on-disk worker log | median < 0.005 s | — (introduced with its first history row) |
 | M86 delegation takeoff-gate scan, delegation-flow shape | M86 collector below | seconds per `check_takeoff_gate` call, worst live chat corpus, one authorized user message appended (the corpus-as-it-stands round is the parity witness) | median < 0.001 s | — (introduced with its first history row) |
+| M87 opencode abort client round-trip | M87 collector below | seconds per `_abort_session` call against a local stub serve (the per-turn cleanup POST, and the run-start client pays the same construction; loop lag reads the 5 ms ticker floor like M14) | wall median < 0.005 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -5379,10 +5380,85 @@ asyncio.run(main())
 EOF
 ```
 
+M87 — opencode abort client round-trip. `_abort_session` runs at every
+opencode turn's cleanup (and `terminate`), posting to the run's local serve;
+the run-start client (`_check_health` through the SSE stream) pays the same
+per-call construction. httpx builds a fresh default SSL context per
+AsyncClient when `verify` is left at its default — ~20 ms of event-loop CPU
+per construction on this host, paid twice per opencode turn — while the serve
+URL is plain localhost HTTP and never uses the context for TLS. The cost is
+turn-boundary event-loop work invisible to HTTP probes, so the collector
+drives the real `_abort_session` (read-only: the run's session id is a
+collector literal) against a local stub serve with a concurrent 5 ms ticker,
+from the checkout under test: one cold pass, as at the first cleanup after a
+process start, then nine timed calls. Evidence while the live server runs
+older code points the same collector at the branch checkout (`CHECKOUT` at
+the worktree root), the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, os, sys, threading, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.agents.backends.opencode import OpenCodeBackend
+
+class _AbortHandler(BaseHTTPRequestHandler):
+  def do_POST(self):
+    self.rfile.read(int(self.headers.get("Content-Length", 0)))
+    self.send_response(200)
+    self.end_headers()
+  def log_message(self, *args):
+    pass
+
+server = HTTPServer(("127.0.0.1", 0), _AbortHandler)
+port = server.server_address[1]
+threading.Thread(target=server.serve_forever, daemon=True).start()
+
+backend = OpenCodeBackend(model="provider/model")
+backend._server_url = f"http://127.0.0.1:{port}"
+backend._session_id = "collector"
+
+async def run_once():
+  gaps = []
+  stop = False
+  async def ticker():
+    prev = time.perf_counter()
+    while not stop:
+      await asyncio.sleep(0.005)
+      now = time.perf_counter()
+      gaps.append(now - prev)
+      prev = now
+  t = asyncio.create_task(ticker())
+  t0 = time.perf_counter()
+  await backend._abort_session()
+  wall = time.perf_counter() - t0
+  stop = True
+  await t
+  return (max(gaps) if gaps else wall), wall
+
+async def main():
+  await run_once()  # cold pass, as at the first cleanup after a process start; not timed
+  lags, walls = [], []
+  for _ in range(9):
+    lag, wall = await run_once()
+    lags.append(lag)
+    walls.append(wall)
+  lags.sort()
+  walls.sort()
+  print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: _abort_session over a local stub serve; "
+        f"loop-lag median {lags[4]*1000:.1f} ms, max {lags[-1]*1000:.1f} ms; "
+        f"wall median {walls[4]*1000:.1f} ms, max {walls[-1]*1000:.1f} ms over 9")
+
+asyncio.run(main())
+server.shutdown()
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-10 | this PR | M87 `_abort_session` wall median 22.3/22.5/20.9 ms → 2.2/1.8/1.9 ms, −90 % to −92 %, maxima 27.4-30.5 → 2.2-2.9 ms (three interleaved rounds of the new collector — the run-start client pays the same construction — over a local stub serve, main checkout before vs branch worktree after back-to-back at load 1.75-2.51 one-minute; loop-lag maxima 6.4-7.1 → 5.8-6.0 ms at the ~5 ms ticker floor; component attribution: `ssl.create_default_context` 18.3 ms of the per-call client construction measured standalone, httpx.AsyncClient construct+POST+close 20.54 ms median → 1.65 ms with the prebuilt context; live-server attribution: py-spy over the running instance carried `create_ssl_context` under the opencode backend's `_abort_session`/run-start client at 43 of 893 samples in a 30 s window while an opencode master turn ended); 5013-passed suite plus 1 new construction-contract test | every opencode turn (master runs and opencode workers) built two fresh httpx.AsyncClients per run — one at run start, one at the cleanup abort — and each construction built a default SSL context (~20 ms of event-loop CPU, the CA-set load) although the serve URL is plain localhost HTTP that never uses TLS; both constructions now pass one process-wide prebuilt context (`_SERVE_SSL_CONTEXT`), the per-call client lifecycle unchanged; M87 definition and healthy range introduced with this PR |
 | 2026-09-10 | this PR | M36 full-poll body 214877 → 154388 B, −28 %, back inside the < 200 KB range (three interleaved rounds of the verbatim collector, 429-row / 3777 KB worst worker-list corpus of session dfe393f7, live state read-only, main checkout before vs branch worktree after back-to-back at load 2.04-2.12, body byte-identical across all six arms; full poll median 1.95/2.19/2.07 → 1.88/1.95/1.91 ms, conditional 204 0 B unchanged; no-regression re-measures interleaved ×2: M63 /view body 231488 → 170999 B with handler median 1.27/1.28 → 0.98/0.95 ms, M68 marked rebuild 4.50/4.60 → 4.80/4.66 ms, M59 full row 1.93/2.00 → 1.86/2.19 ms with body 59259 B identical; 5009-passed suite) | every delegation-heavy row shipped a 240-char description prefix — 52 % of the 429-row body — while the card paints one CSS-truncated line and the full-text modal fetches the thread row on click; the cap drops to 100 chars, one text-sm line at ~700 px, so every visible character still ships and longer text reaches the modal through the existing description_full_len click-fetch; the corpus's thread count grows without bound (266 rows at the 2026-09-02 calibration, 429 today), so the body range stays honest only with the per-row payload bounded |
 | 2026-09-10 | this PR | M10/M15/M48/M73/M70 standing collectors: before — five of 86 crashed in the round's sweep (M10/M15/M48/M73 IndexError at `create_session`'s `backends.options[0]` on the scratch config, M70 AssertionError "artifact-comments injection missing"), no readings; after (repaired commands, main checkout, load 1.78/1.87/1.44) — M10 3000 save_metadata calls / 25774 concurrent reads, 0 torn; M15 3000 _write_cache_entry calls / 425724 concurrent reads, 0 torn; M48 0 search_read_failed lines over 60 scans; M73 amend-validation loop-lag median 0.0058 s / wall median 0.0369 s (14 KB plan page); M70 repeat-view median 0.0026 s, body 1084806 B (injection present) | the 2026-09-09 config-schema series changed the two contracts the five collectors' scratch fixtures leaned on without updating them: 77e1e405 moved the default session backend to the sectioned `backends.options`, whose default is empty (the old flat `backend_options` carried a built-in claude-opus entry), so any `create_session` on a bare scratch config IndexErrors — the suite's own fixtures already pass `backends={"options": […]}`, the baseline's four did not; 126d4cd8 moved the files routes' access-key read from the monkeypatchable `get_config()` to the env-scoped `get_credentials()`, so M70's uncredentialed TestClient request was checked against the live key and served the clean page; the repair seeds one backend option in the four scratch configs (the conftest fixture shape, no behavior change — the metrics are orthogonal to backend choice) and gives M70 the M65 isolation shape (snapshot-seeded credentials.yaml with an empty access key plus `CHARLIEBOT_HOME` pointed at the snapshot before any request); collector commands only, no product code |
 | 2026-09-09 | this PR | M86 delegation takeoff-gate, delegation-flow shape median 2.27/3.65/4.00 → 0.00/0.00/0.00 ms, maxima 2.73-6.46 → 0.00-0.03 ms over nine timed warm calls (three interleaved rounds of the verbatim collector, 20534-event worst live chat file of session d321b9ad, scratch CHARLIEBOT_HOME per round, live home read-only, main checkout before vs branch worktree after back-to-back at load 8.2-11.2 one-minute — a host build was spiking, so the before side's spread is load noise, and every paired round still landed ≥2 orders faster); parity witness, the corpus as it stands (blocked verdict both arms): before median 2.20/2.50/5.01 ms, after 3.73/3.73/2.34 ms, same full-walk span both sides, verdicts identical; 39-passed gate-test file plus a 400-history randomized parity test against the verbatim forward walk, full 4948-passed suite | every `/api/internal/delegate` and `/api/internal/improve` POST ran `check_takeoff_gate` as an O(full-history) forward walk, re-normalizing every real user message's whole content and overwriting the two answers the verdict reads (the file-last real user message's takeoff phrase, the file-last parseable pre-takeoff stamp) — per-delegation thread-pool time growing with the busiest master session without bound (2.2-4.0 ms at 20,534 events today, on the spawn path behind the executor pool); the scan now walks backward and stops once both answers are settled — a file-older message can never overwrite either, so the walked span is the tail after the last user message, one turn's length, while a blocked misfire (no take-off, no parseable pre-takeoff anywhere) still walks the whole file, the same span the forward form always paid; one documented divergence, diagnostic only: pre-takeoff bearers file-older than the first parseable one no longer emit `_parse_pre_takeoff_timestamp` warnings (verdict-exact, fewer warning lines) |

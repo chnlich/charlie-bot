@@ -32,20 +32,6 @@ try {
   process.exit(1);
 }
 
-// renderChatMath's exact delimiter set — a gate skip is sound only when the
-// walk could not have transformed anything.
-const KATEX_OPTS = {
-  delimiters: [
-    { left: '$$', right: '$$', display: true },
-    { left: '\\[', right: '\\]', display: true },
-    { left: '\\(', right: '\\)', display: false },
-    { left: '$', right: '$', display: false },
-  ],
-  ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],
-  ignoredClasses: ['code-block'],
-  throwOnError: false,
-};
-
 (async () => {
   const [markedSrc, hljsSrc, katexSrc, autoSrc] = await Promise.all([
     fetchUrl(MARKED_URL),

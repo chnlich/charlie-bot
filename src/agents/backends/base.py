@@ -63,12 +63,6 @@ SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
 # claude-sub both pin the same dict.
 SKIP_PERMISSIONS_SETTINGS = {"skipDangerousModePermissionPrompt": True}
 
-# Cross-process session-identity wire name: the server writes the master's
-# session id into the master subprocess env (master_cc_run._build_master_env),
-# the backend supervisors strip any inherited value, and the CLIs read it back
-# (src.cli.common.resolve_session_id). One spelling everywhere.
-SESSION_ID_ENV_VAR = "CHARLIEBOT_SESSION_ID"
-
 # Poll cadence of the tail-follow read loop. Event volume is low (median
 # inter-event gap ~54 s measured), so a fixed poll beats an inotify dependency.
 _TAIL_POLL_INTERVAL = 0.15

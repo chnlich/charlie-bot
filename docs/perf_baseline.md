@@ -101,6 +101,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M89 backend stderr tee, per chunk | M89 collector below | seconds per 8 KB chunk tee to the run's stderr.log, the streamed-turn pump shape | median < 0.0002 s | — (introduced with its first history row) |
 | M90 backend stdout pump, per chunk or startup line | M90 collector below | seconds per 8 KB chunk write (the streamed pump shape) and per startup line append (the run-start shape) to the covered backends' stdout.log | chunk median < 0.0002 s; line median < 0.0002 s | — (introduced with its first history row) |
 | M91 worker per-event quota-scan head, streamed-turn replay | M91 collector below | seconds per `Worker._process_event` call over a full-corpus replay of the worst on-disk worker events log — per-event median, worst single event, and the replay's total wall (scratch append target, zero-subscriber broadcast) | per-event median < 0.0002 s; worst single event < 1.0 ms; replay wall median < 0.30 s | — (introduced with its first history row) |
+| M92 CLI invocation startup, common-family command | M92 collector below | seconds per `charliebot` invocation's import-and-dispatch floor (`schedule-trigger --help`: fresh process, the shared `src.cli.common` chain, no server round trip); a real common-family command (delegate/plan/improve) pays the same floor plus its request | median < 0.40 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -5732,10 +5733,41 @@ shutil.rmtree(scratch)
 EOF
 ```
 
+M92 — CLI invocation startup, common-family command. Every `charliebot` invocation is a
+fresh Python process, and the master and workers run several per turn (memory queries,
+plan verbs, delegate, schedule-trigger), so the shared module's import chain is the
+per-call floor they all pay. The collector times `schedule-trigger --help` — argparse
+exits before any request, so the reading is pure import+dispatch, deterministic, and
+independent of server state — with the checkout under test resolved cwd-first (the
+editable-install finder sits behind PathFinder, so a subprocess with cwd at the
+checkout imports that checkout's code). `CHECKOUT` at the worktree root reads the
+branch, the same shape as the M18 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, subprocess, sys, time
+
+CHECKOUT = os.environ["CHECKOUT"]
+CODE = "import sys; from src.cli.main import main; sys.exit(main())"
+
+def wall(args):
+    t0 = time.perf_counter()
+    subprocess.run([sys.executable, "-c", CODE, *args], cwd=CHECKOUT,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    return time.perf_counter() - t0
+
+wall(["schedule-trigger", "--help"])  # warm the interpreter's own page cache; not timed
+times = sorted(wall(["schedule-trigger", "--help"]) for _ in range(7))
+print(f"checkout {os.path.basename(CHECKOUT)}: schedule-trigger --help (import+dispatch floor, "
+      f"no server call) median {times[3]:.3f} s, max {times[-1]:.3f} s over 7")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-11 | this PR | M92 CLI invocation wall, `charliebot schedule-trigger --help` median 0.423/0.427/0.433/0.438 s → 0.338/0.339/0.344/0.347 s, −17 % to −21 %, every paired round faster (four interleaved rounds of the new collector — main checkout before vs branch worktree after, back-to-back at load 0.8-1.1 one-minute, checkout resolved cwd-first per arm); `plan list` (a real common-family command, registry read included) 0.449/0.448/0.449 → 0.358/0.361/0.362 s, −20 %, every paired round faster; `memory query` (config-bound, imports no `src.cli.common`) 0.293 → 0.298 s unchanged within noise — its asyncio rides structlog.stdlib, outside this diff; component attribution on the pre-fix chain (`-X importtime`): `src.cli.common` cumulative 366 ms, of which `src.agents.backends.base` +123 ms (runs → numpy) and `src.core.threads` +17 ms on top of the config+requests core; 5064-passed suite including the new import-weight contract test | every `charliebot` invocation is a fresh process and the master and workers run several per turn; the CLI's shared module imported `SESSION_ID_ENV_VAR` from `src.agents.backends.base` and the thread-layout names from `src.core.threads` at module top, dragging the backend stack (`src.core.runs` → numpy), the sessions stack, and config's top-level `asyncio` import into processes that only parse args, read config, and POST to the internal API; the env-var name moved to `src/core/models.py` beside the constants config already pays for (all four importers updated, one spelling everywhere), the thread names lazy-import at the readback path (the rare sent-but-lost class), and config's `asyncio`/`create_logged_task` imports moved into the cron-alert function's lazy block (the existing no-event-loop skip untouched); requests stays a top-level import so the collector's floor is the floor real commands pay |
 | 2026-09-11 | this PR | M91 worker per-event quota-scan head, streamed-turn replay: worst single event 1.36/1.37/1.40 → 0.66/0.69/0.87 ms, −38 % to −53 %, every paired round faster (three interleaved rounds of the new collector — main checkout before vs branch worktree after back-to-back, 6.7 MB / 2315-event worst on-disk worker log, scratch append target, live home read-only, load 0.86-1.29 one-minute; per-event median 84-104 us both arms — the M82 append floor — and replay wall median 0.222-0.270 s both arms, within noise); component attribution, the head the diff gates — the per-event `str().lower()` copies of both payload fields — measured standalone 5.91/6.05/6.12 → 0.22/0.25/0.27 ms per corpus replay, −95 % to −96 %, every paired round faster; 5059-passed suite plus 3 new quota-scan gate tests | every streamed worker event paid a repr of its whole message dict plus lowercase copies of the message and content payloads for the quota-pattern check although only ERROR events can match — the head scaled with payload (the corpus's 642 KB tool_result event paid ~0.7 ms of scan beside its append), so the copies now ride the ERROR gate, the check's own condition, and non-ERROR events skip the stringification; M91 definition and healthy range introduced with this PR |
 | 2026-09-11 | this PR | M66 merged build median 4.82/4.79/4.80 → 4.38/4.46/4.35 s, −9 % to −11 %, maxima 4.82-4.85 → 4.35-4.48 s (three interleaved rounds of the verbatim collector — `CHECKOUT` at the main checkout before vs branch worktree after, back-to-back, 307.3 MB worst on-disk trace /home/chaoli/data/hayden_243809_traces/step000110/trace_rank008_step000110.json (1,068,461 events), scratch output under /tmp, live home read-only, every paired round faster at load 1.68-1.92 one-minute; artifact 21.5 MB.gz identical across arms; 5056-passed suite plus the mixed-tid-form contract test; component attribution: the pre-fix build's ~4.8 s reads 0.19 s file read + 2.1 s orjson parse + 1.36 s walk+batch-dumps (no-op sink) + 0.74 s level-1 gzip) | the build's per-event walk paid a `str()` on every tid-bearing event for the str-canonical sequencer probe — 0.16 s standalone on the 1,068,461-tid corpus, the same shape #1151 removed for pid — while the generational GC passes over the ~1M dicts the parse allocates and the walk mutates cost 0.3-0.6 s per build (measured gc-on vs gc-off interleaved ×2); the walk now probes a raw-value tid map beside the str-keyed sequencer map (on a raw miss the str-keyed lookup still answers, so int 7 and "7" stay one thread — pinned by a new contract test) and the build runs with GC disabled inside the spawn-context merge pool, re-enabled with one collect so cyclic leftovers never accumulate across builds in a long-lived worker; M66's corpus has grown 2.15x since the range was set (496,116 events at the 2026-09-09 landing, 1,068,461 today) and stays inside < 8 s with margin |
 | 2026-09-11 | this PR | M81 collector command repair: the verbatim command failed from any non-repo CWD (`Cannot find module '<cwd>/tests/katex_walk_collector.js'`, verified from `/tmp` and `/` — the script path was CWD-relative and the `CHECKOUT` prefix assignment it already carried does not feed same-line shell expansion, so the sweep silently lost M81 whenever its runner did not start in the checkout); repaired command runs verbatim from /tmp against both checkouts — main reading page re-render wall 1.03 ms, 0 walks, parity true (corpus sha1 7409bcd20e4c), branch reading 1.01 ms, 0 walks, identical sha1 — inside the healthy ranges, no metric movement | one-word-class fix: `node tests/…` → `; node "$CHECKOUT/tests/…"`, the statement form so the assignment lands before the expansion; collector command only, no product code |

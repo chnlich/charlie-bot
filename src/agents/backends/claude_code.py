@@ -9,10 +9,11 @@ from pathlib import Path
 
 import structlog
 
-from src.agents.backends.base import SESSION_ID_ENV_VAR, SKIP_PERMISSIONS_FLAG, AgentBackend
+from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, AgentBackend
 from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR
 from src.core.log_once import WarnOnceRegistry
+from src.core.models import SESSION_ID_ENV_VAR
 from src.core.process import kill_process_group
 
 log = structlog.get_logger()

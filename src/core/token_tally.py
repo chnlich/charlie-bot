@@ -491,6 +491,23 @@ def _partial_from_doc(doc: object) -> _OpencodePartial | None:
       count=doc["count"])
 
 
+def _adopt_stored_partial(key: str, doc: dict) -> _OpencodePartial | None:
+  """Seed the partial registry from a stored document's partial; return the adopted partial.
+
+  Adoption applies only while the registry holds no partial for the key: an in-process
+  partial is always the fresher one, and overwriting it with the document's older buckets
+  would regress the served tally. None means nothing was adopted — either the registry
+  already holds a partial, or the document carries none (a v1 entry, per _partial_from_doc)
+  — and the caller then works from whatever the registry holds after its scan.
+  """
+  if _opencode_partials.get(key) is not None:
+    return None
+  stored = _partial_from_doc(doc.get("partial"))
+  if stored is not None:
+    _opencode_partials[key] = stored
+  return stored
+
+
 def _entry_records(entry: dict) -> list:
   """The entry's records under either entry shape: v2's ``rows`` map values, or the v1
   ``records`` list the first save rewrites."""
@@ -1213,12 +1230,7 @@ def _merge_opencode(
     epoch = _opencode_row_epochs.get(key, 0)
     partial = _opencode_partials.get(key)
     if partial is None:
-      # Process start: adopt the entry's stored partial when it carries one, so the served
-      # buckets never replay the records; one replay builds the partial only for a v1 entry.
-      stored = _partial_from_doc(entry.get("partial"))
-      if stored is not None:
-        _opencode_partials[key] = stored
-        partial = stored
+      partial = _adopt_stored_partial(key, entry)
     if partial is None:
       records = _entry_records(entry)
       _replay_opencode_records(t, records)
@@ -1233,10 +1245,7 @@ def _merge_opencode(
     prev = cache.prev("opencode", key) if cache is not None else None
     if prev is not None:
       seed = prev.get("rows")
-      if _opencode_partials.get(key) is None:
-        stored = _partial_from_doc(prev.get("partial"))
-        if stored is not None:
-          _opencode_partials[key] = stored
+      _adopt_stored_partial(key, prev)
     scan = _advance_opencode_rows(db, seed)
   if not scan.ok:
     t.notes.append(f"opencode: unreadable db: {scan.error}")

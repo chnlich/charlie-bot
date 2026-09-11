@@ -460,9 +460,13 @@ def _partial_to_doc(partial: _OpencodePartial) -> dict:
   for (_, model, account), bucket in partial.by_account.items():
     accounts.setdefault(model, {})[account] = bucket
   return {
-      "by_model": {model: bucket for (_, model), bucket in partial.by_model.items()},
+      "by_model": {
+          model: bucket for (_, model), bucket in partial.by_model.items()
+      },
       "by_account": accounts,
-      "span": {model: list(pair) for (_, model), pair in partial.span.items()},
+      "span": {
+          model: list(pair) for (_, model), pair in partial.span.items()
+      },
       "count": partial.count,
   }
 
@@ -474,12 +478,16 @@ def _partial_from_doc(doc: object) -> _OpencodePartial | None:
   if not isinstance(doc, dict):
     return None
   return _OpencodePartial(
-      by_model={("opencode", model): bucket for model, bucket in doc["by_model"].items()},
-      by_account={
-          ("opencode", model, account): bucket
-          for model, buckets in doc["by_account"].items() for account, bucket in buckets.items()
+      by_model={
+          ("opencode", model): bucket for model, bucket in doc["by_model"].items()
       },
-      span={("opencode", model): tuple(pair) for model, pair in doc["span"].items()},
+      by_account={
+          ("opencode", model, account): bucket for model, buckets in doc["by_account"].items()
+          for account, bucket in buckets.items()
+      },
+      span={
+          ("opencode", model): tuple(pair) for model, pair in doc["span"].items()
+      },
       count=doc["count"])
 
 
@@ -1255,11 +1263,14 @@ def _merge_opencode(
       # rewrite the multi-MB document for a signature the next WAL write stales anyway.
       cache.store("opencode", db, entry)
     else:
-      cache.store("opencode", db, {
-          "sig": sig,
-          "rows": {mid: (tu, rec) for mid, (tu, rec) in memo.items()},
-          "partial": _partial_to_doc(_opencode_partials[key]),
-      })
+      cache.store(
+          "opencode", db, {
+              "sig": sig,
+              "rows": {
+                  mid: (tu, rec) for mid, (tu, rec) in memo.items()
+              },
+              "partial": _partial_to_doc(_opencode_partials[key]),
+          })
       _opencode_doc_synced[key] = True
   t.notes.append(f"opencode: {count:,} assistant messages with token counts")
   return sig, epoch, from_scan

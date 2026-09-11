@@ -353,6 +353,7 @@ async def run_message(
       future=future,
       expect_fresh_session=expect_fresh_session,
       user_event_id=user_event_id,
+      uploaded_files=uploaded_files,
   )
 
   # --- atomic enqueue block: no await, no statement that can raise ---
@@ -502,8 +503,10 @@ async def replay_user_message(
 
   The original user event stays put in the chat log (skip_user_event); the
   replayed prompt prefixes ``_REPLAY_MARKER`` so the master checks prior side
-  effects before redoing them. The record's user_event_id keeps pointing at
-  the ORIGINAL event, which is the one startup reconcile must exclude.
+  effects before redoing them. Attachments persisted on the event
+  (``uploaded_files``) ride the replay too, so a restart-redelivered attach
+  round re-attaches. The record's user_event_id keeps pointing at the
+  ORIGINAL event, which is the one startup reconcile must exclude.
   """
   content = user_event.get("content")
   if not isinstance(content, str) or not content:
@@ -516,5 +519,6 @@ async def replay_user_message(
       callbacks=callbacks,
       skip_user_event=True,
       is_voice=bool(user_event.get("is_voice")),
+      uploaded_files=user_event.get("uploaded_files"),
       user_event_id=user_event.get("id"),
   )

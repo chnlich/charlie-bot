@@ -633,13 +633,19 @@ class AgentBackend(ABC):
     if self._on_spawn is not None:
       await self._on_spawn(self._proc.pid)
 
-  async def run(self, prompt: str, cwd: str, env: dict) -> AsyncIterator[dict]:
+  async def run(
+      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     """Spawn the agent subprocess and yield parsed NDJSON event dicts.
 
     Template method: calls _prepare_cwd() -> transport-dir resolution ->
     _prepare_transport() -> _build_command() -> _prepare_env() -> subprocess
     spawn with stdout/stderr redirected to the raw log files -> tail-follow
     read loop -> translate_event() -> wait for exit.
+
+    uploaded_files carries structured attachment refs from the user message;
+    the base transport ignores them (text backends reach attachments via the
+    message's path text). Backends with a native attachment channel override
+    run() and consume them.
 
     After the generator is fully consumed, ``exit_code`` and ``stderr_text``
     are populated.

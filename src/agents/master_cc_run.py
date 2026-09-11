@@ -866,7 +866,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     )
     master_cc_state._active_procs[session_meta.id] = backend
 
-    async for event in backend.run(spawn_prompt, cwd, env):
+    async for event in backend.run(spawn_prompt, cwd, env, uploaded_files=item.uploaded_files):
       tracker.on_event(event)
       cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)
       if watch is not None and watch.observe(event):

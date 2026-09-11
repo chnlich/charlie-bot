@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import re
 import sys
@@ -1733,3 +1734,111 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch, tmp_path: 
           "verify": opencode_mod._SERVE_SSL_CONTEXT,
       },
   ]
+
+
+# ---------------------------------------------------------------------------
+# Prompt file parts: image attachments ride the prompt as OpenCode file parts
+# ---------------------------------------------------------------------------
+
+
+def _write_image(tmp_path: Path, name: str, payload: bytes) -> dict:
+  path = tmp_path / name
+  path.write_bytes(payload)
+  return {"filename": name, "path": str(path)}
+
+
+def _expected_file_part(mime: str, payload: bytes) -> dict:
+  return {"type": "file", "mime": mime, "url": f"data:{mime};base64," + base64.b64encode(payload).decode("ascii")}
+
+
+class _RecordingPostClient:
+  """httpx-like client double capturing prompt_async POST bodies."""
+
+  def __init__(self) -> None:
+    self.posts: list[tuple[str, dict]] = []
+
+  async def post(self, path: str, json: dict | None = None) -> _StubHttpResponse:
+    self.posts.append((path, json))
+    return _StubHttpResponse(204)
+
+
+@pytest.mark.asyncio
+async def test_send_prompt_text_part_first_then_file_parts_in_ref_order(monkeypatch, tmp_path: Path) -> None:
+  """Parts assembly: the unchanged prompt text part first, then one file part per
+  readable image attachment in reference order; non-image and missing-file refs
+  produce no part; each file part carries the extension-derived mime and a
+  data URL of the file's bytes."""
+  backend = _build_backend(monkeypatch, model="provider/model")
+  png_payload = b"\x89PNG-fake-bytes-1"
+  jpg_payload = b"\xff\xd8-fake-jpeg-2"
+  uploaded_files = [
+      _write_image(tmp_path, "first.png", png_payload),
+      _write_image(tmp_path, "second.JPG", jpg_payload),
+      {"filename": "notes.pdf", "path": str(tmp_path / "notes.pdf")},
+      {"filename": "ghost.png", "path": str(tmp_path / "missing.png")},
+  ]
+  client = _RecordingPostClient()
+  prompt = "看这张图 🖼 tell me what you see"
+
+  await backend._send_prompt(client, "session-1", prompt, uploaded_files=uploaded_files)
+
+  path, body = client.posts[0]
+  assert path == "/session/session-1/prompt_async"
+  assert body["parts"] == [
+      {"type": "text", "text": prompt},
+      _expected_file_part("image/png", png_payload),
+      _expected_file_part("image/jpeg", jpg_payload),
+  ]
+
+
+def test_image_file_parts_skips_non_image_refs_silently() -> None:
+  """Only image/* extensions map to a mime; pdf/txt/extensionless refs make no part."""
+
+  assert opencode_mod._image_file_parts([
+      {"filename": "notes.pdf", "path": "/uploads/notes.pdf"},
+      {"filename": "readme.txt", "path": "/uploads/readme.txt"},
+      {"filename": "noext", "path": "/uploads/noext"},
+  ]) == []
+
+
+def test_image_file_parts_skips_missing_image_file_with_warning(capsys) -> None:
+  """A missing image file is skipped with one log.warning — it never fails the turn."""
+
+  parts = opencode_mod._image_file_parts([{"filename": "ghost.png", "path": "/nonexistent/ghost.png"}])
+
+  assert parts == []
+  out = capsys.readouterr().out
+  assert "opencode_attachment_unreadable" in out
+  assert "/nonexistent/ghost.png" in out
+
+
+def test_image_file_parts_none_yields_no_parts() -> None:
+
+  assert opencode_mod._image_file_parts(None) == []
+
+
+@pytest.mark.asyncio
+async def test_run_threads_uploaded_files_into_prompt_parts(monkeypatch, tmp_path: Path) -> None:
+  """run() hands its uploaded_files to _send_prompt: the prompt_async body carries
+  the text part plus one file part per readable image."""
+  sid = "ses-attach"
+  backend = _build_backend(monkeypatch, model="provider/model")
+  script = _StubServeScript(sid)
+  script.event_streams = [_StubEventStreamResponse(200, [_sse_connected(), _sse_session_idle(sid)])]
+  _rig_stub_serve_run(monkeypatch, backend, script, [[b"clean stderr\n"]])
+  payload = b"\x89PNG-fake-bytes"
+  (tmp_path / "pic.png").write_bytes(payload)
+
+  events = [
+      event
+      async for event in backend.run(
+          "describe this", str(tmp_path), {"PATH": "/usr/bin"},
+          uploaded_files=[{"filename": "pic.png", "path": str(tmp_path / "pic.png")}])
+  ]
+
+  assert script.prompt_posts[0][1]["parts"] == [
+      {"type": "text", "text": "describe this"},
+      _expected_file_part("image/png", payload),
+  ]
+  assert backend.exit_code == 0
+  assert events[-1]["type"] == ET.RESULT

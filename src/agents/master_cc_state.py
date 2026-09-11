@@ -42,6 +42,9 @@ class _WorkItem:
   # Chat event id of the user message this turn answers; persisted into
   # master_run so restart reconcile can exclude exactly one event from replay.
   user_event_id: str | None = None
+  # Structured attachment refs from the user message, handed to backend.run;
+  # the opencode backend turns image refs into prompt file parts.
+  uploaded_files: list[dict] | None = None
   # Set for re-attach items enqueued by startup reconcile: follow a recorded
   # live turn's raw log instead of spawning a new process.
   resume_record: MasterRunRecord | None = None

@@ -1852,7 +1852,7 @@ class ScriptedRelayBackend:
   def detach(self) -> None:
     pass
 
-  async def run(self, prompt: str, cwd: str, env: dict):
+  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
     self.prompt = prompt
     self.cwd = cwd
     self.env = env
@@ -1914,7 +1914,7 @@ class FakeBackend(TerminateFlagBackend):
   exit_code = 0
   stderr_text = ""
 
-  async def run(self, prompt: str, cwd: str, env: dict):
+  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
     yield backend_base.make_result_event()
 
 

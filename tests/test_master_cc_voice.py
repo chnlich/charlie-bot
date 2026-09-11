@@ -40,7 +40,7 @@ class _PromptCapturingBackend(TerminateFlagBackend):
   def __init__(self) -> None:
     self.prompt = None
 
-  async def run(self, prompt: str, cwd: str, env: dict):
+  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
     self.prompt = prompt
     if False:
       yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine

@@ -43,11 +43,11 @@ function renderToolActivity(tools) {
       if (outText.length > 500) {
         var oid = 'to-' + Math.random().toString(36).slice(2);
         outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-all">'
-          + escapeHtml(outText.substring(0, 500))
-          + showMoreToggleHtml(oid, escapeHtml(outText.substring(500)))
+          + wrapWideChars(escapeHtml(outText.substring(0, 500)))
+          + showMoreToggleHtml(oid, wrapWideChars(escapeHtml(outText.substring(500))))
           + '</pre>';
       } else {
-        outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-all">' + escapeHtml(outText) + '</pre>';
+        outputHtml = '<pre class="mt-1 text-xs ' + colorCls + ' whitespace-pre-wrap break-all">' + wrapWideChars(escapeHtml(outText)) + '</pre>';
       }
       if (tool.output_truncated) {
         outputHtml += '<div class="mt-1 text-xs text-slate-500">output truncated &mdash; full text in the session\'s raw events</div>';
@@ -82,7 +82,7 @@ function renderRawBackendOutput(text) {
     + '</summary>'
     + '<div class="code-block">'
     + '<div class="code-header"><span class="code-lang">literal text</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div>'
-    + '<pre style="max-height:24rem;overflow:auto"><code data-embedded="1">' + escapeHtml(text) + '</code></pre>'
+    + '<pre style="max-height:24rem;overflow:auto"><code data-embedded="1">' + wrapWideChars(escapeHtml(text)) + '</code></pre>'
     + '</div>'
     + '</details>';
 }

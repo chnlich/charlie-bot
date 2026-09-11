@@ -44,6 +44,11 @@ function makeChatRenderContext(elements = new Map()) {
     renderProseMarkdown: (v) => '<p>' + String(v || '') + '</p>',
     renderChatMath: () => {},
     scheduleCodeHighlightFlush: () => {},
+    // Stand-in for markdown-renderer.js's wrapWideChars (not loaded here):
+    // these harnesses' fixtures carry no wide chars, so identity reproduces
+    // the real function's bytes on them; wide-char behavior is covered in
+    // code_block_wc2ch.test.js against the real renderer.
+    wrapWideChars: (html) => html,
     CSS: { escape: (v) => String(v) },
     SESSION_ID: 'sess-1',
     confirm: () => true,
@@ -74,6 +79,9 @@ function loadToggleHarness(extraModule, extraStubs = {}) {
     renderProseMarkdown: (v) => '<p>' + String(v || '') + '</p>',
     renderChatMath: () => {},
     scheduleCodeHighlightFlush: () => {},
+    // Identity stand-in for markdown-renderer.js's wrapWideChars — see
+    // makeChatRenderContext above.
+    wrapWideChars: (html) => html,
     CSS: { escape: (v) => String(v) },
     SESSION_ID: 'sess-1',
     fetch: () => Promise.resolve({ ok: true }),

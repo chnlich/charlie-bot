@@ -20,6 +20,9 @@ function loadChatRendering() {
     renderProseMarkdown: (value) => String(value || ''),
     renderChatMath: () => {},
     scheduleCodeHighlightFlush: () => {},
+    // Identity stand-in for markdown-renderer.js's wrapWideChars (not loaded
+    // here); these fixtures carry no wide chars.
+    wrapWideChars: (html) => html,
     renderUserMessageBubble: () => '',
   };
   vm.createContext(context);

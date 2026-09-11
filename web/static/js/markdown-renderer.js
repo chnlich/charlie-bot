@@ -120,8 +120,179 @@ function codeBlockHtml(displayLang, isMarkdown, innerHtml, markerId) {
     ? '<button class="copy-btn" onclick="renderMarkdown(this)">Render</button>'
     : '';
   const marker = markerId === null ? '' : ` data-hl="${markerId}"`;
-  return `<div class="code-block"><div class="code-header"><span class="code-lang">${displayLang}</span>${renderBtn}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div><pre><code class="hljs"${marker}>${innerHtml}</code></pre></div>`;
+  return `<div class="code-block"><div class="code-header"><span class="code-lang">${displayLang}</span>${renderBtn}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div><pre><code class="hljs"${marker}>${wrapWideChars(innerHtml)}</code></pre></div>`;
 }
+// ---------------------------------------------------------------------------
+// Wide-character 2ch boxes. The code font stack ('Fira Code', ui-monospace,
+// monospace) carries no CJK glyphs, so a wide char falls back to a system
+// font whose 1em advance is ~1.667 columns of the Latin mono font — while an
+// ASCII diagram authored on a terminal reserves exactly 2 columns per wide
+// char, and every CJK label pushes the right edge left by another 1/3
+// column. CSS has no terminal-wcwidth equivalent, so the render side wraps
+// each East_Asian_Width W/F character in a fixed 2ch inline box; `ch` follows
+// the actually-rendered monospace font, so 2ch is exactly two Latin columns
+// on every client, with or without Fira Code. The spans are layout-only and
+// invisible to textContent, so copy and selection stay byte-identical.
+//
+// Ambiguous-width characters (box-drawing ─│, ±, ·, arrows) are NOT
+// boxed: their glyphs come from the Latin monospace font itself and already
+// render one column — which is exactly why the box-drawing rails of a CJK
+// diagram align today while its CJK labels drift. Boxing them at 2ch would
+// double widths that are already correct.
+// ---------------------------------------------------------------------------
+
+// Ordered [lo, hi] code-point ranges of East_Asian_Width W(ide) and
+// F(ullwidth) — the terminal wcwidth 2-cell set — from Unicode 16.0.0's
+// EastAsianWidth.txt (291 ranges, file order). Membership goes through this
+// generated table and a binary search, not a \p{East_Asian_Width} escape:
+// ECMAScript property escapes cover General_Category, Script and binary
+// properties only, and East_Asian_Width throws SyntaxError in V8 — a regex
+// literal is an early error, so it would take this whole file's parse down
+// with it. Regenerate after a Unicode upgrade by re-running (output: the
+// table below, 4 ranges per line):
+//   curl -s https://www.unicode.org/Public/16.0.0/ucd/EastAsianWidth.txt | python3 -c "import re,sys;r=[(m[0],m[1] or m[0]) for m in re.findall(r'^([0-9A-F]{4,6})(?:\.\.([0-9A-F]{4,6}))?\s*;\s*[WF]',sys.stdin.read(),re.M)];print('\n'.join('  '+' '.join('[0x%s,0x%s],'%(r[j][0],r[j][1]) for j in range(i,min(i+4,len(r)))) for i in range(0,len(r),4)))"
+var WC2CH_RANGES = [
+  [0x1100,0x115F], [0x231A,0x231B], [0x2329,0x2329], [0x232A,0x232A],
+  [0x23E9,0x23EC], [0x23F0,0x23F0], [0x23F3,0x23F3], [0x25FD,0x25FE],
+  [0x2614,0x2615], [0x2630,0x2637], [0x2648,0x2653], [0x267F,0x267F],
+  [0x268A,0x268F], [0x2693,0x2693], [0x26A1,0x26A1], [0x26AA,0x26AB],
+  [0x26BD,0x26BE], [0x26C4,0x26C5], [0x26CE,0x26CE], [0x26D4,0x26D4],
+  [0x26EA,0x26EA], [0x26F2,0x26F3], [0x26F5,0x26F5], [0x26FA,0x26FA],
+  [0x26FD,0x26FD], [0x2705,0x2705], [0x270A,0x270B], [0x2728,0x2728],
+  [0x274C,0x274C], [0x274E,0x274E], [0x2753,0x2755], [0x2757,0x2757],
+  [0x2795,0x2797], [0x27B0,0x27B0], [0x27BF,0x27BF], [0x2B1B,0x2B1C],
+  [0x2B50,0x2B50], [0x2B55,0x2B55], [0x2E80,0x2E99], [0x2E9B,0x2EF3],
+  [0x2F00,0x2FD5], [0x2FF0,0x2FFF], [0x3000,0x3000], [0x3001,0x3003],
+  [0x3004,0x3004], [0x3005,0x3005], [0x3006,0x3006], [0x3007,0x3007],
+  [0x3008,0x3008], [0x3009,0x3009], [0x300A,0x300A], [0x300B,0x300B],
+  [0x300C,0x300C], [0x300D,0x300D], [0x300E,0x300E], [0x300F,0x300F],
+  [0x3010,0x3010], [0x3011,0x3011], [0x3012,0x3013], [0x3014,0x3014],
+  [0x3015,0x3015], [0x3016,0x3016], [0x3017,0x3017], [0x3018,0x3018],
+  [0x3019,0x3019], [0x301A,0x301A], [0x301B,0x301B], [0x301C,0x301C],
+  [0x301D,0x301D], [0x301E,0x301F], [0x3020,0x3020], [0x3021,0x3029],
+  [0x302A,0x302D], [0x302E,0x302F], [0x3030,0x3030], [0x3031,0x3035],
+  [0x3036,0x3037], [0x3038,0x303A], [0x303B,0x303B], [0x303C,0x303C],
+  [0x303D,0x303D], [0x303E,0x303E], [0x3041,0x3096], [0x3099,0x309A],
+  [0x309B,0x309C], [0x309D,0x309E], [0x309F,0x309F], [0x30A0,0x30A0],
+  [0x30A1,0x30FA], [0x30FB,0x30FB], [0x30FC,0x30FE], [0x30FF,0x30FF],
+  [0x3105,0x312F], [0x3131,0x318E], [0x3190,0x3191], [0x3192,0x3195],
+  [0x3196,0x319F], [0x31A0,0x31BF], [0x31C0,0x31E5], [0x31EF,0x31EF],
+  [0x31F0,0x31FF], [0x3200,0x321E], [0x3220,0x3229], [0x322A,0x3247],
+  [0x3250,0x3250], [0x3251,0x325F], [0x3260,0x327F], [0x3280,0x3289],
+  [0x328A,0x32B0], [0x32B1,0x32BF], [0x32C0,0x32FF], [0x3300,0x33FF],
+  [0x3400,0x4DBF], [0x4DC0,0x4DFF], [0x4E00,0x9FFF], [0xA000,0xA014],
+  [0xA015,0xA015], [0xA016,0xA48C], [0xA490,0xA4C6], [0xA960,0xA97C],
+  [0xAC00,0xD7A3], [0xF900,0xFA6D], [0xFA6E,0xFA6F], [0xFA70,0xFAD9],
+  [0xFADA,0xFAFF], [0xFE10,0xFE16], [0xFE17,0xFE17], [0xFE18,0xFE18],
+  [0xFE19,0xFE19], [0xFE30,0xFE30], [0xFE31,0xFE32], [0xFE33,0xFE34],
+  [0xFE35,0xFE35], [0xFE36,0xFE36], [0xFE37,0xFE37], [0xFE38,0xFE38],
+  [0xFE39,0xFE39], [0xFE3A,0xFE3A], [0xFE3B,0xFE3B], [0xFE3C,0xFE3C],
+  [0xFE3D,0xFE3D], [0xFE3E,0xFE3E], [0xFE3F,0xFE3F], [0xFE40,0xFE40],
+  [0xFE41,0xFE41], [0xFE42,0xFE42], [0xFE43,0xFE43], [0xFE44,0xFE44],
+  [0xFE45,0xFE46], [0xFE47,0xFE47], [0xFE48,0xFE48], [0xFE49,0xFE4C],
+  [0xFE4D,0xFE4F], [0xFE50,0xFE52], [0xFE54,0xFE57], [0xFE58,0xFE58],
+  [0xFE59,0xFE59], [0xFE5A,0xFE5A], [0xFE5B,0xFE5B], [0xFE5C,0xFE5C],
+  [0xFE5D,0xFE5D], [0xFE5E,0xFE5E], [0xFE5F,0xFE61], [0xFE62,0xFE62],
+  [0xFE63,0xFE63], [0xFE64,0xFE66], [0xFE68,0xFE68], [0xFE69,0xFE69],
+  [0xFE6A,0xFE6B], [0xFF01,0xFF03], [0xFF04,0xFF04], [0xFF05,0xFF07],
+  [0xFF08,0xFF08], [0xFF09,0xFF09], [0xFF0A,0xFF0A], [0xFF0B,0xFF0B],
+  [0xFF0C,0xFF0C], [0xFF0D,0xFF0D], [0xFF0E,0xFF0F], [0xFF10,0xFF19],
+  [0xFF1A,0xFF1B], [0xFF1C,0xFF1E], [0xFF1F,0xFF20], [0xFF21,0xFF3A],
+  [0xFF3B,0xFF3B], [0xFF3C,0xFF3C], [0xFF3D,0xFF3D], [0xFF3E,0xFF3E],
+  [0xFF3F,0xFF3F], [0xFF40,0xFF40], [0xFF41,0xFF5A], [0xFF5B,0xFF5B],
+  [0xFF5C,0xFF5C], [0xFF5D,0xFF5D], [0xFF5E,0xFF5E], [0xFF5F,0xFF5F],
+  [0xFF60,0xFF60], [0xFFE0,0xFFE1], [0xFFE2,0xFFE2], [0xFFE3,0xFFE3],
+  [0xFFE4,0xFFE4], [0xFFE5,0xFFE6], [0x16FE0,0x16FE1], [0x16FE2,0x16FE2],
+  [0x16FE3,0x16FE3], [0x16FE4,0x16FE4], [0x16FF0,0x16FF1], [0x17000,0x187F7],
+  [0x18800,0x18AFF], [0x18B00,0x18CD5], [0x18CFF,0x18CFF], [0x18D00,0x18D08],
+  [0x1AFF0,0x1AFF3], [0x1AFF5,0x1AFFB], [0x1AFFD,0x1AFFE], [0x1B000,0x1B0FF],
+  [0x1B100,0x1B122], [0x1B132,0x1B132], [0x1B150,0x1B152], [0x1B155,0x1B155],
+  [0x1B164,0x1B167], [0x1B170,0x1B2FB], [0x1D300,0x1D356], [0x1D360,0x1D376],
+  [0x1F004,0x1F004], [0x1F0CF,0x1F0CF], [0x1F18E,0x1F18E], [0x1F191,0x1F19A],
+  [0x1F200,0x1F202], [0x1F210,0x1F23B], [0x1F240,0x1F248], [0x1F250,0x1F251],
+  [0x1F260,0x1F265], [0x1F300,0x1F320], [0x1F32D,0x1F335], [0x1F337,0x1F37C],
+  [0x1F37E,0x1F393], [0x1F3A0,0x1F3CA], [0x1F3CF,0x1F3D3], [0x1F3E0,0x1F3F0],
+  [0x1F3F4,0x1F3F4], [0x1F3F8,0x1F3FA], [0x1F3FB,0x1F3FF], [0x1F400,0x1F43E],
+  [0x1F440,0x1F440], [0x1F442,0x1F4FC], [0x1F4FF,0x1F53D], [0x1F54B,0x1F54E],
+  [0x1F550,0x1F567], [0x1F57A,0x1F57A], [0x1F595,0x1F596], [0x1F5A4,0x1F5A4],
+  [0x1F5FB,0x1F5FF], [0x1F600,0x1F64F], [0x1F680,0x1F6C5], [0x1F6CC,0x1F6CC],
+  [0x1F6D0,0x1F6D2], [0x1F6D5,0x1F6D7], [0x1F6DC,0x1F6DF], [0x1F6EB,0x1F6EC],
+  [0x1F6F4,0x1F6FC], [0x1F7E0,0x1F7EB], [0x1F7F0,0x1F7F0], [0x1F90C,0x1F93A],
+  [0x1F93C,0x1F945], [0x1F947,0x1F9FF], [0x1FA70,0x1FA7C], [0x1FA80,0x1FA89],
+  [0x1FA8F,0x1FAC6], [0x1FACE,0x1FADC], [0x1FADF,0x1FAE9], [0x1FAF0,0x1FAF8],
+  [0x20000,0x2A6DF], [0x2A6E0,0x2A6FF], [0x2A700,0x2B739], [0x2B73A,0x2B73F],
+  [0x2B740,0x2B81D], [0x2B81E,0x2B81F], [0x2B820,0x2CEA1], [0x2CEA2,0x2CEAF],
+  [0x2CEB0,0x2EBE0], [0x2EBE1,0x2EBEF], [0x2EBF0,0x2EE5D], [0x2EE5E,0x2F7FF],
+  [0x2F800,0x2FA1D], [0x2FA1E,0x2FA1F], [0x2FA20,0x2FFFD], [0x30000,0x3134A],
+  [0x3134B,0x3134F], [0x31350,0x323AF], [0x323B0,0x3FFFD],
+];
+
+function wc2chIsWide(cp) {
+  var lo = 0;
+  var hi = WC2CH_RANGES.length - 1;
+  while (lo <= hi) {
+    var mid = (lo + hi) >> 1;
+    var range = WC2CH_RANGES[mid];
+    if (cp < range[0]) hi = mid - 1;
+    else if (cp > range[1]) lo = mid + 1;
+    else return true;
+  }
+  return false;
+}
+
+// Tag/text split of the single-pass scan: the capture group makes
+// String.prototype.split keep each tag as an odd-index segment, and tags pass
+// through verbatim, so a character inside a tag (attribute value, class name)
+// is never wrapped. escapeText and highlight.js emit only ASCII tags and
+// entities around escaped text, so wide chars only ever appear in text
+// segments.
+var WC2CH_TAG_SPLIT_RE = /(<[^>]*>)/g;
+// Trailing marks that render inside the wide char's glyph run and share its
+// box: General_Category=Mark (a legal \p escape, unlike East_Asian_Width).
+// U+FE0F is itself Mn, so the class already carries it; the explicit check
+// just mirrors the contract's wording. A mark never OPENS a box — only a
+// W/F char does.
+var WC2CH_MARK_RE = /\p{M}/u;
+
+function wc2chWrapText(text, out) {
+  var i = 0;
+  while (i < text.length) {
+    var cp = text.codePointAt(i);
+    if (!wc2chIsWide(cp)) {
+      // One UTF-16 code unit; non-wide chars — and any lone surrogate — pass
+      // through byte-identically.
+      out.push(text[i]);
+      i += 1;
+      continue;
+    }
+    // A wide char opens one 2ch box; trailing combining marks and U+FE0F join
+    // it (they shape the same glyph run). Surrogate pairs are consumed whole
+    // by the code-point scan, so both units land in the same box.
+    var end = i + (cp > 0xFFFF ? 2 : 1);
+    while (end < text.length) {
+      var tail = text.codePointAt(end);
+      if (tail !== 0xFE0F && !WC2CH_MARK_RE.test(String.fromCodePoint(tail))) break;
+      end += tail > 0xFFFF ? 2 : 1;
+    }
+    out.push('<span class="wc2ch">', text.slice(i, end), '</span>');
+    i = end;
+  }
+}
+
+// One linear pass over a code block's inner HTML: tags verbatim, text
+// segments with each W/F character in exactly one 2ch box. A block without
+// wide chars round-trips byte-identically (split/join plus unit copies), so
+// today's bytes are preserved wherever the fix does not apply.
+function wrapWideChars(html) {
+  var parts = html.split(WC2CH_TAG_SPLIT_RE);
+  var out = [];
+  for (var i = 0; i < parts.length; i++) {
+    if (i % 2 === 1) out.push(parts[i]);  // odd segments are the captured tags
+    else wc2chWrapText(parts[i], out);
+  }
+  return out.join('');
+}
+
 function highlightKey(lang, code) {
   return lang + '\u0000' + code;
 }
@@ -533,13 +704,15 @@ function flushDeferredCodeHighlights() {
     const selector = `code[data-hl="${id}"]`;
     let found = false;
     for (const el of document.querySelectorAll(selector)) {
-      el.innerHTML = highlighted;
+      // Same wrap codeBlockHtml applied to the settled memo bytes: the DOM
+      // write and the memo entry stay byte-identical.
+      el.innerHTML = wrapWideChars(highlighted);
       el.removeAttribute('data-hl');
       found = true;
     }
     for (const root of roots) {
       for (const el of root.querySelectorAll(selector)) {
-        el.innerHTML = highlighted;
+        el.innerHTML = wrapWideChars(highlighted);
         el.removeAttribute('data-hl');
         found = true;
       }

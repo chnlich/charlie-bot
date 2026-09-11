@@ -242,7 +242,7 @@ function paintThreadEvents(threadId, container, events) {
       const hasMore = text.length > 500;
       const id = 'tr-more-' + Math.random().toString(36).slice(2);
       return `<div class="py-1 px-3 ml-6 my-0.5 border-l-2 border-slate-700">
-        <pre class="text-xs text-slate-500 whitespace-pre-wrap break-all">${escapeHtml(short)}${hasMore ? showMoreToggleHtml(id, escapeHtml(text.substring(500))) : ''}</pre>
+        <pre class="text-xs text-slate-500 whitespace-pre-wrap break-all">${wrapWideChars(escapeHtml(short))}${hasMore ? showMoreToggleHtml(id, wrapWideChars(escapeHtml(text.substring(500)))) : ''}</pre>
       </div>`;
     }
 

@@ -449,10 +449,12 @@ async def tail_follow_events(
         await on_silence()
       await asyncio.sleep(poll_interval)
 
-    if buf.strip():
-      # Torn final write (producer killed mid-line). Dropping it makes a
-      # restart replay the run's tail as at most a duplicate — never a loss.
-      log.warning("raw_trailing_torn_line_dropped", bytes=len(buf))
+    # Only the unprocessed tail past *consumed* is a torn final write; the
+    # consumed prefix stays in buf until the next chunk compacts it.
+    if len(buf) > consumed and buf[consumed:].strip():
+      # Dropping it makes a restart replay the run's tail as at most a
+      # duplicate — never a loss.
+      log.warning("raw_trailing_torn_line_dropped", bytes=len(buf) - consumed)
 
 
 def _rotate_stale_transport(log_dir: Path, raw_path: Path, stderr_path: Path, cursor_path: Path) -> None:

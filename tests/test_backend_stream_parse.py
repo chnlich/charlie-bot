@@ -114,6 +114,27 @@ async def test_tail_follow_events_drops_torn_final_line() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tail_follow_events_warns_torn_bytes_only_for_the_partial() -> None:
+  """The torn-tail warning names the unprocessed partial's bytes, and a log
+  ending on a completed line warns nothing."""
+  from structlog.testing import capture_logs
+
+  complete = b'{"type": "assistant", "seq": 1}\n'
+  torn_tail = b'{"type": "assistant", "seq": 2'
+  with capture_logs() as logs:
+    events = await _collect_tail_events(complete, post_result_timeout=60.0)
+  assert [event["seq"] for event in events] == [1]
+  assert not [entry for entry in logs if entry.get("event") == "raw_trailing_torn_line_dropped"]
+
+  with capture_logs() as logs:
+    events = await _collect_tail_events(complete + torn_tail, post_result_timeout=60.0)
+  assert [event["seq"] for event in events] == [1]
+  warnings = [entry for entry in logs if entry.get("event") == "raw_trailing_torn_line_dropped"]
+  assert len(warnings) == 1
+  assert warnings[0]["bytes"] == len(torn_tail)
+
+
+@pytest.mark.asyncio
 async def test_opencode_sse_events_rejects_nan_boundary(monkeypatch) -> None:
   """The stdlib parser accepted NaN literals; orjson fails the frame loudly
   (the boundary the stream funnels deliberately adopt, as the file readers

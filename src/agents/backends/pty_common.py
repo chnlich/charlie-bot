@@ -18,7 +18,7 @@ import termios
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
-from src.agents.backends.base import SESSION_ID_ENV_VAR
+from src.core.models import SESSION_ID_ENV_VAR
 
 log = structlog.get_logger()
 

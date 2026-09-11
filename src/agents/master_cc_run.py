@@ -11,7 +11,6 @@ import structlog
 
 from src.agents import master_cc_relay, master_cc_state
 from src.agents.backends.base import (
-    SESSION_ID_ENV_VAR,
     AgentBackend,
     _read_stderr_tail,
     make_text_event,
@@ -28,6 +27,7 @@ from src.core.latex import check_tex_changed, clear_snapshot
 from src.core.memory import assemble_master
 from src.core.models import (
     PROJECT_ROLE,
+    SESSION_ID_ENV_VAR,
     BackendOption,
     BackendType,
     ClaudeAccount,

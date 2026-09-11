@@ -42,11 +42,20 @@ function showMoreToggleHtml(id, restHtml) {
   return `<span id="${id}-short">… <button onclick="document.getElementById('${id}-short').style.display='none';document.getElementById('${id}-full').style.display='inline'" class="text-blue-400 hover:underline text-xs">Show more</button></span><span id="${id}-full" style="display:none">${restHtml}</span>`;
 }
 
-// Collapsed "Thinking…" block: the button swaps the hidden div in place. The id
-// must be page-unique — chat mints one per message; the streaming draft is a
-// singleton, so its fixed id cannot collide.
+// Collapsed "Thinking…" button: the onclick flips the target element's display
+// in place, so the paired element must carry this id and start hidden. The id
+// is interpolated into a DOM query and must be page-unique — chat mints one per
+// message; the streaming draft is a singleton, so its fixed id cannot collide;
+// workers thread events mint one per event. Each caller passes its palette
+// class; the button label and flip mechanism are the shared part.
+function thinkingButtonHtml(id, buttonClass) {
+  return `<button onclick="const el=document.getElementById('${id}');el.style.display=el.style.display==='none'?'block':'none'" class="${buttonClass}">Thinking…</button>`;
+}
+
+// Collapsed "Thinking…" block at the chat palette: the shared button plus the
+// hidden thinking text.
 function thinkingToggleHtml(id, thinking) {
-  return `<button onclick="const el=document.getElementById('${id}');el.style.display=el.style.display==='none'?'block':'none'" class="text-xs text-slate-500 hover:text-slate-400 italic mb-1">Thinking…</button><div id="${id}" style="display:none" class="text-xs text-slate-500 whitespace-pre-wrap mb-2">${escapeHtml(String(thinking))}</div>`;
+  return `${thinkingButtonHtml(id, 'text-xs text-slate-500 hover:text-slate-400 italic mb-1')}<div id="${id}" style="display:none" class="text-xs text-slate-500 whitespace-pre-wrap mb-2">${escapeHtml(String(thinking))}</div>`;
 }
 
 // Tool-name chip on a turn's tool-call row. Both renderers stamp it:
@@ -109,6 +118,7 @@ Chat.escapeHtml = escapeHtml;
 Chat.escapeHtmlAttr = escapeHtmlAttr;
 Chat.escapeJsSingleQuoted = escapeJsSingleQuoted;
 Chat.showMoreToggleHtml = showMoreToggleHtml;
+Chat.thinkingButtonHtml = thinkingButtonHtml;
 Chat.thinkingToggleHtml = thinkingToggleHtml;
 Chat.toolNameChipHtml = toolNameChipHtml;
 Chat.toolInputSummary = toolInputSummary;
@@ -122,6 +132,7 @@ Chat.expose([
   'escapeHtmlAttr',
   'isRenderedMessage',
   'showMoreToggleHtml',
+  'thinkingButtonHtml',
   'thinkingToggleHtml',
   'toolNameChipHtml',
   'toolInputSummary',

@@ -262,7 +262,7 @@ function paintThreadEvents(threadId, container, events) {
     if (e.type === 'thinking') {
       const id = 'think-' + Math.random().toString(36).slice(2);
       return `<div class="py-1 px-3 my-0.5">
-        <button onclick="const el=document.getElementById('${id}');el.style.display=el.style.display==='none'?'block':'none'" class="text-xs text-slate-600 hover:text-slate-500 italic">Thinking…</button>
+        ${thinkingButtonHtml(id, 'text-xs text-slate-600 hover:text-slate-500 italic')}
         <div id="${id}" style="display:none" class="mt-1 text-xs text-slate-600 whitespace-pre-wrap">${escapeHtml(String(e.content || ''))}</div>
         ${tsHtml}
       </div>`;

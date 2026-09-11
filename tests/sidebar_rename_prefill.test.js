@@ -1,56 +1,17 @@
 // Rename-prefill mechanism tests: the rename input must prefill the session's
 // current name read live from the DOM at open time, and no rename handler
 // string may carry session state (the class of bug where a second rename
-// prefills the stale render-time name). Mirrors the vm-harness pattern of
-// tests/sidebar_session_model.test.js.
+// prefills the stale render-time name). The groups.js vm harness is shared:
+// tests/sidebar_groups_context_stub.js.
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic, sidebarModules, runStaticModules} = require('./read_static');
-const {escapeHtmlText} = require('./escape_html_stub');
+const {readStatic} = require('./read_static');
+const {loadGroups} = require('./sidebar_groups_context_stub');
 
 const NAMESPACE_JS = readStatic('sidebar/namespace.js');
-const GROUPS_JS = readStatic('sidebar/groups.js');
 const MODALS_JS = readStatic('sidebar/modals.js');
-
-// groups.js is an IIFE over globals defined by the other sidebar modules; the
-// sandbox supplies the ones renderSessionItem reaches for.
-function loadGroups() {
-  const Sidebar = {expose() {}, state: {}};
-  const context = {
-    Sidebar,
-    globalThis: null,
-    BACKEND_OPTIONS: {},
-    SESSION_ID: 'other-session',
-    console: {error: () => {}},
-    localStorage: {getItem: () => null, setItem: () => {}},
-    escapeHtml: escapeHtmlText,
-    escapeHtmlAttr: (value) => escapeHtmlText(value == null ? '' : String(value)),
-    relativeTime: () => 'Jul 29, 5:12 PM',
-    formatBubbleTime: () => '',
-    getSessionIndicatorState: () => 'idle',
-    renderSessionIndicators: () => '',
-    renderPendingTriggerIndicator: () => '',
-    renderPendingPlanApprovalIndicator: () => '',
-    renderTuiStatusDot: () => '',
-    recordRenderedSessionStatus: () => {},
-  };
-  context.globalThis = context;
-  vm.createContext(context);
-  // namespace.js first, as on the page: it supplies the shared sidebar namespace.
-  vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
-  vm.runInContext(GROUPS_JS, context, {filename: 'groups.js'});
-  return context;
-}
-
-function row(session) {
-  const {renderSessionItem} = loadGroups().Sidebar;
-  return renderSessionItem(
-    {id: 's1', name: 'demo session', updated_at: '2026-07-29T17:12:00Z', ...session},
-    'all'
-  );
-}
 
 // modals.js wires startRename as a bare global through Sidebar.wire; the fake
 // DOM below covers exactly what startRename touches: getElementById,

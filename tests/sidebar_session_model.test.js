@@ -1,56 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
 
-const { readStatic } = require('./read_static');
-const { escapeHtml, escapeHtmlText } = require('./escape_html_stub');
-
-const NAMESPACE_JS = readStatic('sidebar/namespace.js');
-const GROUPS_JS = readStatic('sidebar/groups.js');
-
-const BACKEND_OPTIONS = {
-  'claude-opus-5': 'CC · Opus 5',
-  'opencode-glm52': 'OC · GLM-5.2',
-  'codex-gpt-5.3-codex-spark': 'Codex · GPT-5.3 Codex Spark xHigh (personal)',
-};
-
-// groups.js is an IIFE over globals defined by the other sidebar modules; the
-// sandbox supplies the ones renderSessionItem reaches for.
-function loadGroups() {
-  const Sidebar = {expose() {}, state: {}};
-  const context = {
-    Sidebar,
-    globalThis: null,
-    BACKEND_OPTIONS,
-    SESSION_ID: 'other-session',
-    console: {error: () => {}},
-    localStorage: {getItem: () => null, setItem: () => {}},
-    escapeHtml: escapeHtmlText,
-    escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
-    relativeTime: () => 'Jul 29, 5:12 PM',
-    formatBubbleTime: () => '',
-    getSessionIndicatorState: () => 'idle',
-    renderSessionIndicators: () => '',
-    renderPendingTriggerIndicator: () => '',
-    renderPendingPlanApprovalIndicator: () => '',
-    renderTuiStatusDot: () => '',
-    recordRenderedSessionStatus: () => {},
-  };
-  context.globalThis = context;
-  vm.createContext(context);
-  // namespace.js first, as on the page: it supplies the shared sidebar namespace.
-  vm.runInContext(NAMESPACE_JS, context, {filename: 'namespace.js'});
-  vm.runInContext(GROUPS_JS, context, {filename: 'groups.js'});
-  return context;
-}
-
-function row(session) {
-  const {renderSessionItem} = loadGroups().Sidebar;
-  return renderSessionItem(
-    {id: 's1', name: 'demo session', updated_at: '2026-07-29T17:12:00Z', ...session},
-    'all'
-  );
-}
+const {loadGroups, row} = require('./sidebar_groups_context_stub');
 
 // The model element must be a sibling of .session-time, never inside it:
 // updateRelativeTimes() (web/static/js/utils.js) reassigns .session-time's

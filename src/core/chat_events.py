@@ -18,6 +18,7 @@ from src.core.ndjson import (
     count_ndjson_lines,
     iter_ndjson_events,
     parse_ndjson_file,
+    parse_ndjson_line,
     parse_ndjson_range,
     parse_ndjson_tail,
 )
@@ -149,20 +150,8 @@ def _walk_tail_line_texts(path: Path, size: int, count: int) -> tuple[list[str],
 
 
 def _live_range_event(segment: str, session_id: str) -> dict | None:
-  """Parse one physical line; a blank or malformed line parses to None and consumes its index.
-
-  The parser is orjson (the iter_ndjson_events skip contract's boundary: the
-  stdlib NaN/Infinity extensions and double-overflow floats skip as malformed;
-  ints at or beyond 2**64 parse as float).
-  """
-  stripped = segment.strip()
-  if not stripped:
-    return None
-  try:
-    return orjson.loads(stripped)
-  except ValueError as e:
-    log.debug("live_range_parse_skip", session_id=session_id, error=str(e))
-    return None
+  """Parse one physical line; a blank or malformed line parses to None and consumes its index."""
+  return parse_ndjson_line(segment, log_event="live_range_parse_skip", log_fields={"session_id": session_id})
 
 
 class _FinalizeFold:

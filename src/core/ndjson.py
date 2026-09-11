@@ -61,26 +61,38 @@ def _count_lines(f: BinaryIO) -> int:
 PARSE_SKIP_LOG_EVENT = "ndjson_parse_skip"
 
 
-def iter_ndjson_events(lines: Iterable[str | bytes], *, log_event: str, log_fields: dict[str, Any]) -> Iterator[dict]:
-  """Yield the JSON objects parsed from *lines*, skipping blank and malformed lines.
+def parse_ndjson_line(line: str | bytes, *, log_event: str, log_fields: dict[str, Any]) -> dict | None:
+  """Parse one line under the NDJSON reader skip contract, or None when the line skips.
 
   The one definition of the NDJSON reader skip contract: a line that strips to
   empty is invisible, and a line the parser rejects logs *log_event* (plus
-  *log_fields* and the parse error) at debug level and yields nothing. Lazy, so
-  first-match and early-stop readers terminate without reading the rest.
-  The parser is orjson, ~2x stdlib json.loads per line measured on the live
-  corpora; orjson rejects the stdlib json NaN/Infinity extensions and float
-  literals that overflow a double (those lines skip as malformed), and ints at
-  or beyond 2**64 parse as float where stdlib keeps exact precision.
+  *log_fields* and the parse error) at debug level and answers None. The parser
+  is orjson, ~2x stdlib json.loads per line measured on the live corpora;
+  orjson rejects the stdlib json NaN/Infinity extensions and float literals
+  that overflow a double (those lines skip as malformed), and ints at or
+  beyond 2**64 parse as float where stdlib keeps exact precision.
+  """
+  stripped = line.strip()
+  if not stripped:
+    return None
+  try:
+    return orjson.loads(stripped)
+  except ValueError as e:
+    log.debug(log_event, error=str(e), **log_fields)
+    return None
+
+
+def iter_ndjson_events(lines: Iterable[str | bytes], *, log_event: str, log_fields: dict[str, Any]) -> Iterator[dict]:
+  """Yield the JSON objects parsed from *lines*, skipping blank and malformed lines.
+
+  Rides :func:`parse_ndjson_line`, the one definition of the reader skip
+  contract. Lazy, so first-match and early-stop readers terminate without
+  reading the rest.
   """
   for raw_line in lines:
-    line = raw_line.strip()
-    if not line:
-      continue
-    try:
-      yield orjson.loads(line)
-    except ValueError as e:
-      log.debug(log_event, error=str(e), **log_fields)
+    event = parse_ndjson_line(raw_line, log_event=log_event, log_fields=log_fields)
+    if event is not None:
+      yield event
 
 
 def parse_ndjson_file(path: Path) -> list[dict]:

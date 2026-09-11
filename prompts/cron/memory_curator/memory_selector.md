@@ -55,6 +55,9 @@ that entry's three proof lines. The selector renders no report.
 
 ## After approval (session master)
 
+Every adjudication round ends by re-rendering the pending proposal page and re-linking it in the reply;
+a bare 'done' leaves the user no way to see the current state.
+
 Step 5: land only after approval.
 Only after the user explicitly approves: commit the working tree with the prefixed messages
 (`admit:` / `revise:` / `migrate:`), then delete the processed staging files, including the

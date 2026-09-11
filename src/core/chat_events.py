@@ -349,7 +349,7 @@ class ChatEventStore:
       rel_start = start - archive_offset
       rel_end = end - archive_offset
       if archive_offset > 0:
-        lines, line_start = self._live_range_lines(live_path, session_id, rel_start, rel_end)
+        lines, line_start = self._live_range_lines(live_path, session_id, rel_start)
         return [e for e in lines[rel_start - line_start:rel_end - line_start] if e is not None], start > 0
       cached = self._events_cache.get(session_id)
       if cached is not None:
@@ -367,7 +367,7 @@ class ChatEventStore:
       return events, start > 0
     archive_events = self._load_archive_range(session_id, start, archive_offset)
     live_end = end - archive_offset
-    lines, line_start = self._live_range_lines(live_path, session_id, 0, live_end)
+    lines, line_start = self._live_range_lines(live_path, session_id, 0)
     live_events = [e for e in lines[:live_end - line_start] if e is not None]
     return archive_events + live_events, start > 0
 
@@ -459,10 +459,13 @@ class ChatEventStore:
     self._archive_events_memo.record(path, st, events)
     return events
 
-  def _live_range_lines(self, path: Path, session_id: str, rel_start: int,
-                        rel_end: int) -> tuple[list[dict | None], int]:
-    """Return the live file's parsed events covering physical-line indices ``[rel_start,
-    rel_end)``, with the index the returned list starts at.
+  def _live_range_lines(self, path: Path, session_id: str, rel_start: int) -> tuple[list[dict | None], int]:
+    """Return the live file's parsed events from physical-line index ``rel_start`` to the
+    file's end, with the index the returned list starts at.
+
+    The covered start sits at or below ``rel_start`` (the memo walk may have
+    covered a wider span), so the caller slices its own window out of the
+    result; the walk itself takes no end index.
 
     A scroll through an archived session's live half re-enters here on every
     page turn; the memo keeps an unchanged covered span at one stat per turn.

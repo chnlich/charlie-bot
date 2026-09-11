@@ -168,7 +168,10 @@ function endsOnClosingFence(raw) {
 // paint whose new text carries one re-parses whole from then on (hasDefs) —
 // a frozen prefix could not resolve a tail reference the full parse resolves.
 var streamParseState = null;
-var STREAM_REF_DEF_RE = /^[ \t]{0,3}\[[^\]\n]+\]:/m;
+// The label class matches marked's def tokenizer (an escaped char or any
+// non-bracket non-backslash), so a definition the lexer accepts — including
+// one with an escaped `]` in the label — can never slip past this guard.
+var STREAM_REF_DEF_RE = /^[ \t]{0,3}\[(?:\\.|[^\[\]\n\\])+\]:/m;
 
 function streamSafeCut(tokens, source, base) {
   // Latest absolute end offset of a `space` token whose preceding token is

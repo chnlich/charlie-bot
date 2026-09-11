@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { loadRendererContext, MARKED_URL } = require('./marked_renderer_harness');
-const { fetchUrl, largestAssistantDraft } = require('./stream_collector_common');
+const { loadRendererContext } = require('./marked_renderer_harness');
+const { largestAssistantDraft } = require('./stream_collector_common');
 
 // The streaming paint path, exactly as usage.js's paintStreamDraft drives it.
 function paint(context, draft) {
@@ -84,12 +84,14 @@ test('random streamed drafts match the full parse on every paint', async () => {
     highlightAuto: (code) => ({ value: code }),
     highlight: (code) => ({ value: code }),
   });
-  const rng = mulberry32(0x5f3759df);
   let paints = 0;
-  for (let i = 0; i < 120; i++) {
-    paints += streamedPaints(context, randomDraft(rng, BLOCKS), rng);
+  for (const seed of [0x5f3759df, 0x1234567, 0xdeadbeef]) {
+    const rng = mulberry32(seed);
+    for (let i = 0; i < 120; i++) {
+      paints += streamedPaints(context, randomDraft(rng, BLOCKS), rng);
+    }
   }
-  assert.ok(paints > 400, `fuzz exercised only ${paints} paints`);
+  assert.ok(paints > 900, `fuzz exercised only ${paints} paints`);
 });
 
 test('a reference definition arriving in the tail re-parses whole from then on', async () => {
@@ -101,6 +103,24 @@ test('a reference definition arriving in the tail re-parses whole from then on',
   // The prefix renders the [ref] use literally; once the definition lands the
   // full parse resolves it — the frames must follow the full parse both ways.
   const steps = ['prefix with [ref] use\n\nmore prose\n\n', '[ref]: https://example.com/d\n', 'tail after definition\n'];
+  let draft = '';
+  for (const step of steps) {
+    draft += step;
+    const html = paint(context, draft);
+    assert.equal(html, referenceStreamRender(context, draft), `mismatch after adding ${JSON.stringify(step)}`);
+  }
+});
+
+test('a reference definition with an escaped bracket in its label resets too', async () => {
+  // marked's def tokenizer accepts an escaped `]` inside the label — a class
+  // the guard's label rule must match, or the frozen prefix renders the use
+  // literally after the full parse resolves it.
+  const context = await loadRendererContext({
+    getLanguage: () => null,
+    highlightAuto: (code) => ({ value: code }),
+    highlight: (code) => ({ value: code }),
+  });
+  const steps = ['use [a\\]b] here.\n\npara\n\n', '[a\\]b]: /url\n', 'tail\n'];
   let draft = '';
   for (const step of steps) {
     draft += step;

@@ -63,6 +63,11 @@ NOTIFICATION_TIMEOUT = 10.0  # seconds — fast external API, fail quickly
 # Anthropic OAuth usage API and token refresh.
 HTTP_OAUTH_TIMEOUT = 30  # seconds — remote API may be slow under load
 
+# `claude --version` subprocess behind the ext_usage User-Agent (probed once
+# per process, cached in src/api/ext_usage.py). A slow or missing CLI falls
+# back to the static User-Agent, so the bound only caps the first request's wait.
+EXT_USAGE_VERSION_PROBE_TIMEOUT = 5  # seconds
+
 # CLI -> CharlieBot server internal endpoints (delegate, improve).
 HTTP_INTERNAL_API_TIMEOUT = 30  # seconds — local loopback, generous for cold starts
 

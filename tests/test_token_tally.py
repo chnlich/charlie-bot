@@ -990,7 +990,8 @@ def test_source_walk_round_persists_moved_opencode_rows(tmp_path: Path) -> None:
 
   entry = json.loads(cache.read_text())["sources"]["opencode"][str(db)]
   assert entry["sig"] != sig_before
-  assert sum(r[3] for r in entry["records"]) == 5 + 100  # in_fresh: both rows' inputs
+  rows_in_fresh = sum(row[1][3] for row in entry["rows"].values() if row[1] is not None)
+  assert rows_in_fresh == 5 + 100  # in_fresh: both rows' inputs
   con.close()
 
 
@@ -1023,16 +1024,26 @@ def test_entry_served_changed_round_adopts_the_partial(tmp_path: Path, monkeypat
   assert [n for n in adopted.notes if n.startswith("opencode")] == \
       [n for n in cold.notes if n.startswith("opencode")]
 
-  tt._opencode_partials.clear()  # a process start: no partial yet, the entry still serves
+  tt._opencode_partials.clear()  # a process start: the stored partial serves without a replay
   tt._aggregate_memo = None
   tt._tally_memo = None
   rebuilt = _collect(claude, None, db, cache)
+  assert replays == []  # the entry's stored partial adopts; no record folds
+  assert _row(rebuilt, "opencode", "oc-m").total == _row(adopted, "opencode", "oc-m").total
+
+  doc = json.loads(cache.read_text())  # an entry without a stored partial (the v1 shape)
+  doc["sources"]["opencode"][str(db)].pop("partial", None)
+  cache.write_text(json.dumps(doc))
+  tt._reset_aggregate_memo()
+  tt._aggregate_memo = None
+  tt._tally_memo = None
+  replayed = _collect(claude, None, db, cache)
   assert replays == [1]  # one replay builds the partial
   tt._aggregate_memo = None
   tt._tally_memo = None
   after_rebuild = _collect(claude, None, db, cache)
   assert replays == [1]  # the rebuilt partial serves every later entry-served round
-  assert _row(after_rebuild, "opencode", "oc-m").total == _row(rebuilt, "opencode", "oc-m").total
+  assert _row(after_rebuild, "opencode", "oc-m").total == _row(replayed, "opencode", "oc-m").total
 
 
 def test_wal_move_with_new_row_still_counts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1424,3 +1435,136 @@ def test_append_tail_skips_entries_without_a_guard(tmp_path: Path) -> None:
   reference = _collect(claude, None, db)
   assert after.rows == reference.rows
   assert _row(after, "Claude Code", NAME).total == 117
+
+
+def test_restart_cold_seeds_the_row_memo_from_the_document(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # A process restart rebuilds the row memo from the document's rows map and proves it with
+  # one key pass: the restart-cold round re-reads zero message blobs and zero corpus bytes
+  # where the unseeded cold scan re-read every contributing row's data.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  tt._reset_aggregate_memo()
+
+  con.execute("insert into other values ('noise2', 'x')")
+  con.commit()  # the WAL moves, so the entry's stored signature misses and the scan path runs
+
+  projected: list[str] = []
+  orig = tt._opencode_row_data
+
+  def spy(data: str) -> tuple[list | None, int]:
+    projected.append(data)
+    return orig(data)
+
+  monkeypatch.setattr(tt, "_opencode_row_data", spy)
+  second = _collect(None, None, db, cache)
+  assert projected == []  # the seeded key diff proved every row unchanged without a blob read
+  assert second.scanned_bytes == 0
+  assert _tally_snapshot(second) == _tally_snapshot(first)
+  con.close()
+
+
+def test_restart_cold_recounts_only_moved_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The seeded memo diffs the live key set: only rows whose (id, time_updated) moved since the
+  # document was written re-enter the parser — one insert and one in-place step-finish upsert,
+  # the production write shapes, and both deltas fold out of and into the stored partial.
+  db, cache, con = _wal_db_with_noise_table(tmp_path)
+  first = _collect(None, None, db, cache)
+  tt._reset_aggregate_memo()
+
+  _insert_opencode_raw(con, [({}, _padded_opencode_row(500))])
+  mid, = con.execute("select id from message where data not like '%pad%'").fetchone()
+  con.execute(
+      "update message set data = ?, time_updated = time_updated + 1 where id = ?",
+      (json.dumps({
+          "role": "assistant",
+          "modelID": "oc-m",
+          "providerID": "prov",
+          "tokens": {
+              "input": 100,
+              "output": 2,
+              "cache": {
+                  "read": 0,
+                  "write": 0
+              }
+          }
+      }), mid))
+  con.commit()
+
+  projected: list[str] = []
+  orig = tt._opencode_row_data
+
+  def spy(data: str) -> tuple[list | None, int]:
+    projected.append(data)
+    return orig(data)
+
+  monkeypatch.setattr(tt, "_opencode_row_data", spy)
+  second = _collect(None, None, db, cache)
+  assert len(projected) == 2  # the moved pair only: the untouched rows' blobs stayed unread
+  after = _row(second, "opencode", "oc-m")
+  assert after.calls == 2  # the upsert replaced its row's record; the insert added one
+  assert after.total == _row(first, "opencode", "oc-m").total - 6 + 102 + 102
+  con.close()
+
+
+def test_stored_partial_adopts_without_replay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The v2 entry's stored partial serves the buckets without folding the records; the replay
+  # builder runs only for an entry that carries no partial (the v1 shape).
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [_oc_row()])
+  _collect(None, None, db, cache)
+
+  entry = json.loads(cache.read_text())["sources"]["opencode"][str(db)]
+  assert set(entry["partial"]["by_model"]) == {"oc-m"}
+  assert entry["partial"]["count"] == 1
+  assert "records" not in entry
+
+  tt._reset_aggregate_memo()
+
+  def boom(*args, **kwargs) -> None:
+    raise AssertionError("the stored partial's buckets were rebuilt by a record replay")
+
+  monkeypatch.setattr(tt, "_replay_opencode_records", boom)
+  served = _collect(None, None, db, cache)
+  assert _row(served, "opencode", "oc-m").total == 6
+
+
+def test_legacy_records_entry_still_serves(tmp_path: Path) -> None:
+  # A v1 entry (records list, no rows/partial) serves through the replay path; the first
+  # scan-path store rewrites it in the current shape.
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [_oc_row()])
+  _collect(None, None, db, cache)
+
+  entry = json.loads(cache.read_text())["sources"]["opencode"][str(db)]
+  legacy = {
+      "version": 1,
+      "sources": {
+          "opencode": {
+              str(db): {
+                  "sig": entry["sig"],
+                  "records": [row[1] for row in entry["rows"].values() if row[1] is not None]
+              }
+          }
+      }
+  }
+  cache.write_text(json.dumps(legacy))
+  tt._reset_aggregate_memo()
+
+  served = _collect(None, None, db, cache)
+  assert _row(served, "opencode", "oc-m").total == 6
+
+  _append_opencode(db, [_padded_opencode_row(500)])
+  after = _collect(None, None, db, cache)
+  assert _row(after, "opencode", "oc-m").total == 108  # the legacy doc's rows still count right
+
+
+def test_document_with_nan_literal_rebuilds_with_note(tmp_path: Path) -> None:
+  # The document parser rejects the NaN/Infinity extensions stdlib json admits; a corrupted
+  # document fails loud into the existing cold-rebuild note instead of half-serving.
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  _write_opencode(db, [_oc_row()])
+  cache.write_text('{"version": 2, "sources": {"opencode": {"x": {"sig": [], "records": [[1, NaN]]}}}}')
+
+  served = _collect(None, None, db, cache)
+  assert _row(served, "opencode", "oc-m").total == 6
+  assert any("unreadable" in note for note in served.notes)

@@ -154,6 +154,16 @@ def test_thinking_mark_busy_marks_session_dirty() -> None:
   clear_busy("sid-busy-mark")
 
 
+def test_marked_path_burst_past_the_cap_takes_the_full_walk() -> None:
+  """An overflowing mark burst drops every pending path: the next proof full-walks."""
+  for i in range(sidebar_state._MARKED_PATHS_CAP):
+    sidebar_state.mark_sidebar_dirty("sid-cap", f"/cap/path/{i}")
+
+  sidebar_state.mark_sidebar_dirty("sid-cap", "/cap/path/overflow")
+
+  assert sidebar_state.take_marked_paths("sid-cap") == []
+
+
 def test_thinking_clear_busy_marks_session_dirty() -> None:
   mark_busy("sid-busy-clear")
   sidebar_state.reset_for_tests()

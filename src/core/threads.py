@@ -210,10 +210,13 @@ class ThreadManager:
     # list_threads reads this file from an executor thread with no
     # coordination, so the write must stay atomic (a validation failure 500s
     # the whole list endpoint).
-    await write_model_json_atomically(self._metadata_path(meta.session_id, meta.id), meta)
+    path = self._metadata_path(meta.session_id, meta.id)
+    await write_model_json_atomically(path, meta)
     # Single funnel behind create_thread/update_status/save_metadata: thread
-    # status transitions (running -> terminal) land here.
-    mark_sidebar_dirty(meta.session_id)
+    # status transitions (running -> terminal) land here. The mark carries the
+    # published path so the list poll's incremental proof stats exactly this
+    # file; it must follow the rename above.
+    mark_sidebar_dirty(meta.session_id, str(path))
 
   def _metadata_path(self, session_id: str, thread_id: str) -> Path:
     return self.thread_dir(session_id, thread_id) / METADATA_NAME

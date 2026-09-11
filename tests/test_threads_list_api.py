@@ -22,6 +22,7 @@ from src.api.sessions import router as sessions_router
 from src.api.threads import _LIST_DESCRIPTION_CAP
 from src.api.threads import router as threads_router
 from src.core import threads as core_threads
+from src.core import sidebar_state
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, ThreadStatus
 from src.core.sessions import SessionManager
@@ -150,7 +151,16 @@ def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
   asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
   updated = client.get(url)
   assert next(row for row in response_rows(updated) if row["id"] == any_id)["status"] == "running"
-  assert walks["n"] == 3
+  # The writer's mark carries the published path, so the list poll proves the
+  # body against exactly that file — no walk. (The session view has no marked
+  # proof and still walks.)
+  if url_pattern.endswith("/list"):
+    assert walks["n"] == 2
+    sidebar_state.mark_sidebar_dirty(session_id)
+    client.get(url)
+    assert walks["n"] == 3
+  else:
+    assert walks["n"] == 3
 
 
 def test_session_view_rows_match_the_list_rows_order(tmp_path: Path) -> None:
@@ -304,3 +314,79 @@ def test_list_threads_from_stats_matches_list_threads(tmp_path: Path) -> None:
 
   assert {t.id for t in from_stats} == {t.id for t in scanned}
   assert {t.description for t in from_stats} == {"one", "two"}
+
+
+def _cleared_memos() -> None:
+  threads_api._list_body_memo.clear()
+  threads_api._sig_gate.clear()
+  threads_api._thread_row_memo.clear()
+  sidebar_state.reset_for_tests()
+
+
+def test_marked_incremental_body_matches_the_full_walk_body(tmp_path: Path) -> None:
+  """The marked poll's spliced body is byte-identical to the full walk's, tag included."""
+  client, session_id, _ = _seeded_client(tmp_path)
+  _cleared_memos()
+  url = f"/api/threads/{session_id}/list"
+
+  client.get(url)
+  rows = {row["id"]: row for row in client.get(url).json()}
+  any_id = next(iter(rows))
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
+  asyncio.run(ThreadManager(cfg).update_status(session_id, any_id, ThreadStatus.RUNNING))
+
+  incremental = client.get(url)
+  assert next(row for row in incremental.json() if row["id"] == any_id)["status"] == "running"
+
+  sidebar_state.mark_sidebar_dirty(session_id)  # path-less mark: the poll full-walks
+  full = client.get(url)
+  assert full.content == incremental.content
+  assert full.headers["ETag"] == incremental.headers["ETag"]
+
+
+def test_marked_vanished_file_drops_the_row(tmp_path: Path) -> None:
+  """A mark whose file vanished between the mark and the poll drops the row, and the full walk agrees."""
+  client, session_id, _ = _seeded_client(tmp_path)
+  _cleared_memos()
+  url = f"/api/threads/{session_id}/list"
+  rows = {row["id"]: row for row in client.get(url).json()}
+  thread_id = next(iter(rows))
+  meta_path = next(
+      candidate for candidate in (tmp_path / "home" / "sessions" / session_id / "threads").glob("*/metadata.json")
+      if thread_id in str(candidate))
+  meta_path.unlink()
+  sidebar_state.mark_sidebar_dirty(session_id, str(meta_path))
+
+  incremental = client.get(url)
+  assert {row["id"] for row in incremental.json()} == set(rows) - {thread_id}
+
+  sidebar_state.mark_sidebar_dirty(session_id)  # path-less mark: the poll full-walks
+  assert client.get(url).content == incremental.content
+
+
+def test_sweep_survives_continuous_marked_polls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Incremental proofs advance the sweep countdown: a full walk still lands within the 10-poll window."""
+  client, session_id, _ = _seeded_client(tmp_path)
+  _cleared_memos()
+  url = f"/api/threads/{session_id}/list"
+
+  walks = {"n": 0}
+  real = threads_api._row_source_stats
+
+  def counting(threads_dir: str, triggers_dir: str):
+    walks["n"] += 1
+    return real(threads_dir, triggers_dir)
+
+  monkeypatch.setattr(threads_api, "_row_source_stats", counting)
+  client.get(url)
+  rows = {row["id"] for row in client.get(url).json()}
+  any_id = next(iter(rows))
+
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
+  thread_mgr = ThreadManager(cfg)
+  for _ in range(10):
+    asyncio.run(thread_mgr.update_status(session_id, any_id, ThreadStatus.RUNNING))
+    client.get(url)  # marked poll: incremental proof unless the sweep is due
+    if walks["n"] == 2:
+      break
+  assert walks["n"] == 2, "no full walk within 10 continuously marked polls"

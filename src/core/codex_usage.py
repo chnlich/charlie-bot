@@ -15,7 +15,7 @@ from src.core import event_types as ET
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendType
-from src.core.ndjson import iter_ndjson_events
+from src.core.ndjson import iter_ndjson_events, iter_ndjson_events_from_end
 
 log = structlog.get_logger()
 
@@ -78,42 +78,16 @@ def _extract_codex_rollout_model_event(event: dict[str, Any]) -> str | None:
 
 def _extract_latest_codex_rollout_usage(path: Path) -> dict[str, Any] | None:
   """Scan a native Codex rollout log backwards for latest token_count and model."""
-  if not path.exists():
-    return None
-
   usage: dict[str, Any] | None = None
   model: str | None = None
-  chunk_size = 8192
-  with open(path, "rb") as f:
-    f.seek(0, 2)
-    pos = f.tell()
-    carry = b""
-
-    while pos > 0:
-      read_size = min(chunk_size, pos)
-      pos -= read_size
-      f.seek(pos)
-      chunk = f.read(read_size)
-      parts = (chunk + carry).split(b"\n")
-      carry = parts[0] if pos > 0 else b""
-      lines = parts[1:] if pos > 0 else parts
-
-      for event in iter_ndjson_events(reversed(lines), log_event="codex_rollout_parse_skip",
-                                      log_fields={"path": str(path)}):
-        if usage is None:
-          usage = _extract_codex_rollout_usage_event(event)
-        if model is None:
-          model = _extract_codex_rollout_model_event(event)
-        if usage is not None and model is not None:
-          usage["model"] = model
-          return usage
-
-    for event in iter_ndjson_events([carry], log_event="codex_rollout_parse_skip", log_fields={"path": str(path)}):
-      if usage is None:
-        usage = _extract_codex_rollout_usage_event(event)
-      if model is None:
-        model = _extract_codex_rollout_model_event(event)
-
+  for event in iter_ndjson_events_from_end(path, log_event="codex_rollout_parse_skip", log_fields={"path": str(path)}):
+    if usage is None:
+      usage = _extract_codex_rollout_usage_event(event)
+    if model is None:
+      model = _extract_codex_rollout_model_event(event)
+    if usage is not None and model is not None:
+      usage["model"] = model
+      return usage
   if usage is None:
     return None
   usage["model"] = model or ""

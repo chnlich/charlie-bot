@@ -28,6 +28,7 @@ from src.core.message_aggregator import extract_text_from_message, extract_tool_
 from src.core.models import (
     BackendType,
     CcClaudeBackend,
+    PendingTrigger,
     ThreadMetadata,
     ThreadStatus,
     TuiCliBackend,
@@ -35,7 +36,7 @@ from src.core.models import (
 )
 from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
 from src.core.process import kill_process_group
-from src.core.sidebar_state import RevisionSweepGate, session_revision
+from src.core.sidebar_state import RevisionSweepGate, session_revision, take_marked_paths
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME, ThreadManager, iter_thread_meta_stats
 from src.core.triggers import TriggerManager
 
@@ -271,6 +272,94 @@ def _thread_list_items(
   return items
 
 
+def _trigger_list_item(tr: PendingTrigger) -> dict:
+  """One trigger row of the workers-panel list payload."""
+  return {
+      "type": "trigger",
+      "id": tr.id,
+      "message": tr.message,
+      "status": tr.status.value,
+      "fire_at": tr.fire_at.isoformat(),
+      "created_at": tr.created_at.isoformat(),
+  }
+
+
+def _list_body(items: list[dict], triggers: list[PendingTrigger]) -> bytes:
+  """The list body from thread rows plus trigger rows: the combined sort, then the dumps."""
+  combined = items + [_trigger_list_item(tr) for tr in triggers]
+  combined.sort(key=lambda x: x["created_at"], reverse=True)
+  return json.dumps(combined, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+
+
+async def _marked_rebuild(
+    session_id: str,
+    session_dir: Path,
+    hit: tuple[tuple[tuple[str, int, int], ...], bytes, str],
+    marked: list[str],
+    trigger_mgr: TriggerManager,
+) -> tuple[tuple[tuple[str, int, int], ...], bytes, str] | None:
+  """Prove the stored list body against exactly the marked row-source files.
+
+  The writers mark the file they just published through their atomic rename,
+  so stat-ing the marked paths and leaving every other signature entry standing
+  proves the body the way a full walk would, at one stat per mark. Returns the
+  new (sig, body, etag), or None when the marked shape cannot prove
+  incrementally — the row memo evicted this session, or a marked path is not a
+  thread metadata file — and the caller falls back to the full walk.
+  """
+  rows = _thread_row_memo.get(session_id)
+  if rows is None:
+    return None
+  threads_prefix = str(session_dir / THREADS_DIR_NAME) + "/"
+  sig_entries = {path: (mtime, size) for path, mtime, size in hit[0]}
+  refreshed = dict(rows)
+  moved = False
+  for path in marked:
+    try:
+      st = os.stat(path)
+    except OSError:
+      sig_entries.pop(path, None)
+      refreshed.pop(path, None)
+      moved = True
+      continue
+    cached = rows.get(path)
+    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+      continue  # a repeat mark whose file already stands in the proof: nothing moved
+    if not path.startswith(threads_prefix):
+      return None
+    try:
+      with open(path, encoding="utf-8") as f:
+        meta = ThreadMetadata.model_validate_json(f.read())
+    except OSError:
+      # Stat saw the file, so the read failure means it vanished between stat
+      # and read: the no-row verdict the full walk gives, entry and row gone.
+      sig_entries.pop(path, None)
+      refreshed.pop(path, None)
+      moved = True
+      continue
+    refreshed[path] = (st.st_mtime_ns, st.st_size, _thread_list_item(meta))
+    sig_entries[path] = (st.st_mtime_ns, st.st_size)
+    moved = True
+  sig = tuple(sorted((path, mtime, size) for path, (mtime, size) in sig_entries.items()))
+  _thread_row_memo.store(session_id, refreshed)
+  if not moved:
+    # Every marked file already stands in the proof (a repeat mark): the
+    # stored body is current, serve it instead of rebuilding the same bytes.
+    return hit
+  triggers = await trigger_mgr.list_triggers(session_id)
+  body = _list_body([entry[2] for entry in refreshed.values()], triggers)
+  etag_value = '"' + hashlib.sha1(body).hexdigest() + '"'
+  return sig, body, etag_value
+
+
+def _list_response(body: bytes, etag_value: str, etag: str | None) -> Response:
+  """The list body's answer: a bodyless 204 when the poll repeats the rendered tag."""
+  if etag == etag_value:
+    return Response(status_code=204, headers={"ETag": etag_value, "Cache-Control": "no-store"})
+  return Response(content=body, media_type="application/json",
+                  headers={"ETag": etag_value, "Cache-Control": "no-store"})
+
+
 # The session view's threads array rides the same row proof as the list body:
 # sorted rows per session gated on the write revision (every row-source
 # writer marks through mark_sidebar_dirty). The view's mark_read
@@ -333,10 +422,25 @@ async def list_threads(
   session_dir = cfg.sessions_dir / session_id
   hit = _list_body_memo.get(session_id)
   rev = session_revision(session_id)
+  # Drained every request so marks never pile up; a mark that landed between
+  # the revision read above and this take left the revision bumped, so the next
+  # poll full-walks (marked_since_proof with no paths) and catches its write.
+  marked = take_marked_paths(session_id)
   thread_pairs: list[tuple[str, os.stat_result]] | None = None
   if hit is not None and _sig_gate.serve_hit(session_id, rev):
     sig = hit[0]
   else:
+    marked_body = None
+    if hit is not None and marked and _sig_gate.marked_since_proof(session_id, rev):
+      marked_body = await _marked_rebuild(session_id, session_dir, hit, marked, trigger_mgr)
+    if marked_body is not None:
+      sig, body, etag_value = marked_body
+      _list_body_memo.store(session_id, (sig, body, etag_value))
+      # The incremental proof covered only the marked files: reset_sweep=False
+      # advances the countdown, so the full walk still arrives on schedule and
+      # an unmarked row-source write heals inside the same ~30 s window.
+      _sig_gate.mark_proven(session_id, rev, reset_sweep=False)
+      return _list_response(body, etag_value, etag)
     thread_pairs, trigger_pairs = await asyncio.to_thread(
         _row_source_stats, str(session_dir / THREADS_DIR_NAME), str(session_dir / "triggers"))
     sig = _signature_from_stats(thread_pairs, trigger_pairs)
@@ -345,16 +449,7 @@ async def list_threads(
     else:
       _sig_gate.drop(session_id)
   if hit is not None and hit[0] == sig:
-    if etag == hit[2]:
-      return Response(status_code=204, headers={"ETag": hit[2], "Cache-Control": "no-store"})
-    return Response(
-        content=hit[1],
-        media_type="application/json",
-        headers={
-            "ETag": hit[2],
-            "Cache-Control": "no-store"
-        },
-    )
+    return _list_response(hit[1], hit[2], etag)
 
   # The rebuild's rows parse from the same walked pairs the signature keys, so
   # the memo's proof and the rows behind the body describe one instant. The
@@ -364,37 +459,12 @@ async def list_threads(
   thread_items = _thread_list_items(session_id, thread_pairs, metas)
 
   triggers = await trigger_mgr.list_triggers(session_id)
-  trigger_items = [
-      {
-          "type": "trigger",
-          "id": tr.id,
-          "message": tr.message,
-          "status": tr.status.value,
-          "fire_at": tr.fire_at.isoformat(),
-          "created_at": tr.created_at.isoformat(),
-      } for tr in triggers
-  ]
-
-  combined = thread_items + trigger_items
-  combined.sort(key=lambda x: x["created_at"], reverse=True)
-  # These dumps flags and the mapped-return serialization this replaces ship
-  # byte-identical bodies (verified on the 277-row worst-session corpus), so a
-  # memo hit and a fresh build are indistinguishable on the wire.
-  body = json.dumps(combined, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+  # The marked rebuild's body rides this same _list_body build.
+  body = _list_body(thread_items, triggers)
   etag_value = '"' + hashlib.sha1(body).hexdigest() + '"'
   _list_body_memo.store(session_id, (sig, body, etag_value))
   _sig_gate.mark_proven(session_id, rev)
-  if etag == etag_value:
-    return Response(status_code=204, headers={"ETag": etag_value, "Cache-Control": "no-store"})
-  return Response(
-      content=body,
-      media_type="application/json",
-      headers={
-          "ETag": etag_value,
-          "Cache-Control": "no-store"
-      },
-  )
-
+  return _list_response(body, etag_value, etag)
 
 @router.get("/{session_id}/threads/{thread_id}")
 async def get_thread(

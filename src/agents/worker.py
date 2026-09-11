@@ -137,11 +137,11 @@ class Worker:
           backend_kwargs["extra_flags"] = ["--resume", self._resume_session_id]
         else:
           backend_kwargs["claude_session_id"] = self._thread.claude_session_id
-      if on_spawn is not None:
-        return build_backend(self._backend_option, self._cfg, claude_account=self._claude_account, **backend_kwargs)
       try:
         return build_backend(self._backend_option, self._cfg, claude_account=self._claude_account, **backend_kwargs)
       except Exception as e:
+        if on_spawn is not None:
+          raise
         log.warning(
             "translate_backend_unresolved",
             thread_id=self._thread.id,

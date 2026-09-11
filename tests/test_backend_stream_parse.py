@@ -95,12 +95,43 @@ async def test_tail_follow_events_carries_partial_line_across_chunks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tail_follow_events_carries_multimegabyte_line_across_chunks() -> None:
+  """A line spanning many 64 KB read boundaries yields exactly once: the carry
+  accumulates the read chunks and completes from one scan, so the cost stays
+  linear in the line's bytes (the live raw log carries multi-MB events)."""
+  payload = b'{"type": "assistant", "seq": 9, "pad": "' + b"x" * (1024 * 1024) + b'"}\n'
+  events = await _collect_tail_events(payload, post_result_timeout=60.0)
+  assert [event["seq"] for event in events] == [9]
+
+
+@pytest.mark.asyncio
 async def test_tail_follow_events_drops_torn_final_line() -> None:
   """A final line the producer never finished stays unprocessed (the torn
   final write replays as at most a duplicate — never a loss)."""
   torn = b'{"type": "assistant", "seq": 1}\n{"type": "assistant", "seq": 2'
   events = await _collect_tail_events(torn, post_result_timeout=60.0)
   assert [event["seq"] for event in events] == [1]
+
+
+@pytest.mark.asyncio
+async def test_tail_follow_events_warns_torn_bytes_only_for_the_partial() -> None:
+  """The torn-tail warning names the unprocessed partial's bytes, and a log
+  ending on a completed line warns nothing."""
+  from structlog.testing import capture_logs
+
+  complete = b'{"type": "assistant", "seq": 1}\n'
+  torn_tail = b'{"type": "assistant", "seq": 2'
+  with capture_logs() as logs:
+    events = await _collect_tail_events(complete, post_result_timeout=60.0)
+  assert [event["seq"] for event in events] == [1]
+  assert not [entry for entry in logs if entry.get("event") == "raw_trailing_torn_line_dropped"]
+
+  with capture_logs() as logs:
+    events = await _collect_tail_events(complete + torn_tail, post_result_timeout=60.0)
+  assert [event["seq"] for event in events] == [1]
+  warnings = [entry for entry in logs if entry.get("event") == "raw_trailing_torn_line_dropped"]
+  assert len(warnings) == 1
+  assert warnings[0]["bytes"] == len(torn_tail)
 
 
 @pytest.mark.asyncio

@@ -355,7 +355,13 @@ async def tail_follow_events(
 
   with open(raw_path, "rb") as f:
     f.seek(offset)
-    buf = b""
+    # The carry is a bytearray appended per chunk and compacted once per chunk,
+    # and the terminator search resumes at the previously scanned boundary: a
+    # line spanning N chunks must cost O(line), not the O(chunks × line) the
+    # bytes-concat carry pays (a 10 MB line measured ~80 ms of copy+rescan).
+    buf = bytearray()
+    consumed = 0  # bytes of buf before the next unprocessed line
+    scanned = 0  # bytes of buf already searched for the terminator
     while True:
       chunk = f.read(65536)
       if chunk:
@@ -363,17 +369,18 @@ async def tail_follow_events(
         # The producer's last write, anchored to the monotonic clock (the
         # file's mtime — reading pre-mount backlog must not count as output).
         last_output_at = last_growth - max(0.0, time.time() - os.fstat(f.fileno()).st_mtime)
-        if buf:
-          chunk = buf + chunk
-          buf = b""
-        start = 0
+        if consumed:
+          del buf[:consumed]
+          scanned -= consumed
+          consumed = 0
+        buf += chunk
         while True:
-          nl = chunk.find(b"\n", start)
+          nl = buf.find(b"\n", scanned)
           if nl < 0:
-            buf = chunk[start:]  # trailing partial line; re-read once completed
+            scanned = len(buf)
             break
-          raw_line = chunk[start:nl]
-          start = nl + 1
+          raw_line = bytes(memoryview(buf)[consumed:nl])
+          consumed = scanned = nl + 1
           offset += len(raw_line) + 1
           event = parse_ndjson_line(
               raw_line.decode("utf-8", errors="replace"), log_event="backend_line_not_json", log_fields={})
@@ -442,10 +449,12 @@ async def tail_follow_events(
         await on_silence()
       await asyncio.sleep(poll_interval)
 
-    if buf.strip():
-      # Torn final write (producer killed mid-line). Dropping it makes a
-      # restart replay the run's tail as at most a duplicate — never a loss.
-      log.warning("raw_trailing_torn_line_dropped", bytes=len(buf))
+    # Only the unprocessed tail past *consumed* is a torn final write; the
+    # consumed prefix stays in buf until the next chunk compacts it.
+    if len(buf) > consumed and buf[consumed:].strip():
+      # Dropping it makes a restart replay the run's tail as at most a
+      # duplicate — never a loss.
+      log.warning("raw_trailing_torn_line_dropped", bytes=len(buf) - consumed)
 
 
 def _rotate_stale_transport(log_dir: Path, raw_path: Path, stderr_path: Path, cursor_path: Path) -> None:

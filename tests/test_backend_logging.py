@@ -130,32 +130,17 @@ async def test_no_log_dir_still_populates_stderr_text(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tee_stderr_chunk_lands_every_byte_in_order(tmp_path: Path) -> None:
-  """The per-chunk tee write-all contract: a short write keeps going, chunk order holds."""
-  from src.agents.backends.base import _tee_stderr_chunk
+async def test_write_chunk_lands_every_byte_in_order(tmp_path: Path) -> None:
+  """The per-chunk write-all contract shared by the stderr tee and the stdout
+  pumps: a short write keeps going, chunk order holds."""
+  from src.agents.backends.base import _write_chunk
 
-  path = tmp_path / "stderr.log"
+  path = tmp_path / "chunk.log"
   fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
   try:
     chunks = [bytes([i % 256]) * (8192 + i) for i in range(9)]
     for chunk in chunks:
-      await _tee_stderr_chunk(fd, chunk)
-  finally:
-    os.close(fd)
-  assert path.read_bytes() == b"".join(chunks)
-
-
-@pytest.mark.asyncio
-async def test_write_stdout_chunk_lands_every_byte_in_order(tmp_path: Path) -> None:
-  """The stdout-pump write-all contract, the stderr tee's rule on the stdout fd."""
-  from src.agents.backends.base import _write_stdout_chunk
-
-  path = tmp_path / "stdout.log"
-  fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
-  try:
-    chunks = [bytes([i % 256]) * (8192 + i) for i in range(9)]
-    for chunk in chunks:
-      await _write_stdout_chunk(fd, chunk)
+      await _write_chunk(fd, chunk)
   finally:
     os.close(fd)
   assert path.read_bytes() == b"".join(chunks)

@@ -11,7 +11,7 @@ from src.agents.backends.base import (
     SKIP_PERMISSIONS_FLAG,
     USER_LOCAL_BIN,
     AgentBackend,
-    _write_stdout_chunk,
+    _write_chunk,
     make_error_event,
     make_result_event,
     make_text_event,
@@ -109,7 +109,7 @@ class AntigravityCliBackend(AgentBackend):
         if not chunk:
           break
         if stdout_fd is not None:
-          await _write_stdout_chunk(stdout_fd, chunk)
+          await _write_chunk(stdout_fd, chunk)
         stdout_bytes.extend(chunk)
     finally:
       if stdout_fd is not None:

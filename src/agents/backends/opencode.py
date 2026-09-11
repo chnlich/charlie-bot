@@ -16,7 +16,7 @@ import structlog
 from src.agents.backends.base import (
     SKIP_PERMISSIONS_FLAG,
     AgentBackend,
-    _write_stdout_chunk,
+    _write_chunk,
     iter_ndjson_events,
     make_compact_boundary_event,
     make_error_event,
@@ -402,7 +402,7 @@ class OpenCodeBackend(AgentBackend):
       if not raw_line:
         raise RuntimeError("OpenCode serve exited before printing its server URL")
       if self._stdout_fd is not None:
-        await _write_stdout_chunk(self._stdout_fd, raw_line)
+        await _write_chunk(self._stdout_fd, raw_line)
       line = raw_line.decode("utf-8", errors="replace").strip()
       match = _SERVER_URL_RE.search(line)
       if match:
@@ -418,7 +418,7 @@ class OpenCodeBackend(AgentBackend):
       chunk = await self._proc.stdout.read(8192)
       if not chunk:
         break
-      await _write_stdout_chunk(self._stdout_fd, chunk)
+      await _write_chunk(self._stdout_fd, chunk)
 
   async def _check_health(self, client: httpx.AsyncClient) -> None:
     response = await client.get("/global/health")

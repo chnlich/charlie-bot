@@ -100,24 +100,38 @@ def test_registry_scopes_opencode_proxy_to_opencode_constructor(monkeypatch) -> 
 # --------------------------------------------------------------- config reload
 
 
-def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypatch) -> None:
-  """A reload must update the existing instance so earlier holders see new values."""
+def _reload_rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+  """Temp default home carrying config.yaml (port 1111); returns the config path.
+
+  Both reload tests assert default-home resolution under the patched Path.home, so the
+  suite-wide profile variable that the autouse fixture sets is deleted here.
+  """
   home = tmp_path / "home"
   (home / ".charliebot").mkdir(parents=True)
   cfg_path = home / ".charliebot" / "config.yaml"
   cfg_path.write_text("server:\n  port: 1111\n", encoding="utf-8")
   monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-  # The test asserts default-home resolution under the patched Path.home, so the suite-wide profile variable is cleared.
   monkeypatch.delenv(core_config.CHARLIEBOT_HOME_ENV, raising=False)
   monkeypatch.setattr(core_config, "_home_cache", {})
+  return cfg_path
+
+
+def _write_port_2222(cfg_path: Path) -> None:
+  import os
+
+  cfg_path.write_text("server:\n  port: 2222\n", encoding="utf-8")
+  os.utime(cfg_path, (0, 0))  # force a different mtime
+
+
+def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypatch) -> None:
+  """A reload must update the existing instance so earlier holders see new values."""
+  cfg_path = _reload_rig(tmp_path, monkeypatch)
 
   first = core_config.get_config()
   holder = first  # a long-lived singleton captures the object here
   assert first.server.port == 1111
 
-  cfg_path.write_text("server:\n  port: 2222\n", encoding="utf-8")
-  import os
-  os.utime(cfg_path, (0, 0))  # force a different mtime
+  _write_port_2222(cfg_path)
 
   second = core_config.get_config()
   assert second is first
@@ -125,19 +139,10 @@ def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypa
 
 
 def test_get_config_keeps_previous_value_when_reload_fails(tmp_path: Path, monkeypatch) -> None:
-  home = tmp_path / "home"
-  (home / ".charliebot").mkdir(parents=True)
-  cfg_path = home / ".charliebot" / "config.yaml"
-  cfg_path.write_text("server:\n  port: 1111\n", encoding="utf-8")
-  monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-  # The test asserts default-home resolution under the patched Path.home, so the suite-wide profile variable is cleared.
-  monkeypatch.delenv(core_config.CHARLIEBOT_HOME_ENV, raising=False)
-  monkeypatch.setattr(core_config, "_home_cache", {})
+  cfg_path = _reload_rig(tmp_path, monkeypatch)
 
   first = core_config.get_config()
-  cfg_path.write_text("server:\n  port: 2222\n", encoding="utf-8")
-  import os
-  os.utime(cfg_path, (0, 0))
+  _write_port_2222(cfg_path)
   monkeypatch.setattr(core_config, "load_config", lambda: (_ for _ in ()).throw(ValueError("bad yaml")))
 
   second = core_config.get_config()

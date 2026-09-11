@@ -103,6 +103,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M91 worker per-event quota-scan head, streamed-turn replay | M91 collector below | seconds per `Worker._process_event` call over a full-corpus replay of the worst on-disk worker events log — per-event median, worst single event, and the replay's total wall (scratch append target, zero-subscriber broadcast) | per-event median < 0.0002 s; worst single event < 1.0 ms; replay wall median < 0.30 s | — (introduced with its first history row) |
 | M92 CLI invocation startup, common-family command | M92 collector below | seconds per `charliebot` invocation's import-and-dispatch floor (`schedule-trigger --help`: fresh process, the shared `src.cli.common` chain, no server round trip); a real common-family command (delegate/plan/improve) pays the same floor plus its request | median < 0.40 s | — (introduced with its first history row) |
 | M93 thread-detail 500s, per 24 h server log | M93 collector below | 500 responses per newest server log for `GET /api/threads/{sid}/threads/{tid}` (the workers panel's per-thread detail fetch and its 5 s `?attach=1` poll — a 500 here fails the poll continuously while the panel is open, and each failure ships a ~30-line traceback into the log) | 0 | 9 (the AttributeError 500s the 2026-09-11 cli-binary fix removed; the live server carries the fix from its next deploy on) |
+| M94 projection page + stream-delta serialization, giant-tool-output corpus | M94 collector below | tail-40 page body bytes + its json.dumps wall + the projection build wall; streamed replay serialized MB + dumps wall (the live broadcast shape: one json.dumps per emitted delta) | page body median < 1 MB; streamed replay serialized median < 30 MB and dumps wall median < 0.06 s | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -5781,10 +5782,92 @@ healthy zero count, and a real grep failure (exit 2) must stay loud:
 LOG=$(ls -1t /tmp/charliebot-logs/server_*.log | head -1); grep -cE "method=GET path=/api/threads/[0-9a-f-]+/threads/[0-9a-f-]+ status=500" "$LOG" || [ $? -eq 1 ]
 ```
 
+M94 — projection page + stream-delta serialization, giant-tool-output corpus. The aggregator's
+message dict carries each tool's full output, and one message's `tools` array rides every render
+path: each page payload (bootstrap, events, view) and each `stream` delta re-serializes the whole
+buffered draft, so one big tool_result turns into megabytes on every delta and every switch back
+to the session (the live log's worst bootstrap tail: 890 ms, session 4914c102's 9.92 MB Bash
+output). The collector resolves the active session whose live chat file carries the largest single
+`tool_result` content (live home read-only; the projection build and the aggregator feed are
+pure), builds the projection, times the tail-40 page's json.dumps, and replays the corpus through
+the live broadcast shape (one json.dumps per emitted delta). Evidence points the same collector at
+the before and after checkouts (`CHECKOUT` at each root), the same shape as the M7 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import json, os, sys, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+from pathlib import Path
+from src.core.message_aggregator import MessageAggregator
+from src.core.message_projection import MessageProjection
+
+root = Path.home() / ".charliebot" / "sessions"
+best, best_out = None, -1
+for d in root.iterdir():
+    meta = d / "metadata.json"
+    if not meta.is_file():
+        continue
+    try:
+        if json.loads(meta.read_text()).get("status") != "active":
+            continue
+    except (OSError, ValueError):
+        continue
+    p = d / "data" / "chat_events.jsonl"
+    if not p.is_file():
+        continue
+    for line in open(p, errors="replace"):
+        if '"tool_result"' not in line:
+            continue
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("type") == "tool_result" and isinstance(e.get("content"), str) and len(e["content"]) > best_out:
+            best, best_out = p, len(e["content"])
+
+events = [json.loads(l) for l in open(best, errors="replace")]
+
+def replay():
+    agg = MessageAggregator(emit_stream_deltas=True)
+    total = 0
+    t0 = time.perf_counter()
+    for ev in events:
+        for delta in agg.feed(ev):
+            total += len(json.dumps(delta, default=str))
+    return time.perf_counter() - t0, total
+
+def page():
+    t0 = time.perf_counter()
+    proj = MessageProjection(events)
+    build = time.perf_counter() - t0
+    messages, _, _ = proj.tail(40)
+    t0 = time.perf_counter()
+    body = json.dumps({"messages": messages}, default=str)
+    return build, len(body), time.perf_counter() - t0
+
+replay()  # cold pass; not timed
+walls, totals = [], []
+for _ in range(3):
+    w, total = replay()
+    walls.append(w)
+    totals.append(total)
+walls.sort()
+totals.sort()
+pages = [page() for _ in range(3)]
+builds = sorted(p[0] for p in pages)
+bodies = sorted(p[1] for p in pages)
+dumps = sorted(p[2] for p in pages)
+print(f"{best.parent.parent.name} corpus, {len(events)} events, largest tool output {best_out / 1e6:.2f} MB; "
+      f"page body median {bodies[1] / 1e6:.2f} MB, dumps median {dumps[1] * 1000:.1f} ms, build median {builds[1] * 1000:.1f} ms; "
+      f"streamed replay serialized median {totals[1] / 1e6:.1f} MB, dumps wall median {walls[1] * 1000:.0f} ms over 3")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-11 | this PR | M94 page body median 16.14/16.14/16.14 MB → 0.84/0.84/0.84 MB, −95 %, page dumps 36.7/35.0/34.6 → 1.8/1.9/1.8 ms; streamed replay serialized 627.2/627.2/627.2 → 20.2/20.2/20.2 MB, −97 %, dumps wall 1390/1387/1386 → 45/44/44 ms (three interleaved rounds of the new collector — main checkout before vs branch worktree after back-to-back, 531-event / 16.2 MB live chat file of session 4914c102 whose largest single tool_result carries 9.92 MB of Bash output, live home read-only, every paired round faster at load 1.25-1.46 one-minute; live-log corroboration: that session's bootstraps read 342-890 ms across the 25 h server log — the 16 MB page's dumps+gzip+transfer — and its raw events.jsonl downloads 1.5-1.8 s, shapes the capped page bounds); no-regression witnesses interleaved ×2: M38 fan-out unchanged (same selected turn, 186 dumps calls 5 ms, final-frame parity True both arms), M26 advance 0.12-0.18 ms with parity True digest e94c56635194 identical, M35 view/bootstrap bodies byte-identical (digests ff7b6850b70d / e153e88533ab) and the events page digest moving 68668edc2776 → 776c27d41c44 (624733 → 624218 B — one barely-over-cap output's trimmed tail, the cap's only served-body change); 5094-passed suite plus 4 new cap tests | every render path re-serializes the aggregator's whole buffered draft — each page payload (bootstrap, events, view) and each `stream` delta snapshot — so one big tool_result rode every subsequent delta and every switch back to the session: the corpus replayed through the live broadcast shape serialized 627 MB across 356 deltas (1.4-1.6 s of event-loop json.dumps per replay) and its projection page shipped 16.14 MB per bootstrap; the aggregator now caps each tool's rendered output at 20000 chars with an `output_truncated` marker the renderer surfaces (the expand still reveals the capped tail; 99 % of on-disk outputs — p99 26016 chars — keep their full text, the cap bounds only the top 1 %), and the full text stays on the persisted event where the raw download, the fork reference, and the review scans already read it; M94 definition and healthy range introduced with this PR |
 | 2026-09-11 | #1336 (row recorded in this docs-only follow-up per the #1046 precedent, the landing PR shipped without it) | M93 thread-detail 500s: 9 per 24 h server log (all `error=AttributeError`: 5 `'CharlieCodeBackend' object has no attribute 'cli_binary'`, 4 `'OpencodeBackend' object has no attribute 'cli_binary'`, across 5 distinct worker threads of 4 sessions — session fcef4323's thread 956e07e4 alone 500ed five times, the cadence of an open panel's 5 s attach poll) → the fixed code serves the same scratch shape 200/200; the live server carries the fix from its next deploy, so the standing count reads the pre-fix log until then. Same PR's M11 collector repair: the 500 count had grepped the uvicorn access-log shape the server stopped writing at the 2026-09-07 09:20 restart (the restart that turned on the structured `http_request` lines) — `HTTP/1.1" 500` matches 0 lines in every log since (the newest 24 h log carries 9 structured `status=500` lines) — so the count read 0 unconditionally for ~4 days, the #1285 vacuous-read class; the repaired pattern reads `path=/api/backlog status=500` (still 0 — the nine 500s are thread-detail, outside M11's endpoint set) and `|| [ $? -eq 1 ]` lets the healthy zero count exit 0 instead of grep's no-match 1 while a real grep failure (exit 2) stays loud; both GETs 200. Scratch A/B: the detail GET against a one-charlie-code-option config 500ed with the live traceback's own frame (`_backend_dispatch`, line 93) on main's code and serves full-row 200 + attach-mode 200 on the branch; new parameterized endpoint test over all nine backend-option types × both shapes red pre-fix (7 of 9 fail — exactly the seven types without `cli_binary`) and green after; 5090-passed suite; M59 no-regression witness 1.90/1.79 ms medians, bodies 59259/48 B identical to the standing band | the attach dispatch read `option.cli_binary` off the bare backend-option union, but `cli_binary` is declared on the CcClaudeBackend and TuiCliBackend option models only — the dispatch predates the sectioned config giving each backend type its own `extra='forbid'` pydantic model, which is what turned the bare attribute read into a crash; the dispatch now reads through the same type gate the backend registry uses |
 | 2026-09-11 | this PR | M84 tail-follow replay median 92.0/95.1/94.7 → 38.9/38.8/39.0 ms, −58 %, maxima 96.8-103.8 → 39.3-39.5 ms (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 10.1 MB / 64-line worst on-disk raw agent log whose largest event is a single 9.99 MB observation line, scratch copy, live home read-only, parser parity 0 divergences both arms, every paired round faster at load 1.95-2.04 one-minute; component attribution on the pre-fix replay: the per-chunk `buf + chunk` carry concat plus the from-byte-0 terminator re-scan read ~80 ms of the ~92 ms wall — cProfile tottime 38 ms in the loop frame, 17 ms in bytes.find over ~155 chunk rounds — against the 12-14 ms orjson parse floor the 9.99 MB line measures); no-regression witnesses interleaved: stdout-stream replay unchanged 36.0/36.4/35.9 → 35.9/36.3/36.2 ms (the untouched sibling funnel), M74 turn-end rescan loop-lag 0.0205 → 0.0231 s within noise (its parse_raw_lines walk is already linear); 5080-passed suite plus the new 1 MB single-line multi-chunk carry test | the worst on-disk raw log changed shape since the M84 landing (391 lines averaging 25 KB → 64 lines carrying one 9.99 MB line), and the pre-fix carry paid the quadratic twice per chunk round — the accumulated-bytes concat and the from-byte-0 terminator search — so the replay read 8x the landing's 11.2-11.6 ms and outside the < 60 ms range; the carry is now a bytearray appended per chunk and compacted once per chunk with the search resuming at the previously scanned boundary, so a multi-chunk line costs O(line) in the loop that is the live read side of every covered backend's streamed turn and the re-attach replay path; range recalibrations carried by this PR's evidence, both corpus-shape moves the orjson floor drives: M84 stdout-stream < 0.010 s → < 0.040 s (funnel measured at the floor: parse_ndjson_line 12.0 ms on the 9.99 MB line vs bare orjson 12.4 ms, decode 1.0 ms, reader hops 0.0 ms; the old line was calibrated on the small-line corpus whose floor was 4.7 ms per 9.9 MB) and M74 loop-lag < 0.015 s → < 0.030 s (the rescan's threaded orjson parse holds the GIL 12-14 ms on this corpus before the walk and project add) |
 | 2026-09-11 | this PR | M91 streamed-turn replay: replay wall median 0.2641/0.2672/0.2290 → 0.0226/0.0222/0.0220 s, −89 % to −92 %; per-event median 105.0/104.2/93.6 → 4.7/4.6/4.5 us, −95 %; worst single event 1.74/1.42/1.43 → 0.45/0.41/0.42 ms, −69 % to −74 %, back inside the < 1.0 ms range (three interleaved rounds of the verbatim collector, main checkout before vs branch worktree after back-to-back, 6.7 MB / 2315-event worst on-disk worker log, scratch append target, live home read-only, load 2.67-2.79 one-minute, every paired round faster); attribution: the worst single event is scheduler jitter, not payload — during the sweep the corpus's 256 B system events spiked to 1.0-3.9 ms while the 234 KB assistant event read 0.62 ms, and a same-loop probe append's own worst hop read 1.35-3.93 ms, so the head was the per-event executor round-trip's wakeup, on top of which the biggest event paid 0.47 ms of stdlib json.dumps; on-loop vs hop microbenchmark on this host: 256 B 1.7 vs 97 us, 3 KB 4.0 vs 119 us, 234 KB 89 vs 217 us, the on-loop worst bounded by the write itself; no-regression re-measure interleaved ×2: M82 events-log append 72/82 → 2/2 us median, maxima 99-121 → 10-24 us (the same function, now write-only); 5070-passed suite plus 2 new round-trip tests | every streamed worker event paid one asyncio.to_thread executor round-trip for its append — the M82 landing's one hop — whose wakeup under load spikes to milliseconds (the worst-single-event readings 2.81 ms / 1.34 ms the last two sweeps carried), while the events log is a page-cached append-only diagnostic stream with no fdatasync, so the hop bought no durability; the append now writes on-loop through the shared write-all (worst case bounded by the write itself, ~90 us per 100 KB), and the persisted line serializes through orjson (the M78 parser-swap precedent: 0.467 → 0.036 ms on the 234 KB event, compact UTF-8 bytes where stdlib emitted spaces and \\uXXXX escapes — every reader JSON-parses per line, the NaN literal the stdlib form could emit is one the orjson read funnels already reject, so null is strictly round-trippable); `_append_event_line` keeps its awaited (fd, line) shape, the M82 collector's contract |

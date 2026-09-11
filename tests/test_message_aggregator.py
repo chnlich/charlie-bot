@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from copy import deepcopy
 
 import pytest
@@ -9,6 +11,7 @@ from conftest import queued_user_reorder_events as _reorder_events
 
 from src.api.message_utils import events_to_messages, events_to_view
 from src.core import event_types as ET
+from src.core.message_aggregator import TOOL_OUTPUT_RENDER_CAP
 from src.core.message_aggregator import MessageAggregator
 
 VOICE_KEY = "is_" + "voice"
@@ -865,3 +868,68 @@ def test_emit_stream_deltas_false_keeps_message_deltas_and_pending_identical() -
 def test_clone_preserves_emit_stream_deltas() -> None:
   assert MessageAggregator().clone().emit_stream_deltas is True
   assert MessageAggregator(emit_stream_deltas=False).clone().emit_stream_deltas is False
+
+
+def test_flat_tool_result_output_is_capped_with_marker() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"cmd": "dump"}}))
+  giant = "x" * (TOOL_OUTPUT_RENDER_CAP + 5000)
+  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": giant}))
+
+  draft = agg.pending_draft_message()
+  assert draft["tools"][0]["output"] == "x" * TOOL_OUTPUT_RENDER_CAP
+  assert draft["tools"][0]["output_truncated"] is True
+
+
+def test_cc_tool_result_output_is_capped_with_marker() -> None:
+  agg = MessageAggregator()
+  list(agg.feed(_assistant_text_tool_use_event("Running", "Bash", {"command": "ls"}, "t1")))
+  giant = "y" * (TOOL_OUTPUT_RENDER_CAP + 1)
+  list(
+      agg.feed(
+          {
+              "type": "user",
+              "message": {
+                  "content": [{
+                      "type": "tool_result",
+                      "content": giant,
+                      "is_error": False
+                  }]
+              },
+          }))
+
+  draft = agg.pending_draft_message()
+  assert draft["tools"][0]["output"] == "y" * TOOL_OUTPUT_RENDER_CAP
+  assert draft["tools"][0]["output_truncated"] is True
+
+
+def test_tool_output_under_cap_carries_no_marker() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"cmd": "ls"}}))
+  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "file1\nfile2"}))
+
+  draft = agg.pending_draft_message()
+  assert draft["tools"][0] == {
+      "name": "Bash",
+      "input": {
+          "cmd": "ls"
+      },
+      "output": "file1\nfile2",
+      "is_error": False,
+  }
+
+
+def test_stream_deltas_stay_bounded_after_a_giant_tool_result() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"cmd": "cat big.log"}}))
+  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "z" * (TOOL_OUTPUT_RENDER_CAP * 500)}))
+
+  serialized = []
+  for i in range(20):
+    list(agg.feed({"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": f"delta {i}"}]}}))
+    draft = agg.pending_draft_message()
+    serialized.append(len(json.dumps(draft)))
+
+  # Every live delta re-serializes the whole buffered draft, so one uncapped
+  # output would ride all of them; the cap bounds each snapshot instead.
+  assert max(serialized) < TOOL_OUTPUT_RENDER_CAP + 100_000

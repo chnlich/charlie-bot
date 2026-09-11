@@ -16,7 +16,6 @@ if TYPE_CHECKING:
   from src.core.sessions import SessionManager
   from src.core.threads import ThreadManager
 
-from src.api.message_utils import extract_text_from_message
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.git import (
@@ -29,6 +28,7 @@ from src.core.git import (
     git_worktree_remove_reporting,
 )
 from src.core.master_trigger import trigger_master
+from src.core.message_aggregator import extract_text_from_message
 from src.core.models import SpawnRequest, TaskType, ThreadStatus, utc_now
 from src.core.runs import IMPROVE_ITERATION_PREFIX
 from src.core.tasks import create_logged_task

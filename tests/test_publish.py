@@ -86,14 +86,17 @@ def test_missing_artifact_raises_naming_the_path(tmp_path: Path) -> None:
   assert str(absent) in str(exc_info.value)
 
 
-def test_missing_publish_dir_key_raises_naming_the_key(tmp_path: Path) -> None:
+@pytest.mark.parametrize("missing_key", ["dir", "public_base_url"])
+def test_missing_publish_key_raises_naming_the_key(tmp_path: Path, missing_key: str) -> None:
   artifact = write_artifact(tmp_path)
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", publish={"public_base_url": PUBLISH_BASE_URL})
+  section: dict[str, str | Path] = {"dir": tmp_path / "publish", "public_base_url": PUBLISH_BASE_URL}
+  del section[missing_key]
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", publish=section)
 
   with pytest.raises(PublishError) as exc_info:
     publish_artifact(artifact, cfg)
 
-  assert "publish.dir" in str(exc_info.value)
+  assert f"publish.{missing_key}" in str(exc_info.value)
 
 
 def test_absent_publish_directory_raises_naming_the_directory(tmp_path: Path) -> None:
@@ -110,16 +113,6 @@ def test_absent_publish_directory_raises_naming_the_directory(tmp_path: Path) ->
     publish_artifact(artifact, cfg)
 
   assert str(absent_dir) in str(exc_info.value)
-
-
-def test_missing_public_base_url_key_raises_naming_the_key(tmp_path: Path) -> None:
-  artifact = write_artifact(tmp_path)
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", publish={"dir": tmp_path / "publish"})
-
-  with pytest.raises(PublishError) as exc_info:
-    publish_artifact(artifact, cfg)
-
-  assert "publish.public_base_url" in str(exc_info.value)
 
 
 def test_config_expands_tilde_in_publish_dir_like_the_other_path_fields() -> None:

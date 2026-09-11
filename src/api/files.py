@@ -54,6 +54,14 @@ _CleanViewKey = tuple[str, int, int]
 
 _clean_view_memo: BoundedMemo[_CleanViewKey, bytes] = BoundedMemo(_CLEAN_VIEW_MEMO_LIMIT)
 
+# Client-visible error details of the files route's diff and read arms. The
+# "not a session artifact page" sentence is a wire contract the tests pin, so
+# each spelling has one home here; the base-side sibling in _resolve_diff_base
+# and deps.SESSION_NOT_FOUND_DETAIL are distinct deliberate wordings.
+_DIFF_TARGET_DETAIL = "diff target is not a session artifact page: {}"
+_DIFF_BASE_NOT_FOUND_DETAIL = "diff base not found: {}"
+_PERMISSION_DENIED_DETAIL = "Permission denied"
+
 
 def _file_signature(path: Path) -> tuple[int, int]:
   """(mtime_ns, size) of *path*; artifact writers publish whole files, so a rewrite always moves it."""
@@ -71,7 +79,7 @@ def _annotated_diff_page(base_path: Path, page_path: Path, inject_ui: bool, sess
   try:
     base_sig = (str(base_path), *_file_signature(base_path))
   except OSError as e:
-    raise HTTPException(status_code=404, detail=f"diff base not found: {base_path}") from e
+    raise HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
   page_sig = (str(page_path), *_file_signature(page_path))
   key: _AnnotateKey = (*base_sig, *page_sig, inject_ui)
   hit = _annotate_memo.get(key)
@@ -80,7 +88,7 @@ def _annotated_diff_page(base_path: Path, page_path: Path, inject_ui: bool, sess
   try:
     base_text = base_path.read_text(encoding="utf-8")
   except OSError as e:
-    raise HTTPException(status_code=404, detail=f"diff base not found: {base_path}") from e
+    raise HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
   page_text = page_path.read_text(encoding="utf-8")
   page = plan_diff.annotate(base_text, page_text)
   if inject_ui:
@@ -239,11 +247,11 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
     # The diff 400 outranks the unreadable 403: the route contract checks the
     # diff target before it tries to read the directory.
     if diff_param is not None:
-      raise HTTPException(status_code=400, detail=f"diff target is not a session artifact page: {dir_path}") from e
-    raise HTTPException(status_code=403, detail="Permission denied") from e
+      raise HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(dir_path)) from e
+    raise HTTPException(status_code=403, detail=_PERMISSION_DENIED_DETAIL) from e
   if diff_param is not None:
     scandir_iter.close()
-    raise HTTPException(status_code=400, detail=f"diff target is not a session artifact page: {dir_path}")
+    raise HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(dir_path))
   entries: list[tuple[bool, str, int, float]] = []
   with scandir_iter:
     for entry in scandir_iter:
@@ -358,7 +366,7 @@ async def serve_file(path: str, request: Request) -> Response:
     # rather than silently answered with the clean page. The marks themselves
     # are spliced into the response before the optional comment layer below.
     if session_id is None:
-      raise HTTPException(status_code=400, detail=f"diff target is not a session artifact page: {fs_path}")
+      raise HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(fs_path))
     base_path = _resolve_diff_base(session_id, diff_param)
     inject_ui = request_has_access_key(request, str(get_credentials().get("charliebot", "access_key") or ""))
     # A cold annotate parses both pages whole (~0.25 s on a 1 MB pair), so the
@@ -377,4 +385,4 @@ async def serve_file(path: str, request: Request) -> Response:
   try:
     return FileResponse(str(fs_path), media_type=media_type)
   except PermissionError as e:
-    raise HTTPException(status_code=403, detail="Permission denied") from e
+    raise HTTPException(status_code=403, detail=_PERMISSION_DENIED_DETAIL) from e

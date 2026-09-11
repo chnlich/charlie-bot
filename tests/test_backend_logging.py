@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 from pathlib import Path
 
 import pytest
@@ -126,3 +127,19 @@ async def test_no_log_dir_still_populates_stderr_text(tmp_path: Path) -> None:
   assert "on stderr" in backend.stderr_text
   assert backend.exit_code == 0
   assert backend.hang_diagnostics is None
+
+
+@pytest.mark.asyncio
+async def test_tee_stderr_chunk_lands_every_byte_in_order(tmp_path: Path) -> None:
+  """The per-chunk tee write-all contract: a short write keeps going, chunk order holds."""
+  from src.agents.backends.base import _tee_stderr_chunk
+
+  path = tmp_path / "stderr.log"
+  fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+  try:
+    chunks = [bytes([i % 256]) * (8192 + i) for i in range(9)]
+    for chunk in chunks:
+      await _tee_stderr_chunk(fd, chunk)
+  finally:
+    os.close(fd)
+  assert path.read_bytes() == b"".join(chunks)

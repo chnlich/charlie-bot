@@ -22,6 +22,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import BackendOption, BackendType, ClaudeAccount, ThreadMetadata
 from src.core.ndjson import append_ndjson
+from src.core.ndjson import write_all as _write_all
 from src.core.process import kill_group_escalating
 from src.core.session_usage import _prompt_token_sum
 from src.core.streaming import handle_compaction_events, streaming_manager
@@ -52,13 +53,6 @@ def _clamp_ts(clamp_to: datetime | None) -> str:
   if clamp_to is not None and clamp_to < now:
     return clamp_to.isoformat()
   return now.isoformat()
-
-
-def _write_all(fd: int, data: bytes) -> None:
-  """Write all of *data* to *fd*: a short write keeps going, never a torn line."""
-  view = memoryview(data)
-  while view:
-    view = view[os.write(fd, view):]
 
 
 async def _append_event_line(fd: int, line: str) -> None:

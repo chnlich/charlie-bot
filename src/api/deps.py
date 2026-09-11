@@ -114,8 +114,9 @@ def bad_request(exc: Exception) -> HTTPException:
   """Build the one expected-failure spelling: HTTP 400 whose detail is the exception's message.
 
   Route handlers raise this from the except clauses that translate a domain
-  failure (backend resolution for the spawn/plan/fork/elone routes, cron-task
-  backend validation, trigger scheduling, the openai-compatible proxy's
-  request translation); raising keeps the ``from e`` chain intact.
+  failure (the delegate spawn's backend resolution, the plan registry's
+  lineage rules, fork/elone succession, cron-task backend validation, trigger
+  scheduling, the openai-compatible proxy's request translation); raising
+  keeps the ``from e`` chain intact.
   """
   return HTTPException(status_code=400, detail=str(exc))

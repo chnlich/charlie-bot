@@ -375,11 +375,6 @@ def _warn_credential_read_once(event: str, credentials_path: Path) -> None:
   _CREDENTIAL_READ_WARNINGS_SEEN.log(log.warning, event, (event, path), path=path)
 
 
-def _reset_credential_read_warnings_for_tests() -> None:
-  """Clear the warn-once registry, restoring the process-start state."""
-  _CREDENTIAL_READ_WARNINGS_SEEN.clear()
-
-
 def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
   """Read OAuth credentials from a Claude account's .credentials.json."""
   if not credentials_path.exists():
@@ -622,11 +617,6 @@ def _warn_unknown_limit_shape(*, provider: str, account: str, slot: str | int, r
       account=account,
       slot=slot,
       reason=reason)
-
-
-def _reset_unknown_limit_shapes_for_tests() -> None:
-  """Clear the warn-once registry, restoring the process-start state."""
-  _UNKNOWN_LIMIT_SHAPES_SEEN.clear()
 
 
 def _as_utilization(value: Any) -> float | None:

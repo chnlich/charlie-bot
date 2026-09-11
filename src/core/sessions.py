@@ -391,11 +391,6 @@ def _log_search_read_failed_once(session_id: str, error: OSError) -> None:
       log.debug, "search_read_failed", (session_id, str(error)), session_id=session_id, error=str(error))
 
 
-def _reset_search_read_failures_for_tests() -> None:
-  """Clear the warn-once registry, restoring the process-start state."""
-  _SEARCH_READ_FAILURES_SEEN.clear()
-
-
 def _absence_rescan_start(
     roots: tuple[tuple[str, tuple[int, int, int]], ...],
     sig: tuple[int, int, int],

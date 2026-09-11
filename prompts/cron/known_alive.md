@@ -69,9 +69,9 @@ Known-alive symbols:
   flags each as an unused variable. Each clears the transcriber module-level bundle cache
   around its file's tests.
 - `_reset_declared_window_warnings` (`tests/test_session_usage.py`) — pytest `autouse=True`
-  fixture, reached by fixture-name discovery like the block above. A substring grep for the
-  name finds matches, but all of them are `_reset_declared_window_warnings_for_tests`, the
-  live reset helper the fixture calls; a word-match grep finds only the definition.
+  fixture, reached by fixture-name discovery like the block above. It resets the registry by
+  calling the registry's own `clear()` (the seam `WarnOnceRegistry` documents for tests); a
+  word-match grep finds only the definition.
 - `session_websocket`, `voice_websocket` — `@app.websocket` handlers in `server.py`
   (`/ws/sessions/{session_id}`, `/ws/voice/{session_id}`), reached by URL string:
   `web/static/js/websocket.js` dials `/ws/sessions/${SESSION_ID}` and `web/static/js/voice-input.js`

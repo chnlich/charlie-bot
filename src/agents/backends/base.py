@@ -279,6 +279,30 @@ def make_compact_boundary_event(trigger: str, pre_tokens: int | None) -> dict:
   }
 
 
+def make_context_compacted_event(trigger: str, pre_tokens: int | float | None, model: str | None) -> dict:
+  """Build the synthesized ``context_compacted`` event producers persist and broadcast.
+
+  ``pre_tokens`` is the count the compaction crossed. ``model`` names the model
+  that ran the compaction; a producer relaying Claude Code's own compaction
+  passes None, which omits the key so the aggregator renders no model note.
+  """
+  event: dict = {"type": ET.CONTEXT_COMPACTED, "trigger": trigger, ET.COMPACT_PRE_TOKENS: pre_tokens}
+  if model is not None:
+    event["model"] = model
+  return event
+
+
+def make_context_compact_failed_event(error: str | None, model: str | None) -> dict:
+  """Build the synthesized ``context_compact_failed`` event producers persist and broadcast.
+
+  ``model`` follows make_context_compacted_event: None omits the key.
+  """
+  event: dict = {"type": ET.CONTEXT_COMPACT_FAILED, "error": error}
+  if model is not None:
+    event["model"] = model
+  return event
+
+
 async def iter_ndjson_events(stdout: asyncio.StreamReader) -> AsyncIterator[dict]:
   """Yield the JSON objects of an NDJSON stream.
 

@@ -20,6 +20,7 @@ from typing import Any
 import structlog
 from fastapi import WebSocket
 
+from src.agents.backends.base import make_context_compact_failed_event, make_context_compacted_event
 from src.core import event_types as ET
 from src.core.tasks import create_logged_task
 
@@ -150,18 +151,9 @@ async def handle_compaction_events(
     trigger = meta.get("trigger", "unknown")
     pre_tokens = meta.get(ET.COMPACT_PRE_TOKENS)
     log.info("cc_context_compacted", trigger=trigger, pre_tokens=pre_tokens, **log_context)
-    compact_event: dict[str, Any] = {
-        "type": ET.CONTEXT_COMPACTED,
-        "trigger": trigger,
-        ET.COMPACT_PRE_TOKENS: pre_tokens,
-    }
-    await persist_and_broadcast(compact_event)
+    await persist_and_broadcast(make_context_compacted_event(trigger, pre_tokens, model=None))
     return
   if subtype == "status" and event.get("compact_result") == "failed":
     error = event.get("compact_error")
     log.info("cc_context_compact_failed", error=error, **log_context)
-    compact_failed_event: dict[str, Any] = {
-        "type": ET.CONTEXT_COMPACT_FAILED,
-        "error": error,
-    }
-    await persist_and_broadcast(compact_failed_event)
+    await persist_and_broadcast(make_context_compact_failed_event(error, model=None))

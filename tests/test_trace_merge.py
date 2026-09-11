@@ -278,37 +278,38 @@ def test_mixed_tid_forms_are_one_thread(tmp_path: Path) -> None:
   # still resolve to one thread: whichever form arrived first allocated, the
   # other rides its str key, and thread_name is emitted once.
   trace = tmp_path / "trace.json"
-  _write_trace(trace, [
-      {
-          "ph": "M",
-          "pid": 7,
-          "name": "process_labels",
-          "args": {
-              "labels": "CPU"
-          }
-      },
-      {
-          "ph": "X",
-          "pid": 7,
-          "tid": 7,
-          "name": "int-form",
-          "ts": 1
-      },
-      {
-          "ph": "X",
-          "pid": 7,
-          "tid": "7",
-          "name": "str-form",
-          "ts": 2
-      },
-      {
-          "ph": "X",
-          "pid": 7,
-          "tid": 7,
-          "name": "int-again",
-          "ts": 3
-      },
-  ])
+  _write_trace(
+      trace, [
+          {
+              "ph": "M",
+              "pid": 7,
+              "name": "process_labels",
+              "args": {
+                  "labels": "CPU"
+              }
+          },
+          {
+              "ph": "X",
+              "pid": 7,
+              "tid": 7,
+              "name": "int-form",
+              "ts": 1
+          },
+          {
+              "ph": "X",
+              "pid": 7,
+              "tid": "7",
+              "name": "str-form",
+              "ts": 2
+          },
+          {
+              "ph": "X",
+              "pid": 7,
+              "tid": 7,
+              "name": "int-again",
+              "ts": 3
+          },
+      ])
   output = tmp_path / "merged.json.gz"
 
   merge_traces([trace], output, slim=False)

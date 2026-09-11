@@ -14,6 +14,7 @@ import argparse
 import json
 import sys
 
+from src.cli.common import exit_error
 from src.core.config import get_config
 from src.core.publish import PublishError, publish_artifact
 
@@ -26,8 +27,7 @@ def main() -> None:
   try:
     result = publish_artifact(args.artifact, get_config())
   except PublishError as e:
-    print(json.dumps({"error": str(e)}), file=sys.stderr)
-    sys.exit(1)
+    exit_error(str(e))
   print(result.url)
   if result.overwrote:
     print(json.dumps({"note": f"overwrote a differing file with the same name: {result.path}"}), file=sys.stderr)

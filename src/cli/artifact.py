@@ -13,12 +13,11 @@ not run, 2 = usage error.
 """
 
 import argparse
-import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from src.cli.common import exit_usage_error
+from src.cli.common import exit_error, exit_usage_error
 from src.core import artifact_check
 from src.core.config import get_config
 
@@ -44,8 +43,7 @@ def _run_check(args: argparse.Namespace) -> int:
     exit_usage_error(f"--genre {args.genre} requires --trigger unless --assertions-only is given")
   artifact = Path(args.file).resolve()
   if not artifact.is_file():
-    print(json.dumps({"error": f"artifact not found: {args.file}"}), file=sys.stderr)
-    return 1
+    exit_error(f"artifact not found: {args.file}")
   cfg = get_config()
   failed = 0
   for outcome in artifact_check.run_assertions(args.genre, artifact, cfg):
@@ -62,8 +60,7 @@ def _run_check(args: argparse.Namespace) -> int:
   try:
     result = artifact_check.run_probe(cfg, artifact, args.trigger)
   except ValueError as e:
-    print(json.dumps({"error": str(e)}), file=sys.stderr)
-    return 1
+    exit_error(str(e))
   for backend_id, error in result.attempts:
     print(f"attempt {backend_id} failed: {error}")
   if result.backend_id is None:

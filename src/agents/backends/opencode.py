@@ -9,7 +9,6 @@ import ssl
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-import aiofiles
 import httpx
 import orjson
 import structlog
@@ -17,6 +16,7 @@ import structlog
 from src.agents.backends.base import (
     SKIP_PERMISSIONS_FLAG,
     AgentBackend,
+    _write_stdout_chunk,
     iter_ndjson_events,
     make_compact_boundary_event,
     make_error_event,
@@ -229,12 +229,13 @@ class OpenCodeBackend(AgentBackend):
         cmd = self._build_command(prompt)
         final_env = self._prepare_env(env)
         stdout_log_path, stderr_log_path = self._log_paths()
+        self._stdout_fd = self._open_stdout_log(stdout_log_path)
 
         await self._spawn_piped_and_pin_identity(cmd, cwd, final_env)
 
         self._stderr_task = asyncio.create_task(self._stream_stderr(stderr_log_path))
-        self._server_url = await self._read_server_url(stdout_log_path)
-        self._stdout_task = asyncio.create_task(self._stream_stdout(stdout_log_path))
+        self._server_url = await self._read_server_url()
+        self._stdout_task = asyncio.create_task(self._stream_stdout())
 
         async with httpx.AsyncClient(base_url=self._server_url, timeout=OPENCODE_HTTP_API_TIMEOUT,
                                      verify=_SERVE_SSL_CONTEXT) as client:
@@ -352,6 +353,7 @@ class OpenCodeBackend(AgentBackend):
     self._server_url: str | None = None
     self._session_id: str | None = None
     self._stdout_task: asyncio.Task | None = None
+    self._stdout_fd: int | None = None
     self._message_roles: dict[str, str] = {}
     self._pending_parts: dict[str, list[dict]] = {}
     self._last_part_text: dict[str, str] = {}
@@ -373,7 +375,19 @@ class OpenCodeBackend(AgentBackend):
     self._log_dir.mkdir(parents=True, exist_ok=True)
     return self._log_dir / "stdout.log", self._log_dir / "stderr.log"
 
-  async def _read_server_url(self, stdout_log_path: Path | None) -> str:
+  def _open_stdout_log(self, stdout_log_path: Path | None) -> int | None:
+    # O_APPEND, never O_TRUNC: the lock-retry attempts append to the one run
+    # log the way the per-line "ab" opens they replace did.
+    if stdout_log_path is None:
+      return None
+    return os.open(str(stdout_log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666)
+
+  def _close_stdout_log(self) -> None:
+    if self._stdout_fd is not None:
+      os.close(self._stdout_fd)
+      self._stdout_fd = None
+
+  async def _read_server_url(self) -> str:
     assert self._proc is not None and self._proc.stdout is not None
     loop = asyncio.get_running_loop()
     deadline = loop.time() + self._SERVER_START_TIMEOUT
@@ -387,32 +401,24 @@ class OpenCodeBackend(AgentBackend):
         raise TimeoutError("OpenCode serve did not print its server URL") from e
       if not raw_line:
         raise RuntimeError("OpenCode serve exited before printing its server URL")
-      await self._append_stdout(stdout_log_path, raw_line)
+      if self._stdout_fd is not None:
+        await _write_stdout_chunk(self._stdout_fd, raw_line)
       line = raw_line.decode("utf-8", errors="replace").strip()
       match = _SERVER_URL_RE.search(line)
       if match:
         return match.group(1)
 
-  async def _append_stdout(self, stdout_log_path: Path | None, data: bytes) -> None:
-    if stdout_log_path is None:
-      return
-    async with aiofiles.open(stdout_log_path, "ab") as stdout_log:
-      await stdout_log.write(data)
-      await stdout_log.flush()
-
-  async def _stream_stdout(self, stdout_log_path: Path | None) -> None:
+  async def _stream_stdout(self) -> None:
     assert self._proc is not None and self._proc.stdout is not None
-    if stdout_log_path is None:
+    if self._stdout_fd is None:
       while await self._proc.stdout.read(8192):
         pass
       return
-    async with aiofiles.open(stdout_log_path, "ab") as stdout_log:
-      while True:
-        chunk = await self._proc.stdout.read(8192)
-        if not chunk:
-          break
-        await stdout_log.write(chunk)
-        await stdout_log.flush()
+    while True:
+      chunk = await self._proc.stdout.read(8192)
+      if not chunk:
+        break
+      await _write_stdout_chunk(self._stdout_fd, chunk)
 
   async def _check_health(self, client: httpx.AsyncClient) -> None:
     response = await client.get("/global/health")
@@ -785,6 +791,7 @@ class OpenCodeBackend(AgentBackend):
       if self._proc is not None and self._proc.returncode is None:
         await self._graceful_shutdown(self._SERVER_STOP_TIMEOUT, timeout_log_event="opencode_server_stop_timeout")
       await self._finish_stdout_task()
+      self._close_stdout_log()
       if self._proc is not None:
         await self._drain_and_cleanup(self._CLEANUP_TIMEOUT)
         if self._failed and self.exit_code == 0:

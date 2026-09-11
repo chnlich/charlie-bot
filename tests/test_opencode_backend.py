@@ -1878,3 +1878,21 @@ async def test_run_threads_uploaded_files_into_prompt_parts(monkeypatch, tmp_pat
   ]
   assert backend.exit_code == 0
   assert events[-1]["type"] == ET.RESULT
+
+
+@pytest.mark.asyncio
+async def test_stdout_startup_line_and_stream_land_through_one_fd(monkeypatch, tmp_path: Path) -> None:
+  """The run's stdout fd serves both phases: the startup URL line and the
+  stream chunks append through the one held fd, and closing twice is a no-op."""
+  backend = _build_backend(monkeypatch, model="provider/model")
+  backend._proc = _StubServeProcess([])
+  backend._stdout_fd = backend._open_stdout_log(tmp_path / "stdout.log")
+
+  url = await backend._read_server_url()
+  assert url == "http://127.0.0.1:15331"
+  await backend._stream_stdout()
+  backend._close_stdout_log()
+  backend._close_stdout_log()
+
+  assert (tmp_path / "stdout.log").read_bytes() == b"opencode server listening on http://127.0.0.1:15331\n"
+  assert backend._stdout_fd is None

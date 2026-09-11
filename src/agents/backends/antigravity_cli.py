@@ -1,18 +1,17 @@
 """AntigravityCliBackend — AgentBackend wrapping `agy --print` final output."""
 
 import asyncio
-import contextlib
 import json
+import os
 import re
 from collections.abc import AsyncIterator
 from pathlib import Path
-
-import aiofiles
 
 from src.agents.backends.base import (
     SKIP_PERMISSIONS_FLAG,
     USER_LOCAL_BIN,
     AgentBackend,
+    _write_stdout_chunk,
     make_error_event,
     make_result_event,
     make_text_event,
@@ -93,25 +92,29 @@ class AntigravityCliBackend(AgentBackend):
     assert self._proc.stdout is not None
     stdout_bytes = bytearray()
 
+    stdout_fd: int | None = None
     if self._log_dir is not None:
       self._log_dir.mkdir(parents=True, exist_ok=True)
-      stdout_log_cm = aiofiles.open(self._log_dir / "stdout.log", "wb")
+      # O_TRUNC keeps the "wb" open it replaces: each run's log starts empty
+      # for its tail -f readers.
+      stdout_fd = os.open(str(self._log_dir / "stdout.log"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
       stderr_log_path: Path | None = self._log_dir / "stderr.log"
     else:
-      stdout_log_cm = contextlib.nullcontext(None)
       stderr_log_path = None
 
     self._stderr_task = asyncio.create_task(self._stream_stderr(stderr_log_path))
 
-    async with stdout_log_cm as stdout_log:
+    try:
       while True:
         chunk = await self._proc.stdout.read(8192)
         if not chunk:
           break
-        if stdout_log is not None:
-          await stdout_log.write(chunk)
-          await stdout_log.flush()
+        if stdout_fd is not None:
+          await _write_stdout_chunk(stdout_fd, chunk)
         stdout_bytes.extend(chunk)
+    finally:
+      if stdout_fd is not None:
+        os.close(stdout_fd)
 
     await self._drain_and_cleanup(self._CLEANUP_TIMEOUT)
 

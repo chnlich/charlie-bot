@@ -44,6 +44,13 @@ async def _tee_stderr_chunk(fd: int, chunk: bytes) -> None:
   await asyncio.to_thread(write_all, fd, chunk)
 
 
+async def _write_stdout_chunk(fd: int, chunk: bytes) -> None:
+  # The stderr tee's rule applied to the stdout pumps: one executor hop per
+  # chunk or startup line, the fd held for the attempt. Same no-fdatasync
+  # diagnostic-stream ground as _tee_stderr_chunk.
+  await asyncio.to_thread(write_all, fd, chunk)
+
+
 # The flag that suppresses the CLI's interactive permission prompt. Its
 # spelling is fixed by the vendor CLI contract, not by this repo, so every
 # Claude-compatible launcher here (claude headless/TUI, claude-sub, agy,

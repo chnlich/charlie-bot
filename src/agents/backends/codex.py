@@ -39,7 +39,7 @@ class CodexBackend(AgentBackend):
       model_auto_compact_token_limit: int | None = None,
       **kwargs) -> None:
     if not model:
-      raise ValueError("codex backend requires a model (set backend_options[].model in config.yaml)")
+      raise ValueError("codex backend requires a model (set model on its backends.options entry in config.yaml)")
     super().__init__(model=model, **kwargs)
     self._codex_bin = resolve_binary("codex", USER_LOCAL_BIN)
     self._model_reasoning_effort = "xhigh" if model_reasoning_effort is None else model_reasoning_effort

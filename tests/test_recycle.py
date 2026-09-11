@@ -517,6 +517,28 @@ async def test_live_range_backward_extension_serves_scroll_below_walked_window(t
 
 
 @pytest.mark.asyncio
+async def test_live_range_walk_delete_race_returns_empty_page(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
+  _append_events(live_path, [{
+      "type": "user",
+      "content": "f3",
+      "timestamp": (cutoff + timedelta(days=2)).isoformat()
+  }])
+  count_ndjson_lines(live_path)
+
+  def delete_mid_count(path: Path) -> int:
+    path.unlink()
+    raise FileNotFoundError(2, "No such file or directory")
+
+  # A delete landing inside the walk's count bracket must not escape as an
+  # exception; the old whole-file build's guarded open returned an empty page.
+  with patch("src.core.chat_events.count_ndjson_lines", side_effect=delete_mid_count):
+    got, _has_more = mgr.load_chat_events_range(session.id, 6, 8)
+  assert got == []
+
+
+@pytest.mark.asyncio
 async def test_live_range_walk_matches_full_build_across_line_shapes(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   await recycle_archive_cutoff_events(mgr, session.id)

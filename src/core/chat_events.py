@@ -38,7 +38,8 @@ _LIVE_RANGE_MEMO_LIMIT = 4
 # file when the window does not reach the file's first line; a span past the
 # byte cap is read once by the full build instead, which then serves every
 # later window from memory. The walk accumulates 512 KiB segments from the
-# end (the iter_ndjson_events segment size) and stops on a raw terminator
+# end (the iter_ndjson_events_from_end tail-window size, _TAIL_WINDOW_SIZE)
+# and stops on a raw terminator
 # count one line above the target plus the possibly cut head segment.
 _WALK_BYTE_BUDGET = 32 * 1024 * 1024
 _WALK_CHUNK_BYTES = 512 * 1024
@@ -555,8 +556,14 @@ class ChatEventStore:
     would index a snapshot the count does not describe) or the span exceeds
     the byte budget; the caller full-builds.
     """
-    total = count_ndjson_lines(path)
-    after = path.stat()
+    try:
+      total = count_ndjson_lines(path)
+      after = path.stat()
+    except OSError as e:
+      # A delete landing mid-call leaves the bracket unanswerable; None falls
+      # to the full build, whose guarded open returns an empty page.
+      log.debug("live_range_read_failed", path=str(path), error=str(e))
+      return None
     if (after.st_mtime_ns, after.st_size, after.st_ino) != (st.st_mtime_ns, st.st_size, st.st_ino):
       return None
     count = total - rel_start

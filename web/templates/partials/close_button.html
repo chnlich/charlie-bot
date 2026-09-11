@@ -1,0 +1,10 @@
+{#- The panel/modal close button of index.html: one home for the button element
+    and its X icon, so the six close buttons stay identical. Each call site
+    passes its own click target and title; an empty title renders no attribute.
+    The icon's w-4 h-4 tokens must stay spelled out here: the Tailwind build
+    scans template source text, never macro expansion. -#}
+{% macro close_button(onclick, title, btn_class) -%}
+<button onclick="{{ onclick }}" class="{{ btn_class }}"{% if title %} title="{{ title }}"{% endif %}>
+  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+</button>
+{%- endmacro %}

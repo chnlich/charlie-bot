@@ -82,8 +82,9 @@
 }
 .turn-spacer { pointer-events: none; }
 /* The turn engine is the scroll-anchoring authority; Chrome's own scroll
-   anchoring fights its spacer corrections. */
-#messages { overflow-anchor: none; }
+   anchoring fights its spacer corrections, and its scroll corrections must
+   not chain to the page. */
+#messages { overflow-anchor: none; overscroll-behavior: contain; }
 .turn-collapse:hover { color: #cbd5e1; }
 /* Page depth control (Outline / Compact / Expand all) */
 .turn-depth-control {
@@ -449,7 +450,6 @@ body.resizing { cursor: col-resize; user-select: none; }
 }
 /* Bug 3: Prevent overscroll bounce */
 body { overscroll-behavior: none; }
-#messages { overscroll-behavior: contain; }
 /* Slash command sidebar */
 .slash-sidebar {
   position: fixed; top: 0; right: 0; bottom: 0; width: 400px;

@@ -3,22 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
-    SESSIONS_SESSION_MANAGER_PATCH_TARGET,
-    TerminateFlagBackend,
-    backend_option,
-    drain_session_consumer,
+    CapturingBackend,
+    build_master_cc_cfg,
     make_work_item,
-    mock_session_callbacks,
     patch_instructions_content,
+    run_captured_round,
 )
 
-from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
-from src.core import config as core_config
+from src.agents import master_cc, master_cc_run
 from src.core import event_types as ET
 from src.core import models
 from src.core.models import SendMessageRequest
@@ -26,24 +22,13 @@ from src.core.models import SendMessageRequest
 DISCLAIMER = master_cc_run._VOICE_DISCLAIMER
 
 
-def _make_cfg(tmp_path: Path) -> core_config.CharlieBotConfig:
-  return core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")]},
-  )
-
-
-class _PromptCapturingBackend(TerminateFlagBackend):
-  exit_code = 0
-  stderr_text = ""
-
-  def __init__(self) -> None:
-    self.prompt = None
-
-  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
-    self.prompt = prompt
-    if False:
-      yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine
+def _user_events(callbacks) -> list[dict]:
+  """The USER events the round persisted, in order, from the mocked callbacks."""
+  return [
+      call.args[1]
+      for call in callbacks.persist_and_broadcast.await_args_list
+      if len(call.args) > 1 and call.args[1].get("type") == ET.USER
+  ]
 
 
 def test_build_prompt_prepends_disclaimer_for_voice() -> None:
@@ -64,9 +49,9 @@ async def test_run_cc_hands_disclaimer_prefixed_prompt_to_backend(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _make_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   meta = models.SessionMetadata(id="voice-cc", name="Voice")
-  backend = _PromptCapturingBackend()
+  backend = CapturingBackend()
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **kw: backend)
   patch_instructions_content(monkeypatch)
 
@@ -74,7 +59,7 @@ async def test_run_cc_hands_disclaimer_prefixed_prompt_to_backend(
 
   await master_cc._run_cc(item)
 
-  assert backend.prompt == DISCLAIMER + "\n" + "transcribed hello"
+  assert backend.calls[0]["prompt"] == DISCLAIMER + "\n" + "transcribed hello"
 
 
 @pytest.mark.asyncio
@@ -82,9 +67,9 @@ async def test_run_cc_passes_verbatim_prompt_when_not_voice(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cfg = _make_cfg(tmp_path)
+  cfg = build_master_cc_cfg(tmp_path)
   meta = models.SessionMetadata(id="plain-cc", name="Plain")
-  backend = _PromptCapturingBackend()
+  backend = CapturingBackend()
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **kw: backend)
   patch_instructions_content(monkeypatch)
 
@@ -92,44 +77,7 @@ async def test_run_cc_passes_verbatim_prompt_when_not_voice(
 
   await master_cc._run_cc(item)
 
-  assert backend.prompt == "plain hello"
-
-
-async def _run_message_with_capturing_backend(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    user_content: str,
-    is_voice_arg: bool,
-):
-  cfg = _make_cfg(tmp_path)
-  meta = models.SessionMetadata(id="voice-msg-session", name="Voice", backend="fake")
-  callbacks = mock_session_callbacks()
-  backend = _PromptCapturingBackend()
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **kw: backend)
-  patch_instructions_content(monkeypatch)
-  master_cc_state._session_queues.pop(meta.id, None)
-  master_cc_state._session_consumers.pop(meta.id, None)
-  try:
-    with (
-        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
-        patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET) as session_mgr_cls,
-    ):
-      session_mgr_inst = MagicMock()
-      session_mgr_inst._has_running_tasks = AsyncMock(return_value=False)
-      session_mgr_cls.return_value = session_mgr_inst
-      await master_cc.run_message(cfg, meta, user_content, callbacks, is_voice=is_voice_arg)
-      await drain_session_consumer(meta.id, timeout=5)
-  finally:
-    master_cc_state._session_queues.pop(meta.id, None)
-    master_cc_state._session_consumers.pop(meta.id, None)
-
-  user_events = [
-      call.args[1]
-      for call in callbacks.persist_and_broadcast.await_args_list
-      if len(call.args) > 1 and call.args[1].get("type") == ET.USER
-  ]
-  return backend, user_events
+  assert backend.calls[0]["prompt"] == "plain hello"
 
 
 @pytest.mark.asyncio
@@ -137,10 +85,16 @@ async def test_run_message_voice_true_prepends_disclaimer_and_flags_event(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  backend, user_events = await _run_message_with_capturing_backend(
-      tmp_path, monkeypatch, user_content="transcribed hello", is_voice_arg=True)
+  backend = CapturingBackend()
 
-  assert backend.prompt == DISCLAIMER + "\n" + "transcribed hello"
+  async def drive(cfg, meta, callbacks):
+    await master_cc.run_message(cfg, meta, "transcribed hello", callbacks, is_voice=True)
+
+  callbacks = await run_captured_round(
+      tmp_path, monkeypatch, session_id="voice-msg-session", name="Voice", backend=backend, drive=drive)
+
+  assert backend.calls[0]["prompt"] == DISCLAIMER + "\n" + "transcribed hello"
+  user_events = _user_events(callbacks)
   assert len(user_events) == 1
   assert user_events[0]["is_voice"] is True
   assert user_events[0]["content"] == "transcribed hello"
@@ -151,10 +105,16 @@ async def test_run_message_voice_false_keeps_verbatim_prompt_and_event(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  backend, user_events = await _run_message_with_capturing_backend(
-      tmp_path, monkeypatch, user_content="plain hello", is_voice_arg=False)
+  backend = CapturingBackend()
 
-  assert backend.prompt == "plain hello"
+  async def drive(cfg, meta, callbacks):
+    await master_cc.run_message(cfg, meta, "plain hello", callbacks, is_voice=False)
+
+  callbacks = await run_captured_round(
+      tmp_path, monkeypatch, session_id="voice-msg-session", name="Voice", backend=backend, drive=drive)
+
+  assert backend.calls[0]["prompt"] == "plain hello"
+  user_events = _user_events(callbacks)
   assert len(user_events) == 1
   assert user_events[0]["is_voice"] is False
   assert user_events[0]["content"] == "plain hello"

@@ -1,5 +1,6 @@
 """Streaming merge support for Chrome-format JSON traces."""
 
+import gc
 import gzip
 import re
 from pathlib import Path
@@ -139,6 +140,12 @@ def _merge_one_trace(
   batcher_add = batcher.add
   pid_map_get = pid_map.get
   tid_map_get = tid_seq.seen.get
+  # tid_raw_map carries one raw value per key so the walk's per-event probe
+  # skips the str() the sequencer's str-canonical map needs; on a raw miss the
+  # str-keyed lookup still answers, so int 7 and "7" stay one thread (whichever
+  # form arrived first allocated, the other rides its str key).
+  tid_raw_map: dict[object, int] = {}
+  tid_raw_get = tid_raw_map.get
   tid_seq_call = tid_seq
   flow_seq_call = flow_seq
   _str = str
@@ -164,22 +171,29 @@ def _merge_one_trace(
     event["pid"] = synthetic_pid
     if "tid" in event:
       original_tid = event["tid"]
-      thread_key = _str(original_tid)
-      synthetic_tid = tid_map_get(thread_key)
+      synthetic_tid = tid_raw_get(original_tid)
       if synthetic_tid is None:
-        # First sight: the sequencer allocates and inserts; the thread_name
-        # rides the same first sight instead of a second per-event set probe.
-        synthetic_tid = tid_seq_call(original_tid)
-        batcher_add(
-            {
-                "ph": "M",
-                "pid": event["pid"],
-                "tid": synthetic_tid,
-                "name": "thread_name",
-                "args": {
-                    "name": f"{rank_label}/{original_tid}"
-                },
-            })
+        # First sight of this raw form: the str-canonical map decides whether
+        # the thread itself is new (allocate + thread_name) or already seen
+        # under another raw form; the raw map records the resolved id either
+        # way so later events of this form probe raw only.
+        thread_key = _str(original_tid)
+        synthetic_tid = tid_map_get(thread_key)
+        if synthetic_tid is None:
+          # First sight: the sequencer allocates and inserts; the thread_name
+          # rides the same first sight instead of a second per-event set probe.
+          synthetic_tid = tid_seq_call(original_tid)
+          batcher_add(
+              {
+                  "ph": "M",
+                  "pid": event["pid"],
+                  "tid": synthetic_tid,
+                  "name": "thread_name",
+                  "args": {
+                      "name": f"{rank_label}/{original_tid}"
+                  },
+              })
+        tid_raw_map[original_tid] = synthetic_tid
       event["tid"] = synthetic_tid
     if ph in {"s", "t", "f"} and "id" in event:
       event["id"] = flow_seq_call(event["id"])
@@ -197,6 +211,21 @@ def _merge_one_trace(
 
 def merge_traces(paths: list[Path], out_path: Path, slim: bool) -> None:
   """Merge Chrome JSON traces into one gzip-compressed Chrome trace."""
+  # A build allocates ~1M dicts per 500k input events and mutates every one;
+  # the generational passes over that churn measured 0.3-0.6 s per 1.07M-event
+  # build. The build runs inside the merge process pool (spawn context, whose
+  # workers run nothing else), so disabling GC is scoped to this build; the
+  # re-enable collect reclaims the build's cyclic leftovers so they never
+  # accumulate across builds in a long-lived worker.
+  gc.disable()
+  try:
+    _merge_all(paths, out_path, slim)
+  finally:
+    gc.enable()
+    gc.collect()
+
+
+def _merge_all(paths: list[Path], out_path: Path, slim: bool) -> None:
   tid_seq = _IdSequencer()
   flow_seq = _IdSequencer()
   with gzip.open(out_path, "wb", compresslevel=_MERGE_COMPRESSLEVEL) as output:

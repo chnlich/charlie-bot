@@ -150,12 +150,9 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
   with open(path, "rb") as f:
     f.seek(0, 2)
     file_size = f.tell()
-    if file_size <= _TAIL_WINDOW_SIZE:
-      f.seek(0)
-      tail_lines = [line for line in f.read().split(b"\n") if line.strip()][-take:]
-    else:
-      window_start = file_size - _TAIL_WINDOW_SIZE
-      f.seek(window_start)
+    tail_lines: list[bytes] | None = None
+    if file_size > _TAIL_WINDOW_SIZE:
+      f.seek(file_size - _TAIL_WINDOW_SIZE)
       window = f.read()
       split_lines = window.split(b"\n")
 
@@ -164,11 +161,14 @@ def parse_ndjson_tail(path: Path, limit: int = 200) -> tuple[list[dict], int, bo
         complete_lines = complete_lines[:-1]
       window_lines = [line for line in complete_lines if line.strip()]
 
-      if len(window_lines) < take:
-        f.seek(0)
-        tail_lines = [line for line in f.read().split(b"\n") if line.strip()][-take:]
-      else:
+      if len(window_lines) >= take:
         tail_lines = window_lines[-take:]
+    if tail_lines is None:
+      # The file fits the window, or the window holds fewer than *take* lines:
+      # the whole-file read is the one fallback, so its skip-and-take contract
+      # lives here exactly once.
+      f.seek(0)
+      tail_lines = [line for line in f.read().split(b"\n") if line.strip()][-take:]
 
   events = list(iter_ndjson_events(tail_lines, log_event="ndjson_tail_parse_skip", log_fields={}))
 

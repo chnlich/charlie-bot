@@ -319,8 +319,9 @@ def find_local_thread(
   ``description_match`` is ``exact`` or ``contains``.
   """
   # Lazy: the readback path is the rare sent-but-lost class, and the threads
-  # module drags the sessions stack its import chain carries (numpy included)
-  # into every CLI invocation that imports this module.
+  # module's own import chain (config, models, sidebar_state) is ~17 ms of
+  # every CLI invocation that imports this module — the numpy weight rides the
+  # backends.base import this module never makes.
   from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 
   threads_dir = get_config().sessions_dir / session_id / THREADS_DIR_NAME

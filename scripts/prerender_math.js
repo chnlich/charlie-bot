@@ -96,6 +96,11 @@ function scanMathSpans(text) {
     if (raw) {
       spans.push({ start: i, end: i + raw.length, raw, display });
       i += raw.length;
+    } else if (text[i] === '\\') {
+      // Escape pair: the char after a backslash never opens a span (marked's
+      // escape tokenizer does this on the chat path): \$ stays literal,
+      // \\ consumes both backslashes so a following $ still opens.
+      i += 2;
     } else {
       i++;
     }

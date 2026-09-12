@@ -332,7 +332,7 @@ def _run_comparison(options: CompareOptions, *, cfg: CharlieBotConfig, now: date
     raise errors.ReplayError(
         f"the recorded reviewer responses of the completed run at {run_dir} no longer validate: "
         f"{reviewer_arm['error']}")
-  verification["proposal"] = _verify_proposal(run_dir, manifest, record, reviewer_arm, contract, selections)
+  verification["proposal"] = _verify_proposal(run_dir, manifest, record, reviewer_arm, selections)
   verification["limitations"] = _verification_limitations(verification)
 
   comparison = {
@@ -1031,7 +1031,6 @@ def _verify_proposal(
     manifest: Manifest,
     record: dict,
     reviewer_arm: dict,
-    contract: ExchangeContract,
     selections: dict[str, list[FeedbackSelection]],
 ) -> dict:
   """A recorded proposal must still match the finalization of the recorded reviewer responses."""

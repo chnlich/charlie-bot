@@ -11,6 +11,7 @@ builder's own template constant.
 from __future__ import annotations
 
 import html
+import os
 import random
 import time
 from datetime import UTC, datetime
@@ -20,7 +21,8 @@ from urllib.parse import quote
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.files import _DIR_LISTING_TEMPLATE, _dir_listing_html, _format_mtime
+from src.api.files import _DIR_LISTING_TEMPLATE, _dir_listing_html, _format_mtime, _listing_memo, _row_memo
+from src.api.files import router as files_router
 from src.api.files import router as files_router
 
 
@@ -91,6 +93,30 @@ def test_listing_matches_the_reference_walk_bytes(tmp_path: Path) -> None:
   served = _dir_listing_html(corpus, f"/files{corpus}", None)
   assert served is not None
   assert served == _reference_listing(corpus, f"/files{corpus}")
+
+
+def test_a_changed_corpus_rebuild_serves_the_cold_builds_bytes(tmp_path: Path) -> None:
+  """A rebuild after a corpus move is byte-identical to a from-nothing build.
+
+  A move between views keys the page memo miss; the rebuild renders the moved
+  entry's new row and serves every unchanged row from the row memo. The page
+  memo's drop models that miss without touching the corpus; the row memo stays
+  warm, as a long-running server's is.
+  """
+  corpus = _listing_corpus(tmp_path)
+  prefix = f"/files{corpus}"
+  _row_memo.clear()
+  _listing_memo.clear()
+  assert _dir_listing_html(corpus, prefix, None) is not None
+  assert len(_row_memo) == 5
+  _listing_memo.clear()
+  os.utime(corpus / "alpha.txt", None)
+  rebuilt = _dir_listing_html(corpus, prefix, None)
+  _row_memo.clear()
+  _listing_memo.clear()
+  cold = _dir_listing_html(corpus, prefix, None)
+  assert rebuilt is not None and cold is not None
+  assert rebuilt == cold
 
 
 def test_a_non_directory_returns_none_and_the_route_falls_through(tmp_path: Path) -> None:

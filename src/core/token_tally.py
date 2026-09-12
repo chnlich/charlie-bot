@@ -349,9 +349,9 @@ def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str) -> Call
   return _onerror
 
 
-def _iter_jsonl_stats(root: Path, t: _Tally, source: str, label: str,
-                      suffixes: tuple[str, ...] = (".jsonl",)
-                      ) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
+def _iter_jsonl_stats(
+    root: Path, t: _Tally, source: str, label: str,
+    suffixes: tuple[str, ...] = (".jsonl",)) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
   """Yield ``(path, stat, error)`` for every file under *root* whose name ends in one of
   *suffixes*, recording a note when a directory is unreadable.
 
@@ -383,9 +383,7 @@ def _iter_jsonl_stats(root: Path, t: _Tally, source: str, label: str,
             yield entry.path, None, repr(exc)
 
 
-def _iter_charliebot_logs(
-    sessions: Path, t: _Tally
-) -> Iterator[tuple[str, str, os.stat_result | None, str | None]]:
+def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str, os.stat_result | None, str | None]]:
   """Yield ``(kind, path, stat, error)`` over the charlie-bot corpus: every session directory's
   thread event logs (``threads/*/data/events.jsonl``, kind ``"thread"``) and master raw
   captures (``data/master_runs/*/agent.raw.ndjson``, kind ``"master"``).
@@ -425,8 +423,7 @@ def _charliebot_signature(sessions: Path) -> tuple:
   return ("charlie-bot", str(sessions), tuple(sorted(entries)), tuple(probe.notes))
 
 
-def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path],
-                      sessions: Path) -> tuple:
+def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path], sessions: Path) -> tuple:
   """Walk signature of the Claude+Codex+charlie-bot corpus: home pairs, every log file's stat
   pair, and the walk's own error strings. Any corpus or permission move changes the tuple."""
   sig = []
@@ -1172,13 +1169,16 @@ def _thread_records(objects: list[dict], meta: dict | None, registry: dict) -> t
   for obj in objects:
     if obj.get("type") == ET.RESULT:
       usage = obj.get("usage") or {}
-      records.append([
-          model, backend, obj.get("timestamp"),
-          usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0,
-          usage.get(ET.USAGE_CACHE_CREATION_INPUT_TOKENS, 0) or 0,
-          usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0,
-          usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0,
-      ])
+      records.append(
+          [
+              model,
+              backend,
+              obj.get("timestamp"),
+              usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0,
+              usage.get(ET.USAGE_CACHE_CREATION_INPUT_TOKENS, 0) or 0,
+              usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0,
+              usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0,
+          ])
     elif obj.get("session_id"):
       sid = obj["session_id"]
       if isinstance(sid, str):
@@ -1219,7 +1219,9 @@ def _thread_contribution(path: str, registry: dict, prev: dict | None = None) ->
   return entry, end
 
 
-def _master_records(objects: list[dict], path: str, registry: dict,
+def _master_records(objects: list[dict],
+                    path: str,
+                    registry: dict,
                     model: str | None = None) -> tuple[list[list], str | None]:
   """The capture's (records, trailing context model): one record per trailing result event,
   at most one.
@@ -1245,13 +1247,18 @@ def _master_records(objects: list[dict], path: str, registry: dict,
   opt = next((o for o in registry.values() if o.type == BackendType.CHARLIE_CODE and o.model == model), None)
   account = opt.id if opt is not None else _CLC_MASTER_ACCOUNT
   ts = Path(path).parts[-2]  # the master_runs/<started_at> directory name
-  return ([[
-      _bare_model(model), account, ts,
-      usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0,
-      usage.get(ET.USAGE_CACHE_CREATION_INPUT_TOKENS, 0) or 0,
-      usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0,
-      usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0,
-  ]], model)
+  return (
+      [
+          [
+              _bare_model(model),
+              account,
+              ts,
+              usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0,
+              usage.get(ET.USAGE_CACHE_CREATION_INPUT_TOKENS, 0) or 0,
+              usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0,
+              usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0,
+          ]
+      ], model)
 
 
 def _master_contribution(path: str, registry: dict, prev: dict | None = None) -> tuple[dict, int]:
@@ -1306,8 +1313,8 @@ def _classify_backend(backend: str, registry: dict) -> str | None:
   opt = registry.get(backend)
   btype = str(opt.type) if opt is not None else None
   if btype is None:
-    for prefix, verdict in (("charlie-code-", "include"), ("codex-", "codex"),
-                            ("claude-", "skip"), ("opencode-", "skip")):
+    for prefix, verdict in (("charlie-code-", "include"), ("codex-", "codex"), ("claude-", "skip"), ("opencode-",
+                                                                                                     "skip")):
       if backend.startswith(prefix):
         return verdict
     return None
@@ -1321,8 +1328,15 @@ def _classify_backend(backend: str, registry: dict) -> str | None:
 def _fold_charliebot_records(t: _Tally, records: list[list]) -> int:
   """Fold one entry's records into the accumulator; returns the folded count."""
   for model, account, ts, in_fresh, cache_write, cache_read, output in records:
-    t.add("charlie-bot", model, account, ts, in_fresh=in_fresh, cache_write=cache_write,
-          cache_read=cache_read, output=output)
+    t.add(
+        "charlie-bot",
+        model,
+        account,
+        ts,
+        in_fresh=in_fresh,
+        cache_write=cache_write,
+        cache_read=cache_read,
+        output=output)
   return len(records)
 
 

@@ -143,8 +143,8 @@ def _spy_row_blobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   return projected
 
 
-def _collect(claude: Claude | None, codex: Codex | None, db: Path, cache: Path | None = None,
-             sessions: Path | None = None):
+def _collect(
+    claude: Claude | None, codex: Codex | None, db: Path, cache: Path | None = None, sessions: Path | None = None):
   return collect_token_usage(
       claude_homes=claude.dirs if claude else {},
       codex_homes=codex.homes if codex else {},
@@ -1673,12 +1673,24 @@ def test_charliebot_thread_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
   (whose runs the CLI sources already carry) stay out entirely."""
   _stub_registry(monkeypatch, _CLC_GEMINI)
   cb = Charliebot(tmp_path)
-  cb.thread("s1", "t1", backend="charlie-code-gemini-3.8-flash", model="openai/gemini-3.8-flash",
-            results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
-  cb.thread("s1", "t2", backend="claude-sonnet-5", model="claude-sonnet-5",
-            results=[("2026-09-11T22:08:00+00:00", _result_usage(2000, 20))])
-  cb.thread("s1", "t3", backend="opencode-kimi-k3", model="fpt-kimi-k3/moonshotai/Kimi-K3",
-            results=[("2026-09-11T22:08:00+00:00", _result_usage(3000, 30))])
+  cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  cb.thread(
+      "s1",
+      "t2",
+      backend="claude-sonnet-5",
+      model="claude-sonnet-5",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(2000, 20))])
+  cb.thread(
+      "s1",
+      "t3",
+      backend="opencode-kimi-k3",
+      model="fpt-kimi-k3/moonshotai/Kimi-K3",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(3000, 30))])
 
   tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
 
@@ -1698,21 +1710,48 @@ def test_charliebot_master_legs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
   stream) or without a trailing result contribute nothing."""
   _stub_registry(monkeypatch, _CLC_GLM)
   cb = Charliebot(tmp_path)
-  cb.master("s1", "2026-09-11T21:11:10.460207+00:00", [
-      {"type": "session", "session_id": "clc-1"},
-      {"type": "context", "step": 1, "prompt_tokens": 10, "model": "openai/zai-org/GLM-5.3-Flash"},
-      {"type": "thought", "step": 1, "text": "t"},
-      {"type": "result", "completed": True, "n_steps": 2,
-       "usage": {"n_calls": 3, "input_tokens": 500, "output_tokens": 25}},
-  ])
+  cb.master(
+      "s1", "2026-09-11T21:11:10.460207+00:00", [
+          {
+              "type": "session",
+              "session_id": "clc-1"
+          },
+          {
+              "type": "context",
+              "step": 1,
+              "prompt_tokens": 10,
+              "model": "openai/zai-org/GLM-5.3-Flash"
+          },
+          {
+              "type": "thought",
+              "step": 1,
+              "text": "t"
+          },
+          {
+              "type": "result",
+              "completed": True,
+              "n_steps": 2,
+              "usage": {
+                  "n_calls": 3,
+                  "input_tokens": 500,
+                  "output_tokens": 25
+              }
+          },
+      ])
   # A claude-shaped capture: compact separators, no context line, claude-style result.
-  cb.raw_master("s1", "2026-09-10T00:00:00+00:00",
-                '{"type":"system","subtype":"init","session_id":"x"}\n'
-                '{"type":"result","usage":{"input_tokens":9,"output_tokens":1}}\n')
+  cb.raw_master(
+      "s1", "2026-09-10T00:00:00+00:00", '{"type":"system","subtype":"init","session_id":"x"}\n'
+      '{"type":"result","usage":{"input_tokens":9,"output_tokens":1}}\n')
   # A CLC shape killed mid-turn: context but no result yet.
-  cb.master("s1", "2026-09-09T00:00:00+00:00", [
-      {"type": "context", "step": 1, "prompt_tokens": 1, "model": "openai/zai-org/GLM-5.3-Flash"},
-  ])
+  cb.master(
+      "s1", "2026-09-09T00:00:00+00:00", [
+          {
+              "type": "context",
+              "step": 1,
+              "prompt_tokens": 1,
+              "model": "openai/zai-org/GLM-5.3-Flash"
+          },
+      ])
 
   tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
 
@@ -1729,10 +1768,23 @@ def test_charliebot_master_account_falls_back(tmp_path: Path, monkeypatch: pytes
   clc-master account, with a note saying so."""
   _stub_registry(monkeypatch, _CLC_GLM)
   cb = Charliebot(tmp_path)
-  cb.master("s1", "2026-09-11T21:11:10.460207+00:00", [
-      {"type": "context", "step": 1, "prompt_tokens": 1, "model": "openai/retired-model-x"},
-      {"type": "result", "completed": True, "usage": {"input_tokens": 10, "output_tokens": 2}},
-  ])
+  cb.master(
+      "s1", "2026-09-11T21:11:10.460207+00:00", [
+          {
+              "type": "context",
+              "step": 1,
+              "prompt_tokens": 1,
+              "model": "openai/retired-model-x"
+          },
+          {
+              "type": "result",
+              "completed": True,
+              "usage": {
+                  "input_tokens": 10,
+                  "output_tokens": 2
+              }
+          },
+      ])
 
   tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
 
@@ -1747,12 +1799,16 @@ def test_charliebot_metadata_classification(tmp_path: Path, monkeypatch: pytest.
   unknown id with an unknown prefix land in the notes instead of any row."""
   _stub_registry(monkeypatch, _CLC_GLM)
   cb = Charliebot(tmp_path)
-  cb.thread("s1", "t1", backend=None, model="openai/zai-org/GLM-5.3-Flash",
-            results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5))])
-  cb.thread("s1", "t2", backend=None, model="mystery/model-x",
-            results=[("2026-09-11T20:00:00+00:00", _result_usage(200, 5))])
-  cb.thread("s1", "t3", backend="weird-backend-x", model=None,
-            results=[("2026-09-11T20:00:00+00:00", _result_usage(300, 5))])
+  cb.thread(
+      "s1",
+      "t1",
+      backend=None,
+      model="openai/zai-org/GLM-5.3-Flash",
+      results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5))])
+  cb.thread(
+      "s1", "t2", backend=None, model="mystery/model-x", results=[("2026-09-11T20:00:00+00:00", _result_usage(200, 5))])
+  cb.thread(
+      "s1", "t3", backend="weird-backend-x", model=None, results=[("2026-09-11T20:00:00+00:00", _result_usage(300, 5))])
 
   tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
 
@@ -1777,15 +1833,35 @@ def test_charliebot_codex_reconciliation(tmp_path: Path, monkeypatch: pytest.Mon
   s1, s2, s3 = "01a09201-0000-7000-8000-000000000001", "01a09201-0000-7000-8000-000000000002", \
       "01a09201-0000-7000-8000-000000000003"
   multi_a, multi_b = "01a09201-0000-7000-8000-00000000000a", "01a09201-0000-7000-8000-00000000000b"
-  cb.thread("s1", "t1", backend="codex-gpt-5.6-luna", model="gpt-5.6-luna", session_ids=[s1],
-            results=[("2026-08-01T00:00:00+00:00", _result_usage(1000, 10, cache_read=800))])
+  cb.thread(
+      "s1",
+      "t1",
+      backend="codex-gpt-5.6-luna",
+      model="gpt-5.6-luna",
+      session_ids=[s1],
+      results=[("2026-08-01T00:00:00+00:00", _result_usage(1000, 10, cache_read=800))])
   _write_rollout(codex.home, s1)
-  cb.thread("s1", "t2", backend="codex-gpt-5.6-luna", model="gpt-5.6-luna", session_ids=[s2],
-            results=[("2026-08-02T00:00:00+00:00", _result_usage(2000, 20, cache_read=500))])
-  cb.thread("s1", "t3", backend="codex-gpt-5.5-personal", model="gpt-5.5", session_ids=[s3],
-            results=[("2026-08-03T00:00:00+00:00", _result_usage(3000, 30))])
-  cb.thread("s1", "t4", backend="codex-gpt-5.6-luna", model="gpt-5.6-luna", session_ids=[multi_a, multi_b],
-            results=[("2026-08-04T00:00:00+00:00", _result_usage(4000, 40))])
+  cb.thread(
+      "s1",
+      "t2",
+      backend="codex-gpt-5.6-luna",
+      model="gpt-5.6-luna",
+      session_ids=[s2],
+      results=[("2026-08-02T00:00:00+00:00", _result_usage(2000, 20, cache_read=500))])
+  cb.thread(
+      "s1",
+      "t3",
+      backend="codex-gpt-5.5-personal",
+      model="gpt-5.5",
+      session_ids=[s3],
+      results=[("2026-08-03T00:00:00+00:00", _result_usage(3000, 30))])
+  cb.thread(
+      "s1",
+      "t4",
+      backend="codex-gpt-5.6-luna",
+      model="gpt-5.6-luna",
+      session_ids=[multi_a, multi_b],
+      results=[("2026-08-04T00:00:00+00:00", _result_usage(4000, 40))])
   _write_rollout(codex.home, multi_a)
 
   tally = _collect(None, codex, tmp_path / "db.sqlite", sessions=cb.root)
@@ -1805,8 +1881,13 @@ def test_charliebot_codex_reconciliation(tmp_path: Path, monkeypatch: pytest.Mon
 def test_charliebot_missing_metadata_skips_with_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _stub_registry(monkeypatch)
   cb = Charliebot(tmp_path)
-  cb.thread("s1", "t1", backend="charlie-code-gemini-3.8-flash", model="openai/gemini-3.8-flash",
-            results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))], meta=False)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))],
+      meta=False)
 
   tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
 
@@ -1820,12 +1901,29 @@ def test_charliebot_cache_serves_and_appends(tmp_path: Path, monkeypatch: pytest
   shows up through the tail parse, and a trailing master result replaces the stored one."""
   _stub_registry(monkeypatch, _CLC_GEMINI)
   cb = Charliebot(tmp_path)
-  events = cb.thread("s1", "t1", backend="charlie-code-gemini-3.8-flash", model="openai/gemini-3.8-flash",
-                     results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
-  capture = cb.master("s1", "2026-09-11T21:00:00+00:00", [
-      {"type": "context", "step": 1, "prompt_tokens": 1, "model": "openai/gemini-3.8-flash"},
-      {"type": "result", "completed": True, "usage": {"input_tokens": 100, "output_tokens": 5}},
-  ])
+  events = cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  capture = cb.master(
+      "s1", "2026-09-11T21:00:00+00:00", [
+          {
+              "type": "context",
+              "step": 1,
+              "prompt_tokens": 1,
+              "model": "openai/gemini-3.8-flash"
+          },
+          {
+              "type": "result",
+              "completed": True,
+              "usage": {
+                  "input_tokens": 100,
+                  "output_tokens": 5
+              }
+          },
+      ])
   db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
   first = _collect(None, None, db, cache, sessions=cb.root)
   assert _row(first, "charlie-bot", "gemini-3.8-flash").calls == 2
@@ -1836,11 +1934,24 @@ def test_charliebot_cache_serves_and_appends(tmp_path: Path, monkeypatch: pytest
       _row(first, "charlie-bot", "gemini-3.8-flash").total
 
   with events.open("a") as fh:
-    fh.write(json.dumps({"type": "result", "result": "", "usage": _result_usage(70, 3),
-                         "timestamp": "2026-09-12T01:00:00+00:00"}) + "\n")
+    fh.write(
+        json.dumps(
+            {
+                "type": "result",
+                "result": "",
+                "usage": _result_usage(70, 3),
+                "timestamp": "2026-09-12T01:00:00+00:00"
+            }) + "\n")
   with capture.open("a") as fh:
-    fh.write(json.dumps({"type": "result", "completed": True,
-                         "usage": {"input_tokens": 200, "output_tokens": 8}}) + "\n")
+    fh.write(
+        json.dumps({
+            "type": "result",
+            "completed": True,
+            "usage": {
+                "input_tokens": 200,
+                "output_tokens": 8
+            }
+        }) + "\n")
   third = _collect(None, None, db, cache, sessions=cb.root)
   row = _row(third, "charlie-bot", "gemini-3.8-flash")
   assert row.calls == 3  # thread result appended + the capture's replaced trailing result
@@ -1857,10 +1968,18 @@ def test_charliebot_walk_errors_become_notes(tmp_path: Path, monkeypatch: pytest
   never reopened.)"""
   _stub_registry(monkeypatch, _CLC_GEMINI)
   cb = Charliebot(tmp_path)
-  events = cb.thread("s1", "t1", backend="charlie-code-gemini-3.8-flash", model="openai/gemini-3.8-flash",
-                     results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
-  cb.thread("s1", "t2", backend="charlie-code-gemini-3.8-flash", model="openai/gemini-3.8-flash",
-            results=[("2026-09-11T22:09:00+00:00", _result_usage(10, 1))])
+  events = cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  cb.thread(
+      "s1",
+      "t2",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:09:00+00:00", _result_usage(10, 1))])
   events.chmod(0o000)
   try:
     tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)

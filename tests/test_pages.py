@@ -168,21 +168,22 @@ async def test_token_usage_route_labels_charliebot_source(
     monkeypatch: pytest.MonkeyPatch, pages_config: CharlieBotConfig) -> None:
   """The fourth source renders end to end: the row carries the charlie-bot slot and the
   page's sources annotation names charlie-bot beside the three CLI sources."""
-  tally = _usage_tally([
-      _claude_row("2024-01-01", "2024-01-02"),
-      ModelRow(
-          model="gemini-3.8-flash",
-          source="charlie-bot",
-          calls=66,
-          in_fresh=100,
-          cache_write=0,
-          cache_read=0,
-          output=8,
-          total=108,
-          first="2024-01-01",
-          last="2024-01-02",
-          accounts=[AccountRow(name="charlie-code-gemini-3.8-flash", calls=66, output=8, total=108)]),
-  ])
+  tally = _usage_tally(
+      [
+          _claude_row("2024-01-01", "2024-01-02"),
+          ModelRow(
+              model="gemini-3.8-flash",
+              source="charlie-bot",
+              calls=66,
+              in_fresh=100,
+              cache_write=0,
+              cache_read=0,
+              output=8,
+              total=108,
+              first="2024-01-01",
+              last="2024-01-02",
+              accounts=[AccountRow(name="charlie-code-gemini-3.8-flash", calls=66, output=8, total=108)]),
+      ])
 
   monkeypatch.setattr(pages, "collect_token_usage", lambda **_kwargs: tally)
 

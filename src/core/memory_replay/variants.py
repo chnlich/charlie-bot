@@ -60,6 +60,7 @@ from src.core.memory_replay.errors import (
 from src.core.memory_replay.exchange import (
     _CONSTRAINTS,
     _EDITOR_DECISIONS,
+    _ENTRY_ROW_SHAPE,
     _OPERATIONS,
     _RESPONSE_SHAPE,
     _REVIEWER_DECISIONS,
@@ -67,6 +68,7 @@ from src.core.memory_replay.exchange import (
     EntryOp,
     EntryOpSpec,
     ThemeOutput,
+    candidate_row_shape,
 )
 from src.core.memory_replay.manifest import Manifest, Theme
 from src.core.memory_replay.retrieval import FeedbackSelection
@@ -187,21 +189,18 @@ def _dispositions_block(feedback_view: str) -> str:
 # The editor's response shape: the shared v3 schema plus the proofs field every experimental
 # editor writes. The reviewers' shape is the plain v3 schema (no proofs field) — matching their
 # parser, which rejects any extra key.
-_EDITOR_SHAPE = """JSON shape:
-{
+_PROOFS_FIELDS = (',\n     "proofs": {"action": "<one sentence>", "home": "<one sentence>", '
+                  '"brevity": "<one sentence>"}')
+
+_EDITOR_SHAPE = f"""JSON shape:
+{{
   "entries": [
-    {"action": "new" | "rewrite" | "delete" | "keep",
-     "path": "entries/<topic>/<slug>.md",
-     "text": "<complete entry file text, front matter included; new/rewrite only>",
-     "source_refs": ["<ref>"],
-     "reason": "<one sentence>"}
+{_ENTRY_ROW_SHAPE}
   ],
   "candidates": [
-    {"source_ref": "<ref>", "outcome": "propose" | "no_change" | "needs_decision",
-     "paths": ["entries/<topic>/<slug>.md"], "reason": "<one sentence>",
-     "proofs": {"action": "<one sentence>", "home": "<one sentence>", "brevity": "<one sentence>"}}
+{candidate_row_shape(_PROOFS_FIELDS)}
   ]
-}
+}}
 
 The "proofs" object is required on every "propose" row and forbidden on every other row."""
 

@@ -72,8 +72,5 @@ def test_frontend_js(js_name: str) -> None:
 
 def test_node_tests_list_covers_every_suite() -> None:
   """``_NODE_TESTS`` matches the node suites on disk exactly: no omission, no duplicate, no stale entry."""
-  on_disk = sorted(
-      p.name
-      for pattern in ("*.test.js", "*.test.mjs")
-      for p in Path(__file__).parent.glob(pattern))
+  on_disk = sorted(p.name for pattern in ("*.test.js", "*.test.mjs") for p in Path(__file__).parent.glob(pattern))
   assert sorted(_NODE_TESTS) == on_disk

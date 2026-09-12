@@ -108,9 +108,8 @@ def _build_client(cfg: CharlieBotConfig, thread_mgr: ThreadManager) -> TestClien
   return TestClient(app)
 
 
-async def _saved_opus_thread(
-    tmp_path: Path, **thread_overrides
-) -> tuple[CharlieBotConfig, ThreadManager, Path, ThreadMetadata]:
+async def _saved_opus_thread(tmp_path: Path,
+                             **thread_overrides) -> tuple[CharlieBotConfig, ThreadManager, Path, ThreadMetadata]:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       backends={

@@ -102,11 +102,26 @@ def test_tool_result_over_render_cap_is_capped_and_marked(tmp_path: Path) -> Non
 def test_top_level_tool_result_line_is_capped_and_marked(tmp_path: Path) -> None:
   path = tmp_path / "events.jsonl"
   cap = threads_api.TOOL_OUTPUT_RENDER_CAP
-  line = json.dumps({"type": "tool_result", "tool_name": "Bash", "tool_use_id": "t1",
-                     "content": "y" * (cap + 1), "timestamp": TS}) + "\n"
-  _write_events(path, [line, json.dumps({"type": "tool_result", "tool_name": "Bash",
-                                         "tool_use_id": "t2", "content": "small",
-                                         "timestamp": TS}) + "\n"])
+  line = json.dumps(
+      {
+          "type": "tool_result",
+          "tool_name": "Bash",
+          "tool_use_id": "t1",
+          "content": "y" * (cap + 1),
+          "timestamp": TS
+      }) + "\n"
+  _write_events(
+      path, [
+          line,
+          json.dumps(
+              {
+                  "type": "tool_result",
+                  "tool_name": "Bash",
+                  "tool_use_id": "t2",
+                  "content": "small",
+                  "timestamp": TS
+              }) + "\n"
+      ])
 
   events = threads_api.read_thread_worker_events(path)
   assert events[0].output_truncated is True

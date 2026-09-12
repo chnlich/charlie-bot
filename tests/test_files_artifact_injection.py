@@ -140,25 +140,19 @@ def test_serve_file_injects_via_bearer_header(sessions_root: Path) -> None:
   assert 'window.__cbcServerSessionId="S";' in resp.text
 
 
-def test_serve_file_no_credential_returns_original_bytes(sessions_root: Path) -> None:
+@pytest.mark.parametrize("access_key", [None, "wrong"], ids=["no-credential", "wrong-credential"])
+def test_serve_file_without_valid_credential_returns_original_bytes(
+    sessions_root: Path, access_key: str | None) -> None:
+  """Only a valid access key reaches the injection arm; both credential-less
+  states read the file's original bytes, with no comment UI and no inline session id."""
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
   original = page.read_text(encoding="utf-8")
 
-  resp = _build_client(None).get("/files" + str(page))
+  resp = _build_client(access_key).get("/files" + str(page))
   assert resp.status_code == 200
   assert resp.text == original
   assert "artifact-comments.js" not in resp.text
   assert 'window.__cbcServerSessionId="S";' not in resp.text
-
-
-def test_serve_file_wrong_credential_returns_original_bytes(sessions_root: Path) -> None:
-  page = _write(sessions_root / "S" / "artifacts" / "x.html")
-  original = page.read_text(encoding="utf-8")
-
-  resp = _build_client("wrong").get("/files" + str(page))
-  assert resp.status_code == 200
-  assert resp.text == original
-  assert "artifact-comments.js" not in resp.text
 
 
 def test_serve_file_empty_configured_key_injects(sessions_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:

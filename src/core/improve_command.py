@@ -354,17 +354,30 @@ async def _worktree_commit_delta(wt_path: Path, tip_before: str) -> tuple[str, i
   return tip_after, commits_added, diffstat
 
 
-def _extract_iteration_summary(events: list[dict], iteration: int, status: str) -> str:
-  """Extract a summary from worker events: newest-first scan, the first event
-  carrying a result text or assistant text wins.
+def _summary_text(event: dict) -> str | None:
+  """The summary text *event* carries, or None — the one definition of a
+  summary-bearing event, shared by the single-judgment scan and the fused
+  failed-iteration pass.
   """
-  for event in reversed(events):
-    if event.get("type") == ET.RESULT and event.get("result"):
-      return event["result"][:500]
-    if event.get("type") == ET.ASSISTANT:
-      text = extract_text_from_message(event.get("message"))
-      if text:
-        return text[:500]
+  if event.get("type") == ET.RESULT and event.get("result"):
+    return event["result"][:500]
+  if event.get("type") == ET.ASSISTANT:
+    text = extract_text_from_message(event.get("message"))
+    if text:
+      return text[:500]
+  return None
+
+
+def _extract_iteration_summary(events_newest_first: Iterator[dict], iteration: int, status: str) -> str:
+  """Extract a summary from worker events: newest-first scan, the first event
+  carrying a result text or assistant text wins. *events_newest_first* is the
+  from-the-end walk's stream (:func:`_newest_first_events`), consumed to the
+  first answer.
+  """
+  for event in events_newest_first:
+    text = _summary_text(event)
+    if text is not None:
+      return text
   return f"Iteration {iteration} {status} (no summary available)."
 
 
@@ -452,33 +465,67 @@ def _event_text(event: dict) -> str:
   return "\n".join(parts)
 
 
-def _quota_blocker_reason(events: list[dict]) -> str | None:
-  for ev in reversed(events):
-    event_type = ev.get('type')
-    if event_type == ET.RATE_LIMIT_EVENT:
-      rli = ev.get(ET.RATE_LIMIT_INFO, {})
-      status = str(rli.get('status', '')).lower()
-      overage_status = str(rli.get('overageStatus', '')).lower()
-      if status == 'rejected' or overage_status == 'rejected':
-        rate_type = rli.get('rateLimitType') or 'rate limit'
-        return f"rate-limit rejection ({rate_type})"
+def _quota_blocker_match(ev: dict) -> str | None:
+  """The quota blocker *ev* names, or None when the event carries none — the
+  one definition of the quota-shaped event, shared by the fused failed-iteration
+  pass's two judgments.
+  """
+  event_type = ev.get('type')
+  if event_type == ET.RATE_LIMIT_EVENT:
+    rli = ev.get(ET.RATE_LIMIT_INFO, {})
+    status = str(rli.get('status', '')).lower()
+    overage_status = str(rli.get('overageStatus', '')).lower()
+    if status == 'rejected' or overage_status == 'rejected':
+      rate_type = rli.get('rateLimitType') or 'rate limit'
+      return f"rate-limit rejection ({rate_type})"
 
-    if event_type not in (ET.ERROR, ET.ASSISTANT_ERROR, ET.RESULT):
-      continue
-    if (event_type == ET.RESULT and ev.get('is_error') is not True and ev.get('api_error_status') is None and
-        'error' not in str(ev.get('subtype', '')).lower()):
-      continue
+  if event_type not in (ET.ERROR, ET.ASSISTANT_ERROR, ET.RESULT):
+    return None
+  if (event_type == ET.RESULT and ev.get('is_error') is not True and ev.get('api_error_status') is None and
+      'error' not in str(ev.get('subtype', '')).lower()):
+    return None
 
-    text = _event_text(ev).lower()
-    for pattern in _QUOTA_BLOCKER_TEXT_PATTERNS:
-      if pattern in text:
-        return f"provider quota/token/rate-limit rejection ({pattern})"
+  text = _event_text(ev).lower()
+  for pattern in _QUOTA_BLOCKER_TEXT_PATTERNS:
+    if pattern in text:
+      return f"provider quota/token/rate-limit rejection ({pattern})"
   return None
+
+
+def _failed_iteration_judgments(events_newest_first: Iterator[dict], iteration: int,
+                                status: str) -> tuple[str | None, str]:
+  """Both failed-iteration judgments from one newest-first pass: the blocker at
+  the first quota-shaped event or exhaustion, the summary at the first
+  result/assistant text. The walk stops once both are settled, so a no-match
+  exhaustion parses the log once — the shape the shared full parse this
+  replaced ran.
+  """
+  blocker_reason = None
+  summary = None
+  for ev in events_newest_first:
+    if blocker_reason is None:
+      blocker_reason = _quota_blocker_match(ev)
+    if summary is None:
+      summary = _summary_text(ev)
+    if blocker_reason is not None and summary is not None:
+      break
+  if summary is None:
+    summary = f"Iteration {iteration} {status} (no summary available)."
+  return blocker_reason, summary
 
 
 # ---------------------------------------------------------------------------
 # Single-iteration helper
 # ---------------------------------------------------------------------------
+
+
+def _newest_first_events(events_path: Path) -> Iterator[dict]:
+  """The iteration thread's events log, newest line first — the stream both
+  iteration judgments scan (the from-the-end walk parses only the bytes the
+  answer needs)."""
+  from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events_from_end
+
+  return iter_ndjson_events_from_end(events_path, log_event=PARSE_SKIP_LOG_EVENT, log_fields={})
 
 
 async def _run_single_iteration(
@@ -503,7 +550,6 @@ async def _run_single_iteration(
   Returns the iteration summary on success, None if stopped by user.
   Appends the summary to previous_summaries on success.
   """
-  from src.core.ndjson import parse_ndjson_file
   from src.core.spawner import spawn_worker
 
   # Check if stopped
@@ -563,11 +609,9 @@ async def _run_single_iteration(
   thread_meta = await thread_mgr.get_thread(session_id, thread.id)
   status = thread_meta.status.value if thread_meta else "unknown"
   events_path = await thread_mgr.get_events_log_path(session_id, thread.id)
-  events = await asyncio.to_thread(parse_ndjson_file, events_path)
   if thread_meta and thread_meta.status == ThreadStatus.FAILED:
-    blocker_reason = _quota_blocker_reason(events)
+    blocker_reason, summary = _failed_iteration_judgments(_newest_first_events(events_path), i, status)
     if blocker_reason:
-      summary = _extract_iteration_summary(events, i, status)
       log.warning("improve_iteration_blocked", session=session_id, iteration=i, reason=blocker_reason)
       raise _ImproveLoopBlockedError(i, blocker_reason, summary)
 
@@ -587,7 +631,7 @@ async def _run_single_iteration(
   # (loop context comes from report files or invalid-iteration syntheses); the
   # blocked path above delivers its own extracted copy to the successor.
   if not await asyncio.to_thread(report_path.exists):
-    fallback_body = _extract_iteration_summary(events, i, status)
+    fallback_body = _extract_iteration_summary(_newest_first_events(events_path), i, status)
     await asyncio.to_thread(
         report_path.write_text, "<!-- runner fallback: worker wrote no report -->\n" + fallback_body)
 

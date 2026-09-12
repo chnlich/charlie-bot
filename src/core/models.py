@@ -446,6 +446,9 @@ class WorkerEvent(BaseModel):
   status: str | None = None
   tool_name: str | None = None
   input: dict | None = None
+  # Set only when the projection capped this row's rendered output at
+  # TOOL_OUTPUT_RENDER_CAP; the persisted events log keeps the full text.
+  output_truncated: bool | None = None
   timestamp: UtcDatetime = Field(default_factory=utc_now)
 
 

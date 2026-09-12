@@ -24,7 +24,7 @@ from src.api.responses import FastJsonResponse
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.memo import BoundedMemo, StatSignatureMemo
-from src.core.message_aggregator import extract_text_from_message, extract_tool_result_text
+from src.core.message_aggregator import TOOL_OUTPUT_RENDER_CAP, extract_text_from_message, extract_tool_result_text
 from src.core.models import (
     BackendType,
     CcClaudeBackend,
@@ -627,19 +627,31 @@ def _append_worker_events(
           tool_use_id = block.get('tool_use_id', '')
           name = tool_id_to_name.get(tool_use_id, '')
           result_text = extract_tool_result_text(block)
+          # The projected row rides every full fetch and the panel's innerHTML
+          # rebuild, so a result over TOOL_OUTPUT_RENDER_CAP is capped and
+          # marked — the same bound the chat aggregator applies; the persisted
+          # events log keeps the full text.
+          truncated = len(result_text) > TOOL_OUTPUT_RENDER_CAP
           events.append(
               WorkerEvent(
                   type=ET.TOOL_RESULT,
                   tool_name=name,
-                  content=result_text,
+                  content=result_text[:TOOL_OUTPUT_RENDER_CAP] if truncated else result_text,
+                  output_truncated=True if truncated else None,
                   timestamp=event_timestamp,
               ))
     else:
       try:
-        events.append(WorkerEvent(**{k: v for k, v in data.items() if k in WorkerEvent.model_fields}))
+        row = WorkerEvent(**{k: v for k, v in data.items() if k in WorkerEvent.model_fields})
       except Exception as e:
         log.debug('event_parse_failed', error=str(e))
-        events.append(WorkerEvent(type='raw', content=str(data)))
+        row = WorkerEvent(type='raw', content=str(data))
+      # A top-level tool_result line carries its output in content; the same
+      # render cap as the message-nested branch above bounds the projected row.
+      if row.type == ET.TOOL_RESULT and row.content is not None and len(row.content) > TOOL_OUTPUT_RENDER_CAP:
+        row.content = row.content[:TOOL_OUTPUT_RENDER_CAP]
+        row.output_truncated = True
+      events.append(row)
 
 
 @router.get("/{session_id}/threads/{thread_id}/events", response_model=list[WorkerEvent])

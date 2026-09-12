@@ -229,6 +229,30 @@ _listing_memo: BoundedMemo[_ListingKey, str] = BoundedMemo(_LISTING_MEMO_LIMIT)
 # charliebot corpus is almost entirely safe names.
 _SAFE_ENTRY_RE = re.compile(r"[A-Za-z0-9_.~-]+")
 
+# One home for the listing page's chrome (the rows are built per walk): the
+# dir-listing byte-pin test in tests/test_files_dir_listing.py formats this
+# same template for its reference builder, so a chrome edit cannot desync the
+# two builders.
+_DIR_LISTING_TEMPLATE = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Index of {display_path}</title>
+<style>
+  body {{ font-family: monospace; margin: 2em; }}
+  table {{ border-collapse: collapse; }}
+  td, th {{ padding: 4px 12px; text-align: left; }}
+  a {{ text-decoration: none; color: #0366d6; }}
+  a:hover {{ text-decoration: underline; }}
+</style>
+</head>
+<body>
+<h2>Index of {display_path}</h2>
+<table>
+<tr><th></th><th>Name</th><th>Size</th><th>Modified</th></tr>
+{rows}
+</table>
+</body>
+</html>"""
+
 
 def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -> str | None:
   """Return the HTML listing of *dir_path*, or None when it is not a directory.
@@ -294,25 +318,7 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
         f'</tr>\n')
 
   display_path = html.escape("/" + dir_path.as_posix().lstrip("/"))
-  listing = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Index of {display_path}</title>
-<style>
-  body {{ font-family: monospace; margin: 2em; }}
-  table {{ border-collapse: collapse; }}
-  td, th {{ padding: 4px 12px; text-align: left; }}
-  a {{ text-decoration: none; color: #0366d6; }}
-  a:hover {{ text-decoration: underline; }}
-</style>
-</head>
-<body>
-<h2>Index of {display_path}</h2>
-<table>
-<tr><th></th><th>Name</th><th>Size</th><th>Modified</th></tr>
-{''.join(rows)}
-</table>
-</body>
-</html>"""
+  listing = _DIR_LISTING_TEMPLATE.format(display_path=display_path, rows=''.join(rows))
   _listing_memo.store(key, listing)
   return listing
 

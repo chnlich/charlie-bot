@@ -231,15 +231,22 @@ class CodexBackend(AgentBackend):
     log.debug("codex_event_unhandled", type=ev_type)
     return []
 
+  # Codex items that translate one started/completed pair onto one fixed tool event:
+  # item type -> (tool name, payload field carrying the input, whether the completed
+  # output is str()-wrapped before it becomes the tool_result content).
+  _TOOL_ITEM_SPECS: ClassVar[dict[str, tuple[str, str, bool]]] = {
+      "command_execution": ("Bash", "command", False),
+      "web_search": ("WebSearch", "query", True),
+  }
+
   # Handler registry: each handler is called for every item event,
   # preserving multi-fire semantics (independent ifs, not elif).
   _ITEM_HANDLERS: ClassVar[list[str]] = [
       "_handle_agent_message",
       "_handle_reasoning",
-      "_handle_command_execution",
+      "_handle_tool_item",
       "_handle_file_change",
       "_handle_mcp_tool_call",
-      "_handle_web_search",
       "_handle_todo_list",
       "_handle_error",
   ]
@@ -292,16 +299,17 @@ class CodexBackend(AgentBackend):
       return []
     return [{"type": ET.THINKING, "content": delta}]
 
-  def _handle_command_execution(self, ev: dict) -> list[dict]:
+  def _handle_tool_item(self, ev: dict) -> list[dict]:
     item = ev.get("item", {})
-    if item.get("type") != "command_execution":
+    spec = self._TOOL_ITEM_SPECS.get(item.get("type"))
+    if spec is None:
       return []
+    tool, payload_field, stringify_output = spec
     if ev.get("type") == "item.started":
-      command = item.get("command", "")
-      return [make_tool_use_event("Bash", {"command": command})]
+      return [make_tool_use_event(tool, {payload_field: item.get(payload_field, "")})]
     if ev.get("type") == "item.completed":
       output = item.get("output", "")
-      return [make_tool_result_event("Bash", output)]
+      return [make_tool_result_event(tool, str(output) if stringify_output else output)]
     return []
 
   def _handle_file_change(self, ev: dict) -> list[dict]:
@@ -338,18 +346,6 @@ class CodexBackend(AgentBackend):
     if ev.get("type") == "item.completed":
       output = item.get("result", item.get("error", ""))
       return [make_tool_result_event(tool_name, str(output))]
-    return []
-
-  def _handle_web_search(self, ev: dict) -> list[dict]:
-    item = ev.get("item", {})
-    if item.get("type") != "web_search":
-      return []
-    if ev.get("type") == "item.started":
-      query = item.get("query", "")
-      return [make_tool_use_event("WebSearch", {"query": query})]
-    if ev.get("type") == "item.completed":
-      output = item.get("output", "")
-      return [make_tool_result_event("WebSearch", str(output))]
     return []
 
   def _handle_todo_list(self, ev: dict) -> list[dict]:

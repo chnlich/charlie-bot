@@ -144,12 +144,6 @@ def account_by_label(cfg: CharlieBotConfig, label: str | None) -> ClaudeAccount 
   return next((account for account in pool(cfg) if account.label == label), None)
 
 
-def account_for_dir(cfg: CharlieBotConfig, config_dir: str | Path) -> ClaudeAccount | None:
-  """The pool account whose login directory is *config_dir*, or None."""
-  wanted = str(Path(config_dir).expanduser())
-  return next((account for account in pool(cfg) if account.config_dir == wanted), None)
-
-
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------

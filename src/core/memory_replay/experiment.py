@@ -35,7 +35,7 @@ Honesty rules this module enforces structurally:
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import structlog
@@ -50,6 +50,7 @@ from src.core.memory_replay.report import _e, _page
 from src.core.memory_replay.runner import (
     ReplayOptions,
     _require_disjoint_output_root,
+    _timestamp,
     compute_input_identity,
     resolve_backend_identity,
     run_directory_name,
@@ -754,10 +755,6 @@ def _editor_calls_section(arms: list[dict]) -> dict:
       "identical_chosen_content": identical,
       "variants_without_chosen_editor_response": sorted(without),
   }
-
-
-def _timestamp(now: datetime | None) -> str:
-  return (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # --- the readable report ---------------------------------------------------------

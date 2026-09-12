@@ -202,6 +202,61 @@ def test_tool_use_attaches_to_buffer_then_tool_result_updates_output() -> None:
   }]
 
 
+def test_flat_tool_use_aggregates_into_tools() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"cmd": "ls"}}))
+
+  draft = agg.pending_draft_message()
+  assert draft is not None
+  assert draft["tools"] == [{
+      "name": "Bash",
+      "input": {
+          "cmd": "ls"
+      },
+      "output": "",
+      "is_error": False,
+  }]
+
+
+def test_flat_tool_result_attaches_to_last_tool() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"cmd": "pwd"}}))
+  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "/home", "is_error": True}))
+
+  draft = agg.pending_draft_message()
+  assert draft is not None
+  assert draft["tools"][0]["output"] == "/home"
+  assert draft["tools"][0]["is_error"] is True
+
+
+def test_text_and_flat_tools_interleave() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": "hi "}]}}))
+  list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"cmd": "ls"}}))
+  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "/home"}))
+  deltas = list(agg.feed({"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": "done"}]}}))
+
+  finalized = [delta for delta in deltas if delta["type"] == "message"]
+  assert len(finalized) == 1
+  message = finalized[0]["message"]
+  assert message["content"] == "hi "
+  assert len(message["tools"]) == 1
+  assert message["tools"][0]["output"] == "/home"
+
+  draft = agg.pending_draft_message()
+  assert draft is not None
+  assert draft["content"] == "done"
+  assert "tools" not in draft or draft["tools"] == []
+
+
+def test_flat_tool_result_with_empty_buf_is_silent() -> None:
+  agg = MessageAggregator()
+  deltas = list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "orphan"}))
+
+  assert not deltas
+  assert agg.pending_draft_message() is None
+
+
 def test_exit_plan_mode_emits_plan_message_with_explicit_text() -> None:
   agg = MessageAggregator()
   deltas = list(

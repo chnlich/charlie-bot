@@ -1599,10 +1599,6 @@ def eviction_keep_response(reason: str) -> str:
   return editor_json([keep_op()], [row("capture-eviction", "no_change", [], reason)])
 
 
-def plotting_keep_response(reason: str) -> str:
-  return editor_json([keep_op("entries/plotting/axis-scale.md")], [row("capture-axis-scale", "no_change", [], reason)])
-
-
 def plotting_needs_decision_response(reason: str) -> str:
   return editor_json(
       [keep_op("entries/plotting/axis-scale.md")], [row("capture-axis-scale", "needs_decision", [], reason)])

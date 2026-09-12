@@ -155,19 +155,28 @@ class ThemeOutput:
   raw: str = field(repr=False, default="")
 
 
-def build_editor_request(manifest: Manifest, theme: Theme, selections: list[FeedbackSelection]) -> str:
-  """The editor's user content: every byte of theme evidence, deterministically ordered."""
-  parts = [f"# Memory curation replay — editor\n\nTheme: {theme.name}"]
-  parts.append("## Guideline (admission policy)")
+def _theme_evidence(manifest: Manifest, theme: Theme, selections: list[FeedbackSelection]) -> list[str]:
+  """The evidence sections both stage requests render, in render order.
+
+  The exchange contract pins both stages to the same evidence, so the two
+  request builders must not drift apart section by section.
+  """
+  parts = ["## Guideline (admission policy)"]
   parts.extend(_render_source(s) for s in manifest.guidelines())
   parts.append("## Current entries")
-  entries = manifest.theme_sources(theme, "entry")
-  parts.extend(f"### {s.path}\n{s.text.rstrip()}" for s in entries)
+  parts.extend(f"### {s.path}\n{s.text.rstrip()}" for s in manifest.theme_sources(theme, "entry"))
   parts.append("## Owning documents")
   parts.extend(_render_source(s) for s in manifest.theme_sources(theme, "document"))
   parts.append("## Candidate material")
   parts.extend(_render_candidate(s) for s in manifest.theme_sources(theme, "candidate"))
   parts.append(_render_feedback(selections))
+  return parts
+
+
+def build_editor_request(manifest: Manifest, theme: Theme, selections: list[FeedbackSelection]) -> str:
+  """The editor's user content: every byte of theme evidence, deterministically ordered."""
+  parts = [f"# Memory curation replay — editor\n\nTheme: {theme.name}"]
+  parts.extend(_theme_evidence(manifest, theme, selections))
   return "\n\n".join(parts) + "\n"
 
 
@@ -179,16 +188,7 @@ def build_reviewer_request(
 ) -> str:
   """The reviewer's user content: the editor's evidence plus its proposals, without its reasons."""
   parts = [f"# Memory curation replay — reviewer\n\nTheme: {theme.name}"]
-  parts.append("## Guideline (admission policy)")
-  parts.extend(_render_source(s) for s in manifest.guidelines())
-  parts.append("## Current entries")
-  entries = manifest.theme_sources(theme, "entry")
-  parts.extend(f"### {s.path}\n{s.text.rstrip()}" for s in entries)
-  parts.append("## Owning documents")
-  parts.extend(_render_source(s) for s in manifest.theme_sources(theme, "document"))
-  parts.append("## Candidate material")
-  parts.extend(_render_candidate(s) for s in manifest.theme_sources(theme, "candidate"))
-  parts.append(_render_feedback(selections))
+  parts.extend(_theme_evidence(manifest, theme, selections))
   parts.append(_render_editor_proposals(editor_output))
   return "\n\n".join(parts) + "\n"
 

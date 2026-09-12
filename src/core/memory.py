@@ -137,38 +137,49 @@ def parse_entry(path: Path) -> Entry:
   falls back to a legacy body first line of ``# <title>``; when neither exists
   the entry is malformed (fail-loud).
   """
-  text = path.read_text(encoding="utf-8")
+  return parse_entry_text(path.read_text(encoding="utf-8"), entry_path=path)
+
+
+def parse_entry_text(text: str, *, entry_path: Path) -> Entry:
+  """Parse one entry file's *text* into an :class:`Entry`, or raise :class:`MemoryFormatError`.
+
+  Shared body of :func:`parse_entry`, callable without a file on disk so a
+  proposed (not yet written) entry gets the same structural parse. *entry_path*
+  only attributes errors and supplies the parsed identity: the slug is its
+  filename stem and validation compares its parent directory name against the
+  topic, so callers parsing proposed text pass the path the entry would take.
+  """
   lines = text.split("\n")
   if not lines or lines[0] != "---":
-    raise MemoryFormatError(f"{path}: line 1: expected '---' front matter opener")
+    raise MemoryFormatError(f"{entry_path}: line 1: expected '---' front matter opener")
   header: dict[str, str] = {}
   i = 1
   while i < len(lines) and lines[i] != "---":
     m = _HEADER_RE.match(lines[i])
     if m is None:
-      raise MemoryFormatError(f"{path}: line {i + 1}: malformed header line: {lines[i]!r}")
+      raise MemoryFormatError(f"{entry_path}: line {i + 1}: malformed header line: {lines[i]!r}")
     key, value = m.group(1), m.group(2)
     if key not in _KNOWN_FIELDS:
-      raise MemoryFormatError(f"{path}: line {i + 1}: unknown header field {key!r}")
+      raise MemoryFormatError(f"{entry_path}: line {i + 1}: unknown header field {key!r}")
     if key in header:
-      raise MemoryFormatError(f"{path}: line {i + 1}: duplicate header field {key!r}")
+      raise MemoryFormatError(f"{entry_path}: line {i + 1}: duplicate header field {key!r}")
     if key == "title":
       value = value.strip()
       if not value:
-        raise MemoryFormatError(f"{path}: line {i + 1}: empty 'title' header value")
+        raise MemoryFormatError(f"{entry_path}: line {i + 1}: empty 'title' header value")
     elif key == "audience":
       if not _AUDIENCE_VALUE_RE.match(value):
-        raise MemoryFormatError(f"{path}: line {i + 1}: malformed header line: {lines[i]!r}")
+        raise MemoryFormatError(f"{entry_path}: line {i + 1}: malformed header line: {lines[i]!r}")
     elif not _SLUG_RE.match(value):
-      raise MemoryFormatError(f"{path}: line {i + 1}: malformed header line: {lines[i]!r}")
+      raise MemoryFormatError(f"{entry_path}: line {i + 1}: malformed header line: {lines[i]!r}")
     header[key] = value
     i += 1
   if i >= len(lines):
-    raise MemoryFormatError(f"{path}: missing closing '---' after header")
+    raise MemoryFormatError(f"{entry_path}: missing closing '---' after header")
   # lines[i] == "---" is the closer; the body is everything after it.
   body_lines = lines[i + 1:]
   if not body_lines or (len(body_lines) == 1 and body_lines[0] == ""):
-    raise MemoryFormatError(f"{path}: line {i + 2}: empty body")
+    raise MemoryFormatError(f"{entry_path}: line {i + 2}: empty body")
   body = "\n".join(body_lines)
   if "title" in header:
     title = header["title"]
@@ -177,16 +188,17 @@ def parse_entry(path: Path) -> Entry:
     # Legacy fallback: the body's first line carries `# <title>`.
     first = body_lines[0]
     if not first.startswith("# "):
-      raise MemoryFormatError(f"{path}: line {i + 2}: no frontmatter 'title' and body must start with '# <title>'")
+      raise MemoryFormatError(
+          f"{entry_path}: line {i + 2}: no frontmatter 'title' and body must start with '# <title>'")
     title = first[2:].strip()
     title_in_header = False
     if not title:
-      raise MemoryFormatError(f"{path}: line {i + 2}: empty title after '# '")
+      raise MemoryFormatError(f"{entry_path}: line {i + 2}: empty title after '# '")
   audience_raw = header.get("audience")
   return Entry(
-      path=path,
+      path=entry_path,
       topic=header.get("topic"),
-      slug=path.stem,
+      slug=entry_path.stem,
       scope=header.get("scope"),
       audience=_parse_audience(audience_raw) if audience_raw is not None else None,
       audience_raw=audience_raw,
@@ -292,6 +304,18 @@ def _validate_entry(entry: Entry, topics: dict[str, Topic], *, relaxed: bool, st
       if entry.source is not None:
         violations.append(v("'source' is forbidden in entries/ (dropped in entry format v2)"))
   return violations
+
+
+def entry_violations(entry: Entry, topics: dict[str, Topic], *, strict_v2: bool = True) -> list[str]:
+  """Semantic violations for one parsed entry under the entries/ rules (empty list = valid).
+
+  Public validation entry point for entries parsed outside the store: the
+  replay pipeline validates model-proposed entry text through this before any
+  file is written. Same rules as :func:`load_store` applies to ``entries/``;
+  ``strict_v2`` (default) additionally requires a frontmatter ``title`` and
+  forbids literal ``both`` and ``created``/``source``, matching :func:`lint`.
+  """
+  return _validate_entry(entry, topics, relaxed=False, strict_v2=strict_v2)
 
 
 def _iter_entry_files(memory_dir: Path) -> list[Path]:

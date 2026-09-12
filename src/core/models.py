@@ -9,6 +9,11 @@ from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, model_validator
 
+# The cross-layer constants single-home in src/core.constants (stdlib-only, the
+# CLI import floor's contract); the names stay importable from here for every
+# model-layer importer.
+from src.core.constants import MAX_TRIGGER_MESSAGE_CHARS, SESSION_ID_ENV_VAR, WatchKind  # noqa: F401  (re-export)
+
 
 def ensure_utc(v: datetime | str) -> datetime:
   """Coerce naive datetimes to UTC; pass aware datetimes through unchanged."""
@@ -30,14 +35,6 @@ def utc_now() -> datetime:
 
 
 UtcDatetime = Annotated[datetime, BeforeValidator(ensure_utc)]
-
-# Cross-process session-identity wire name: the server writes the master's
-# session id into every spawned process env (master_cc_run._build_master_env),
-# the backend supervisors strip any inherited value, and the CLIs read it back
-# (src.cli.common.resolve_session_id). One spelling everywhere; the constant
-# lives beside the models config already imports so the CLI never pays the
-# backend stack for it.
-SESSION_ID_ENV_VAR = "CHARLIEBOT_SESSION_ID"
 
 # ---------------------------------------------------------------------------
 # Aliased types
@@ -80,13 +77,6 @@ class TaskType(StrEnum):
   QUICK_EDIT = "quick-edit"
   SCRIPT_RUN = "script-run"
   VERIFY = "verify"
-
-
-class WatchKind(StrEnum):
-  UNKNOWN = "unknown"  # fail-loud sentinel; never a valid target, no default
-  LOCAL_PID = "local_pid"
-  REMOTE_PID = "remote_pid"
-  SLURM_JOB = "slurm_job"
 
 
 class LastRunStatus(StrEnum):
@@ -552,12 +542,6 @@ class ImproveRequest(BaseModel):
   plan: str | None = None
   work_branch: str | None = None
   merge_back: bool = False
-
-
-# Upper bound on trigger --message length. The message is a short label naming
-# which watch fired (runbook steps and readback commands live in session
-# artifacts), so the CLI argparse precheck and --help text share this constant.
-MAX_TRIGGER_MESSAGE_CHARS = 200
 
 
 class ScheduleTriggerRequest(BaseModel):

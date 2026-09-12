@@ -3,8 +3,9 @@
 Every master turn and worker session runs several `charliebot` invocations, each a
 fresh process, so `src.cli.common` — the module every command imports — must not drag
 the backend stack (`src.agents.backends.base`), the sessions stack (`src.core.threads`,
-`src.core.sessions`), numpy (`src.core.runs`), or the logging stack (`structlog`, whose
-import eagerly pulls structlog.dev — rich, pygments) into processes that only parse
+`src.core.sessions`), numpy (`src.core.runs`), the logging stack (`structlog`, whose
+import eagerly pulls structlog.dev — rich, pygments), or the HTTP client (`requests`,
+urllib3 + charset_normalizer, ~100 ms of the M92 floor) into processes that only parse
 args, read config, and POST to the internal API. The constants they need live in
 `src.core.models`, which config already pays for; config's own logger imports
 structlog on first use instead.
@@ -24,6 +25,7 @@ HEAVY_MODULES = (
     "src.core.runs",
     "numpy",
     "structlog",
+    "requests",
 )
 
 

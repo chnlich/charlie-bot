@@ -12,6 +12,8 @@ Every failure output stays a JSON object on stderr with exit code 1 plus a
 (none / unknown) field so the caller can tell "retry safely" from "verify".
 """
 
+from __future__ import annotations
+
 import argparse
 import contextlib
 import json
@@ -21,9 +23,10 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
-import requests
+if TYPE_CHECKING:
+  import requests
 
 from src.core.buildinfo import read_repo_head_sha
 from src.core.config import CharlieBotConfig, get_config, get_credentials
@@ -43,6 +46,17 @@ TASK_SPEC_REQUIRED_HEADINGS = (
     "Reviewer Checklist",
     "Out of Scope",
 )
+
+
+def __getattr__(name: str) -> Any:
+  # requests costs ~100 ms of the M92 CLI import floor (urllib3 + charset_normalizer)
+  # and --help paths never send a request; it loads on first use. Resolving it as a
+  # module attribute keeps the tests' "src.cli.common.requests.*" patch targets valid.
+  if name != "requests":
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+  import requests
+  globals()["requests"] = requests
+  return requests
 
 
 def internal_api_auth_headers() -> dict[str, str]:
@@ -158,6 +172,7 @@ def _best_effort_server_version(cfg: CharlieBotConfig) -> tuple[str | None, str 
   Swallows every failure (network, non-200, non-JSON) so the CLI error path never raises
   from the hint computation. Bounded by HTTP_VERSION_SKEW_TIMEOUT.
   """
+  import requests  # module-local: the module __getattr__ serves only attribute access
   try:
     resp = requests.get(
         f"{cfg.server_base_url}/api/internal/version",
@@ -191,6 +206,7 @@ def _is_connect_failure(exc: requests.RequestException) -> bool:
   a reset may arrive after the server accepted (and possibly processed) the
   request — that is the outcome_unknown class instead.
   """
+  import requests  # module-local: the module __getattr__ serves only attribute access
   if isinstance(exc, requests.exceptions.ConnectTimeout):
     return True
   if isinstance(exc, requests.exceptions.ConnectionError):
@@ -237,6 +253,7 @@ def _request_with_contract(
     unknown_effect: str,
 ) -> dict[str, Any]:
   """Issue one internal-API call under the restart-crossing contract."""
+  import requests  # module-local: the module __getattr__ serves only attribute access
   cfg = get_config()
   url = f"{cfg.server_base_url}{endpoint}"
   request_fn = requests.post if method == "POST" else requests.get

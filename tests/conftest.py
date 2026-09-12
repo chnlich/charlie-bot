@@ -995,11 +995,12 @@ CHAT_RUN_AND_FINALIZE_PATCH_TARGET = "src.api.chat.run_and_finalize"
 CHAT_CREATE_LOGGED_TASK_PATCH_TARGET = "src.api.chat.create_logged_task"
 CHAT_CANCEL_MASTER_PATCH_TARGET = "src.api.chat.cancel_master"
 
-# Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py binds the
-# library with module-scope `import requests`, and its helpers read requests.get at call time
-# and pick requests.post inside _request_with_contract's `request_fn = requests.post if ... else
-# ...`, so mock and monkeypatch.setattr land the stand-in on the requests module through the
-# src.cli.common route and every helper defined there picks it up at call time.
+# Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py resolves
+# `requests` lazily (a module __getattr__ that imports-and-caches on first access), and its
+# helpers read requests.get at call time and pick requests.post inside _request_with_contract's
+# `request_fn = requests.post if ... else ...`, so mock and monkeypatch.setattr land the
+# stand-in on the requests module through the src.cli.common route and every helper defined
+# there picks it up at call time.
 CLI_COMMON_REQUESTS_POST_PATCH_TARGET = "src.cli.common.requests.post"
 CLI_COMMON_REQUESTS_GET_PATCH_TARGET = "src.cli.common.requests.get"
 

@@ -95,10 +95,8 @@ JSON shape:
 {_RESPONSE_SHAPE}"""
 
 
-def build_editor_request(manifest: Manifest, theme: Theme, selections: list[FeedbackSelection]) -> str:
-  """The v2 editor's user content: prose sections, evidence inline under headings."""
-  parts = [f"# Memory curation replay — editor\n\nTheme: {theme.name}"]
-  parts.append(_render_topics(manifest))
+def _evidence_parts(manifest: Manifest, theme: Theme, selections: list[FeedbackSelection]) -> list[str]:
+  parts = [_render_topics(manifest)]
   parts.append("## Guideline (admission policy)")
   parts.extend(_render_source(s) for s in manifest.guidelines())
   parts.append("## Current entries")
@@ -109,6 +107,13 @@ def build_editor_request(manifest: Manifest, theme: Theme, selections: list[Feed
   parts.append("## Candidate material")
   parts.extend(_render_candidate(s) for s in manifest.theme_sources(theme, "candidate"))
   parts.append(_render_feedback(selections))
+  return parts
+
+
+def build_editor_request(manifest: Manifest, theme: Theme, selections: list[FeedbackSelection]) -> str:
+  """The v2 editor's user content: prose sections, evidence inline under headings."""
+  parts = [f"# Memory curation replay — editor\n\nTheme: {theme.name}"]
+  parts.extend(_evidence_parts(manifest, theme, selections))
   return "\n\n".join(parts) + "\n"
 
 
@@ -120,17 +125,7 @@ def build_reviewer_request(
 ) -> str:
   """The v2 reviewer's user content: the editor's evidence plus its proposals, without its reasons."""
   parts = [f"# Memory curation replay — reviewer\n\nTheme: {theme.name}"]
-  parts.append(_render_topics(manifest))
-  parts.append("## Guideline (admission policy)")
-  parts.extend(_render_source(s) for s in manifest.guidelines())
-  parts.append("## Current entries")
-  entries = manifest.theme_sources(theme, "entry")
-  parts.extend(f"### {s.path} (ref: {s.ref})\n{s.text.rstrip()}" for s in entries)
-  parts.append("## Owning documents")
-  parts.extend(_render_source(s) for s in manifest.theme_sources(theme, "document"))
-  parts.append("## Candidate material")
-  parts.extend(_render_candidate(s) for s in manifest.theme_sources(theme, "candidate"))
-  parts.append(_render_feedback(selections))
+  parts.extend(_evidence_parts(manifest, theme, selections))
   parts.append(_render_editor_proposals(editor_output))
   return "\n\n".join(parts) + "\n"
 

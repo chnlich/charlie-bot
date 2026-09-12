@@ -70,7 +70,11 @@ from src.core.memory_replay.transport import (
     request_model_for,
 )
 from src.core.memory_replay.validate import theme_output_errors
-from src.core.memory_replay.variants import ENTRY_SCOPE_WHOLE_ENTRY, ExperimentContract
+from src.core.memory_replay.variants import (
+    ENTRY_SCOPE_WHOLE_ENTRY,
+    ExperimentContract,
+    _feedback_refs_selected,
+)
 
 log = structlog.get_logger()
 
@@ -126,7 +130,7 @@ def standalone_v3_contract() -> ExperimentContract:
       parse_reviewer_output=parse_model_output,
       editor_errors=v3_errors,
       reviewer_errors=v3_errors,
-      feedback_refs=_selected_feedback_refs,
+      feedback_refs=_feedback_refs_selected,
       changes_vs_baseline=(),
       notes=(),
       experiment=False,
@@ -157,19 +161,6 @@ def compute_input_identity(manifest: Manifest, *, mode: str, model_identity: dic
       editor_prompt_version=contract.editor_prompt_version,
       reviewer_prompt_version=contract.reviewer_prompt_version,
       variant=contract.identity_payload() if contract.experiment else None)
-
-
-def _selected_feedback_refs(manifest: Manifest, selections: dict[str, list]) -> list[dict]:
-  by_event = {f.comment_event: f for f in manifest.feedback_examples}
-  events = sorted({s.example.comment_event for selected in selections.values() for s in selected})
-  return [
-      {
-          "comment_event":
-              event,
-          "approved_change_ref":
-              by_event[event].approved_change.approved_change_ref if by_event[event].approved_change else None,
-      } for event in events
-  ]
 
 
 @dataclass

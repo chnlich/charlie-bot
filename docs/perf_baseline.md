@@ -81,7 +81,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
 | M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.010 s | — (introduced with its first history row) |
 | M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.006 s | — (introduced with its first history row) |
-| M72 file-browser directory listing | M72 collector below | seconds per `GET /files/<dir>` request, worst on-disk listing corpus (the sessions root) | median < 0.008 s | — (introduced with its first history row) |
+| M72 file-browser directory listing | M72 collector below | seconds per `GET /files/<dir>` request, worst on-disk listing corpus (the sessions root); the changed-round rebuild (one corpus move since the stored page keyed — a metadata rename into a session dir; the harness drops the page memo per timed round, row memo warm, builder level) | repeat-view median < 0.008 s; changed-round median < 0.007 s | — (introduced with its first history row) |
 | M73 plan-verb validation event-loop lag | M73 collector below | seconds of loop lag + wall per amend validation (the registration gate: the DOM assertion set plus the headless-Chrome page-height render), scratch home, copied passing plan page (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.2 s (warm steady state; the first validation after a process start pays the one-time browser launch) | — (introduced with its first history row) |
 | M74 master turn-end raw-log rescan | M74 collector below | seconds of loop lag + wall per fallback-notice projection (whole read+parse+project of the turn's raw log), worst on-disk master-run raw log, fresh cc-claude translate (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.030 s | — (introduced with its first history row) |
 | M75 live-aggregator catch-up, first streamed event | M75 collector below | seconds of loop lag + wall per first-`persist_and_broadcast` catch-up (whole read+feed of the live corpus), worst on-disk live chat corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.020 s | — (introduced with its first history row) |
@@ -4285,9 +4285,14 @@ EOF
 
 M72 — file-browser directory listing. The file server renders a directory's
 listing per request (`GET /files/<dir>` and `HEAD`); the browser's navigation
-clicks pay the walk. The listing is a pure per-request render of the directory
-scan — no memo (per-entry sizes and mtimes move without the directory's own
-signature moving), so the standing metric is every request. The cost is a
+clicks pay the walk. The page memoizes on the walk's own entry snapshot
+(per-entry (is_dir, name, size, mtime), the resolved dir and URL prefix around
+it): equal walked state proves the stored page equals what this walk would
+build, so a repeat view pays the walk plus one lookup, and a corpus move since
+the stored page keyed — a metadata rename into a session dir moves exactly that
+dir's mtime — keys the miss to a rebuild. The rebuild renders each row through
+the row memo keyed on the same entry tuple plus the prefix; unchanged rows
+serve as strings and only the moved entries re-render. The cost is a
 navigation click, invisible to the standing HTTP probes (the chat log's
 file-server traffic is artifact pages, the M70 shape; directory listings are
 rare — 16 in the 78.85 h live log sampled 2026-09-07), so the collector drives
@@ -4327,6 +4332,43 @@ for _ in range(9):
 times.sort()
 print(f"{n} entries; listing request median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms, "
       f"body {len(body)} B, sha1 {hashlib.sha1(body).hexdigest()[:12]}")
+EOF
+```
+
+M72 changed-round — the rebuild behind a view whose corpus moved since the stored page keyed (the
+navigation shape between two browser opens with any session write between them; the standing
+collector's back-to-back requests never cross a move — 0 rebuilds across 27 timed requests at the
+2026-09-12 corpus). The harness drops the page memo per timed round instead of writing the live
+corpus — the key miss the move produces — and leaves the row memo warm, as the long-running
+server's is; the walk, sort, and join re-run per round and unchanged rows serve as strings:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import os, sys, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+from pathlib import Path
+import src.api.files as files_mod
+
+# Worst listing corpus: the sessions root (the M72 standing shape), read-only.
+corpus = Path.home() / ".charliebot" / "sessions"
+prefix = f"/files{corpus}"
+checkout = os.environ["CHECKOUT"].rsplit("/", 1)[-1]
+
+# Cold pass, as at a first browser open: rows memoized the way a first view
+# leaves them; not timed.
+files_mod._dir_listing_html(corpus, prefix, None)
+times = []
+for _ in range(9):
+    # The changed-round shape: a corpus move since the stored page keyed
+    # walks to a key miss; the harness drops the page memo instead of writing
+    # the live corpus, and the row memo stays warm as the running server's is.
+    files_mod._listing_memo.clear()
+    t0 = time.perf_counter()
+    files_mod._dir_listing_html(corpus, prefix, None)
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"checkout {checkout}: {sum(1 for _ in os.scandir(corpus))} entries; "
+      f"changed-round rebuild median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms over 9")
 EOF
 ```
 
@@ -5960,6 +6002,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-12 | this PR | M72 changed-round rebuild median 8.32/8.16/8.06 → 6.33/6.01/6.30 ms, −22 % to −26 %, maxima 8.33-8.77 → 6.64-7.24 ms (three interleaved rounds of the new changed-round collector — main checkout before vs branch worktree after back-to-back, 1159-entry sessions root, live state read-only, every paired round faster at load 1.34-1.69 one-minute; component attribution on the pre-fix rebuild, cProfile over 20 rounds: `_format_mtime` 2.0 ms re-formatting 1159 mostly-unchanged mtimes, the row f-strings + escape fast-path + sort-key lambda ~2.5 ms — the per-entry row memo re-renders only the moved entries and serves the rest as strings); the standing repeat-view reading unchanged within noise 7.09/6.89 → 6.87/7.18 ms with the served body byte-identical across arms, sha1 671ee67e152a — the hit path is untouched by design; M72 definition stale no-memo sentence corrected and the changed-round sub-metric + collector introduced with this PR; 5484-passed suite plus the rebuild-parity test | a rebuild after any corpus move re-rendered all ~1159 rows — sort keys, escape checks, size text, and a civil-from-days format per entry, 2.0 ms of it re-formatting mtimes that had not moved — while the moved corpus differs by the one entry a metadata rename touched; rows now memoize on the entry tuple plus the URL prefix the href embeds (the same walked-state ground the page memo's key stands on), so a rebuild re-renders only the moved entries and joins the rest, byte-identity pinned by the same pure-function-of-the-key contract the reference-walk test pins |
 | 2026-09-12 | this PR | M92 CLI invocation wall, `charliebot schedule-trigger --help` median 0.334/0.322/0.300/0.304/0.292 → 0.256/0.237/0.243/0.234/0.227 s, −22 % to −30 %, every paired round faster (five interleaved rounds of the verbatim collector — main checkout before vs branch worktree after, back-to-back at load 1.16-1.82 one-minute, checkout resolved cwd-first per arm); real common-family command corroboration, `plan list` (a GET against the live server): 0.78/0.75 → 0.68/0.71 s wall, both paired rounds faster — the request dominates the remaining wall; component attribution (`-X importtime`): the CLI's own top-level `import requests` cum 105 ms of the src.cli.common 278 ms chain (urllib3 63 ms, charset_normalizer 24 ms), reachable by no code path before the first real request — argparse exits at --help; 5481-passed suite plus `requests` in the import-weight contract's HEAVY_MODULES; the e2e restart-recovery suite caught the first draft (PEP 562 `__getattr__` serves external attribute access only, the module's own global lookups raised NameError) — the shipped form keeps the `__getattr__` for the tests' `src.cli.common.requests.*` patch targets and adds module-local imports at the three runtime use sites | every `charliebot` invocation — the master's and workers' several per turn — paid requests' import chain although only request-path functions touch it; the import now rides those functions (a sys.modules hit per call after the first), the module attribute resolves lazily so the patch-target contract is unchanged |
 | 2026-09-12 | this PR | M7 reading validity restored: live `/token-usage` 500ed on every load from 2026-09-11 21:43 to this round — 53 `jinja2.exceptions.UndefinedError: 'dict object' has no attribute 'charlie-bot'` tracebacks in the 41 h server log, 5 per hourly round (each round's own M7 collector timed the 500s; this round's sweep read median 0.014 s, max 0.327 s of that shape) → the same page serves 5/5 status=200, median 2.0 ms, max 2.7 ms through a TestClient on the branch with the old-process context shape (three-clause scale sentence, the charlie-bot clause absent; verbatim before curls against the live server read 5/5 status=500, 61-307 ms, load 0.89-1.02 one-minute); the live page heals at merge without a restart — the serving process's Jinja auto-reload reads the template from the checkout it runs from, and its python regains the fourth clause at the next restart; 5479-passed suite plus the skew-shape route test (red on main's template with the live UndefinedError) and the four-clause pin on the labels test; M7 collector asserts 200 now (curl status+time pair, awk fail-loud on any non-200), so a down page can never again read as healthy latency | 0794f81a added the charlie-bot source and a scale-sentence clause indexing `ctx.per_src["charlie-bot"]`; the live server process (started 2026-09-10 12:42) predates it while the template auto-reloads from disk, so the old python's three-source per_src met the new template's fourth lookup and every render raised — the page was hard-down for every visitor for the window; the sentence now renders one clause per source the serving tally's per_src carries, in the fixed display order, so a template-newer-than-python window degrades to a three-source page instead of a 500 |
 | 2026-09-12 | this PR | M96 switch-bootstrap body over the 25 active sessions: median 244912 → 97465 B, −60 %, p90 815424 → 229316 B, −72 %, max 1066055 → 371036 B, −65 %, total 9274862 → 3261927 B, −65 % (live-before GETs against the running server vs scratch-after GETs through a TestClient on the branch checkout, scratch CHARLIEBOT_HOME holding the same 25 sessions' metadata + data with master_runs excluded, live home read-only; 0 mismatches outside the trim contract — every message's non-tools fields byte-identical across arms, every trimmed tool a strict prefix with its marker set); live-log attribution joining each of 869 completed `diag_switch` client reports to its bootstrap server line (40 h server log): server share median 6 % (14 ms of 164 ms), client transfer+parse+mount 94 % — the body's tools arrays read 95 % of the pre-trim body (output 3.31 MB + input 3.42 MB across the 25 bootstraps' 2440 tools against 54 KB of content), while the renderer displays only a bounded preview (output's first 500 chars, input's summary line — 80 chars for Bash, 60 for other named tools, the full file path/pattern for the file tools) inside a block hidden behind the "N tool calls" toggle; switch elapsed median 164 ms, p90 386 ms (the after numbers for the elapsed ride the next deploy's live telemetry — the collector's client-side half cannot move the running server); 5478-passed suite plus 2 new payload contract tests (trim over cap with markers, ≤500 untouched by identity) and the 3-test node note suite; M96 definition and healthy ranges introduced with this PR | the bootstrap payload — the SPA switch's fetch and the index page's embedded SESSION_BOOTSTRAP alike — shipped every tail tool's whole input and output — a 40-message tail weighed 245 KB median / 1.07 MB max — although the renderer displays only a bounded preview inside a block hidden behind the "N tool calls" toggle, inside turns that mostly render folded; the payload now caps each tool's output and each input string field at 500 chars (the renderer's own output split, so a capped output renders plain with the existing truncation note and no dead reveal toggle; a long path/pattern summary the renderer would have shown in full trims behind the input_truncated note), marks output_truncated/input_truncated, and copies only messages that actually trim (the projection memo's dicts stay shared with the events pages and the M26 digest, re-read byte-identical after the payload build); full text stays on the persisted chat event where the raw download and the review scans already read it |

@@ -48,7 +48,7 @@ TASK_SPEC_REQUIRED_HEADINGS = (
 )
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
   # requests costs ~100 ms of the M92 CLI import floor (urllib3 + charset_normalizer)
   # and --help paths never send a request; it loads on first use. Resolving it as a
   # module attribute keeps the tests' "src.cli.common.requests.*" patch targets valid.

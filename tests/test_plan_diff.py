@@ -467,6 +467,51 @@ def test_header_ignores_class_names_that_merely_contain_wrap() -> None:
   assert annotated.index('<div class="cbd-header"') == annotated.index('<body>') + len('<body>')
 
 
+def test_header_offset_matches_a_full_reparse_of_the_spliced_page() -> None:
+  # The arithmetic header anchor (_offset_after_insertions over the pre-splice
+  # parse) must read the same position the replaced full re-parse of the
+  # spliced page read, on every splice shape the render passes produce.
+  from src.core import plan_diff
+  from src.core.plan_diff import (
+      _document_root, _first_class_descendant, _first_descendant, _offset_after_insertions, _parse, _parse_anchors)
+
+  original = plan_diff._append_style_and_header
+  captures: list[tuple[str, dict[int, list[str]], object]] = []
+
+  def capture(source: str, insertions: dict[int, list[str]], root: object) -> str:
+    captures.append((source, insertions, root))
+    return original(source, insertions, root)
+
+  plan_diff._append_style_and_header = capture
+  try:
+    fixture_base = (_ROOT / "tests/data/plan_move2-direct-kill_v10.html").read_text(encoding="utf-8")
+    fixture_new = (_ROOT / "tests/data/plan_move2-direct-kill_v11.html").read_text(encoding="utf-8")
+    pairs = [(fixture_base, fixture_new)]
+    rng = random.Random(20260912)
+    for _ in range(300):
+      doc = _fuzz_document(rng)
+      changed = doc.replace("alpha beta", "alpha gamma").replace("hello world", "hello there")
+      pairs.append((doc, changed))
+    for base, new in pairs:
+      annotate(base, new)
+  finally:
+    plan_diff._append_style_and_header = original
+
+  assert len(captures) == len(pairs)
+  for spliced, insertions, pre_root in captures:
+    _, body = _parse_anchors(spliced)
+    if body is None or body.start_end is None:
+      continue
+    relocated = _document_root(_parse(spliced))
+    pre_target = _first_class_descendant(pre_root, "wrap") or _first_descendant(pre_root, "main")
+    expected_target = _first_class_descendant(relocated, "wrap") or _first_descendant(relocated, "main")
+    assert (pre_target is None) == (expected_target is None)
+    computed = (_offset_after_insertions(pre_target.start_end, insertions)
+                if pre_target is not None else body.start_end)
+    expected = expected_target.start_end if expected_target is not None else body.start_end
+    assert computed == expected, f"header offset drift: {computed} != {expected}"
+
+
 def _anchors_from_full_parse(source: str) -> tuple[tuple | None, tuple | None]:
   from src.core.plan_diff import _first_descendant, _Node, _parse
 

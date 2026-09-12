@@ -347,5 +347,5 @@ def test_search_row_memo_respects_its_cap() -> None:
     sessions_api._search_row_static_segments(meta)
   assert len(sessions_api._search_row_fragments) == sessions_api._SEARCH_ROW_FRAGMENT_CAP
   # The evicted oldest entry is gone; a recent one survives with its pinned object.
-  assert sessions_api._search_row_fragments[id(metas[599])][0] is metas[599]
+  assert sessions_api._search_row_fragments.get(id(metas[599]))[0] is metas[599]
   sessions_api._search_row_fragments.clear()

@@ -1,7 +1,6 @@
 """Session management API routes."""
 
 import asyncio
-from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -40,6 +39,7 @@ from src.core.config import (
     get_scheduled_tasks,
 )
 from src.core.event_types import BACKEND_SWITCHED
+from src.core.memo import BoundedMemo
 from src.core.models import (
     BackendOption,
     BackendType,
@@ -466,7 +466,8 @@ _SEARCH_DERIVED_KEYS = frozenset(
         sidebar_state.PENDING_TRIGGER_COUNT,
         sidebar_state.NEXT_TRIGGER_AT,
     })
-_search_row_fragments: OrderedDict[int, tuple[SessionMetadata, tuple[bytes | str, ...]]] = OrderedDict()
+_search_row_fragments: BoundedMemo[int, tuple[SessionMetadata, tuple[bytes | str,
+                                                                     ...]]] = BoundedMemo(_SEARCH_ROW_FRAGMENT_CAP)
 
 
 def _search_row_static_segments(meta: SessionMetadata) -> tuple[bytes | str, ...]:
@@ -487,7 +488,6 @@ def _search_row_static_segments(meta: SessionMetadata) -> tuple[bytes | str, ...
   """
   cached = _search_row_fragments.get(id(meta))
   if cached is not None and cached[0] is meta:
-    _search_row_fragments.move_to_end(id(meta))
     return cached[1]
   row = meta.model_dump(mode="json")
   segments: list[bytes | str] = []
@@ -502,9 +502,7 @@ def _search_row_static_segments(meta: SessionMetadata) -> tuple[bytes | str, ...
       static[key] = value
   if static:
     segments.append(fast_json_bytes(static)[1:-1])
-  _search_row_fragments[id(meta)] = (meta, tuple(segments))
-  while len(_search_row_fragments) > _SEARCH_ROW_FRAGMENT_CAP:
-    _search_row_fragments.popitem(last=False)
+  _search_row_fragments.store(id(meta), (meta, tuple(segments)))
   return tuple(segments)
 
 

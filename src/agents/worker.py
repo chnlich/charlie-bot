@@ -56,16 +56,20 @@ def _clamp_ts(clamp_to: datetime | None) -> str:
   return now.isoformat()
 
 
-def _event_line(event: dict) -> str:
-  """Serialize one persisted worker event to its log line."""
+def _event_line(event: dict) -> bytes:
+  """Serialize one persisted worker event to its log line, as wire bytes."""
   # orjson because the per-event serialization rides the streamed-turn head
   # (the collector's worst-single-event reading); every reader JSON-parses the
   # log per line, so the compact UTF-8 byte form is inert. Every persisted
   # event is a machine-built dict of JSON-parsed values — str keys only.
-  return orjson.dumps(event).decode("utf-8") + "\n"
+  # The line stays bytes end to end: a decode-to-str hop costs a full
+  # decode + str concat + re-encode of the payload per event (64 ms of the
+  # 76 ms head on a 9.5 MB tool_result), and orjson's output is already the
+  # UTF-8 bytes the log carries.
+  return orjson.dumps(event) + b"\n"
 
 
-async def _append_event_line(fd: int, line: str) -> None:
+async def _append_event_line(fd: int, line: bytes) -> None:
   # On-loop write: the events log is page-cached and append-only, so os.write
   # costs single-digit microseconds on a typical event and its worst case is
   # the write itself (~90 us per 100 KB). The executor hop bought no
@@ -73,7 +77,7 @@ async def _append_event_line(fd: int, line: str) -> None:
   # stream, not the fdatasync-durable chat funnel (append_ndjson) — and cost a
   # scheduler round-trip per event whose wakeup under load can spike to
   # milliseconds, the streamed-turn head this append rides.
-  _write_all(fd, line.encode("utf-8"))
+  _write_all(fd, line)
 
 
 class Worker:

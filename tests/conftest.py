@@ -26,8 +26,9 @@ if str(ROOT) not in sys.path:
 
 # Imports must follow the sys.path bootstrap above.
 import src.core.config as core_config  # noqa: E402,I001
-from src.agents import master_cc_queue, master_cc_run, master_cc_state  # noqa: E402
+from src.agents import master_cc_queue, master_cc_run, master_cc_state, worker as worker_module  # noqa: E402
 from src.agents.backends import base as backend_base  # noqa: E402
+from src.agents.worker import Worker  # noqa: E402
 from src.api.cron import router as cron_router  # noqa: E402
 from src.api.deps import get_session_manager  # noqa: E402
 from src.api.internal import router as internal_router  # noqa: E402
@@ -1940,6 +1941,33 @@ def install_scripted_backends(
 
   monkeypatch.setattr(patch_target, fake_build_backend)
   return builds
+
+
+def make_worker(tmp_path: Path, thread_id: str) -> Worker:
+  """A Worker whose events log and config home both live under tmp_path."""
+  return Worker(
+      models.ThreadMetadata.model_construct(id=thread_id),
+      tmp_path,
+      tmp_path / "events.jsonl",
+      "",
+      CharlieBotConfig(charliebot_home=tmp_path / "home"),
+  )
+
+
+async def process_worker_event(worker: Worker, tmp_path: Path, event: dict, monkeypatch: pytest.MonkeyPatch) -> str:
+  """Append one event through Worker._process_event with the broadcast seam stubbed.
+
+  The events log is driven through a real O_APPEND fd and closed even when the
+  event raises (the quota scan path); returns the log text so callers assert on
+  the persisted lines without re-reading the file.
+  """
+  monkeypatch.setattr(worker_module.streaming_manager, "broadcast", AsyncMock())
+  fd = os.open(tmp_path / "events.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+  try:
+    await worker._process_event(event, fd)
+  finally:
+    os.close(fd)
+  return (tmp_path / "events.jsonl").read_text(encoding="utf-8")
 
 
 class TerminateFlagBackend:

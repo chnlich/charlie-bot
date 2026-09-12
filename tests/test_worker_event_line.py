@@ -6,16 +6,12 @@ escapes, and every reader JSON-parses the log per line.
 """
 
 import json
-import os
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
+from conftest import make_worker, process_worker_event
 
-import src.agents.worker as worker_mod
-from src.agents.worker import Worker, _event_line
-from src.core.config import CharlieBotConfig
-from src.core.models import ThreadMetadata
+from src.agents.worker import _event_line
 
 
 def test_event_line_round_trips_the_event() -> None:
@@ -35,26 +31,9 @@ def test_event_line_round_trips_the_event() -> None:
   assert json.loads(_event_line(event)) == event
 
 
-async def _process(worker: Worker, tmp_path: Path, event: dict, monkeypatch) -> str:
-  monkeypatch.setattr(worker_mod.streaming_manager, "broadcast", AsyncMock())
-  fd = os.open(tmp_path / "events.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
-  try:
-    await worker._process_event(event, fd)
-  finally:
-    os.close(fd)
-  return (tmp_path / "events.jsonl").read_text(encoding="utf-8")
-
-
 @pytest.mark.asyncio
 async def test_process_event_persists_a_line_that_parses_back(tmp_path: Path, monkeypatch) -> None:
-  worker = Worker(
-      ThreadMetadata.model_construct(id="event-line"),
-      tmp_path,
-      tmp_path / "events.jsonl",
-      "",
-      CharlieBotConfig(charliebot_home=tmp_path / "home"),
-  )
+  worker = make_worker(tmp_path, "event-line")
   event = {"type": "user", "message": {"content": [{"type": "text", "text": "café ✓"}]}}
-  text = await _process(worker, tmp_path, event, monkeypatch)
-  lines = text.splitlines()
+  lines = (await process_worker_event(worker, tmp_path, event, monkeypatch)).splitlines()
   assert len(lines) == 1 and json.loads(lines[0]) == event

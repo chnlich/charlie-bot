@@ -23,7 +23,6 @@ from fastapi.testclient import TestClient
 
 from src.api.files import _DIR_LISTING_TEMPLATE, _dir_listing_html, _format_mtime, _listing_memo, _row_memo
 from src.api.files import router as files_router
-from src.api.files import router as files_router
 
 
 def _client() -> TestClient:

@@ -15,7 +15,6 @@ import structlog
 from src.agents.backends.base import (
     USER_LOCAL_BIN,
     AgentBackend,
-    apply_proxy_env,
     make_compact_boundary_event,
     make_context_reading_event,
     make_error_event,
@@ -67,7 +66,6 @@ class CharlieCodeBackend(AgentBackend):
       image_input: bool = False,
       stream: bool = True,
       timeout_seconds: int | None = None,
-      proxy_url: str | None = None,
       api_key: str | None = None,
       **kwargs,
   ) -> None:
@@ -80,7 +78,6 @@ class CharlieCodeBackend(AgentBackend):
     self._image_input = image_input
     self._stream = stream
     self._timeout_seconds = timeout_seconds
-    self._proxy_url = proxy_url
     self._api_key = api_key
     self._bin = resolve_binary("charlie-code", USER_LOCAL_BIN)
     self._transport_dir: Path | None = None
@@ -127,8 +124,6 @@ class CharlieCodeBackend(AgentBackend):
     prepend_path_dir(charlie_code_env, USER_LOCAL_BIN)
     if self._api_key is not None:
       charlie_code_env["CHARLIE_CODE_API_KEY"] = self._api_key
-    if self._proxy_url is not None:
-      apply_proxy_env(charlie_code_env, self._proxy_url)
     return charlie_code_env
 
   def _prepare_cwd(self, cwd: str) -> None:

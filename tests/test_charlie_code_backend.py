@@ -469,72 +469,6 @@ def test_prepare_env_without_api_key_leaves_env_untouched(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Per-entry proxy_url injection (same env contract as the opencode backend)
-# ---------------------------------------------------------------------------
-
-
-def test_prepare_env_injects_proxy_and_merges_local_no_proxy_without_mutating_input(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, proxy_url="http://proxy.test:8080")
-  input_env = {
-      "PATH": "/usr/bin",
-      "NO_PROXY": "internal.test,localhost,127.0.0.1",
-  }
-  original_env = dict(input_env)
-
-  prepared = backend._prepare_env(input_env)
-
-  assert prepared["HTTP_PROXY"] == "http://proxy.test:8080"
-  assert prepared["HTTPS_PROXY"] == "http://proxy.test:8080"
-  assert prepared["NO_PROXY"] == "internal.test,localhost,127.0.0.1,::1"
-  assert input_env == original_env
-
-  repeated = backend._prepare_env(prepared)
-  assert repeated["NO_PROXY"] == prepared["NO_PROXY"]
-
-
-def test_prepare_env_without_proxy_preserves_proxy_related_environment(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch)
-  input_env = {
-      "PATH": "/usr/bin",
-      "HTTP_PROXY": "http://existing-http.test:8080",
-      "HTTPS_PROXY": "http://existing-https.test:8080",
-      "NO_PROXY": "internal.test,localhost",
-  }
-  original_env = dict(input_env)
-
-  prepared = backend._prepare_env(input_env)
-
-  assert {
-      key: prepared[key] for key in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
-  } == {
-      "HTTP_PROXY": "http://existing-http.test:8080",
-      "HTTPS_PROXY": "http://existing-https.test:8080",
-      "NO_PROXY": "internal.test,localhost",
-  }
-  assert input_env == original_env
-
-
-def test_proxy_state_is_isolated_between_backend_instances(monkeypatch) -> None:
-  proxied = _build_backend(monkeypatch, proxy_url="http://proxy.test:8080")
-  unproxied = _build_backend(monkeypatch)
-
-  proxied_env = proxied._prepare_env({"PATH": "/usr/bin"})
-  unproxied_env = unproxied._prepare_env({"PATH": "/usr/bin"})
-
-  assert proxied_env["HTTP_PROXY"] == "http://proxy.test:8080"
-  assert proxied_env["HTTPS_PROXY"] == "http://proxy.test:8080"
-  assert proxied_env["NO_PROXY"] == "localhost,127.0.0.1,::1"
-  assert "HTTP_PROXY" not in unproxied_env
-  assert "HTTPS_PROXY" not in unproxied_env
-  assert "NO_PROXY" not in unproxied_env
-
-
-def test_backend_option_proxy_url_defaults_to_none() -> None:
-  option = backend_option(id="cc-k3-test", label="t", type="charlie-code", model="test-model")
-  assert option.proxy_url is None
-
-
-# ---------------------------------------------------------------------------
 # registry wiring
 # ---------------------------------------------------------------------------
 
@@ -545,7 +479,6 @@ def test_backend_option_proxy_url_defaults_to_none() -> None:
         ("image_input", True, "_image_input"),
         ("stream", False, "_stream"),
         ("timeout_seconds", 600, "_timeout_seconds"),
-        ("proxy_url", "http://proxy.test:8080", "_proxy_url"),
     ])
 def test_registry_propagates_option_fields_into_charlie_code_backend(
     monkeypatch, field: str, value: object, attr: str) -> None:

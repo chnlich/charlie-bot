@@ -249,7 +249,6 @@ class CharlieCodeBackend(BackendBase):
   context_window: int | None = Field(
       default=None, gt=0)  # compaction context window in tokens (None = charlie-code default)
   credential: str | None = None
-  proxy_url: str | None = None  # per-entry HTTP/HTTPS proxy URL injected into the child env
   image_input: bool = False  # endpoint accepts image attachments (sent as --image); false refuses them
   stream: bool = True  # endpoint is called in streaming mode (default); false emits --no-stream
   timeout_seconds: int | None = Field(

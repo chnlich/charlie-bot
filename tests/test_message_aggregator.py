@@ -875,7 +875,7 @@ def test_flat_tool_result_output_is_capped_with_marker() -> None:
   list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": giant}))
 
   draft = agg.pending_draft_message()
-  assert draft["tools"][0]["output"] == "x" * TOOL_OUTPUT_RENDER_CAP
+  assert draft["tools"][0]["output"] == "x" * TOOL_PREVIEW_CHARS
   assert draft["tools"][0]["output_truncated"] is True
 
 
@@ -897,7 +897,7 @@ def test_cc_tool_result_output_is_capped_with_marker() -> None:
           }))
 
   draft = agg.pending_draft_message()
-  assert draft["tools"][0]["output"] == "y" * TOOL_OUTPUT_RENDER_CAP
+  assert draft["tools"][0]["output"] == "y" * TOOL_PREVIEW_CHARS
   assert draft["tools"][0]["output_truncated"] is True
 
 
@@ -947,29 +947,29 @@ def test_stream_delta_tool_rows_carry_the_preview_shape() -> None:
   assert tool["input"]["file_path"] == "/tmp/a"
 
 
-def test_stream_delta_leaves_the_committed_shape_at_the_render_cap() -> None:
+def test_committed_message_tool_rows_carry_the_preview_shape() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"command": "x" * 5000}}))
   list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "y" * (TOOL_OUTPUT_RENDER_CAP + 1)}))
 
   commit = next(d for d in agg.flush_pending() if d["type"] == "message")
   tool = commit["message"]["tools"][0]
-  assert tool["output"] == "y" * TOOL_OUTPUT_RENDER_CAP
+  assert tool["output"] == "y" * TOOL_PREVIEW_CHARS
   assert tool["output_truncated"] is True
-  assert "input_truncated" not in tool
-  assert tool["input"] == {"command": "x" * 5000}
+  assert tool["input"]["command"] == "x" * TOOL_PREVIEW_CHARS
+  assert tool["input_truncated"] is True
 
 
-def test_stream_delta_shares_no_trimmed_state_with_the_buffer() -> None:
+def test_tool_row_trims_once_at_ingestion() -> None:
   agg = MessageAggregator()
   list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"command": "z" * 5000}}))
   list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "w" * 5000}))
   first = next(d for d in agg.feed({"type": ET.THINKING, "content": "t"}) if d["type"] == "stream")
   second = next(d for d in agg.feed({"type": ET.THINKING, "content": "t2"}) if d["type"] == "stream")
 
-  # Each stream snapshot trims its own copies: the buffer the commit reads and
-  # the earlier snapshots' bytes stay untouched.
+  # The trim lands once at ingestion: the buffer, every stream snapshot, and
+  # the commit carry the same preview shape, so no wire shape re-trims.
   assert first["message"]["tools"][0]["output"] == "w" * TOOL_PREVIEW_CHARS
   assert second["message"]["tools"][0]["output"] == "w" * TOOL_PREVIEW_CHARS
   commit = next(d for d in agg.flush_pending() if d["type"] == "message")
-  assert commit["message"]["tools"][0]["output"] == "w" * 5000
+  assert commit["message"]["tools"][0]["output"] == "w" * TOOL_PREVIEW_CHARS

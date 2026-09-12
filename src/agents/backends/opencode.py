@@ -17,6 +17,7 @@ from src.agents.backends.base import (
     SKIP_PERMISSIONS_FLAG,
     AgentBackend,
     _write_chunk,
+    apply_proxy_env,
     iter_ndjson_events,
     make_compact_boundary_event,
     make_error_event,
@@ -71,7 +72,6 @@ _IGNORED_SSE_EVENT_TYPES = {
 # applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via
 # `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`).
 OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
-_LOCAL_NO_PROXY_ENTRIES = ("localhost", "127.0.0.1", "::1")
 
 # opencode's SQLite store locking (e.g. the boot-time `insert into "project"`
 # collision observed in production) surfaces as an HTTP 500 or session.error
@@ -155,33 +155,13 @@ class OpenCodeBackend(AgentBackend):
     cmd.extend(self._extra_flags)
     return cmd
 
-  @staticmethod
-  def _merge_local_no_proxy(value: str) -> str:
-    entries: list[str] = []
-    seen_local_entries: set[str] = set()
-    for raw_entry in value.split(","):
-      entry = raw_entry.strip()
-      if not entry:
-        continue
-      if entry in _LOCAL_NO_PROXY_ENTRIES:
-        if entry in seen_local_entries:
-          continue
-        seen_local_entries.add(entry)
-        entries.append(entry)
-        continue
-      entries.append(raw_entry)
-    entries.extend(entry for entry in _LOCAL_NO_PROXY_ENTRIES if entry not in seen_local_entries)
-    return ",".join(entries)
-
   def _prepare_env(self, env: dict, *, opencode_config: dict | None = None) -> dict:
     oc_env = {**env}
     prepend_path_dir(oc_env, str(Path.home() / ".opencode" / "bin"))
     oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps(
         self._headless_config() if opencode_config is None else opencode_config)
     if self._proxy_url is not None:
-      oc_env["HTTP_PROXY"] = self._proxy_url
-      oc_env["HTTPS_PROXY"] = self._proxy_url
-      oc_env["NO_PROXY"] = self._merge_local_no_proxy(oc_env.get("NO_PROXY", ""))
+      apply_proxy_env(oc_env, self._proxy_url)
     return oc_env
 
   def _headless_config(self) -> dict:

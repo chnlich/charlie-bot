@@ -126,6 +126,46 @@ def prepend_path_dir(env: dict[str, str], dir_path: str) -> None:
     env["PATH"] = f"{dir_path}:{current_path}"
 
 
+# Local addresses that must bypass an injected proxy: localhost traffic
+# (health probes, local API calls) never rides the outbound proxy.
+LOCAL_NO_PROXY_ENTRIES = ("localhost", "127.0.0.1", "::1")
+
+
+def merge_local_no_proxy(value: str) -> str:
+  """Merge LOCAL_NO_PROXY_ENTRIES into a NO_PROXY value, deduplicated, order-stable.
+
+  Caller-supplied entries keep their positions (and may repeat); each local
+  entry appears exactly once, appended in canonical order when absent.
+  """
+  entries: list[str] = []
+  seen_local_entries: set[str] = set()
+  for raw_entry in value.split(","):
+    entry = raw_entry.strip()
+    if not entry:
+      continue
+    if entry in LOCAL_NO_PROXY_ENTRIES:
+      if entry in seen_local_entries:
+        continue
+      seen_local_entries.add(entry)
+      entries.append(entry)
+      continue
+    entries.append(raw_entry)
+  entries.extend(entry for entry in LOCAL_NO_PROXY_ENTRIES if entry not in seen_local_entries)
+  return ",".join(entries)
+
+
+def apply_proxy_env(env: dict[str, str], proxy_url: str) -> None:
+  """Point a child env's outbound traffic at proxy_url, in place.
+
+  HTTP_PROXY and HTTPS_PROXY both carry the URL, and NO_PROXY gains the local
+  exemptions so localhost traffic never rides the proxy. Shared by every
+  backend option that carries a per-entry proxy_url.
+  """
+  env["HTTP_PROXY"] = proxy_url
+  env["HTTPS_PROXY"] = proxy_url
+  env["NO_PROXY"] = merge_local_no_proxy(env.get("NO_PROXY", ""))
+
+
 def strip_google_api_keys(env: dict[str, str]) -> dict[str, str]:
   """Return a copy of *env* with the Google API-key vars removed.
 

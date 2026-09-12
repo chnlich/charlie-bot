@@ -77,6 +77,8 @@ def build_backend(
         api_base=option.api_base,
         context_window=option.context_window,
         image_input=option.image_input,
+        stream=option.stream,
+        timeout_seconds=option.timeout_seconds,
         api_key=str(get_credentials().require(option.credential, "api_key")) if option.credential else None,
         **kwargs)
   if option.type == BackendType.GEMINI:

@@ -76,3 +76,27 @@ def test_charlie_code_image_input_accepted_and_defaults_false() -> None:
   accepted = BACKEND_OPTION_ADAPTER.validate_python({**payload, "image_input": True})
   assert accepted.image_input is True
   assert type(accepted) is CharlieCodeBackend
+
+
+def test_charlie_code_stream_defaults_true_and_accepts_false() -> None:
+  """stream is a charlie-code-only option: accepted on its entries, defaulting to true."""
+  payload = minimal_payload(CharlieCodeBackend)
+  assert BACKEND_OPTION_ADAPTER.validate_python(payload).stream is True
+  opted_out = BACKEND_OPTION_ADAPTER.validate_python({**payload, "stream": False})
+  assert opted_out.stream is False
+  assert type(opted_out) is CharlieCodeBackend
+
+
+def test_charlie_code_timeout_seconds_defaults_none_and_accepts_positive() -> None:
+  """timeout_seconds follows context_window's shape: None by default, positive ints accepted."""
+  payload = minimal_payload(CharlieCodeBackend)
+  assert BACKEND_OPTION_ADAPTER.validate_python(payload).timeout_seconds is None
+  accepted = BACKEND_OPTION_ADAPTER.validate_python({**payload, "timeout_seconds": 600})
+  assert accepted.timeout_seconds == 600
+  assert type(accepted) is CharlieCodeBackend
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_charlie_code_timeout_seconds_rejects_nonpositive(bad: int) -> None:
+  with pytest.raises(ValidationError):
+    BACKEND_OPTION_ADAPTER.validate_python({**minimal_payload(CharlieCodeBackend), "timeout_seconds": bad})

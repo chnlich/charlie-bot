@@ -176,7 +176,8 @@ writes the bundle:
 ```
 <output-dir>/runs/<input-identity prefix>/
   proposal.json        # exactly the plan 4.1 schema
-  report.html          # final diff and dispositions first, evidence folded
+  report.html          # final diff and dispositions first, evidence folded; names the run's
+                       # actual rationale visibility and feedback view (see below)
   sources/<ref>.md     # frozen evidence snapshots (sha256 in proposal.json)
   frozen/manifest.yaml # the fully inlined frozen inputs (self-contained)
   run.json             # identity, model identity, selection, status, prompt versions,
@@ -213,6 +214,21 @@ references, the input identity, the model identity, and whatever usage the
 endpoint reported (output tokens and latency; cost only when actually known,
 null when unknown). They are local artifacts for the later evaluation — keep
 the output directory out of git.
+
+The report's evidence sections describe what the run's stages actually
+received, with the facts carried from the run's owning contract: an
+editor-review run under a visible-rationale contract says the reviewer request
+carried the editor's disposition rows and proof lines, a hidden-rationale
+contract says they were withheld, and an editor-only run says no second review
+ran. Its feedback section renders the view the stages actually read — the
+whole raw comment pool verbatim (no approved revisions) under the raw-history
+view, or the relevance selection with approved before/after texts under the
+selected structured view. Bundled-but-unexposed material is labeled as never
+provided rather than presented as model-visible evidence: approved revisions
+under the raw-history view, and pool comments the selection did not pick under
+the selected view (the raw-history relevance-selection record is folded in as
+computed audit data, marked as not part of what the stages saw). A reused run
+keeps the report it originally wrote.
 
 ## Reuse and exit codes
 

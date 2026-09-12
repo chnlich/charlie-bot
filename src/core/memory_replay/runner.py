@@ -72,6 +72,8 @@ from src.core.memory_replay.transport import (
 from src.core.memory_replay.validate import theme_output_errors
 from src.core.memory_replay.variants import (
     ENTRY_SCOPE_WHOLE_ENTRY,
+    RATIONALE_HIDDEN,
+    SELECTED_STRUCTURED_VIEW,
     ExperimentContract,
     _feedback_refs_selected,
 )
@@ -118,8 +120,8 @@ def standalone_v3_contract() -> ExperimentContract:
       editor_stage="v3-editor",
       reviewer_stage="v3-reviewer",
       entry_scope=ENTRY_SCOPE_WHOLE_ENTRY,
-      feedback_view="selected-structured",
-      rationale_visibility="hidden",
+      feedback_view=SELECTED_STRUCTURED_VIEW,
+      rationale_visibility=RATIONALE_HIDDEN,
       editor_prompt_version=EDITOR_PROMPT_VERSION,
       reviewer_prompt_version=REVIEWER_PROMPT_VERSION,
       editor_system=EDITOR_SYSTEM,
@@ -629,6 +631,9 @@ def _write_bundle(
           selections=selections,
           editor_dispositions=record["editor_dispositions"],
           calls=record["calls"],
+          feedback_view=contract.feedback_view,
+          rationale_visibility=contract.rationale_visibility,
+          feedback_examples=manifest.feedback_examples,
           unused_sources=record["unused_sources"],
       ))
   (run_dir / "report.html").write_text(report, encoding="utf-8")

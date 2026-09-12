@@ -708,7 +708,130 @@ def test_every_editor_variant_requires_the_three_proofs(tmp_path: Path, variant:
   assert len(editor_calls) == 2, "the proof requirement is enforced again on the repair attempt"
 
 
-# --- the trim-only capability ----------------------------------------------------
+# --- the run report describes what the stages actually received -----------------
+
+
+def test_report_rationale_claim_matches_what_the_reviewer_request_carried(tmp_path: Path) -> None:
+  """Visible rationale reports the handoff as reviewed; hidden rationale reports it as withheld.
+
+  Each claim is checked against that variant's actual reviewer request, so the report cannot
+  describe a handoff the request never carried — the reproduced defect had the visible baseline
+  and the hidden variant render the same false "withheld" caption.
+  """
+  reports: dict[str, str] = {}
+  reviewer_payloads: dict[str, dict] = {}
+  for name in ("baseline-original-flow", "rationale-hidden-review"):
+    transport = VariantScriptedTransport(**COMPLETE_RESPONSES)
+    outcome, _ = run_variant(
+        tmp_path,
+        name,
+        transport=transport,
+        manifest_path=write_manifest(tmp_path, name=f"{name}.yaml"),
+        output_dir=tmp_path / f"out-{name}")
+    reports[name] = (outcome.run_dir / "report.html").read_text(encoding="utf-8")
+    reviewer_payloads[name] = payload_of(transport.calls[1]["user"])
+
+  # Request evidence: the baseline reviewer request carried the handoff — disposition rows with
+  # the three proofs — while the hidden variant's carried the proposed entries only.
+  assert "dispositions" in reviewer_payloads["baseline-original-flow"]["editor_proposals"]
+  assert PROOFS["action"] in json.dumps(reviewer_payloads["baseline-original-flow"]["editor_proposals"])
+  assert set(reviewer_payloads["rationale-hidden-review"]["editor_proposals"]) == {"entries"}
+  assert PROOFS["action"] not in json.dumps(reviewer_payloads["rationale-hidden-review"])
+  # Each report describes its own request; the shared false caption is gone.
+  assert "the reviewer request carried this handoff" in reports["baseline-original-flow"]
+  assert "withheld from the reviewer" not in reports["baseline-original-flow"]
+  assert "withheld from the reviewer" in reports["rationale-hidden-review"]
+  assert "the reviewer request carried this handoff" not in reports["rationale-hidden-review"]
+
+
+def test_raw_history_report_renders_the_pool_it_provided_not_the_selected_view(tmp_path: Path) -> None:
+  """A raw-history run's report describes the whole comment pool the requests carried — unselected
+  comment included — and never presents the bundled approved revisions as something the stages saw."""
+  transport = VariantScriptedTransport(**COMPLETE_RESPONSES)
+  outcome, _ = run_variant(tmp_path, "baseline-original-flow", transport=transport)
+  report = (outcome.run_dir / "report.html").read_text(encoding="utf-8")
+  pool = payload_of(transport.calls[0]["user"])["feedback_history"]
+
+  # The raw view exposed the whole pool: the report renders exactly the comments the request
+  # carried, with their provenance ids, the unselected one included.
+  assert {row["comment_event"] for row in pool} == {"fb-001", "fb-002", "fb-003", "fb-004"}
+  assert "Feedback history (raw) (4 pool comments)" in report
+  for row in pool:
+    assert f"<p><code>{row['comment_event']}</code></p>" in report
+    assert f"comment:\n{row['comment_text']}" in report
+  assert "UNSELECTED-COMMENT-MARKER" in report, "the unselected pool comment was provided too"
+  # The approved revisions were bundled but never exposed: the report says so and never renders
+  # them as selected structured feedback with approved before/after texts.
+  assert "the stages saw none of them" in report
+  assert "approved change (ref" not in report
+  assert "approved-001" not in report and "approved-003" not in report
+  # The relevance-selection record stays available as folded audit data, labeled as not
+  # model-visible.
+  assert "not part of the raw view the stages saw" in report
+  assert "score" in report
+
+
+def test_selected_view_report_renders_exactly_the_provided_selection(tmp_path: Path) -> None:
+  """The selected structured view's report renders the selection with its approved texts and marks
+  pool comments the selection did not pick as never provided."""
+  transport = VariantScriptedTransport(**COMPLETE_RESPONSES)
+  outcome, _ = run_variant(tmp_path, "approved-edit-feedback", transport=transport)
+  report = (outcome.run_dir / "report.html").read_text(encoding="utf-8")
+  provided = {row["comment_event"]: row for row in payload_of(transport.calls[0]["user"])["feedback"]}
+  assert set(provided) == {"fb-001", "fb-003", "fb-004"}, "the relevance selection, not the pool"
+
+  assert "Selected feedback (3)" in report
+  for event, row in provided.items():
+    assert f"comment:\n{row['comment_text']}" in report
+    change = row["approved_change"]
+    if change is not None:
+      assert f"approved change (ref {change['approved_change_ref']})" in report
+      assert f"--- before ---\n{change['before']}" in report
+      assert f"--- after ---\n{change['after']}" in report
+  # fb-003's approved deletion keeps its empty after side verbatim: nothing is invented for it.
+  assert "--- after ---\n</pre>" in report
+  # The unselected pool comment was never provided: its text stays out and its id is named as such.
+  assert "UNSELECTED-COMMENT-MARKER" not in report
+  assert "never provided to any stage: fb-002" in report
+
+
+def test_report_escapes_pool_comment_and_proof_text(tmp_path: Path) -> None:
+  """Pool comments and proof lines are arbitrary user/model text: the report escapes them.
+
+  The requests carry the raw strings; the report must never let them become markup.
+  """
+  hostile_comment = "Hostile pool comment <script>alert('c')</script> fb-comment-marker"
+  manifest = feedback_rich_manifest_dict()
+  manifest["feedback_examples"][0]["comment_text"] = hostile_comment
+  hostile_proofs = {
+      "action": "proof action <script>alert('a')</script>",
+      "home": "proof home <script>alert('h')</script>",
+      "brevity": "proof brevity <script>alert('b')</script>",
+  }
+  editor = selector_json(
+      [
+          {
+              "action": "rewrite",
+              "path": "entries/render/cache-eviction.md",
+              "text": EDITOR_TEXT,
+              "source_refs": ["capture-eviction", "entry-cache-eviction"],
+              "reason": "merged the capture",
+          }
+      ], [selector_row(proofs=hostile_proofs)])
+  transport = VariantScriptedTransport(editor_response=editor, reviewer_response=TRIM_ACCEPT_RESPONSE)
+  outcome, _ = run_variant(
+      tmp_path, "baseline-original-flow", transport=transport, manifest_path=write_manifest(tmp_path, manifest))
+  report = (outcome.run_dir / "report.html").read_text(encoding="utf-8")
+
+  # The raw requests carried the raw strings: the pool comment reached the editor, the proofs the
+  # visible-rationale reviewer.
+  assert hostile_comment in transport.calls[0]["user"]
+  assert "proof action <script>alert('a')</script>" in transport.calls[1]["user"]
+  # The report escapes both.
+  assert "<script>alert" not in report
+  assert hostile_comment.replace("<", "&lt;").replace(">", "&gt;").replace("'", "&#x27;") in report
+  for proof in hostile_proofs.values():
+    assert proof.replace("<", "&lt;").replace(">", "&gt;").replace("'", "&#x27;") in report
 
 
 def test_trim_only_reviewer_accepts_a_line_removed_form(tmp_path: Path) -> None:

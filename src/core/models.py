@@ -260,6 +260,10 @@ class CharlieCodeBackend(BackendBase):
       default=None, gt=0)  # compaction context window in tokens (None = charlie-code default)
   credential: str | None = None
   image_input: bool = False  # endpoint accepts image attachments (sent as --image); false refuses them
+  stream: bool = True  # endpoint is called in streaming mode (default); false emits --no-stream
+  timeout_seconds: int | None = Field(
+      default=None, gt=0
+  )  # call budget: silence bound when streaming, whole-call bound when not (None = charlie-code default)
 
 
 class GeminiBackend(BackendBase):

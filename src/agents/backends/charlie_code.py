@@ -64,6 +64,8 @@ class CharlieCodeBackend(AgentBackend):
       api_base: str | None = None,
       context_window: int | None = None,
       image_input: bool = False,
+      stream: bool = True,
+      timeout_seconds: int | None = None,
       api_key: str | None = None,
       **kwargs,
   ) -> None:
@@ -74,6 +76,8 @@ class CharlieCodeBackend(AgentBackend):
           "charlie-code backend requires api_base (set api_base on its backends.options entry in config.yaml)")
     self._context_window = context_window
     self._image_input = image_input
+    self._stream = stream
+    self._timeout_seconds = timeout_seconds
     self._api_key = api_key
     self._bin = resolve_binary("charlie-code", USER_LOCAL_BIN)
     self._transport_dir: Path | None = None
@@ -134,6 +138,10 @@ class CharlieCodeBackend(AgentBackend):
     cmd = [self._bin, "--json", "--model", self._model, "--api-base", self._api_base]
     if self._context_window is not None:
       cmd += ["--context-window", str(self._context_window)]
+    if not self._stream:
+      cmd += ["--no-stream"]
+    if self._timeout_seconds is not None:
+      cmd += ["--timeout-seconds", str(self._timeout_seconds)]
     if self._resume_session_id:
       cmd += ["--resume", self._resume_session_id]
     cmd += self._extra_flags

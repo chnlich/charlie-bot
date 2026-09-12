@@ -300,6 +300,44 @@ def test_build_command_emits_context_window_only_when_configured(monkeypatch, tm
   assert "--context-window" not in default_backend._build_command(FLAG_LIKE_PROMPT)
 
 
+def test_build_command_emits_no_stream_and_timeout_seconds_when_declared(monkeypatch, tmp_path: Path) -> None:
+  """stream: false + timeout_seconds land as --no-stream and --timeout-seconds 600, with the
+  other option-derived flags before --task-file."""
+  backend = _build_backend(monkeypatch, stream=False, timeout_seconds=600)
+  backend._prepare_transport(tmp_path)
+
+  cmd = backend._build_command(FLAG_LIKE_PROMPT)
+
+  no_stream_idx = cmd.index("--no-stream")
+  timeout_idx = cmd.index("--timeout-seconds")
+  assert cmd[timeout_idx + 1] == "600"
+  task_idx = cmd.index("--task-file")
+  assert no_stream_idx < task_idx
+  assert timeout_idx < task_idx
+
+
+def test_build_command_without_call_strategy_fields_keeps_pre_change_command(monkeypatch, tmp_path: Path) -> None:
+  """An entry setting neither field emits neither flag: the argv is byte-identical to the
+  command built before the fields existed, so older charlie-code builds keep working."""
+  backend = _build_backend(monkeypatch)
+  backend._prepare_transport(tmp_path)
+
+  cmd = backend._build_command(FLAG_LIKE_PROMPT)
+
+  assert "--no-stream" not in cmd
+  assert "--timeout-seconds" not in cmd
+  assert cmd == [
+      "/usr/bin/charlie-code",
+      "--json",
+      "--model",
+      "charlie-code-test-model",
+      "--api-base",
+      "http://test.invalid/v1",
+      "--task-file",
+      str(tmp_path / "task.md"),
+  ]
+
+
 def test_build_command_before_prepare_transport_raises(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
@@ -439,6 +477,8 @@ def test_prepare_env_without_api_key_leaves_env_untouched(monkeypatch) -> None:
     ("field", "value", "attr"), [
         ("context_window", 262144, "_context_window"),
         ("image_input", True, "_image_input"),
+        ("stream", False, "_stream"),
+        ("timeout_seconds", 600, "_timeout_seconds"),
     ])
 def test_registry_propagates_option_fields_into_charlie_code_backend(
     monkeypatch, field: str, value: object, attr: str) -> None:

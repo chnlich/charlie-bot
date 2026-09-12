@@ -788,32 +788,53 @@ def _parse(source: str) -> _Parser:
   return parser
 
 
-def _append_style_and_header(source: str) -> str:
+def _offset_after_insertions(offset: int, insertions: dict[int, list[str]]) -> int:
+  """The spliced-page position an original-page offset lands at.
+
+  ``_splice`` only ever inserts bytes, so a position shifts by the total length
+  inserted before it; insertions at the offset itself share its source boundary
+  and sit ahead of it, which is where the replaced full re-parse read the
+  position too.
+  """
+  return offset + sum(
+      sum(len(piece) for piece in pieces) for at, pieces in insertions.items() if at < offset)
+
+
+def _append_style_and_header(source: str, insertions: dict[int, list[str]], root: _Node) -> str:
   # The anchors are read off a re-parse of the spliced page on purpose: the
   # render passes can rewrite the body start tag itself (class and data-del
   # attributes) and insert synthetic start tags, so a spliced page's DOM can
   # disagree with the pre-splice parse about where head and body sit. The
   # re-parse rides the anchor-only parser — the same tokenizer walk as _Parser,
-  # minus the DOM build nothing here reads.
+  # minus the DOM build nothing here reads. The wrap header anchor needs no
+  # re-parse: no render pass synthesizes a wrap class (a ghost stamps only
+  # cbd-del), so the pre-splice DOM answers the same lookup, and no pass
+  # inserts inside another element's start tag except attribute additions, so
+  # the element's tag bytes stay contiguous and its spliced position is the
+  # pre-splice one shifted by the inserted length before it
+  # (_offset_after_insertions). The main-tag fallback can diverge from the
+  # replaced re-parse — a deleted bare main or body becomes a ghost carrying
+  # that tag — but the artifact pages the route serves share the wrap chrome,
+  # which answers the lookup first; there the header moves outside the
+  # deleted ghost, the saner placement.
   head, body = _parse_anchors(source)
-  insertions: dict[int, list[str]] = {}
+  header_insertions: dict[int, list[str]] = {}
   style_tag = f'<style data-cbd-style>{_CBD_STYLE}</style>'
   if head is not None and head.end is not None:
-    _add_insertion(insertions, head.end, style_tag)
+    _add_insertion(header_insertions, head.end, style_tag)
   else:
     offset = body.start if body is not None and body.start is not None else 0
-    _add_insertion(insertions, offset, style_tag)
+    _add_insertion(header_insertions, offset, style_tag)
   if body is not None and body.start_end is not None:
     # Artifact genres share the body{padding} + .wrap{max-width;margin:auto} chrome, so a
     # header outside the wrapper spans full width while the column does not.
-    root = _document_root(_parse(source))
     target = _first_class_descendant(root, "wrap") or _first_descendant(root, "main")
-    offset = target.start_end if target is not None else body.start_end
+    offset = _offset_after_insertions(target.start_end, insertions) if target is not None else body.start_end
   else:
     offset = len(source)
   header = f'<div class="cbd-header" data-cbd-header="{_html.escape(_HEADER_TEXT, quote=True)}"></div>'
-  _add_insertion(insertions, offset, header)
-  return _splice(source, insertions)
+  _add_insertion(header_insertions, offset, header)
+  return _splice(source, header_insertions)
 
 
 def _analyse(base_html: str, new_html: str) -> tuple[_Parser, _Parser, list[_LeafChange], list[_Leaf], list[_Leaf]]:
@@ -830,10 +851,10 @@ def annotate(base_html: str, new_html: str) -> str:
   insertions: dict[int, list[str]] = {}
   classes: dict[_Node, set[str]] = {}
   details: set[_Node] = set()
-  _render_leaf_changes(
-      new_html, _document_root(new_parser), changes, new_leaves, insertions, classes, details, base_parser.source)
+  root = _document_root(new_parser)
+  _render_leaf_changes(new_html, root, changes, new_leaves, insertions, classes, details, base_parser.source)
   _render_start_tag_additions(new_html, classes, details, insertions)
-  return _append_style_and_header(_splice(new_html, insertions))
+  return _append_style_and_header(_splice(new_html, insertions), insertions, root)
 
 
 def diff_text(base_html: str, new_html: str) -> str:

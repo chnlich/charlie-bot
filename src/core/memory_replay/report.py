@@ -3,13 +3,30 @@
 Everything dynamic goes through ``html.escape`` — entry bodies, comments, and
 patch lines are arbitrary text and must never become markup. The page is
 static HTML by design: no scripts, no external assets.
+
+The evidence sections describe what the run's stages actually received, and the
+facts come from the run's owning contract via the runner — the renderer keeps
+no registry of its own. The editor section states whether the reviewer request
+carried the editor's handoff (its disposition rows and proof lines), withheld
+it, or never ran (editor-only mode); the feedback section renders the feedback
+view the stages actually read — the whole raw comment pool verbatim under the
+raw-history view, or the relevance selection with approved before/after texts
+under the selected structured view. Bundled-but-unexposed material — approved
+revisions under the raw-history view, pool comments the selection did not pick
+— is labeled as never provided, never presented as model-visible evidence.
 """
 
 import html
 from dataclasses import dataclass, field
 
-from src.core.memory_replay.manifest import Source
+from src.core.memory_replay.manifest import FeedbackExample, Source
 from src.core.memory_replay.retrieval import FeedbackSelection
+from src.core.memory_replay.variants import (
+    RATIONALE_HIDDEN,
+    RATIONALE_VISIBLE,
+    RAW_HISTORY_VIEW,
+    SELECTED_STRUCTURED_VIEW,
+)
 
 # <style> rules shared by the memory-replay HTML pages; _page wraps them with
 # each page's body-width pin and page-only rules.
@@ -53,7 +70,12 @@ def _page(title: str, body_width_px: int, extra_css: list[str], body_parts: list
 
 @dataclass
 class ReportData:
-  """Everything the report renders, already computed by the runner."""
+  """Everything the report renders, already computed by the runner.
+
+  ``feedback_view`` and ``rationale_visibility`` are the run's owning contract's
+  declared dimensions; ``feedback_examples`` is the frozen comment pool both
+  views render from. The renderer phrases these facts but never decides them.
+  """
 
   mode: str
   created_at: str
@@ -68,6 +90,9 @@ class ReportData:
   selections: dict[str, list[FeedbackSelection]]
   editor_dispositions: list[dict]
   calls: list[dict]
+  feedback_view: str
+  rationale_visibility: str
+  feedback_examples: list[FeedbackExample]
   unused_sources: list[str] = field(default_factory=list)
 
 
@@ -105,8 +130,8 @@ def render_report(data: ReportData) -> str:
     parts.append('<p class="muted">No paths changed.</p>')
   parts.append("<h2>Evidence</h2>")
   parts.extend(_sources_section(data.sources))
-  parts.extend(_feedback_section(data.selections))
-  parts.extend(_editor_section(data.editor_dispositions))
+  parts.extend(_feedback_section(data))
+  parts.extend(_editor_section(data))
   parts.extend(_run_section(data))
   return _page("Memory replay proposal", 1100, [], parts)
 
@@ -123,9 +148,25 @@ def _sources_section(sources: list[Source]) -> list[str]:
   return lines
 
 
-def _feedback_section(selections: dict[str, list[FeedbackSelection]]) -> list[str]:
+def _feedback_section(data: ReportData) -> list[str]:
+  """The feedback view the stages actually read, per the run's declared feedback view."""
+  if data.feedback_view == RAW_HISTORY_VIEW:
+    return _raw_history_feedback_section(data)
+  if data.feedback_view == SELECTED_STRUCTURED_VIEW:
+    return _selected_feedback_section(data)
+  raise ValueError(f"unknown feedback view: {data.feedback_view!r}")
+
+
+def _selected_feedback_section(data: ReportData) -> list[str]:
+  selections = data.selections
   total = sum(len(v) for v in selections.values())
-  lines = [f"<details><summary>Selected feedback ({total})</summary>"]
+  lines = [
+      f"<details><summary>Selected feedback ({total}) &mdash; the selected structured view, "
+      f"{_stage_reach(data.mode)}</summary>",
+      '<p class="muted">What was provided is exactly this relevance selection: each selected comment\'s original '
+      "text with its provenance id and, when one exists, the approved before/after revision. Pool comments not "
+      "listed below stayed in the frozen pool and were never provided.</p>",
+  ]
   for theme in sorted(selections):
     lines.append(f"<p><strong>{_e(theme)}</strong></p>")
     if not selections[theme]:
@@ -142,27 +183,89 @@ def _feedback_section(selections: dict[str, list[FeedbackSelection]]) -> list[st
         lines.append(
             f"<pre>approved change (ref {_e(change.approved_change_ref)}):\n--- before ---\n{_e(change.before)}\n"
             f"--- after ---\n{_e(change.after)}</pre>")
+  provided = {s.example.comment_event for selected in selections.values() for s in selected}
+  unselected = sorted(
+      example.comment_event for example in data.feedback_examples if example.comment_event not in provided)
+  if unselected:
+    lines.append(
+        '<p class="muted">In the frozen pool but not selected, so never provided to any stage: '
+        f"{_e(', '.join(unselected))}</p>")
   lines.append("</details>")
   return lines
 
 
-def _editor_section(editor_dispositions: list[dict]) -> list[str]:
+def _raw_history_feedback_section(data: ReportData) -> list[str]:
+  pool = data.feedback_examples
+  approved_count = sum(1 for example in pool if example.approved_change is not None)
+  lines = [
+      f"<details><summary>Feedback history (raw) ({len(pool)} pool comments) &mdash; the raw view, "
+      f"{_stage_reach(data.mode)}</summary>",
+      '<p class="muted">The raw-history view is the frozen-input replacement for the production selector\'s '
+      "user-message digest: every pool comment verbatim with its provenance id, nothing else. It carries no "
+      "approved before/after revisions" + (
+          f"; the frozen pool bundles {approved_count} approved revision(s), and the stages saw none of them."
+          if approved_count else ".") + "</p>",
+  ]
+  for example in pool:
+    lines.append(f"<p><code>{_e(example.comment_event)}</code></p>")
+    lines.append(f"<pre>comment:\n{_e(example.comment_text)}</pre>")
+  lines.append(
+      "<details><summary>Relevance-selection audit (computed by the replay's retrieval and recorded in the run "
+      "record; not part of the raw view the stages saw)</summary>")
+  for theme in sorted(data.selections):
+    lines.append(f"<p><strong>{_e(theme)}</strong></p>")
+    if not data.selections[theme]:
+      lines.append('<p class="muted">No prior comment matched this theme.</p>')
+    for selection in data.selections[theme]:
+      lines.append(
+          f"<p><code>{_e(selection.example.comment_event)}</code> · score {selection.score} · "
+          f"principles {_e(', '.join(selection.matched_principles)) or '-'} · "
+          f"terms {_e(', '.join(selection.matched_terms)) or '-'}</p>")
+  lines.append("</details>")
+  lines.append("</details>")
+  return lines
+
+
+def _editor_section(data: ReportData) -> list[str]:
+  """The editor's own rows and proofs, captioned by what the run's second stage actually received."""
+  if data.mode == "editor-only":
+    summary_note = "editor-only run: no second review ran, so no reviewer received any of this"
+    proof_caption = "proofs (model output; no reviewer ran in this editor-only run):"
+  elif data.rationale_visibility == RATIONALE_VISIBLE:
+    summary_note = "the reviewer request carried this handoff: the disposition rows and their proof lines below"
+    proof_caption = "proofs (model output; the reviewer request carried them under the run's visible-rationale setting):"
+  elif data.rationale_visibility == RATIONALE_HIDDEN:
+    summary_note = (
+        "admission rationale withheld from the reviewer: the reviewer request carried the proposed "
+        "entries only, never these rows or proof lines")
+    proof_caption = "proofs (model output, withheld from the reviewer by the run's hidden-rationale setting):"
+  else:
+    raise ValueError(f"unknown rationale visibility: {data.rationale_visibility!r}")
   lines = [
       "<details><summary>Editor dispositions &mdash; audit record "
-      f"({len(editor_dispositions)} rows; admission rationale, withheld from the reviewer)</summary>"
+      f"({len(data.editor_dispositions)} rows; {summary_note})</summary>"
   ]
-  for row in editor_dispositions:
+  for row in data.editor_dispositions:
     lines.append(
         f"<p><code>{_e(row['role'])}</code> · {_e(row['kind'])} · <code>{_e(row['name'])}</code> · "
         f"{_e(row['detail'])}</p>")
     proofs = row.get("proofs")
     if proofs:
       lines.append(
-          "<pre>proofs (model output, withheld from the reviewer by the variant's rationale setting):\n"
-          f"action: {_e(proofs.get('action', ''))}\nhome: {_e(proofs.get('home', ''))}\n"
-          f"brevity: {_e(proofs.get('brevity', ''))}</pre>")
+          f"<pre>{proof_caption}\n"
+          f"action: {_e(proofs['action'])}\nhome: {_e(proofs['home'])}\n"
+          f"brevity: {_e(proofs['brevity'])}</pre>")
   lines.append("</details>")
   return lines
+
+
+def _stage_reach(mode: str) -> str:
+  """How far the feedback view traveled, in the run's own mode."""
+  if mode == "editor-review":
+    return "provided to both stages"
+  if mode == "editor-only":
+    return "provided to the editor only (this run ran no reviewer)"
+  raise ValueError(f"unknown replay mode: {mode!r}")
 
 
 def _run_section(data: ReportData) -> list[str]:

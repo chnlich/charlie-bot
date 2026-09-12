@@ -1068,6 +1068,42 @@ def test_report_renders_the_actual_patch_and_escapes_markup(tmp_path: Path) -> N
   assert "evict_below" in report
 
 
+def test_report_rationale_and_feedback_claims_match_the_actual_requests(tmp_path: Path) -> None:
+  """The standalone report's rationale and feedback claims follow its own contract and requests.
+
+  The v3 reviewer request carries the editor's proposed entries only — its disposition rows and
+  reasons are withheld — and both stages read the selected structured feedback with the approved
+  before/after texts. An editor-only run runs no second review at all, so its report must not
+  describe anything as having reached a reviewer.
+  """
+  editor = editor_json(
+      [rewrite_op(ENTRY_WITHOUT_INSTANCE)],
+      [row("capture-eviction", "propose", ["entries/render/cache-eviction.md"], "EDITOR-RATIONALE-MARKER")])
+  reviewer = editor_json([keep_op()], [row("capture-eviction", "no_change", [], "kept as proposed")])
+  review_outcome, review_transport = run_replay_with(tmp_path, [editor, reviewer], output_dir=tmp_path / "out-review")
+  only_outcome, _ = run_replay_with(tmp_path, [editor], mode="editor-only", output_dir=tmp_path / "out-only")
+  review_report = (review_outcome.run_dir / "report.html").read_text(encoding="utf-8")
+  only_report = (only_outcome.run_dir / "report.html").read_text(encoding="utf-8")
+
+  # Request evidence: the reviewer request carries the proposed entries only, and the selected
+  # structured feedback (approved revision included) reached the editor.
+  reviewer_payload = evidence_payload(review_transport.calls[1]["user"])
+  assert set(reviewer_payload["editor_proposals"]) == {"entries"}
+  assert "EDITOR-RATIONALE-MARKER" not in review_transport.calls[1]["user"]
+  assert reviewer_payload["feedback"][0]["approved_change"]["approved_change_ref"] == "approved-001"
+  # The review report says the handoff was withheld and renders the selected structured view it
+  # actually provided, approved texts included.
+  assert "withheld from the reviewer" in review_report
+  assert "no second review ran" not in review_report
+  assert "Selected feedback" in review_report
+  assert "approved change (ref approved-001)" in review_report
+  assert "fb-comment-marker" in review_report
+  # The editor-only report identifies that no second review ran instead of claiming either
+  # visibility.
+  assert "no second review ran" in only_report
+  assert "withheld from the reviewer" not in only_report
+
+
 # --- isolation -----------------------------------------------------------------
 
 

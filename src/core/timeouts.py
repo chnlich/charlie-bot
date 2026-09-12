@@ -66,8 +66,9 @@ KATEX_CDN_FETCH_TIMEOUT = 60  # seconds
 # ---------------------------------------------------------------------------
 
 # Whole render measurement (navigate + page-height probe) on the warm Chrome
-# process; exceeding it raises ValueError naming the timeout and the browser's
-# stderr tail.
+# process. Expiry fails the measurement with a ValueError — the CDP-wait path
+# names this timeout and the browser's stderr tail, the marker-poll path
+# reports the missing page-height marker.
 HEADLESS_RENDER_TIMEOUT = 60  # seconds
 
 # Cold launch of that Chrome process: spawn, the DevToolsActivePort file, and

@@ -6,24 +6,31 @@ that small, fixed set of named variants end to end — their prompts, their requ
 their response contracts and validators, and the three behavioral dimensions that separate
 them from the baseline:
 
-- **feedback view** — what the stages see of the user's prior comments: the ``raw-history``
-  view (every manifest comment verbatim with its provenance id, the adaptation of the
-  production selector's user-message digest) or the ``selected-structured`` view (the existing
-  relevance selection with original comments and approved before/after texts, as the new
-  design supplies it);
-- **rationale visibility** — whether the reviewer request carries the selector's handoff (its
+- **editing/review scope** — ``candidate-merge`` (the original flow: the editor curates
+  candidates one by one, merge-first, and the reviewer gates the proposed text line by line,
+  writing no prose of its own) or ``whole-entry`` (the redesigned unit on both stages: the
+  editor reads the theme's base entries, candidates, and feedback view together and determines
+  the complete-entry changes the theme needs, and the reviewer may rewrite proposed entries as
+  wholes). The candidate-merge editor's merge-time trimming of a whole entry is original
+  behavior the pinned guideline permits and stays available to it;
+- **rationale visibility** — whether the reviewer request carries the editor's handoff (its
   disposition rows and the three Action/Home/Brevity proof lines) or withholds every such
-  field, from the initial request through every repair request;
-- **reviewer capability** — ``trim-only`` (the original reviewer: accept the selector's text,
-  remove lines from it, reject new entries, restore the base; never write prose) or
-  ``whole-entry`` (the redesigned reviewer: re-decide and rewrite complete entries).
+  field, from the initial request through every repair request. It controls what the reviewer
+  sees, never whether the editor writes the proofs;
+- **feedback view** — what the stages see of the user's prior comments: the ``raw-history``
+  view (every manifest comment verbatim with its provenance id, the frozen-input replacement
+  for the production selector's user-message digest) or the ``selected-structured`` view (the
+  existing relevance selection with original comments and approved before/after texts, as the
+  new design supplies it).
 
-Each single-intervention variant changes exactly one of these dimensions relative to
-``baseline-original-flow``; the combined variant is the proposed design. Everything else —
-the frozen source snapshot, the guideline, the allowed topics, the candidate set, the
-content-only transport, the JSON evidence payload, the base-relative operation protocol, the
-bounded mechanical recovery, and the validation machinery — is shared, so a variant
-difference is attributable to its declared dimension alone.
+Every experimental editor — candidate-merge and whole-entry alike, combined arm included —
+writes the same three admission proof lines under the same response schema, so no
+proof-generation or schema change can ride only in the combined arm; the combined condition is
+exactly the three declared dimensions composed. Everything else — the frozen source snapshot,
+the guideline, the allowed topics, the candidate set, the content-only transport, the JSON
+evidence payload, the base-relative operation protocol, the bounded mechanical recovery, and
+the validation machinery — is shared, so a variant difference is attributable to its declared
+dimensions alone.
 
 The citation domain is derived here from what a stage actually saw (the theme's assigned
 sources, the guideline, and exactly the feedback ids its view exposed), closing the
@@ -33,6 +40,11 @@ experimental contracts. Recorded v2/v3 runs keep their original wider meanings e
 The runner and the paired comparison both dispatch through :class:`ExperimentContract`; the
 CLI only resolves names. Nothing in this module reads the live memory store, the scoring
 answers, another variant's outputs, or any pilot expectation.
+
+Definition version 2 is the corrected compositional matrix (definition v1 let the whole-entry
+arm keep the candidate-merge editor and let the combined arm drop the editor's proof contract,
+so neither matched its declared intervention). Recorded v1 runs stay intact on disk and are
+rejected with their version named — never reinterpreted under this definition.
 """
 
 from collections.abc import Callable
@@ -46,12 +58,9 @@ from src.core.memory_replay.errors import (
     ReplayModelOutputError,
 )
 from src.core.memory_replay.exchange import (
-    _CITATIONS,
     _CONSTRAINTS,
-    _DISPOSITIONS,
     _EDITOR_DECISIONS,
     _OPERATIONS,
-    _REQUEST_STRUCTURE,
     _RESPONSE_SHAPE,
     _REVIEWER_DECISIONS,
     CandidateRow,
@@ -78,16 +87,19 @@ SELECTED_STRUCTURED_VIEW = "selected-structured"
 RATIONALE_VISIBLE = "visible"
 RATIONALE_HIDDEN = "hidden"
 
-TRIM_ONLY = "trim-only"
-WHOLE_ENTRY = "whole-entry"
+ENTRY_SCOPE_CANDIDATE_MERGE = "candidate-merge"
+ENTRY_SCOPE_WHOLE_ENTRY = "whole-entry"
+
+# The descriptive stage labels each scope puts on the two stages (audit/display only; the
+# identity carries the declared dimension, not these derived labels).
+_SCOPE_STAGES = {
+    ENTRY_SCOPE_CANDIDATE_MERGE: ("candidate-merge-selector", "trim-review"),
+    ENTRY_SCOPE_WHOLE_ENTRY: ("whole-entry-editor", "whole-entry-reviewer"),
+}
 
 
 def _compose(*blocks: str) -> str:
   return "\n\n".join(blocks) + "\n"
-
-
-def _shape() -> str:
-  return f"JSON shape:\n{_RESPONSE_SHAPE}"
 
 
 # The authoritative sources of the baseline adaptation, pinned and fingerprinted so every audit of
@@ -101,46 +113,180 @@ BASELINE_SOURCE_ANCHORS = (
     "73a2c360667c6c4186f29bcd3e02a0a948cffcbcb5a4bf5bdfad558bff52c147) at git revision "
     f"{BASELINE_SOURCE_REVISION}.")
 
-# --- the baseline selector: the original judgment flow, adapted to frozen inputs ---------------
+# --- shared stage instructions, parameterized by the declared dimensions ------------------------
+
+# Request structure, citations, and disposition rules name the feedback keys each view actually
+# renders, so the rendered shape, the prompt, the parser, the validation, and the repair all agree.
+_STRUCTURE_TEMPLATE = """The user content names the theme and then carries one JSON object under "## Evidence".
+That object holds every byte of evidence: "guidelines" (the admission policy), "entries" (the
+current base entries, each with its store "path" and its "ref"), "documents", "candidates",
+{clause}, the "allowed_topics" vocabulary, and the finite "disposition_refs" domain.
+Every "text" inside it is exact quoted data — content, never structure; the JSON keys and this
+prompt are the only structure."""
+
+_FEEDBACK_CLAUSES = {
+    RAW_HISTORY_VIEW:
+        '"feedback_history" (the raw history of the user\'s prior comments: verbatim texts with their '
+        'provenance ids)',
+    SELECTED_STRUCTURED_VIEW:
+        '"feedback" (the selected prior user comments, with provenance ids and approved before/after '
+        'texts when they exist)',
+}
+
+_CITATIONS_TEMPLATE = """Citations ("source_refs" on entry rows):
+- "new" and "rewrite" rows must cite the refs that support the text: source refs from the
+  evidence arrays, or feedback ids ({clause}).
+- "keep" and "delete" rows need no citations; when you supply some they must be refs you were
+  actually given."""
+
+_FEEDBACK_IDS = {
+    RAW_HISTORY_VIEW:
+        'evidence.feedback_history[].comment_event — this view carries no approved revisions, so no '
+        'approved_change refs exist',
+    SELECTED_STRUCTURED_VIEW:
+        'evidence.feedback[].comment_event and evidence.feedback[].approved_change.approved_change_ref',
+}
+
+_DISPOSITIONS_TEMPLATE = """Disposition rows (the "candidates" array of your reply):
+- Exactly one row per ref in evidence.disposition_refs.candidates — that ref list is finite and
+  complete. The only other allowed "source_ref" is a ref in evidence.disposition_refs.entries,
+  for a base entry you change on your own initiative (no candidate asked for it); that row's
+  outcome must be "propose" and its "paths" must list the entry's path.
+- Never use a feedback id ({clause}), a document ref, or any other string as a
+  disposition "source_ref": feedback ids are provenance, citable as evidence only, never
+  dispositions.
+- outcome is "propose" (you changed or added at least one path because of it), "no_change", or
+  "needs_decision". "propose" rows list the paths changed for that candidate; "no_change" and
+  "needs_decision" rows have empty "paths". Every candidate keeps exactly one visible row even
+  when you change nothing."""
+
+_FEEDBACK_GUARDS = {
+    RAW_HISTORY_VIEW: "evidence.feedback_history[].comment_event; this view has no approved_change refs",
+    SELECTED_STRUCTURED_VIEW: "evidence.feedback[].comment_event or an approved_change ref",
+}
+
+
+def _feedback_view_block(template: str, clauses: dict[str, str], feedback_view: str) -> str:
+  if feedback_view not in clauses:
+    raise ReplayError(f"unknown feedback view: {feedback_view!r}")
+  return template.format(clause=clauses[feedback_view])
+
+
+def _structure_block(feedback_view: str) -> str:
+  return _feedback_view_block(_STRUCTURE_TEMPLATE, _FEEDBACK_CLAUSES, feedback_view)
+
+
+def _citations_block(feedback_view: str) -> str:
+  return _feedback_view_block(_CITATIONS_TEMPLATE, _FEEDBACK_IDS, feedback_view)
+
+
+def _dispositions_block(feedback_view: str) -> str:
+  return _feedback_view_block(_DISPOSITIONS_TEMPLATE, _FEEDBACK_GUARDS, feedback_view)
+
+
+# The editor's response shape: the shared v3 schema plus the proofs field every experimental
+# editor writes. The reviewers' shape is the plain v3 schema (no proofs field) — matching their
+# parser, which rejects any extra key.
+_EDITOR_SHAPE = """JSON shape:
+{
+  "entries": [
+    {"action": "new" | "rewrite" | "delete" | "keep",
+     "path": "entries/<topic>/<slug>.md",
+     "text": "<complete entry file text, front matter included; new/rewrite only>",
+     "source_refs": ["<ref>"],
+     "reason": "<one sentence>"}
+  ],
+  "candidates": [
+    {"source_ref": "<ref>", "outcome": "propose" | "no_change" | "needs_decision",
+     "paths": ["entries/<topic>/<slug>.md"], "reason": "<one sentence>",
+     "proofs": {"action": "<one sentence>", "home": "<one sentence>", "brevity": "<one sentence>"}}
+  ]
+}
+
+The "proofs" object is required on every "propose" row and forbidden on every other row."""
+
+# The frozen-input adaptations every variant shares, stated without claiming more than the
+# frozen inputs carry: the guideline source replaces the skill read, and the master prompt's
+# Writing Style section is not part of the frozen input unless the manifest itself supplies it.
+_FROZEN_INPUT_ADAPTATION = (
+    "What the frozen-input experiment replaces from the production steps that touched the live store:\n"
+    "- Staged captures arrive as evidence.candidates; the admission guideline arrives as evidence.guidelines "
+    "(the production prompt read the llm-context-guideline skill from disk; the experiment supplies that "
+    "guideline as a frozen manifest source instead — the master prompt's Writing Style section is not part "
+    "of the frozen input unless the manifest itself carries it, and these prompts claim none of its text).\n"
+    "- The working-tree edits become complete-entry operations relative to the original frozen base, the "
+    "lint pass runs mechanically after your reply, and the handoff sheet becomes the recorded dispositions "
+    "and proof lines you return.")
+
+# --- the editor stages: one decision unit per scope, one proof contract for every variant -------
 
 _SELECTOR_ROLE = (
-    "You are the selector stage of an offline memory-curation experiment: the original production "
+    "You are the editor stage of an offline memory-curation experiment: the original production "
     "memory-selector judgment flow, adapted to frozen inputs. You curate staged candidates one by one, "
     "merge-first, and hand off every disposition with its admission proof lines. You read frozen evidence "
     "and return complete proposed memory entries as one JSON object. The request is content-only: there "
     "are no tools, nothing you receive is writable, and your reply must be exactly one JSON object with "
     "no other text.")
 
-_SELECTOR_ADAPTATION = (
-    "What this adaptation preserves from the original selector, and what the frozen-input experiment "
-    "replaces:\n"
+_CANDIDATE_MERGE_FLOW = (
+    "What this adaptation preserves from the original selector's judgment flow:\n"
     "- Curate candidate by candidate. The default action for a passing candidate is a merge into the "
     "existing entry whose theme covers it (the original revise): return it as a \"rewrite\" of that "
-    "entry, so the final diff shows before and after.\n"
+    "entry, so the final diff shows before and after. Trimming a merged entry down to what a future "
+    "action needs — whole lines included — is the original merge-time behavior, permitted by the "
+    "guideline.\n"
     "- Admit a new entry only when no existing entry's theme covers the candidate and the title honestly "
     "describes the whole content after the change (the original admit): return it as a \"new\" operation "
     "with the complete header (scope, topic, audience, title) and body.\n"
     "- Reject the rest the way the original handoff sheet listed them: a one-line reason naming the "
     "question the candidate could not answer or why it does not belong (wrong home, theme already "
-    "covered, dishonest title), in the candidate's visible disposition row.\n"
-    "- Every candidate you act on (outcome \"propose\") hands off its three admission proof lines in the "
-    "row's \"proofs\", each answering its question in one sentence: \"action\" — when will this be used "
-    "again, and what will it change; \"home\" — why is the store the cheapest home, answered by checking "
-    "the other homes (owning docs, skills, LESSONS.md, run dirs, trackers) and naming the reader and the "
-    "delivery path; \"brevity\" — what the trim removed, or the line count when the draft already sat at "
-    "the bar. A question that finds no answer is the signal to reject the candidate instead.\n"
-    "- The frozen-input experiment replaces the production steps that touched the live store: staged "
-    "captures arrive as evidence.candidates, the admission guideline arrives as evidence.guidelines (the "
-    "production prompt read the llm-context-guideline skill and the master prompt's Writing Style "
-    "section; both are frozen into the supplied guideline here), the working-tree edits become "
-    "complete-entry operations relative to the original frozen base, the lint pass runs mechanically "
-    "after your reply, and the handoff sheet becomes the recorded dispositions and proofs.")
+    "covered, dishonest title), in the candidate's visible disposition row.")
+
+_WHOLE_ENTRY_EDITOR_ROLE = (
+    "You are the editor stage of an offline memory-curation experiment: the redesigned whole-entry "
+    "memory-editor flow, adapted to frozen inputs. You read one theme's frozen evidence as a whole and "
+    "return complete proposed memory entries as one JSON object, handing off every candidate disposition "
+    "with its admission proof lines. The request is content-only: there are no tools, nothing you receive "
+    "is writable, and your reply must be exactly one JSON object with no other text.")
+
+_WHOLE_ENTRY_FLOW = (
+    "What whole-entry editing decides — the redesigned editor's decision unit — and what stays identical "
+    "to the candidate-merge editor:\n"
+    "- Decide from the theme as a whole: read the theme's base entries, all of its candidates, and its "
+    "feedback view together, and determine the complete-entry changes the theme needs. First establish "
+    "what a future action requires, then choose the material that serves it; how detailed the sources are "
+    "does not set the entry's length.\n"
+    "- In one pass you may merge several candidates into one entry, fold a candidate into an existing "
+    "entry, add a new complete entry, correct existing entries the new evidence overturns, replace "
+    "details the owning documents carry with the necessary pointers, or leave entries unchanged. When the "
+    "material is insufficient, keep the status quo and say in the row's reason what is missing.\n"
+    "- The candidate-merge editor already rewrites complete entries when it merges (merge-time trimming of "
+    "a whole entry is original behavior the guideline permits); what changes here is the decision unit — "
+    "one decision over the theme's base, candidates, and feedback together, not candidates folded in one "
+    "by one.\n"
+    "- The same admission rules govern: the guideline is the admission bar, the operations keep their "
+    "shared base-relative meaning, and every candidate keeps exactly one visible disposition row — an "
+    "explicit remember request you do not act on keeps its row naming the request and why nothing changed.")
+
+_EDITOR_PROOFS = (
+    "Admission proofs on disposition rows: every row with outcome \"propose\" must carry \"proofs\": "
+    "{\"action\", \"home\", \"brevity\"} — the three proof lines, each one sentence, written by you for "
+    "this candidate; rows with outcome \"no_change\" or \"needs_decision\" carry no \"proofs\".\n"
+    "- \"action\": when will this be used again, and what will it change.\n"
+    "- \"home\": why is the store the cheapest home — check the other homes (owning docs, skills, "
+    "LESSONS.md, run dirs, trackers) and name the reader and the delivery path.\n"
+    "- \"brevity\": what the trim removed, or the line count when the draft already sat at the bar.\n"
+    "A proof question that finds no answer is the signal to reject the candidate instead. Writing these "
+    "proofs is part of this stage in every variant of this experiment; only the reviewer's access to them "
+    "varies.")
 
 _FEEDBACK_RAW_HISTORY = (
     "User feedback: evidence.feedback_history is the raw history of the user's prior comments about this "
-    "store, verbatim, each with its provenance id (\"comment_event\") — the same raw user-message digest "
-    "the production selector reads. These comments are evidence of what the user has said, not rules, "
-    "and this view carries no approved before/after revisions.")
+    "store, verbatim, each with its provenance id (\"comment_event\") — the frozen-input replacement for "
+    "the raw user-message digest the production selector reads (that digest's live session mining is "
+    "frozen out; this pool is exactly the manifest's recorded comment history). These comments are "
+    "evidence of what the user has said, not rules, and this view carries no approved before/after "
+    "revisions.")
 
 _FEEDBACK_SELECTED = (
     "User feedback: evidence.feedback carries the prior user comments selected as relevant to this "
@@ -148,46 +294,58 @@ _FEEDBACK_SELECTED = (
     "before/after revision under \"approved_change\". An empty side is real feedback: an approved "
     "deletion has an empty \"after\", an approved creation an empty \"before\".")
 
-_SELECTOR_PROOFS = (
-    "Admission proofs on disposition rows: every row with outcome \"propose\" must carry \"proofs\": "
-    "{\"action\", \"home\", \"brevity\"} — the three proof lines above, written by you for this "
-    "candidate. Rows with outcome \"no_change\" or \"needs_decision\" carry no \"proofs\".")
+_FEEDBACK_BLOCKS = {RAW_HISTORY_VIEW: _FEEDBACK_RAW_HISTORY, SELECTED_STRUCTURED_VIEW: _FEEDBACK_SELECTED}
 
 
-def _selector_system(feedback_block: str) -> str:
+def _editor_system(*, entry_scope: str, feedback_view: str) -> str:
+  """The editor prompt of one scope over one feedback view, from the shared blocks alone."""
+  if entry_scope == ENTRY_SCOPE_CANDIDATE_MERGE:
+    role, flow = _SELECTOR_ROLE, _CANDIDATE_MERGE_FLOW
+  elif entry_scope == ENTRY_SCOPE_WHOLE_ENTRY:
+    role, flow = _WHOLE_ENTRY_EDITOR_ROLE, _WHOLE_ENTRY_FLOW
+  else:
+    raise ReplayError(f"unknown entry scope: {entry_scope!r}")
   return _compose(
-      _SELECTOR_ROLE,
-      _REQUEST_STRUCTURE,
-      _SELECTOR_ADAPTATION,
-      feedback_block,
+      role,
+      _structure_block(feedback_view),
+      _FROZEN_INPUT_ADAPTATION,
+      flow,
+      _FEEDBACK_BLOCKS[feedback_view],
       _EDITOR_DECISIONS,
       _OPERATIONS,
-      _DISPOSITIONS,
-      _SELECTOR_PROOFS,
-      _CITATIONS,
+      _dispositions_block(feedback_view),
+      _EDITOR_PROOFS,
+      _citations_block(feedback_view),
       _CONSTRAINTS,
-      _shape(),
+      _EDITOR_SHAPE,
       LANGUAGE_RULE,
   )
 
 
-# --- the baseline reviewer: the original gating flow, adapted to frozen inputs -----------------
+# --- the reviewer stages: one authority per scope, one handoff visibility switch ----------------
 
-_REVIEWER_ROLE = (
+_REVIEWER_ROLE_TRIM = (
     "You are the reviewer stage of an offline memory-curation experiment: the original production "
     "memory-reviewer gating flow, adapted to frozen inputs. You re-decide every disposition yourself, "
-    "with \"no change\" as the default, and you gate the selector's proposed changes line by line. You "
-    "see the same frozen evidence the selector saw. The request is content-only: there are no tools, "
-    "nothing you receive is writable, and your reply must be exactly one JSON object with no other text.")
+    "with \"no change\" as the default, and you gate the editor's proposed changes line by line. You see "
+    "the same frozen evidence the editor saw. The request is content-only: there are no tools, nothing "
+    "you receive is writable, and your reply must be exactly one JSON object with no other text.")
+
+_REVIEWER_ROLE_WHOLE_ENTRY = (
+    "You are the reviewer stage of an offline memory-curation experiment: the redesigned whole-entry "
+    "memory-reviewer flow, adapted to frozen inputs. You re-decide every disposition yourself, with \"no "
+    "change\" as the default, and you own the final content. You see the same frozen evidence the editor "
+    "saw. The request is content-only: there are no tools, nothing you receive is writable, and your "
+    "reply must be exactly one JSON object with no other text.")
 
 _HANDOFF_VISIBLE = (
-    "You also see the selector's handoff sheet — its disposition rows and their three admission proof "
-    "lines — under evidence.editor_proposals.dispositions. Weigh it as the original reviewer weighed the "
-    "handoff: it says what the selector did and which admission questions it answered; it does not "
-    "exempt any line from your gate.")
+    "You also see the editor's handoff sheet — the selector's handoff in the original flow — its "
+    "disposition rows and their three admission proof lines, under evidence.editor_proposals.dispositions. "
+    "Weigh it as the original reviewer weighed the handoff: it says what the editor did and which "
+    "admission questions it answered; it does not exempt any line from your gate.")
 
 _HANDOFF_HIDDEN = (
-    "The selector's handoff sheet — its disposition rows and their three admission proof lines — is "
+    "The editor's handoff sheet — its disposition rows and their three admission proof lines — is "
     "withheld from this request; judge the proposed text on the evidence alone, as the redesigned "
     "reviewer must.")
 
@@ -196,9 +354,9 @@ _TRIM_GATE = (
     "- Gate every changed line of every proposed entry: ask whether it still holds after the model, the "
     "fix, and the next run are replaced, and check it against the guideline's entry form (narrative, "
     "length, phrasing). A line that fails is deleted or trimmed.\n"
-    "- You write no new entry prose. Whatever text you return for a path must be the selector's proposed "
+    "- You write no new entry prose. Whatever text you return for a path must be the editor's proposed "
     "text for that path with whole lines removed — never new or recombined prose, and never text on a "
-    "path the selector did not propose text for.\n"
+    "path the editor did not propose text for.\n"
     "- A file whose whole change fails is restored to the base; an admitted entry that wholly fails is "
     "rejected (its proposed new entry is dropped). Every reversal is visible in the affected "
     "candidate's final disposition row with a one-sentence reason, as the original reviewer's reject "
@@ -206,51 +364,53 @@ _TRIM_GATE = (
 
 _TRIM_DECISIONS = (
     "Your reply describes the final state you decide, as operations relative to the same original frozen "
-    "base the selector worked from — never relative to the selector's proposals:\n"
-    "- To accept a selector \"new\"/\"rewrite\", return that same operation for the path with the text "
-    "you approve: the selector's text, or that text with failing lines removed (every line of your text "
-    "must be a verbatim line of the selector's proposed text for that path, in the selector's order).\n"
-    "- To drop a selector \"new\", omit that operation and give the candidate its final row explaining "
+    "base the editor worked from — never relative to the editor's proposals:\n"
+    "- To accept an editor \"new\"/\"rewrite\", return that same operation for the path with the text "
+    "you approve: the editor's text, or that text with failing lines removed (every line of your text "
+    "must be a verbatim line of the editor's proposed text for that path, in the editor's order).\n"
+    "- To drop an editor \"new\", omit that operation and give the candidate its final row explaining "
     "the reversal.\n"
-    "- To restore a base entry the selector proposed to change, omit the operation — the base entry "
+    "- To restore a base entry the editor proposed to change, omit the operation — the base entry "
     "stands (\"keep\" is the explicit form of the same restore and carries no text).\n"
-    "- Return \"delete\" only to confirm a selector \"delete\" of the same path.\n"
-    "- A change you initiate on a path with no selector text proposal is not available to you.")
+    "- Return \"delete\" only to confirm an editor \"delete\" of the same path.\n"
+    "- A change you initiate on a path with no editor text proposal is not available to you.")
 
 _WHOLE_ENTRY_AUTHORITY = (
-    "What this variant changes — whole-entry review, the redesigned reviewer's authority: you own the "
+    "What this review scope grants — whole-entry review, the redesigned reviewer's authority: you own the "
     "final content. You may rewrite a proposed entry as a whole with your own complete text (concision "
     "and reorganization supported by the evidence), delete or keep entries, and restore the base — "
     "everything the trim-only reviewer is barred from. New or rewritten facts still need a source ref "
     "you were actually given, and every reversal stays visible in the affected candidate's final row.")
 
 
-def _reviewer_system(handoff_block: str, gate_block: str, decisions_block: str) -> str:
+def _reviewer_system(*, entry_scope: str, rationale_visibility: str, feedback_view: str) -> str:
+  """The reviewer prompt of one scope, one handoff visibility, and one feedback view."""
+  if entry_scope == ENTRY_SCOPE_CANDIDATE_MERGE:
+    role, gate, decisions = _REVIEWER_ROLE_TRIM, _TRIM_GATE, _TRIM_DECISIONS
+  elif entry_scope == ENTRY_SCOPE_WHOLE_ENTRY:
+    role, gate, decisions = _REVIEWER_ROLE_WHOLE_ENTRY, _WHOLE_ENTRY_AUTHORITY, _REVIEWER_DECISIONS
+  else:
+    raise ReplayError(f"unknown entry scope: {entry_scope!r}")
+  if rationale_visibility == RATIONALE_VISIBLE:
+    handoff = _HANDOFF_VISIBLE
+  elif rationale_visibility == RATIONALE_HIDDEN:
+    handoff = _HANDOFF_HIDDEN
+  else:
+    raise ReplayError(f"unknown rationale visibility: {rationale_visibility!r}")
   return _compose(
-      _REVIEWER_ROLE,
-      _REQUEST_STRUCTURE,
-      handoff_block,
-      gate_block,
-      decisions_block,
+      role,
+      _structure_block(feedback_view),
+      handoff,
+      gate,
+      decisions,
       _OPERATIONS,
-      _DISPOSITIONS,
-      _CITATIONS,
+      _dispositions_block(feedback_view),
+      _citations_block(feedback_view),
       _CONSTRAINTS,
-      _shape(),
+      f"JSON shape:\n{_RESPONSE_SHAPE}",
       LANGUAGE_RULE,
   )
 
-
-SELECTOR_RAW_HISTORY_SYSTEM = _selector_system(_FEEDBACK_RAW_HISTORY)
-SELECTOR_SELECTED_SYSTEM = _selector_system(_FEEDBACK_SELECTED)
-
-TRIM_RAW_HISTORY_VISIBLE_SYSTEM = _reviewer_system(_HANDOFF_VISIBLE, _TRIM_GATE, _TRIM_DECISIONS)
-TRIM_RAW_HISTORY_HIDDEN_SYSTEM = _reviewer_system(_HANDOFF_HIDDEN, _TRIM_GATE, _TRIM_DECISIONS)
-TRIM_SELECTED_VISIBLE_SYSTEM = _reviewer_system(_HANDOFF_VISIBLE, _TRIM_GATE, _TRIM_DECISIONS)
-WHOLE_ENTRY_RAW_HISTORY_VISIBLE_SYSTEM = _reviewer_system(_HANDOFF_VISIBLE, _WHOLE_ENTRY_AUTHORITY, _REVIEWER_DECISIONS)
-
-COMBINED_EDITOR_SYSTEM = exchange.EDITOR_SYSTEM.rstrip() + "\n\n" + LANGUAGE_RULE + "\n"
-COMBINED_REVIEWER_SYSTEM = exchange.REVIEWER_SYSTEM.rstrip() + "\n\n" + LANGUAGE_RULE + "\n"
 
 # --- visible-evidence citation domains ---------------------------------------------------------
 
@@ -288,7 +448,7 @@ def visible_refs(
 def feedback_history_payload(manifest: Manifest) -> list[dict]:
   """The raw-history feedback view: every pool comment verbatim with its provenance id.
 
-  This is the fixed-input adaptation of the production selector's user-message digest. It
+  This is the frozen-input replacement for the production selector's user-message digest. It
   carries comment texts and provenance only — no approved before/after revisions, which the
   production selector never saw and which the feedback intervention alone supplies.
   """
@@ -301,14 +461,19 @@ def feedback_history_payload(manifest: Manifest) -> list[dict]:
 # --- request builders --------------------------------------------------------------------------
 
 
-def build_selector_request(
+def build_editor_request(
     manifest: Manifest,
     theme: Theme,
     selections: list[FeedbackSelection],
     *,
     feedback_view: str,
 ) -> str:
-  """The baseline selector's user content: the evidence context plus the variant's feedback view."""
+  """Every experimental editor's user content: the evidence context plus the variant's feedback view.
+
+  The editing/review scope changes the system prompt's decision unit, never the evidence payload:
+  the whole-entry editor reads the same theme base, candidates, and feedback view the
+  candidate-merge editor reads, only framed as one whole-theme decision.
+  """
   payload = exchange.evidence_context_payload(manifest, theme)
   if feedback_view == RAW_HISTORY_VIEW:
     payload["feedback_history"] = feedback_history_payload(manifest)
@@ -317,7 +482,7 @@ def build_selector_request(
   return exchange.render_evidence_request(theme, payload)
 
 
-def build_selector_reviewer_request(
+def build_reviewer_request(
     manifest: Manifest,
     theme: Theme,
     selections: list[FeedbackSelection],
@@ -326,7 +491,7 @@ def build_selector_reviewer_request(
     feedback_view: str,
     rationale_visible: bool,
 ) -> str:
-  """The baseline reviewer's user content: the selector's evidence plus its proposals.
+  """Every experimental reviewer's user content: the editor's evidence plus its proposals.
 
   The handoff (disposition rows and their proof lines) rides in
   ``editor_proposals.dispositions`` exactly when the variant's rationale visibility says so;
@@ -366,7 +531,7 @@ def build_selector_reviewer_request(
   return exchange.render_evidence_request(theme, payload)
 
 
-# --- the selector's response contract: the three proofs are model output -----------------------
+# --- the editors' response contract: the three proofs are model output in every variant ---------
 
 PROOF_KEYS = ("action", "home", "brevity")
 
@@ -381,7 +546,7 @@ class _ProofSpec(_StrictModel):
   brevity: str
 
 
-class _SelectorCandidateRowSpec(_StrictModel):
+class _EditorCandidateRowSpec(_StrictModel):
   source_ref: str
   outcome: str
   paths: list[str] = []
@@ -389,16 +554,16 @@ class _SelectorCandidateRowSpec(_StrictModel):
   proofs: _ProofSpec | None = None
 
 
-class _SelectorOutputSpec(_StrictModel):
+class _EditorOutputSpec(_StrictModel):
   entries: list[EntryOpSpec]
-  candidates: list[_SelectorCandidateRowSpec]
+  candidates: list[_EditorCandidateRowSpec]
 
 
-def parse_selector_output(raw: str, *, role: str) -> ThemeOutput:
-  """Parse one selector response: the v3 shape plus the per-candidate admission proofs."""
+def parse_editor_output(raw: str, *, role: str) -> ThemeOutput:
+  """Parse one experimental editor response: the shared schema plus the per-candidate proofs."""
   payload = exchange.parse_model_json(raw, role=role)
   try:
-    spec = _SelectorOutputSpec.model_validate(payload)
+    spec = _EditorOutputSpec.model_validate(payload)
   except ValidationError as e:
     raise ReplayModelOutputError(f"{role}: response does not match the required JSON shape: {e}") from e
   entries = [
@@ -463,7 +628,8 @@ def _mechanical_errors(
       available_refs=visible_refs(manifest, theme, selections, feedback_view))
 
 
-def _selector_editor_errors(feedback_view: str) -> Callable:
+def _editor_errors(feedback_view: str) -> Callable:
+  """Every experimental editor's gate: the mechanical checks plus the three-proof contract."""
 
   def errors(
       output: ThemeOutput, *, role: str, manifest: Manifest, theme: Theme, selections: list[FeedbackSelection],
@@ -476,12 +642,13 @@ def _selector_editor_errors(feedback_view: str) -> Callable:
   return errors
 
 
-def _narrowed_v3_errors(feedback_view: str) -> Callable:
-  """The v3 mechanical checks under the visible-evidence citation domain."""
+def _whole_entry_reviewer_errors(feedback_view: str) -> Callable:
+  """The whole-entry reviewer's gate: the mechanical checks under the visible-evidence domain."""
 
   def errors(
       output: ThemeOutput, *, role: str, manifest: Manifest, theme: Theme, selections: list[FeedbackSelection],
       editor_output: ThemeOutput | None) -> list[str]:
+    del editor_output
     return _mechanical_errors(
         output, role=role, manifest=manifest, theme=theme, selections=selections, feedback_view=feedback_view)
 
@@ -489,13 +656,13 @@ def _narrowed_v3_errors(feedback_view: str) -> Callable:
 
 
 def _trim_capability_errors(output: ThemeOutput, *, role: str, editor_output: ThemeOutput) -> list[str]:
-  """The narrow trim-only capability, checked against the exact selector output the reviewer saw.
+  """The narrow trim-only capability, checked against the exact editor output the reviewer saw.
 
-  Allowed: confirming a selector new/rewrite with its own text or a line-removed form of it;
-  confirming a selector delete; restoring a base entry (omit, or the explicit keep); dropping a
-  selector new by omission. Forbidden: any text not removable line-by-line from the selector's
-  proposed text, any operation on a path the selector never proposed text for, and deleting an
-  entry the selector did not delete.
+  Allowed: confirming an editor new/rewrite with its own text or a line-removed form of it;
+  confirming an editor delete; restoring a base entry (omit, or the explicit keep); dropping an
+  editor new by omission. Forbidden: any text not removable line-by-line from the editor's
+  proposed text, any operation on a path the editor never proposed text for, and deleting an
+  entry the editor did not delete.
   """
   editor_ops = {op.path: op for op in editor_output.entries}
   errors: list[str] = []
@@ -505,25 +672,25 @@ def _trim_capability_errors(output: ThemeOutput, *, role: str, editor_output: Th
     editor_op = editor_ops.get(op.path)
     if editor_op is None:
       errors.append(
-          f"{role}: trim-only review returned {op.action} on {op.path}, which the selector never proposed "
+          f"{role}: trim-only review returned {op.action} on {op.path}, which the editor never proposed "
           "text for; the reviewer writes no prose of its own")
       continue
     if op.action == "delete":
       if editor_op.action != "delete":
         errors.append(
-            f"{role}: trim-only review returned delete on {op.path}; it may only confirm a selector "
-            "delete, never delete an entry the selector proposed to keep or change")
+            f"{role}: trim-only review returned delete on {op.path}; it may only confirm an editor "
+            "delete, never delete an entry the editor proposed to keep or change")
       continue
     if op.action not in ("rewrite", "new"):
       continue
     if op.action != editor_op.action:
       errors.append(
-          f"{role}: trim-only review returned {op.action} on {op.path}; the selector proposed "
+          f"{role}: trim-only review returned {op.action} on {op.path}; the editor proposed "
           f"{editor_op.action} there, and the reviewer may only confirm or trim that operation")
       continue
     if editor_op.text is None:
       errors.append(
-          f"{role}: trim-only review returned {op.action} on {op.path} but the selector's "
+          f"{role}: trim-only review returned {op.action} on {op.path} but the editor's "
           f"{editor_op.action} carries no text to trim")
       continue
     violation = _line_removal_violation(op.text or "", editor_op.text)
@@ -534,8 +701,8 @@ def _trim_capability_errors(output: ThemeOutput, *, role: str, editor_output: Th
 
 def _line_removal_violation(returned_text: str, proposed_text: str) -> str | None:
   """The mechanical form of the original reviewer's 'deleted or trimmed' under a no-new-prose
-  capability: every returned line must be a verbatim line of the selector's proposed text, in
-  the selector's order, each selector line used at most once. Within-line rewriting is not
+  capability: every returned line must be a verbatim line of the editor's proposed text, in
+  the editor's order, each editor line used at most once. Within-line rewriting is not
   available to the reviewer; a failing line is removed whole. Greedy left-to-right matching is
   complete for this subsequence check."""
   proposed = canonical_text(proposed_text).split("\n")
@@ -546,7 +713,7 @@ def _line_removal_violation(returned_text: str, proposed_text: str) -> str | Non
       cursor += 1
     if cursor == len(proposed):
       return (
-          f"line {index + 1} ({line!r}) is not a verbatim line of the selector's proposed text in "
+          f"line {index + 1} ({line!r}) is not a verbatim line of the editor's proposed text in "
           "order; the reviewer removes whole lines and writes no prose")
     cursor += 1
   return None
@@ -598,11 +765,9 @@ def _feedback_refs_selected(manifest: Manifest, selections: dict[str, list[Feedb
 _IDENTITY_FIELDS = (
     "name",
     "version",
-    "editor_stage",
-    "reviewer_stage",
-    "feedback_view",
+    "entry_scope",
     "rationale_visibility",
-    "reviewer_capability",
+    "feedback_view",
 )
 
 
@@ -612,9 +777,10 @@ class ExperimentContract:
 
   This is the single home the runner, the paired comparison, and the CLI dispatch through:
   the prompts and their versions, the request builders, the parser, the per-stage validators
-  (which close over the variant's feedback view and rationale visibility), the citation
-  domain, and the identity payload that makes runs under different variants non-reusable
-  against each other.
+  (which close over the variant's feedback view), the citation domain, and the identity payload
+  that makes runs under different variants non-reusable against each other. The identity
+  carries exactly the declared dimensions — editing/review scope, rationale visibility, and
+  feedback view — so the combined condition is their composition and nothing else.
   """
 
   name: str
@@ -622,9 +788,9 @@ class ExperimentContract:
   version: int
   editor_stage: str
   reviewer_stage: str
-  feedback_view: str
+  entry_scope: str
   rationale_visibility: str
-  reviewer_capability: str
+  feedback_view: str
   editor_prompt_version: str
   reviewer_prompt_version: str
   editor_system: str
@@ -657,6 +823,10 @@ class ExperimentContract:
             {
                 **self.identity_payload(),
                 "title": self.title,
+                "stages": {
+                    "editor": self.editor_stage,
+                    "reviewer": self.reviewer_stage,
+                },
                 "changes_vs_baseline": list(self.changes_vs_baseline),
                 "notes": list(self.notes),
                 "prompt_versions": {
@@ -677,7 +847,10 @@ def identity_fields_from_record(record: dict) -> dict:
   missing = [field for field in _IDENTITY_FIELDS if field not in variant]
   if missing:
     raise ReplayError(
-        f"the run record's variant section is missing {', '.join(missing)}; the record changed after the run")
+        f"the run record's variant section is missing {', '.join(missing)}; it declares experimental "
+        f"definition version {variant.get('version')!r}, and this registry defines version "
+        f"{VARIANT_DEFINITION_VERSION} with a different intervention matrix — the record keeps its "
+        "original meaning on disk and is not reinterpretable under the current definition")
   return {field: variant[field] for field in _IDENTITY_FIELDS}
 
 
@@ -688,6 +861,12 @@ def contract_for_record(record: dict) -> ExperimentContract:
   if contract is None:
     raise ReplayError(f"the run record names variant {fields['name']!r}, which this registry does not define")
   if contract.identity_payload() != fields:
+    if fields.get("version") != contract.version:
+      raise ReplayError(
+          f"the run record for variant {fields['name']!r} declares experimental definition version "
+          f"{fields.get('version')!r}; this registry defines version {contract.version} (the corrected "
+          "compositional intervention matrix), so the record is not reinterpretable under it and its "
+          "original meaning is not recreated here")
     raise ReplayError(
         f"the recorded definition of variant {fields['name']!r} no longer matches this registry's contract; "
         "the record or the registry changed, so the run is not reinterpretable under the current contract")
@@ -716,69 +895,70 @@ VARIANT_WHOLE_ENTRY = "whole-entry-review"
 VARIANT_APPROVED_FEEDBACK = "approved-edit-feedback"
 VARIANT_COMBINED = "combined-proposed-design"
 
-_SELECTOR_EDITOR_RAW = "memory-experiment-editor-selector-raw-history-v1"
-_SELECTOR_EDITOR_SELECTED = "memory-experiment-editor-selector-selected-v1"
-_EDITOR_COMBINED = "memory-experiment-editor-combined-v1"
-_REVIEWER_TRIM_RAW_VISIBLE = "memory-experiment-reviewer-trim-raw-history-visible-v1"
-_REVIEWER_TRIM_RAW_HIDDEN = "memory-experiment-reviewer-trim-raw-history-hidden-v1"
-_REVIEWER_TRIM_SELECTED_VISIBLE = "memory-experiment-reviewer-trim-selected-visible-v1"
-_REVIEWER_WHOLE_ENTRY_RAW_VISIBLE = "memory-experiment-reviewer-whole-entry-raw-history-visible-v1"
-_REVIEWER_COMBINED = "memory-experiment-reviewer-combined-v1"
+_EDITOR_CANDIDATE_MERGE_RAW = "memory-experiment-editor-candidate-merge-raw-history-v2"
+_EDITOR_CANDIDATE_MERGE_SELECTED = "memory-experiment-editor-candidate-merge-selected-v2"
+_EDITOR_WHOLE_ENTRY_RAW = "memory-experiment-editor-whole-entry-raw-history-v2"
+_EDITOR_WHOLE_ENTRY_SELECTED = "memory-experiment-editor-whole-entry-selected-v2"
+_REVIEWER_TRIM_RAW_VISIBLE = "memory-experiment-reviewer-trim-raw-history-visible-v2"
+_REVIEWER_TRIM_RAW_HIDDEN = "memory-experiment-reviewer-trim-raw-history-hidden-v2"
+_REVIEWER_TRIM_SELECTED_VISIBLE = "memory-experiment-reviewer-trim-selected-visible-v2"
+_REVIEWER_WHOLE_ENTRY_RAW_VISIBLE = "memory-experiment-reviewer-whole-entry-raw-history-visible-v2"
+_REVIEWER_WHOLE_ENTRY_SELECTED_HIDDEN = "memory-experiment-reviewer-whole-entry-selected-hidden-v2"
 
-_VARIANT_VERSION = 1
-
-
-def _selector_build(feedback_view: str) -> Callable:
-  return lambda manifest, theme, selections: build_selector_request(
-      manifest, theme, selections, feedback_view=feedback_view)
-
-
-def _selector_reviewer_build(feedback_view: str, rationale_visible: bool) -> Callable:
-  return lambda manifest, theme, selections, editor_output: build_selector_reviewer_request(
-      manifest, theme, selections, editor_output, feedback_view=feedback_view, rationale_visible=rationale_visible)
+_VARIANT_VERSION = 2
+VARIANT_DEFINITION_VERSION = _VARIANT_VERSION
 
 
 def _variant(
     *,
     name: str,
     title: str,
-    editor_stage: str,
-    reviewer_stage: str,
-    feedback_view: str,
+    entry_scope: str,
     rationale_visibility: str,
-    reviewer_capability: str,
+    feedback_view: str,
     editor_prompt_version: str,
     reviewer_prompt_version: str,
-    editor_system: str,
-    reviewer_system: str,
     changes_vs_baseline: tuple[str, ...],
     notes: tuple[str, ...],
 ) -> ExperimentContract:
+  if entry_scope not in (ENTRY_SCOPE_CANDIDATE_MERGE, ENTRY_SCOPE_WHOLE_ENTRY):
+    raise ReplayError(f"unknown entry scope: {entry_scope!r}")
+  if rationale_visibility not in (RATIONALE_VISIBLE, RATIONALE_HIDDEN):
+    raise ReplayError(f"unknown rationale visibility: {rationale_visibility!r}")
+  if feedback_view not in (RAW_HISTORY_VIEW, SELECTED_STRUCTURED_VIEW):
+    raise ReplayError(f"unknown feedback view: {feedback_view!r}")
+  editor_stage, reviewer_stage = _SCOPE_STAGES[entry_scope]
   return ExperimentContract(
       name=name,
       title=title,
       version=_VARIANT_VERSION,
       editor_stage=editor_stage,
       reviewer_stage=reviewer_stage,
-      feedback_view=feedback_view,
+      entry_scope=entry_scope,
       rationale_visibility=rationale_visibility,
-      reviewer_capability=reviewer_capability,
+      feedback_view=feedback_view,
       editor_prompt_version=editor_prompt_version,
       reviewer_prompt_version=reviewer_prompt_version,
-      editor_system=editor_system,
-      reviewer_system=reviewer_system,
-      build_editor_request=_selector_build(feedback_view) if editor_stage == "baseline-selector" else
-      (exchange.build_editor_request),
-      build_reviewer_request=_selector_reviewer_build(feedback_view, rationale_visibility == RATIONALE_VISIBLE)
-      if reviewer_stage != "proposed-design" else exchange.build_reviewer_request,
-      parse_editor_output=parse_selector_output if editor_stage == "baseline-selector" else exchange.parse_model_output,
-      # Reviewers never write proofs in any variant, so every reviewer parses with the plain v3 spec.
+      editor_system=_editor_system(entry_scope=entry_scope, feedback_view=feedback_view),
+      reviewer_system=_reviewer_system(
+          entry_scope=entry_scope, rationale_visibility=rationale_visibility, feedback_view=feedback_view),
+      build_editor_request=lambda manifest, theme, selections: build_editor_request(
+          manifest, theme, selections, feedback_view=feedback_view),
+      build_reviewer_request=lambda manifest, theme, selections, editor_output: build_reviewer_request(
+          manifest,
+          theme,
+          selections,
+          editor_output,
+          feedback_view=feedback_view,
+          rationale_visible=rationale_visibility == RATIONALE_VISIBLE),
+      # Every experimental editor parses and validates with the same proofs contract; reviewers
+      # never write proofs in any variant, so every reviewer parses with the plain v3 spec.
+      parse_editor_output=parse_editor_output,
       parse_reviewer_output=exchange.parse_model_output,
-      editor_errors=_selector_editor_errors(feedback_view) if editor_stage == "baseline-selector" else
-      (_narrowed_v3_errors(feedback_view)),
+      editor_errors=_editor_errors(feedback_view),
       reviewer_errors=(
           _trim_reviewer_errors(feedback_view)
-          if reviewer_capability == TRIM_ONLY else _narrowed_v3_errors(feedback_view)),
+          if entry_scope == ENTRY_SCOPE_CANDIDATE_MERGE else _whole_entry_reviewer_errors(feedback_view)),
       feedback_refs=_feedback_refs_all if feedback_view == RAW_HISTORY_VIEW else _feedback_refs_selected,
       changes_vs_baseline=changes_vs_baseline,
       notes=notes,
@@ -798,75 +978,67 @@ VARIANTS: dict[str, ExperimentContract] = {
         _variant(
             name=VARIANT_BASELINE,
             title="Adapted original judgment flow (baseline)",
-            editor_stage="baseline-selector",
-            reviewer_stage="baseline-trim",
-            feedback_view=RAW_HISTORY_VIEW,
+            entry_scope=ENTRY_SCOPE_CANDIDATE_MERGE,
             rationale_visibility=RATIONALE_VISIBLE,
-            reviewer_capability=TRIM_ONLY,
-            editor_prompt_version=_SELECTOR_EDITOR_RAW,
+            feedback_view=RAW_HISTORY_VIEW,
+            editor_prompt_version=_EDITOR_CANDIDATE_MERGE_RAW,
             reviewer_prompt_version=_REVIEWER_TRIM_RAW_VISIBLE,
-            editor_system=SELECTOR_RAW_HISTORY_SYSTEM,
-            reviewer_system=TRIM_RAW_HISTORY_VISIBLE_SYSTEM,
             changes_vs_baseline=(),
             notes=(
                 BASELINE_SOURCE_ANCHORS,
                 "The original production curation judgment flow on frozen inputs: candidate-by-candidate, "
                 "merge-first selection whose handoff carries the three Action/Home/Brevity proof lines, and "
                 "a line-gating reviewer that may remove text, reject new entries, or restore the base but "
-                "writes no new entry prose.",
+                "writes no new entry prose. The merge-time trimming of a whole entry is original selector "
+                "behavior the pinned guideline permits.",
             ),
         ),
         _variant(
             name=VARIANT_RATIONALE_HIDDEN,
             title="Rationale hidden from review",
-            editor_stage="baseline-selector",
-            reviewer_stage="baseline-trim",
-            feedback_view=RAW_HISTORY_VIEW,
+            entry_scope=ENTRY_SCOPE_CANDIDATE_MERGE,
             rationale_visibility=RATIONALE_HIDDEN,
-            reviewer_capability=TRIM_ONLY,
-            editor_prompt_version=_SELECTOR_EDITOR_RAW,
+            feedback_view=RAW_HISTORY_VIEW,
+            editor_prompt_version=_EDITOR_CANDIDATE_MERGE_RAW,
             reviewer_prompt_version=_REVIEWER_TRIM_RAW_HIDDEN,
-            editor_system=SELECTOR_RAW_HISTORY_SYSTEM,
-            reviewer_system=TRIM_RAW_HISTORY_HIDDEN_SYSTEM,
             changes_vs_baseline=(
-                "The reviewer request (initial and repair) no longer carries the selector's handoff: its "
+                "The reviewer request (initial and repair) no longer carries the editor's handoff: its "
                 "disposition rows and the three Action/Home/Brevity proof lines are withheld, so the "
-                "reviewer judges the proposed text on the evidence alone.",),
+                "reviewer judges the proposed text on the evidence alone. The editor still writes the "
+                "proofs; only the reviewer's access changes.",),
             notes=(),
         ),
         _variant(
             name=VARIANT_WHOLE_ENTRY,
             title="Whole-entry editing and review",
-            editor_stage="baseline-selector",
-            reviewer_stage="whole-entry",
-            feedback_view=RAW_HISTORY_VIEW,
+            entry_scope=ENTRY_SCOPE_WHOLE_ENTRY,
             rationale_visibility=RATIONALE_VISIBLE,
-            reviewer_capability=WHOLE_ENTRY,
-            editor_prompt_version=_SELECTOR_EDITOR_RAW,
+            feedback_view=RAW_HISTORY_VIEW,
+            editor_prompt_version=_EDITOR_WHOLE_ENTRY_RAW,
             reviewer_prompt_version=_REVIEWER_WHOLE_ENTRY_RAW_VISIBLE,
-            editor_system=SELECTOR_RAW_HISTORY_SYSTEM,
-            reviewer_system=WHOLE_ENTRY_RAW_HISTORY_VISIBLE_SYSTEM,
             changes_vs_baseline=(
-                "The reviewer may rewrite proposed entries as wholes with its own complete text, delete, "
-                "keep, or restore — the redesigned reviewer's authority — instead of being limited to "
-                "removing lines from the selector's text.",),
+                "The editor's decision unit: instead of curating candidates one by one and merging first, "
+                "it reads the theme's base entries, candidates, and feedback view together and determines "
+                "the complete-entry changes the theme needs — merging, correcting, or leaving entries "
+                "unchanged — under the same admission rules, with every candidate disposition preserved "
+                "and the same three-proof handoff.",
+                "The reviewer's authority: it may rewrite proposed entries as wholes with its own complete "
+                "text, delete, keep, or restore — the redesigned reviewer's authority — instead of being "
+                "limited to removing lines from the editor's text.",
+            ),
             notes=(),
         ),
         _variant(
             name=VARIANT_APPROVED_FEEDBACK,
             title="Selected approved-edit feedback",
-            editor_stage="baseline-selector",
-            reviewer_stage="baseline-trim",
-            feedback_view=SELECTED_STRUCTURED_VIEW,
+            entry_scope=ENTRY_SCOPE_CANDIDATE_MERGE,
             rationale_visibility=RATIONALE_VISIBLE,
-            reviewer_capability=TRIM_ONLY,
-            editor_prompt_version=_SELECTOR_EDITOR_SELECTED,
+            feedback_view=SELECTED_STRUCTURED_VIEW,
+            editor_prompt_version=_EDITOR_CANDIDATE_MERGE_SELECTED,
             reviewer_prompt_version=_REVIEWER_TRIM_SELECTED_VISIBLE,
-            editor_system=SELECTOR_SELECTED_SYSTEM,
-            reviewer_system=TRIM_SELECTED_VISIBLE_SYSTEM,
             changes_vs_baseline=(
                 "The raw comment history is replaced by the existing relevance selection with structured "
-                "original-comment and approved before/after examples, supplied to both the selector and "
+                "original-comment and approved before/after examples, supplied to both the editor and "
                 "the reviewer as in the new design; only the selected comments (and their exposed "
                 "approved-change refs) are citable.",),
             notes=(
@@ -876,19 +1048,17 @@ VARIANTS: dict[str, ExperimentContract] = {
         _variant(
             name=VARIANT_COMBINED,
             title="Combined proposed design",
-            editor_stage="proposed-design",
-            reviewer_stage="proposed-design",
-            feedback_view=SELECTED_STRUCTURED_VIEW,
+            entry_scope=ENTRY_SCOPE_WHOLE_ENTRY,
             rationale_visibility=RATIONALE_HIDDEN,
-            reviewer_capability=WHOLE_ENTRY,
-            editor_prompt_version=_EDITOR_COMBINED,
-            reviewer_prompt_version=_REVIEWER_COMBINED,
-            editor_system=COMBINED_EDITOR_SYSTEM,
-            reviewer_system=COMBINED_REVIEWER_SYSTEM,
+            feedback_view=SELECTED_STRUCTURED_VIEW,
+            editor_prompt_version=_EDITOR_WHOLE_ENTRY_SELECTED,
+            reviewer_prompt_version=_REVIEWER_WHOLE_ENTRY_SELECTED_HIDDEN,
             changes_vs_baseline=(
                 "All three interventions together, as the approved design proposes: whole-entry editing "
-                "and review, the selector's rationale withheld from the reviewer, and the selected "
-                "approved-edit feedback view supplied to both stages.",),
+                "and review, the editor's rationale withheld from the reviewer, and the selected "
+                "approved-edit feedback view supplied to both stages. Nothing else differs from the "
+                "baseline: the editor's three-proof handoff and response schema are the shared ones, so "
+                "no proof-generation or schema change rides only in this arm.",),
             notes=(),
         ),
     )

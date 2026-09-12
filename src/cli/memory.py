@@ -253,6 +253,8 @@ def _experiment_arm_lines(summary_path: Path) -> list[str]:
             f"post-review {comparison['post_review_status']})")
       elif comparison["status"] == "failed":
         detail = "comparison failed (recorded)"
+      elif comparison["status"] == "blocked":
+        detail = "comparison blocked (existing evidence preserved)"
       lines.append(f"{case['case']}/{arm['variant']}: run {run_status}, {detail}")
   return lines
 

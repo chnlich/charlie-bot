@@ -17,11 +17,18 @@ Honesty rules this module enforces structurally:
 - a failed arm is recorded with its full attempt chain and usage and is never substituted with
   ``no_change`` output, and it is never silently deleted and rerun under the same output root —
   a fresh output root is the intentional new experimental draw;
+- before any replay can delete or replace evidence, the experiment validates the existing run
+  records and the expected run-directory occupancy: a corrupted, missing, or unreadable record,
+  a record whose input identity disagrees with its own directory, or an orphaned directory with
+  partial attempt evidence blocks the arm as a visible failed condition that keeps every file
+  byte-for-byte — with no model call and no silent repair under the same output root;
 - repeating the experiment reuses completed bundles without model calls and preserves the
-  recorded failures;
-- variants draw their own editor responses; the summary discloses which arms shared a
-  byte-identical editor response and which did not, and never claims a single stochastic draw
-  isolates a causal gain;
+  recorded failures; a record of a different, legitimate input identity coexists untouched in
+  its own run directory;
+- every variant's editor is called for itself; the summary records per-case, per-theme call
+  provenance (run-record reference, chosen attempt and response reference, content digest) and
+  labels byte-identical recorded content across variants as identical content — never as shared
+  sampling or a reused call, and equal text saves no calls or cost;
 - semantic quality stays unjudged: fewer lines, fewer proposals, or more deletions are data,
   never an automatic pass, and the exit code reports execution and format success only.
 """
@@ -45,24 +52,28 @@ from src.core.memory_replay.runner import (
     _require_disjoint_output_root,
     compute_input_identity,
     resolve_backend_identity,
+    run_directory_name,
     run_replay,
 )
 from src.core.memory_replay.validate import apply_unified_patch, canonical_text
 
 log = structlog.get_logger()
 
-EXPERIMENT_SCHEMA = "memory-curation-variant-experiment/1"
+# Summary schema v2: per-case/theme editor call provenance replaces the old content-hash "draw"
+# grouping, and blocked-evidence arms joined the arm statuses. v1 summaries are not reinterpreted.
+EXPERIMENT_SCHEMA = "memory-curation-variant-experiment/2"
 MODE = "editor-review"
 
 QUALITY_NOTE = (
     "No semantic quality judgment is made here: fewer lines, fewer proposals, or more deletions never "
     "establish better curation. An independent assessment supplies quality; this experiment supplies "
     "execution evidence.")
-STOCHASTIC_NOTE = (
-    "Each variant ran its own editor draw unless the recorded editor responses are byte-identical. "
-    "Separate draws confound editor stochasticity with the declared intervention, so a single-draw "
-    "difference between variants does not isolate a causal gain; arms that genuinely shared a response "
-    "record its source and usage honestly.")
+EDITOR_CALLS_NOTE = (
+    "Every variant makes its own editor calls; the engine never feeds one variant's recorded response to "
+    "another variant's editor. Byte-identical recorded content across variants is labeled identical "
+    "content — content equality is not shared sampling or a reused call, and it saves nothing: usage is "
+    "the sum of actual attempts, so equal text costs the same as different text. Each variant's "
+    "editor-only control is still the exact recorded response its own reviewer consumed.")
 FEEDBACK_VIEW_NOTE = (
     "Old-flow feedback is not no-feedback: the baseline's raw-history view exposes the manifest's whole "
     "prior-comment pool — comment texts with provenance ids, as the production selector's user-message "
@@ -169,7 +180,7 @@ def run_experiment(
   report_path.write_text(render_experiment_report(summary), encoding="utf-8")
   failed_arms = [
       f"{arm['case']}/{arm['variant']}" for arm in arms
-      if arm["run"]["status"] != "completed" or arm["comparison"]["status"] == "failed"
+      if arm["run"]["status"] != "completed" or arm["comparison"]["status"] in ("failed", "blocked")
   ]
   log.info("memory_experiment_completed", output_dir=str(options.output_dir), arms=len(arms), failed=len(failed_arms))
   return ExperimentOutcome(summary_path=summary_path, report_path=report_path, failed_arms=failed_arms)
@@ -217,16 +228,26 @@ def _run_arm(
     model_identity: dict,
     transport_factory,
 ) -> dict:
-  """One case x variant: reuse, run, or preserve the recorded failure — then the paired comparison."""
+  """One case x variant: validate existing evidence, reuse, run, or preserve — then the comparison."""
   identity = compute_input_identity(manifest, mode=MODE, model_identity=model_identity, contract=contract)
   variant_runs_root = options.output_dir / "cases" / case_id / "runs" / contract.name
   runs_dir = variant_runs_root / "runs"
-  completed_dir, preserved_dirs = _scan_existing_runs(runs_dir, identity)
+  existing = _scan_existing_runs(runs_dir, identity)
+  if existing.blocked:
+    return _blocked_arm(
+        case_id=case_id,
+        manifest_path=manifest_path,
+        manifest=manifest,
+        contract=contract,
+        identity=identity,
+        blocked=existing.blocked,
+        preserved=existing.preserved,
+        options=options)
 
   run_error: str | None = None
-  run_dir: Path | None = completed_dir or (preserved_dirs[-1] if preserved_dirs else None)
-  reused = completed_dir is not None
-  if completed_dir is None and not preserved_dirs:
+  run_dir: Path | None = existing.completed or (existing.preserved[-1] if existing.preserved else None)
+  reused = existing.completed is not None
+  if existing.completed is None and not existing.preserved:
     try:
       outcome = run_replay(
           ReplayOptions(manifest=manifest_path, output_dir=variant_runs_root, backend=options.backend, mode=MODE),
@@ -238,8 +259,19 @@ def _run_arm(
     except ReplayError as e:
       run_error = str(e)
       # run_replay records the failure in its bundle before raising; keep that bundle as-is.
-      completed_dir, preserved_dirs = _scan_existing_runs(runs_dir, identity)
-      run_dir = completed_dir or (preserved_dirs[-1] if preserved_dirs else None)
+      existing = _scan_existing_runs(runs_dir, identity)
+      if existing.blocked:
+        return _blocked_arm(
+            case_id=case_id,
+            manifest_path=manifest_path,
+            manifest=manifest,
+            contract=contract,
+            identity=identity,
+            blocked=existing.blocked,
+            preserved=existing.preserved,
+            options=options,
+            run_error=run_error)
+      run_dir = existing.completed or (existing.preserved[-1] if existing.preserved else None)
 
   record: dict | None = None
   if run_dir is not None:
@@ -273,42 +305,141 @@ def _run_arm(
       "denominators":
           _denominators(manifest),
       "run":
-          _run_section(run_dir, record, run_status, run_status_error, reused, preserved_dirs, options.output_dir),
+          _run_section(run_dir, record, run_status, run_status_error, reused, existing.preserved, options.output_dir),
       "comparison":
           comparison,
+      "editor_provenance":
+          _editor_provenance(run_dir, record, manifest, options.output_dir),
   }
-  if record and record.get("status") == "completed" and run_dir is not None:
-    arm["editor_response_sha256"] = _chosen_response_sha256(run_dir, record, "editor")
-    arm["reviewer_response_sha256"] = _chosen_response_sha256(run_dir, record, "reviewer")
-  else:
-    arm["editor_response_sha256"] = None
-    arm["reviewer_response_sha256"] = None
   return arm
 
 
-def _scan_existing_runs(runs_dir: Path, identity: str) -> tuple[Path | None, list[Path]]:
-  """Completed and preserved (failed or killed) run bundles with this exact identity.
+@dataclass
+class _ExistingRuns:
+  """The classified contents of one variant's runs directory, before any replay may run.
 
-  A completed bundle is reused without model calls. Anything else that already settled under
-  this output root stays exactly as recorded — a failed or killed attempt is never silently
-  deleted and rerun here; a fresh output root is the intentional new draw.
+  ``completed`` and ``preserved`` are bundles recorded under this exact input identity;
+  ``blocked`` lists uninterpretable evidence with the reason it blocks the arm.
   """
-  completed: Path | None = None
-  preserved: list[Path] = []
+
+  completed: Path | None
+  preserved: list[Path]
+  blocked: list[tuple[Path, str]]
+
+
+def _scan_existing_runs(runs_dir: Path, identity: str) -> _ExistingRuns:
+  """Classify every run directory under one variant's runs root before any replay may run.
+
+  A completed bundle recorded under this exact identity is reused without model calls; a failed
+  one stays preserved as recorded. Records of different, legitimate input identities (earlier
+  frozen inputs of the same case) coexist untouched in their own directories. Anything that
+  cannot be interpreted — a missing or unreadable run record, a record whose input identity
+  disagrees with its own directory name, or an orphaned directory without a readable record —
+  blocks the arm: it neither runs nor reuses, every file stays byte-for-byte, and a fresh
+  output root is the intentional way to request a new draw.
+  """
+  result = _ExistingRuns(completed=None, preserved=[], blocked=[])
   if not runs_dir.is_dir():
-    return None, preserved
-  for record_path in sorted(runs_dir.glob("*/run.json")):
+    return result
+  for run_dir in sorted(path for path in runs_dir.iterdir() if path.is_dir()):
+    record_path = run_dir / "run.json"
+    if not record_path.is_file():
+      result.blocked.append((run_dir, "run record run.json is missing from an existing run directory"))
+      continue
     try:
       record = json.loads(record_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-      raise ReplayError(f"experiment run record {record_path} is unreadable: {e}") from e
-    if record.get("input_identity") != identity:
+      result.blocked.append((run_dir, f"run record run.json is unreadable: {e}"))
       continue
-    if record.get("status") == "completed":
-      completed = record_path.parent
+    recorded = record.get("input_identity")
+    if not isinstance(recorded, str) or not recorded:
+      result.blocked.append((run_dir, "run record carries no input_identity"))
+      continue
+    if run_dir.name != run_directory_name(recorded):
+      result.blocked.append(
+          (
+              run_dir, f"identity/path disagreement: the record's input_identity prefix "
+              f"{run_directory_name(recorded)!r} does not name this run directory {run_dir.name!r}"))
+      continue
+    if recorded != identity:
+      continue  # another legitimate input identity, in its own directory
+    status = record.get("status")
+    if status == "completed":
+      result.completed = run_dir
+    elif status == "failed":
+      result.preserved.append(run_dir)
     else:
-      preserved.append(record_path.parent)
-  return completed, preserved
+      result.blocked.append((run_dir, f"the run record is not settled (status {status!r})"))
+  return result
+
+
+def _blocked_arm(
+    *,
+    case_id: str,
+    manifest_path: Path,
+    manifest: Manifest,
+    contract: variants.ExperimentContract,
+    identity: str,
+    blocked: list[tuple[Path, str]],
+    preserved: list[Path],
+    options: ExperimentOptions,
+    run_error: str | None = None,
+) -> dict:
+  """The arm outcome when existing evidence under this output root cannot be interpreted.
+
+  No model call is made and nothing is deleted or replaced: the evidence stays byte-for-byte,
+  the failure is visible, and the other cases and variants continue. A fresh output root is the
+  intentional way to request a new draw.
+  """
+  evidence = [{"path": _rel_path(path, options.output_dir), "reason": reason} for path, reason in blocked]
+  detail = "; ".join(f"{item['path']}: {item['reason']}" for item in evidence)
+  error = (
+      "existing evidence under this output root failed the identity/occupancy check, so this arm neither "
+      f"ran nor reused anything and its files are preserved byte-for-byte ({detail}); resolve the evidence "
+      "or use a fresh output root for a new draw")
+  if run_error:
+    error = f"the fresh attempt failed ({run_error}); afterwards, {error[0].lower() + error[1:]}"
+  record_rel = next(
+      (_rel_path(path / "run.json", options.output_dir) for path, _ in blocked if (path / "run.json").is_file()), None)
+  return {
+      "case": case_id,
+      "manifest": str(manifest_path),
+      "variant": contract.name,
+      "variant_title": contract.title,
+      "input_identity": identity,
+      "base_commit": manifest.base_commit,
+      "prompt_versions": {
+          "editor": contract.editor_prompt_version,
+          "reviewer": contract.reviewer_prompt_version,
+      },
+      "denominators": _denominators(manifest),
+      "run":
+          {
+              "dir": None,
+              "status": "blocked",
+              "error": error,
+              "reused": False,
+              "record": record_rel,
+              "proposal": None,
+              "report": None,
+              "preserved_failed_attempts": [_rel_path(path, options.output_dir) for path in preserved],
+              "blocked_evidence": evidence,
+              "usage": None,
+          },
+      "comparison":
+          {
+              "status": "blocked",
+              "error": "not attempted: the arm's existing evidence failed the identity/occupancy check",
+              "dir": None,
+              "comparison": None,
+              "report": None,
+              "editor_only_status": None,
+              "post_review_status": None,
+              "editor_only": None,
+              "post_review": None,
+          },
+      "editor_provenance": None,
+  }
 
 
 def _read_run_record(run_dir: Path) -> dict:
@@ -433,6 +564,7 @@ def _run_section(
         "proposal": None,
         "report": None,
         "preserved_failed_attempts": [_rel_path(path, output_root) for path in preserved_dirs],
+        "blocked_evidence": [],
         "usage": None,
     }
   usage = _usage(record)
@@ -445,15 +577,62 @@ def _run_section(
       "proposal": _rel_path(run_dir / "proposal.json", output_root) if (run_dir / "proposal.json").is_file() else None,
       "report": _rel_path(run_dir / "report.html", output_root) if (run_dir / "report.html").is_file() else None,
       "preserved_failed_attempts": [_rel_path(path, output_root) for path in preserved_dirs],
+      "blocked_evidence": [],
       "usage": usage,
   }
 
 
-def _chosen_response_sha256(run_dir: Path, record: dict, role: str) -> str | None:
+def _editor_provenance(run_dir: Path | None, record: dict | None, manifest: Manifest, output_root: Path) -> dict | None:
+  """Per-theme call provenance of one arm's editor: every recorded attempt, the chosen one marked.
+
+  The chosen response is the exact bytes the arm's reviewer consumed; the digest identifies
+  content only — equal digests across arms mean identical content, never a shared call. The
+  provenance is reported whenever the run record is readable, including when a later reviewer
+  stage failed, and it accounts for every theme of the manifest, not just the first one.
+  """
+  if run_dir is None or record is None:
+    return None
+  themes: dict[str, dict] = {
+      theme.name: {
+          "actual_calls": 0,
+          "attempts": [],
+          "chosen_response": None,
+      } for theme in manifest.themes
+  }
+  total = 0
   for call in record.get("calls", []):
-    if call.get("role") == role and call.get("chosen") and call.get("response_file"):
-      return sha256_hex((run_dir / call["response_file"]).read_bytes())
-  return None
+    if call.get("role") != "editor":
+      continue
+    total += 1
+    theme = themes[call["theme"]]
+    theme["actual_calls"] += 1
+    response_file = call.get("response_file")
+    digest = sha256_hex((run_dir / response_file).read_bytes()) if response_file else None
+    attempt = {
+        "call": call.get("name"),
+        "attempt": call.get("attempt"),
+        "chosen": bool(call.get("chosen")),
+        "validation": (call.get("validation") or {}).get("status"),
+        "request_file": call.get("request_file"),
+        "response_file": response_file,
+        "response_sha256": digest,
+        "output_tokens": call.get("output_tokens"),
+    }
+    theme["attempts"].append(attempt)
+    if attempt["chosen"]:
+      theme["chosen_response"] = {
+          "call": attempt["call"],
+          "attempt": attempt["attempt"],
+          "response_file": attempt["response_file"],
+          "response_sha256": attempt["response_sha256"],
+      }
+  for theme in themes.values():
+    theme["attempts"].sort(key=lambda a: a["attempt"] or 0)
+  return {
+      "run_record": _rel_path(run_dir / "run.json", output_root),
+      "actual_editor_calls": total,
+      "themes": themes,
+  }
 
 
 def _denominators(manifest: Manifest) -> dict:
@@ -496,7 +675,7 @@ def _build_summary(
       "scope":
           {
               "control": CONTROL_NOTE,
-              "stochastic_editor_draws": STOCHASTIC_NOTE,
+              "editor_calls": EDITOR_CALLS_NOTE,
               "feedback_views": FEEDBACK_VIEW_NOTE,
               "quality": QUALITY_NOTE,
           },
@@ -506,6 +685,11 @@ def _build_summary(
           [
               {
                   **contract.record_payload()["variant"],
+                  # The descriptive stage labels sit beside the declared dimensions for the report.
+                  "editor_stage":
+                      contract.editor_stage,
+                  "reviewer_stage":
+                      contract.reviewer_stage,
                   "editor_system_sha256":
                       sha256_hex(contract.editor_system.encode("utf-8")),
                   "reviewer_system_sha256":
@@ -520,28 +704,55 @@ def _build_summary(
                   "base_commit": manifest.base_commit,
                   "denominators": _denominators(manifest),
                   "arms": by_case.get(case_id, []),
-                  "editor_draws": _editor_draws(by_case.get(case_id, [])),
+                  "editor_calls": _editor_calls_section(by_case.get(case_id, [])),
               } for case_id, manifest_path, manifest in cases
           ],
   }
 
 
-def _editor_draws(arms: list[dict]) -> dict:
-  """Which variants of this case genuinely shared one recorded editor response, and which did not."""
-  by_hash: dict[str, list[str]] = {}
-  missing: list[str] = []
+def _editor_calls_section(arms: list[dict]) -> dict:
+  """Actual editor calls per variant arm, and byte-identical chosen content labeled as such.
+
+  Two arms that recorded the same editor bytes still made two real calls: the grouping here is
+  content equality, never shared sampling or a reused call, and each arm's usage stays its own.
+  """
+  per_variant: dict[str, dict] = {}
+  themes: set[str] = set()
+  without: list[str] = []
   for arm in arms:
-    digest = arm.get("editor_response_sha256")
-    if digest is None:
-      missing.append(arm["variant"])
-    else:
-      by_hash.setdefault(digest, []).append(arm["variant"])
-  shared = sorted([sorted(names) for names in by_hash.values() if len(names) > 1])
+    provenance = arm.get("editor_provenance") or {}
+    theme_sections: dict[str, dict] = {}
+    for theme, theme_provenance in (provenance.get("themes") or {}).items():
+      themes.add(theme)
+      chosen = theme_provenance["chosen_response"]
+      theme_sections[theme] = {
+          "actual_calls": theme_provenance["actual_calls"],
+          "chosen_response_file": chosen["response_file"] if chosen else None,
+          "chosen_response_sha256": chosen["response_sha256"] if chosen else None,
+      }
+    per_variant[arm["variant"]] = {
+        "run_record": provenance.get("run_record"),
+        "actual_editor_calls": provenance.get("actual_editor_calls", 0),
+        "themes": theme_sections,
+    }
+    if not theme_sections or all(section["chosen_response_sha256"] is None for section in theme_sections.values()):
+      without.append(arm["variant"])
+  identical: dict[str, list[list[str]]] = {}
+  for theme in sorted(themes):
+    by_digest: dict[str, list[str]] = {}
+    for variant, section in per_variant.items():
+      digest = section["themes"].get(theme, {}).get("chosen_response_sha256")
+      if digest:
+        by_digest.setdefault(digest, []).append(variant)
+    groups = sorted(sorted(group) for group in by_digest.values() if len(group) > 1)
+    if groups:
+      identical[theme] = groups
   return {
-      "note": STOCHASTIC_NOTE,
-      "shared_editor_responses": shared,
-      "distinct_editor_responses": len(by_hash),
-      "variants_without_editor_response": sorted(missing),
+      "note": EDITOR_CALLS_NOTE,
+      "actual_editor_calls": sum(section["actual_editor_calls"] for section in per_variant.values()),
+      "per_variant": per_variant,
+      "identical_chosen_content": identical,
+      "variants_without_chosen_editor_response": sorted(without),
   }
 
 
@@ -571,8 +782,8 @@ def render_experiment_report(summary: dict) -> str:
             _e(variant["title"]), _e(variant["name"])))
     parts.append(
         "<table><tr><th>dimension</th><th>value</th></tr>" + "".join(
-            "<tr><td>{}</td><td><code>{}</code></td></tr>".format(_e(field), _e(str(variant[field]))) for field in
-            ("editor_stage", "reviewer_stage", "feedback_view", "rationale_visibility", "reviewer_capability")) +
+            "<tr><td>{}</td><td><code>{}</code></td></tr>".format(_e(field), _e(str(variant[field])))
+            for field in ("editor_stage", "reviewer_stage", "entry_scope", "feedback_view", "rationale_visibility")) +
         "</table>")
     parts.append(
         f'<p class="mono">prompt versions: editor <code>{_e(variant["prompt_versions"]["editor"])}</code> · '
@@ -589,12 +800,17 @@ def render_experiment_report(summary: dict) -> str:
         f'<code>{_e(case["base_commit"])}</code> · themes <code>{_e(str(case["denominators"]["themes"]))}</code> · '
         f'input candidates <code>{_e(str(case["denominators"]["input_candidates"]))}</code></p>')
     parts.append(_case_arm_table(case))
-    draws = case["editor_draws"]
+    calls = case["editor_calls"]
+    identical = calls["identical_chosen_content"]
+    identical_text = "; ".join(
+        f"{theme}: " + ", ".join("/".join(group)
+                                 for group in groups)
+        for theme, groups in sorted(identical.items())) or "none"
     parts.append(
-        f'<p class="muted">Editor draws: {_e(str(draws["distinct_editor_responses"]))} distinct recorded '
-        f'editor response(s); shared byte-identical responses: '
-        f'{_e(", ".join("/".join(group) for group in draws["shared_editor_responses"])) or "none"}. '
-        f'{_e(draws["note"])}</p>')
+        f'<p class="muted">Editor calls: {_e(str(calls["actual_editor_calls"]))} actual editor call(s) across '
+        f'{_e(str(len(calls["per_variant"])))} variant arm(s); identical chosen editor content: '
+        f'{_e(identical_text)} &mdash; content equality, not a shared draw or a reused call. '
+        f'{_e(calls["note"])}</p>')
   parts.append(
       '<p class="muted">A failed arm keeps its recorded bundle, attempt chain, and usage under this output '
       'root and is never rerun here; a fresh output root is an intentional new draw.</p>')

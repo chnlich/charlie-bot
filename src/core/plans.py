@@ -9,20 +9,36 @@ Error domains are split: verbs (present/amend/approve/close) read plans.json via
 consume the tolerant read in ``read_plans_tolerant`` — the single authority for catch-and-derive.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import posixpath
 from enum import IntEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.core import plan_paths
-from src.core.artifact_check import run_assertions
-from src.core.config import CharlieBotConfig
-from src.core.json_utils import write_json_atomically
+from src.core.constants import PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES
 from src.core.memo import StatSignatureMemo
-from src.core.models import PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES, utc_now
-from src.core.sessions import SessionManager
 from src.core.sidebar_state import mark_sidebar_dirty
+
+if TYPE_CHECKING:
+  from src.core.config import CharlieBotConfig
+  from src.core.sessions import SessionManager
+
+
+def run_assertions(*args, **kwargs):
+  """Lazy delegate to ``artifact_check.run_assertions``.
+
+  The artifact-check import drags the backends registry (numpy, fastapi) — a
+  validation-path-only cost, paid here inside the verb's ``to_thread`` hop so
+  the plan chain's read paths (list endpoint, sidebar probe, ``plan list``)
+  never load it.
+  """
+  from src.core.artifact_check import run_assertions as _run_assertions
+
+  return _run_assertions(*args, **kwargs)
 
 # ---------------------------------------------------------------------------
 # DerivedState — internal enum (0 = UNKNOWN reserved); API use strings
@@ -84,6 +100,9 @@ def derive_state_str(plan: dict) -> str:
 
 
 def _utc_now_iso() -> str:
+  # Lazy: utc_now lives in the model stack (pydantic); only the verb paths stamp times.
+  from src.core.models import utc_now
+
   return utc_now().isoformat()
 
 
@@ -279,6 +298,8 @@ class PlanRegistryManager:
     # Every save path first reads plans.json or a bound artifact out of the
     # session dir, so the dir exists; no mkdir here — a deleted dir must fail
     # this write, not resurrect.
+    from src.core.json_utils import write_json_atomically
+
     await asyncio.to_thread(write_json_atomically, self._plans_path(session_id), _project_registry(data), indent=2)
     # Single funnel for every registry verb (present/amend/approve/close):
     # an awaiting-approval change must reach the sidebar snapshot.

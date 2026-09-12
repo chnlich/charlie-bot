@@ -32,11 +32,20 @@ HEAVY_MODULES = (
     "pydantic",
 )
 
+# The plan chain's extra bans: the validation gate's registry stack and the web
+# framework, none of which a plan command touches before its request.
+PLAN_HEAVY_MODULES = HEAVY_MODULES + (
+    "fastapi",
+    "src.core.artifact_check",
+    "src.agents.backends.registry",
+)
 
-def _modules_loaded_after_common_import() -> list[str]:
+
+def _modules_loaded_after_import(module_expr: str, heavy: tuple[str, ...]) -> list[str]:
   code = (
-      "import json, sys; import src.cli.common; "
-      f"print(json.dumps(sorted(set(sys.modules) & {set(HEAVY_MODULES)!r})))")
+      "import json, sys; "
+      f"{module_expr}; "
+      f"print(json.dumps(sorted(set(sys.modules) & {set(heavy)!r})))")
   proc = subprocess.run(
       [sys.executable, "-c", code],
       cwd=REPO_ROOT,
@@ -49,11 +58,46 @@ def _modules_loaded_after_common_import() -> list[str]:
 
 
 def test_cli_common_imports_without_the_heavy_chains() -> None:
-  loaded = _modules_loaded_after_common_import()
+  loaded = _modules_loaded_after_import("import src.cli.common", HEAVY_MODULES)
   assert loaded == [], (
       "src.cli.common pulled the server's heavy chains into the CLI process: "
       f"{loaded}; the CLI startup budget (docs/perf_baseline.md M92) depends on "
       "these staying out — import them lazily at the use site that needs them")
+
+
+def test_plan_chain_imports_without_the_heavy_chains() -> None:
+  # Every plan command imports the module and builds the parser (the amend/close
+  # choices ride src.core.constants, so parser build stays light too); the heavy
+  # chains load only inside the verb paths that need them (artifact check inside
+  # the validation to_thread hop).
+  loaded = _modules_loaded_after_import(
+      "import src.cli.plan; src.cli.plan._build_parser()", PLAN_HEAVY_MODULES)
+  assert loaded == [], (
+      "the plan command chain pulled the server's heavy chains into the CLI "
+      f"process: {loaded}; the M97 command wall (docs/perf_baseline.md) depends "
+      "on these staying out — import them lazily at the use site that needs them")
+
+
+def test_plan_constants_match_the_model_literals() -> None:
+  # The type home is models' Literal; the stdlib tuples the CLI parses with must
+  # stay its exact runtime image.
+  code = (
+      "import json; from typing import get_args; "
+      "import src.core.constants as c; import src.core.models as m; "
+      "print(json.dumps([list(c.PLAN_AMEND_TRIGGERS), list(get_args(m.PlanAmendTrigger)), "
+      "list(c.PLAN_CLOSE_MODES), list(get_args(m.PlanCloseMode))]))")
+  proc = subprocess.run(
+      [sys.executable, "-c", code],
+      cwd=REPO_ROOT,
+      capture_output=True,
+      text=True,
+      timeout=120,
+      check=True,
+  )
+  amend_tuple, amend_literal, close_tuple, close_literal = json.loads(proc.stdout)
+  assert amend_tuple == amend_literal and close_tuple == close_literal, (
+      "src.core.constants' plan vocabularies drifted from the models Literals: "
+      f"{amend_tuple} vs {amend_literal}; {close_tuple} vs {close_literal}")
 
 
 def test_config_defers_structlog_until_the_first_log_call() -> None:

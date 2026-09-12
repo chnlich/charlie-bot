@@ -18,6 +18,14 @@ SESSION_ID_ENV_VAR = "CHARLIEBOT_SESSION_ID"
 # artifacts), so the CLI argparse precheck and --help text share this constant.
 MAX_TRIGGER_MESSAGE_CHARS = 200
 
+# Plan-registry verb vocabularies: the CLI's argparse choices (src.cli.plan) and the
+# registry verbs' validation (src.core.plans) share one tuple per vocabulary, so the
+# plan chain imports no pydantic to parse args. The request models' Literal types
+# (src.core.models PlanAmendTrigger / PlanCloseMode) are the type home; the import
+# contract pins tuple == get_args(Literal).
+PLAN_AMEND_TRIGGERS = ("auto_amend", "feedback")
+PLAN_CLOSE_MODES = ("superseded", "abandoned", "completed")
+
 
 class WatchKind(StrEnum):
   UNKNOWN = "unknown"  # fail-loud sentinel; never a valid target, no default

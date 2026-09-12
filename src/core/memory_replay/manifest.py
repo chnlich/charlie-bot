@@ -24,8 +24,8 @@ File format (YAML, one document):
       tags: [<principle tag>, ...]     # rebuildable retrieval index, never a user rule
       approved_change:                 # nullable
         approved_change_ref: <provenance id of the approved diff>
-        before: <text before approval>
-        after: <text after approval>
+        before: <text before approval>   # empty when the approval created the text
+        after: <text after approval>     # empty when the approval deleted the text
   themes:                              # optional explicit assignments
     <theme name>:
       principles: [<principle tag>, ...]
@@ -191,6 +191,86 @@ class Manifest:
     return sorted(s.ref for s in self.sources if s.kind in ("entry", "document") and s.ref not in assigned)
 
 
+class _FrozenDumper(yaml.SafeDumper):
+  """SafeDumper that renders multi-line source texts as literal blocks.
+
+  Subclass-scoped so the global SafeDumper stays untouched; without this the
+  frozen manifest copy dumps every entry body as one quoted escape-sequence
+  line, which round-trips but is unreadable.
+  """
+
+
+def _represent_text(dumper: yaml.SafeDumper, value: str):
+  if "\n" in value:
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style="|")
+  return dumper.represent_scalar("tag:yaml.org,2002:str", value)
+
+
+_FrozenDumper.add_representer(str, _represent_text)
+
+
+def dump_manifest(manifest: Manifest) -> str:
+  """Serialize a resolved manifest back to self-contained schema-v1 YAML.
+
+  Every source's text is inlined — ``file:`` references were resolved at load
+  time — so this dump alone is the complete frozen input set, and loading it
+  with :func:`load_manifest` reproduces the same manifest and the same input
+  identity. The runner persists it inside the run bundle (``frozen/manifest.yaml``)
+  so a paired comparison stays possible after the original manifest moves or
+  changes.
+  """
+  doc = {
+      "version": MANIFEST_VERSION,
+      "base_commit": manifest.base_commit,
+      "topics": list(manifest.topics),
+      "sources":
+          [
+              {
+                  "ref": s.ref,
+                  "kind": s.kind,
+                  **({
+                      "path": s.path
+                  } if s.path is not None else {}),
+                  "text": s.text,
+                  **({
+                      "remember_request": True
+                  } if s.remember_request else {}),
+              } for s in manifest.sources
+          ],
+      "feedback_examples":
+          [
+              {
+                  "comment_event":
+                      f.comment_event,
+                  "comment_text":
+                      f.comment_text,
+                  "tags":
+                      list(f.tags),
+                  **(
+                      {
+                          "approved_change":
+                              {
+                                  "approved_change_ref": f.approved_change.approved_change_ref,
+                                  "before": f.approved_change.before,
+                                  "after": f.approved_change.after,
+                              }
+                      } if f.approved_change is not None else {}),
+              } for f in manifest.feedback_examples
+          ],
+      "themes":
+          {
+              t.name:
+                  {
+                      "principles": list(t.principles),
+                      "candidate_refs": list(t.candidate_refs),
+                      "entry_refs": list(t.entry_refs),
+                      "document_refs": list(t.document_refs),
+                  } for t in manifest.themes
+          },
+  }
+  return yaml.dump(doc, Dumper=_FrozenDumper, sort_keys=False, allow_unicode=True)
+
+
 def load_manifest(path: Path) -> Manifest:
   """Read and validate one replay manifest; raise :class:`ReplayManifestError` on any violation."""
   try:
@@ -323,10 +403,19 @@ def _load_feedback(spec: ManifestSpec, path: Path) -> list[FeedbackExample]:
         raise ReplayManifestError(
             f"replay manifest {path}: feedback {item.comment_event!r} has invalid approved_change_ref "
             f"{change.approved_change_ref!r}")
-      if not change.before.strip() or not change.after.strip():
+      before_empty = not change.before.strip()
+      after_empty = not change.after.strip()
+      if before_empty and after_empty:
         raise ReplayManifestError(
-            f"replay manifest {path}: feedback {item.comment_event!r} approved_change needs "
-            "non-empty before and after texts")
+            f"replay manifest {path}: feedback {item.comment_event!r} approved_change changes nothing: "
+            "before and after are both empty")
+      if not before_empty and not after_empty and change.before.strip() == change.after.strip():
+        raise ReplayManifestError(
+            f"replay manifest {path}: feedback {item.comment_event!r} approved_change changes nothing: "
+            "before and after are identical")
+      # One empty side is the real semantics of an approved deletion (nonempty before, empty
+      # after) or an approved creation (empty before, nonempty after). The actual texts — the
+      # empty side included — are preserved verbatim; nothing invents placeholder prose.
       approved = ApprovedChange(
           approved_change_ref=change.approved_change_ref, before=change.before, after=change.after)
     feedback.append(

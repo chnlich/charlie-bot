@@ -237,10 +237,26 @@ def _render_feedback(selections: list[FeedbackSelection]) -> str:
     lines.append(head)
     lines.append(f"comment:\n{example.comment_text.rstrip()}")
     if example.approved_change is not None:
-      lines.append(f"approved change (ref: {example.approved_change.approved_change_ref}):")
-      lines.append(f"--- before ---\n{example.approved_change.before.rstrip()}")
-      lines.append(f"--- after ---\n{example.approved_change.after.rstrip()}")
+      lines.extend(_render_approved_change(example.approved_change))
   return "\n".join(lines)
+
+
+# An empty side of an approved change is real feedback (an approved deletion has an empty
+# after, an approved creation an empty before), so the rendering names the fact instead of
+# leaving a bare section header the model could read as lost content. Nonempty sides render
+# exactly as before.
+_EMPTY_BEFORE_MARKER = "(empty: the approved revision created this text)"
+_EMPTY_AFTER_MARKER = "(empty: the approved revision deleted this text)"
+
+
+def _render_approved_change(change) -> list[str]:
+  before = change.before.rstrip() if change.before.strip() else _EMPTY_BEFORE_MARKER
+  after = change.after.rstrip() if change.after.strip() else _EMPTY_AFTER_MARKER
+  return [
+      f"approved change (ref: {change.approved_change_ref}):",
+      f"--- before ---\n{before}",
+      f"--- after ---\n{after}",
+  ]
 
 
 def _render_editor_proposals(editor_output: ThemeOutput) -> str:

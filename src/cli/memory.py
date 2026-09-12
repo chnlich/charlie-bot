@@ -1,4 +1,4 @@
-"""CLI: labeled-entry memory store (query / add / lint / replay).
+"""CLI: labeled-entry memory store (query / add / lint / replay / compare).
 
 Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
 (``~/.charliebot/memory/``). See ``src/core/memory.py`` for the store contract.
@@ -8,9 +8,12 @@ Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
   charliebot memory lint
   charliebot memory replay --input <manifest> --output-dir <dir> --backend <id> \
       --mode editor-only|editor-review
+  charliebot memory compare --run-dir <editor-review-run> --output-dir <dir>
 
 ``replay`` runs the isolated offline curation pipeline over a frozen manifest
-(docs/memory-replay.md); it never reads or writes the live store.
+(docs/memory-replay.md); it never reads or writes the live store. ``compare``
+derives both comparison arms of one recorded editor-review run from the same
+recorded editor response — offline, with no model calls.
 """
 
 import argparse
@@ -21,7 +24,14 @@ from pathlib import Path
 
 from src.core import memory
 from src.core.config import CharlieBotConfig, get_config
-from src.core.memory_replay import MODES, ReplayError, ReplayOptions, run_replay
+from src.core.memory_replay import (
+    MODES,
+    CompareOptions,
+    ReplayError,
+    ReplayOptions,
+    run_comparison,
+    run_replay,
+)
 
 
 def main() -> None:
@@ -53,6 +63,19 @@ def main() -> None:
   p_replay.add_argument("--backend", required=True, metavar="ID", help="Configured backend id from backends.options")
   p_replay.add_argument("--mode", required=True, choices=list(MODES), help="Model stages to run")
 
+  p_compare = sub.add_parser(
+      "compare", help="Compare an editor-review run against its own editor-only alternative (offline; no model calls)")
+  p_compare.add_argument(
+      "--run-dir",
+      required=True,
+      metavar="RUN_DIR",
+      help="Recorded editor-review run directory (the one containing run.json); see docs/memory-replay.md")
+  p_compare.add_argument(
+      "--output-dir",
+      required=True,
+      metavar="DIR",
+      help="Output root for comparison.json and report.html; must not overlap the run dir or the store")
+
   args = parser.parse_args()
   if args.command == "query":
     _cmd_query(args)
@@ -62,6 +85,8 @@ def main() -> None:
     _cmd_lint()
   elif args.command == "replay":
     _cmd_replay(args)
+  elif args.command == "compare":
+    _cmd_compare(args)
 
 
 def _cmd_query(args: argparse.Namespace) -> None:
@@ -152,6 +177,20 @@ def _cmd_replay(args: argparse.Namespace) -> None:
       f"dispositions: propose {outcome.propose}, no_change {outcome.no_change}, "
       f"needs_decision {outcome.needs_decision}")
   print(f"changed paths: {len(outcome.changed_paths)}")
+
+
+def _cmd_compare(args: argparse.Namespace) -> None:
+  options = CompareOptions(run_dir=Path(args.run_dir), output_dir=Path(args.output_dir))
+  try:
+    outcome = run_comparison(options)
+  except ReplayError as e:
+    print(f"error: {e}", file=sys.stderr)
+    sys.exit(1)
+  print("comparison complete: paired editor/reviewer (no model calls)")
+  print(f"source run: {args.run_dir}")
+  print(f"comparison: {outcome.comparison_path}")
+  print(f"report: {outcome.report_path}")
+  print(f"arms: editor-only {outcome.editor_status}, post-review {outcome.reviewer_status}")
 
 
 def _slugify(text: str) -> str:

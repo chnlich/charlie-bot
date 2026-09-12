@@ -11,7 +11,9 @@ under the requested output root::
       proposal.json        # exactly the plan 4.1 schema
       report.html          # the review page
       sources/<ref>.md     # frozen evidence snapshots
-      run.json             # identity, model identity, selection, usage, timing, status
+      frozen/manifest.yaml # the fully inlined frozen inputs, self-contained
+      run.json             # identity, model identity, selection, usage, timing, status,
+                           # prompt fingerprints, and the bundle's write-time hashes
       raw/                 # the exact request and response text of every model call
 
 Isolation is structural: the live memory store is never opened for reading or
@@ -48,8 +50,8 @@ from src.core.memory_replay.exchange import (
     build_reviewer_request,
     parse_model_output,
 )
-from src.core.memory_replay.identity import approval_digest, input_identity
-from src.core.memory_replay.manifest import Manifest, Theme, load_manifest
+from src.core.memory_replay.identity import approval_digest, input_identity, sha256_hex
+from src.core.memory_replay.manifest import Manifest, Theme, dump_manifest, load_manifest
 from src.core.memory_replay.report import ReportData, render_report
 from src.core.memory_replay.retrieval import FeedbackSelection, select_feedback
 from src.core.memory_replay.transport import OpenAICompatibleTransport, ReplayTransport, request_model_for
@@ -134,8 +136,20 @@ def run_replay(
           "editor": EDITOR_PROMPT_VERSION,
           "reviewer": REVIEWER_PROMPT_VERSION
       },
+      # Fingerprints of the exact system prompts sent to each stage, so a later comparison can
+      # verify the recorded responses follow the contract it validates against.
+      "system_prompts":
+          {
+              "editor": sha256_hex(EDITOR_SYSTEM.encode("utf-8")),
+              "reviewer": sha256_hex(REVIEWER_SYSTEM.encode("utf-8")),
+          },
       "model": model_identity,
       "manifest": str(options.manifest),
+      # Filled by _write_frozen_inputs before the first model call; None only if that failed.
+      "frozen_inputs": None,
+      # sha256 of every bundle file at the moment the run wrote it (run.json and the derived
+      # report excluded); a later comparison fails visibly when a recorded file changed.
+      "bundle_integrity": {},
       "themes": [],
       "unused_sources": manifest.unused_refs(),
       "calls": [],
@@ -143,6 +157,7 @@ def run_replay(
       "error": None,
   }
   try:
+    _write_frozen_inputs(run_dir, manifest, record)
     transport = _build_transport(transport_factory, option)
     final_outputs, selections = _run_stages(options, manifest, transport, run_dir, record)
     base = {path: validate.canonical_text(text) for path, text in manifest.base_entries().items()}
@@ -268,8 +283,10 @@ def _call_stage(
   raw_dir = run_dir / "raw"
   raw_dir.mkdir(exist_ok=True)
   (raw_dir / f"{name}.request.txt").write_text(user, encoding="utf-8")
+  _record_artifact_hash(run_dir, record, f"raw/{name}.request.txt")
   result = transport.complete(system=system, user=user)
   (raw_dir / f"{name}.response.txt").write_text(result.text, encoding="utf-8")
+  _record_artifact_hash(run_dir, record, f"raw/{name}.response.txt")
   record["calls"].append(
       {
           "name": name,
@@ -298,6 +315,32 @@ def _aggregate_candidate_results(ordered: list[tuple[Theme, ThemeOutput]]) -> li
   return sorted(rows, key=lambda row: row["source_ref"])
 
 
+def _write_frozen_inputs(run_dir: Path, manifest: Manifest, record: dict) -> None:
+  """Persist the resolved frozen inputs inside the run bundle before any model call.
+
+  The bundle then carries everything a later comparison needs even after the
+  original manifest moves or changes: the fully inlined manifest plus every
+  source snapshot, each hashed into ``bundle_integrity`` at write time.
+  """
+  frozen_dir = run_dir / "frozen"
+  frozen_dir.mkdir(parents=True)
+  (frozen_dir / "manifest.yaml").write_text(dump_manifest(manifest), encoding="utf-8")
+  sources_dir = run_dir / "sources"
+  sources_dir.mkdir(exist_ok=True)
+  for source in manifest.sources:
+    (sources_dir / f"{source.ref}.md").write_text(source.text, encoding="utf-8")
+  record["frozen_inputs"] = {"manifest": "frozen/manifest.yaml"}
+  for rel in ["frozen/manifest.yaml", *(f"sources/{source.ref}.md" for source in manifest.sources)]:
+    _record_artifact_hash(run_dir, record, rel)
+
+
+def _record_artifact_hash(run_dir: Path, record: dict, relpath: str) -> str:
+  """Hash one written bundle file into run.json's integrity map; the comparison rechecks it."""
+  digest = sha256_hex((run_dir / relpath).read_bytes())
+  record["bundle_integrity"][relpath] = digest
+  return digest
+
+
 def _write_bundle(
     *,
     run_dir: Path,
@@ -310,11 +353,12 @@ def _write_bundle(
     candidate_results: list[dict],
     selections: dict[str, list[FeedbackSelection]],
 ) -> None:
-  """Write the proposal, its evidence snapshots, the report, and the run record."""
-  sources_dir = run_dir / "sources"
-  sources_dir.mkdir(exist_ok=True)
-  for source in manifest.sources:
-    (sources_dir / f"{source.ref}.md").write_text(source.text, encoding="utf-8")
+  """Write the proposal, the report, and the run record.
+
+  The frozen inputs (manifest copy and source snapshots) were written before the
+  first model call, so failed runs are self-contained too; this only adds the
+  derived proposal.
+  """
   selected_events = sorted(
       {selection.example.comment_event for selected in selections.values() for selection in selected})
   feedback_refs = []
@@ -340,6 +384,7 @@ def _write_bundle(
   }
   (run_dir / "proposal.json").write_text(
       json.dumps(proposal, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+  _record_artifact_hash(run_dir, record, "proposal.json")
   changed_mapping = [
       {
           "path":

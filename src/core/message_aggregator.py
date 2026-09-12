@@ -359,8 +359,10 @@ class MessageAggregator:
     Feeding the clone continues from the same position without mutating the
     original; the message projection uses that to evaluate its still-open
     interval region speculatively while the fed aggregator stays clean for
-    the next ingest. ``_tools_buf`` dicts are copied because USER events
-    carrying tool_result blocks mutate them in place.
+    the next ingest. Tool rows are replaced, never mutated, after ingestion
+    (``_buffer_tool``/``_attach_tool_output`` rebind the slot), so the clone
+    shares them; only the list itself is copied, keeping the clone's appends
+    and rebinds local.
     """
     copied = MessageAggregator(self._idx_offset, emit_stream_deltas=self.emit_stream_deltas)
     copied._processed = self._processed
@@ -369,7 +371,7 @@ class MessageAggregator:
     copied._last_assistant_ts = self._last_assistant_ts
     copied._last_event_idx = self._last_event_idx
     copied._last_event_id = self._last_event_id
-    copied._tools_buf = [dict(t) for t in self._tools_buf]
+    copied._tools_buf = list(self._tools_buf)
     return copied
 
   def flush_pending(self) -> Iterator[dict]:

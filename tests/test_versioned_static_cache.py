@@ -14,31 +14,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import make_http_scope
 
 import server
 from src.api import pages
 
 
 def _drive(url: str) -> dict[str, str]:
-  path, _, qs = url.partition("?")
   headers: dict[str, str] = {}
-  scope: dict[str, Any] = {
-      "type": "http",
-      "asgi": {
-          "version": "3.0",
-          "spec_version": "2.3"
-      },
-      "http_version": "1.1",
-      "method": "GET",
-      "scheme": "http",
-      "path": path,
-      "raw_path": url.encode(),
-      "query_string": qs.encode(),
-      "root_path": "",
-      "headers": [(b"host", b"t")],
-      "client": ("t", 1),
-      "server": ("t", 80),
-  }
+  scope = make_http_scope(url, headers=[(b"host", b"t")])
 
   async def receive() -> dict[str, Any]:
     return {"type": "http.request", "body": b"", "more_body": False}

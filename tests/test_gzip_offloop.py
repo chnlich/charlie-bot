@@ -3,32 +3,16 @@ import gzip
 from collections.abc import AsyncIterator
 from typing import Any
 
+from conftest import make_http_scope
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import Response
-from starlette.types import Message, Scope
+from starlette.types import Message
 
 import server
 
 BODY = ("{\"text\": \"" + "内容" * 60_000 + "\"}").encode("utf-8")
-SCOPE: Scope = {
-    "type": "http",
-    "asgi": {
-        "version": "3.0",
-        "spec_version": "2.3"
-    },
-    "http_version": "1.1",
-    "method": "GET",
-    "scheme": "http",
-    "path": "/big",
-    "raw_path": b"/big",
-    "query_string": b"",
-    "root_path": "",
-    "headers": [(b"host", b"t"), (b"accept-encoding", b"gzip")],
-    "client": ("t", 1),
-    "server": ("t", 80),
-}
 
 
 def _strip_mtime(wire: bytes) -> bytes:
@@ -74,7 +58,8 @@ def _drive(app: FastAPI) -> tuple[dict[str, str], bytes]:
     await done.wait()
     return {"type": "http.disconnect"}
 
-  asyncio.run(app(SCOPE, receive, send))
+  scope = make_http_scope("/big", headers=[(b"host", b"t"), (b"accept-encoding", b"gzip")])
+  asyncio.run(app(scope, receive, send))
   return headers, body
 
 

@@ -34,6 +34,7 @@ manifest cannot carry them.
 """
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from pydantic import ValidationError
@@ -360,11 +361,19 @@ def evidence_context_payload(manifest: Manifest, theme: Theme) -> dict:
   }
 
 
-def parse_model_output(raw: str, *, role: str) -> ThemeOutput:
-  """Parse one stage's response into a :class:`ThemeOutput`; raise on any shape violation."""
+def parse_stage_output(
+    raw: str,
+    spec_cls: type[ModelOutputSpec],
+    candidates_from_spec: Callable[[ModelOutputSpec], list[CandidateRow]],
+    *,
+    role: str,
+) -> ThemeOutput:
+  """The one mechanical parse both stage parsers share: one JSON object validated against
+  *spec_cls*, shape violations raised as :class:`ReplayModelOutputError`, entries converted,
+  the caller's candidates conversion deciding the row type."""
   payload = parse_model_json(raw, role=role)
   try:
-    spec = ModelOutputSpec.model_validate(payload)
+    spec = spec_cls.model_validate(payload)
   except ValidationError as e:
     raise ReplayModelOutputError(f"{role}: response does not match the required JSON shape: {e}") from e
   entries = [
@@ -372,11 +381,19 @@ def parse_model_output(raw: str, *, role: str) -> ThemeOutput:
           action=item.action, path=item.path, text=item.text, source_refs=list(item.source_refs), reason=item.reason)
       for item in spec.entries
   ]
-  candidates = [
+  return ThemeOutput(entries=entries, candidates=candidates_from_spec(spec), raw=raw)
+
+
+def parse_model_output(raw: str, *, role: str) -> ThemeOutput:
+  """Parse one stage's response into a :class:`ThemeOutput`; raise on any shape violation."""
+  return parse_stage_output(raw, ModelOutputSpec, _candidate_rows_from_spec, role=role)
+
+
+def _candidate_rows_from_spec(spec: ModelOutputSpec) -> list[CandidateRow]:
+  return [
       CandidateRow(source_ref=row.source_ref, outcome=row.outcome, paths=list(row.paths), reason=row.reason)
       for row in spec.candidates
   ]
-  return ThemeOutput(entries=entries, candidates=candidates, raw=raw)
 
 
 def parse_model_json(raw: str, *, role: str) -> dict:

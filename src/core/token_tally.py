@@ -1416,7 +1416,7 @@ def _fold_charliebot_records(t: _Tally, records: list[list]) -> int:
 
 
 def collect_charliebot(
-    t: _Tally, sessions: Path, codex_homes: dict[str, Path], cache: TallyCache | None,
+    t: _Tally, codex_homes: dict[str, Path], cache: TallyCache | None,
     rows: list[tuple[str, str, int | None, int | None, str | None]]) -> None:
   """Tally the charlie-bot corpus into the accumulator: thread event logs and master raw
   captures, served per file from the cache document like the CLI sources. *rows* is the
@@ -1943,7 +1943,7 @@ def collect_token_usage(
     t.notes.extend(charliebot_probe.notes)
     collect_claude(t, claude_homes, cache)
     collect_codex(t, codex_homes, cache)
-    collect_charliebot(t, sessions_dir, codex_homes, cache, charliebot_rows)
+    collect_charliebot(t, codex_homes, cache, charliebot_rows)
     _aggregate_memo = (signature, _SourceAggregate.snapshot(t, notes_from))
   else:
     _aggregate_memo[1].apply(t)

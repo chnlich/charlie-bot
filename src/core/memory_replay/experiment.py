@@ -172,8 +172,7 @@ def run_experiment(
               model_identity=model_identity,
               transport_factory=transport_factory))
 
-  summary = _build_summary(
-      options=options, cases=cases, contracts=contracts, model_identity=model_identity, arms=arms, now=now)
+  summary = _build_summary(cases=cases, contracts=contracts, model_identity=model_identity, arms=arms, now=now)
   options.output_dir.mkdir(parents=True, exist_ok=True)
   summary_path = options.output_dir / "experiment.json"
   report_path = options.output_dir / "report.html"
@@ -642,7 +641,6 @@ def _rel_path(path: Path, root: Path) -> str:
 
 def _build_summary(
     *,
-    options: ExperimentOptions,
     cases: list[tuple[str, Path, Manifest]],
     contracts: list[variants.ExperimentContract],
     model_identity: dict,

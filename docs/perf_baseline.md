@@ -5564,10 +5564,10 @@ M89 — backend stderr tee, per chunk. Every covered backend's run tees subproce
 run's stderr.log (0.6-4 MB on disk per run) through the streamed loop's per-chunk write before
 the in-memory tail update, and the tee's executor-hop count is invisible to the HTTP probes
 above. The collector drives the per-chunk tee exactly as the pump issues it — a scratch
-stderr.log under /tmp, 8 KB chunks, one warm pass then 50 timed tees — dispatching on the
-checkout (the pre-fix aiofiles write+flush pair vs the one-hop helper; the dispatch reads the
-module), the same shape as the M82 protocol. Evidence points the same collector at the before
-and after checkouts (``CHECKOUT`` at each root):
+stderr.log under /tmp, 8 KB chunks, one warm pass then 50 timed tees — through the tee's
+module-level write, read as a direct attribute so a renamed helper fails the collector instead
+of silently timing a removed shape, the same shape as the M82 protocol. Evidence points the
+same collector at the before and after checkouts (``CHECKOUT`` at each root):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
@@ -5578,30 +5578,21 @@ import src.agents.backends.base as base_mod
 chunk = b"x" * 8192
 path = os.path.join(tempfile.mkdtemp(prefix="m89-stderr-tee-"), "stderr.log")
 
+# The tee's write; a checkout whose base module lacks the name has no shape
+# worth timing, so the AttributeError is the finding.
+tee = base_mod._write_chunk
+
 async def main():
-    tee = getattr(base_mod, "_tee_stderr_chunk", None)
-    if tee is not None:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
-        async def one():
-            await tee(fd, chunk)
-    else:
-        import aiofiles
-        f = await aiofiles.open(path, "wb")
-        async def one():
-            await f.write(chunk)
-            await f.flush()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
     for _ in range(5):
-        await one()  # warm, as a run's first stderr bytes; not timed
+        await tee(fd, chunk)  # warm, as a run's first stderr bytes; not timed
     times = []
     for _ in range(50):
         t0 = time.perf_counter()
-        await one()
+        await tee(fd, chunk)
         times.append(time.perf_counter() - t0)
     times.sort()
-    if tee is None:
-        await f.close()
-    else:
-        os.close(fd)
+    os.close(fd)
     print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: stderr tee chunk "
           f"median {times[24] * 1e6:.0f} us, max {times[-1] * 1e6:.0f} us over 50")
 
@@ -5615,9 +5606,10 @@ writes every 8 KB chunk), and the antigravity envelope pump writes its whole std
 way; the claude-family backends' raw stdout lands through the spawn fd, so those runs pay no
 per-chunk write. The collector drives both shapes exactly as the pump issues them — a scratch
 stdout.log under /tmp, 8 KB chunks and one printed line, one warm pass then 50 timed writes
-each — dispatching on the checkout (the pre-fix aiofiles shapes vs the one-hop helper; the
-dispatch reads the module), the same shape as the M89 protocol. Evidence points the same
-collector at the before and after checkouts (``CHECKOUT`` at each root):
+each — through the pumps' module-level write, read as a direct attribute so a renamed helper
+fails the collector instead of silently timing a removed shape, the same shape as the M89
+protocol. Evidence points the same collector at the before and after checkouts (``CHECKOUT``
+at each root):
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
@@ -5629,29 +5621,16 @@ chunk = b"x" * 8192
 line = b"2026-09-11T04:00:00.000Z  INFO serve listening on 127.0.0.1:4099\n"
 path = os.path.join(tempfile.mkdtemp(prefix="m90-stdout-pump-"), "stdout.log")
 
-# Post-fix helper (one-hop fd write); None on the pre-fix checkout.
-helper = getattr(base_mod, "_write_stdout_chunk", None)
+# The pumps' write; a checkout whose base module lacks the name has no shape
+# worth timing, so the AttributeError is the finding.
+helper = base_mod._write_chunk
 
 async def main():
-    if helper is not None:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666)
-        async def chunk_one():
-            await helper(fd, chunk)
-        async def line_one():
-            await helper(fd, line)
-    else:
-        import aiofiles
-        f = await aiofiles.open(path, "ab")
-        async def chunk_one():
-            # the pre-fix _stream_stdout shape: the handle is held for the run,
-            # every chunk pays the write+flush pair
-            await f.write(chunk)
-            await f.flush()
-        async def line_one():
-            # the pre-fix _append_stdout shape: the file object per line
-            async with aiofiles.open(path, "ab") as g:
-                await g.write(line)
-                await g.flush()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666)
+    async def chunk_one():
+        await helper(fd, chunk)
+    async def line_one():
+        await helper(fd, line)
     for one in (chunk_one, line_one):
         for _ in range(5):
             await one()  # warm, as a run's first bytes; not timed
@@ -5663,10 +5642,7 @@ async def main():
         times.sort()
         name = "chunk" if one is chunk_one else "line"
         print(f"{name} median {times[24] * 1e6:.0f} us, max {times[-1] * 1e6:.0f} us over 50")
-    if helper is not None:
-        os.close(fd)
-    else:
-        await f.close()
+    os.close(fd)
 
 asyncio.run(main())
 EOF
@@ -5873,6 +5849,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-11 | this PR | M89/M90 collector repair: since #1346 (15:37 today) renamed the two per-chunk log writes as one `base._write_chunk`, both standing collectors' `getattr(…, None)` dispatches missed the new name and silently timed the pre-fix aiofiles fallback — this round's sweep read M89 tee 178 µs, M90 chunk 180 µs / startup line 417 µs medians (re-runs 173-212 / 409-467 µs at load 1.75 one-minute), the #1303 landing's before numbers, and every M89/M90 reading in that window proved nothing; repaired commands read, three rounds back-to-back at load 1.72-1.90 one-minute: M89 tee 89/91/83 µs, M90 chunk 91/96/81 µs, line 87/96/71 µs — the one to_thread round-trip floor the #1303 landing documented, all inside the standing < 200 µs ranges, maxima 0.5-3.4 ms the scheduler jitter the M91 row classifies; collector commands only, no product code | the getattr-plus-aiofiles dispatch existed for the #1303/#1288 before/after arms and became a trap once the helper moved under it: the fallback has no failure mode, so a renamed helper silently re-prices a removed shape (the #1285 vacuous-read class, the M53 repair's precedent); both collectors now read the helper as a direct attribute — a checkout whose base module lacks the name fails the collector loudly instead of timing a shape the tee and pumps no longer run — and the dead aiofiles arms are gone |
 | 2026-09-11 | #1348 (row recorded in this docs-only follow-up per the #1046 precedent, the landing PR shipped without it) | M68 marked changed-poll rebuild median 7.09/7.60/7.76 → 3.78/3.87/3.92 ms, −45 % to −49 %, maxima 7.75-8.84 → 4.60-5.29 ms (three interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, 499-row / 4393 KB worst on-disk thread-metadata corpus of session dfe393f7, scratch CHARLIEBOT_HOME per arm, live home read-only, body byte-identical 179620 B across all six arms, every paired round faster at load 1.01-1.09 one-minute; no-regression witnesses interleaved ×2: M36 full poll 2.06/2.12 → 2.11/2.17 ms with body identical, conditional 204 1.92-2.13 ms both arms, M63 /view 1.02/1.14 → 1.01/1.03 ms with body 193415 B identical; 5124-passed suite plus 5 new contract tests — incremental body byte-identical to the full walk's etag included, vanished marked file drops the row, the sweep lands within 10 continuously marked polls, a path-less mark full-walks, and the marked-path cap drops the whole burst) | the marked round re-walked every row-source file (one stat per thread metadata) and re-parsed/re-serialized the whole body to find the one file the writer had just published; the writers' marks now carry the published path (mark_sidebar_dirty(session_id, path), post-rename), and the poll proves its stored body by stat-ing exactly the marked paths, patching the stored signature, and rebuilding rows from the row memo plus a parse of each moved file, with the every-10th-poll full walk kept on schedule by the incremental proof advancing the sweep countdown; the same PR repairs the standing collector, which had never driven a rebuild — it overrode deps.get_config while the endpoint resolves get_config_on_loop, so the endpoint walked the live home, the scratch rewrites were invisible, and every timed request was walk-plus-memo-serve (the vacuous-read class; this round's pre-fix sweep read 8.63 ms of that shape, and the reviewer's finding on the marked-path cap — clear-then-add leaving a one-path set that proved the burst's revision — fixed in the landing's second commit); M68 healthy range recalibrated < 0.007 s → < 0.005 s with this PR |
 | 2026-09-11 | this PR | M84 stdout-stream replay median 36.8/35.8/36.1 → 12.7/12.9/13.3 ms, −63 % to −65 %, maxima 37.2-39.3 → 12.9-14.1 ms; tail-follow replay median 39.1/39.5/38.8 → 36.8/37.8/37.7 ms, −4 % to −6 %, maxima 40.0-40.1 → 37.2-38.6 ms (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 10.1 MB / 64-line worst on-disk raw agent log whose single 9.99 MB observation line parses in ~12.5 ms bare, scratch copy, live home read-only, parser parity 0 divergences both arms, every paired round faster at load 1.4-1.7 one-minute; component attribution: the removed cost is the per-line `errors="replace"` decode — 6.0 ms on the 10 MB line — while `strip()` already returns the original object for a clean line and orjson parses str and bytes alike, so the str-mode readers move only where bytes lines flowed through a pre-decode); no-regression witnesses on the branch: M78 whole-file parse unchanged 51.6/52.4 → 51.4/49.9 ms (interleaved ×2, the str reader), M13 steady state 0.0000 s, M26 advance 0.18 ms parity True digest e94c56635194, M34 full 0.0055 s / after=total 0.0018 s (40 B), M52 append at the fdatasync floor; 5112-passed suite plus 4 new bytes-contract tests | every spawned-stdout and tail-follow stream line paid a full `errors="replace"` decode before the parse although orjson parses the wire's UTF-8 bytes natively — the decode rode both backend stream funnels (the live read side of every codex/opencode streamed turn and the raw-log tail-follow loop, the same pre-decode shape parse_raw_lines shed at its M74 landing); the strict bytes parse is now the fast path inside the skip contract's one home (parse_ndjson_line), with the replace decode demoted to the fallback that decides torn multibyte (the U+FFFD contract preserved and pinned by new tests), and both funnels feed raw bytes |
 | 2026-09-11 | this PR | M94 page body median 16.14/16.14/16.14 MB → 0.84/0.84/0.84 MB, −95 %, page dumps 36.7/35.0/34.6 → 1.8/1.9/1.8 ms; streamed replay serialized 627.2/627.2/627.2 → 20.2/20.2/20.2 MB, −97 %, dumps wall 1390/1387/1386 → 45/44/44 ms (three interleaved rounds of the new collector — main checkout before vs branch worktree after back-to-back, 531-event / 16.2 MB live chat file of session 4914c102 whose largest single tool_result carries 9.92 MB of Bash output, live home read-only, every paired round faster at load 1.25-1.46 one-minute; live-log corroboration: that session's bootstraps read 342-890 ms across the 25 h server log — the 16 MB page's dumps+gzip+transfer — and its raw events.jsonl downloads 1.5-1.8 s, shapes the capped page bounds); no-regression witnesses interleaved ×2: M38 fan-out unchanged (same selected turn, 186 dumps calls 5 ms, final-frame parity True both arms), M26 advance 0.12-0.18 ms with parity True digest e94c56635194 identical, M35 view/bootstrap bodies byte-identical (digests ff7b6850b70d / e153e88533ab) and the events page digest moving 68668edc2776 → 776c27d41c44 (624733 → 624218 B — one barely-over-cap output's trimmed tail, the cap's only served-body change); 5094-passed suite plus 4 new cap tests | every render path re-serializes the aggregator's whole buffered draft — each page payload (bootstrap, events, view) and each `stream` delta snapshot — so one big tool_result rode every subsequent delta and every switch back to the session: the corpus replayed through the live broadcast shape serialized 627 MB across 356 deltas (1.4-1.6 s of event-loop json.dumps per replay) and its projection page shipped 16.14 MB per bootstrap; the aggregator now caps each tool's rendered output at 20000 chars with an `output_truncated` marker the renderer surfaces (the expand still reveals the capped tail; 99 % of on-disk outputs — p99 26016 chars — keep their full text, the cap bounds only the top 1 %), and the full text stays on the persisted event where the raw download, the fork reference, and the review scans already read it; M94 definition and healthy range introduced with this PR |

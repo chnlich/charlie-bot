@@ -100,19 +100,23 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
   }
 
 
-# The switch bootstrap ships each tool's whole input and output, but the
+# The bootstrap payload (the SPA switch's fetch and the index page's embedded
+# SESSION_BOOTSTRAP alike) ships each tool's whole input and output, but the
 # renderer (web/static/js/chat/rendering.js renderToolActivity) displays only a
 # bounded preview without a click — an output's first 500 characters plain, an
-# input's 60-80 character summary line — inside a block hidden behind the "N
+# input's summary line (80 chars for Bash, 60 for other named tools, the full
+# file path/pattern for the file tools) — inside a block hidden behind the "N
 # tool calls" toggle, inside turns that mostly render folded. The cap must
 # match the renderer's 500-character output split: at exactly the cap no dead
-# reveal toggle renders and the existing output_truncated note shows. Full text
-# stays on the persisted chat event, the same home the M94 render cap points at.
+# reveal toggle renders and the existing output_truncated note shows. A long
+# path/pattern summary the renderer would have shown in full trims to the cap
+# behind the input_truncated note. Full text stays on the persisted chat
+# event, the same home the M94 render cap points at.
 _SWITCH_TOOL_PREVIEW_CHARS = 500
 
 
-def _switch_tool_preview(tool: dict) -> dict:
-  """One tool row's switch-payload shape: string fields over the preview cap
+def _bootstrap_tool_preview(tool: dict) -> dict:
+  """One tool row's bootstrap-payload shape: string fields over the preview cap
   trim to the cap with their truncation markers set."""
   output = tool.get("output")
   input_val = tool.get("input")
@@ -135,8 +139,8 @@ def _switch_tool_preview(tool: dict) -> dict:
   return preview
 
 
-def _switch_tool_previews(messages: list[dict]) -> list[dict]:
-  """The switch bootstrap's messages with tool input/output trimmed to the
+def _bootstrap_tool_previews(messages: list[dict]) -> list[dict]:
+  """The bootstrap payload's messages with tool input/output trimmed to the
   preview cap. The projection memo's dicts are shared with the events pages and
   the M26 digest, so a message copies only when one of its tools actually
   trims; unchanged messages pass through by reference."""
@@ -146,7 +150,7 @@ def _switch_tool_previews(messages: list[dict]) -> list[dict]:
     if not isinstance(tools, list):
       out.append(msg)
       continue
-    previews = [_switch_tool_preview(tool) if isinstance(tool, dict) else tool for tool in tools]
+    previews = [_bootstrap_tool_preview(tool) if isinstance(tool, dict) else tool for tool in tools]
     if all(new is old for new, old in zip(previews, tools)):
       out.append(msg)
       continue
@@ -159,7 +163,7 @@ def _switch_tool_previews(messages: list[dict]) -> list[dict]:
 def _bootstrap_payload(bootstrap: SessionBootstrapData, cfg: CharlieBotConfig) -> dict:
   payload = {
       "session": bootstrap.session.model_dump(mode="json"),
-      "messages": _switch_tool_previews(bootstrap.messages),
+      "messages": _bootstrap_tool_previews(bootstrap.messages),
       "pending_draft": bootstrap.pending_draft,
       "event_count": bootstrap.total_event_count,
       "oldest_message_ordinal": bootstrap.oldest_message_ordinal,

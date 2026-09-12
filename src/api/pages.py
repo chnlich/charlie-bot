@@ -4,12 +4,10 @@ import asyncio
 import concurrent.futures
 import datetime as dt
 import fnmatch
-import gzip
 import hashlib
 import json
 import multiprocessing
 import os
-import shutil
 import socket
 import subprocess
 import tempfile
@@ -426,20 +424,28 @@ async def _cached_merge(paths: list[Path], slim: bool) -> Path:
 
 
 def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
-  """Validate the file is parseable JSON, then stream-compress the original bytes unchanged.
+  """Validate the trace is parseable JSON while a gzip process stream-compresses the original bytes.
 
-  Peaks around 2.25 GB RSS for a 525.8 MB file (same order as the merge path's per-input
-  orjson.loads) and reads the source file a second time, after validation, to compress it.
-  Compression level is the merge path's: one build per cache key, viewer-fetched whole.
-  Validation parses with orjson, the parser the merge path's build already parses with, so
-  both serve shapes share one JSON boundary: the NaN/Infinity literals stdlib json accepts
-  fail the build loudly here too — a literal Perfetto cannot render must not reach the cache.
+  The artifact is the original bytes compressed and the parse result is discarded, so the two
+  passes are independent; the parse holds the GIL for its whole run (measured: a concurrent
+  gzip thread makes no progress), so the compress must leave the process — the `gzip` run at
+  the merge path's compression level compresses in parallel with the parse. Validation parses
+  with orjson, the parser the merge path's build already parses with, so both serve shapes
+  share one JSON boundary: the NaN/Infinity literals stdlib json accepts fail the build loudly
+  here too — a literal Perfetto cannot render must not reach the cache.
   """
-  with path.open("rb") as validate_file:
-    orjson.loads(validate_file.read())
-  with (path.open("rb") as source_file, open(out_path, "wb") as
-        raw_output, gzip.GzipFile(fileobj=raw_output, mode="wb", compresslevel=_MERGE_COMPRESSLEVEL) as gzip_output):
-    shutil.copyfileobj(source_file, gzip_output, length=65536)
+  with out_path.open("wb") as compressed, subprocess.Popen(
+      ["gzip", f"-{_MERGE_COMPRESSLEVEL}", "-c", str(path)], stdout=compressed, stderr=subprocess.PIPE) as gzip_proc:
+    try:
+      with path.open("rb") as validate_file:
+        orjson.loads(validate_file.read())
+      if gzip_proc.wait() != 0:
+        detail = gzip_proc.stderr.read().decode(errors="replace").strip()
+        raise RuntimeError(f"gzip -{_MERGE_COMPRESSLEVEL} failed for {path}: {detail}")
+    except BaseException:
+      gzip_proc.kill()
+      gzip_proc.wait()
+      raise
 
 
 async def _cached_direct_pass(path: Path) -> Path:

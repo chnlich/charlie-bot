@@ -4,11 +4,12 @@ Every master turn and worker session runs several `charliebot` invocations, each
 fresh process, so `src.cli.common` — the module every command imports — must not drag
 the backend stack (`src.agents.backends.base`), the sessions stack (`src.core.threads`,
 `src.core.sessions`), numpy (`src.core.runs`), the logging stack (`structlog`, whose
-import eagerly pulls structlog.dev — rich, pygments), or the HTTP client (`requests`,
-urllib3 + charset_normalizer, ~100 ms of the M92 floor) into processes that only parse
-args, read config, and POST to the internal API. The constants they need live in
-`src.core.models`, which config already pays for; config's own logger imports
-structlog on first use instead.
+import eagerly pulls structlog.dev — rich, pygments), the HTTP client (`requests`,
+urllib3 + charset_normalizer, ~100 ms of the M92 floor), or the config stack
+(`src.core.config`, whose pydantic models + yaml chain is ~180 ms of the M92 floor)
+into processes that only parse args, read config, and POST to the internal API.
+config loads on first call through the get_config/get_credentials forwarders; the
+constants the argparse layer needs single-home in `src.core.constants` (stdlib-only).
 """
 
 import json
@@ -23,9 +24,12 @@ HEAVY_MODULES = (
     "src.core.threads",
     "src.core.sessions",
     "src.core.runs",
+    "src.core.config",
+    "src.core.models",
     "numpy",
     "structlog",
     "requests",
+    "pydantic",
 )
 
 

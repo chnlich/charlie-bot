@@ -181,3 +181,19 @@ test('markers no sweep ever finds give up after the bounded retries', () => {
   assert.equal(settled, c.marked.parse(c.fixNestedFences('body six')));
   assert.doesNotMatch(settled, /data-hl/); // the memo settled on the first pass regardless
 });
+
+test('the bounded retries re-sweep for markers without rebuilding the settled block', () => {
+  const c = loadCodeRenderer();
+  c.document = { querySelectorAll: () => [] };
+  // The stub's value rides through wrapWideChars's split, so a counting
+  // split counts settled-block builds across the retry chain.
+  let builds = 0;
+  class Counted extends String {
+    split(sep) { builds++; return super.split(sep); }
+  }
+  c.hljs = { ...hljsStub, highlightAuto: () => ({ value: new Counted('body seven') }) };
+  c.renderProseMarkdown('body seven');
+  for (let i = 0; i < 10000 && c.__timerCount() > 0; i++) c.__runTimers();
+  assert.equal(c.__timerCount(), 0); // the retry loop terminated
+  assert.equal(builds, 1); // one settled build; the retries only re-swept
+});

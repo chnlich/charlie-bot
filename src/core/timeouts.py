@@ -62,6 +62,24 @@ ARTIFACT_PROBE_TIMEOUT = 300.0  # seconds
 KATEX_CDN_FETCH_TIMEOUT = 60  # seconds
 
 # ---------------------------------------------------------------------------
+# Headless page-height renderer
+# ---------------------------------------------------------------------------
+
+# Whole render measurement (navigate + page-height probe) on the warm Chrome
+# process. Expiry fails the measurement with a ValueError — the CDP-wait path
+# names this timeout and the browser's stderr tail, the marker-poll path
+# reports the missing page-height marker.
+HEADLESS_RENDER_TIMEOUT = 60  # seconds
+
+# Cold launch of that Chrome process: spawn, the DevToolsActivePort file, and
+# the first websocket connect; a launch past it raises ValueError and closes.
+HEADLESS_LAUNCH_TIMEOUT = 15  # seconds
+
+# Post-kill wait in close() for the SIGKILLed browser process to exit, before
+# the temp profile dir is removed.
+HEADLESS_TEARDOWN_WAIT = 5  # seconds
+
+# ---------------------------------------------------------------------------
 # HTTP client timeouts (outbound requests)
 # ---------------------------------------------------------------------------
 

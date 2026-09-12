@@ -19,8 +19,7 @@ from pathlib import Path
 
 from websockets.sync import client as _ws_client
 
-_RENDER_TIMEOUT_S = 60
-_LAUNCH_TIMEOUT_S = 15
+from src.core.timeouts import HEADLESS_LAUNCH_TIMEOUT, HEADLESS_RENDER_TIMEOUT, HEADLESS_TEARDOWN_WAIT
 
 
 class _WarmRenderer:
@@ -41,7 +40,7 @@ class _WarmRenderer:
       if self._proc is None or self._proc.poll() is not None or self._ws is None:
         self.close()
         self._launch()
-      self._deadline = time.monotonic() + _RENDER_TIMEOUT_S
+      self._deadline = time.monotonic() + HEADLESS_RENDER_TIMEOUT
       return self._render_once(probe_uri)
     except Exception as e:
       tail = self._stderr_tail()
@@ -50,7 +49,8 @@ class _WarmRenderer:
         raise
       if isinstance(e, TimeoutError):
         raise ValueError(
-            f"headless renderer timed out after {_RENDER_TIMEOUT_S}s while measuring the plan page height{tail}") from e
+            f"headless renderer timed out after {HEADLESS_RENDER_TIMEOUT}s while measuring the plan page height{tail}"
+        ) from e
       raise ValueError(f"headless renderer failed while measuring the plan page height: {e}{tail}") from e
 
   def _render_once(self, probe_uri: str) -> int:
@@ -71,7 +71,7 @@ class _WarmRenderer:
   def _launch(self) -> None:
     self._udd = Path(tempfile.mkdtemp(prefix="headless-render-"))
     self._stderr_path = self._udd / "stderr.log"
-    self._deadline = time.monotonic() + _LAUNCH_TIMEOUT_S
+    self._deadline = time.monotonic() + HEADLESS_LAUNCH_TIMEOUT
     try:
       # Our own handle closes with the with-block; the child keeps its inherited fd.
       with self._stderr_path.open("wb") as stderr_log:
@@ -103,7 +103,7 @@ class _WarmRenderer:
       time.sleep(0.05)
     port, path = port_file.read_text().splitlines()[:2]
     try:
-      self._ws = _ws_client.connect(f"ws://127.0.0.1:{port}{path}", open_timeout=_LAUNCH_TIMEOUT_S)
+      self._ws = _ws_client.connect(f"ws://127.0.0.1:{port}{path}", open_timeout=HEADLESS_LAUNCH_TIMEOUT)
     except Exception as e:
       tail = self._stderr_tail()
       self.close()
@@ -158,7 +158,7 @@ class _WarmRenderer:
       self._ws = None
     if self._proc is not None:
       self._proc.kill()
-      self._proc.wait(5)
+      self._proc.wait(HEADLESS_TEARDOWN_WAIT)
       self._proc = None
     if self._udd is not None:
       shutil.rmtree(self._udd, ignore_errors=True)

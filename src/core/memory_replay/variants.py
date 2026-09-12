@@ -503,18 +503,7 @@ def build_reviewer_request(
     payload["feedback_history"] = feedback_history_payload(manifest)
   else:
     payload["feedback"] = exchange.feedback_selections_payload(selections)
-  proposals = {
-      "entries":
-          [
-              {
-                  "action": op.action,
-                  "path": op.path,
-                  **({
-                      "text": op.text
-                  } if op.text is not None else {}),
-              } for op in editor_output.entries
-          ]
-  }
+  proposals = exchange.editor_proposals_payload(editor_output)
   if rationale_visible:
     proposals["dispositions"] = [
         {

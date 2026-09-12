@@ -380,7 +380,6 @@ def headroom(label: str, model: str | None, now: datetime | None = None) -> floa
 def select(
     cfg: CharlieBotConfig,
     model: str | None,
-    current: str | None = None,
     exclude: Iterable[str] = (),
     busy_accounts: Set[str] | None = None,
     now: datetime | None = None,
@@ -391,8 +390,7 @@ def select(
   quota about to lapse is spent before it lapses -- and scores closer than
   ``_SCORE_TIE`` break by least-recent event activity (a never-active account
   sorts first), so turns spread over the pool with no cursor state to restore
-  after a restart. *current* is accepted for the callers' sake but no longer
-  owns ties; warm-cache stickiness is the caller's decision.
+  after a restart.
 
   *busy_accounts* names accounts another running session holds: an idle account
   wins outright, and only when every healthy account is busy does the choice
@@ -402,7 +400,6 @@ def select(
   again. None when no account qualifies, which the caller reports loudly
   together with ``earliest_reset``.
   """
-  del current  # ranking is stateless: near-ties break by LRU, not by the current account
   moment = now_or(now)
   excluded = set(exclude)
   available: list[tuple[ClaudeAccount, float]] = []

@@ -34,6 +34,7 @@ Honesty rules this module enforces structurally:
 """
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +50,7 @@ from src.core.memory_replay.manifest import REF_RE, Manifest, load_manifest
 from src.core.memory_replay.report import _e, _page, _row
 from src.core.memory_replay.runner import (
     ReplayOptions,
+    ReplayTransport,
     _require_disjoint_output_root,
     _timestamp,
     compute_input_identity,
@@ -142,7 +144,7 @@ def run_experiment(
     options: ExperimentOptions,
     *,
     cfg: CharlieBotConfig | None = None,
-    transport_factory=None,
+    transport_factory: Callable[[], ReplayTransport] | None = None,
     now: datetime | None = None,
 ) -> ExperimentOutcome:
   """Run the selected variants over every supplied case; every failure is a :class:`ReplayError`.
@@ -227,7 +229,7 @@ def _run_arm(
     options: ExperimentOptions,
     cfg: CharlieBotConfig,
     model_identity: dict,
-    transport_factory,
+    transport_factory: Callable[[], ReplayTransport] | None,
 ) -> dict:
   """One case x variant: validate existing evidence, reuse, run, or preserve — then the comparison."""
   identity = compute_input_identity(manifest, mode=MODE, model_identity=model_identity, contract=contract)

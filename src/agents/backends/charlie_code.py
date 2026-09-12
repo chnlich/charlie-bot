@@ -69,7 +69,7 @@ class CharlieCodeBackend(AgentBackend):
       timeout_seconds: int | None = None,
       proxy_url: str | None = None,
       api_key: str | None = None,
-      **kwargs,
+      **kwargs: object,
   ) -> None:
     super().__init__(model=model, **kwargs)
     self._api_base = api_base

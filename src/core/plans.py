@@ -24,11 +24,12 @@ from src.core.memo import StatSignatureMemo
 from src.core.sidebar_state import mark_sidebar_dirty
 
 if TYPE_CHECKING:
+  from src.core.artifact_check import AssertionOutcome
   from src.core.config import CharlieBotConfig
   from src.core.sessions import SessionManager
 
 
-def run_assertions(*args, **kwargs):
+def run_assertions(*args: object, **kwargs: object) -> list[AssertionOutcome]:
   """Lazy delegate to ``artifact_check.run_assertions``.
 
   The artifact-check import drags the backends registry (numpy, fastapi) — a

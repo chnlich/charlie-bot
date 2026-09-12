@@ -1399,19 +1399,20 @@ def _classify_backend(backend: str, registry: dict) -> str | None:
   return "skip"
 
 
-def _fold_charliebot_records(t: _Tally, records: list[list]) -> int:
-  """Fold one entry's records into the accumulator; returns the folded count."""
+def _fold_records(t: _Tally, source: str, records: list) -> int:
+  """Fold one entry's records into the accumulator; returns the folded count.
+
+  Every record is (model, account, ts, in_fresh, cache_write, cache_read, output) — the
+  shape both the charlie-bot log parses and the opencode row projection append.
+  """
   for model, account, ts, in_fresh, cache_write, cache_read, output in records:
-    t.add(
-        "charlie-bot",
-        model,
-        account,
-        ts,
-        in_fresh=in_fresh,
-        cache_write=cache_write,
-        cache_read=cache_read,
-        output=output)
+    t.add(source, model, account, ts, in_fresh=in_fresh, cache_write=cache_write, cache_read=cache_read, output=output)
   return len(records)
+
+
+def _fold_charliebot_records(t: _Tally, records: list[list]) -> int:
+  """Fold one charlie-bot entry's records into the accumulator; returns the folded count."""
+  return _fold_records(t, "charlie-bot", records)
 
 
 def collect_charliebot(
@@ -1644,17 +1645,8 @@ def _advance_opencode_rows(db: Path, seed: dict | None = None) -> _OpencodeScan:
 
 
 def _replay_opencode_records(t: _Tally, records: list) -> None:
-  """Fold a record list into the accumulator (the cold and cache-document paths)."""
-  for model, account, ts, in_fresh, cache_write, cache_read, output in records:
-    t.add(
-        "opencode",
-        model,
-        account,
-        ts,
-        in_fresh=in_fresh,
-        cache_write=cache_write,
-        cache_read=cache_read,
-        output=output)
+  """Fold an opencode record list into the accumulator (the cold and cache-document paths)."""
+  _fold_records(t, "opencode", records)
 
 
 def _merge_opencode(

@@ -396,7 +396,7 @@ def _iter_jsonl_stats(
 _charliebot_dir_memo: dict[str, tuple[tuple[int, int], list[tuple[str, bool, bool]]]] = {}
 
 
-def _charliebot_listing(dirpath: str, t: _Tally) -> list[tuple[str, bool, bool]]:
+def _charliebot_listing(dirpath: str) -> list[tuple[str, bool, bool]]:
   """The directory's entries as (path, is_dir, is_symlink), memoized on the directory's own
   stat pair.
 
@@ -438,7 +438,7 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
   instead of a full scandir pass.
   """
   try:
-    session_listing = _charliebot_listing(str(sessions), t)
+    session_listing = _charliebot_listing(str(sessions))
   except OSError as exc:
     if not isinstance(exc, FileNotFoundError):
       t.notes.append(f"charlie-bot: unreadable {sessions}: {exc}")
@@ -451,7 +451,7 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
       while stack:
         dirpath = stack.pop()
         try:
-          listing = _charliebot_listing(dirpath, t)
+          listing = _charliebot_listing(dirpath)
         except OSError as exc:
           if not isinstance(exc, FileNotFoundError):
             t.notes.append(f"charlie-bot: unreadable {dirpath}: {exc}")
@@ -1946,6 +1946,9 @@ def collect_token_usage(
     cache = TallyCache(sources)
   if fresh_sources:
     notes_from = len(t.notes)
+    # The shared walk's dir-level error notes ride the fresh round (the rows carry only
+    # per-file errors); the memo captures them here and serves them on hit rounds.
+    t.notes.extend(charliebot_probe.notes)
     collect_claude(t, claude_homes, cache)
     collect_codex(t, codex_homes, cache)
     collect_charliebot(t, sessions_dir, codex_homes, cache, charliebot_rows)

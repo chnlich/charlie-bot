@@ -9,6 +9,7 @@
 // (tailwind_class_coverage.test.js).
 const vm = require('node:vm');
 
+const { createEscapingElement } = require('./dom_element_stub');
 const { FakeElement } = require('./fake_dom');
 const { readStatic } = require('./read_static');
 
@@ -22,6 +23,34 @@ function loadChatRenderingModules(context) {
   context.Chat.renderRoundRatingButtons = () => '';
   context.Chat.embedLinkedHtmlArtifacts = () => {};
   vm.runInContext(RENDERING_JS, context, {filename: 'chat/rendering.js'});
+}
+
+// The harnesses that assert rendered markup share this context: createElement
+// routes through createEscapingElement so the escape path stays observable,
+// and attachments.js is not loaded, so renderUserMessageBubble stays a no-op.
+// A harness needing a FakeElement document or page globals uses
+// makeChatRenderContext instead.
+function loadChatRendering() {
+  const context = {
+    CSS: {escape: (value) => String(value)},
+    document: {
+      createElement: (tag) => createEscapingElement(tag),
+      getElementById: () => null,
+      querySelector: () => null,
+    },
+    marked: {parse: (value) => String(value || '')},
+    fixNestedFences: (value) => String(value || ''),
+    renderProseMarkdown: (value) => String(value || ''),
+    renderChatMath: () => {},
+    scheduleCodeHighlightFlush: () => {},
+    // Identity stand-in for markdown-renderer.js's wrapWideChars (not loaded
+    // here); these fixtures carry no wide chars.
+    wrapWideChars: (html) => html,
+    renderUserMessageBubble: () => '',
+  };
+  vm.createContext(context);
+  loadChatRenderingModules(context);
+  return context;
 }
 
 // makeChatRenderContext builds the sandbox shared by the chat/rendering.js vm
@@ -96,4 +125,4 @@ function loadToggleHarness(extraModule, extraStubs = {}) {
   return context;
 }
 
-module.exports = {loadChatRenderingModules, loadToggleHarness, makeChatRenderContext};
+module.exports = {loadChatRendering, loadChatRenderingModules, loadToggleHarness, makeChatRenderContext};

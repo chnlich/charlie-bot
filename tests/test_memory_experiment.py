@@ -95,12 +95,13 @@ def selector_row(
     ref: str = "capture-eviction",
     outcome: str = "propose",
     paths: list[str] | None = None,
+    reason: str = "merge-first revise of the covered entry",
     proofs: dict | None = -1) -> dict:
   row = {
       "source_ref": ref,
       "outcome": outcome,
       "paths": paths if paths is not None else ["entries/render/cache-eviction.md"],
-      "reason": "merge-first revise of the covered entry",
+      "reason": reason,
   }
   if proofs != -1:
     if proofs is not None:
@@ -615,24 +616,20 @@ def test_combined_editor_writes_the_shared_proofs_and_hides_them_from_review(tmp
   assert "feedback" in payload and "feedback_history" not in payload
 
 
+# The editor arm all three proof-contract failures share: one propose rewrite of the covered entry.
+_MERGED_REWRITE_EDITOR_ROWS = [
+    {
+        "action": "rewrite",
+        "path": "entries/render/cache-eviction.md",
+        "text": EDITOR_TEXT,
+        "source_refs": ["capture-eviction"],
+        "reason": "merged",
+    }
+]
+
+
 def test_propose_rows_require_complete_proofs_and_other_rows_forbid_them(tmp_path: Path) -> None:
-  missing = selector_json(
-      [
-          {
-              "action": "rewrite",
-              "path": "entries/render/cache-eviction.md",
-              "text": EDITOR_TEXT,
-              "source_refs": ["capture-eviction"],
-              "reason": "merged",
-          }
-      ], [
-          {
-              "source_ref": "capture-eviction",
-              "outcome": "propose",
-              "paths": ["entries/render/cache-eviction.md"],
-              "reason": "merged",
-          }
-      ])
+  missing = selector_json(_MERGED_REWRITE_EDITOR_ROWS, [selector_row(reason="merged", proofs=None)])
   record = run_variant_expect_failure(
       tmp_path,
       "baseline-original-flow",
@@ -642,27 +639,11 @@ def test_propose_rows_require_complete_proofs_and_other_rows_forbid_them(tmp_pat
   assert record["status"] == "failed"
 
   partial = selector_json(
-      [
-          {
-              "action": "rewrite",
-              "path": "entries/render/cache-eviction.md",
-              "text": EDITOR_TEXT,
-              "source_refs": ["capture-eviction"],
-              "reason": "merged",
-          }
-      ], [
-          {
-              "source_ref": "capture-eviction",
-              "outcome": "propose",
-              "paths": ["entries/render/cache-eviction.md"],
-              "reason": "merged",
-              "proofs": {
-                  "action": "a",
-                  "home": "",
-                  "brevity": "b"
-              },
-          }
-      ])
+      _MERGED_REWRITE_EDITOR_ROWS, [selector_row(reason="merged", proofs={
+          "action": "a",
+          "home": "",
+          "brevity": "b"
+      })])
   record = run_variant_expect_failure(
       tmp_path,
       "baseline-original-flow",
@@ -672,23 +653,8 @@ def test_propose_rows_require_complete_proofs_and_other_rows_forbid_them(tmp_pat
   assert record["status"] == "failed"
 
   stray = selector_json(
-      [
-          {
-              "action": "rewrite",
-              "path": "entries/render/cache-eviction.md",
-              "text": EDITOR_TEXT,
-              "source_refs": ["capture-eviction"],
-              "reason": "merged",
-          }
-      ], [
-          {
-              "source_ref": "capture-eviction",
-              "outcome": "no_change",
-              "paths": [],
-              "reason": "nothing to do",
-              "proofs": dict(PROOFS),
-          }
-      ])
+      _MERGED_REWRITE_EDITOR_ROWS,
+      [selector_row(outcome="no_change", paths=[], reason="nothing to do", proofs=dict(PROOFS))])
   record = run_variant_expect_failure(
       tmp_path,
       "baseline-original-flow",

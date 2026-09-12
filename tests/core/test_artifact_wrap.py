@@ -23,10 +23,12 @@ _DRIVER = Path(__file__).resolve().parents[2] / "scripts" / "prerender_math.js"
 # chat extension test pins, run here through the wrap driver so the two scanner
 # copies stay behavior-identical. display marks the two display classes.
 _MATH_SOURCES = [
-    ("inline escape-eat", r"$\text{Output} = \text{out\_routed} + \text{out\_shared} + x$",
-     r"\text{Output} = \text{out\_routed} + \text{out\_shared} + x", False),
-    ("display em-inject", r"$$\text{logits}_{\text{token}} = x \cdot W_{\text{token}}^T \in [N, 32]$$",
-     r"\text{logits}_{\text{token}} = x \cdot W_{\text{token}}^T \in [N, 32]", True),
+    (
+        "inline escape-eat", r"$\text{Output} = \text{out\_routed} + \text{out\_shared} + x$",
+        r"\text{Output} = \text{out\_routed} + \text{out\_shared} + x", False),
+    (
+        "display em-inject", r"$$\text{logits}_{\text{token}} = x \cdot W_{\text{token}}^T \in [N, 32]$$",
+        r"\text{logits}_{\text{token}} = x \cdot W_{\text{token}}^T \in [N, 32]", True),
     ("inline bracket", r"\(x^2\)", "x^2", False),
     ("display bracket", r"\[\text{logits} \in [N, 32]\]", r"\text{logits} \in [N, 32]", True),
 ]
@@ -43,8 +45,7 @@ def vendored_katex(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def cli_katex(monkeypatch: pytest.MonkeyPatch, vendored_katex: Path) -> Path:
   """Point the CLI verb's config home at a dir whose vendor copy is the session-fetched one."""
   monkeypatch.setattr(
-      "src.cli.artifact.get_config",
-      lambda: SimpleNamespace(charliebot_home=vendored_katex.parent.parent))
+      "src.cli.artifact.get_config", lambda: SimpleNamespace(charliebot_home=vendored_katex.parent.parent))
   return vendored_katex
 
 
@@ -57,8 +58,13 @@ def _write_fragment(tmp_path: Path, fragment: str | bytes, name: str = "fragment
   return fragment_path
 
 
-def _wrap(tmp_path: Path, fragment: str | bytes, genre: str = "explain", math: bool = True,
-          vendored_katex: Path | None = None, name: str = "fragment.html") -> Path:
+def _wrap(
+    tmp_path: Path,
+    fragment: str | bytes,
+    genre: str = "explain",
+    math: bool = True,
+    vendored_katex: Path | None = None,
+    name: str = "fragment.html") -> Path:
   output = tmp_path / "page.html"
   wrap_fragment(
       genre=genre,
@@ -148,8 +154,8 @@ def test_driver_escaped_dollar_never_opens_a_span(tmp_path: Path, vendored_katex
       r"<p>close $5 + \$3$ total</p>",
   ]
   fragment_path = _write_fragment(tmp_path, chr(10).join(lines) + chr(10), name="escaped.html")
-  proc = subprocess.run(["node", str(_DRIVER), str(fragment_path), str(vendored_katex)], capture_output=True,
-                        check=False)
+  proc = subprocess.run(
+      ["node", str(_DRIVER), str(fragment_path), str(vendored_katex)], capture_output=True, check=False)
   assert proc.returncode == 0, proc.stderr.decode("utf-8")
   out = proc.stdout.decode("utf-8")
   assert out.count('class="katex"') == 2  # only $\alpha$ and the $5 + \$3$ span render
@@ -157,8 +163,7 @@ def test_driver_escaped_dollar_never_opens_a_span(tmp_path: Path, vendored_katex
     assert literal in out, literal
 
 
-def test_driver_copies_protected_blocks_comments_and_tags_verbatim(
-    tmp_path: Path, vendored_katex: Path) -> None:
+def test_driver_copies_protected_blocks_comments_and_tags_verbatim(tmp_path: Path, vendored_katex: Path) -> None:
   fragment = (
       "<p>$x$</p>\n"
       "<pre>fence $x$ stays</pre>\n"
@@ -170,8 +175,8 @@ def test_driver_copies_protected_blocks_comments_and_tags_verbatim(
       "<!-- comment $x$ dropped from the scan -->\n"
       '<a href="attr$x$link">attr</a>\n')
   fragment_path = _write_fragment(tmp_path, fragment, name="protected.html")
-  proc = subprocess.run(["node", str(_DRIVER), str(fragment_path), str(vendored_katex)], capture_output=True,
-                        check=False)
+  proc = subprocess.run(
+      ["node", str(_DRIVER), str(fragment_path), str(vendored_katex)], capture_output=True, check=False)
   assert proc.returncode == 0, proc.stderr.decode("utf-8")
   out = proc.stdout.decode("utf-8")
   assert out.count('class="katex"') == 1  # only the free <p> span rendered
@@ -202,8 +207,8 @@ def test_cli_defaults_math_on_for_explain_and_off_for_other_genres(
   assert "$$y = x$$" in sitrep_page
 
 
-def test_cli_no_math_disables_prerender_for_explain(tmp_path: Path, capsys: pytest.CaptureFixture[str],
-                                                    cli_katex: Path) -> None:
+def test_cli_no_math_disables_prerender_for_explain(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
   fragment = _write_fragment(tmp_path, r"<p>$$y = x$$</p>")
   output = tmp_path / "plain.html"
   assert _wrap_cli(tmp_path, fragment, output, "explain", "--no-math").code == 0
@@ -224,8 +229,8 @@ def _damaged_fragment() -> bytes:
   return (prose + display).replace("TAB", "\t").replace("\\x0c", "\x0c").encode("utf-8")
 
 
-def test_wrap_byte_gate_aborts_before_write_and_names_offsets(tmp_path: Path, capsys: pytest.CaptureFixture[str],
-                                                              cli_katex: Path) -> None:
+def test_wrap_byte_gate_aborts_before_write_and_names_offsets(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
   fragment = _write_fragment(tmp_path, _damaged_fragment(), name="damaged.html")
   output = tmp_path / "damaged_page.html"
   assert _wrap_cli(tmp_path, fragment, output, "explain").code == 1
@@ -236,8 +241,8 @@ def test_wrap_byte_gate_aborts_before_write_and_names_offsets(tmp_path: Path, ca
   assert not output.exists()  # no partial output behind the aborted write
 
 
-def test_wrap_byte_gate_runs_on_the_assembled_bytes(tmp_path: Path, capsys: pytest.CaptureFixture[str],
-                                                    cli_katex: Path) -> None:
+def test_wrap_byte_gate_runs_on_the_assembled_bytes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
   r"""A fragment TAB reports at its assembled-page offset, past the template head."""
   fragment = _write_fragment(tmp_path, "<p>x\ty</p>")
   output = tmp_path / "page.html"
@@ -246,8 +251,8 @@ def test_wrap_byte_gate_runs_on_the_assembled_bytes(tmp_path: Path, capsys: pyte
   assert offset > 5000  # the template head alone is longer than any fragment prefix
 
 
-def test_wrap_byte_gate_passes_a_clean_fragment_through(tmp_path: Path, capsys: pytest.CaptureFixture[str],
-                                                        cli_katex: Path) -> None:
+def test_wrap_byte_gate_passes_a_clean_fragment_through(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], cli_katex: Path) -> None:
   fragment = _write_fragment(tmp_path, r"<p>$$\text{logits} = Wx$$</p>")
   output = tmp_path / "clean.html"
   assert _wrap_cli(tmp_path, fragment, output, "explain").code == 0
@@ -261,8 +266,9 @@ def test_wrap_byte_gate_passes_a_clean_fragment_through(tmp_path: Path, capsys: 
 
 
 def test_render_path_assertion_passes_the_wrapped_page(tmp_path: Path, vendored_katex: Path) -> None:
-  body = ('<div class="triad"><div class="row"><span class="k">You know</span>X</div></div>' +
-          "".join(f'<section><h2><span class="n">{i}</span> S</h2><p>$x^{i}$</p></section>' for i in range(1, 6)))
+  body = (
+      '<div class="triad"><div class="row"><span class="k">You know</span>X</div></div>' +
+      "".join(f'<section><h2><span class="n">{i}</span> S</h2><p>$x^{i}$</p></section>' for i in range(1, 6)))
   output = _wrap(tmp_path, body, vendored_katex=vendored_katex)
   by_name: dict[str, list[artifact_check.AssertionOutcome]] = {}
   for outcome in artifact_check.run_assertions("explain", output):

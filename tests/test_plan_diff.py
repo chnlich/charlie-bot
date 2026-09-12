@@ -5,7 +5,16 @@ from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 
-from src.core.plan_diff import annotate, diff_text
+from src.core import plan_diff
+from src.core.plan_diff import (
+    _document_root,
+    _first_class_descendant,
+    _first_descendant,
+    _offset_after_insertions,
+    _parse_anchors,
+    annotate,
+    diff_text,
+)
 
 _ROOT = Path(__file__).resolve().parents[1]
 _BLOCK_TAGS = {
@@ -474,9 +483,7 @@ def test_header_offset_matches_a_full_reparse_of_the_spliced_page() -> None:
   # corpus wraps each fuzz document in the wrap and main chrome the anchor
   # needs — the shared fuzz vocabulary carries neither, so an unwrapped fuzz
   # document only exercises the body fallback.
-  from src.core import plan_diff
-  from src.core.plan_diff import (
-      _document_root, _first_class_descendant, _first_descendant, _offset_after_insertions, _parse, _parse_anchors)
+  from src.core.plan_diff import _parse
 
   original = plan_diff._append_style_and_header
   captures: list[tuple[str, dict[int, list[str]], object]] = []

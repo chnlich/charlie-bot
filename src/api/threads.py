@@ -285,8 +285,11 @@ def _trigger_list_item(tr: PendingTrigger) -> dict:
   """One trigger row of the workers-panel list payload.
 
   Timestamps ride the same epoch-ms wire form as the thread rows: ``_list_body``
-  sorts both row kinds by ``created_at``, so the mixed sort stays homogeneous,
-  and the client's ``new Date()`` reads the integer form unchanged.
+  sorts both row kinds by ``created_at``, so the mixed sort stays homogeneous.
+  The client's first paint reads the raw JSON value through ``new Date()``,
+  which accepts the integer; its poll-update path re-reads ``fire_at`` from the
+  ``data-fire-at`` attribute as a string, where only the numeric form coerces —
+  the card's formatter handles that coercion (``formatTriggerTimeLabel``).
   """
   return {
       "type": "trigger",

@@ -273,7 +273,7 @@ def _run_arm(
       "denominators":
           _denominators(manifest),
       "run":
-          _run_section(run_dir, record, run_status, run_status_error, reused, preserved_dirs, variant_runs_root),
+          _run_section(run_dir, record, run_status, run_status_error, reused, preserved_dirs, options.output_dir),
       "comparison":
           comparison,
   }
@@ -419,8 +419,10 @@ def _run_section(
     error: str | None,
     reused: bool,
     preserved_dirs: list[Path],
-    variant_runs_root: Path,
+    output_root: Path,
 ) -> dict:
+  # Every artifact ref is relative to the output root, so report.html's hrefs resolve and the
+  # summary stays self-contained under one base.
   if run_dir is None or record is None:
     return {
         "dir": None,
@@ -430,30 +432,20 @@ def _run_section(
         "record": None,
         "proposal": None,
         "report": None,
-        "preserved_failed_attempts": [_rel_path(path, variant_runs_root) for path in preserved_dirs],
+        "preserved_failed_attempts": [_rel_path(path, output_root) for path in preserved_dirs],
         "usage": None,
     }
   usage = _usage(record)
   return {
-      "dir":
-          _rel_path(run_dir, variant_runs_root.parent.parent.parent),
-      "status":
-          status,
-      "error":
-          error,
-      "reused":
-          reused,
-      "record":
-          _rel_path(run_dir / "run.json", variant_runs_root.parent.parent.parent),
-      "proposal":
-          _rel_path(run_dir / "proposal.json", variant_runs_root.parent.parent.parent) if
-          (run_dir / "proposal.json").is_file() else None,
-      "report":
-          _rel_path(run_dir / "report.html", variant_runs_root.parent.parent.parent) if
-          (run_dir / "report.html").is_file() else None,
-      "preserved_failed_attempts": [_rel_path(path, variant_runs_root) for path in preserved_dirs],
-      "usage":
-          usage,
+      "dir": _rel_path(run_dir, output_root),
+      "status": status,
+      "error": error,
+      "reused": reused,
+      "record": _rel_path(run_dir / "run.json", output_root),
+      "proposal": _rel_path(run_dir / "proposal.json", output_root) if (run_dir / "proposal.json").is_file() else None,
+      "report": _rel_path(run_dir / "report.html", output_root) if (run_dir / "report.html").is_file() else None,
+      "preserved_failed_attempts": [_rel_path(path, output_root) for path in preserved_dirs],
+      "usage": usage,
   }
 
 

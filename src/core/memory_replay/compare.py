@@ -230,7 +230,6 @@ def _run_comparison(options: CompareOptions, *, cfg: CharlieBotConfig, now: date
 
   _verify_stage_chain(
       contract=contract,
-      record=record,
       manifest=manifest,
       selections=selections,
       role="editor",
@@ -239,7 +238,6 @@ def _run_comparison(options: CompareOptions, *, cfg: CharlieBotConfig, now: date
       verification=verification)
   _verify_stage_chain(
       contract=contract,
-      record=record,
       manifest=manifest,
       selections=selections,
       role="reviewer",
@@ -612,7 +610,6 @@ def _read_attempt_chain(run_dir: Path, manifest: Manifest, record: dict, stage: 
 def _verify_stage_chain(
     *,
     contract: ExchangeContract,
-    record: dict,
     manifest: Manifest,
     selections: dict[str, list[FeedbackSelection]],
     role: str,
@@ -640,7 +637,7 @@ def _verify_stage_chain(
       without.append(name)
       continue
     if contract.bounded_recovery:
-      _verify_chain_structure(contract, record.get("status"), role, manifest, theme, attempts)
+      _verify_chain_structure(contract, role, manifest, theme, attempts)
     base_request = _stage_base_request(contract, manifest, selections, chosen_outputs, role, theme)
     previous: StageAttempt | None = None
     for a in attempts:
@@ -696,7 +693,7 @@ def _raise_request_mismatch(role: str, name: str, attempt: int) -> None:
 
 
 def _verify_chain_structure(
-    contract: ExchangeContract, record_status: str | None, role: str, manifest: Manifest, theme,
+    contract: ExchangeContract, role: str, manifest: Manifest, theme,
     attempts: list[StageAttempt]) -> None:
   """The chain must be a bounded recovery chain: consecutive, at most two, failures recorded."""
   name = theme.name

@@ -57,7 +57,7 @@ from src.core.memory_replay.exchange import (
 )
 from src.core.memory_replay.identity import approval_digest, canonical_bytes, input_identity, sha256_hex
 from src.core.memory_replay.manifest import Manifest, load_manifest
-from src.core.memory_replay.report import _e
+from src.core.memory_replay.report import REPORT_CSS, _e
 from src.core.memory_replay.retrieval import FeedbackSelection
 from src.core.memory_replay.runner import PROPOSAL_SCHEMA, _aggregate_candidate_results, _timestamp
 from src.core.memory_replay.validate import build_patch, canonical_text, finalize, validate_theme_output
@@ -837,15 +837,8 @@ def render_comparison_report(comparison: dict) -> str:
       "<title>Memory replay — paired editor/reviewer comparison</title>",
       "<style>",
       "body{font:14px/1.5 -apple-system,sans-serif;margin:24px auto;max-width:1150px;color:#1b2430}",
-      "h1{font-size:20px}h2{font-size:15px;border-bottom:1px solid #d9dfe6;padding-bottom:4px;margin-top:26px}",
-      "table{border-collapse:collapse;width:100%;font-size:12.5px}",
-      "th,td{border:1px solid #d9dfe6;padding:6px 9px;text-align:left;vertical-align:top}",
-      "th{background:#eef1f5}code,.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}",
-      "pre{background:#f6f8fa;border:1px solid #d9dfe6;border-radius:6px;padding:10px;overflow:auto;"
-      "font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:pre-wrap}",
-      ".needs{background:#fff4e5;border:1px solid #e6d09b;border-radius:6px;padding:10px 14px;margin:8px 0}",
+      *REPORT_CSS,
       ".failed{background:#ffebe9;border:1px solid #ff818266;border-radius:6px;padding:10px 14px;margin:8px 0}",
-      ".muted{color:#5b6774;font-size:12px}",
       "</style>",
       "</head>",
       "<body>",

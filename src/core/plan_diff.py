@@ -806,12 +806,17 @@ def _append_style_and_header(source: str, insertions: dict[int, list[str]], root
   # attributes) and insert synthetic start tags, so a spliced page's DOM can
   # disagree with the pre-splice parse about where head and body sit. The
   # re-parse rides the anchor-only parser — the same tokenizer walk as _Parser,
-  # minus the DOM build nothing here reads. The wrap/main header anchor needs
-  # no re-parse: no render pass inserts inside another element's start tag
-  # except attribute additions, so the element's tag bytes stay contiguous and
-  # its spliced position is the pre-splice one shifted by the inserted length
-  # before it (_offset_after_insertions); no pass adds a wrap class or a main
-  # tag either, so the pre-splice DOM answers the same lookup.
+  # minus the DOM build nothing here reads. The wrap header anchor needs no
+  # re-parse: no render pass synthesizes a wrap class (a ghost stamps only
+  # cbd-del), so the pre-splice DOM answers the same lookup, and no pass
+  # inserts inside another element's start tag except attribute additions, so
+  # the element's tag bytes stay contiguous and its spliced position is the
+  # pre-splice one shifted by the inserted length before it
+  # (_offset_after_insertions). The main-tag fallback can diverge from the
+  # replaced re-parse — a deleted bare main or body becomes a ghost carrying
+  # that tag — but the artifact pages the route serves share the wrap chrome,
+  # which answers the lookup first; there the header moves outside the
+  # deleted ghost, the saner placement.
   head, body = _parse_anchors(source)
   header_insertions: dict[int, list[str]] = {}
   style_tag = f'<style data-cbd-style>{_CBD_STYLE}</style>'

@@ -241,8 +241,11 @@ function paintThreadEvents(threadId, container, events) {
       const short = text.substring(0, 500);
       const hasMore = text.length > 500;
       const id = 'tr-more-' + Math.random().toString(36).slice(2);
+      const truncNote = e.output_truncated
+        ? '<div class="mt-1 text-xs text-slate-500">output truncated &mdash; full text in the raw events log</div>'
+        : '';
       return `<div class="py-1 px-3 ml-6 my-0.5 border-l-2 border-slate-700">
-        <pre class="text-xs text-slate-500 whitespace-pre-wrap break-all">${wrapWideChars(escapeHtml(short))}${hasMore ? showMoreToggleHtml(id, wrapWideChars(escapeHtml(text.substring(500)))) : ''}</pre>
+        <pre class="text-xs text-slate-500 whitespace-pre-wrap break-all">${wrapWideChars(escapeHtml(short))}${hasMore ? showMoreToggleHtml(id, wrapWideChars(escapeHtml(text.substring(500)))) : ''}</pre>${truncNote}
       </div>`;
     }
 

@@ -302,6 +302,41 @@ def test_translate_todo_list_suppresses_duplicate_snapshots(monkeypatch) -> None
   assert updated == [assistant_text_event("- [x] Inspect the code\n- [ ] Patch the bug")]
 
 
+_TOOL_ITEM_ROWS = [
+    pytest.param(
+        "command_execution",
+        "command",
+        "cargo test",
+        "3 passed",
+        "Bash",
+        id="command_execution_maps_onto_bash",
+    ),
+    pytest.param(
+        "web_search",
+        "query",
+        "codex exec json flags",
+        "docs page",
+        "WebSearch",
+        id="web_search_maps_onto_websearch",
+    ),
+]
+
+
+@pytest.mark.parametrize(("item_type", "payload_field", "payload_value", "output", "tool"), _TOOL_ITEM_ROWS)
+def test_translate_tool_item_maps_one_started_completed_pair_onto_one_tool_event(
+    monkeypatch, item_type: str, payload_field: str, payload_value: str, output: str, tool: str) -> None:
+  backend = _build_backend(monkeypatch)
+  item = {"id": "item-1", "type": item_type, payload_field: payload_value, "output": output}
+
+  started = backend.translate_event({"type": "item.started", "item": item})
+  completed = backend.translate_event({"type": "item.completed", "item": item})
+  updated = backend.translate_event({"type": "item.updated", "item": item})
+
+  assert started == [{"type": ET.TOOL_USE, "name": tool, "input": {payload_field: payload_value}}]
+  assert completed == [{"type": ET.TOOL_RESULT, "tool_name": tool, "content": output}]
+  assert not updated
+
+
 def test_reasoning_item_emits_thinking_deltas(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 

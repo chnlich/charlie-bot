@@ -62,8 +62,12 @@ SOURCE_KINDS = ("candidate", "entry", "guideline", "document")
 
 
 class _StrictModel(BaseModel):
-  """Manifest-section base: unknown keys are rejected so evaluation metadata
-  cannot ride along inside the manifest the runner sends to models."""
+  """Strict base for model-facing structures: unknown keys are rejected.
+
+  Covers both directions of the model boundary — the manifest sections the runner
+  sends and the response-contract specs that parse what comes back — so evaluation
+  or audit metadata cannot ride along inside either.
+  """
 
   model_config = ConfigDict(extra="forbid")
 

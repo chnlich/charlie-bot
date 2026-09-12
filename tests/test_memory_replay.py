@@ -898,6 +898,31 @@ MALFORMED_PATCH_CASES = {
             "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -1,5 +1,5 @@\n line 1\n-line 2\n+TWO\n",
             "hunk ends before its header counts are met",
         ),
+    "counts-exceeded-extra-deletion":
+        (
+            {
+                "entries/t/f.md": numbered_file(12)
+            },
+            # header declares 1 old line but the body carries two; GNU patch: malformed (exit 2)
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -1,1 +1,2 @@\n-line 1\n-line 2\n+X\n+Y\n",
+            "body disagrees with its header counts",
+        ),
+    "counts-exceeded-extra-insertion":
+        (
+            {
+                "entries/t/f.md": numbered_file(12)
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -2,2 +1,1 @@\n-line 2\n+X\n+Y\n-line 3\n",
+            "body disagrees with its header counts",
+        ),
+    "counts-exceeded-extra-context":
+        (
+            {
+                "entries/t/f.md": numbered_file(12)
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -1,1 +1,3 @@\n line 1\n line 2\n+X\n+Y\n+Z\n",
+            "body disagrees with its header counts",
+        ),
     "body-overrun-past-counts":
         (
             {

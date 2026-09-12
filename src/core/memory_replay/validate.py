@@ -288,6 +288,10 @@ def _read_hunk(lines: list[str], i: int, path: str) -> tuple[int, int, list[str]
       seen_new += 1
     else:
       raise ReplayValidationError(f"patch for {path}: unexpected line in hunk: {line!r}")
+    if seen_old > old_count or seen_new > new_count:
+      raise ReplayValidationError(
+          f"patch for {path}: hunk body disagrees with its header counts (old {seen_old}/{old_count}, new "
+          f"{seen_new}/{new_count})")
     body.append(line)
     i += 1
   return old_start, old_count, body, i

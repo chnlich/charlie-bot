@@ -403,8 +403,8 @@ Known-alive symbols:
   `search_sessions_readonly` (the cap before per-row work, shared cache references), so the
   wrapper's owned-copy + sidebar-state-fold form has zero production callers since that
   switch — but the same change added a cross-check test pinning that the wrapper serves the
-  same rows, and the search-content, pending-trigger-state, and archived-pagination tests
-  plus `docs/perf_baseline.md`'s search benchmark drive the wrapper as the semantics
-  reference. A src-only vulture scan flags it as an unused method; a whole-repo grep finds
-  only those tests, one docstring cross-reference, the same-named route handler in
-  `src/api/sessions.py`, and the perf doc.
+  same rows, and the search-content, master-cc-consumer, pending-trigger-state, and
+  archived-pagination tests plus `docs/perf_baseline.md`'s search benchmark drive the
+  wrapper as the semantics reference. A src-only vulture scan flags it as an unused method;
+  a whole-repo grep finds only those tests, one docstring cross-reference, the same-named
+  route handler in `src/api/sessions.py`, and the perf doc.

@@ -68,7 +68,10 @@ log = structlog.get_logger()
 
 MODES = ("editor-only", "editor-review")
 PROPOSAL_SCHEMA = "memory-replay-proposal/1"
-RUN_SCHEMA = "memory-replay-run/1"
+# Run-record schema v2: attempt chains (per-attempt validation outcome, chosen flag, usage) and
+# the recorded recovery policy joined the record. Comparison dispatches on prompt versions, not
+# on this field, so v1 records stay readable.
+RUN_SCHEMA = "memory-replay-run/2"
 # The bounded recovery budget: a stage response that fails mechanical validation is re-asked
 # at most once, so a stage consumes at most two model responses. Model judgments are never
 # retried and transport/backend failures are never retried.

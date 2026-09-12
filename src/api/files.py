@@ -222,6 +222,16 @@ _ListingKey = tuple[str, str, tuple[tuple[bool, str, int, float], ...]]
 
 _listing_memo: BoundedMemo[_ListingKey, str] = BoundedMemo(_LISTING_MEMO_LIMIT)
 
+# A row's bytes are a pure function of its key: the entry's walked tuple plus
+# the URL prefix the href embeds — the same walked-state ground the page memo's
+# key stands on. A rebuild after a corpus move re-renders only the entries whose
+# tuple moved (a metadata rename into a session dir moves exactly that dir's
+# mtime); the cap holds several listings' working sets and evicts the stale
+# mtimes such renames leave behind LRU-first.
+_ROW_MEMO_LIMIT = 8192
+_RowKey = tuple[str, bool, str, int, float]
+_row_memo: BoundedMemo[_RowKey, str] = BoundedMemo(_ROW_MEMO_LIMIT)
+
 # A name over [A-Za-z0-9_.~-] is its own html.escape output and its own
 # urllib.parse.quote(safe="") output — both functions' always-safe sets — so a
 # matching entry renders by interpolation and only the rest pay the per-entry
@@ -303,19 +313,24 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
 
   escaped_prefix = html.escape(prefix)
   for is_dir, name, size, mtime in entries:
-    icon = "📁" if is_dir else "📄"
-    name_text = name + ("/" if is_dir else "")
-    href = f"{escaped_prefix}/{name}"
-    if _SAFE_ENTRY_RE.fullmatch(name) is None:
-      name_text = html.escape(name_text)
-      href = html.escape(f"{prefix}/{quote(name, safe='')}")
-    size_text = "" if is_dir else _human_size(size)
-    mtime_text = _format_mtime(mtime)
-    rows.append(
-        f'<tr>'
-        f'<td>{icon}</td><td><a href="{href}">{name_text}</a></td>'
-        f'<td style="text-align:right">{size_text}</td><td>{mtime_text}</td>'
-        f'</tr>\n')
+    row_key = (url_prefix, is_dir, name, size, mtime)
+    row = _row_memo.get(row_key)
+    if row is None:
+      icon = "📁" if is_dir else "📄"
+      name_text = name + ("/" if is_dir else "")
+      href = f"{escaped_prefix}/{name}"
+      if _SAFE_ENTRY_RE.fullmatch(name) is None:
+        name_text = html.escape(name_text)
+        href = html.escape(f"{prefix}/{quote(name, safe='')}")
+      size_text = "" if is_dir else _human_size(size)
+      mtime_text = _format_mtime(mtime)
+      row = (
+          f'<tr>'
+          f'<td>{icon}</td><td><a href="{href}">{name_text}</a></td>'
+          f'<td style="text-align:right">{size_text}</td><td>{mtime_text}</td>'
+          f'</tr>\n')
+      _row_memo.store(row_key, row)
+    rows.append(row)
 
   display_path = html.escape("/" + dir_path.as_posix().lstrip("/"))
   listing = _DIR_LISTING_TEMPLATE.format(display_path=display_path, rows=''.join(rows))

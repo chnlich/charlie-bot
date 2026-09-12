@@ -42,7 +42,7 @@ import structlog
 
 from src.core.config import CharlieBotConfig, get_config
 from src.core.memory_replay import variants
-from src.core.memory_replay.compare import CompareOptions, _usage, run_comparison
+from src.core.memory_replay.compare import CompareOptions, _denominators, _usage, run_comparison
 from src.core.memory_replay.errors import ReplayError
 from src.core.memory_replay.identity import sha256_hex
 from src.core.memory_replay.manifest import REF_RE, Manifest, load_manifest
@@ -633,16 +633,6 @@ def _editor_provenance(run_dir: Path | None, record: dict | None, manifest: Mani
       "run_record": _rel_path(run_dir / "run.json", output_root),
       "actual_editor_calls": total,
       "themes": themes,
-  }
-
-
-def _denominators(manifest: Manifest) -> dict:
-  per_theme = {theme.name: len(theme.candidate_refs) for theme in manifest.themes}
-  return {
-      "themes": len(manifest.themes),
-      "theme_names": [theme.name for theme in manifest.themes],
-      "input_candidates": sum(per_theme.values()),
-      "candidates_per_theme": per_theme,
   }
 
 

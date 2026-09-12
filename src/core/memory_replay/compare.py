@@ -96,6 +96,7 @@ COMPARISON_NOTE = (
 QUALITY_NOTE = (
     "No semantic quality judgment is made here: fewer lines, more deletions, or fewer proposed paths "
     "do not establish better quality. Evaluate the content against separately stored user judgments.")
+_DENOMINATORS_NOTE = "fixed denominators from the frozen inputs; failed arms stay counted here"
 
 
 @dataclass
@@ -344,7 +345,9 @@ def _run_comparison(options: CompareOptions, *, cfg: CharlieBotConfig, now: date
       "verification": verification,
       "provenance": provenance,
       "recovery": _recovery_section(manifest, editor_stage, reviewer_stage),
-      "denominators": _denominators(manifest),
+      "denominators": {
+          **_denominators(manifest), "note": _DENOMINATORS_NOTE
+      },
       "arms": {
           "editor-only": editor_arm,
           "post-review": reviewer_arm,
@@ -1184,13 +1187,13 @@ def _recovery_section(
 
 
 def _denominators(manifest: Manifest) -> dict:
+  """Theme and candidate counts the frozen inputs fix; the comparison report adds its own note."""
   per_theme = {theme.name: len(theme.candidate_refs) for theme in manifest.themes}
   return {
       "themes": len(manifest.themes),
       "theme_names": [theme.name for theme in manifest.themes],
       "input_candidates": sum(per_theme.values()),
       "candidates_per_theme": per_theme,
-      "note": "fixed denominators from the frozen inputs; failed arms stay counted here",
   }
 
 

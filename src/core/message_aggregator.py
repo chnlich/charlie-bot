@@ -376,6 +376,15 @@ class MessageAggregator:
       self._tools_buf = []
       yield {"type": "message", "message": msg}
 
+  def _buffer_tool(self, name: object, tool_input: object) -> None:
+    """Open one buffered tool slot; its output arrives later via _attach_tool_output."""
+    self._tools_buf.append({
+        'name': name,
+        'input': tool_input,
+        'output': '',
+        'is_error': False,
+    })
+
   def _attach_tool_output(self, output: object, is_error: object) -> None:
     """Store one tool_result's renderable output on the newest buffered tool.
 
@@ -468,13 +477,7 @@ class MessageAggregator:
 
       for b in blocks:
         if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') != 'ExitPlanMode':
-          self._tools_buf.append(
-              {
-                  'name': b.get('name', ''),
-                  'input': b.get('input', {}),
-                  'output': '',
-                  'is_error': False,
-              })
+          self._buffer_tool(b.get('name', ''), b.get('input', {}))
 
       thinking_snapshot = extract_thinking_from_message(msg)
       if thinking_snapshot:
@@ -494,13 +497,7 @@ class MessageAggregator:
       return
 
     if t == ET.TOOL_USE:
-      self._tools_buf.append(
-          {
-              'name': ev.get('name', ''),
-              'input': ev.get('input', {}),
-              'output': '',
-              'is_error': False,
-          })
+      self._buffer_tool(ev.get('name', ''), ev.get('input', {}))
       self._last_event_idx = idx
       self._last_event_id = ev_id
       if self._last_assistant_ts is None:

@@ -301,7 +301,9 @@ async def test_tui_attachment_still_uses_shared_pty_path(
 
 
 @pytest.mark.asyncio
-async def test_terminal_websocket_uses_ws_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("auth_ok", [True, False], ids=["accepts", "rejects"])
+async def test_terminal_websocket_ws_auth_gate(monkeypatch: pytest.MonkeyPatch, auth_ok: bool) -> None:
+  """The attach runs only behind one auth check: a failed check neither accepts the socket nor attaches."""
   from server import terminal_websocket
 
   ws = _AcceptingWebSocket()
@@ -310,7 +312,7 @@ async def test_terminal_websocket_uses_ws_auth(monkeypatch: pytest.MonkeyPatch) 
 
   async def fake_check_ws_auth(websocket) -> bool:
     checked.append(websocket)
-    return True
+    return auth_ok
 
   async def fake_run_terminal_attachment(websocket) -> None:
     attached.append(websocket)
@@ -321,30 +323,8 @@ async def test_terminal_websocket_uses_ws_auth(monkeypatch: pytest.MonkeyPatch) 
   await terminal_websocket(ws)
 
   assert checked == [ws]
-  assert ws.accepted is True
-  assert attached == [ws]
-
-
-@pytest.mark.asyncio
-async def test_terminal_websocket_rejects_failed_ws_auth(monkeypatch: pytest.MonkeyPatch) -> None:
-  from server import terminal_websocket
-
-  ws = _AcceptingWebSocket()
-  attached = []
-
-  async def fake_check_ws_auth(_websocket) -> bool:
-    return False
-
-  async def fake_run_terminal_attachment(websocket) -> None:
-    attached.append(websocket)
-
-  monkeypatch.setattr(SERVER_CHECK_WS_AUTH_PATCH_TARGET, fake_check_ws_auth)
-  monkeypatch.setattr(TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET, fake_run_terminal_attachment)
-
-  await terminal_websocket(ws)
-
-  assert ws.accepted is False
-  assert not attached
+  assert ws.accepted is auth_ok
+  assert attached == ([ws] if auth_ok else [])
 
 
 def test_pty_client_can_push_clipboard_to_the_browser(monkeypatch: pytest.MonkeyPatch) -> None:

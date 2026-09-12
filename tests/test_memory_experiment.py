@@ -8,6 +8,7 @@ run records and summaries carry, and what the comparison refuses when a record o
 
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,15 @@ import test_memory_replay as base
 import yaml
 
 from src.core.config import CharlieBotConfig
-from src.core.memory_replay import CompareOptions, ReplayError, ReplayOptions, run_comparison, run_replay, variants
+from src.core.memory_replay import (
+    CompareOptions,
+    ExperimentOutcome,
+    ReplayError,
+    ReplayOptions,
+    run_comparison,
+    run_replay,
+    variants,
+)
 from src.core.memory_replay.experiment import ExperimentOptions, run_experiment
 from src.core.memory_replay.identity import sha256_hex
 
@@ -1135,20 +1144,28 @@ def experiment_cfg(tmp_path: Path) -> CharlieBotConfig:
   return replay_cfg(tmp_path)
 
 
+def run_scripted_experiment(
+    tmp_path: Path,
+    manifests: list[Path],
+    output_dir: Path,
+    variants: list[str],
+    transport_factory: Callable[[], VariantScriptedTransport],
+) -> ExperimentOutcome:
+  """One experiment run over the scripted transport: fake-clc backend on the tmp replay config."""
+  return run_experiment(
+      ExperimentOptions(manifests=manifests, output_dir=output_dir, backend="fake-clc", variants=variants),
+      cfg=experiment_cfg(tmp_path),
+      transport_factory=transport_factory)
+
+
 def test_experiment_runs_the_matrix_preserves_a_failing_arm_and_reuses_completed_arms(tmp_path: Path) -> None:
   manifests = [write_manifest(tmp_path, name="case-alpha.yaml"), write_manifest(tmp_path, name="case-beta.yaml")]
   output_dir = tmp_path / "exp"
   # The combined editor of the first case dies on its single call (transport failures are never
   # retried): one failing arm, every other arm completes.
   transport = VariantScriptedTransport(die_on_call=3, **COMPLETE_RESPONSES)
-  result = run_experiment(
-      ExperimentOptions(
-          manifests=manifests,
-          output_dir=output_dir,
-          backend="fake-clc",
-          variants=["baseline-original-flow", "combined-proposed-design"]),
-      cfg=experiment_cfg(tmp_path),
-      transport_factory=lambda: transport)
+  result = run_scripted_experiment(
+      tmp_path, manifests, output_dir, ["baseline-original-flow", "combined-proposed-design"], lambda: transport)
   assert result.failed_arms == ["case-alpha/combined-proposed-design"]
 
   summary = json.loads((output_dir / "experiment.json").read_text(encoding="utf-8"))
@@ -1193,14 +1210,8 @@ def test_experiment_runs_the_matrix_preserves_a_failing_arm_and_reuses_completed
   # Repeat the experiment: completed arms reuse their bundles, the failed arm is preserved and
   # not rerun, and no model call is made at all.
   fresh = VariantScriptedTransport(**COMPLETE_RESPONSES)
-  result_again = run_experiment(
-      ExperimentOptions(
-          manifests=manifests,
-          output_dir=output_dir,
-          backend="fake-clc",
-          variants=["baseline-original-flow", "combined-proposed-design"]),
-      cfg=experiment_cfg(tmp_path),
-      transport_factory=lambda: fresh)
+  result_again = run_scripted_experiment(
+      tmp_path, manifests, output_dir, ["baseline-original-flow", "combined-proposed-design"], lambda: fresh)
   assert fresh.calls == [], "repeating a settled experiment makes no model calls"
   assert result_again.failed_arms == ["case-alpha/combined-proposed-design"], "failures stay recorded"
   summary_again = json.loads((output_dir / "experiment.json").read_text(encoding="utf-8"))
@@ -1214,11 +1225,9 @@ def test_experiment_runs_the_matrix_preserves_a_failing_arm_and_reuses_completed
 def test_experiment_derives_the_editor_only_control_from_the_shared_response(tmp_path: Path) -> None:
   manifest = write_manifest(tmp_path, name="case-alpha.yaml")
   output_dir = tmp_path / "exp"
-  run_experiment(
-      ExperimentOptions(
-          manifests=[manifest], output_dir=output_dir, backend="fake-clc", variants=["baseline-original-flow"]),
-      cfg=experiment_cfg(tmp_path),
-      transport_factory=lambda: VariantScriptedTransport(**COMPLETE_RESPONSES))
+  run_scripted_experiment(
+      tmp_path, [manifest], output_dir, ["baseline-original-flow"],
+      lambda: VariantScriptedTransport(**COMPLETE_RESPONSES))
   summary = json.loads((output_dir / "experiment.json").read_text(encoding="utf-8"))
   arm = summary["cases"][0]["arms"][0]
   run_dir = output_dir / "cases" / "case-alpha" / "runs" / "baseline-original-flow" / "runs"
@@ -1255,14 +1264,8 @@ def test_editor_call_provenance_reports_actual_calls_and_labels_identical_conten
     transports.append(transport)
     return transport
 
-  run_experiment(
-      ExperimentOptions(
-          manifests=manifests,
-          output_dir=output_dir,
-          backend="fake-clc",
-          variants=["baseline-original-flow", "rationale-hidden-review"]),
-      cfg=experiment_cfg(tmp_path),
-      transport_factory=factory)
+  run_scripted_experiment(
+      tmp_path, manifests, output_dir, ["baseline-original-flow", "rationale-hidden-review"], factory)
   actual_editor_calls = [call for transport in transports for call in editor_calls(transport)]
   assert len(actual_editor_calls) == 2, "each variant's editor is really called; equal bytes save no call"
 
@@ -1313,14 +1316,9 @@ def test_editor_call_provenance_compares_content_per_theme_across_variants(tmp_p
       editor_responses=[ALERTS_EDITOR_RESPONSE_A, SELECTOR_EDITOR_RESPONSE], reviewer_response=TRIM_ACCEPT_RESPONSE)
   second = VariantScriptedTransport(
       editor_responses=[ALERTS_EDITOR_RESPONSE_B, SELECTOR_EDITOR_RESPONSE], reviewer_response=TRIM_ACCEPT_RESPONSE)
-  run_experiment(
-      ExperimentOptions(
-          manifests=manifests,
-          output_dir=output_dir,
-          backend="fake-clc",
-          variants=["baseline-original-flow", "rationale-hidden-review"]),
-      cfg=experiment_cfg(tmp_path),
-      transport_factory=lambda: first if not first.calls else second)
+  run_scripted_experiment(
+      tmp_path, manifests, output_dir, ["baseline-original-flow", "rationale-hidden-review"], lambda: first
+      if not first.calls else second)
   assert len(editor_calls(first)) == 2 and len(editor_calls(second)) == 2, (
       "four real editor calls across the two variants x two themes; equal theme bytes save none")
 
@@ -1345,11 +1343,7 @@ def test_editor_provenance_survives_a_failed_reviewer(tmp_path: Path) -> None:
   output_dir = tmp_path / "exp"
   transport = VariantScriptedTransport(
       editor_response=SELECTOR_EDITOR_RESPONSE, reviewer_responses=[NEW_PROSE_RESPONSE, NEW_PROSE_RESPONSE])
-  result = run_experiment(
-      ExperimentOptions(
-          manifests=manifests, output_dir=output_dir, backend="fake-clc", variants=["baseline-original-flow"]),
-      cfg=experiment_cfg(tmp_path),
-      transport_factory=lambda: transport)
+  result = run_scripted_experiment(tmp_path, manifests, output_dir, ["baseline-original-flow"], lambda: transport)
   assert result.failed_arms == ["case-alpha/baseline-original-flow"]
   summary = json.loads((output_dir / "experiment.json").read_text(encoding="utf-8"))
   arm = summary["cases"][0]["arms"][0]
@@ -1383,11 +1377,9 @@ def test_experiment_rejects_unknown_variants_and_duplicate_case_ids(tmp_path: Pa
 
 
 def run_completed_experiment(tmp_path: Path, manifests: list[Path], output_dir: Path) -> None:
-  run_experiment(
-      ExperimentOptions(
-          manifests=manifests, output_dir=output_dir, backend="fake-clc", variants=["baseline-original-flow"]),
-      cfg=experiment_cfg(tmp_path),
-      transport_factory=lambda: VariantScriptedTransport(**COMPLETE_RESPONSES))
+  run_scripted_experiment(
+      tmp_path, manifests, output_dir, ["baseline-original-flow"],
+      lambda: VariantScriptedTransport(**COMPLETE_RESPONSES))
 
 
 def variant_runs_root(output_dir: Path, case_id: str = "case-alpha", variant: str = "baseline-original-flow") -> Path:
@@ -1410,11 +1402,7 @@ def test_corrupted_input_identity_blocks_the_arm_and_preserves_the_original_byte
   assert b"preserve-this-original-corruption-evidence" in before[Path("run.json")]
 
   transport = VariantScriptedTransport(**COMPLETE_RESPONSES)
-  result = run_experiment(
-      ExperimentOptions(
-          manifests=manifests, output_dir=output_dir, backend="fake-clc", variants=["baseline-original-flow"]),
-      cfg=experiment_cfg(tmp_path),
-      transport_factory=lambda: transport)
+  result = run_scripted_experiment(tmp_path, manifests, output_dir, ["baseline-original-flow"], lambda: transport)
   assert transport.calls == [], "no model call may follow an uninterpretable run record"
   assert snapshot_files(run_dir) == before, "the corrupted evidence is preserved byte-for-byte, not repaired"
 
@@ -1446,11 +1434,7 @@ def test_missing_run_record_with_partial_evidence_blocks_the_arm(tmp_path: Path)
   before = snapshot_files(run_dir)
 
   transport = VariantScriptedTransport(**COMPLETE_RESPONSES)
-  run_experiment(
-      ExperimentOptions(
-          manifests=manifests, output_dir=output_dir, backend="fake-clc", variants=["baseline-original-flow"]),
-      cfg=experiment_cfg(tmp_path),
-      transport_factory=lambda: transport)
+  run_scripted_experiment(tmp_path, manifests, output_dir, ["baseline-original-flow"], lambda: transport)
   assert transport.calls == []
   assert snapshot_files(run_dir) == before
   summary = json.loads((output_dir / "experiment.json").read_text(encoding="utf-8"))
@@ -1468,11 +1452,7 @@ def test_unreadable_run_record_blocks_the_arm(tmp_path: Path) -> None:
   before = snapshot_files(run_dir)
 
   transport = VariantScriptedTransport(**COMPLETE_RESPONSES)
-  run_experiment(
-      ExperimentOptions(
-          manifests=manifests, output_dir=output_dir, backend="fake-clc", variants=["baseline-original-flow"]),
-      cfg=experiment_cfg(tmp_path),
-      transport_factory=lambda: transport)
+  run_scripted_experiment(tmp_path, manifests, output_dir, ["baseline-original-flow"], lambda: transport)
   assert transport.calls == []
   assert snapshot_files(run_dir) == before
   summary = json.loads((output_dir / "experiment.json").read_text(encoding="utf-8"))
@@ -1493,11 +1473,7 @@ def test_different_legitimate_identities_coexist_in_distinct_run_directories(tmp
   changed["base_commit"] = "mem-base-0002"
   new_manifests = [write_manifest(tmp_path, data=changed, name="case-alpha.yaml")]
   transport = VariantScriptedTransport(**COMPLETE_RESPONSES)
-  result = run_experiment(
-      ExperimentOptions(
-          manifests=new_manifests, output_dir=output_dir, backend="fake-clc", variants=["baseline-original-flow"]),
-      cfg=experiment_cfg(tmp_path),
-      transport_factory=lambda: transport)
+  result = run_scripted_experiment(tmp_path, new_manifests, output_dir, ["baseline-original-flow"], lambda: transport)
   assert result.failed_arms == []
   assert transport.calls, "the changed inputs legitimately draw fresh; coexistence is not a rerun of the old"
   assert snapshot_files(first_run_dir) == before

@@ -1,6 +1,6 @@
 """The per-entry ``proxy_url`` env contract, single-homed across the CLI backends.
 
-Both ``cc-charlie-code`` and ``opencode`` inject the proxy through the shared
+Both ``charlie-code`` and ``opencode`` inject the proxy through the shared
 ``apply_proxy_env`` (src/agents/backends/base.py); each parametrized case drives
 that backend's own ``_prepare_env`` call site, so both wirings stay covered while
 the assertions live in one place.

@@ -97,10 +97,11 @@ def _backward_user_answers(
   span held a real user message at all.
 
   No early break. The stored answers must be complete prefix facts for the
-  suffix fold to combine with, and walking on can only fill the stamp answer,
-  never flip a verdict: the break the scan replaced fired only after the
-  takeoff phrase had already allowed the delegation, and a blocked corpus
-  never settled either answer, so it always walked to exhaustion anyway.
+  suffix fold to combine with, and the break the scan replaced could fire
+  with the stamp answer still unset behind a takeoff-allowed verdict — the
+  one under-fill this walk removes. Past a settled stamp the break changed
+  nothing (both answers settle, and a file-older message cannot overwrite
+  either), so walking on only fills that corner and never flips a verdict.
   """
   latest_user_has_takeoff = False
   latest_pre_takeoff_at: datetime | None = None

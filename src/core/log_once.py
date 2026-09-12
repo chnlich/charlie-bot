@@ -1,4 +1,9 @@
-"""The one warn-once rule: at most one log line per key per process."""
+"""The one warn-once rule: at most one log line per key per process.
+
+Also home to the structlog-deferring logger proxy. Both residents stay
+stdlib-only: config and memory bind them at import, on CLI chains whose
+measured floors depend on structlog staying out until first use.
+"""
 
 from collections.abc import Callable, Hashable
 from typing import Any
@@ -42,3 +47,20 @@ class WarnOnceRegistry:
   def __bool__(self) -> bool:
     """True when at least one key has fired."""
     return bool(self._seen)
+
+
+class LazyStructlogLogger:
+  """Forwards every attribute to structlog's logger, importing structlog on first use.
+
+  ``import structlog`` eagerly pulls structlog.dev (rich, pygments, the traceback
+  formatter) — ~67 ms of the CLI import floor the M92 collector measures and ~97 ms
+  of the memory-CLI invocation wall the M98 collector measures — while the modules
+  binding ``log`` emit only on log lines those CLI invocations never reach. A test
+  may monkeypatch an attribute on a module's ``log``: the patch lands on this
+  object, which every later lookup reaches.
+  """
+
+  def __getattr__(self, name: str) -> Any:
+    import structlog
+
+    return getattr(structlog.get_logger(), name)

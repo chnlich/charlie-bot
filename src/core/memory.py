@@ -34,28 +34,11 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
+from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo
 
-
-class _LazyStructlogLogger:
-  """Forwards every attribute to structlog's logger, importing structlog on first use.
-
-  ``import structlog`` eagerly pulls structlog.dev (rich, pygments, the traceback
-  formatter) — ~97 ms of the memory-CLI invocation wall the M98 collector measures —
-  while this module logs only on the memory-dir-missing error path a read command
-  never reaches. A test may monkeypatch an attribute on ``log``: the patch lands on
-  this object, which every later lookup reaches.
-  """
-
-  def __getattr__(self, name: str) -> Any:
-    import structlog
-
-    return getattr(structlog.get_logger(), name)
-
-
-log = _LazyStructlogLogger()
+log = LazyStructlogLogger()
 
 _TOPICS_FILENAME = "topics"
 _ENTRIES_DIRNAME = "entries"

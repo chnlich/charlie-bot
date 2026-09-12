@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Generic, Literal, TypeVar
+from typing import Generic, Literal, TypeVar
 from zoneinfo import ZoneInfo
 
 from pydantic import (
@@ -19,7 +19,7 @@ from pydantic import (
     model_validator,
 )
 
-from src.core.log_once import WarnOnceRegistry
+from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.models import (
     BackendOption,
     ClaudeAccount,
@@ -27,24 +27,7 @@ from src.core.models import (
 )
 from src.core.yaml_utils import load_yaml
 
-
-class _LazyStructlogLogger:
-  """Forwards every attribute to structlog's logger, importing structlog on first use.
-
-  ``import structlog`` eagerly pulls structlog.dev (rich, pygments, the traceback
-  formatter) — ~67 ms of the CLI import floor the M92 collector measures — while
-  this module logs only on warning paths a CLI command never reaches. A test may
-  monkeypatch an attribute on ``log``: the patch lands on this object, which every
-  later lookup reaches.
-  """
-
-  def __getattr__(self, name: str) -> Any:
-    import structlog
-
-    return getattr(structlog.get_logger(), name)
-
-
-log = _LazyStructlogLogger()
+log = LazyStructlogLogger()
 
 CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 

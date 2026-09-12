@@ -11,6 +11,19 @@ from dataclasses import dataclass, field
 from src.core.memory_replay.manifest import Source
 from src.core.memory_replay.retrieval import FeedbackSelection
 
+# <style> rules shared by the memory-replay HTML pages. Each page pins its own
+# body width and appends page-only rules around this list.
+REPORT_CSS = [
+    "h1{font-size:20px}h2{font-size:15px;border-bottom:1px solid #d9dfe6;padding-bottom:4px;margin-top:26px}",
+    "table{border-collapse:collapse;width:100%;font-size:12.5px}",
+    "th,td{border:1px solid #d9dfe6;padding:6px 9px;text-align:left;vertical-align:top}",
+    "th{background:#eef1f5}code,.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}",
+    "pre{background:#f6f8fa;border:1px solid #d9dfe6;border-radius:6px;padding:10px;overflow:auto;"
+    "font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:pre-wrap}",
+    ".needs{background:#fff4e5;border:1px solid #e6d09b;border-radius:6px;padding:10px 14px;margin:8px 0}",
+    ".muted{color:#5b6774;font-size:12px}",
+]
+
 
 @dataclass
 class ReportData:
@@ -42,14 +55,7 @@ def render_report(data: ReportData) -> str:
       "<title>Memory replay proposal</title>",
       "<style>",
       "body{font:14px/1.5 -apple-system,sans-serif;margin:24px auto;max-width:1100px;color:#1b2430}",
-      "h1{font-size:20px}h2{font-size:15px;border-bottom:1px solid #d9dfe6;padding-bottom:4px;margin-top:26px}",
-      "table{border-collapse:collapse;width:100%;font-size:12.5px}",
-      "th,td{border:1px solid #d9dfe6;padding:6px 9px;text-align:left;vertical-align:top}",
-      "th{background:#eef1f5}code,.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}",
-      "pre{background:#f6f8fa;border:1px solid #d9dfe6;border-radius:6px;padding:10px;overflow:auto;"
-      "font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:pre-wrap}",
-      ".needs{background:#fff4e5;border:1px solid #e6d09b;border-radius:6px;padding:10px 14px;margin:8px 0}",
-      ".muted{color:#5b6774;font-size:12px}",
+      *REPORT_CSS,
       "</style>",
       "</head>",
       "<body>",

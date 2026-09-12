@@ -77,7 +77,13 @@ from src.core.memory_replay.identity import approval_digest, canonical_bytes, in
 from src.core.memory_replay.manifest import Manifest, load_manifest
 from src.core.memory_replay.report import _e, _page, _row
 from src.core.memory_replay.retrieval import FeedbackSelection
-from src.core.memory_replay.runner import MAX_STAGE_RESPONSES, PROPOSAL_SCHEMA, _aggregate_candidate_results, _timestamp
+from src.core.memory_replay.runner import (
+    MAX_STAGE_RESPONSES,
+    PROPOSAL_SCHEMA,
+    _aggregate_candidate_results,
+    _require_store_disjoint_output_root,
+    _timestamp,
+)
 from src.core.memory_replay.validate import (
     build_patch,
     canonical_text,
@@ -1259,16 +1265,7 @@ def _usage(record: dict) -> dict:
 
 def _require_disjoint_comparison_output(output_dir: Path, run_dir: Path, cfg: CharlieBotConfig) -> None:
   """The comparison writes only into its own output root; the run bundle and the store are inputs."""
-  out = output_dir.resolve()
-  if out.exists() and not out.is_dir():
-    raise errors.ReplayIsolationError(
-        f"output dir {output_dir} exists and is not a directory; comparison writes only to an isolated "
-        "output root")
-  store = cfg.memory_dir.resolve()
-  if out == store or out.is_relative_to(store) or store.is_relative_to(out):
-    raise errors.ReplayIsolationError(
-        f"output dir {output_dir} overlaps the live memory store {cfg.memory_dir}; comparison writes only "
-        "to an isolated output root")
+  out = _require_store_disjoint_output_root(output_dir, cfg, writer="comparison")
   run = run_dir.resolve()
   if out == run or out.is_relative_to(run) or run.is_relative_to(out):
     raise errors.ReplayIsolationError(

@@ -665,18 +665,26 @@ def _record_theme(record: dict, theme: Theme, selected: list[FeedbackSelection])
       })
 
 
-def _require_disjoint_output_root(
-    output_dir: Path, manifest_path: Path, manifest: Manifest, cfg: CharlieBotConfig) -> None:
-  """Reject any output root that overlaps the live memory store or a frozen input file."""
+def _require_store_disjoint_output_root(output_dir: Path, cfg: CharlieBotConfig, *, writer: str) -> Path:
+  """Shared output-root guard for both writers (replay and comparison): the root must be a
+  creatable directory, disjoint from the live memory store; returns the resolved root.
+  ``writer`` names the writer in the rejection message."""
   out = output_dir.resolve()
   if out.exists() and not out.is_dir():
     raise ReplayIsolationError(
-        f"output dir {output_dir} exists and is not a directory; replay writes only to an isolated output root")
+        f"output dir {output_dir} exists and is not a directory; {writer} writes only to an isolated output root")
   store = cfg.memory_dir.resolve()
   if out == store or out.is_relative_to(store) or store.is_relative_to(out):
     raise ReplayIsolationError(
-        f"output dir {output_dir} overlaps the live memory store {cfg.memory_dir}; replay writes only to an "
+        f"output dir {output_dir} overlaps the live memory store {cfg.memory_dir}; {writer} writes only to an "
         "isolated output root")
+  return out
+
+
+def _require_disjoint_output_root(
+    output_dir: Path, manifest_path: Path, manifest: Manifest, cfg: CharlieBotConfig) -> None:
+  """Reject any output root that overlaps the live memory store or a frozen input file."""
+  out = _require_store_disjoint_output_root(output_dir, cfg, writer="replay")
   for frozen_path in [manifest_path, *manifest.frozen_files()]:
     resolved = frozen_path.resolve()
     if out == resolved or out.is_relative_to(resolved) or resolved.is_relative_to(out):

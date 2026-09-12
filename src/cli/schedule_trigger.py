@@ -27,16 +27,32 @@ freely in one trigger.
     --message 'Remote + slurm training finished'
 """
 
+from __future__ import annotations
+
 import argparse
 import json
+from typing import TYPE_CHECKING
 
 from src.cli.common import add_session_arg, post_internal_api, resolve_session_id
-from src.core.config import get_config
-from src.core.models import MAX_TRIGGER_MESSAGE_CHARS, WatchKind
+from src.core.constants import MAX_TRIGGER_MESSAGE_CHARS, WatchKind
+
+if TYPE_CHECKING:
+  from src.core.config import CharlieBotConfig
 
 # Exit code returned when trigger creation is rejected: remote-PID verify-on-create
 # or --message length validation. Mirrors argparse's usage-error exit code.
 EXIT_VERIFY_REJECTED = 2
+
+
+def get_config() -> CharlieBotConfig:
+  """Resolve the process config, importing its module on first call.
+
+  Same M92 floor rule as src.cli.common.get_config: config's import chain serves
+  only the paths that read it, and the module attribute stays the tests' patch
+  target (conftest patches cli_module.get_config for the readback path).
+  """
+  from src.core.config import get_config
+  return get_config()
 
 
 def _positive_int(value: str, raw: str, what: str) -> int:

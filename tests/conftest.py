@@ -905,9 +905,10 @@ ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "asyncio.create_subprocess_exec"
 # patch setattrs the stand-in on the src.core.triggers module attribute.
 TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.core.triggers._SACCT_AVAILABLE"
 
-# Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py binds the
-# name with `from src.core.config import get_config`, so mock setattrs the stand-in on the
-# src.cli.common module attribute and every helper defined there reads it at call time.
+# Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py defines a
+# get_config forwarder (config's module imports lazily on first call, the M92 floor rule), so
+# mock setattrs the stand-in on the src.cli.common module attribute and every helper defined
+# there reads it as a module global at call time.
 CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
 
 # Import-path patch target for the version-skew hint the CLI error paths append. src/cli/common.py

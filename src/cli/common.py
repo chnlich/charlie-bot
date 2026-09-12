@@ -28,9 +28,10 @@ from typing import TYPE_CHECKING, Any, NoReturn
 if TYPE_CHECKING:
   import requests
 
+  from src.core.config import CharlieBotConfig, Credentials
+
 from src.core.buildinfo import read_repo_head_sha
-from src.core.config import CharlieBotConfig, get_config, get_credentials
-from src.core.models import SESSION_ID_ENV_VAR
+from src.core.constants import SESSION_ID_ENV_VAR
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
     HTTP_INTERNAL_API_TIMEOUT,
@@ -57,6 +58,24 @@ def __getattr__(name: str) -> Any:
   import requests
   globals()["requests"] = requests
   return requests
+
+
+def get_config() -> CharlieBotConfig:
+  """Resolve the process config, importing its module on first call.
+
+  config's import chain (pydantic models + yaml, ~180 ms of the M92 CLI import
+  floor) serves only paths that read config; --help never does. The module
+  attribute stays the tests' patch target (conftest
+  CLI_COMMON_GET_CONFIG_PATCH_TARGET setattrs this name).
+  """
+  from src.core.config import get_config
+  return get_config()
+
+
+def get_credentials() -> Credentials:
+  """Resolve the process credentials, importing config's module on first call (same M92 floor rule as get_config)."""
+  from src.core.config import get_credentials
+  return get_credentials()
 
 
 def internal_api_auth_headers() -> dict[str, str]:

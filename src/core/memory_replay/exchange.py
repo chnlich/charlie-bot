@@ -228,15 +228,13 @@ def build_editor_request(manifest: Manifest, theme: Theme, selections: list[Feed
   return render_evidence_request(theme, evidence_payload(manifest, theme, selections))
 
 
-def build_reviewer_request(
-    manifest: Manifest,
-    theme: Theme,
-    selections: list[FeedbackSelection],
-    editor_output: ThemeOutput,
-) -> str:
-  """The reviewer's user content: the editor's evidence plus its proposals, without its reasons."""
-  payload = evidence_payload(manifest, theme, selections)
-  payload["editor_proposals"] = {
+def editor_proposals_payload(editor_output: ThemeOutput) -> dict:
+  """The editor handoff every reviewer request carries: its entry operations, reasons withheld.
+
+  The v3 and variant reviewer requests must serialize these identically; a "text" key appears
+  only on an operation that carries one, per the response contract's keep/delete rule.
+  """
+  return {
       "entries":
           [
               {
@@ -248,6 +246,17 @@ def build_reviewer_request(
               } for op in editor_output.entries
           ]
   }
+
+
+def build_reviewer_request(
+    manifest: Manifest,
+    theme: Theme,
+    selections: list[FeedbackSelection],
+    editor_output: ThemeOutput,
+) -> str:
+  """The reviewer's user content: the editor's evidence plus its proposals, without its reasons."""
+  payload = evidence_payload(manifest, theme, selections)
+  payload["editor_proposals"] = editor_proposals_payload(editor_output)
   return render_evidence_request(theme, payload)
 
 

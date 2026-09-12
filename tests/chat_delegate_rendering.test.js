@@ -1,34 +1,10 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
 
 const { escapeHtml } = require('./escape_html_stub');
 const {createEscapingElement} = require('./dom_element_stub');
-const {loadChatRenderingModules} = require('./chat_rendering_context_stub');
+const {loadChatRendering} = require('./chat_rendering_context_stub');
 const {loadSidebarWorkersContext} = require('./sidebar_workers_context_stub');
-
-function loadChatRendering() {
-  const context = {
-    CSS: {escape: (value) => String(value)},
-    document: {
-      createElement: (tag) => createEscapingElement(tag),
-      getElementById: () => null,
-      querySelector: () => null,
-    },
-    marked: {parse: (value) => String(value || '')},
-    fixNestedFences: (value) => String(value || ''),
-    renderProseMarkdown: (value) => String(value || ''),
-    renderChatMath: () => {},
-    scheduleCodeHighlightFlush: () => {},
-    // Identity stand-in for markdown-renderer.js's wrapWideChars (not loaded
-    // here); these fixtures carry no wide chars.
-    wrapWideChars: (html) => html,
-    renderUserMessageBubble: () => '',
-  };
-  vm.createContext(context);
-  loadChatRenderingModules(context);
-  return context;
-}
 
 function assertWellFormedMarkup(html, label = 'html') {
   assert.doesNotMatch(html, /<[^>]*</, `${label} contains a nested tag opener`);

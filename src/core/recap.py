@@ -293,7 +293,7 @@ async def generate_and_cache_summary(
   last_exception: Exception | None = None
   for option in options:
     try:
-      backend = build_backend(option, cfg)
+      backend = build_backend(option, cfg, cgroup_session_id=session_id)
       summary = await backend.one_shot_text(prompt, _SUMMARY_SYSTEM_PROMPT, timeout=AUTONAMER_TIMEOUT)
     except Exception as e:
       last_exception = e

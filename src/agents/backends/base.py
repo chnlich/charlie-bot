@@ -23,8 +23,16 @@ import structlog
 
 from src.core import event_types as ET
 from src.core import runs
+from src.core.config import get_config
 from src.core.ndjson import parse_ndjson_line, write_all
-from src.core.process import kill_process_group, make_pdeathsig_kill_preexec
+from src.core.process import (
+    SessionCgroup,
+    compose_preexec,
+    kill_process_group,
+    make_pdeathsig_kill_preexec,
+    make_session_cgroup_preexec,
+    prepare_session_cgroup,
+)
 from src.core.timeouts import (
     NO_OUTPUT_REPORT_THRESHOLD,
     SUBPROCESS_DIAG_CAPTURE_TIMEOUT,
@@ -553,6 +561,7 @@ class AgentBackend(ABC):
       instructions_content: str | None = None,
       resume_session_id: str | None = None,
       log_dir: Path | None = None,
+      cgroup_session_id: str | None = None,
       **_extra,
   ) -> None:
     self._model = model
@@ -562,6 +571,11 @@ class AgentBackend(ABC):
     self._instructions_content = instructions_content
     self._resume_session_id = resume_session_id
     self._log_dir = log_dir
+    # The CharlieBot session this backend's processes belong to. Every spawn
+    # point below forks its child into that session's memory-cap cgroup; None
+    # (a backend with no session home — an unowned one-shot) never enters one.
+    self._cgroup_session_id = cgroup_session_id
+    self._active_session_cgroup: SessionCgroup | None = None
     self._proc: asyncio.subprocess.Process | None = None
     self._stderr_task: asyncio.Task | None = None
     self._stdin_task: asyncio.Task | None = None
@@ -649,8 +663,10 @@ class AgentBackend(ABC):
     the child's stdout/stderr directly instead of tail-following log files.
     Piped children serve this process alone, so the kernel holds them to our
     death (PR_SET_PDEATHSIG): run()'s raw-log spawn is the exact opposite —
-    covered transports are designed to survive parent death.
+    covered transports are designed to survive parent death. The pdeathsig
+    preexec is merged with the session cgroup move (not replaced by it).
     """
+    self._active_session_cgroup = self._prepare_session_cgroup()
     self._proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=cwd,
@@ -660,9 +676,42 @@ class AgentBackend(ABC):
         env=final_env,
         limit=self._buffer_limit,
         start_new_session=True,
-        preexec_fn=make_pdeathsig_kill_preexec(),
+        preexec_fn=compose_preexec(
+            make_pdeathsig_kill_preexec(),
+            make_session_cgroup_preexec(self._active_session_cgroup.path if self._active_session_cgroup else None)),
     )
     await self._pin_identity_and_fire_on_spawn()
+
+  def _prepare_session_cgroup(self) -> SessionCgroup | None:
+    """Ensure this backend's session cgroup exists and snapshot its counters; None when off.
+
+    Shared pre-spawn step for every spawn point below. The cgroup is keyed by
+    the session id the caller pinned at construction (master turn, worker
+    task, session-scoped one-shot); a backend constructed with
+    cgroup_session_id=None (a spawn with no session home) never enters one.
+    """
+    if self._cgroup_session_id is None:
+      return None
+    cfg = get_config()
+    return prepare_session_cgroup(
+        self._cgroup_session_id,
+        memory_max_mb=cfg.server.session_memory_max_mb,
+        swap_max_mb=cfg.server.session_swap_max_mb,
+    )
+
+  def cgroup_exit_report(self) -> str | None:
+    """Cap / host-OOM attribution message for this run's exit, or None.
+
+    Returns None when cgroup control was off for this spawn, when the run was
+    deliberately terminated (a user stop or shutdown kill is our own -9, not
+    the kernel's), or when the memory.events counters did not move in the
+    plan_01 v3 §4.2 attribution shape.
+    """
+    if self.terminated:
+      return None
+    if self._active_session_cgroup is None:
+      return None
+    return self._active_session_cgroup.classify_exit(self.exit_code)
 
   async def _pin_identity_and_fire_on_spawn(self) -> None:
     # Pin the process identity BEFORE on_spawn so the callback can persist
@@ -728,6 +777,10 @@ class AgentBackend(ABC):
         os.close(raw_fd)
         raise
       try:
+        # Covered (raw-log) transport: no pdeathsig by design — but the child
+        # still lands in the session's memory-cap cgroup when cgroup control
+        # is on (preexec is None, i.e. behavior unchanged, when it is off).
+        self._active_session_cgroup = self._prepare_session_cgroup()
         self._proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=cwd,
@@ -736,6 +789,8 @@ class AgentBackend(ABC):
             stderr=stderr_fd,
             env=final_env,
             start_new_session=True,
+            preexec_fn=make_session_cgroup_preexec(
+                self._active_session_cgroup.path if self._active_session_cgroup else None),
         )
       finally:
         # The child holds its own copies of both fds.

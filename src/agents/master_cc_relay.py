@@ -127,6 +127,7 @@ async def place_turn(
         config_dir=chosen.config_dir,
         pre_tokens=context_tokens,
         persist_and_broadcast=_persist(item),
+        cgroup_session_id=session_meta.id,
         log_context={
             "session": session_meta.id,
             "account": chosen.label,
@@ -208,6 +209,7 @@ async def prepare_relay(
         config_dir=nxt.config_dir,
         pre_tokens=context_tokens,
         persist_and_broadcast=_persist(item),
+        cgroup_session_id=session_meta.id,
         log_context={
             "session": session_meta.id,
             "account": nxt.label,

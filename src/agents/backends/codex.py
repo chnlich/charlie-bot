@@ -21,7 +21,7 @@ from src.agents.backends.base import (
 )
 from src.core import event_types as ET
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
-from src.core.process import wait_or_kill_group
+from src.core.process import make_session_cgroup_preexec, wait_or_kill_group
 
 log = structlog.get_logger()
 
@@ -123,6 +123,10 @@ class CodexBackend(AgentBackend):
         framed,
     ]
     self._last_agent_text.clear()
+    # Session-scoped one-shots land in the session's memory-cap cgroup; a
+    # backend built with cgroup_session_id=None (no session home) spawns
+    # exactly as before (preexec None).
+    self._active_session_cgroup = self._prepare_session_cgroup()
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.DEVNULL,
@@ -131,6 +135,8 @@ class CodexBackend(AgentBackend):
         env=self._prepare_env(dict(os.environ)),
         limit=self._buffer_limit,
         start_new_session=True,
+        preexec_fn=make_session_cgroup_preexec(
+            self._active_session_cgroup.path if self._active_session_cgroup else None),
     )
 
     async def _read_bounded_stderr() -> bytes:

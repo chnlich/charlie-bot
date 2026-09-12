@@ -14,26 +14,40 @@ are the recorded run's inputs, and refuses to proceed when they are not:
   bundles existed, the manifest at the path the run record names) must
   reproduce the run's recorded input identity;
 - every bundle file the run hashed at write time must still match that hash;
+- the recorded attempt chain of every stage must reconstruct: each attempt's
+  request must be byte-identical to the request its contract builds (the
+  stage's base request for attempt 1, the bounded repair request — same
+  evidence, the stage's own previous raw response, its recorded validation
+  errors — for a re-ask), the chosen attempt must be the last one, and a
+  response recorded as failed must still fail mechanical validation;
 - each recorded editor request must be byte-identical to the request the
-  current builders reconstruct from the frozen inputs and the recorded
-  feedback selection, and each recorded reviewer request must be
-  byte-identical to the request reconstructed from the frozen inputs and the
-  recorded editor response — which is the proof that the reviewer actually
-  consumed that editor response, not merely that two JSON files exist;
-- the recorded system-prompt fingerprints must match the prompts this
-  comparison validates against;
+  recorded contract builds from the frozen inputs and the recorded feedback
+  selection, and each recorded reviewer request byte-identical to the request
+  built from the frozen inputs and the recorded editor response — which is
+  the proof that the reviewer actually consumed that editor response, not
+  merely that two JSON files exist;
+- the recorded system-prompt fingerprints must match the prompts of the
+  recorded contract;
 - a recorded proposal must still match the finalization of the recorded
   reviewer responses (base, sources, patch, digest, final dispositions).
 
-Runs recorded before this provenance metadata existed are supported when every
-check their record can support passes, and the comparison explicitly declares
-what such a record never saved instead of silently certifying it.
+Version dispatch. The run's recorded prompt versions select the exchange
+contract used for every check above: v3 runs are read under the v3 contract,
+v2 runs under the v2 contract with its original operation and validation
+meanings, and anything else fails explicitly. A v2 run's known failed arms
+stay failed — v3's wider citation allowance does not reach back into old
+records. Runs recorded before this provenance metadata existed are supported
+when every check their record can support passes, and the comparison explicitly
+declares what such a record never saved instead of silently certifying it.
 
 Each arm is then parsed, mechanically validated, and finalized with the same
 helpers the runner used. A stage whose recorded response fails to parse or
 validate is reported as a failed arm — never substituted with empty or
 no-change output — while the denominators (themes and input candidates) stay
-fixed. Quality is reported as unjudged: fewer lines, more deletions, or fewer
+fixed. Usage counts every recorded attempt, failed repairs included. A
+recovered response can change an arm's judgment; that is stage
+execution/recovery, not independent-review quality gain, and the report says
+so. Quality is reported as unjudged: fewer lines, more deletions, or fewer
 proposed paths do not establish better content. The exit status communicates
 mechanical execution and format success only.
 """
@@ -45,13 +59,19 @@ from pathlib import Path
 
 import structlog
 
+from collections.abc import Callable
+from dataclasses import dataclass
+
 from src.core.config import CharlieBotConfig, get_config
-from src.core.memory_replay import errors
+from src.core.memory_replay import errors, exchange_v2
 from src.core.memory_replay.exchange import (
+    EDITOR_PROMPT_VERSION,
     EDITOR_SYSTEM,
+    REVIEWER_PROMPT_VERSION,
     REVIEWER_SYSTEM,
     ThemeOutput,
     build_editor_request,
+    build_repair_request,
     build_reviewer_request,
     parse_model_output,
 )
@@ -59,8 +79,8 @@ from src.core.memory_replay.identity import approval_digest, canonical_bytes, in
 from src.core.memory_replay.manifest import Manifest, load_manifest
 from src.core.memory_replay.report import _e, _page
 from src.core.memory_replay.retrieval import FeedbackSelection
-from src.core.memory_replay.runner import PROPOSAL_SCHEMA, _aggregate_candidate_results, _timestamp
-from src.core.memory_replay.validate import build_patch, canonical_text, finalize, validate_theme_output
+from src.core.memory_replay.runner import MAX_STAGE_RESPONSES, PROPOSAL_SCHEMA, _aggregate_candidate_results, _timestamp
+from src.core.memory_replay.validate import build_patch, canonical_text, finalize, validate_theme_output, validate_theme_output_v2
 
 log = structlog.get_logger()
 
@@ -80,6 +100,65 @@ class CompareOptions:
 
   run_dir: Path
   output_dir: Path
+
+
+@dataclass(frozen=True)
+class ExchangeContract:
+  """The exchange contract one recorded run was made under, selected by its recorded versions.
+
+  Everything the comparison checks against the contract — the system prompts it
+  fingerprints, the request builders it reconstructs with, the validator that
+  gives recorded responses their meanings — comes from here, so a v2 record is
+  interpreted with v2 meanings and a v3 record with v3 meanings, and no other
+  version is interpreted at all.
+  """
+
+  name: str
+  editor_system: str
+  reviewer_system: str
+  build_editor_request: Callable[..., str]
+  build_reviewer_request: Callable[..., str]
+  validate_output: Callable[..., None]
+  bounded_recovery: bool
+
+
+def _contract_for(record: dict) -> ExchangeContract:
+  versions = record.get("prompt_versions") or {}
+  editor_version, reviewer_version = versions.get("editor"), versions.get("reviewer")
+  if editor_version == EDITOR_PROMPT_VERSION and reviewer_version == REVIEWER_PROMPT_VERSION:
+    return ExchangeContract(
+        name="v3",
+        editor_system=EDITOR_SYSTEM,
+        reviewer_system=REVIEWER_SYSTEM,
+        build_editor_request=build_editor_request,
+        build_reviewer_request=build_reviewer_request,
+        validate_output=validate_theme_output,
+        bounded_recovery=True)
+  if (editor_version == exchange_v2.EDITOR_PROMPT_VERSION
+      and reviewer_version == exchange_v2.REVIEWER_PROMPT_VERSION):
+    return ExchangeContract(
+        name="v2",
+        editor_system=exchange_v2.EDITOR_SYSTEM,
+        reviewer_system=exchange_v2.REVIEWER_SYSTEM,
+        build_editor_request=exchange_v2.build_editor_request,
+        build_reviewer_request=exchange_v2.build_reviewer_request,
+        validate_output=validate_theme_output_v2,
+        bounded_recovery=False)
+  raise errors.ReplayError(
+      f"unsupported replay prompt version(s): editor {editor_version!r}, reviewer {reviewer_version!r}; "
+      f"this comparison reads {EDITOR_PROMPT_VERSION!r} (v3) and "
+      f"{exchange_v2.EDITOR_PROMPT_VERSION!r} (v2)")
+
+
+@dataclass
+class StageAttempt:
+  """One recorded stage attempt: its raw request/response and the recorded validation outcome."""
+
+  attempt: int
+  request: str | None
+  response: str | None
+  chosen: bool
+  validation: dict
 
 
 @dataclass
@@ -125,6 +204,7 @@ def _run_comparison(options: CompareOptions, *, cfg: CharlieBotConfig, now: date
         f"the run at {run_dir} has not settled (status {record.get('status')!r}); comparison reads a "
         "completed or failed run")
 
+  contract = _contract_for(record)
   verification: dict = {}
   provenance = _new_provenance()
 
@@ -133,30 +213,28 @@ def _run_comparison(options: CompareOptions, *, cfg: CharlieBotConfig, now: date
   manifest, manifest_verification = _load_verified_manifest(run_dir, record)
   verification.update(manifest_verification)
   _verify_source_snapshots(run_dir, manifest, verification)
-  _verify_prompt_fingerprints(record, verification)
+  _verify_prompt_fingerprints(record, contract, verification)
 
   selections = _recorded_selections(record, manifest)
-  (editor_requests, editor_responses), editor_gaps = _read_stage_raw(run_dir, manifest, record, "editor")
-  (reviewer_requests, reviewer_responses), reviewer_gaps = _read_stage_raw(run_dir, manifest, record, "reviewer")
+  editor_stage = _read_stage_attempts(run_dir, manifest, record, "editor", contract)
+  reviewer_stage = _read_stage_attempts(run_dir, manifest, record, "reviewer", contract)
 
-  _verify_editor_requests(manifest, selections, editor_requests, provenance)
-  editor_outputs, editor_parse_errors = _parse_stage_outputs(manifest, editor_responses, editor_gaps, role="editor")
-  _verify_reviewer_requests(manifest, selections, editor_outputs, editor_parse_errors, reviewer_requests, provenance)
-  reviewer_outputs, reviewer_parse_errors = _parse_stage_outputs(
-      manifest, reviewer_responses, reviewer_gaps, role="reviewer")
+  run_error = record.get("error")
+  editor_outputs, editor_parse_errors = _parse_chosen_outputs(manifest, editor_stage, role="editor", run_error=run_error)
+  reviewer_outputs, reviewer_parse_errors = _parse_chosen_outputs(
+      manifest, reviewer_stage, role="reviewer", run_error=run_error)
 
-  _fill_provenance(provenance, manifest, editor_requests, editor_responses, reviewer_requests, reviewer_responses)
-  verification["editor_requests"] = _request_verification(
-      len(editor_requests),
-      len(manifest.themes),
-      missing=[theme.name for theme in manifest.themes if theme.name not in editor_requests])
-  verification["reviewer_requests"] = _request_verification(
-      len(reviewer_requests),
-      len(manifest.themes),
-      missing=[theme.name for theme in manifest.themes if theme.name not in reviewer_requests])
+  _verify_stage_chain(
+      contract=contract, record=record, manifest=manifest, selections=selections, role="editor",
+      stage_attempts=editor_stage, chosen_outputs=editor_outputs, verification=verification)
+  _verify_stage_chain(
+      contract=contract, record=record, manifest=manifest, selections=selections, role="reviewer",
+      stage_attempts=reviewer_stage, chosen_outputs=editor_outputs, verification=verification)
 
-  editor_arm = _establish_arm(manifest, editor_outputs, editor_parse_errors, role="editor")
-  reviewer_arm = _establish_arm(manifest, reviewer_outputs, reviewer_parse_errors, role="reviewer")
+  _fill_provenance(provenance, manifest, editor_stage, reviewer_stage)
+
+  editor_arm = _establish_arm(manifest, editor_outputs, editor_parse_errors, role="editor", contract=contract)
+  reviewer_arm = _establish_arm(manifest, reviewer_outputs, reviewer_parse_errors, role="reviewer", contract=contract)
   if reviewer_arm["status"] == "failed" and record["status"] == "completed":
     # A completed run's reviewer responses validated when it ran; if they no longer do, the
     # bundle changed or the validation contract drifted, and its proposal cannot be cross-checked.
@@ -172,9 +250,10 @@ def _run_comparison(options: CompareOptions, *, cfg: CharlieBotConfig, now: date
       "created_at": _timestamp(now),
       "note": COMPARISON_NOTE,
       "model_calls_made": 0,
-      "source_run": _source_run_section(run_dir, record, manifest),
+      "source_run": _source_run_section(run_dir, record, manifest, contract),
       "verification": verification,
       "provenance": provenance,
+      "recovery": _recovery_section(manifest, editor_stage, reviewer_stage),
       "denominators": _denominators(manifest),
       "arms": {
           "editor-only": editor_arm,
@@ -355,11 +434,11 @@ def _verify_source_snapshots(run_dir: Path, manifest: Manifest, verification: di
   verification["source_snapshots"] = {"status": "verified", "count": len(manifest.sources)}
 
 
-def _verify_prompt_fingerprints(record: dict, verification: dict) -> None:
-  """The recorded system prompts must match the prompts this comparison validates against."""
+def _verify_prompt_fingerprints(record: dict, contract: ExchangeContract, verification: dict) -> None:
+  """The recorded system prompts must match the prompts of the recorded contract."""
   current = {
-      "editor": sha256_hex(EDITOR_SYSTEM.encode("utf-8")),
-      "reviewer": sha256_hex(REVIEWER_SYSTEM.encode("utf-8")),
+      "editor": sha256_hex(contract.editor_system.encode("utf-8")),
+      "reviewer": sha256_hex(contract.reviewer_system.encode("utf-8")),
   }
   recorded = record.get("system_prompts")
   if not recorded:
@@ -422,19 +501,35 @@ def _read_raw_if_present(run_dir: Path, name: str) -> str | None:
     raise errors.ReplayError(f"recorded raw file {path} is unreadable: {e}") from e
 
 
-def _read_stage_raw(run_dir: Path, manifest: Manifest, record: dict,
-                    stage: str) -> tuple[tuple[dict[str, str], dict[str, str]], dict[str, str]]:
-  """The recorded raw request/response texts of one stage, per theme.
+def _read_recorded_raw(run_dir: Path, rel: str, kind: str) -> str:
+  path = run_dir / rel
+  if not path.is_file():
+    raise errors.ReplayError(f"the recorded {kind} {rel} is missing; the bundle changed after the run")
+  try:
+    return path.read_text(encoding="utf-8")
+  except OSError as e:
+    raise errors.ReplayError(f"recorded raw file {path} is unreadable: {e}") from e
 
-  A completed run's bundle must be complete; a failed run may legitimately stop
-  mid-stage, and the gap becomes that arm's failure reason instead of a
-  comparison error. A response without its request is a broken bundle either way.
+
+def _read_stage_attempts(
+    run_dir: Path, manifest: Manifest, record: dict, stage: str, contract: ExchangeContract,
+) -> dict[str, list[StageAttempt]]:
+  """The recorded attempt chain of one stage, per theme, requests and responses included.
+
+  A completed run's bundle must be complete: every theme needs a chosen response. A failed
+  run may legitimately stop mid-stage, and the gap becomes that arm's failure reason instead
+  of a comparison error. A response without its request is a broken bundle either way.
   """
-  requests: dict[str, str] = {}
-  responses: dict[str, str] = {}
-  gaps: dict[str, str] = {}
-  run_error = record.get("error")
-  suffix = f" (the run recorded: {run_error})" if run_error else ""
+  if contract.bounded_recovery:
+    return _read_attempt_chain(run_dir, manifest, record, stage)
+  return _read_single_raw(run_dir, manifest, record, stage)
+
+
+def _read_single_raw(
+    run_dir: Path, manifest: Manifest, record: dict, stage: str
+) -> dict[str, list[StageAttempt]]:
+  """The v2 layout: one fixed-name request/response pair per stage and theme, no attempt metadata."""
+  attempts: dict[str, list[StageAttempt]] = {theme.name: [] for theme in manifest.themes}
   for theme in manifest.themes:
     name = theme.name
     request = _read_raw_if_present(run_dir, f"{stage}-{name}.request.txt")
@@ -443,61 +538,212 @@ def _read_stage_raw(run_dir: Path, manifest: Manifest, record: dict,
       raise errors.ReplayError(
           f"the run bundle at {run_dir} holds a recorded {stage} response for theme {name!r} without its "
           "request; the bundle changed after the run")
-    if request is not None:
-      requests[name] = request
     if response is not None:
-      responses[name] = response
+      attempts[name] = [
+          StageAttempt(attempt=1, request=request, response=response, chosen=True, validation={
+              "status": "not-recorded"
+          })
+      ]
       continue
     if record["status"] == "completed":
       raise errors.ReplayError(
           f"the completed run at {run_dir} is incomplete: no recorded {stage} response for theme {name!r}")
-    gaps[name] = f"no recorded {stage} response for theme {name!r}{suffix}"
-  return (requests, responses), gaps
+    if request is not None:
+      attempts[name] = [
+          StageAttempt(attempt=1, request=request, response=None, chosen=False, validation={
+              "status": "not-recorded"
+          })
+      ]
+  return attempts
 
 
-def _verify_editor_requests(
-    manifest: Manifest, selections: dict[str, list[FeedbackSelection]], requests: dict[str, str],
-    provenance: dict) -> None:
-  """Each recorded editor request must be the request the frozen inputs reconstruct."""
-  for theme in manifest.themes:
-    if theme.name not in requests:
+def _read_attempt_chain(
+    run_dir: Path, manifest: Manifest, record: dict, stage: str
+) -> dict[str, list[StageAttempt]]:
+  """The v3 layout: the run record's calls, grouped per theme into ordered attempt chains."""
+  attempts: dict[str, list[StageAttempt]] = {theme.name: [] for theme in manifest.themes}
+  for call in record.get("calls", []):
+    if call.get("role") != stage:
       continue
-    rebuilt = build_editor_request(manifest, theme, selections[theme.name])
-    if rebuilt != requests[theme.name]:
+    name = call.get("theme")
+    if name not in attempts:
+      raise errors.ReplayError(f"the run record holds a {stage} call for unknown theme {name!r}")
+    request_rel = call.get("request_file")
+    if not request_rel:
       raise errors.ReplayError(
-          f"the recorded editor request for theme {theme.name!r} does not match the request reconstructed "
-          "from the frozen inputs and the recorded selection; the recorded editor response cannot be "
-          "attributed to them")
+          f"the run record's {stage} call for theme {name!r} names no request file; the record changed "
+          "after the run")
+    request = _read_recorded_raw(run_dir, request_rel, f"{stage} request")
+    response = None
+    if call.get("response_file"):
+      response = _read_recorded_raw(run_dir, call["response_file"], f"{stage} response")
+    attempts[name].append(
+        StageAttempt(
+            attempt=int(call.get("attempt", 0)),
+            request=request,
+            response=response,
+            chosen=bool(call.get("chosen")),
+            validation=dict(call.get("validation") or {})))
+  for rows in attempts.values():
+    rows.sort(key=lambda a: a.attempt)
+  if record["status"] == "completed":
+    for theme in manifest.themes:
+      if not any(a.chosen for a in attempts[theme.name]):
+        raise errors.ReplayError(
+            f"the completed run at {run_dir} is incomplete: no chosen {stage} response for theme "
+            f"{theme.name!r}")
+  return attempts
 
 
-def _verify_reviewer_requests(
+def _verify_stage_chain(
+    *,
+    contract: ExchangeContract,
+    record: dict,
     manifest: Manifest,
     selections: dict[str, list[FeedbackSelection]],
-    editor_outputs: dict[str, ThemeOutput | None],
-    editor_parse_errors: dict[str, str],
-    requests: dict[str, str],
-    provenance: dict,
+    role: str,
+    stage_attempts: dict[str, list[StageAttempt]],
+    chosen_outputs: dict[str, ThemeOutput | None],
+    verification: dict,
 ) -> None:
-  """Prove each recorded reviewer request was built from the recorded editor response.
+  """Reconstruct and verify the recorded attempt chain of one stage, theme by theme.
 
-  This is the check that makes the comparison paired: the reviewer request is
-  reconstructed from the parsed recorded editor response, so byte equality
-  shows the reviewer consumed exactly that response.
+  Attempt 1's request must be the request the recorded contract builds; a
+  re-ask's request must be the bounded repair request over the same authorized
+  evidence, the previous attempt's recorded raw response, and that attempt's
+  recorded validation errors. Every non-chosen attempt must be recorded as a
+  mechanical failure and its response must still fail validation now; the
+  chosen attempt, if any, is the last one. For the reviewer, attempt 1's
+  request is built from the chosen editor outputs, which is what proves the
+  reviewer consumed exactly those responses.
   """
+  verified = 0
+  without: list[str] = []
   for theme in manifest.themes:
-    if theme.name not in requests:
+    name = theme.name
+    attempts = stage_attempts.get(name, [])
+    if not attempts:
+      without.append(name)
       continue
-    editor_output = editor_outputs.get(theme.name)
-    if editor_output is None:
+    if contract.bounded_recovery:
+      _verify_chain_structure(contract, record.get("status"), role, manifest, theme, attempts)
+    base_request = _stage_base_request(contract, manifest, selections, chosen_outputs, role, theme)
+    previous: StageAttempt | None = None
+    for a in attempts:
+      if a.attempt == 1:
+        expected = base_request
+      else:
+        if previous is None or previous.response is None or not previous.validation.get("errors"):
+          raise errors.ReplayError(
+              f"the recorded {role} repair attempt {a.attempt} for theme {name!r} has no recoverable "
+              "predecessor; the attempt chain is broken")
+        expected = build_repair_request(base_request, previous.response, list(previous.validation["errors"]))
+      if a.request != expected:
+        _raise_request_mismatch(role, name, a.attempt)
+      previous = a
+    verified += 1
+  verification[f"{role}_requests"] = _request_verification(verified, len(manifest.themes), without)
+
+
+def _stage_base_request(
+    contract: ExchangeContract,
+    manifest: Manifest,
+    selections: dict[str, list[FeedbackSelection]],
+    chosen_outputs: dict[str, ThemeOutput | None],
+    role: str,
+    theme,
+) -> str:
+  """The base request of one stage for one theme, rebuilt under the recorded contract."""
+  if role == "editor":
+    return contract.build_editor_request(manifest, theme, selections[theme.name])
+  editor_output = chosen_outputs.get(theme.name)
+  if editor_output is None:
+    raise errors.ReplayError(
+        f"cannot establish what the reviewer of theme {theme.name!r} consumed: the recorded editor "
+        "response does not parse or is missing")
+  return contract.build_reviewer_request(manifest, theme, selections[theme.name], editor_output)
+
+
+def _raise_request_mismatch(role: str, name: str, attempt: int) -> None:
+  if attempt == 1 and role == "editor":
+    raise errors.ReplayError(
+        f"the recorded editor request for theme {name!r} does not match the request reconstructed "
+        "from the frozen inputs and the recorded selection; the recorded editor response cannot be "
+        "attributed to them")
+  if attempt == 1 and role == "reviewer":
+    raise errors.ReplayError(
+        f"the recorded reviewer request for theme {name!r} does not match the request reconstructed "
+        "from the recorded editor response; the reviewer did not verifiably consume that response, so the "
+        "two alternatives cannot be established")
+  raise errors.ReplayError(
+      f"the recorded {role} repair request for theme {name!r} (attempt {attempt}) does not match the request "
+      "reconstructed from the previous recorded response and its recorded validation errors; the attempt "
+      "chain is broken")
+
+
+def _verify_chain_structure(
+    contract: ExchangeContract, record_status: str | None, role: str, manifest: Manifest, theme,
+    attempts: list[StageAttempt]
+) -> None:
+  """The chain must be a bounded recovery chain: consecutive, at most two, failures recorded."""
+  name = theme.name
+  numbers = [a.attempt for a in attempts]
+  if numbers != list(range(1, len(numbers) + 1)):
+    raise errors.ReplayError(
+        f"the recorded {role} attempts for theme {name!r} are not a consecutive chain: {numbers}")
+  if len(attempts) > MAX_STAGE_RESPONSES:
+    raise errors.ReplayError(
+        f"the recorded {role} attempts for theme {name!r} exceed the bounded recovery budget "
+        f"({len(attempts)} responses > {MAX_STAGE_RESPONSES})")
+  chosen = [a for a in attempts if a.chosen]
+  if len(chosen) > 1:
+    raise errors.ReplayError(
+        f"the recorded {role} attempts for theme {name!r} mark {len(chosen)} responses as chosen")
+  if chosen and chosen[0].attempt != attempts[-1].attempt:
+    raise errors.ReplayError(
+        f"the chosen {role} response for theme {name!r} is not the last recorded attempt; the attempt "
+        "chain is broken")
+  for a in attempts:
+    if a.chosen:
+      if a.validation.get("status") != "passed":
+        raise errors.ReplayError(
+            f"the chosen {role} attempt {a.attempt} for theme {name!r} is not recorded as passed")
+      continue
+    status = a.validation.get("status")
+    if status == "transport-failed":
+      if a.response is not None:
+        raise errors.ReplayError(
+            f"the {role} attempt {a.attempt} for theme {name!r} is recorded as transport-failed but "
+            "carries a response")
+    elif status == "failed":
+      if not a.validation.get("errors"):
+        raise errors.ReplayError(
+            f"the failed {role} attempt {a.attempt} for theme {name!r} records no validation errors")
+      if a.response is None:
+        raise errors.ReplayError(
+            f"the failed {role} attempt {a.attempt} for theme {name!r} has no recorded response")
+      if _mechanical_error(
+          a.response, role=f"{role}[{name}]", contract=contract, manifest=manifest, theme=theme) is None:
+        raise errors.ReplayError(
+            f"the {role} attempt {a.attempt} for theme {name!r} is recorded as failed but its response "
+            "passes mechanical validation; the attempt chain is inconsistent")
+    else:
       raise errors.ReplayError(
-          f"cannot establish what the reviewer of theme {theme.name!r} consumed: the recorded editor "
-          f"response does not parse ({editor_parse_errors.get(theme.name)})")
-    rebuilt = build_reviewer_request(manifest, theme, selections[theme.name], editor_output)
-    if rebuilt != requests[theme.name]:
-      raise errors.ReplayError(
-          f"the recorded reviewer request for theme {theme.name!r} does not match the request reconstructed "
-          "from the recorded editor response; the reviewer did not verifiably consume that response, so the "
-          "two alternatives cannot be established")
+          f"the non-chosen {role} attempt {a.attempt} for theme {name!r} has unknown validation status "
+          f"{status!r}")
+
+
+def _mechanical_error(raw: str, *, role: str, contract: ExchangeContract, manifest: Manifest, theme) -> str | None:
+  """The mechanical validation error of one response under the recorded contract, or None."""
+  try:
+    output = parse_model_output(raw, role=role)
+  except errors.ReplayModelOutputError as e:
+    return str(e)
+  try:
+    contract.validate_output(output, role=role, manifest=manifest, theme=theme)
+  except errors.ReplayValidationError as e:
+    return str(e)
+  return None
 
 
 def _request_verification(verified: int, total: int, missing: list[str]) -> dict:
@@ -528,28 +774,42 @@ def _verification_limitations(verification: dict) -> list[str]:
 # --- arms: parse, validate, finalize each alternative ---------------------------
 
 
-def _parse_stage_outputs(
+def _parse_chosen_outputs(
     manifest: Manifest,
-    responses: dict[str, str | None],
-    gaps: dict[str, str],
+    stage_attempts: dict[str, list[StageAttempt]],
     *,
     role: str,
+    run_error: str | None = None,
 ) -> tuple[dict[str, ThemeOutput | None], dict[str, str]]:
+  """Parse each theme's chosen response; themes without one become that arm's visible gap."""
   outputs: dict[str, ThemeOutput | None] = {}
   parse_errors: dict[str, str] = {}
   for theme in manifest.themes:
     name = theme.name
-    raw = responses.get(name)
-    if raw is None:
+    attempts = stage_attempts.get(name, [])
+    chosen = [a for a in attempts if a.chosen]
+    if not chosen:
       outputs[name] = None
-      parse_errors[name] = gaps.get(name) or f"no recorded {role} response for theme {name!r}"
+      parse_errors[name] = _gap_message(role, name, attempts, run_error)
       continue
+    if chosen[0].response is None:
+      raise errors.ReplayError(
+          f"the chosen {role} response for theme {name!r} has no recorded response file; the bundle "
+          "changed after the run")
     try:
-      outputs[name] = parse_model_output(raw, role=f"{role}[{name}]")
+      outputs[name] = parse_model_output(chosen[0].response, role=f"{role}[{name}]")
     except errors.ReplayModelOutputError as e:
       outputs[name] = None
       parse_errors[name] = str(e)
   return outputs, parse_errors
+
+
+def _gap_message(role: str, name: str, attempts: list[StageAttempt], run_error: str | None) -> str:
+  suffix = f" (the run recorded: {run_error})" if run_error else ""
+  if not attempts:
+    return f"no recorded {role} response for theme {name!r}{suffix}"
+  detail = "; ".join(f"attempt {a.attempt}: {a.validation.get('status') or 'unknown'}" for a in attempts)
+  return f"no recorded {role} response for theme {name!r}{suffix} (recorded attempts: {detail})"
 
 
 def _establish_arm(
@@ -558,6 +818,7 @@ def _establish_arm(
     parse_errors: dict[str, str],
     *,
     role: str,
+    contract: ExchangeContract,
 ) -> dict:
   """One arm's full final state, or a visible failure — never a stand-in for it."""
   for theme in manifest.themes:
@@ -567,7 +828,7 @@ def _establish_arm(
   ordered = [(theme, outputs[theme.name]) for theme in manifest.themes]
   try:
     for theme, output in ordered:
-      validate_theme_output(output, role=f"{role}[{theme.name}]", manifest=manifest, theme=theme)
+      contract.validate_output(output, role=f"{role}[{theme.name}]", manifest=manifest, theme=theme)
     base = {path: canonical_text(text) for path, text in manifest.base_entries().items()}
     result = finalize(base, ordered)
   except errors.ReplayValidationError as e:
@@ -702,31 +963,57 @@ def _new_provenance() -> dict:
   }
 
 
+def _chosen_attempt(attempts: list[StageAttempt]) -> StageAttempt | None:
+  for a in attempts:
+    if a.chosen:
+      return a
+  return None
+
+
+def _attempt_provenance(attempts: list[StageAttempt]) -> list[dict]:
+  return [
+      {
+          "attempt": a.attempt,
+          "chosen": a.chosen,
+          "validation": a.validation.get("status"),
+          "request_sha256": sha256_hex(a.request.encode("utf-8")) if a.request is not None else None,
+          "response_sha256": sha256_hex(a.response.encode("utf-8")) if a.response is not None else None,
+      } for a in attempts
+  ]
+
+
 def _fill_provenance(
     provenance: dict,
     manifest: Manifest,
-    editor_requests: dict[str, str],
-    editor_responses: dict[str, str],
-    reviewer_requests: dict[str, str],
-    reviewer_responses: dict[str, str],
+    editor_stage: dict[str, list[StageAttempt]],
+    reviewer_stage: dict[str, list[StageAttempt]],
 ) -> None:
+  """Per theme: the hashes of the chosen responses both arms derive from, plus every attempt."""
   shared = provenance["shared_editor_response"]
   for theme in manifest.themes:
     name = theme.name
+    editor_chosen = _chosen_attempt(editor_stage.get(name, []))
+    reviewer_chosen = _chosen_attempt(reviewer_stage.get(name, []))
     shared["themes"][name] = {
         "editor_request_sha256":
-            sha256_hex(editor_requests[name].encode("utf-8")) if name in editor_requests else None,
+            sha256_hex(editor_chosen.request.encode("utf-8")) if editor_chosen else None,
         "editor_response_sha256":
-            sha256_hex(editor_responses[name].encode("utf-8")) if name in editor_responses else None,
+            sha256_hex(editor_chosen.response.encode("utf-8")) if editor_chosen else None,
         "reviewer_request_sha256":
-            sha256_hex(reviewer_requests[name].encode("utf-8")) if name in reviewer_requests else None,
+            sha256_hex(reviewer_chosen.request.encode("utf-8")) if reviewer_chosen else None,
         "reviewer_response_sha256":
-            sha256_hex(reviewer_responses[name].encode("utf-8")) if name in reviewer_responses else None,
+            sha256_hex(reviewer_chosen.response.encode("utf-8")) if reviewer_chosen else None,
+        "attempts":
+            {
+                "editor": _attempt_provenance(editor_stage.get(name, [])),
+                "reviewer": _attempt_provenance(reviewer_stage.get(name, [])),
+            },
     }
-  shared["editor_response_complete"] = all(theme.name in editor_responses for theme in manifest.themes)
+  shared["editor_response_complete"] = all(
+      _chosen_attempt(editor_stage.get(theme.name, [])) is not None for theme in manifest.themes)
 
 
-def _source_run_section(run_dir: Path, record: dict, manifest: Manifest) -> dict:
+def _source_run_section(run_dir: Path, record: dict, manifest: Manifest, contract: ExchangeContract) -> dict:
   return {
       "run_dir": str(run_dir),
       "status": record["status"],
@@ -737,7 +1024,28 @@ def _source_run_section(run_dir: Path, record: dict, manifest: Manifest) -> dict
       "base_commit": manifest.base_commit,
       "model": record.get("model"),
       "prompt_versions": record.get("prompt_versions"),
+      "exchange_contract": contract.name,
       "manifest_path_recorded": record.get("manifest"),
+  }
+
+
+def _recovery_section(
+    manifest: Manifest, editor_stage: dict[str, list[StageAttempt]],
+    reviewer_stage: dict[str, list[StageAttempt]]) -> dict:
+  """What the bounded recovery did on this run, and what a recovery must not be read as."""
+  recovered = []
+  for stage_name, stage in (("editor", editor_stage), ("reviewer", reviewer_stage)):
+    for theme in manifest.themes:
+      if len(stage.get(theme.name, [])) > 1:
+        recovered.append(f"{stage_name}[{theme.name}]")
+  return {
+      "policy":
+          "at most one re-ask per stage response (two responses maximum); only mechanical validation "
+          "failures re-ask — model judgments and transport failures never do",
+      "note":
+          "a recovered response replaces the failed one and can change an arm's judgment; that is stage "
+          "execution/recovery, not independent-review quality gain",
+      "themes_with_multiple_attempts": sorted(recovered),
   }
 
 
@@ -753,13 +1061,21 @@ def _denominators(manifest: Manifest) -> dict:
 
 
 def _usage(record: dict) -> dict:
-  """Usage exactly as the run recorded it; the incremental review cost is the review calls only."""
+  """Usage exactly as the run recorded it, every recorded attempt included.
+
+  Failed repair attempts and transport-failed calls carry their real usage when the endpoint
+  reported it (unknown stays null), so the totals are the run's honest cost, not just the
+  successful responses'.
+  """
   calls = record.get("calls", [])
   per_call = [
       {
           "name": call.get("name"),
           "role": call.get("role"),
           "theme": call.get("theme"),
+          "attempt": call.get("attempt"),
+          "chosen": call.get("chosen"),
+          "validation": (call.get("validation") or {}).get("status"),
           "latency_ms": call.get("latency_ms"),
           "prompt_tokens": call.get("prompt_tokens"),
           "output_tokens": call.get("output_tokens"),
@@ -798,7 +1114,8 @@ def _usage(record: dict) -> dict:
               "calls": len(reviewer_rows),
               "output_tokens": total(reviewer_rows, "output_tokens"),
               "latency_ms": total(reviewer_rows, "latency_ms"),
-              "note": "the review calls only; the editor calls are the shared base cost of both arms",
+              "note": "the review calls only, failed recovery attempts included; the editor calls are "
+                      "the shared base cost of both arms",
           },
   }
 
@@ -836,13 +1153,15 @@ def render_comparison_report(comparison: dict) -> str:
       "<table><tr><th>field</th><th>value</th></tr>" + "".join(
           "<tr><td>{}</td><td><code>{}</code></td></tr>".format(_e(key), _e(str(source[key]))) for key in (
               "run_dir", "status", "error", "created_at", "mode", "input_identity", "base_commit", "model",
-              "prompt_versions", "manifest_path_recorded")) + "</table>",
+              "prompt_versions", "exchange_contract", "manifest_path_recorded")) + "</table>",
       "<h2>Provenance &mdash; one recorded editor response</h2>",
       f'<p>{_e(comparison["provenance"]["shared_editor_response"]["statement"])} '
       f'Model calls made by this comparison: <code>{comparison["model_calls_made"]}</code>.</p>',
       _provenance_table(comparison["provenance"]["shared_editor_response"]),
       "<h2>Verification</h2>",
       _verification_section(comparison["verification"]),
+      "<h2>Stage recovery</h2>",
+      _recovery_section_html(comparison["recovery"]),
       "<h2>Denominators</h2>",
       _denominators_section(comparison["denominators"]),
       "<h2>Usage</h2>",
@@ -871,10 +1190,33 @@ def _provenance_table(shared: dict) -> str:
                     "reviewer_request_sha256",
                     "reviewer_response_sha256",
                 ))))
+  attempts_note = ""
+  attempt_counts = []
+  for theme, hashes in sorted(shared["themes"].items()):
+    for stage in ("editor", "reviewer"):
+      count = len(hashes.get("attempts", {}).get(stage, []))
+      if count > 1:
+        attempt_counts.append(f"{stage}[{theme}]: {count} attempts")
+  if attempt_counts:
+    attempts_note = f'<p class="muted">recorded attempt chains: {_e("; ".join(attempt_counts))}</p>'
   return (
       "<table><tr><th>theme</th><th>editor request</th><th>editor response</th>"
       "<th>reviewer request</th><th>reviewer response</th></tr>" + "".join(rows) + "</table>"
-      f'<p class="muted">editor responses complete: {shared["editor_response_complete"]}</p>')
+      f'<p class="muted">editor responses complete: {shared["editor_response_complete"]}</p>' + attempts_note)
+
+
+def _recovery_section_html(recovery: dict) -> str:
+  parts = [
+      f'<p>{_e(recovery["policy"])}</p>',
+      f'<p class="muted">{_e(recovery["note"])}</p>',
+  ]
+  if recovery["themes_with_multiple_attempts"]:
+    parts.append(
+        "<p>themes with a recovered response: <code>" +
+        _e(", ".join(recovery["themes_with_multiple_attempts"])) + "</code></p>")
+  else:
+    parts.append('<p class="muted">no stage needed a re-ask on this run.</p>')
+  return "".join(parts)
 
 
 def _verification_section(verification: dict) -> str:
@@ -909,12 +1251,13 @@ def _denominators_section(denominators: dict) -> str:
 
 
 def _usage_section(usage: dict) -> str:
-  parts = ["<table><tr><th>call</th><th>role</th><th>theme</th><th>latency ms</th><th>output tokens</th></tr>"]
+  parts = ["<table><tr><th>call</th><th>role</th><th>theme</th><th>attempt</th><th>outcome</th>"
+           "<th>latency ms</th><th>output tokens</th></tr>"]
   for call in usage["editor"]["per_call"] + usage["reviewer"]["per_call"]:
     parts.append(
-        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-            _e(str(call["name"])), _e(str(call["role"])), _e(str(call["theme"])), _e(str(call["latency_ms"])),
-            _e(str(call["output_tokens"]))))
+        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+            _e(str(call["name"])), _e(str(call["role"])), _e(str(call["theme"])), _e(str(call["attempt"])),
+            _e(str(call["validation"])), _e(str(call["latency_ms"])), _e(str(call["output_tokens"]))))
   parts.append("</table>")
   for role in ("editor", "reviewer", "incremental_review"):
     section = usage[role]

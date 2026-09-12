@@ -494,9 +494,11 @@ def test_header_offset_matches_a_full_reparse_of_the_spliced_page() -> None:
     for _ in range(300):
       doc = _fuzz_document(rng)
       changed = doc.replace("alpha beta", "alpha gamma").replace("hello world", "hello there")
-      chrome = rng.choice(['<html><body><div class="wrap">{}</div></body></html>',
-                           '<html><body><main>{}</main></body></html>',
-                           '<html><body>{}</body></html>'])
+      chrome = rng.choice(
+          [
+              '<html><body><div class="wrap">{}</div></body></html>', '<html><body><main>{}</main></body></html>',
+              '<html><body>{}</body></html>'
+          ])
       pairs.append((chrome.format(doc), chrome.format(changed)))
     for base, new in pairs:
       annotate(base, new)
@@ -513,8 +515,8 @@ def test_header_offset_matches_a_full_reparse_of_the_spliced_page() -> None:
     pre_target = _first_class_descendant(pre_root, "wrap") or _first_descendant(pre_root, "main")
     expected_target = _first_class_descendant(relocated, "wrap") or _first_descendant(relocated, "main")
     assert (pre_target is None) == (expected_target is None)
-    computed = (_offset_after_insertions(pre_target.start_end, insertions)
-                if pre_target is not None else body.start_end)
+    computed = (
+        _offset_after_insertions(pre_target.start_end, insertions) if pre_target is not None else body.start_end)
     expected = expected_target.start_end if expected_target is not None else body.start_end
     assert computed == expected, f"header offset drift: {computed} != {expected}"
     anchored += 1 if pre_target is not None else 0

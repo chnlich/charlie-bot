@@ -47,8 +47,11 @@ since the read (a stat-only check); a moved signature whose row memo the scan ju
 unchanged means the WAL wrote rows the tally never reads — the epoch counts row-memo changes,
 so an unchanged epoch re-serves the rows and re-signs them at the scan's own signature. Only
 memos built from a scan carry that epoch proof; rows served from the persisted document sign
-into the key by signature alone. The walk signature itself recurses scandir entries carrying
-their own stat — one syscall per jsonl — and pays it on every collect, hit or miss.
+into the key by signature alone. The walk signature and the charlie-bot serve share one
+walk's rows per collect. Each walked directory's listing memoizes on the directory's own
+(mtime_ns, size) — one stat validates a remembered listing, since an entry's create, delete
+or rename moves it — and every corpus file re-stats per collect, so an append still moves
+the signature.
 Vocabulary (opencode row memo):
   key         ``(message id, time_updated)`` of one row in the db's message table. opencode
               (drizzle ORM, ``$onUpdate(() => Date.now())`` on the column) bumps time_updated
@@ -383,6 +386,42 @@ def _iter_jsonl_stats(
             yield entry.path, None, repr(exc)
 
 
+# The charlie-bot walk's per-directory listing memo: dirpath -> ((mtime_ns, size),
+# [(path, is_dir, is_symlink)]). One stat validates a remembered listing, since an entry's
+# create, delete or rename moves the containing directory's own mtime_ns, while a file
+# append moves only the file's mtime, which the walk's per-file stat takes every round.
+# Entry paths are absolute so a memo hit joins nothing. Entries are bounded by the
+# historical directory set of the sessions tree; a subtree that stops being listed leaves
+# its entries until the process restarts.
+_charliebot_dir_memo: dict[str, tuple[tuple[int, int], list[tuple[str, bool, bool]]]] = {}
+
+
+def _charliebot_listing(dirpath: str, t: _Tally) -> list[tuple[str, bool, bool]]:
+  """The directory's entries as (path, is_dir, is_symlink), memoized on the directory's own
+  stat pair.
+
+  A remembered listing costs one stat to validate; a miss re-scandirs. A vanished directory
+  drops its memo entry and raises FileNotFoundError; any other read failure raises OSError
+  for the caller to note."""
+  try:
+    st = os.stat(dirpath)
+    key = (st.st_mtime_ns, st.st_size)
+  except OSError:
+    _charliebot_dir_memo.pop(dirpath, None)
+    raise
+  memo = _charliebot_dir_memo.get(dirpath)
+  if memo is not None and memo[0] == key:
+    return memo[1]
+  try:
+    with os.scandir(dirpath) as scandir:
+      listing = [(entry.path, entry.is_dir(), entry.is_symlink()) for entry in scandir]
+  except OSError:
+    _charliebot_dir_memo.pop(dirpath, None)
+    raise
+  _charliebot_dir_memo[dirpath] = (key, listing)
+  return listing
+
+
 def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str, os.stat_result | None, str | None]]:
   """Yield ``(kind, path, stat, error)`` over the charlie-bot corpus: every session directory's
   thread event logs (``threads/*/data/events.jsonl``, kind ``"thread"``) and master raw
@@ -393,39 +432,73 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
   the walk never sees the session-level ``chat_events.jsonl`` or the workers' own
   ``threads/*/data/agent.raw.ndjson`` (those runs' usage is already in their thread's event
   log). A missing sessions root or session subtree is an empty corpus, not an error — the
-  same contract _iter_jsonl_stats runs under; anything else unreadable becomes a note.
+  same contract _iter_jsonl_stats runs under; anything else unreadable becomes a note. Each
+  directory's listing memoizes on the directory's own stat pair (``_charliebot_listing``),
+  so a repeat walk pays one stat per remembered directory plus the corpus files' own stats
+  instead of a full scandir pass.
   """
   try:
-    scandir = os.scandir(sessions)
+    session_listing = _charliebot_listing(str(sessions), t)
   except OSError as exc:
     if not isinstance(exc, FileNotFoundError):
       t.notes.append(f"charlie-bot: unreadable {sessions}: {exc}")
     return
-  with scandir:
-    for entry in scandir:
-      if not entry.is_dir() or entry.is_symlink():
-        continue
-      session = Path(entry.path)
-      for kind, sub, suffixes in (("thread", "threads", (".jsonl",)), ("master", "data/master_runs", (".ndjson",))):
-        for path, st, error in _iter_jsonl_stats(session / sub, t, "charlie-bot", kind, suffixes):
-          yield kind, path, st, error
+  for session_path, session_is_dir, session_is_symlink in session_listing:
+    if not session_is_dir or session_is_symlink:
+      continue
+    for kind, sub, suffixes in (("thread", "threads", (".jsonl",)), ("master", "data/master_runs", (".ndjson",))):
+      stack = [os.path.join(session_path, sub)]
+      while stack:
+        dirpath = stack.pop()
+        try:
+          listing = _charliebot_listing(dirpath, t)
+        except OSError as exc:
+          if not isinstance(exc, FileNotFoundError):
+            t.notes.append(f"charlie-bot: unreadable {dirpath}: {exc}")
+          continue
+        for path, is_dir, is_symlink in listing:
+          if is_dir:
+            if not is_symlink:
+              stack.append(path)
+          elif path.endswith(suffixes):
+            try:
+              yield kind, path, os.stat(path), None
+            except OSError as exc:
+              yield kind, path, None, repr(exc)
 
 
-def _charliebot_signature(sessions: Path) -> tuple:
-  """Walk signature of the charlie-bot corpus: the root, every corpus file's (kind, path, stat
-  pair), and the walk's own error strings. Thread event logs and master captures only — a
-  metadata.json rewrite never moves it (its backend/model fields are write-once, and the
-  parse reads them on the round the log itself moves)."""
-  probe = _Tally()
-  entries = []
-  for kind, path, st, error in _iter_charliebot_logs(sessions, probe):
-    entries.append((kind, path, st.st_mtime_ns, st.st_size) if st is not None else (kind, path, None, error))
-  return ("charlie-bot", str(sessions), tuple(sorted(entries)), tuple(probe.notes))
+def _walk_charliebot(sessions: Path, t: _Tally) -> list[tuple[str, str, int | None, int | None, str | None]]:
+  """The charlie-bot corpus in one pass: ``(kind, path, mtime_ns, size, error)`` per file,
+  the stat pair None on an unreadable file. The corpus signature and collect_charliebot
+  consume the same rows, so a collect walks the corpus once."""
+  rows: list[tuple[str, str, int | None, int | None, str | None]] = []
+  for kind, path, st, error in _iter_charliebot_logs(sessions, t):
+    if st is None:
+      rows.append((kind, path, None, None, error))
+    else:
+      rows.append((kind, path, st.st_mtime_ns, st.st_size, None))
+  return rows
 
 
-def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path], sessions: Path) -> tuple:
+def _charliebot_signature(
+    sessions: Path, rows: list[tuple[str, str, int | None, int | None, str | None]], notes: tuple[str, ...]) -> tuple:
+  """Walk signature of the charlie-bot corpus from the shared walk's rows: the root, every
+  corpus file's (kind, path, stat pair), and the walk's own error strings. Thread event logs
+  and master captures only — a metadata.json rewrite never moves it (its backend/model fields
+  are write-once, and the parse reads them on the round the log itself moves)."""
+  entries = tuple(
+      sorted((kind, path, m, s) if m is not None else (kind, path, None, err) for kind, path, m, s, err in rows))
+  return ("charlie-bot", str(sessions), entries, notes)
+
+
+def _corpus_signature(
+    claude_homes: dict[str, Path], codex_homes: dict[str, Path], sessions: Path,
+    charliebot_rows: list[tuple[str, str, int | None, int | None, str | None]], charliebot_notes: tuple[str,
+                                                                                                        ...]) -> tuple:
   """Walk signature of the Claude+Codex+charlie-bot corpus: home pairs, every log file's stat
-  pair, and the walk's own error strings. Any corpus or permission move changes the tuple."""
+  pair, and the walk's own error strings. Any corpus or permission move changes the tuple.
+  The charlie-bot component arrives pre-walked: the caller's one pass feeds both this
+  signature and the serve, so a collect never walks that corpus twice."""
   sig = []
   for source, homes, sub in (("Claude Code", claude_homes, "projects"), ("Codex", codex_homes, "sessions")):
     probe = _Tally()
@@ -437,7 +510,7 @@ def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path
       entries.append((label, tuple(sorted(per_home))))
     home_pairs = tuple(sorted((label, str(path)) for label, path in homes.items()))
     sig.append((source, home_pairs, tuple(entries), tuple(probe.notes)))
-  sig.append(_charliebot_signature(sessions))
+  sig.append(_charliebot_signature(sessions, charliebot_rows, charliebot_notes))
   return tuple(sig)
 
 
@@ -614,6 +687,7 @@ def _reset_aggregate_memo() -> None:
   _tally_cache_docs.clear()
   _opencode_doc_synced.clear()
   _source_partials.clear()
+  _charliebot_dir_memo.clear()
   _claude_key_counts.clear()
   _claude_key_records.clear()
   _claude_key_loc.clear()
@@ -1340,9 +1414,12 @@ def _fold_charliebot_records(t: _Tally, records: list[list]) -> int:
   return len(records)
 
 
-def collect_charliebot(t: _Tally, sessions: Path, codex_homes: dict[str, Path], cache: TallyCache | None) -> None:
+def collect_charliebot(
+    t: _Tally, sessions: Path, codex_homes: dict[str, Path], cache: TallyCache | None,
+    rows: list[tuple[str, str, int | None, int | None, str | None]]) -> None:
   """Tally the charlie-bot corpus into the accumulator: thread event logs and master raw
-  captures, served per file from the cache document like the CLI sources.
+  captures, served per file from the cache document like the CLI sources. *rows* is the
+  caller's shared walk (``_walk_charliebot``) — the same pass the corpus signature consumed.
 
   Inclusion is decided per collect, not baked into the entries: charlie-code-type threads
   fold, codex-type threads fold only when none of the session ids their event log carries
@@ -1355,11 +1432,11 @@ def collect_charliebot(t: _Tally, sessions: Path, codex_homes: dict[str, Path], 
   folded = 0
   undetermined: dict[str, int] = {}
   clc_master = 0
-  for kind, path, st, error in _iter_charliebot_logs(sessions, t):
-    if st is None:
+  for kind, path, mtime_ns, size, error in rows:
+    if mtime_ns is None:
       t.notes.append(f"charlie-bot: unreadable {path}: {error}")
       continue
-    entry = cache.lookup_sig("charlie-bot", path, [st.st_mtime_ns, st.st_size]) if cache is not None else None
+    entry = cache.lookup_sig("charlie-bot", path, [mtime_ns, size]) if cache is not None else None
     if entry is None:
       prev = cache.prev("charlie-bot", path) if cache is not None else None
       parse = _thread_contribution if kind == "thread" else _master_contribution
@@ -1826,7 +1903,9 @@ def collect_token_usage(
     sessions_dir = get_config().sessions_dir
 
   global _aggregate_memo, _tally_memo
-  signature = _corpus_signature(claude_homes, codex_homes, sessions_dir)
+  charliebot_probe = _Tally()
+  charliebot_rows = _walk_charliebot(sessions_dir, charliebot_probe)
+  signature = _corpus_signature(claude_homes, codex_homes, sessions_dir, charliebot_rows, tuple(charliebot_probe.notes))
   lookup_sig = _opencode_db_signature(opencode_db)
   tally_memo = _tally_memo
   if lookup_sig is not None and tally_memo is not None and tally_memo[0][:2] == (signature, lookup_sig):
@@ -1869,7 +1948,7 @@ def collect_token_usage(
     notes_from = len(t.notes)
     collect_claude(t, claude_homes, cache)
     collect_codex(t, codex_homes, cache)
-    collect_charliebot(t, sessions_dir, codex_homes, cache)
+    collect_charliebot(t, sessions_dir, codex_homes, cache, charliebot_rows)
     _aggregate_memo = (signature, _SourceAggregate.snapshot(t, notes_from))
   else:
     _aggregate_memo[1].apply(t)

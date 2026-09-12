@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -1959,6 +1960,77 @@ def test_charliebot_cache_serves_and_appends(tmp_path: Path, monkeypatch: pytest
   assert row.total == (1000 + 50) + (70 + 3) + (200 + 8)
   assert row.accounts[0].calls == 3
   assert 0 < third.scanned_bytes < first.scanned_bytes  # only the two moved files re-parsed
+
+
+def test_charliebot_dir_listing_memo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The walk's per-directory listing memo: a repeat collect over an unchanged corpus
+  re-scandirs nothing, while any entry create or delete — a new session, a new thread log,
+  a new capture, a deleted session — moves the containing directory's own mtime_ns and
+  shows up on the next collect."""
+  _stub_registry(monkeypatch, _CLC_GEMINI)
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  first = _collect(None, None, db, cache, sessions=cb.root)
+  assert _row(first, "charlie-bot", "gemini-3.8-flash").calls == 1
+
+  real_scandir = os.scandir
+  calls = {"n": 0}
+
+  def counting_scandir(path):
+    calls["n"] += 1
+    return real_scandir(path)
+
+  monkeypatch.setattr(os, "scandir", counting_scandir)
+  before = calls["n"]
+  second = _collect(None, None, db, cache, sessions=cb.root)
+  assert calls["n"] - before == 0  # every listing came from the memo
+  assert _row(second, "charlie-bot", "gemini-3.8-flash").calls == 1
+
+  cb.thread(
+      "s2",
+      "t1",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T23:08:00+00:00", _result_usage(200, 5))])
+  cb.thread(
+      "s1",
+      "t2",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T23:09:00+00:00", _result_usage(300, 6))])
+  cb.master(
+      "s1", "2026-09-11T23:10:00+00:00", [
+          {
+              "type": "context",
+              "step": 1,
+              "prompt_tokens": 1,
+              "model": "openai/gemini-3.8-flash"
+          },
+          {
+              "type": "result",
+              "completed": True,
+              "usage": {
+                  "input_tokens": 400,
+                  "output_tokens": 7
+              }
+          },
+      ])
+  before = calls["n"]
+  third = _collect(None, None, db, cache, sessions=cb.root)
+  assert calls["n"] - before > 0  # exactly the moved directories re-scandir
+  row = _row(third, "charlie-bot", "gemini-3.8-flash")
+  assert row.calls == 4 and row.total == (1000 + 50) + (200 + 5) + (300 + 6) + (400 + 7)
+
+  shutil.rmtree(cb.root / "s2")
+  fourth = _collect(None, None, db, cache, sessions=cb.root)
+  row = _row(fourth, "charlie-bot", "gemini-3.8-flash")
+  assert row.calls == 3 and row.total == (1000 + 50) + (300 + 6) + (400 + 7)
 
 
 def test_charliebot_walk_errors_become_notes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

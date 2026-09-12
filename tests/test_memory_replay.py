@@ -638,6 +638,17 @@ def test_output_roots_overlapping_store_or_inputs_are_rejected(tmp_path: Path, o
   assert not (tmp_path / "out" / "runs").exists() or not list((tmp_path / "out" / "runs").iterdir())
 
 
+def test_output_root_that_is_an_existing_file_is_rejected(tmp_path: Path) -> None:
+  cfg = replay_cfg(tmp_path)
+  (tmp_path / "a-file").write_text("not a directory", encoding="utf-8")
+  with pytest.raises(ReplayIsolationError, match="not a directory"):
+    run_replay(
+        ReplayOptions(
+            manifest=write_manifest(tmp_path), output_dir=tmp_path / "a-file", backend="fake-clc", mode="editor-only"),
+        cfg=cfg,
+        transport_factory=lambda: FakeTransport([MERGE_RESPONSE]))
+
+
 # --- backend selection ---------------------------------------------------------
 
 

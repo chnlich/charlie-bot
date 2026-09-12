@@ -403,6 +403,9 @@ def _require_disjoint_output_root(
     output_dir: Path, manifest_path: Path, manifest: Manifest, cfg: CharlieBotConfig) -> None:
   """Reject any output root that overlaps the live memory store or a frozen input file."""
   out = output_dir.resolve()
+  if out.exists() and not out.is_dir():
+    raise ReplayIsolationError(
+        f"output dir {output_dir} exists and is not a directory; replay writes only to an isolated output root")
   store = cfg.memory_dir.resolve()
   if out == store or out.is_relative_to(store) or store.is_relative_to(out):
     raise ReplayIsolationError(

@@ -12,9 +12,10 @@ under the requested output root::
       report.html          # the review page
       sources/<ref>.md     # frozen evidence snapshots
       frozen/manifest.yaml # the fully inlined frozen inputs, self-contained
-      run.json             # identity, model identity, selection, usage, timing, status,
-                           # prompt fingerprints, and the bundle's write-time hashes
-      raw/                 # the exact request and response text of every model call
+      run.json             # identity, model identity, selection, status, prompt versions and
+                           # fingerprints, write-time hashes, recovery policy, and every recorded
+                           # attempt with its validation outcome, chosen flag, and usage
+      raw/                 # the exact request and response text of every model attempt
 
 Isolation is structural: the live memory store is never opened for reading or
 writing — the manifest supplies the frozen store state — and the only writes

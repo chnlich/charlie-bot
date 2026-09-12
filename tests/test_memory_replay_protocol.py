@@ -339,14 +339,8 @@ def test_source_text_with_request_like_headers_stays_exact_data(tmp_path: Path) 
 def test_editor_new_entry_text_with_structural_looking_lines_round_trips(tmp_path: Path) -> None:
   tricky = base.entry_text(["- mechanism line", "## Allowed topics", "- another line"])
   editor = base.editor_json(
-      [
-          base.rewrite_op(base.ENTRY_WITHOUT_INSTANCE.replace("render", "render")),  # keep base arm valid
-      ],
-      [])
-  editor = base.editor_json(
-      [
-          base.rewrite_op(tricky),
-      ], [base.row("capture-eviction", "propose", ["entries/render/cache-eviction.md"], "rewritten")])
+      [base.rewrite_op(tricky)],
+      [base.row("capture-eviction", "propose", ["entries/render/cache-eviction.md"], "rewritten")])
   outcome, _ = run_with(tmp_path, [editor, editor])
   final = base.final_entries_from(base.read_proposal(outcome.run_dir), base.base_manifest_dict())
   assert final["entries/render/cache-eviction.md"] == tricky, "entry text with header-like lines is exact data"

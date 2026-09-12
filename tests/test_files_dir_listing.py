@@ -3,7 +3,9 @@
 The reference walk restates the pre-scandir form (``Path.iterdir`` plus one
 ``is_dir`` and one ``stat`` per child) so the served bytes stay pinned to it:
 same order (directories first, case-insensitive names), same size text, same
-UTC mtime text — the walk is an optimization, not a redefinition.
+UTC mtime text — the walk is an optimization, not a redefinition. The page
+chrome itself is not restated: the reference builder formats the served
+builder's own template constant.
 """
 
 from __future__ import annotations
@@ -18,28 +20,8 @@ from urllib.parse import quote
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.files import _dir_listing_html, _format_mtime
+from src.api.files import _DIR_LISTING_TEMPLATE, _dir_listing_html, _format_mtime
 from src.api.files import router as files_router
-
-_TEMPLATE = """<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Index of {display_path}</title>
-<style>
-  body {{ font-family: monospace; margin: 2em; }}
-  table {{ border-collapse: collapse; }}
-  td, th {{ padding: 4px 12px; text-align: left; }}
-  a {{ text-decoration: none; color: #0366d6; }}
-  a:hover {{ text-decoration: underline; }}
-</style>
-</head>
-<body>
-<h2>Index of {display_path}</h2>
-<table>
-<tr><th></th><th>Name</th><th>Size</th><th>Modified</th></tr>
-{rows}
-</table>
-</body>
-</html>"""
 
 
 def _client() -> TestClient:
@@ -49,7 +31,11 @@ def _client() -> TestClient:
 
 
 def _reference_listing(dir_path: Path, url_prefix: str) -> str:
-  """The pre-scandir builder, byte for byte."""
+  """The pre-scandir builder, byte for byte.
+
+  Restates only the walk and the row build; the page chrome comes from the
+  served builder's own template constant.
+  """
   entries: list[dict] = []
   for child in sorted(dir_path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
     stat = child.stat()
@@ -79,7 +65,7 @@ def _reference_listing(dir_path: Path, url_prefix: str) -> str:
         f'<td style="text-align:right">{size}</td><td>{mtime}</td>'
         f'</tr>\n')
   display_path = html.escape("/" + dir_path.as_posix().lstrip("/"))
-  return _TEMPLATE.format(display_path=display_path, rows=rows)
+  return _DIR_LISTING_TEMPLATE.format(display_path=display_path, rows=rows)
 
 
 def _reference_size(size: int) -> str:

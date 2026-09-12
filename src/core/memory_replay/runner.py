@@ -39,6 +39,7 @@ from src.core.memory_replay.errors import (
     ReplayBackendError,
     ReplayError,
     ReplayIsolationError,
+    ReplayModelOutputError,
 )
 from src.core.memory_replay.exchange import (
     EDITOR_PROMPT_VERSION,
@@ -47,20 +48,31 @@ from src.core.memory_replay.exchange import (
     REVIEWER_SYSTEM,
     ThemeOutput,
     build_editor_request,
+    build_repair_request,
     build_reviewer_request,
     parse_model_output,
 )
+from src.core.memory_replay.validate import theme_output_errors
 from src.core.memory_replay.identity import approval_digest, input_identity, sha256_hex
 from src.core.memory_replay.manifest import Manifest, Theme, dump_manifest, load_manifest
 from src.core.memory_replay.report import ReportData, render_report
 from src.core.memory_replay.retrieval import FeedbackSelection, select_feedback
-from src.core.memory_replay.transport import OpenAICompatibleTransport, ReplayTransport, request_model_for
+from src.core.memory_replay.transport import (
+    OpenAICompatibleTransport,
+    ReplayTransport,
+    TransportResult,
+    request_model_for,
+)
 
 log = structlog.get_logger()
 
 MODES = ("editor-only", "editor-review")
 PROPOSAL_SCHEMA = "memory-replay-proposal/1"
 RUN_SCHEMA = "memory-replay-run/1"
+# The bounded recovery budget: a stage response that fails mechanical validation is re-asked
+# at most once, so a stage consumes at most two model responses. Model judgments are never
+# retried and transport/backend failures are never retried.
+MAX_STAGE_RESPONSES = 2
 
 
 @dataclass
@@ -150,6 +162,14 @@ def run_replay(
       # sha256 of every bundle file at the moment the run wrote it (run.json and the derived
       # report excluded); a later comparison fails visibly when a recorded file changed.
       "bundle_integrity": {},
+      # The bounded recovery policy this run ran under, recorded so a later comparison can
+      # verify the attempt chain against the contract that produced it.
+      "stage_recovery":
+          {
+              "max_responses_per_stage": MAX_STAGE_RESPONSES,
+              "retrigger": "mechanical validation failure only; model judgments and transport "
+                           "failures are never retried",
+          },
       "themes": [],
       "unused_sources": manifest.unused_refs(),
       "calls": [],
@@ -216,34 +236,30 @@ def _run_stages(
         manifest.feedback_examples, principles=set(theme.principles), context_text=_theme_context_text(manifest, theme))
     selections[theme.name] = selected
     _record_theme(record, theme, selected)
-    request = build_editor_request(manifest, theme, selected)
-    editor_outputs[theme.name] = _call_stage(
+    editor_outputs[theme.name] = _run_stage(
         transport=transport,
         role="editor",
-        theme_name=theme.name,
+        manifest=manifest,
+        theme=theme,
         system=EDITOR_SYSTEM,
-        user=request,
+        build_request=lambda t=theme, s=selected: build_editor_request(manifest, t, s),
         run_dir=run_dir,
         record=record)
-    validate.validate_theme_output(
-        editor_outputs[theme.name], role=f"editor[{theme.name}]", manifest=manifest, theme=theme)
   for theme in manifest.themes:
     _record_editor_audit(record, theme.name, editor_outputs[theme.name])
   final_outputs = editor_outputs
   if options.mode == "editor-review":
     final_outputs = {}
     for theme in manifest.themes:
-      request = build_reviewer_request(manifest, theme, selections[theme.name], editor_outputs[theme.name])
-      reviewer_output = _call_stage(
+      final_outputs[theme.name] = _run_stage(
           transport=transport,
           role="reviewer",
-          theme_name=theme.name,
+          manifest=manifest,
+          theme=theme,
           system=REVIEWER_SYSTEM,
-          user=request,
+          build_request=lambda t=theme: build_reviewer_request(manifest, t, selections[t.name], editor_outputs[t.name]),
           run_dir=run_dir,
           record=record)
-      validate.validate_theme_output(reviewer_output, role=f"reviewer[{theme.name}]", manifest=manifest, theme=theme)
-      final_outputs[theme.name] = reviewer_output
   return final_outputs, selections
 
 
@@ -268,38 +284,110 @@ def _record_editor_audit(record: dict, theme_name: str, output: ThemeOutput) -> 
         })
 
 
-def _call_stage(
+def _run_stage(
+    *,
+    transport: ReplayTransport,
+    role: str,
+    manifest: Manifest,
+    theme: Theme,
+    system: str,
+    build_request,
+    run_dir: Path,
+    record: dict,
+) -> ThemeOutput:
+  """One stage for one theme: up to two model responses, the second only a bounded repair.
+
+  The first response is validated as sent; on a mechanical failure (JSON shape,
+  unknown ref, path, format, or patch/disposition inconsistency) the same stage
+  is re-asked once with the original authorized evidence, its own previous raw
+  response, and the concrete validation errors. Model judgments are never retry
+  triggers and transport or backend failures are never retried — they fail the
+  run immediately after being recorded. A second invalid response fails
+  visibly; nothing is coerced into a valid output.
+  """
+  base_request = build_request()
+  previous: tuple[str, list[str]] | None = None  # (raw response, its mechanical errors)
+  for attempt in range(1, MAX_STAGE_RESPONSES + 1):
+    user = base_request if previous is None else build_repair_request(base_request, previous[0], previous[1])
+    result, call_entry = _call_attempt(
+        transport=transport, role=role, theme_name=theme.name, attempt=attempt, system=system, user=user,
+        run_dir=run_dir, record=record)
+    output, errors = _parse_and_validate(result.text, role=role, manifest=manifest, theme=theme)
+    call_entry["chosen"] = not errors
+    call_entry["validation"] = {"status": "passed"} if not errors else {"status": "failed", "errors": errors}
+    _write_record(run_dir, record)
+    if not errors:
+      return output
+    previous = (result.text, errors)
+  raise ReplayError(
+      f"{role}[{theme.name}]: stage response failed mechanical validation after 1 re-ask "
+      f"({MAX_STAGE_RESPONSES} responses); errors of the last response: {previous[1][-1]}")
+
+
+def _call_attempt(
     *,
     transport: ReplayTransport,
     role: str,
     theme_name: str,
+    attempt: int,
     system: str,
     user: str,
     run_dir: Path,
     record: dict,
-) -> ThemeOutput:
-  """One model call: save the request, call, save the raw reply, parse, record usage."""
-  name = f"{role}-{theme_name}"
+) -> tuple[TransportResult, dict]:
+  """One model call of one stage's attempt chain: persist request/response/usage, return the entry.
+
+  The call entry is appended before the transport call and completed after it, so a transport
+  failure is recorded with the request, a null response, and unknown usage — never silently
+  dropped and never retried. The caller fills in the validation outcome and the chosen flag.
+  """
+  name = f"{role}-{theme_name}.attempt-{attempt}"
   raw_dir = run_dir / "raw"
   raw_dir.mkdir(exist_ok=True)
-  (raw_dir / f"{name}.request.txt").write_text(user, encoding="utf-8")
-  _record_artifact_hash(run_dir, record, f"raw/{name}.request.txt")
-  result = transport.complete(system=system, user=user)
-  (raw_dir / f"{name}.response.txt").write_text(result.text, encoding="utf-8")
-  _record_artifact_hash(run_dir, record, f"raw/{name}.response.txt")
-  record["calls"].append(
-      {
-          "name": name,
-          "role": role,
-          "theme": theme_name,
-          "latency_ms": result.latency_ms,
-          "prompt_tokens": result.prompt_tokens,
-          "output_tokens": result.output_tokens,
-          # Known only when an endpoint reports pricing; replay never guesses a rate.
-          "cost_usd": None,
-      })
-  _write_record(run_dir, record)
-  return parse_model_output(result.text, role=f"{role}[{theme_name}]")
+  request_rel = f"raw/{name}.request.txt"
+  (run_dir / request_rel).write_text(user, encoding="utf-8")
+  _record_artifact_hash(run_dir, record, request_rel)
+  entry: dict = {
+      "name": name,
+      "role": role,
+      "theme": theme_name,
+      "attempt": attempt,
+      "request_file": request_rel,
+      "response_file": None,
+      "validation": {"status": "transport-failed"},
+      "chosen": False,
+      "latency_ms": None,
+      "prompt_tokens": None,
+      "output_tokens": None,
+      # Known only when an endpoint reports pricing; replay never guesses a rate.
+      "cost_usd": None,
+  }
+  record["calls"].append(entry)
+  try:
+    result = transport.complete(system=system, user=user)
+  except Exception as e:
+    entry["validation"] = {"status": "transport-failed", "error": str(e)}
+    _write_record(run_dir, record)
+    raise
+  response_rel = f"raw/{name}.response.txt"
+  (run_dir / response_rel).write_text(result.text, encoding="utf-8")
+  _record_artifact_hash(run_dir, record, response_rel)
+  entry["response_file"] = response_rel
+  entry["latency_ms"] = result.latency_ms
+  entry["prompt_tokens"] = result.prompt_tokens
+  entry["output_tokens"] = result.output_tokens
+  return result, entry
+
+
+def _parse_and_validate(raw: str, *, role: str, manifest: Manifest, theme: Theme) -> tuple[ThemeOutput | None, list[str]]:
+  """The mechanical gate of one stage response: parse, then validate, collecting every error."""
+  role_ctx = f"{role}[{theme.name}]"
+  try:
+    output = parse_model_output(raw, role=role_ctx)
+  except ReplayModelOutputError as e:
+    return None, [str(e)]
+  errors = theme_output_errors(output, role=role_ctx, manifest=manifest, theme=theme, allow_no_write_citations=True)
+  return (None, errors) if errors else (output, [])
 
 
 def _aggregate_candidate_results(ordered: list[tuple[Theme, ThemeOutput]]) -> list[dict]:

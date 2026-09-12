@@ -86,6 +86,10 @@ model therefore has no read path beyond the supplied evidence and no write path
 at all — the isolation is a property of the transport, not of an instruction
 saying "do not write".
 
+The request states the frozen topics vocabulary (`## Allowed topics`) and shows
+each current entry's store path together with its `ref` — a model cannot honor
+vocabulary it never sees.
+
 - **Editor** returns complete proposed entries (rewrite with full replacement
   text, delete, keep, or new) plus one disposition row per candidate
   (`propose`, `no_change`, `needs_decision`). An explicit remember request
@@ -93,15 +97,20 @@ saying "do not write".
 - **Reviewer** (editor-review mode only) sees the same evidence, the same
   selected feedback, and the editor's proposed entries. It may keep, delete, or
   rewrite, and its rows become the final dispositions; a change it initiates
-  gets a row naming the existing entry it touches. The editor's reasons stay in
-  the audit record and are withheld from the reviewer request.
+  gets a row whose `source_ref` is the touched entry's `ref`, with the store
+  path kept separately in the row's `paths`. The editor's reasons stay in the
+  audit record and are withheld from the reviewer request.
 
 ## Mechanical validation and the proposal
 
 After the stages, deterministic code (`src/core/memory_replay/validate.py`)
 checks entry formats through the store's own parser, topic vocabulary
 membership, source-ref resolution, path shapes (no traversal), disposition
-coverage, and that the generated diff round-trips. Then it writes the bundle:
+coverage, and that the generated diff round-trips under a strict unified-diff
+applicator: hunks land exactly where their headers say, in order, without
+overlap, and the unchanged text around them — prefix, between hunks, and the
+trailing suffix — survives, so the applied state is the complete file. Then it
+writes the bundle:
 
 ```
 <output-dir>/runs/<input-identity prefix>/
@@ -115,7 +124,9 @@ coverage, and that the generated diff round-trips. Then it writes the bundle:
 `proposal.json` carries exactly the schema fields: `base_commit`, `sources`
 (`ref`/`sha256`/`snapshot`), `feedback_refs`
 (`comment_event`/`approved_change_ref`, the latter nullable),
-`candidate_results` (`source_ref`/`outcome`/`paths`/`reason`),
+`candidate_results` (`source_ref`/`outcome`/`paths`/`reason` — every
+`source_ref` is a ref from `sources`, a candidate's or an existing entry's,
+never a store path),
 `reviewed_patch` (unified diff against the base), and `approval_digest` —
 SHA-256 over the canonical JSON encoding of `base_commit` and
 `reviewed_patch` jointly. Every changed path maps back through a `propose`

@@ -11,6 +11,14 @@ editor's proposed complete entries. The editor's justifications (its ``reason``
 fields) are withheld from the reviewer request and kept only in the run record;
 evaluation answers have no channel into either request because the manifest
 cannot carry them.
+
+Every disposition row's ``source_ref`` names evidence by its ref — a candidate
+ref for a candidate disposition, the entry's own ref for a change the stage
+initiates on an existing entry. Store paths appear only in ``paths`` and in the
+entry operations, so a proposal's dispositions resolve against
+``proposal.sources`` by one identity convention. The request states the frozen
+topics vocabulary and shows each current entry's store path together with its
+ref: a model cannot honor vocabulary it never sees.
 """
 
 import json
@@ -22,8 +30,12 @@ from src.core.memory_replay.errors import ReplayModelOutputError
 from src.core.memory_replay.manifest import Manifest, Theme
 from src.core.memory_replay.retrieval import FeedbackSelection
 
-EDITOR_PROMPT_VERSION = "memory-replay-editor-v1"
-REVIEWER_PROMPT_VERSION = "memory-replay-reviewer-v1"
+# v2: entry-initiated disposition rows carry the entry's source ref (v1 wrongly
+# told the model to emit its store path), and the request renders entry refs and
+# the allowed topics. The versions are part of the input identity, so cached
+# runs made under v1 are never reused.
+EDITOR_PROMPT_VERSION = "memory-replay-editor-v2"
+REVIEWER_PROMPT_VERSION = "memory-replay-reviewer-v2"
 
 # The response contract, stated twice: prose for the model, types for the parser.
 _RESPONSE_SHAPE = """{
@@ -59,11 +71,13 @@ Constraints:
 - A candidate marked "explicit remember request" still gets a visible row; if you do not act on
   it, its row's "reason" names the request and why nothing changed.
 - An entry change you initiate that no candidate asked for still gets a "candidates" row whose
-  "source_ref" is that existing entry's path and whose "paths" list it.
+  "source_ref" is that entry's ref from "## Current entries" (never its store path) and whose
+  "paths" list the entry's path.
 - Cite only source refs you were actually given, in the "source_refs" of the entries rows those
   refs support. Never invent refs, paths, or topics outside the given vocabulary.
-- Paths are exactly "entries/<topic>/<slug>.md". "new" paths must not exist yet; "rewrite",
-  "delete", and "keep" paths must be listed under "## Current entries".
+- Paths are exactly "entries/<topic>/<slug>.md", and a "new" entry's topic must be one of
+  "## Allowed topics". "new" paths must not exist yet; "rewrite", "delete", and "keep" paths
+  must be listed under "## Current entries".
 - A "rewrite" or "new" "text" is the complete entry file (front matter, then body) and must
   differ from the current text. "delete" and "keep" rows carry no "text".
 - "propose" rows list the paths changed for that candidate; "no_change" and "needs_decision"
@@ -85,7 +99,8 @@ Decide:
 - for every entry proposed under "## Editor proposals": keep it as proposed, delete it, or
   rewrite it (return the complete replacement text);
 - entries you change that the editor did not propose get their own "entries" row, and a
-  "candidates" row whose "source_ref" is that existing entry's path.
+  "candidates" row whose "source_ref" is that entry's ref from "## Current entries" (never its
+  store path).
 
 Constraints:
 - The guideline below is the admission bar. New or rewritten facts need a source ref you were
@@ -158,11 +173,12 @@ class ThemeOutput:
 def build_editor_request(manifest: Manifest, theme: Theme, selections: list[FeedbackSelection]) -> str:
   """The editor's user content: every byte of theme evidence, deterministically ordered."""
   parts = [f"# Memory curation replay — editor\n\nTheme: {theme.name}"]
+  parts.append(_render_topics(manifest))
   parts.append("## Guideline (admission policy)")
   parts.extend(_render_source(s) for s in manifest.guidelines())
   parts.append("## Current entries")
   entries = manifest.theme_sources(theme, "entry")
-  parts.extend(f"### {s.path}\n{s.text.rstrip()}" for s in entries)
+  parts.extend(f"### {s.path} (ref: {s.ref})\n{s.text.rstrip()}" for s in entries)
   parts.append("## Owning documents")
   parts.extend(_render_source(s) for s in manifest.theme_sources(theme, "document"))
   parts.append("## Candidate material")
@@ -179,11 +195,12 @@ def build_reviewer_request(
 ) -> str:
   """The reviewer's user content: the editor's evidence plus its proposals, without its reasons."""
   parts = [f"# Memory curation replay — reviewer\n\nTheme: {theme.name}"]
+  parts.append(_render_topics(manifest))
   parts.append("## Guideline (admission policy)")
   parts.extend(_render_source(s) for s in manifest.guidelines())
   parts.append("## Current entries")
   entries = manifest.theme_sources(theme, "entry")
-  parts.extend(f"### {s.path}\n{s.text.rstrip()}" for s in entries)
+  parts.extend(f"### {s.path} (ref: {s.ref})\n{s.text.rstrip()}" for s in entries)
   parts.append("## Owning documents")
   parts.extend(_render_source(s) for s in manifest.theme_sources(theme, "document"))
   parts.append("## Candidate material")
@@ -191,6 +208,11 @@ def build_reviewer_request(
   parts.append(_render_feedback(selections))
   parts.append(_render_editor_proposals(editor_output))
   return "\n\n".join(parts) + "\n"
+
+
+def _render_topics(manifest: Manifest) -> str:
+  """The declared topic vocabulary: a model cannot stay inside vocabulary it never sees."""
+  return "## Allowed topics (the only topics an entry may use)\n" + "\n".join(manifest.topics)
 
 
 def _render_source(source) -> str:

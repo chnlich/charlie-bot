@@ -50,7 +50,7 @@ rejected with their version named — never reinterpreted under this definition.
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ValidationError
 
 from src.core.memory_replay import exchange
 from src.core.memory_replay.errors import (
@@ -65,12 +65,13 @@ from src.core.memory_replay.exchange import (
     _RESPONSE_SHAPE,
     _REVIEWER_DECISIONS,
     CandidateRow,
+    CandidateRowSpec,
     EntryOp,
-    EntryOpSpec,
+    ModelOutputSpec,
     ThemeOutput,
     candidate_row_shape,
 )
-from src.core.memory_replay.manifest import Manifest, Theme
+from src.core.memory_replay.manifest import Manifest, Theme, _StrictModel
 from src.core.memory_replay.retrieval import FeedbackSelection
 from src.core.memory_replay.validate import canonical_text, theme_output_errors
 
@@ -525,26 +526,19 @@ def build_reviewer_request(
 PROOF_KEYS = ("action", "home", "brevity")
 
 
-class _StrictModel(BaseModel):
-  model_config = ConfigDict(extra="forbid")
-
-
 class _ProofSpec(_StrictModel):
   action: str
   home: str
   brevity: str
 
 
-class _EditorCandidateRowSpec(_StrictModel):
-  source_ref: str
-  outcome: str
-  paths: list[str] = []
-  reason: str
+class _EditorCandidateRowSpec(CandidateRowSpec):
+  # The shared candidate row plus the proofs field; both parser and prompt fragment
+  # single-home the shared fields, exchange.py holds the prompt side.
   proofs: _ProofSpec | None = None
 
 
-class _EditorOutputSpec(_StrictModel):
-  entries: list[EntryOpSpec]
+class _EditorOutputSpec(ModelOutputSpec):
   candidates: list[_EditorCandidateRowSpec]
 
 

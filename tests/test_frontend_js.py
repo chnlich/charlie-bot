@@ -22,6 +22,7 @@ _NODE_TESTS = [
     "chat_scroll_no_write.test.js",
     "chat_session_bump.test.js",
     "chat_single_tilde_literal.test.js",
+    "chat_switch_tool_preview.test.js",
     "chat_url_ascii_boundary.test.js",
     "code_block_wc2ch.test.js",
     "comment_post.test.js",

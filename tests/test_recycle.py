@@ -18,8 +18,8 @@ from conftest import (
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
 
-from src.api.message_utils import build_session_bootstrap_data, build_session_view_data
-from src.api.sessions import get_session_events_page
+from src.api.message_utils import SessionBootstrapData, build_session_bootstrap_data, build_session_view_data
+from src.api.sessions import _bootstrap_payload, get_session_events_page
 from src.core import event_types as ET
 from src.core.models import SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core.ndjson import count_ndjson_lines
@@ -731,6 +731,122 @@ async def test_session_bootstrap_uses_tail_without_thread_or_usage_load(tmp_path
   assert [m["role"] for m in bootstrap.messages] == ["user", "separator"]
   assert bootstrap.messages[0]["content"] == "e3"
   assert [m["event_index"] for m in bootstrap.messages] == [6, 7]
+
+
+def projection_messages(mgr: SessionManager, session_id: str) -> list[dict]:
+  projection = mgr.get_message_projection(session_id)
+  assert projection is not None
+  messages, _oldest, _more = projection.tail(40)
+  return messages
+
+
+def _switch_payload_messages(mgr: SessionManager, session: SessionMetadata) -> tuple[list[dict], list[dict]]:
+  """The bootstrap's messages and the switch payload's trimmed copy of them."""
+  messages = projection_messages(mgr, session.id)
+  bootstrap = SessionBootstrapData(
+      session=session, messages=messages, pending_draft=None,
+      total_event_count=0, oldest_message_ordinal=0, has_more=False)
+  payload = _bootstrap_payload(bootstrap, mgr._cfg)
+  return messages, payload["messages"]
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_payload_trims_tool_previews_over_cap(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  big_output = "o" * (500 + 40000)
+  big_command = "git " + "x" * (500 + 40000)
+  events = [
+      {
+          "type": ET.TOOL_USE,
+          "id": "tool-0",
+          "name": "Read",
+          "input": {"file_path": "a.txt"},
+          "timestamp": "2026-05-10T00:00:00Z",
+      },
+      {
+          "type": ET.USER,
+          "id": "tool-result-1",
+          "message": {"content": [{"type": "tool_result", "content": big_output}]},
+          "timestamp": "2026-05-10T00:00:01Z",
+      },
+      {
+          "type": ET.TOOL_USE,
+          "id": "tool-1",
+          "name": "Bash",
+          "input": {"command": big_command},
+          "timestamp": "2026-05-10T00:00:02Z",
+      },
+      {
+          "type": ET.USER,
+          "id": "tool-result-2",
+          "message": {"content": [{"type": "tool_result", "content": "ok"}]},
+          "timestamp": "2026-05-10T00:00:03Z",
+      },
+      {
+          "type": ET.ASSISTANT,
+          "id": "assistant-3",
+          "message": {"content": [{"type": "text", "text": "done"}]},
+          "timestamp": "2026-05-10T00:00:04Z",
+      },
+      {
+          "type": ET.MASTER_DONE,
+          "thinking_seconds": 1,
+          "timestamp": "2026-05-10T00:00:05Z",
+      },
+  ]
+  _append_events(mgr.get_chat_events_path(session.id), events)
+
+  projection_messages_before = projection_messages(mgr, session.id)
+  messages, payload_messages = _switch_payload_messages(mgr, session)
+  tools = payload_messages[0]["tools"]
+
+  assert tools[0]["output"] == big_output[:500]
+  assert tools[0]["output_truncated"] is True
+  assert tools[1]["input"]["command"] == big_command[:500]
+  assert tools[1]["input_truncated"] is True
+
+  # The trimmed copies never reach the projection memo: a re-read after the
+  # payload build returns dicts identical to the pre-payload read, full
+  # projection text included (the M94 render cap's own 20000-char shape).
+  assert projection_messages(mgr, session.id) == projection_messages_before
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_payload_leaves_small_tools_untouched(tmp_path: Path) -> None:
+  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  events = [
+      {
+          "type": ET.TOOL_USE,
+          "id": "tool-0",
+          "name": "Read",
+          "input": {"file_path": "a.txt"},
+          "timestamp": "2026-05-10T00:00:00Z",
+      },
+      {
+          "type": ET.USER,
+          "id": "tool-result-1",
+          "message": {"content": [{"type": "tool_result", "content": "x" * 499}]},
+          "timestamp": "2026-05-10T00:00:01Z",
+      },
+      {
+          "type": ET.ASSISTANT,
+          "id": "assistant-2",
+          "message": {"content": [{"type": "text", "text": "done"}]},
+          "timestamp": "2026-05-10T00:00:02Z",
+      },
+      {
+          "type": ET.MASTER_DONE,
+          "thinking_seconds": 1,
+          "timestamp": "2026-05-10T00:00:03Z",
+      },
+  ]
+  _append_events(mgr.get_chat_events_path(session.id), events)
+
+  messages, payload_messages = _switch_payload_messages(mgr, session)
+
+  assert payload_messages[0] is messages[0]
+  assert "output_truncated" not in payload_messages[0]["tools"][0]
+  assert "input_truncated" not in payload_messages[0]["tools"][0]
 
 
 @pytest.mark.asyncio

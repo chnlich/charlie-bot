@@ -21,9 +21,15 @@ Isolation is structural: the live memory store is never opened for reading or
 writing — the manifest supplies the frozen store state — and the only writes
 go to the requested output root, which must not overlap the store or any
 frozen input. A completed run whose input identity matches (inputs, mode,
-model, prompt versions) is reused without a model call; anything else runs
+model, prompt versions, and, for experimental variants, the variant's
+behavioral definition) is reused without a model call; anything else runs
 again. Model judgments never set the exit status; execution, parse, and
 mechanical validation failures do.
+
+Every stage hand-off goes through one :class:`ExperimentContract`. The
+default is the landed v3 replay contract, byte-identical to the standalone
+behavior this module has always had; the experimental variants
+(``variants.py``) supply their own contracts without touching this pipeline.
 """
 
 import json
@@ -64,6 +70,7 @@ from src.core.memory_replay.transport import (
     request_model_for,
 )
 from src.core.memory_replay.validate import theme_output_errors
+from src.core.memory_replay.variants import ExperimentContract
 
 log = structlog.get_logger()
 
@@ -77,6 +84,84 @@ RUN_SCHEMA = "memory-replay-run/2"
 # at most once, so a stage consumes at most two model responses. Model judgments are never
 # retried and transport/backend failures are never retried.
 MAX_STAGE_RESPONSES = 2
+
+
+def standalone_v3_contract() -> ExperimentContract:
+  """The default replay contract: the landed v3 exchange, no experimental dimension changed.
+
+  Both stage validators are the plain v3 checks over the full recorded v3 citation domain, the
+  identity carries no variant payload, and nothing is added to the run record — so standalone
+  v3 runs stay byte-compatible with the bundles and comparisons recorded before the experiment
+  existed.
+  """
+
+  def v3_errors(output, *, role, manifest, theme, selections, editor_output):
+    del selections, editor_output
+    return theme_output_errors(output, role=role, manifest=manifest, theme=theme, allow_no_write_citations=True)
+
+  return ExperimentContract(
+      name="standalone-v3-replay",
+      title="Standalone v3 replay (no experimental variant)",
+      version=0,
+      editor_stage="v3-editor",
+      reviewer_stage="v3-reviewer",
+      feedback_view="selected-structured",
+      rationale_visibility="hidden",
+      reviewer_capability="whole-entry",
+      editor_prompt_version=EDITOR_PROMPT_VERSION,
+      reviewer_prompt_version=REVIEWER_PROMPT_VERSION,
+      editor_system=EDITOR_SYSTEM,
+      reviewer_system=REVIEWER_SYSTEM,
+      build_editor_request=build_editor_request,
+      build_reviewer_request=build_reviewer_request,
+      parse_editor_output=parse_model_output,
+      parse_reviewer_output=parse_model_output,
+      editor_errors=v3_errors,
+      reviewer_errors=v3_errors,
+      feedback_refs=_selected_feedback_refs,
+      changes_vs_baseline=(),
+      notes=(),
+      experiment=False,
+  )
+
+
+def resolve_backend_identity(cfg: CharlieBotConfig, backend_id: str) -> tuple[object, dict]:
+  """The configured backend option and the model identity it yields; both fail visibly when unset."""
+  option = _resolve_backend(cfg, backend_id)
+  return option, {
+      "backend": option.id,
+      "backend_type": str(option.type),
+      "model": request_model_for(option),
+  }
+
+
+def compute_input_identity(manifest: Manifest, *, mode: str, model_identity: dict, contract: ExperimentContract) -> str:
+  """The run identity over one manifest, one mode, one transport, and one contract.
+
+  Experimental variant contracts fold their behavioral definition into the identity, so runs
+  under different variants (or a changed variant) never reuse each other's bundles; standalone
+  v2/v3 runs keep the exact identities they have always computed.
+  """
+  return input_identity(
+      manifest=manifest,
+      mode=mode,
+      model_identity=model_identity,
+      editor_prompt_version=contract.editor_prompt_version,
+      reviewer_prompt_version=contract.reviewer_prompt_version,
+      variant=contract.identity_payload() if contract.experiment else None)
+
+
+def _selected_feedback_refs(manifest: Manifest, selections: dict[str, list]) -> list[dict]:
+  by_event = {f.comment_event: f for f in manifest.feedback_examples}
+  events = sorted({s.example.comment_event for selected in selections.values() for s in selected})
+  return [
+      {
+          "comment_event":
+              event,
+          "approved_change_ref":
+              by_event[event].approved_change.approved_change_ref if by_event[event].approved_change else None,
+      } for event in events
+  ]
 
 
 @dataclass
@@ -107,25 +192,21 @@ def run_replay(
     cfg: CharlieBotConfig | None = None,
     transport_factory=None,
     now: datetime | None = None,
+    contract: ExperimentContract | None = None,
 ) -> ReplayOutcome:
-  """Run one replay end to end; every failure is a :class:`ReplayError` with a visible message."""
+  """Run one replay end to end; every failure is a :class:`ReplayError` with a visible message.
+
+  ``contract`` selects the stage contract; ``None`` means the standalone v3 replay, byte-for-byte
+  the behavior this function has always had.
+  """
   if options.mode not in MODES:
     raise ReplayError(f"unknown replay mode: {options.mode!r} (expected one of {', '.join(MODES)})")
+  contract = contract or standalone_v3_contract()
   cfg = cfg or get_config()
   manifest = load_manifest(options.manifest)
   _require_disjoint_output_root(options.output_dir, options.manifest, manifest, cfg)
-  option = _resolve_backend(cfg, options.backend)
-  model_identity = {
-      "backend": option.id,
-      "backend_type": str(option.type),
-      "model": request_model_for(option),
-  }
-  identity = input_identity(
-      manifest=manifest,
-      mode=options.mode,
-      model_identity=model_identity,
-      editor_prompt_version=EDITOR_PROMPT_VERSION,
-      reviewer_prompt_version=REVIEWER_PROMPT_VERSION)
+  option, model_identity = resolve_backend_identity(cfg, options.backend)
+  identity = compute_input_identity(manifest, mode=options.mode, model_identity=model_identity, contract=contract)
 
   runs_dir = options.output_dir / "runs"
   if (reused_dir := _find_completed_run(runs_dir, identity)) is not None:
@@ -149,15 +230,15 @@ def run_replay(
       "mode": options.mode,
       "input_identity": identity,
       "prompt_versions": {
-          "editor": EDITOR_PROMPT_VERSION,
-          "reviewer": REVIEWER_PROMPT_VERSION
+          "editor": contract.editor_prompt_version,
+          "reviewer": contract.reviewer_prompt_version
       },
       # Fingerprints of the exact system prompts sent to each stage, so a later comparison can
       # verify the recorded responses follow the contract it validates against.
       "system_prompts":
           {
-              "editor": sha256_hex(EDITOR_SYSTEM.encode("utf-8")),
-              "reviewer": sha256_hex(REVIEWER_SYSTEM.encode("utf-8")),
+              "editor": sha256_hex(contract.editor_system.encode("utf-8")),
+              "reviewer": sha256_hex(contract.reviewer_system.encode("utf-8")),
           },
       "model": model_identity,
       "manifest": str(options.manifest),
@@ -181,10 +262,11 @@ def run_replay(
       "editor_dispositions": [],
       "error": None,
   }
+  record.update(contract.record_payload())
   try:
     _write_frozen_inputs(run_dir, manifest, record)
     transport = _build_transport(transport_factory, option)
-    final_outputs, selections = _run_stages(options, manifest, transport, run_dir, record)
+    final_outputs, selections = _run_stages(options, manifest, transport, run_dir, record, contract)
     base = {path: validate.canonical_text(text) for path, text in manifest.base_entries().items()}
     ordered = [(theme, final_outputs[theme.name]) for theme in manifest.themes]
     result = validate.finalize(base, ordered)
@@ -199,6 +281,7 @@ def run_replay(
         result=result,
         candidate_results=candidate_results,
         selections=selections,
+        contract=contract,
     )
     record["status"] = "completed"
     _write_record(run_dir, record)
@@ -224,15 +307,17 @@ def _run_stages(
     transport: ReplayTransport,
     run_dir: Path,
     record: dict,
+    contract: ExperimentContract,
 ) -> tuple[dict[str, ThemeOutput], dict[str, list[FeedbackSelection]]]:
   """Editor for every theme, then (in editor-review mode) the reviewer over the same inputs.
 
   The editor request is built once per theme and shared verbatim by both modes,
   so the editor-only control sees exactly the input the editor-review run gave
   its editor. The reviewer sees that evidence plus the editor's proposed
-  entries, never the editor's justifications. The returned outputs are the
-  stage whose content wins: the reviewer's in editor-review mode, otherwise
-  the editor's.
+  entries — plus the selector's handoff only when the contract's rationale
+  visibility says so — never the editor's justifications otherwise. The
+  returned outputs are the stage whose content wins: the reviewer's in
+  editor-review mode, otherwise the editor's.
   """
   selections: dict[str, list[FeedbackSelection]] = {}
   editor_outputs: dict[str, ThemeOutput] = {}
@@ -244,10 +329,10 @@ def _run_stages(
     editor_outputs[theme.name] = _run_stage(
         transport=transport,
         role="editor",
-        manifest=manifest,
         theme=theme,
-        system=EDITOR_SYSTEM,
-        build_request=lambda t=theme, s=selected: build_editor_request(manifest, t, s),
+        system=contract.editor_system,
+        build_request=lambda t=theme, s=selected: contract.build_editor_request(manifest, t, s),
+        validate=_stage_output_validator(contract, role="editor", manifest=manifest, theme=theme, selections=selected),
         run_dir=run_dir,
         record=record)
   for theme in manifest.themes:
@@ -259,13 +344,54 @@ def _run_stages(
       final_outputs[theme.name] = _run_stage(
           transport=transport,
           role="reviewer",
-          manifest=manifest,
           theme=theme,
-          system=REVIEWER_SYSTEM,
-          build_request=lambda t=theme: build_reviewer_request(manifest, t, selections[t.name], editor_outputs[t.name]),
+          system=contract.reviewer_system,
+          build_request=lambda t=theme: contract.build_reviewer_request(
+              manifest, t, selections[t.name], editor_outputs[t.name]),
+          validate=_stage_output_validator(
+              contract,
+              role="reviewer",
+              manifest=manifest,
+              theme=theme,
+              selections=selections[theme.name],
+              editor_output=editor_outputs[theme.name]),
           run_dir=run_dir,
           record=record)
   return final_outputs, selections
+
+
+def _stage_output_validator(
+    contract: ExperimentContract,
+    *,
+    role: str,
+    manifest: Manifest,
+    theme: Theme,
+    selections: list[FeedbackSelection],
+    editor_output: ThemeOutput | None = None,
+):
+  """The mechanical gate of one stage's responses: the contract's parser, then its validator.
+
+  The same gate runs on the initial attempt and on every repair attempt, and the comparison
+  re-runs it against the recorded responses, so a stage can never cite evidence its request
+  never carried.
+  """
+
+  def validate(raw: str) -> tuple[ThemeOutput | None, list[str]]:
+    role_ctx = f"{role}[{theme.name}]"
+    try:
+      output = (contract.parse_editor_output if role == "editor" else contract.parse_reviewer_output)(
+          raw, role=role_ctx)
+    except ReplayModelOutputError as e:
+      return None, [str(e)]
+    if role == "editor":
+      errors = contract.editor_errors(
+          output, role=role_ctx, manifest=manifest, theme=theme, selections=selections, editor_output=None)
+    else:
+      errors = contract.reviewer_errors(
+          output, role=role_ctx, manifest=manifest, theme=theme, selections=selections, editor_output=editor_output)
+    return (None, errors) if errors else (output, [])
+
+  return validate
 
 
 def _record_editor_audit(record: dict, theme_name: str, output: ThemeOutput) -> None:
@@ -280,23 +406,27 @@ def _record_editor_audit(record: dict, theme_name: str, output: ThemeOutput) -> 
             "detail": f"action {op.action}; reason {op.reason}",
         })
   for row in output.candidates:
-    record["editor_dispositions"].append(
-        {
-            "role": role,
-            "kind": "candidate",
-            "name": row.source_ref,
-            "detail": f"outcome {row.outcome}; reason {row.reason}",
-        })
+    entry = {
+        "role": role,
+        "kind": "candidate",
+        "name": row.source_ref,
+        "detail": f"outcome {row.outcome}; reason {row.reason}",
+    }
+    if row.proofs is not None:
+      # The selector's three admission proof lines, exactly as the model wrote them: audit data
+      # for the rationale-visibility dimension, never part of the public proposal schema.
+      entry["proofs"] = dict(row.proofs)
+    record["editor_dispositions"].append(entry)
 
 
 def _run_stage(
     *,
     transport: ReplayTransport,
     role: str,
-    manifest: Manifest,
     theme: Theme,
     system: str,
     build_request,
+    validate,
     run_dir: Path,
     record: dict,
 ) -> ThemeOutput:
@@ -324,7 +454,7 @@ def _run_stage(
         user=user,
         run_dir=run_dir,
         record=record)
-    output, errors = _parse_and_validate(result.text, role=role, manifest=manifest, theme=theme)
+    output, errors = validate(result.text)
     call_entry["chosen"] = not errors
     call_entry["validation"] = {"status": "passed"} if not errors else {"status": "failed", "errors": errors}
     _write_record(run_dir, record)
@@ -395,18 +525,6 @@ def _call_attempt(
   return result, entry
 
 
-def _parse_and_validate(raw: str, *, role: str, manifest: Manifest,
-                        theme: Theme) -> tuple[ThemeOutput | None, list[str]]:
-  """The mechanical gate of one stage response: parse, then validate, collecting every error."""
-  role_ctx = f"{role}[{theme.name}]"
-  try:
-    output = parse_model_output(raw, role=role_ctx)
-  except ReplayModelOutputError as e:
-    return None, [str(e)]
-  errors = theme_output_errors(output, role=role_ctx, manifest=manifest, theme=theme, allow_no_write_citations=True)
-  return (None, errors) if errors else (output, [])
-
-
 def _aggregate_candidate_results(ordered: list[tuple[Theme, ThemeOutput]]) -> list[dict]:
   rows: list[dict] = []
   for _, output in ordered:
@@ -457,6 +575,7 @@ def _write_bundle(
     result: validate.FinalResult,
     candidate_results: list[dict],
     selections: dict[str, list[FeedbackSelection]],
+    contract: ExperimentContract,
 ) -> None:
   """Write the proposal, the report, and the run record.
 
@@ -464,16 +583,9 @@ def _write_bundle(
   first model call, so failed runs are self-contained too; this only adds the
   derived proposal.
   """
-  selected_events = sorted(
-      {selection.example.comment_event for selected in selections.values() for selection in selected})
-  feedback_refs = []
-  for event in selected_events:
-    example = next(f for f in manifest.feedback_examples if f.comment_event == event)
-    feedback_refs.append(
-        {
-            "comment_event": event,
-            "approved_change_ref": example.approved_change.approved_change_ref if example.approved_change else None,
-        })
+  # The feedback the stages actually saw names the proposal's feedback provenance: the relevance
+  # selection for selected-view contracts, the whole comment pool for raw-history contracts.
+  feedback_refs = contract.feedback_refs(manifest, selections)
   proposal = {
       "schema": PROPOSAL_SCHEMA,
       "base_commit": manifest.base_commit,

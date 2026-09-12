@@ -61,7 +61,7 @@ from pathlib import Path
 import structlog
 
 from src.core.config import CharlieBotConfig, get_config
-from src.core.memory_replay import errors, exchange_v2
+from src.core.memory_replay import errors, exchange_v2, variants
 from src.core.memory_replay.exchange import (
     EDITOR_PROMPT_VERSION,
     EDITOR_SYSTEM,
@@ -122,35 +122,97 @@ class ExchangeContract:
   reviewer_system: str
   build_editor_request: Callable[..., str]
   build_reviewer_request: Callable[..., str]
-  validate_output: Callable[..., None]
+  parse_editor_output: Callable[..., ThemeOutput]
+  parse_reviewer_output: Callable[..., ThemeOutput]
+  validate_editor: Callable[..., None]
+  validate_reviewer: Callable[..., None]
   bounded_recovery: bool
 
 
+def _permissive_role_validators(validate: Callable[..., None]) -> tuple[Callable, Callable]:
+  """The v2/v3 validators are role-agnostic; the reviewer's takes the consumed editor output
+  (unused there) so one call shape serves every contract."""
+
+  def editor_validate(output, *, role, manifest, theme, selections):
+    del selections
+    validate(output, role=role, manifest=manifest, theme=theme)
+
+  def reviewer_validate(output, *, role, manifest, theme, selections, editor_output):
+    del selections, editor_output
+    validate(output, role=role, manifest=manifest, theme=theme)
+
+  return editor_validate, reviewer_validate
+
+
 def _contract_for(record: dict) -> ExchangeContract:
+  if record.get("variant"):
+    return _experiment_contract_view(variants.contract_for_record(record))
   versions = record.get("prompt_versions") or {}
   editor_version, reviewer_version = versions.get("editor"), versions.get("reviewer")
   if editor_version == EDITOR_PROMPT_VERSION and reviewer_version == REVIEWER_PROMPT_VERSION:
+    editor_validate, reviewer_validate = _permissive_role_validators(validate_theme_output)
     return ExchangeContract(
         name="v3",
         editor_system=EDITOR_SYSTEM,
         reviewer_system=REVIEWER_SYSTEM,
         build_editor_request=build_editor_request,
         build_reviewer_request=build_reviewer_request,
-        validate_output=validate_theme_output,
+        parse_editor_output=parse_model_output,
+        parse_reviewer_output=parse_model_output,
+        validate_editor=editor_validate,
+        validate_reviewer=reviewer_validate,
         bounded_recovery=True)
   if (editor_version == exchange_v2.EDITOR_PROMPT_VERSION and reviewer_version == exchange_v2.REVIEWER_PROMPT_VERSION):
+    editor_validate, reviewer_validate = _permissive_role_validators(validate_theme_output_v2)
     return ExchangeContract(
         name="v2",
         editor_system=exchange_v2.EDITOR_SYSTEM,
         reviewer_system=exchange_v2.REVIEWER_SYSTEM,
         build_editor_request=exchange_v2.build_editor_request,
         build_reviewer_request=exchange_v2.build_reviewer_request,
-        validate_output=validate_theme_output_v2,
+        parse_editor_output=parse_model_output,
+        parse_reviewer_output=parse_model_output,
+        validate_editor=editor_validate,
+        validate_reviewer=reviewer_validate,
         bounded_recovery=False)
   raise errors.ReplayError(
       f"unsupported replay prompt version(s): editor {editor_version!r}, reviewer {reviewer_version!r}; "
-      f"this comparison reads {EDITOR_PROMPT_VERSION!r} (v3) and "
-      f"{exchange_v2.EDITOR_PROMPT_VERSION!r} (v2)")
+      f"this comparison reads {EDITOR_PROMPT_VERSION!r} (v3), "
+      f"{exchange_v2.EDITOR_PROMPT_VERSION!r} (v2), and the experimental variant contracts")
+
+
+def _experiment_contract_view(contract: variants.ExperimentContract) -> ExchangeContract:
+  """The comparison-side view of one experimental variant contract.
+
+  The variant module stays the single home: this adapter only reshapes its error-listing
+  validators into the raising form the comparison arm establishment uses, and threads the
+  recorded editor output into the reviewer validation (the trim-only capability check needs the
+  exact selector text the reviewer's responses derive from).
+  """
+
+  def editor_validate(output, *, role, manifest, theme, selections):
+    found = contract.editor_errors(
+        output, role=role, manifest=manifest, theme=theme, selections=selections, editor_output=None)
+    if found:
+      raise errors.ReplayValidationError("\n".join(found))
+
+  def reviewer_validate(output, *, role, manifest, theme, selections, editor_output):
+    found = contract.reviewer_errors(
+        output, role=role, manifest=manifest, theme=theme, selections=selections, editor_output=editor_output)
+    if found:
+      raise errors.ReplayValidationError("\n".join(found))
+
+  return ExchangeContract(
+      name=f"experiment:{contract.name}",
+      editor_system=contract.editor_system,
+      reviewer_system=contract.reviewer_system,
+      build_editor_request=contract.build_editor_request,
+      build_reviewer_request=contract.build_reviewer_request,
+      parse_editor_output=contract.parse_editor_output,
+      parse_reviewer_output=contract.parse_reviewer_output,
+      validate_editor=editor_validate,
+      validate_reviewer=reviewer_validate,
+      bounded_recovery=True)
 
 
 @dataclass
@@ -224,9 +286,9 @@ def _run_comparison(options: CompareOptions, *, cfg: CharlieBotConfig, now: date
 
   run_error = record.get("error")
   editor_outputs, editor_parse_errors = _parse_chosen_outputs(
-      manifest, editor_stage, role="editor", run_error=run_error)
+      manifest, editor_stage, role="editor", contract=contract, run_error=run_error)
   reviewer_outputs, reviewer_parse_errors = _parse_chosen_outputs(
-      manifest, reviewer_stage, role="reviewer", run_error=run_error)
+      manifest, reviewer_stage, role="reviewer", contract=contract, run_error=run_error)
 
   _verify_stage_chain(
       contract=contract,
@@ -247,15 +309,29 @@ def _run_comparison(options: CompareOptions, *, cfg: CharlieBotConfig, now: date
 
   _fill_provenance(provenance, manifest, editor_stage, reviewer_stage)
 
-  editor_arm = _establish_arm(manifest, editor_outputs, editor_parse_errors, role="editor", contract=contract)
-  reviewer_arm = _establish_arm(manifest, reviewer_outputs, reviewer_parse_errors, role="reviewer", contract=contract)
+  editor_arm = _establish_arm(
+      manifest,
+      editor_outputs,
+      editor_parse_errors,
+      role="editor",
+      contract=contract,
+      selections=selections,
+      editor_outputs=editor_outputs)
+  reviewer_arm = _establish_arm(
+      manifest,
+      reviewer_outputs,
+      reviewer_parse_errors,
+      role="reviewer",
+      contract=contract,
+      selections=selections,
+      editor_outputs=editor_outputs)
   if reviewer_arm["status"] == "failed" and record["status"] == "completed":
     # A completed run's reviewer responses validated when it ran; if they no longer do, the
     # bundle changed or the validation contract drifted, and its proposal cannot be cross-checked.
     raise errors.ReplayError(
         f"the recorded reviewer responses of the completed run at {run_dir} no longer validate: "
         f"{reviewer_arm['error']}")
-  verification["proposal"] = _verify_proposal(run_dir, manifest, record, reviewer_arm)
+  verification["proposal"] = _verify_proposal(run_dir, manifest, record, reviewer_arm, contract, selections)
   verification["limitations"] = _verification_limitations(verification)
 
   comparison = {
@@ -382,7 +458,8 @@ def _recorded_identity(manifest: Manifest, record: dict) -> str:
       mode=record["mode"],
       model_identity=record["model"],
       editor_prompt_version=record["prompt_versions"]["editor"],
-      reviewer_prompt_version=record["prompt_versions"]["reviewer"])
+      reviewer_prompt_version=record["prompt_versions"]["reviewer"],
+      variant=variants.identity_fields_from_record(record) if record.get("variant") else None)
 
 
 def _external_manifest_state(record: dict, manifest: Manifest) -> dict:
@@ -637,7 +714,7 @@ def _verify_stage_chain(
       without.append(name)
       continue
     if contract.bounded_recovery:
-      _verify_chain_structure(contract, role, manifest, theme, attempts)
+      _verify_chain_structure(contract, role, manifest, theme, attempts, selections, chosen_outputs)
     base_request = _stage_base_request(contract, manifest, selections, chosen_outputs, role, theme)
     previous: StageAttempt | None = None
     for a in attempts:
@@ -693,8 +770,14 @@ def _raise_request_mismatch(role: str, name: str, attempt: int) -> None:
 
 
 def _verify_chain_structure(
-    contract: ExchangeContract, role: str, manifest: Manifest, theme,
-    attempts: list[StageAttempt]) -> None:
+    contract: ExchangeContract,
+    role: str,
+    manifest: Manifest,
+    theme,
+    attempts: list[StageAttempt],
+    selections: dict[str, list[FeedbackSelection]],
+    chosen_outputs: dict[str, ThemeOutput | None],
+) -> None:
   """The chain must be a bounded recovery chain: consecutive, at most two, failures recorded."""
   name = theme.name
   numbers = [a.attempt for a in attempts]
@@ -728,8 +811,9 @@ def _verify_chain_structure(
             f"the failed {role} attempt {a.attempt} for theme {name!r} records no validation errors")
       if a.response is None:
         raise errors.ReplayError(f"the failed {role} attempt {a.attempt} for theme {name!r} has no recorded response")
-      if _mechanical_error(a.response, role=f"{role}[{name}]", contract=contract, manifest=manifest,
-                           theme=theme) is None:
+      if _mechanical_error(a.response, role=f"{role}[{name}]", contract=contract, manifest=manifest, theme=theme,
+                           selections=selections,
+                           editor_output=chosen_outputs.get(name) if role == "reviewer" else None) is None:
         raise errors.ReplayError(
             f"the {role} attempt {a.attempt} for theme {name!r} is recorded as failed but its response "
             "passes mechanical validation; the attempt chain is inconsistent")
@@ -739,14 +823,33 @@ def _verify_chain_structure(
           f"{status!r}")
 
 
-def _mechanical_error(raw: str, *, role: str, contract: ExchangeContract, manifest: Manifest, theme) -> str | None:
+def _mechanical_error(
+    raw: str,
+    *,
+    role: str,
+    contract: ExchangeContract,
+    manifest: Manifest,
+    theme,
+    selections: dict[str, list[FeedbackSelection]],
+    editor_output: ThemeOutput | None,
+) -> str | None:
   """The mechanical validation error of one response under the recorded contract, or None."""
+  parse = contract.parse_reviewer_output if role.startswith("reviewer") else contract.parse_editor_output
   try:
-    output = parse_model_output(raw, role=role)
+    output = parse(raw, role=role)
   except errors.ReplayModelOutputError as e:
     return str(e)
   try:
-    contract.validate_output(output, role=role, manifest=manifest, theme=theme)
+    if role.startswith("reviewer"):
+      contract.validate_reviewer(
+          output,
+          role=role,
+          manifest=manifest,
+          theme=theme,
+          selections=selections[theme.name],
+          editor_output=editor_output)
+    else:
+      contract.validate_editor(output, role=role, manifest=manifest, theme=theme, selections=selections[theme.name])
   except errors.ReplayValidationError as e:
     return str(e)
   return None
@@ -785,6 +888,7 @@ def _parse_chosen_outputs(
     stage_attempts: dict[str, list[StageAttempt]],
     *,
     role: str,
+    contract: ExchangeContract,
     run_error: str | None = None,
 ) -> tuple[dict[str, ThemeOutput | None], dict[str, str]]:
   """Parse each theme's chosen response; themes without one become that arm's visible gap."""
@@ -802,8 +906,9 @@ def _parse_chosen_outputs(
       raise errors.ReplayError(
           f"the chosen {role} response for theme {name!r} has no recorded response file; the bundle "
           "changed after the run")
+    parse = contract.parse_reviewer_output if role == "reviewer" else contract.parse_editor_output
     try:
-      outputs[name] = parse_model_output(chosen[0].response, role=f"{role}[{name}]")
+      outputs[name] = parse(chosen[0].response, role=f"{role}[{name}]")
     except errors.ReplayModelOutputError as e:
       outputs[name] = None
       parse_errors[name] = str(e)
@@ -825,6 +930,8 @@ def _establish_arm(
     *,
     role: str,
     contract: ExchangeContract,
+    selections: dict[str, list[FeedbackSelection]],
+    editor_outputs: dict[str, ThemeOutput | None],
 ) -> dict:
   """One arm's full final state, or a visible failure — never a stand-in for it."""
   for theme in manifest.themes:
@@ -834,7 +941,17 @@ def _establish_arm(
   ordered = [(theme, outputs[theme.name]) for theme in manifest.themes]
   try:
     for theme, output in ordered:
-      contract.validate_output(output, role=f"{role}[{theme.name}]", manifest=manifest, theme=theme)
+      if role == "reviewer":
+        contract.validate_reviewer(
+            output,
+            role=f"{role}[{theme.name}]",
+            manifest=manifest,
+            theme=theme,
+            selections=selections[theme.name],
+            editor_output=editor_outputs.get(theme.name))
+      else:
+        contract.validate_editor(
+            output, role=f"{role}[{theme.name}]", manifest=manifest, theme=theme, selections=selections[theme.name])
     base = {path: canonical_text(text) for path, text in manifest.base_entries().items()}
     result = finalize(base, ordered)
   except errors.ReplayValidationError as e:
@@ -906,7 +1023,14 @@ def _path_diff(base: dict[str, str], final: dict[str, str], path: str) -> str:
   return build_patch(old, new)
 
 
-def _verify_proposal(run_dir: Path, manifest: Manifest, record: dict, reviewer_arm: dict) -> dict:
+def _verify_proposal(
+    run_dir: Path,
+    manifest: Manifest,
+    record: dict,
+    reviewer_arm: dict,
+    contract: ExchangeContract,
+    selections: dict[str, list[FeedbackSelection]],
+) -> dict:
   """A recorded proposal must still match the finalization of the recorded reviewer responses."""
   path = run_dir / "proposal.json"
   if not path.is_file():
@@ -933,6 +1057,14 @@ def _verify_proposal(run_dir: Path, manifest: Manifest, record: dict, reviewer_a
         "the proposal changed after it was written")
   if {s["ref"]: s["sha256"] for s in proposal.get("sources", [])} != {s.ref: s.sha256 for s in manifest.sources}:
     raise errors.ReplayError("the recorded proposal's source list does not match the frozen inputs")
+  if record.get("variant"):
+    # Experimental contracts name exactly the feedback their view exposed; a tampered feedback
+    # provenance list is a tampered record of what the stages saw.
+    expected_refs = variants.contract_for_record(record).feedback_refs(manifest, selections)
+    if proposal.get("feedback_refs") != expected_refs:
+      raise errors.ReplayError(
+          "the recorded proposal's feedback_refs do not match the feedback view the variant's stages "
+          "saw; the proposal changed after the run")
   checked = ["base_commit", "approval_digest", "sources"]
   if reviewer_arm["status"] == "established":
     if proposal.get("reviewed_patch") != reviewer_arm["reviewed_patch"]:

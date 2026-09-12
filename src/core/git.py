@@ -113,6 +113,16 @@ async def _git_rev_parse(repo_path: Path, ref: str) -> str | None:
 _SYMREF_PREFIX = "ref: refs/heads/"
 
 
+def _heads_ref(branch: str) -> str:
+  """The ref a branch lives at: ``refs/heads/<branch>``."""
+  return f"refs/heads/{branch}"
+
+
+def _origin_tracking_ref(branch: str) -> str:
+  """The remote-tracking ref origin holds for a published branch: ``refs/remotes/origin/<branch>``."""
+  return f"refs/remotes/origin/{branch}"
+
+
 def _default_branch_from_ls_remote(out: str, source: str, repo_path: Path) -> str:
   """Parse the symref line of `git ls-remote --symref` output into the default branch name."""
   for line in out.splitlines():
@@ -158,7 +168,7 @@ async def git_remote_default_branch_and_tip(repo_path: Path) -> tuple[str, str |
   if not ok:
     raise BaseBranchResolutionError(f"cannot read origin's default branch in {repo_path} via git ls-remote: {err}")
   branch = _default_branch_from_ls_remote(out, "git ls-remote --symref origin", repo_path)
-  return branch, _ls_remote_ref_sha(out, f"refs/heads/{branch}")
+  return branch, _ls_remote_ref_sha(out, _heads_ref(branch))
 
 
 async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: str | None = None) -> BaseResolution:
@@ -229,7 +239,7 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
         repo_path,
         "ls-remote",
         "origin",
-        f"refs/heads/{branch}",
+        _heads_ref(branch),
         timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
         timeout_label="git ls-remote",
     )
@@ -237,16 +247,16 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
       raise BaseBranchResolutionError(
           f"cannot reach origin to resolve base branch {branch!r}: {ls_err}. "
           "Retry when the remote is reachable, or pass a full commit SHA to pin the base.")
-    remote_tip = _ls_remote_ref_sha(out, f"refs/heads/{branch}")
+    remote_tip = _ls_remote_ref_sha(out, _heads_ref(branch))
 
   remote_exists = remote_tip is not None
   if remote_exists:
-    local_remote_sha = await _git_rev_parse(repo_path, f"refs/remotes/origin/{branch}")
+    local_remote_sha = await _git_rev_parse(repo_path, _origin_tracking_ref(branch))
     if remote_tip != local_remote_sha:
       fetched, fetch_err = await git_fetch(repo_path, "origin", branch)
       if not fetched:
         raise BaseBranchResolutionError(f"git fetch origin {branch} failed: {fetch_err}")
-      remote_sha = await _git_rev_parse(repo_path, f"refs/remotes/origin/{branch}")
+      remote_sha = await _git_rev_parse(repo_path, _origin_tracking_ref(branch))
       if remote_sha is None:
         raise BaseBranchResolutionError(f"origin/{branch} listed by ls-remote but missing after fetch in {repo_path}")
     else:
@@ -256,7 +266,7 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
     if not explicit_remote:
       # The local-vs-remote divergence check exists only for the bare-branch
       # form; an explicit origin/<b> request never reads the local branch.
-      local_sha = await _git_rev_parse(repo_path, f"refs/heads/{branch}")
+      local_sha = await _git_rev_parse(repo_path, _heads_ref(branch))
       if local_sha is not None and local_sha != remote_sha:
         raise BaseBranchResolutionError(
             f"local {branch} ({local_sha[:12]}) differs from origin/{branch} ({remote_sha[:12]}). "
@@ -270,7 +280,7 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
   if explicit_remote:
     raise BaseBranchResolutionError(
         f"origin/{branch} was requested explicitly but that remote branch does not exist on origin.")
-  local_sha = await _git_rev_parse(repo_path, f"refs/heads/{branch}")
+  local_sha = await _git_rev_parse(repo_path, _heads_ref(branch))
   if local_sha is None:
     raise BaseBranchResolutionError(
         f"base branch {branch!r} exists neither locally nor on origin "
@@ -662,7 +672,7 @@ async def git_push_refspec(repo_path: Path, local_branch: str, remote_branch: st
       repo_path,
       "push",
       "origin",
-      f"{local_branch}:refs/heads/{remote_branch}",
+      f"{local_branch}:{_heads_ref(remote_branch)}",
       timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
       timeout_label="git push refspec",
   )

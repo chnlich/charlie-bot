@@ -139,6 +139,24 @@ def test_wrap_leaves_dollar_amounts_literal(tmp_path: Path, vendored_katex: Path
   assert literal in page
 
 
+def test_driver_escaped_dollar_never_opens_a_span(tmp_path: Path, vendored_katex: Path) -> None:
+  r"""An escaped \$ never opens (the chat path's marked escape rule); a genuine $...$ span renders."""
+  lines = [
+      r"<p>price \$5 and \$10 today</p>",
+      r"<p>I owe \$50, and $\alpha$ is fine</p>",
+      r"<p>costs \$x$ each</p>",
+      r"<p>close $5 + \$3$ total</p>",
+  ]
+  fragment_path = _write_fragment(tmp_path, chr(10).join(lines) + chr(10), name="escaped.html")
+  proc = subprocess.run(["node", str(_DRIVER), str(fragment_path), str(vendored_katex)], capture_output=True,
+                        check=False)
+  assert proc.returncode == 0, proc.stderr.decode("utf-8")
+  out = proc.stdout.decode("utf-8")
+  assert out.count('class="katex"') == 2  # only $\alpha$ and the $5 + \$3$ span render
+  for literal in (r"price \$5 and \$10 today", r"I owe \$50, and ", r"costs \$x$ each"):
+    assert literal in out, literal
+
+
 def test_driver_copies_protected_blocks_comments_and_tags_verbatim(
     tmp_path: Path, vendored_katex: Path) -> None:
   fragment = (

@@ -131,8 +131,10 @@ def _bootstrap_tool_preview(tool: dict) -> dict:
     preview["output_truncated"] = True
   if input_trims:
     preview["input"] = {
-        key: (value[:_SWITCH_TOOL_PREVIEW_CHARS]
-              if isinstance(value, str) and len(value) > _SWITCH_TOOL_PREVIEW_CHARS else value)
+        key:
+            (
+                value[:_SWITCH_TOOL_PREVIEW_CHARS]
+                if isinstance(value, str) and len(value) > _SWITCH_TOOL_PREVIEW_CHARS else value)
         for key, value in input_val.items()
     }
     preview["input_truncated"] = True

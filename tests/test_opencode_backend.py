@@ -1499,56 +1499,65 @@ async def test_run_lock_failure_exhausts_budget_with_single_error_event(monkeypa
   assert not [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
 
 
-@pytest.mark.asyncio
-async def test_run_session_error_without_lock_signature_no_retry(monkeypatch, tmp_path: Path, capsys) -> None:
-  """Lock retry 5a (no signature): an unrelated session.error keeps today's
-  single-attempt behaviour and the unchanged error event."""
-  sid = "ses-unrelated"
-  backend = _build_backend(monkeypatch, model="provider/model")
-  script = _StubServeScript(sid)
-  script.event_streams = [
-      _StubEventStreamResponse(200, [_sse_connected(), _sse_session_error(sid, "model exploded")]),
-  ]
-  create_process, sleep_calls = _rig_stub_serve_run(monkeypatch, backend, script, [[b"something else broke\n"]])
-
-  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
-
-  assert create_process.await_count == 1
-  assert sleep_calls == []
-  assert events == [
-      {
-          "session_id": sid
-      },
-      make_error_event("model exploded"),
-  ]
-  assert backend.exit_code == 1
-  assert "opencode_lock_retry" not in capsys.readouterr().out
-
-
-@pytest.mark.asyncio
-async def test_run_permission_ask_without_lock_signature_no_retry(monkeypatch, tmp_path: Path, capsys) -> None:
-  """Lock retry 5b (no signature): permission.asked is untouched by the retry
-  path — single attempt and the pre-patch error text."""
-  sid = "ses-perm"
-  backend = _build_backend(monkeypatch, model="provider/model")
-  script = _StubServeScript(sid)
-  permission_properties = {
+def _permission_asked_properties(sid: str) -> dict:
+  return {
       "id": "perm-1",
       "sessionID": sid,
       "permission": "external_directory",
       "patterns": ["/etc"],
   }
-  script.event_streams = [
-      _StubEventStreamResponse(
-          200, [
-              _sse_connected(),
-              {
-                  "type": SSE_EVENT_PERMISSION_ASKED,
-                  "properties": permission_properties
-              },
-          ]),
-  ]
-  create_process, sleep_calls = _rig_stub_serve_run(monkeypatch, backend, script, [[b"plain logs\n"]])
+
+
+# Lock retry 5's no-signature leg, one row per failure surface: an SSE session.error,
+# an SSE permission.asked, and a plain /event HTTP 500. Each fails the attempt while
+# the stderr tail carries no lock signature, so the single-attempt contract holds.
+_NO_SIGNATURE_ROWS = [
+    pytest.param(
+        "ses-unrelated",
+        lambda sid: [_StubEventStreamResponse(200, [_sse_connected(),
+                                                    _sse_session_error(sid, "model exploded")])],
+        [[b"something else broke\n"]],
+        lambda sid, backend: make_error_event("model exploded"),
+        id="session-error",
+    ),
+    pytest.param(
+        "ses-perm",
+        lambda sid: [
+            _StubEventStreamResponse(
+                200, [
+                    _sse_connected(),
+                    {
+                        "type": SSE_EVENT_PERMISSION_ASKED,
+                        "properties": _permission_asked_properties(sid),
+                    },
+                ])
+        ],
+        [[b"plain logs\n"]],
+        lambda sid, backend: make_error_event(backend._format_permission_error(_permission_asked_properties(sid))),
+        id="permission-asked",
+    ),
+    pytest.param(
+        "ses-http",
+        lambda sid: [_StubEventStreamResponse(500)],
+        [[b"unrelated crash\n"]],
+        lambda sid, backend: make_error_event("OpenCode backend failed: stub serve returned HTTP 500"),
+        id="http-500",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sid", "build_streams", "stderr_chunks", "build_error"), _NO_SIGNATURE_ROWS)
+async def test_run_failure_without_lock_signature_never_retries(
+    monkeypatch, tmp_path: Path, capsys, sid: str, build_streams: Callable[[str], list[_StubEventStreamResponse]],
+    stderr_chunks: list[list[bytes]], build_error: Callable[[str, OpenCodeBackend], dict]) -> None:
+  """Lock retry 5 (no signature): a failed attempt whose stderr tail carries no lock
+  signature never retries — one spawn, no backoff sleep, the attempt's terminal error
+  emitted once, exit 1."""
+  backend = _build_backend(monkeypatch, model="provider/model")
+  script = _StubServeScript(sid)
+  script.event_streams = build_streams(sid)
+  create_process, sleep_calls = _rig_stub_serve_run(monkeypatch, backend, script, stderr_chunks)
 
   events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
 
@@ -1558,30 +1567,8 @@ async def test_run_permission_ask_without_lock_signature_no_retry(monkeypatch, t
       {
           "session_id": sid
       },
-      make_error_event(backend._format_permission_error(permission_properties)),
+      build_error(sid, backend),
   ]
-  assert backend.exit_code == 1
-  assert "opencode_lock_retry" not in capsys.readouterr().out
-
-
-@pytest.mark.asyncio
-async def test_run_http_failure_without_lock_signature_no_retry(monkeypatch, tmp_path: Path, capsys) -> None:
-  """Lock retry 5c (no signature): a plain HTTP failure stays a single attempt
-  with the pre-patch 'OpenCode backend failed' error text."""
-  sid = "ses-http"
-  backend = _build_backend(monkeypatch, model="provider/model")
-  script = _StubServeScript(sid)
-  script.event_streams = [_StubEventStreamResponse(500)]
-  create_process, sleep_calls = _rig_stub_serve_run(monkeypatch, backend, script, [[b"unrelated crash\n"]])
-
-  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
-
-  assert create_process.await_count == 1
-  assert sleep_calls == []
-  assert len(events) == 2
-  assert events[0] == {"session_id": sid}
-  assert events[1]["type"] == ET.ERROR
-  assert events[1]["message"].startswith("OpenCode backend failed: stub serve returned HTTP 500")
   assert backend.exit_code == 1
   assert "opencode_lock_retry" not in capsys.readouterr().out
 

@@ -38,20 +38,20 @@ def test_artifact_name_set_includes_new_caches() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_should_skip_cleanup_keeps_worktree_on_nonzero_exit() -> None:
-  # No reviewer, no pins — a failure must still keep the worktree for debugging.
-  thread = _thread(repo_path="/tmp/repo", branch_name="b", worktree_path="/tmp/wt", require_review=False)
-  assert spawner._should_skip_worktree_cleanup(thread, exit_code=1) is True
-
-
-def test_should_skip_cleanup_removes_on_success_without_review() -> None:
-  thread = _thread(repo_path="/tmp/repo", branch_name="b", worktree_path="/tmp/wt", require_review=False)
-  assert spawner._should_skip_worktree_cleanup(thread, exit_code=0) is False
-
-
-def test_should_skip_cleanup_keeps_for_reviewer_handoff_on_success() -> None:
-  thread = _thread(repo_path="/tmp/repo", branch_name="b", worktree_path="/tmp/wt", require_review=True)
-  assert spawner._should_skip_worktree_cleanup(thread, exit_code=0) is True
+# The pin-free axes of the keep decision: with no keep pin, skip pin, or review
+# chain, the exit code and the reviewer handoff decide alone. Rows for the pins
+# live in the test below.
+@pytest.mark.parametrize(
+    ("require_review", "exit_code", "expected"),
+    [
+        pytest.param(False, 1, True, id="nonzero-exit-keeps-worktree"),
+        pytest.param(False, 0, False, id="success-without-review-removes"),
+        pytest.param(True, 0, True, id="success-keeps-worktree-for-reviewer-handoff"),
+    ],
+)
+def test_should_skip_cleanup_exit_and_review_axes(require_review: bool, exit_code: int, expected: bool) -> None:
+  thread = _thread(repo_path="/tmp/repo", branch_name="b", worktree_path="/tmp/wt", require_review=require_review)
+  assert spawner._should_skip_worktree_cleanup(thread, exit_code=exit_code) is expected
 
 
 def test_should_skip_cleanup_honours_existing_pins() -> None:

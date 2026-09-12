@@ -286,6 +286,14 @@ class ServerConfig(BaseModel):
   # Subprocess stdout buffer limit in MB (for asyncio StreamReader)
   subprocess_buffer_limit_mb: int = 1024
 
+  # Per-session memory-cap cgroup (plan_01 v3), MB. Every agent process a
+  # session spawns (master, workers, one-shots, compaction) is forked into the
+  # session's cgroup and held to these hard limits; on a limit breach the
+  # kernel kills only the cgroup's largest process. 0 disables cgroup control
+  # entirely. session_swap_max_mb bounds swap use separately (0 = no swap).
+  session_memory_max_mb: int = 12288
+  session_swap_max_mb: int = 2048
+
 
 class PathsConfig(BaseModel):
   """``paths:`` section: repos to scan and where worker worktrees live."""

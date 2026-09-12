@@ -16,6 +16,7 @@ _NODE_TESTS = [
     "chat_delegate_rendering.test.js",
     "chat_file_link_prefixes.test.js",
     "chat_link_prefix_gate.test.js",
+    "chat_math_extension.test.js",
     "chat_math_gate.test.js",
     "chat_markup_containment.test.js",
     "chat_scroll_no_write.test.js",

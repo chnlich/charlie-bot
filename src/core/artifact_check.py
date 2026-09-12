@@ -51,6 +51,8 @@ FORK_OPEN_SHAPE = "fork-open-shape"
 FORK_EXPLAINER = "fork-explainer"
 FACT_ANCHORED = "fact-anchored"
 REQ_CHIPS = "req-chips"
+BYTE_INTEGRITY = "byte-integrity"
+RENDER_PATH = "render-path"
 GOAL_BUDGET = "goal-budget"
 PAGE_HEIGHT = "page-height"
 ORDINAL_NAMED = "ordinal-named"
@@ -159,12 +161,13 @@ def _require_chrome_bin(cfg: CharlieBotConfig) -> Path:
 
 
 class _Element:
-  """DOM element: tag, class tokens, ordered children (elements and text chunks), parent link."""
+  """DOM element: tag, attributes, class tokens, ordered children (elements and text chunks), parent link."""
 
-  __slots__ = ("children", "classes", "parent", "tag")
+  __slots__ = ("attrs", "children", "classes", "parent", "tag")
 
   def __init__(self, tag: str, attrs: dict, parent: "_Element | None") -> None:
     self.tag = tag
+    self.attrs = attrs
     self.classes = frozenset((attrs.get("class") or "").split())
     self.children: list = []
     self.parent = parent
@@ -619,6 +622,62 @@ def _check_ordinal_named(ctx: _Context) -> list[AssertionOutcome]:
   return failures
 
 
+def non_lf_control_bytes(data: bytes) -> list[tuple[int, int]]:
+  """Every control byte other than LF (0x0A) in *data*, as (offset, byte value) pairs.
+
+  Single source for the byte-integrity gate: the assertion runner feeds it the
+  artifact's raw file bytes (re-read from disk, not the parsed DOM — the DOM
+  layer drops comment bytes and normalizes whitespace, which hides mangled
+  bytes), and the ``artifact wrap`` self-check feeds it the assembled page
+  bytes, so both judge the identical rule on identical input. The damaged
+  4914c102 pages hold 8 and 12 such bytes (TAB from a decoded \t, formfeed
+  from a decoded \f); the clean pages and the five genre templates hold zero.
+  """
+  return [(offset, value) for offset, value in enumerate(data) if value < 0x20 and value != 0x0A]
+
+
+def named_control_bytes(bad: list[tuple[int, int]]) -> str:
+  """The byte-integrity failure location string, shared by the gate and the wrap self-check."""
+  return ", ".join(f"0x{value:02x} at offset {offset}" for offset, value in bad)
+
+
+def _check_byte_integrity(ctx: _Context) -> list[AssertionOutcome]:
+  name = BYTE_INTEGRITY
+  bad = non_lf_control_bytes(ctx.artifact.read_bytes())
+  if not bad:
+    return [_ok(name)]
+  return [_fail(name, f"{len(bad)} non-LF control bytes: {named_control_bytes(bad)}")]
+
+
+_KATEX_CSS_HINT = "katex.min.css"
+_KATEX_JS_HINT = "katex.min.js"
+_KATEX_AUTO_RENDER_HINT = "auto-render.min.js"
+
+
+def _check_render_path(ctx: _Context) -> list[AssertionOutcome]:
+  """A page carries a working math render path when it holds pre-rendered
+  class="katex" markup (the ``artifact wrap`` product) or the full KaTeX script
+  injection a hand-composed page copies from the genre template (katex.min.css
+  link + katex.min.js script + auto-render.min.js script)."""
+  name = RENDER_PATH
+  if any("katex" in el.classes for el in _descendants(ctx.root)):
+    return [_ok(name, 'pre-rendered class="katex" markup')]
+
+  def carries(attr: str, hint: str) -> bool:
+    return any(hint in (el.attrs.get(attr) or "") for el in _descendants(ctx.root))
+
+  has_css = carries("href", _KATEX_CSS_HINT)
+  has_katex_js = carries("src", _KATEX_JS_HINT)
+  has_auto_render = carries("src", _KATEX_AUTO_RENDER_HINT)
+  if has_css and has_katex_js and has_auto_render:
+    return [_ok(name, "KaTeX script injection")]
+  return [
+      _fail(
+          name, "no math render path: neither pre-rendered class=\"katex\" markup nor the KaTeX script "
+          f"injection ({_KATEX_CSS_HINT} link + {_KATEX_JS_HINT} + {_KATEX_AUTO_RENDER_HINT})")
+  ]
+
+
 def _presence_check(
     name: str,
     tag: str,
@@ -647,20 +706,28 @@ _ASSERTION_RUNNERS = {
     GOAL_BUDGET: _check_goal_budget,
     PAGE_HEIGHT: _check_page_height,
     ORDINAL_NAMED: _check_ordinal_named,
+    BYTE_INTEGRITY: _check_byte_integrity,
+    RENDER_PATH: _check_render_path,
 }
 
 # The genre -> assertion-set table: the only place genres and their sets are stated.
+# byte-integrity rides every genre set: mangled control bytes are genre-blind.
 _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
     "plan":
         (
-            STYLE_VERBATIM, SECTIONS_NUMBERED, FOOT_PRESENT, FORK_OPEN_SHAPE, FORK_EXPLAINER, GOAL_BUDGET, PAGE_HEIGHT,
-            ORDINAL_NAMED),
+            BYTE_INTEGRITY, STYLE_VERBATIM, SECTIONS_NUMBERED, FOOT_PRESENT, FORK_OPEN_SHAPE, FORK_EXPLAINER,
+            GOAL_BUDGET, PAGE_HEIGHT, ORDINAL_NAMED),
     "understanding":
-        (STYLE_VERBATIM, SECTIONS_NUMBERED, FOOT_PRESENT, FORK_OPEN_SHAPE, FORK_EXPLAINER, PAGE_HEIGHT, ORDINAL_NAMED),
+        (
+            BYTE_INTEGRITY, STYLE_VERBATIM, SECTIONS_NUMBERED, FOOT_PRESENT, FORK_OPEN_SHAPE, FORK_EXPLAINER,
+            PAGE_HEIGHT, ORDINAL_NAMED),
     "sitrep":
-        (STYLE_VERBATIM, SECTIONS_NUMBERED, FORK_OPEN_SHAPE, FORK_EXPLAINER, FACT_ANCHORED, REQ_CHIPS, ORDINAL_NAMED),
-    "debug": (STYLE_VERBATIM, SECTIONS_NUMBERED, FORK_OPEN_SHAPE, FACT_ANCHORED, ORDINAL_NAMED),
-    "explain": (STYLE_VERBATIM, SECTIONS_NUMBERED, EXPLAIN_TRIAD, FORK_OPEN_SHAPE, ORDINAL_NAMED),
+        (
+            BYTE_INTEGRITY, STYLE_VERBATIM, SECTIONS_NUMBERED, FORK_OPEN_SHAPE, FORK_EXPLAINER, FACT_ANCHORED,
+            REQ_CHIPS, ORDINAL_NAMED),
+    "debug": (BYTE_INTEGRITY, STYLE_VERBATIM, SECTIONS_NUMBERED, FORK_OPEN_SHAPE, FACT_ANCHORED, ORDINAL_NAMED),
+    "explain":
+        (BYTE_INTEGRITY, STYLE_VERBATIM, RENDER_PATH, SECTIONS_NUMBERED, EXPLAIN_TRIAD, FORK_OPEN_SHAPE, ORDINAL_NAMED),
 }
 
 GENRES: tuple[str, ...] = tuple(_ASSERTION_SETS)

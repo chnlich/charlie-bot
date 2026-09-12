@@ -103,7 +103,18 @@ def test_unknown_genre_is_refused(tmp_path: Path) -> None:
 def test_plan_assertion_set_carries_fork_explainer_after_fork_open_shape() -> None:
   names = artifact_check._ASSERTION_SETS["plan"]
   assert names.index("fork-explainer") == names.index("fork-open-shape") + 1
-  assert len(names) == 8
+  assert len(names) == 9
+
+
+def test_byte_integrity_registered_for_every_genre() -> None:
+  assert set(artifact_check._ASSERTION_SETS) == set(artifact_check._GENRE_TEMPLATES)
+  for names in artifact_check._ASSERTION_SETS.values():
+    assert names[0] == "byte-integrity"
+
+
+def test_render_path_registered_for_explain_only() -> None:
+  for genre, names in artifact_check._ASSERTION_SETS.items():
+    assert ("render-path" in names) == (genre == "explain")
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +653,7 @@ def test_cli_plan_template_assertions_only_passes_and_prints_ok_lines(
   monkeypatch.setattr(_CLI_ARTIFACT_GET_CONFIG_PATCH_TARGET, lambda: _cli_ok_cfg(tmp_path))
   assert _run_cli([str(artifact), "--genre", "plan", "--assertions-only"]) == 0
   assert capsys.readouterr().out.splitlines() == [
+      "ok byte-integrity",
       "ok style-verbatim",
       "ok sections-numbered",
       "ok foot-present",
@@ -897,3 +909,86 @@ def test_run_probe_raises_without_resolvable_backends(tmp_path: Path) -> None:
   cfg = SimpleNamespace(backends=SimpleNamespace(preference=[]), get_backend_option=lambda entry_id: None)
   with pytest.raises(ValueError, match="no light backends resolvable"):
     run_probe(cfg, _write(tmp_path, "<html>x</html>"), "t")
+
+
+# ---------------------------------------------------------------------------
+# byte-integrity
+# ---------------------------------------------------------------------------
+
+_DAMAGED_BYTES = [(b"\t", "0x09"), (b"\x0c", "0x0c"), (b"\r", "0x0d")]
+
+
+@pytest.mark.parametrize("damaged_byte,hex_name", _DAMAGED_BYTES)
+def test_byte_integrity_fails_on_non_lf_control_byte(tmp_path: Path, damaged_byte: bytes, hex_name: str) -> None:
+  """TAB / formfeed / CR in the raw source bytes fail the gate, each offset and value named."""
+  doc = _sitrep_ok_doc().replace("Nothing.", f"Before{damaged_byte.decode('latin-1')}After")
+  artifact = tmp_path / "damaged.html"
+  artifact.write_bytes(doc.encode("utf-8"))
+  (outcome,) = _run("sitrep", artifact)["byte-integrity"]
+  assert not outcome.passed
+  assert hex_name in outcome.detail
+  assert "at offset" in outcome.detail
+
+
+def test_byte_integrity_reports_every_offending_offset(tmp_path: Path) -> None:
+  doc = _sitrep_ok_doc().replace("Nothing.", "A\tB\x0cC")
+  artifact = tmp_path / "damaged.html"
+  artifact.write_bytes(doc.encode("utf-8"))
+  (outcome,) = _run("sitrep", artifact)["byte-integrity"]
+  assert not outcome.passed
+  assert outcome.detail.count("at offset") == 2
+
+
+def test_byte_integrity_passes_on_every_genre_template() -> None:
+  """The gate reads the raw bytes itself, so the template files check directly through the runner."""
+  for template in artifact_check._GENRE_TEMPLATES.values():
+    artifact = _REPO_ROOT / "prompts" / template
+    ctx = artifact_check._Context(
+        genre="explain", artifact=artifact, root=artifact_check._parse_dom(artifact.read_text(encoding="utf-8")),
+        cfg=None)
+    assert [o.passed for o in artifact_check._check_byte_integrity(ctx)] == [True], template
+
+
+def test_byte_integrity_passes_on_a_clean_page(tmp_path: Path) -> None:
+  assert [o.passed for o in _run("sitrep", _write(tmp_path, _sitrep_ok_doc()))["byte-integrity"]] == [True]
+
+
+# ---------------------------------------------------------------------------
+# render-path (explain only)
+# ---------------------------------------------------------------------------
+
+_KATEX_HEAD_INJECTION = (
+    '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css">'
+    '<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script>'
+    '<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/contrib/auto-render.min.js"></script>')
+
+
+def test_render_path_passes_on_pre_rendered_katex_markup(tmp_path: Path) -> None:
+  doc = _genre_doc(
+      "explain", '<section><p><span class="katex">x^2</span></p></section>' + _sections([f"S{i}" for i in range(1, 6)]))
+  (outcome,) = _run("explain", _write(tmp_path, doc))["render-path"]
+  assert outcome.passed
+  assert 'pre-rendered class="katex" markup' in outcome.detail
+
+
+def test_render_path_passes_on_the_full_script_injection(tmp_path: Path) -> None:
+  doc = _genre_doc("explain",
+                   _sections([f"S{i}" for i in range(1, 6)])).replace("</head>", _KATEX_HEAD_INJECTION + "</head>")
+  (outcome,) = _run("explain", _write(tmp_path, doc))["render-path"]
+  assert outcome.passed
+  assert outcome.detail == "KaTeX script injection"
+
+
+def test_render_path_fails_on_a_partial_injection(tmp_path: Path) -> None:
+  doc = _genre_doc("explain", _sections([f"S{i}" for i in range(1, 6)])).replace(
+      "</head>", '<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js"></script></head>')
+  (outcome,) = _run("explain", _write(tmp_path, doc))["render-path"]
+  assert not outcome.passed
+
+
+def test_render_path_fails_on_a_historical_shaped_page(tmp_path: Path) -> None:
+  """The 4914c102 network_architecture page shape: head with no scripts, no katex markup."""
+  doc = _genre_doc("explain", _sections([f"S{i}" for i in range(1, 6)]))
+  (outcome,) = _run("explain", _write(tmp_path, doc))["render-path"]
+  assert not outcome.passed
+  assert "no math render path" in outcome.detail

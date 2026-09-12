@@ -11,6 +11,10 @@ The codebase has a single user. Apply these principles:
 - **Recipes are executable**: submit, deploy, and recovery flows go through the repo's entry
   point; a command sequence worth running twice becomes a script, and its preflight asserts
   the mechanisms the task depends on (launcher, credentials, environment).
+- **含反斜杠内容经文件写入工具或带引号 heredoc 落盘**: LaTeX、正则表达式、Windows 路径这类内容
+  用写入工具或 `cat > file <<'EOF'` 写入;页面产物直接交给组装入口点
+  (`charliebot artifact wrap`)。嵌进 `python3 -c` 的字符串字面量会让解释器在写入前静默
+  改写 \t、\n、\\ 序列。
 
 <!-- section: skills_discovery -->
 ## Skills Discovery

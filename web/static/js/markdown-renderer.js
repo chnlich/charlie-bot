@@ -528,13 +528,97 @@ function recordCodeTokens(tokens) {
     const title = token.title ? ` title="${escapeAttr(token.title)}"` : '';
     return `<img src="${src}" alt="${alt}"${title}>`;
   };
+  // Inline math pass-through: the four KaTeX delimiter classes ($...$,
+  // $$...$$, \(...\), \[...\]) become whole inline tokens carrying the literal
+  // source span, so marked's escape rule never eats \_ and the em rule never
+  // wraps _{subscripts} in <em> — KaTeX receives the bytes the model wrote.
+  // Rendering itself stays with renderChatMath's auto-render walk on the DOM
+  // text node; this extension only decides what survives the parse. The
+  // scanner rules are duplicated in scripts/prerender_math.js (the wrap
+  // pre-render driver, which scans HTML fragments instead of markdown); the
+  // two copies are kept behavior-identical by tests/chat_math_extension.test.js.
+  function mathRaw(src) {
+    const isWs = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v';
+    const isDigit = (c) => c >= '0' && c <= '9';
+    // $...$: single line. Open: next char non-whitespace and non-$ (blocks
+    // "$5 and $10" currency, whose close candidate sits next to whitespace).
+    // Close: prev char non-whitespace non-$, next char non-digit.
+    if (src.startsWith('$') && !src.startsWith('$$')) {
+      if (src[1] === undefined || isWs(src[1])) return undefined;
+      for (let j = 1; j < src.length; j++) {
+        const c = src[j];
+        if (c === '\\') { j++; continue; }  // \$ never closes; \x pairs skip as content
+        if (c === '\n') return undefined;
+        if (c !== '$') continue;
+        if (isWs(src[j - 1]) || src[j - 1] === '$') continue;
+        if (isDigit(src[j + 1])) continue;
+        return src.slice(0, j + 1);
+      }
+      return undefined;
+    }
+    // $$...$$: multi-line; the first $$ closes; any $ inside the content
+    // declines the token (no nested $ — a relaxed rule only adds misreads).
+    if (src.startsWith('$$')) {
+      for (let j = 2; j < src.length; j++) {
+        if (src[j] !== '$') continue;
+        if (src[j + 1] !== '$') return undefined;
+        if (j === 2) return undefined;  // empty content
+        return src.slice(0, j + 2);
+      }
+      return undefined;
+    }
+    // \(...\) inline single-line, \[...\] display multi-line. The close check
+    // runs before the escape skip so the delimiter's own backslash is not
+    // consumed as an escape pair; \[ inside the content never re-opens. A \]
+    // immediately followed by ']' is not a close (display math with [N, 32]
+    // style trailing brackets).
+    const bracket = src.startsWith('\\[') ? { close: '\\]', singleLine: false }
+      : src.startsWith('\\(') ? { close: '\\)', singleLine: true }
+      : null;
+    if (bracket) {
+      for (let j = 2; j < src.length; j++) {
+        if (src.startsWith(bracket.close, j)) {
+          if (bracket.close.endsWith(']') && src[j + 2] === ']') { j++; continue; }
+          if (j === 2) return undefined;  // empty content
+          return src.slice(0, j + 2);
+        }
+        if (src[j] === '\\') { j++; continue; }
+        if (src[j] === '\n' && bracket.singleLine) return undefined;
+      }
+      return undefined;
+    }
+    return undefined;
+  }
+  const mathExtension = {
+    name: 'math',
+    level: 'inline',
+    // marked cuts the text token one char past the returned index (measured in
+    // src, which arrives shifted by one), so the walk re-enters this tokenizer
+    // at the next potential open instead of letting inlineText swallow it.
+    start(src) {
+      let cut;
+      for (const probe of ['$', '\\(', '\\[']) {
+        const found = src.indexOf(probe);
+        if (found !== -1 && (cut === undefined || found < cut)) cut = found;
+      }
+      return cut;
+    },
+    tokenizer(src) {
+      const raw = mathRaw(src);
+      return raw && { type: 'math', raw, text: raw };
+    },
+    // Same invariant as renderer.html: the span renders as literal text, so a
+    // < or & inside the formula can never become a DOM node.
+    renderer(token) { return escapeText(token.text); },
+  };
+
   // Models write a bare ~ for "approximately"; marked's inline del rule is
   // /^(~~?)/ so two lone tildes cross-pair into one <del>. Only let ~~ enter
   // the default del tokenizer; a lone ~ is plain text. Returning undefined for
   // a source that does not start with ~ lets the normal text tokenizer consume
   // the rest of the prose unchanged. Registered in the same use() as the
   // renderer so a single marked.use drives every chat surface.
-  marked.use({ renderer, tokenizer: {
+  marked.use({ renderer, extensions: [mathExtension], tokenizer: {
     del(src) {
       if (typeof src === 'string' && src.startsWith('~~')) return false;
       if (typeof src === 'string' && src.startsWith('~')) return { type: 'text', raw: '~', text: '~' };

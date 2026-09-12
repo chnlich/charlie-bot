@@ -376,6 +376,21 @@ class MessageAggregator:
       self._tools_buf = []
       yield {"type": "message", "message": msg}
 
+  def _attach_tool_output(self, output: object, is_error: object) -> None:
+    """Store one tool_result's renderable output on the newest buffered tool.
+
+    The output rides every render path (each stream delta snapshot
+    re-serializes the whole buffered draft), so a string over
+    TOOL_OUTPUT_RENDER_CAP is capped and marked ``output_truncated``; the
+    persisted event keeps the full content. Non-string output (a tool_result
+    whose content is not text) is stored as-is.
+    """
+    tail = self._tools_buf[-1]
+    tail["output"] = output[:TOOL_OUTPUT_RENDER_CAP] if isinstance(output, str) else output
+    if isinstance(output, str) and len(output) > TOOL_OUTPUT_RENDER_CAP:
+      tail["output_truncated"] = True
+    tail["is_error"] = bool(is_error)
+
   def _stream_delta(self) -> dict | None:
     if not self.emit_stream_deltas:
       return None
@@ -392,13 +407,8 @@ class MessageAggregator:
       # to the most recent tool_use entry so the UI can render it inline.
       if "message" in ev and "content" not in ev:
         for block in (ev.get("message") or {}).get("content", []):
-          if isinstance(block, dict) and block.get("type") == "tool_result":
-            text = extract_tool_result_text(block)
-            if self._tools_buf:
-              self._tools_buf[-1]["output"] = text[:TOOL_OUTPUT_RENDER_CAP]
-              self._tools_buf[-1]["is_error"] = bool(block.get("is_error", False))
-              if len(text) > TOOL_OUTPUT_RENDER_CAP:
-                self._tools_buf[-1]["output_truncated"] = True
+          if isinstance(block, dict) and block.get("type") == "tool_result" and self._tools_buf:
+            self._attach_tool_output(extract_tool_result_text(block), block.get("is_error", False))
         delta = self._stream_delta()
         if delta is not None:
           yield delta
@@ -503,11 +513,7 @@ class MessageAggregator:
     if t == ET.TOOL_RESULT:
       if not self._tools_buf:
         return
-      content = ev.get('content', '')
-      self._tools_buf[-1]['output'] = content[:TOOL_OUTPUT_RENDER_CAP] if isinstance(content, str) else content
-      if isinstance(content, str) and len(content) > TOOL_OUTPUT_RENDER_CAP:
-        self._tools_buf[-1]['output_truncated'] = True
-      self._tools_buf[-1]['is_error'] = bool(ev.get('is_error', False))
+      self._attach_tool_output(ev.get('content', ''), ev.get('is_error', False))
       self._last_event_idx = idx
       delta = self._stream_delta()
       if delta is not None:

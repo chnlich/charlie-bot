@@ -34,10 +34,13 @@ def validate_theme_output(output: ThemeOutput, *, role: str, manifest: Manifest,
   Entry operations may only touch the theme's own current entries or add new
   ones in a declared topic; proposed texts must parse as format-v2 entries;
   source refs must resolve; every candidate of the theme needs exactly one
-  disposition row. This is the boundary that stops a hallucinated path or an
-  unknown ref from reaching the proposal.
+  disposition row, and a change a stage initiates on an existing entry names
+  that entry's source ref — the identity proposal.sources carries — never its
+  store path. This is the boundary that stops a hallucinated path or an unknown
+  ref from reaching the proposal.
   """
   entry_paths = manifest.theme_entry_paths(theme)
+  entry_by_ref = {source.ref: source for source in entry_paths.values()}
   seen_paths: set[str] = set()
   for op in output.entries:
     match = ENTRY_PATH_RE.match(op.path)
@@ -67,10 +70,10 @@ def validate_theme_output(output: ThemeOutput, *, role: str, manifest: Manifest,
       if row.source_ref in covered:
         raise ReplayValidationError(f"{role}: two disposition rows for candidate {row.source_ref!r}")
       covered.add(row.source_ref)
-    elif row.source_ref in entry_paths:
+    elif row.source_ref in entry_by_ref:
       # An entry-initiated change (editor maintenance or a reviewer reversal): the disposition
-      # names the existing entry's store path — the handle the request shows — so every changed
-      # path keeps its evidence mapping even when no candidate asked for it.
+      # names the existing entry's source ref, so every changed path keeps its evidence mapping
+      # even when no candidate asked for it; row.paths carries the store path separately.
       if row.outcome != "propose":
         raise ReplayValidationError(
             f"{role}: entry disposition for {row.source_ref!r} must be propose (it changes the entry)")
@@ -78,9 +81,12 @@ def validate_theme_output(output: ThemeOutput, *, role: str, manifest: Manifest,
         raise ReplayValidationError(f"{role}: two disposition rows for entry {row.source_ref!r}")
       claimed_entries.add(row.source_ref)
     else:
+      hint = ""
+      if row.source_ref.startswith("entries/"):
+        hint = " (a store path is not a source_ref; use the entry's ref shown in '## Current entries')"
       raise ReplayValidationError(
-          f"{role}: disposition row names {row.source_ref!r}, which is neither a candidate of this theme "
-          "nor one of its current entry paths")
+          f"{role}: disposition row names {row.source_ref!r}, which is neither a candidate of this theme nor "
+          f"the ref of one of its current entries{hint}")
     if row.outcome not in OUTCOMES:
       raise ReplayValidationError(f"{role}: unknown outcome {row.outcome!r} for candidate {row.source_ref!r}")
     if not row.reason.strip():
@@ -91,7 +97,7 @@ def validate_theme_output(output: ThemeOutput, *, role: str, manifest: Manifest,
       for path in row.paths:
         if ENTRY_PATH_RE.match(path) is None:
           raise ReplayValidationError(f"{role}: propose row for {row.source_ref!r} lists malformed path {path!r}")
-      if row.source_ref in claimed_entries and row.source_ref not in row.paths:
+      if row.source_ref in claimed_entries and entry_by_ref[row.source_ref].path not in row.paths:
         raise ReplayValidationError(f"{role}: entry disposition for {row.source_ref!r} must list its own path")
     elif row.paths:
       raise ReplayValidationError(
@@ -155,7 +161,7 @@ def finalize(base: dict[str, str], theme_outputs: list[tuple[Theme, ThemeOutput]
   The reviewed patch is built over newline-normalized texts, then round-trip
   applied to prove it reconstructs the final state. Every changed path must be
   claimed by at least one ``propose`` disposition (including reviewer-initiated
-  changes, whose rows name the existing entry as source_ref), and every
+  changes, whose rows name the existing entry's source ref), and every
   ``propose`` path must actually change.
   """
   final = dict(base)
@@ -203,34 +209,56 @@ def apply_unified_patch(base: dict[str, str], patch: str) -> dict[str, str | Non
   The result maps every touched path to its new text, and a deleted path to
   None. This is the mechanical proof that ``reviewed_patch`` is appliable to
   ``base_commit``'s content.
+
+  The applicator is deliberately strict — no offset search, no context fuzz, no
+  clamping: each hunk lands exactly where its header says, hunks come in order
+  without overlap, and header counts must match the body. A patch that only a
+  lenient applicator could place is a malformed patch, not a near miss. What
+  the hunks leave around them — the unchanged prefix, the text between hunks,
+  and the trailing suffix — survives into the result, so the applied state is
+  the complete file, not just the span the hunks cover.
   """
   result: dict[str, str | None] = dict(base)
   lines = patch.split("\n")
   while lines and lines[-1] == "":
     lines.pop()
   i = 0
+  seen_paths: set[str] = set()
   while i < len(lines):
-    if not lines[i].startswith("--- a/"):
-      raise ReplayValidationError(f"patch line {i + 1}: expected a '--- a/<path>' file header")
-    path = lines[i][len("--- a/"):]
-    i += 1
-    if i >= len(lines) or not lines[i].startswith("+++ b/"):
-      raise ReplayValidationError(f"patch line {i}: expected a '+++ b/<path>' header after '--- a/{path}'")
-    i += 1
-    hunks: list[tuple[int, list[str]]] = []
+    path, i = _read_file_header(lines, i)
+    if path in seen_paths:
+      raise ReplayValidationError(f"patch for {path}: the path appears in more than one file section")
+    seen_paths.add(path)
+    hunks: list[tuple[int, int, list[str]]] = []
     while i < len(lines) and lines[i].startswith("@@ "):
-      old_start, _, body, i = _read_hunk(lines, i, path)
-      hunks.append((old_start, body))
+      old_start, old_count, body, i = _read_hunk(lines, i, path)
+      hunks.append((old_start, old_count, body))
     if not hunks:
       raise ReplayValidationError(f"patch for {path}: no hunks")
     old_lines = (base.get(path) or "").splitlines()
     out: list[str] = []
     cursor = 0
-    for start, body in hunks:
-      cursor = _apply_hunk(out, old_lines, cursor, start, body, path)
-    new_text = "\n".join(out) + "\n" if out else ""
-    result[path] = new_text if out else None
+    for old_start, old_count, body in hunks:
+      cursor = _apply_hunk(out, old_lines, cursor, old_start, old_count, body, path)
+    out.extend(old_lines[cursor:])  # the unchanged suffix after the last hunk survives
+    result[path] = "\n".join(out) + "\n" if out else None
   return result
+
+
+def _read_file_header(lines: list[str], i: int) -> tuple[str, int]:
+  """Read one '--- a/<path>' / '+++ b/<path>' pair; the two must name the same path."""
+  if not lines[i].startswith("--- a/"):
+    raise ReplayValidationError(f"patch line {i + 1}: expected a '--- a/<path>' file header, got {lines[i]!r}")
+  old_path = lines[i][len("--- a/"):]
+  if not old_path:
+    raise ReplayValidationError(f"patch line {i + 1}: file header has an empty path")
+  i += 1
+  if i >= len(lines) or not lines[i].startswith("+++ b/"):
+    raise ReplayValidationError(f"patch line {i + 1}: expected a '+++ b/<path>' header after '--- a/{old_path}'")
+  new_path = lines[i][len("+++ b/"):]
+  if new_path != old_path:
+    raise ReplayValidationError(f"patch: file headers disagree: '--- a/{old_path}' vs '+++ b/{new_path}'")
+  return old_path, i + 1
 
 
 def _read_hunk(lines: list[str], i: int, path: str) -> tuple[int, int, list[str], int]:
@@ -241,6 +269,8 @@ def _read_hunk(lines: list[str], i: int, path: str) -> tuple[int, int, list[str]
   old_start = int(header.group(1))
   old_count = int(header.group(2) if header.group(2) is not None else "1")
   new_count = int(header.group(4) if header.group(4) is not None else "1")
+  if old_count == 0 and new_count == 0:
+    raise ReplayValidationError(f"patch for {path}: hunk header {lines[i]!r} describes an empty hunk")
   i += 1
   body: list[str] = []
   seen_old = seen_new = 0
@@ -263,10 +293,28 @@ def _read_hunk(lines: list[str], i: int, path: str) -> tuple[int, int, list[str]
   return old_start, old_count, body, i
 
 
-def _apply_hunk(out: list[str], old_lines: list[str], cursor: int, start_count: int, body: list[str], path: str) -> int:
-  start = max(start_count - 1, 0)
-  out.extend(old_lines[cursor:start])
-  cursor = start
+def _apply_hunk(
+    out: list[str], old_lines: list[str], cursor: int, old_start: int, old_count: int, body: list[str],
+    path: str) -> int:
+  """Copy the unchanged old lines before the hunk, then apply its body; return the new cursor.
+
+  ``cursor`` counts the old lines already consumed; a hunk must start at or
+  after it, so overlapping and out-of-order hunks fail here. A hunk that
+  consumes old lines begins at 1-based ``old_start``; an empty old range
+  (``-N,0``) inserts after line ``N``, the standard unified-diff convention.
+  """
+  anchor = old_start - 1 if old_count else old_start
+  if anchor < cursor:
+    raise ReplayValidationError(
+        f"patch for {path}: hunk at old line {old_start} precedes or overlaps the previous hunk")
+  if old_count and anchor + old_count > len(old_lines):
+    raise ReplayValidationError(
+        f"patch for {path}: hunk at old line {old_start} runs past the end of the file ({len(old_lines)} lines)")
+  if not old_count and anchor > len(old_lines):
+    raise ReplayValidationError(
+        f"patch for {path}: hunk inserts after old line {old_start}, past the end of the file ({len(old_lines)} lines)")
+  out.extend(old_lines[cursor:anchor])
+  cursor = anchor
   for line in body:
     prefix, content = line[:1], line[1:]
     if prefix == " ":

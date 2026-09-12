@@ -10,6 +10,7 @@ the bundle contains.
 
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -68,7 +69,9 @@ def base_manifest_dict() -> dict:
   return {
       "version": 1,
       "base_commit": "mem-base-0001",
-      "topics": ["render"],
+      # Two allowed topics: 'plotting' appears nowhere else in the corpus, so the
+      # vocabulary-visibility test can assert the stages really saw the list.
+      "topics": ["render", "plotting"],
       "sources":
           [
               {
@@ -230,6 +233,19 @@ def final_entries_from(proposal: dict, manifest_dict: dict) -> dict:
   return apply_unified_patch(base, proposal["reviewed_patch"])
 
 
+def assert_proposal_integrity(proposal: dict) -> None:
+  """The proposal-schema relationship under repair: every disposition ref resolves to
+  proposal.sources (entry-initiated rows use the entry's ref, deliberately distinct from its
+  store path), and every changed path is mapped by a final propose row."""
+  sources = {s["ref"] for s in proposal["sources"]}
+  for result in proposal["candidate_results"]:
+    assert result["source_ref"] in sources, (
+        f"disposition source_ref {result['source_ref']!r} must resolve to proposal.sources")
+  changed = {line[len("--- a/"):] for line in proposal["reviewed_patch"].split("\n") if line.startswith("--- a/")}
+  claimed = {p for r in proposal["candidate_results"] if r["outcome"] == "propose" for p in r["paths"]}
+  assert changed == claimed, "every changed path must be mapped by a final propose row, and only those"
+
+
 # --- end-to-end behavior -------------------------------------------------------
 
 
@@ -243,7 +259,34 @@ def test_editor_merge_drops_instance_details_and_keeps_mechanism(tmp_path: Path)
   assert "chart-2077" not in body, "the irrelevant instance detail must leave the entry"
   assert proposal["candidate_results"][0]["outcome"] == "propose"
   assert proposal["feedback_refs"] == [{"comment_event": "fb-001", "approved_change_ref": "approved-001"}]
+  assert_proposal_integrity(proposal)
   assert proposal["approval_digest"] == approval_digest(proposal["base_commit"], proposal["reviewed_patch"])
+
+
+def test_long_entry_merge_round_trips_end_to_end(tmp_path: Path) -> None:
+  """The reproduced defect: a valid merge into a 27-line entry must finalize, not be rejected.
+
+  One changed line mid-file yields a hunk covering lines 9-15; the unchanged suffix used to be
+  dropped, so finalize rejected the proposal with "does not round-trip"."""
+  note = "the render cache eviction threshold needs warm replay data"
+  base_entry = entry_text([MECHANISM_LINE] + [f"- tuning note {i}: {note}" for i in range(1, 21)])
+  final_notes = [f"- tuning note {i}: {note}" for i in range(1, 21)]
+  final_notes[4] = f"- tuning note 5 corrected: {note}"
+  final_entry = entry_text([MECHANISM_LINE] + final_notes)
+  assert len(base_entry.splitlines()) == 27
+  manifest = base_manifest_dict()
+  manifest["sources"][1]["text"] = base_entry
+  outcome, _ = run_replay_with(
+      tmp_path, [merge_response("entries/render/cache-eviction.md", final_entry)],
+      manifest_path=write_manifest(tmp_path, manifest),
+      mode="editor-only")
+  proposal = read_proposal(outcome.run_dir)
+  assert outcome.changed_paths == ["entries/render/cache-eviction.md"]
+  assert_proposal_integrity(proposal)
+  applied = apply_unified_patch(
+      {"entries/render/cache-eviction.md": canonical_text(base_entry)}, proposal["reviewed_patch"])
+  assert applied["entries/render/cache-eviction.md"] == canonical_text(final_entry), (
+      "the reviewed patch reconstructs the complete rewritten entry")
 
 
 def test_reviewer_reversal_updates_disposition_and_patch_together(tmp_path: Path) -> None:
@@ -260,7 +303,7 @@ def test_reviewer_reversal_updates_disposition_and_patch_together(tmp_path: Path
       ], [
           row("capture-eviction", "no_change", [], "the capture adds nothing once the entry is deleted"),
           row(
-              "entries/render/cache-eviction.md", "propose", ["entries/render/cache-eviction.md"],
+              "entry-cache-eviction", "propose", ["entries/render/cache-eviction.md"],
               "reversal: the whole entry fails the synthetic bar"),
       ])
   outcome, _ = run_replay_with(tmp_path, [editor, reviewer])
@@ -268,12 +311,73 @@ def test_reviewer_reversal_updates_disposition_and_patch_together(tmp_path: Path
   final = final_entries_from(proposal, base_manifest_dict())
   assert final["entries/render/cache-eviction.md"] is None, "the reversal must delete the entry"
   results = {r["source_ref"]: r for r in proposal["candidate_results"]}
-  assert results["entries/render/cache-eviction.md"]["reason"].startswith("reversal:")
+  assert results["entry-cache-eviction"]["reason"].startswith("reversal:")
+  assert_proposal_integrity(proposal)
   assert results["capture-eviction"]["outcome"] == "no_change"
   assert outcome.propose == 1
   audit = run_record(outcome.run_dir)["editor_dispositions"]
   assert any(a["kind"] == "candidate" and "editor-merged-the-capture" in a["detail"] for a in audit), (
       "the editor's own dispositions stay in the audit record even when reversed")
+
+
+def test_store_path_is_not_a_disposition_source_ref(tmp_path: Path) -> None:
+  """The v1 prompt told the model to emit the entry's path as source_ref; that row cannot
+  resolve to proposal.sources, so the mechanical contract rejects it."""
+  editor = editor_json(
+      [rewrite_op(ENTRY_WITHOUT_INSTANCE)], [row("capture-eviction", "propose", ["entries/render/cache-eviction.md"])])
+  reviewer = editor_json(
+      [keep_op()], [
+          row("capture-eviction", "no_change", [], "kept as proposed"),
+          row(
+              "entries/render/cache-eviction.md", "propose", ["entries/render/cache-eviction.md"],
+              "v1-shaped row: the store path where a source ref belongs"),
+      ])
+  with pytest.raises(ReplayValidationError, match="store path is not a source_ref"):
+    run_replay_with(tmp_path, [editor, reviewer])
+
+
+def test_editor_initiated_maintenance_without_a_candidate_ask(tmp_path: Path) -> None:
+  response = editor_json(
+      [rewrite_op(ENTRY_WITHOUT_INSTANCE)], [
+          row("capture-eviction", "no_change", [], "the capture adds nothing to keep"),
+          row(
+              "entry-cache-eviction", "propose", ["entries/render/cache-eviction.md"],
+              "editor maintenance: the stale instance line fails the bar on its own"),
+      ])
+  outcome, _ = run_replay_with(tmp_path, [response], mode="editor-only")
+  proposal = read_proposal(outcome.run_dir)
+  assert_proposal_integrity(proposal)
+  results = {r["source_ref"]: r for r in proposal["candidate_results"]}
+  assert results["entry-cache-eviction"]["outcome"] == "propose"
+  assert results["capture-eviction"]["outcome"] == "no_change"
+
+
+def test_reviewer_initiated_maintenance_without_a_candidate_ask(tmp_path: Path) -> None:
+  editor = editor_json([keep_op()], [row("capture-eviction", "no_change", [], "nothing to do")])
+  reviewer = editor_json(
+      [rewrite_op(ENTRY_WITHOUT_INSTANCE)], [
+          row("capture-eviction", "no_change", [], "nothing to do"),
+          row(
+              "entry-cache-eviction", "propose", ["entries/render/cache-eviction.md"],
+              "reviewer maintenance: the stale instance line fails the bar on its own"),
+      ])
+  outcome, _ = run_replay_with(tmp_path, [editor, reviewer])
+  proposal = read_proposal(outcome.run_dir)
+  assert_proposal_integrity(proposal)
+  final = final_entries_from(proposal, base_manifest_dict())
+  assert "chart-2077" not in final["entries/render/cache-eviction.md"], (
+      "the reviewer-initiated rewrite is the final state")
+
+
+def test_both_stages_see_entry_refs_and_topic_vocabulary(tmp_path: Path) -> None:
+  _, transport = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
+  assert len(transport.calls) == 2
+  for stage, call in zip(("editor", "reviewer"), transport.calls):
+    assert "### entries/render/cache-eviction.md (ref: entry-cache-eviction)" in call["user"], (
+        f"the {stage} must see the current entry's store path together with its canonical ref")
+    assert "## Allowed topics" in call["user"], f"the {stage} must see the allowed topic vocabulary"
+    assert "plotting" in call["user"], (
+        f"the {stage} must see every allowed topic; 'plotting' appears nowhere else in the corpus")
 
 
 def test_reviewer_request_excludes_editor_rationale_and_scoring_answers(tmp_path: Path) -> None:
@@ -385,6 +489,29 @@ def test_replacing_feedback_changes_the_input_identity(tmp_path: Path) -> None:
 
 
 # --- reuse ---------------------------------------------------------------------
+
+
+def test_prompt_version_identity_invalidates_cached_runs(tmp_path: Path) -> None:
+  """The owning version identity: a cached run made under the broken prompt/schema contract
+  must not be reused after the contract fix."""
+  from src.core.memory_replay.exchange import EDITOR_PROMPT_VERSION, REVIEWER_PROMPT_VERSION
+  from src.core.memory_replay.identity import input_identity
+
+  manifest = load_manifest(write_manifest(tmp_path))
+  model = {"backend": "b", "backend_type": "t", "model": "m"}
+  broken = input_identity(
+      manifest=manifest,
+      mode="editor-review",
+      model_identity=model,
+      editor_prompt_version="memory-replay-editor-v1",
+      reviewer_prompt_version="memory-replay-reviewer-v1")
+  current = input_identity(
+      manifest=manifest,
+      mode="editor-review",
+      model_identity=model,
+      editor_prompt_version=EDITOR_PROMPT_VERSION,
+      reviewer_prompt_version=REVIEWER_PROMPT_VERSION)
+  assert broken != current, "runs cached under the v1 contract are never reused"
 
 
 def test_identical_rerun_reuses_completed_outputs_without_model_calls(tmp_path: Path) -> None:
@@ -536,11 +663,319 @@ def test_missing_candidate_disposition_fails(tmp_path: Path) -> None:
 
 
 def test_unappliable_patch_fails_visibly(tmp_path: Path) -> None:
-  base = {"entries/t/a.md": "different\n"}
+  base = {"entries/t/a.md": "line one\ndifferent\n"}
   with pytest.raises(ReplayValidationError, match="does not match the base"):
     apply_unified_patch(
         base,
         build_patch({"entries/t/a.md": "line one\nline two\n"}, {"entries/t/a.md": "line one\nline two changed\n"}))
+
+
+# --- patch contract: full-file application, independent oracle, malformed structure ----
+
+
+def numbered_file(count: int, start: int = 1) -> str:
+  return "".join(f"line {i}\n" for i in range(start, start + count))
+
+
+def _edit(text: str, old: str, new: str) -> str:
+  assert old in text
+  return text.replace(old, new)
+
+
+PATCH_ORACLE_CASES = {
+    "one-line-edit": ({
+        "entries/t/f.md": "only\n"
+    }, {
+        "entries/t/f.md": "ONLY\n"
+    }),
+    "short-edit-middle":
+        (
+            {
+                "entries/t/f.md": numbered_file(5)
+            },
+            {
+                "entries/t/f.md": _edit(numbered_file(5), "line 3\n", "line THREE\n")
+            },
+        ),
+    "long-edit-near-start":
+        (
+            {
+                "entries/t/f.md": numbered_file(20)
+            },
+            {
+                "entries/t/f.md": _edit(numbered_file(20), "line 2\n", "line TWO\n")
+            },
+        ),
+    "long-edit-middle":
+        (
+            {
+                "entries/t/f.md": numbered_file(20)
+            },
+            {
+                "entries/t/f.md": _edit(numbered_file(20), "line 10\n", "line TEN\n")
+            },
+        ),
+    "long-edit-near-end":
+        (
+            {
+                "entries/t/f.md": numbered_file(20)
+            },
+            {
+                "entries/t/f.md": _edit(numbered_file(20), "line 19\n", "line NINETEEN\n")
+            },
+        ),
+    "three-separated-hunks":
+        (
+            {
+                "entries/t/f.md": numbered_file(40)
+            },
+            {
+                "entries/t/f.md":
+                    "\n".join(
+                        [
+                            "line ONE",
+                            *[f"line {i}" for i in range(2, 20)],
+                            "line TWENTY",
+                            *[f"line {i}" for i in range(21, 40)],
+                            "line FORTY",
+                        ]) + "\n"
+            },
+        ),
+    "insert-and-delete":
+        (
+            {
+                "entries/t/f.md": numbered_file(10)
+            },
+            {
+                "entries/t/f.md":
+                    "\n".join(
+                        ["top", "line 1", "line 2", "line 3", "mid", *[f"line {i}" for i in range(5, 11)], "tail"]) +
+                    "\n"
+            },
+        ),
+    "new-file": (
+        {
+            "entries/t/old.md": "keep\n"
+        },
+        {
+            "entries/t/old.md": "keep\n",
+            "entries/t/new.md": "alpha\nbeta\n"
+        },
+    ),
+    "delete-file": ({
+        "entries/t/gone.md": "a\nb\nc\n"
+    }, {}),
+    "rewrite-whole-file": ({
+        "entries/t/f.md": numbered_file(6)
+    }, {
+        "entries/t/f.md": "fresh one\nfresh two\n"
+    }),
+}
+
+
+def _apply_with_patch_oracle(tmp_path: Path, base: dict[str, str], patch: str) -> dict[str, str | None]:
+  """GNU patch as the independent standard engine: apply to real files, read them back.
+
+  GNU patch empties a fully deleted file instead of removing it; an empty file reads as the
+  deleted state (None) the replay patch contract uses.
+  """
+  for rel, text in base.items():
+    target = tmp_path / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+  subprocess.run(["patch", "-p1", "-s", "-N"], input=patch, text=True, cwd=tmp_path, check=True)
+  touched = {line[len("--- a/"):] for line in patch.split("\n") if line.startswith("--- a/")}
+  result: dict[str, str | None] = {}
+  for rel in sorted(set(base) | touched):
+    target = tmp_path / rel
+    result[rel] = (target.read_text(encoding="utf-8") if target.exists() else None) or None
+  return result
+
+
+@pytest.mark.parametrize("case", sorted(PATCH_ORACLE_CASES))
+def test_generated_patch_matches_intended_file_and_standard_oracle(tmp_path: Path, case: str) -> None:
+  base, final = PATCH_ORACLE_CASES[case]
+  expected = {**base, **final}
+  expected.update({path: None for path in base if path not in final})
+  patch = build_patch(base, final)
+  assert apply_unified_patch(base, patch) == expected, "the applicator reconstructs the intended complete file"
+  assert _apply_with_patch_oracle(tmp_path, base, patch) == expected, "an independent standard engine agrees"
+
+
+def test_apply_preserves_the_unchanged_suffix_after_the_last_hunk() -> None:
+  """The reproduced defect: a 20-line file whose fifth line changes yields one 7-line-context
+  hunk ending at line 8; the 12 unchanged lines after it must survive."""
+  base = {"entries/t/long.md": numbered_file(20)}
+  final = {"entries/t/long.md": _edit(numbered_file(20), "line 5\n", "line FIVE\n")}
+  patch = build_patch(base, final)
+  assert "@@ -2,7 +2,7 @@" in patch, "the reproduced shape: one hunk covering old lines 2-8"
+  applied = apply_unified_patch(base, patch)
+  assert applied["entries/t/long.md"] == final["entries/t/long.md"], (
+      "the applied state is the complete file, not just the span the hunks cover")
+
+
+def test_apply_keeps_prefix_intervening_text_and_multiple_hunks() -> None:
+  old_lines = [f"line {i}" for i in range(1, 41)]
+  new_lines = list(old_lines)
+  new_lines[0], new_lines[19], new_lines[39] = "line ONE", "line TWENTY", "line FORTY"
+  base = {"entries/t/long.md": "\n".join(old_lines) + "\n"}
+  final = {"entries/t/long.md": "\n".join(new_lines) + "\n"}
+  patch = build_patch(base, final)
+  assert patch.count("@@ -") == 3, "three separated edits produce three hunks"
+  assert apply_unified_patch(base, patch) == final
+
+
+def test_apply_insertions_and_deletions_everywhere() -> None:
+  old_lines = [f"line {i}" for i in range(1, 11)]
+  new_lines = ["inserted-top"] + old_lines[:4] + ["inserted-middle"] + old_lines[4:9] + ["appended-at-end"]
+  base = {"entries/t/f.md": "\n".join(old_lines) + "\n"}
+  final = {"entries/t/f.md": "\n".join(new_lines) + "\n"}
+  assert apply_unified_patch(base, build_patch(base, final)) == final
+
+
+def test_apply_zero_context_insertion_uses_the_standard_position() -> None:
+  base = {"entries/t/f.md": numbered_file(10)}
+  patch = "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -5,0 +6,2 @@\n+X\n+Y\n"
+  applied = apply_unified_patch(base, patch)
+  assert applied["entries/t/f.md"] == numbered_file(5) + "X\nY\n" + numbered_file(
+      5, start=6), ("an empty old range (-N,0) inserts after line N, per the unified-diff standard")
+
+
+def test_apply_delete_to_empty_and_new_file() -> None:
+  base = {"entries/t/gone.md": "a\nb\n"}
+  patch = build_patch(base, {"entries/t/gone.md": "", "entries/t/fresh.md": "alpha\nbeta\n"})
+  applied = apply_unified_patch(base, patch)
+  assert applied["entries/t/gone.md"] is None, "a file whose lines all go is deleted"
+  assert applied["entries/t/fresh.md"] == "alpha\nbeta\n"
+
+
+MALFORMED_PATCH_CASES = {
+    "header-path-disagreement":
+        (
+            {
+                "entries/t/f.md": "a\n"
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/other.md\n@@ -1,1 +1,1 @@\n-a\n+b\n",
+            "disagree",
+        ),
+    "missing-plus-header":
+        (
+            {
+                "entries/t/f.md": "a\n"
+            },
+            "--- a/entries/t/f.md\n@@ -1,1 +1,1 @@\n-a\n+b\n",
+            r"expected a '\+\+\+ b/<path>' header",
+        ),
+    "empty-path-header":
+        (
+            {
+                "entries/t/f.md": "a\n"
+            },
+            "--- a/\n+++ b/\n@@ -1,1 +1,1 @@\n-a\n+b\n",
+            "file header has an empty path",
+        ),
+    "malformed-hunk-header":
+        (
+            {
+                "entries/t/f.md": numbered_file(12)
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ 1,2 1,2 @@\n line 1\n-line 2\n+TWO\n line 3\n",
+            "malformed hunk header",
+        ),
+    "empty-hunk":
+        (
+            {
+                "entries/t/f.md": numbered_file(12)
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -1,0 +1,0 @@\n",
+            "empty hunk",
+        ),
+    "counts-unmet-truncated-body":
+        (
+            {
+                "entries/t/f.md": numbered_file(12)
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -1,5 +1,5 @@\n line 1\n-line 2\n+TWO\n",
+            "hunk ends before its header counts are met",
+        ),
+    "body-overrun-past-counts":
+        (
+            {
+                "entries/t/f.md": numbered_file(12)
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -1,1 +1,1 @@\n-line 1\n+ONE\n line 2\n",
+            "expected a '--- a/<path>' file header",
+        ),
+    "garbage-between-hunks":
+        (
+            {
+                "entries/t/f.md": numbered_file(12)
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -1,1 +1,1 @@\n-line 1\n+ONE\njunk\n"
+            "@@ -3,1 +3,1 @@\n-line 3\n+THREE\n",
+            "expected a '--- a/<path>' file header",
+        ),
+    "unexpected-line-in-hunk":
+        (
+            {
+                "entries/t/f.md": numbered_file(12)
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -1,2 +1,2 @@\n-line 1\njunk\n+ONE\n",
+            "unexpected line in hunk",
+        ),
+    "out-of-order-hunks":
+        (
+            {
+                "entries/t/f.md": numbered_file(20)
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -10,3 +10,3 @@\n line 10\n-line 11\n+ELEVEN\n"
+            " line 12\n@@ -2,3 +2,3 @@\n line 2\n-line 3\n+THREE\n line 4\n",
+            "precedes or overlaps the previous hunk",
+        ),
+    "overlapping-hunks":
+        (
+            {
+                "entries/t/f.md": numbered_file(20)
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -2,7 +2,7 @@\n line 2\n line 3\n line 4\n"
+            "-line 5\n+FIVE\n line 6\n line 7\n line 8\n@@ -5,7 +5,7 @@\n line 5\n line 6\n line 7\n"
+            "-line 8\n+EIGHT\n line 9\n line 10\n line 11\n",
+            "precedes or overlaps the previous hunk",
+        ),
+    "consuming-hunk-past-end-of-file":
+        (
+            {
+                "entries/t/f.md": numbered_file(12)
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -15,3 +15,3 @@\n line 15\n-line 16\n+SIXTEEN\n"
+            " line 17\n",
+            "runs past the end of the file",
+        ),
+    "insertion-point-past-end-of-file":
+        (
+            {
+                "entries/t/f.md": numbered_file(10)
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -50,0 +51,1 @@\n+X\n",
+            "inserts after old line 50, past the end of the file",
+        ),
+    "duplicate-file-section":
+        (
+            {
+                "entries/t/f.md": "a\nb\n"
+            },
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -1,1 +1,1 @@\n-a\n+A\n"
+            "--- a/entries/t/f.md\n+++ b/entries/t/f.md\n@@ -2,1 +2,1 @@\n-b\n+Q\n",
+            "more than one file section",
+        ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(MALFORMED_PATCH_CASES))
+def test_malformed_patch_structure_fails(case: str) -> None:
+  base, patch, match = MALFORMED_PATCH_CASES[case]
+  with pytest.raises(ReplayValidationError, match=match):
+    apply_unified_patch(base, patch)
 
 
 def test_generated_patch_round_trips_every_shape(tmp_path: Path) -> None:

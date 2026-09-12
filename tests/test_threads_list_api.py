@@ -21,8 +21,8 @@ from src.api.deps import (
 from src.api.sessions import router as sessions_router
 from src.api.threads import _LIST_DESCRIPTION_CAP
 from src.api.threads import router as threads_router
-from src.core import threads as core_threads
 from src.core import sidebar_state
+from src.core import threads as core_threads
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, ThreadStatus
 from src.core.sessions import SessionManager

@@ -12,7 +12,12 @@ function formatCardTimestamp(d) {
 function formatTriggerTimeLabel(status, fireAt) {
   if (status === 'cancelled') return 'cancelled';
   const prefix = status === 'fired' ? 'fired at ' : 'fires at ';
-  return prefix + formatCardTimestamp(new Date(fireAt));
+  // The fire time re-enters this function as the data-fire-at attribute's
+  // string, and a stringified epoch-ms int is not a Date-parseable string —
+  // only its ISO form is. Coerce the numeric form; the ISO form fails Number()
+  // and hands through unchanged.
+  const ms = Number(fireAt);
+  return prefix + formatCardTimestamp(new Date(fireAt !== '' && Number.isFinite(ms) ? ms : fireAt));
 }
 
 // One trigger card gets painted from three sites -- full render, live append,

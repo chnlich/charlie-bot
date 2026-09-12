@@ -2,6 +2,8 @@
 (src/api/threads.py list_threads, src/api/sessions.py get_session_view)."""
 
 import asyncio
+import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -24,7 +26,7 @@ from src.api.threads import router as threads_router
 from src.core import sidebar_state
 from src.core import threads as core_threads
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, ThreadStatus
+from src.core.models import CreateSessionRequest, PendingTrigger, ThreadStatus
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
@@ -264,6 +266,53 @@ def test_marked_rebuild_reuses_rows_and_parses_from_one_walk(tmp_path: Path) -> 
       assert row is not stored[tid]
     else:
       assert row is stored[tid]
+
+
+def test_list_rows_ship_epoch_ms_timestamps(tmp_path: Path) -> None:
+  """Row timestamps ride the epoch-ms wire form the client's new Date() reads."""
+  client, session_id, long_thread_id = _seeded_client(tmp_path)
+
+  rows = {row["id"]: row for row in client.get(f"/api/threads/{session_id}/list").json()}
+  detail = client.get(f"/api/threads/{session_id}/threads/{long_thread_id}").json()
+
+  created = datetime.fromisoformat(detail["created_at"])
+  assert isinstance(rows[long_thread_id]["created_at"], int)
+  assert rows[long_thread_id]["created_at"] == int(created.timestamp() * 1000)
+  assert rows[long_thread_id]["completed_at"] is None
+
+
+def test_list_body_sorts_thread_and_trigger_rows_by_one_epoch_ms_key(tmp_path: Path) -> None:
+  """The mixed body sort compares int against int: both row kinds convert their timestamps."""
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
+  sessions = SessionManager(cfg)
+
+  async def seed() -> str:
+    session = await sessions.create_session(CreateSessionRequest(name="mixed-sort"))
+    threads = ThreadManager(cfg)
+    await threads.create_thread(session, "the thread row")
+    return session.id
+
+  session_id = asyncio.run(seed())
+  threads_dir = cfg.sessions_dir / session_id / "threads"
+  mgr = ThreadManager(cfg)
+  pairs = list(core_threads.iter_thread_meta_stats(str(threads_dir)))
+  metas = mgr.list_threads_from_stats(iter(pairs))
+  thread_item = threads_api._thread_list_items(session_id, pairs, metas)[0]
+  trigger = PendingTrigger(
+      session_id=session_id,
+      fire_at=datetime.now(UTC) + timedelta(hours=1),
+      message="the trigger row",
+      watch_targets=[],
+  )
+
+  body = json.loads(threads_api._list_body([thread_item], [trigger]))
+
+  stamps = [row["created_at"] for row in body]
+  assert stamps == sorted(stamps, reverse=True)
+  assert all(isinstance(stamp, int) for stamp in stamps)
+  trigger_row = next(row for row in body if row["type"] == "trigger")
+  assert isinstance(trigger_row["fire_at"], int)
+  assert trigger_row["fire_at"] == int(trigger.fire_at.timestamp() * 1000)
 
 
 def test_rebuild_tolerates_file_vanished_between_walk_and_read(tmp_path: Path) -> None:

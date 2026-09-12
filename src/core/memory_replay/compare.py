@@ -475,8 +475,9 @@ def _verify_prompt_fingerprints(record: dict, contract: ExchangeContract, verifi
   }
   if mismatched:
     raise errors.ReplayError(
-        f"the recorded system prompt fingerprint(s) for {', '.join(mismatched)} do not match the current "
-        "replay prompts; the recorded responses may not follow the contract this comparison validates against")
+        f"the recorded system prompt fingerprint(s) for {', '.join(mismatched)} do not match the "
+        f"{contract.name} replay prompts; the recorded responses may not follow the contract this comparison "
+        "validates against")
 
 
 def _recorded_selections(record: dict, manifest: Manifest) -> dict[str, list[FeedbackSelection]]:

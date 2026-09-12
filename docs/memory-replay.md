@@ -342,7 +342,13 @@ and the pipeline only resolve names. They are, by content:
 | `combined-proposed-design` | **proposed design** | **proposed design** | **selected structured** | **hidden** | **whole-entry** |
 
 Each single-intervention variant changes exactly one bolded dimension relative
-to the baseline; the combined variant is the approved design. Everything else —
+to the baseline; the combined variant is the approved design. The baseline is
+anchored to the authoritative original prompts
+`prompts/cron/memory_curator/memory_selector.md` and
+`prompts/cron/memory_curator/memory_reviewer.md`, pinned at git revision
+`183fb29fa91b03a2c457ff7c73846299a44c420f` with their sha256 fingerprints
+carried in the variant definition (`src/core/memory_replay/variants.py`), so
+the adaptation can be audited against exactly those texts (`git show`). Everything else —
 the frozen source snapshots, guideline, allowed topics, candidate set,
 transport, JSON evidence payload, bounded recovery, validation, proposal
 finalization, and paired comparison — is shared, so a variant difference is

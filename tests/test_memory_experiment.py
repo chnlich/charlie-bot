@@ -300,6 +300,16 @@ def test_variant_matrix_changes_only_the_declared_dimensions() -> None:
         contract.reviewer_capability) == (editor, reviewer, view, rationale, capability), name
 
 
+def test_baseline_definition_anchors_the_pinned_source_prompts() -> None:
+  contract = variants.resolve_variant("baseline-original-flow")
+  notes = "\n".join(contract.notes)
+  assert variants.BASELINE_SOURCE_REVISION in notes
+  assert "prompts/cron/memory_curator/memory_selector.md" in notes
+  assert "prompts/cron/memory_curator/memory_reviewer.md" in notes
+  assert "bdefc53d138c73e03d2f5f61c3264ea7ddfd2b5b51ad2bac10c81a5726d8f59c" in notes
+  assert "73a2c360667c6c4186f29bcd3e02a0a948cffcbcb5a4bf5bdfad558bff52c147" in notes
+
+
 def test_every_variant_prompt_states_the_english_memory_rule() -> None:
   for name in variants.VARIANT_ORDER:
     contract = variants.resolve_variant(name)
@@ -395,6 +405,8 @@ def test_selector_proofs_are_recorded_model_output_and_hand_off_to_the_reviewer(
     assert proof in reviewer_request, "the visible-rationale reviewer sees the actual editor proof text"
   proposal = json.loads((outcome.run_dir / "proposal.json").read_text(encoding="utf-8"))
   assert "proofs" not in json.dumps(proposal), "the public proposal schema never grows"
+  assert any(variants.BASELINE_SOURCE_REVISION in note for note in record["variant"]["notes"]), (
+      "the run record carries the pinned source anchors for audit")
 
 
 def test_hidden_rationale_excludes_proofs_from_the_initial_and_repair_requests(tmp_path: Path) -> None:
@@ -835,6 +847,13 @@ def test_experiment_runs_the_matrix_preserves_a_failing_arm_and_reuses_completed
               "eviction": 1
           },
       }, "case, theme, and candidate denominators stay fixed for every variant"
+
+  # The readable report links exact replay and comparison artifacts: every href resolves.
+  import re
+  hrefs = re.findall(r'href="([^"]+)"', (output_dir / "report.html").read_text(encoding="utf-8"))
+  assert hrefs, "the report links the replay and comparison artifacts"
+  for href in hrefs:
+    assert (output_dir / href).is_file(), f"report.html link {href} does not resolve under the output root"
 
   # Repeat the experiment: completed arms reuse their bundles, the failed arm is preserved and
   # not rerun, and no model call is made at all.

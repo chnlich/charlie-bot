@@ -93,6 +93,17 @@ def _shape() -> str:
   return f"JSON shape:\n{_RESPONSE_SHAPE}"
 
 
+# The authoritative sources of the baseline adaptation, pinned and fingerprinted so every audit of
+# the adapted original flow checks it against exactly these texts (read with `git show`).
+BASELINE_SOURCE_REVISION = "183fb29fa91b03a2c457ff7c73846299a44c420f"
+BASELINE_SOURCE_ANCHORS = (
+    "Source anchors: this baseline adapts the original production curation prompts "
+    "prompts/cron/memory_curator/memory_selector.md (sha256 "
+    "bdefc53d138c73e03d2f5f61c3264ea7ddfd2b5b51ad2bac10c81a5726d8f59c) and "
+    "prompts/cron/memory_curator/memory_reviewer.md (sha256 "
+    "73a2c360667c6c4186f29bcd3e02a0a948cffcbcb5a4bf5bdfad558bff52c147) at git revision "
+    f"{BASELINE_SOURCE_REVISION}.")
+
 # --- the baseline selector: the original judgment flow, adapted to frozen inputs ---------------
 
 _SELECTOR_ROLE = (
@@ -801,10 +812,12 @@ VARIANTS: dict[str, ExperimentContract] = {
             reviewer_system=TRIM_RAW_HISTORY_VISIBLE_SYSTEM,
             changes_vs_baseline=(),
             notes=(
+                BASELINE_SOURCE_ANCHORS,
                 "The original production curation judgment flow on frozen inputs: candidate-by-candidate, "
                 "merge-first selection whose handoff carries the three Action/Home/Brevity proof lines, and "
                 "a line-gating reviewer that may remove text, reject new entries, or restore the base but "
-                "writes no new entry prose.",),
+                "writes no new entry prose.",
+            ),
         ),
         _variant(
             name=VARIANT_RATIONALE_HIDDEN,

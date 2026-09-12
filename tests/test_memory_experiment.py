@@ -111,10 +111,6 @@ def selector_row(
   return row
 
 
-def selector_json(entries: list[dict], candidates: list[dict]) -> str:
-  return json.dumps({"entries": entries, "candidates": candidates})
-
-
 def reviewer_row(
     ref: str = "capture-eviction",
     outcome: str = "propose",
@@ -128,7 +124,7 @@ def reviewer_row(
   }
 
 
-SELECTOR_EDITOR_RESPONSE = selector_json(
+SELECTOR_EDITOR_RESPONSE = base.editor_json(
     [
         {
             "action": "rewrite",
@@ -139,7 +135,7 @@ SELECTOR_EDITOR_RESPONSE = selector_json(
         }
     ], [selector_row()])
 
-TRIM_ACCEPT_RESPONSE = selector_json(
+TRIM_ACCEPT_RESPONSE = base.editor_json(
     [
         {
             "action": "rewrite",
@@ -150,7 +146,7 @@ TRIM_ACCEPT_RESPONSE = selector_json(
         }
     ], [reviewer_row()])
 
-NEW_PROSE_RESPONSE = selector_json(
+NEW_PROSE_RESPONSE = base.editor_json(
     [
         {
             "action": "rewrite",
@@ -161,7 +157,7 @@ NEW_PROSE_RESPONSE = selector_json(
         }
     ], [reviewer_row()])
 
-WHOLE_REWRITE_RESPONSE = selector_json(
+WHOLE_REWRITE_RESPONSE = base.editor_json(
     [
         {
             "action": "rewrite",
@@ -172,9 +168,9 @@ WHOLE_REWRITE_RESPONSE = selector_json(
         }
     ], [reviewer_row()])
 
-RESTORE_RESPONSE = selector_json([], [reviewer_row(outcome="no_change", paths=[])])
+RESTORE_RESPONSE = base.editor_json([], [reviewer_row(outcome="no_change", paths=[])])
 
-SELECTOR_NEW_ADMISSION_RESPONSE = selector_json(
+SELECTOR_NEW_ADMISSION_RESPONSE = base.editor_json(
     [
         {
             "action": "new",
@@ -217,7 +213,7 @@ def two_theme_manifest_dict() -> dict:
 
 
 def alerts_editor_json(text: str) -> str:
-  return selector_json(
+  return base.editor_json(
       [
           {
               "action": "rewrite",
@@ -629,7 +625,7 @@ _MERGED_REWRITE_EDITOR_ROWS = [
 
 
 def test_propose_rows_require_complete_proofs_and_other_rows_forbid_them(tmp_path: Path) -> None:
-  missing = selector_json(_MERGED_REWRITE_EDITOR_ROWS, [selector_row(reason="merged", proofs=None)])
+  missing = base.editor_json(_MERGED_REWRITE_EDITOR_ROWS, [selector_row(reason="merged", proofs=None)])
   record = run_variant_expect_failure(
       tmp_path,
       "baseline-original-flow",
@@ -638,7 +634,7 @@ def test_propose_rows_require_complete_proofs_and_other_rows_forbid_them(tmp_pat
       match="admission proofs")
   assert record["status"] == "failed"
 
-  partial = selector_json(
+  partial = base.editor_json(
       _MERGED_REWRITE_EDITOR_ROWS, [selector_row(reason="merged", proofs={
           "action": "a",
           "home": "",
@@ -652,7 +648,7 @@ def test_propose_rows_require_complete_proofs_and_other_rows_forbid_them(tmp_pat
       match="empty 'home' proof line")
   assert record["status"] == "failed"
 
-  stray = selector_json(
+  stray = base.editor_json(
       _MERGED_REWRITE_EDITOR_ROWS,
       [selector_row(outcome="no_change", paths=[], reason="nothing to do", proofs=dict(PROOFS))])
   record = run_variant_expect_failure(
@@ -779,7 +775,7 @@ def test_report_escapes_pool_comment_and_proof_text(tmp_path: Path) -> None:
       "home": "proof home <script>alert('h')</script>",
       "brevity": "proof brevity <script>alert('b')</script>",
   }
-  editor = selector_json(
+  editor = base.editor_json(
       [
           {
               "action": "rewrite",
@@ -858,7 +854,7 @@ def test_trim_only_reviewer_can_restore_the_base_and_reject_new_entries(tmp_path
   proposal = json.loads((outcome.run_dir / "proposal.json").read_text(encoding="utf-8"))
   assert proposal["reviewed_patch"] == "", "restoring the base leaves no diff"
 
-  drop_new = selector_json(
+  drop_new = base.editor_json(
       [], [reviewer_row(outcome="no_change", paths=[], reason="reversal: the admitted entry fails the entry form")])
   outcome, _ = run_variant(
       tmp_path,
@@ -872,7 +868,7 @@ def test_trim_only_reviewer_can_restore_the_base_and_reject_new_entries(tmp_path
 
 
 def test_trim_only_reviewer_cannot_delete_or_act_without_a_selector_text_proposal(tmp_path: Path) -> None:
-  delete_response = selector_json(
+  delete_response = base.editor_json(
       [{
           "action": "delete",
           "path": "entries/render/cache-eviction.md",
@@ -887,7 +883,7 @@ def test_trim_only_reviewer_cannot_delete_or_act_without_a_selector_text_proposa
       match="may only confirm an editor delete")
   assert record["status"] == "failed"
 
-  unasked = selector_json(
+  unasked = base.editor_json(
       [
           {
               "action": "rewrite",
@@ -901,7 +897,7 @@ def test_trim_only_reviewer_cannot_delete_or_act_without_a_selector_text_proposa
       tmp_path,
       "baseline-original-flow",
       transport=VariantScriptedTransport(
-          editor_response=selector_json([], [selector_row(outcome="no_change", paths=[])]),
+          editor_response=base.editor_json([], [selector_row(outcome="no_change", paths=[])]),
           reviewer_responses=[unasked, unasked]),  # editor row: no_change, proof-free
       output_dir=tmp_path / "out-unasked",
       match="never proposed text for")
@@ -912,7 +908,7 @@ def test_trim_only_reviewer_cannot_delete_or_act_without_a_selector_text_proposa
 
 
 def editor_with_refs(*refs: str, proofs: bool = True) -> str:
-  return selector_json(
+  return base.editor_json(
       [
           {
               "action": "rewrite",
@@ -990,7 +986,7 @@ def test_unselected_comment_ids_are_citable_only_in_the_raw_history_view(tmp_pat
 
 
 def test_reviewer_citations_follow_the_same_visible_view(tmp_path: Path) -> None:
-  reviewer_with_refs = selector_json(
+  reviewer_with_refs = base.editor_json(
       [
           {
               "action": "rewrite",

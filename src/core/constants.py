@@ -26,6 +26,11 @@ MAX_TRIGGER_MESSAGE_CHARS = 200
 PLAN_AMEND_TRIGGERS = ("auto_amend", "feedback")
 PLAN_CLOSE_MODES = ("superseded", "abandoned", "completed")
 
+# Memory-replay mode vocabulary: the memory CLI's argparse choices (src.cli.memory) and the
+# replay runner's validation (src.core.memory_replay.runner) share one tuple, so the memory
+# query/add/lint verbs import no replay stack to build the parser. One spelling everywhere.
+REPLAY_MODES = ("editor-only", "editor-review")
+
 
 class WatchKind(StrEnum):
   UNKNOWN = "unknown"  # fail-loud sentinel; never a valid target, no default

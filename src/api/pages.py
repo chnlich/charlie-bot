@@ -434,8 +434,8 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
   share one JSON boundary: the NaN/Infinity literals stdlib json accepts fail the build loudly
   here too — a literal Perfetto cannot render must not reach the cache.
   """
-  with out_path.open("wb") as compressed, subprocess.Popen(
-      ["gzip", f"-{_MERGE_COMPRESSLEVEL}", "-c", str(path)], stdout=compressed, stderr=subprocess.PIPE) as gzip_proc:
+  with out_path.open("wb") as compressed, subprocess.Popen(["gzip", f"-{_MERGE_COMPRESSLEVEL}", "-c", str(path)],
+                                                           stdout=compressed, stderr=subprocess.PIPE) as gzip_proc:
     try:
       with path.open("rb") as validate_file:
         orjson.loads(validate_file.read())

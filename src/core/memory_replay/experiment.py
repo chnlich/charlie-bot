@@ -401,6 +401,8 @@ def _blocked_arm(
     error = f"the fresh attempt failed ({run_error}); afterwards, {error[0].lower() + error[1:]}"
   record_rel = next(
       (_rel_path(path / "run.json", options.output_dir) for path, _ in blocked if (path / "run.json").is_file()), None)
+  comparison = _unavailable_comparison(
+      "blocked", "not attempted: the arm's existing evidence failed the identity/occupancy check", None)
   return {
       "case": case_id,
       "manifest": str(manifest_path),
@@ -426,24 +428,32 @@ def _blocked_arm(
               "blocked_evidence": evidence,
               "usage": None,
           },
-      "comparison":
-          {
-              "status": "blocked",
-              "error": "not attempted: the arm's existing evidence failed the identity/occupancy check",
-              "dir": None,
-              "comparison": None,
-              "report": None,
-              "editor_only_status": None,
-              "post_review_status": None,
-              "editor_only": None,
-              "post_review": None,
-          },
+      "comparison": comparison,
       "editor_provenance": None,
   }
 
 
 def _read_run_record(run_dir: Path) -> dict:
   return json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+
+
+def _unavailable_comparison(status: str, error: str, dir_rel: str | None) -> dict:
+  """The comparison section every arm carries when no comparison was established.
+
+  One shape for the three causes (blocked, absent, failed): the summary's comparison schema
+  stays identical whichever way an arm fails to produce a comparison.
+  """
+  return {
+      "status": status,
+      "error": error,
+      "dir": dir_rel,
+      "comparison": None,
+      "report": None,
+      "editor_only_status": None,
+      "post_review_status": None,
+      "editor_only": None,
+      "post_review": None,
+  }
 
 
 def _run_comparison_for(
@@ -455,32 +465,12 @@ def _run_comparison_for(
 ) -> dict:
   """Derive the paired comparison for one arm's run bundle; failures are recorded, never hidden."""
   if run_dir is None:
-    return {
-        "status": "absent",
-        "error": "no run bundle; the arm failed before or at bundle creation",
-        "dir": None,
-        "comparison": None,
-        "report": None,
-        "editor_only_status": None,
-        "post_review_status": None,
-        "editor_only": None,
-        "post_review": None,
-    }
+    return _unavailable_comparison("absent", "no run bundle; the arm failed before or at bundle creation", None)
   comparison_dir = options.output_dir / "cases" / case_id / "comparisons" / contract.name
   try:
     run_comparison(CompareOptions(run_dir=run_dir, output_dir=comparison_dir), cfg=cfg)
   except ReplayError as e:
-    return {
-        "status": "failed",
-        "error": str(e),
-        "dir": _rel_path(comparison_dir, options.output_dir),
-        "comparison": None,
-        "report": None,
-        "editor_only_status": None,
-        "post_review_status": None,
-        "editor_only": None,
-        "post_review": None,
-    }
+    return _unavailable_comparison("failed", str(e), _rel_path(comparison_dir, options.output_dir))
   data = json.loads((comparison_dir / "comparison.json").read_text(encoding="utf-8"))
   arms = data["arms"]
   editor_only = _arm_view(run_dir, arms["editor-only"])

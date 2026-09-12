@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Literal, get_args
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, model_validator
 
@@ -598,9 +598,7 @@ class PlanPresentRequest(BaseModel):
 
 
 PlanAmendTrigger = Literal["auto_amend", "feedback"]
-PLAN_AMEND_TRIGGERS: tuple[str, ...] = get_args(PlanAmendTrigger)
 PlanCloseMode = Literal["superseded", "abandoned", "completed"]
-PLAN_CLOSE_MODES: tuple[str, ...] = get_args(PlanCloseMode)
 
 
 class PlanAmendRequest(BaseModel):

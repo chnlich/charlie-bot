@@ -27,7 +27,7 @@ from src.cli.common import (
     resolve_session_id,
 )
 from src.core import plan_diff
-from src.core.models import PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES
+from src.core.constants import PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES
 from src.core.plans import require_plan
 
 _PLAN_REMINDER = (

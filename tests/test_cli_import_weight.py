@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 HEAVY_MODULES = (
@@ -123,12 +125,34 @@ def test_memory_chain_imports_without_the_heavy_chains() -> None:
       "path, and src.core.memory's log proxy defers structlog to first use")
 
 
-def test_memory_defers_structlog_until_the_first_log_call() -> None:
+# Modules whose log proxy defers structlog to first use. Each imports on an
+# error path only, so an eager structlog import would tax every invocation for
+# lines the read path never emits; the probe pin: `import` alone must leave
+# structlog unloaded, and the first `log.warning` must load it.
+_STRUCTLOG_DEFERRAL_CASES = [
+    pytest.param(
+        "src.core.config",
+        "every CLI invocation pays structlog.dev (rich, pygments) for log lines config never emits",
+        id="config",
+    ),
+    pytest.param(
+        "src.core.memory",
+        "every memory CLI invocation pays structlog.dev (rich, pygments) "
+        "for the error-path log lines a read command never emits",
+        id="memory",
+    ),
+]
+
+
+@pytest.mark.parametrize(("module_name", "import_cost"), _STRUCTLOG_DEFERRAL_CASES)
+def test_module_defers_structlog_until_the_first_log_call(module_name: str, import_cost: str) -> None:
   # The probe's warning line and the result JSON both reach the subprocess's
   # streams; the JSON rides stderr so the parse sees it alone.
   code = (
-      "import json, sys; import src.core.memory; "
-      "before = 'structlog' in sys.modules; src.core.memory.log.warning('m98_probe'); "
+      "import json, sys; "
+      f"import {module_name}; "
+      "before = 'structlog' in sys.modules; "
+      f"{module_name}.log.warning('probe'); "
       "sys.stderr.write(json.dumps([before, 'structlog' in sys.modules]))")
   proc = subprocess.run(
       [sys.executable, "-c", code],
@@ -139,30 +163,5 @@ def test_memory_defers_structlog_until_the_first_log_call() -> None:
       check=True,
   )
   before, after = json.loads(proc.stderr)
-  assert before is False, (
-      "src.core.memory imported structlog at module import; every memory CLI "
-      "invocation pays structlog.dev (rich, pygments) for the error-path log "
-      "lines a read command never emits")
-  assert after is True, "memory.log did not resolve structlog on first use"
-
-
-def test_config_defers_structlog_until_the_first_log_call() -> None:
-  # The probe's warning line and the result JSON both reach the subprocess's
-  # streams; the JSON rides stderr so the parse sees it alone.
-  code = (
-      "import json, sys; import src.core.config; "
-      "before = 'structlog' in sys.modules; src.core.config.log.warning('m92_probe'); "
-      "sys.stderr.write(json.dumps([before, 'structlog' in sys.modules]))")
-  proc = subprocess.run(
-      [sys.executable, "-c", code],
-      cwd=REPO_ROOT,
-      capture_output=True,
-      text=True,
-      timeout=120,
-      check=True,
-  )
-  before, after = json.loads(proc.stderr)
-  assert before is False, (
-      "config imported structlog at module import; every CLI invocation pays "
-      "structlog.dev (rich, pygments) for log lines config never emits")
-  assert after is True, "config.log did not resolve structlog on first use"
+  assert before is False, f"{module_name} imported structlog at module import; {import_cost}"
+  assert after is True, f"{module_name}.log did not resolve structlog on first use"

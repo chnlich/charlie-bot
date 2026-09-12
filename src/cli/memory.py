@@ -1,4 +1,4 @@
-"""CLI: labeled-entry memory store (query / add / lint / replay / compare).
+"""CLI: labeled-entry memory store (query / add / lint / replay / compare / experiment).
 
 Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
 (``~/.charliebot/memory/``). See ``src/core/memory.py`` for the store contract.
@@ -9,14 +9,21 @@ Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
   charliebot memory replay --input <manifest> --output-dir <dir> --backend <id> \
       --mode editor-only|editor-review
   charliebot memory compare --run-dir <editor-review-run> --output-dir <dir>
+  charliebot memory experiment --input <manifest> [<manifest> ...] \
+      --output-dir <dir> --backend <id> [--variants NAME ...]
 
 ``replay`` runs the isolated offline curation pipeline over a frozen manifest
 (docs/memory-replay.md); it never reads or writes the live store. ``compare``
 derives both comparison arms of one recorded editor-review run from the same
-recorded editor response — offline, with no model calls.
+recorded editor response — offline, with no model calls. ``experiment`` runs
+the named curation variants over the supplied frozen cases in one invocation
+and writes the self-contained variant-comparison summary; the variant
+definitions and their dispatch live in ``src/core/memory_replay/variants.py``,
+not here — this module only parses arguments and prints outcomes.
 """
 
 import argparse
+import json
 import re
 import sys
 from datetime import UTC, datetime
@@ -30,8 +37,10 @@ from src.core.memory_replay import (
     ReplayError,
     ReplayOptions,
     run_comparison,
+    run_experiment,
     run_replay,
 )
+from src.core.memory_replay.experiment import ExperimentOptions
 
 
 def main() -> None:
@@ -63,6 +72,32 @@ def main() -> None:
   p_replay.add_argument("--backend", required=True, metavar="ID", help="Configured backend id from backends.options")
   p_replay.add_argument("--mode", required=True, choices=list(MODES), help="Model stages to run")
 
+  p_experiment = sub.add_parser(
+      "experiment",
+      help="Run the named memory-curation variants over frozen cases in one command (docs/memory-replay.md)")
+  p_experiment.add_argument(
+      "--input",
+      required=True,
+      nargs="+",
+      metavar="MANIFEST",
+      help="One or more replay manifests (YAML); "
+      "each file's stem names the case")
+  p_experiment.add_argument(
+      "--output-dir",
+      required=True,
+      metavar="DIR",
+      help="Output root for the summary, the per-variant run bundles, and the paired comparisons; "
+      "must not overlap the store or the manifest inputs")
+  p_experiment.add_argument(
+      "--backend", required=True, metavar="ID", help="Configured backend id from backends.options")
+  p_experiment.add_argument(
+      "--variants",
+      nargs="*",
+      metavar="NAME",
+      default=None,
+      help="Named variant subset for bounded diagnostic runs (default: all five; see "
+      "src/core/memory_replay/variants.py for the defined names)")
+
   p_compare = sub.add_parser(
       "compare", help="Compare an editor-review run against its own editor-only alternative (offline; no model calls)")
   p_compare.add_argument(
@@ -85,6 +120,8 @@ def main() -> None:
     _cmd_lint()
   elif args.command == "replay":
     _cmd_replay(args)
+  elif args.command == "experiment":
+    _cmd_experiment(args)
   elif args.command == "compare":
     _cmd_compare(args)
 
@@ -177,6 +214,47 @@ def _cmd_replay(args: argparse.Namespace) -> None:
       f"dispositions: propose {outcome.propose}, no_change {outcome.no_change}, "
       f"needs_decision {outcome.needs_decision}")
   print(f"changed paths: {len(outcome.changed_paths)}")
+
+
+def _cmd_experiment(args: argparse.Namespace) -> None:
+  options = ExperimentOptions(
+      manifests=[Path(manifest) for manifest in args.input],
+      output_dir=Path(args.output_dir),
+      backend=args.backend,
+      variants=args.variants,
+  )
+  try:
+    outcome = run_experiment(options)
+  except ReplayError as e:
+    print(f"error: {e}", file=sys.stderr)
+    sys.exit(1)
+  print("experiment complete: fixed-input variant comparison")
+  for arm in _experiment_arm_lines(outcome.summary_path):
+    print(f"arm {arm}")
+  print(f"summary: {outcome.summary_path}")
+  print(f"report: {outcome.report_path}")
+  if outcome.failed_arms:
+    print(f"failed arms (recorded, not rerun under this output root): {', '.join(outcome.failed_arms)}")
+    sys.exit(1)
+
+
+def _experiment_arm_lines(summary_path: Path) -> list[str]:
+  """One line per arm from the written summary, so failures are visible without opening the JSON."""
+  summary = json.loads(summary_path.read_text(encoding="utf-8"))
+  lines = []
+  for case in summary["cases"]:
+    for arm in case["arms"]:
+      run_status = arm["run"]["status"]
+      comparison = arm["comparison"]
+      detail = "no comparison"
+      if comparison["status"] == "established":
+        detail = (
+            f"comparison established (editor-only {comparison['editor_only_status']}, "
+            f"post-review {comparison['post_review_status']})")
+      elif comparison["status"] == "failed":
+        detail = "comparison failed (recorded)"
+      lines.append(f"{case['case']}/{arm['variant']}: run {run_status}, {detail}")
+  return lines
 
 
 def _cmd_compare(args: argparse.Namespace) -> None:

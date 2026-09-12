@@ -35,7 +35,14 @@ def canonical_text(text: str) -> str:
 
 
 def theme_output_errors(
-    output: ThemeOutput, *, role: str, manifest: Manifest, theme: Theme, allow_no_write_citations: bool) -> list[str]:
+    output: ThemeOutput,
+    *,
+    role: str,
+    manifest: Manifest,
+    theme: Theme,
+    allow_no_write_citations: bool,
+    available_refs: set[str] | None = None,
+) -> list[str]:
   """Every mechanical violation of one stage's response for one theme, in check order.
 
   Empty means the response is valid. ``allow_no_write_citations`` is the one
@@ -45,6 +52,11 @@ def theme_output_errors(
   relative operations, the finite disposition-ref domain, path shapes, entry
   formats, coverage, and the stage's own patch/disposition consistency — is
   shared, because it is what the finalization mechanics require.
+
+  ``available_refs`` narrows the citation domain to what one stage actually saw (the
+  experimental contracts derive it from the visible theme sources, the guideline, and the
+  selected feedback view). ``None`` keeps the recorded v2/v3 meanings: every manifest source and
+  the whole feedback pool are citable, exactly as those runs were judged when they ran.
   """
   errors: list[str] = []
   base = {path: canonical_text(text) for path, text in manifest.base_entries().items()}
@@ -70,16 +82,24 @@ def theme_output_errors(
         if not allow_no_write_citations:
           errors.append(f"{role}: {op.action} on {op.path} must not carry source_refs")
         else:
-          available = _available_ref_ids(manifest)
+          available = available_refs if available_refs is not None else _available_ref_ids(manifest)
           for ref in op.source_refs:
             if ref not in available:
               errors.append(f"{role}: {op.action} on {op.path} cites unknown source ref {ref!r}")
     if not op.reason.strip():
       errors.append(f"{role}: {op.action} on {op.path} needs a non-empty reason")
     if op.action in ("new", "rewrite"):
-      errors.extend(_entry_text_errors(op, role=role, manifest=manifest, existing=entry_paths.get(op.path)))
+      errors.extend(
+          _entry_text_errors(
+              op, role=role, manifest=manifest, existing=entry_paths.get(op.path), available_refs=available_refs))
   covered, claimed_entries = _disposition_errors(
-      output, role=role, manifest=manifest, theme=theme, errors=errors, entry_by_ref=entry_by_ref)
+      output,
+      role=role,
+      manifest=manifest,
+      theme=theme,
+      errors=errors,
+      entry_by_ref=entry_by_ref,
+      available_refs=available_refs)
   missing = sorted(set(theme.candidate_refs) - covered)
   if missing:
     errors.append(f"{role}: no disposition row for candidate(s): {', '.join(missing)}")
@@ -130,13 +150,13 @@ def _available_ref_ids(manifest: Manifest) -> set[str]:
   return ids | {s.ref for s in manifest.sources}
 
 
-def _entry_text_errors(op, *, role: str, manifest: Manifest, existing) -> list[str]:
+def _entry_text_errors(op, *, role: str, manifest: Manifest, existing, available_refs: set[str] | None) -> list[str]:
   errors: list[str] = []
   if not op.text or not op.text.strip():
     errors.append(f"{role}: {op.action} on {op.path} needs the complete entry text")
   if op.action == "new" and op.path in manifest.base_paths:
     errors.append(f"{role}: new entry {op.path} already exists in the base")
-  available = _available_ref_ids(manifest)
+  available = available_refs if available_refs is not None else _available_ref_ids(manifest)
   for ref in op.source_refs:
     if ref not in available:
       errors.append(f"{role}: {op.action} on {op.path} cites unknown source ref {ref!r}")
@@ -159,8 +179,15 @@ def _entry_text_errors(op, *, role: str, manifest: Manifest, existing) -> list[s
 
 
 def _disposition_errors(
-    output: ThemeOutput, *, role: str, manifest: Manifest, theme: Theme, errors: list[str],
-    entry_by_ref: dict) -> tuple[set[str], set[str]]:
+    output: ThemeOutput,
+    *,
+    role: str,
+    manifest: Manifest,
+    theme: Theme,
+    errors: list[str],
+    entry_by_ref: dict,
+    available_refs: set[str] | None = None,
+) -> tuple[set[str], set[str]]:
   """Check every disposition row; return (covered candidate refs, claimed entry refs)."""
   covered: set[str] = set()
   claimed_entries: set[str] = set()
@@ -182,7 +209,8 @@ def _disposition_errors(
       hint = ""
       if row.source_ref.startswith("entries/"):
         hint = " (a store path is not a source_ref; use the entry's ref shown in evidence.entries)"
-      elif row.source_ref.startswith("comment_event:") or row.source_ref in _available_ref_ids(manifest):
+      available = available_refs if available_refs is not None else _available_ref_ids(manifest)
+      if row.source_ref.startswith("comment_event:") or row.source_ref in available:
         hint = (
             " (a feedback id is evidence provenance, never a disposition source_ref; dispositions name "
             "candidate refs or current-entry refs only)")

@@ -155,6 +155,12 @@ def _editor_section(editor_dispositions: list[dict]) -> list[str]:
     lines.append(
         f"<p><code>{_e(row['role'])}</code> · {_e(row['kind'])} · <code>{_e(row['name'])}</code> · "
         f"{_e(row['detail'])}</p>")
+    proofs = row.get("proofs")
+    if proofs:
+      lines.append(
+          "<pre>proofs (model output, withheld from the reviewer by the variant's rationale setting):\n"
+          f"action: {_e(proofs.get('action', ''))}\nhome: {_e(proofs.get('home', ''))}\n"
+          f"brevity: {_e(proofs.get('brevity', ''))}</pre>")
   lines.append("</details>")
   return lines
 

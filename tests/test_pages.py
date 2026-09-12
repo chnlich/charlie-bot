@@ -196,6 +196,35 @@ async def test_token_usage_route_labels_charliebot_source(
   assert "charlie-bot reads its own thread event logs" in body  # the Sources bullet
   assert "their per-run usage lives only in the thread event logs" in body  # Not covered
   assert "'charlie-bot':4" in body  # the JS payload's source slot
+  scale = body.split("Scale by platform:", 1)[1].split("</li>", 1)[0]
+  for src in ("Claude Code", "opencode", "Codex", "charlie-bot"):
+    assert src in scale  # every source per_src carries renders its clause
+
+
+@pytest.mark.asyncio
+async def test_token_usage_route_renders_when_a_source_key_is_absent(
+    monkeypatch: pytest.MonkeyPatch, pages_config: CharlieBotConfig) -> None:
+  """The deploy-skew shape renders: the template reloads from disk while the serving
+  process runs the python it started with, so a freshly added source's per_src key stays
+  absent until that process restarts — the page serves the sources it knows instead of
+  failing the whole report."""
+  tally = _usage_tally([_claude_row("2024-01-01", "2024-01-02")])
+  monkeypatch.setattr(pages, "collect_token_usage", lambda **_kwargs: tally)
+  real_context = pages._token_usage_context
+
+  def skew_context(tally: TokenTally) -> dict:
+    ctx = real_context(tally)
+    del ctx["ctx"]["per_src"]["charlie-bot"]  # the pre-source serving process's shape
+    return ctx
+
+  monkeypatch.setattr(pages, "_token_usage_context", skew_context)
+
+  response = await pages.token_usage_viewer(make_page_request("/"))
+  assert response.status_code == 200
+  body = response.body.decode("utf-8")
+  scale = body.split("Scale by platform:", 1)[1].split("</li>", 1)[0]
+  assert "Claude Code 65 (100%, 1 models)" in scale
+  assert "charlie-bot" not in scale
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="requires node on PATH")

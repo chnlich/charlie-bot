@@ -31,16 +31,7 @@ from pathlib import Path
 
 from src.core import memory
 from src.core.config import CharlieBotConfig, get_config
-from src.core.memory_replay import (
-    MODES,
-    CompareOptions,
-    ReplayError,
-    ReplayOptions,
-    run_comparison,
-    run_experiment,
-    run_replay,
-)
-from src.core.memory_replay.experiment import ExperimentOptions
+from src.core.constants import REPLAY_MODES
 
 
 def main() -> None:
@@ -70,7 +61,7 @@ def main() -> None:
       metavar="DIR",
       help="Output root for the proposal bundle and run records; must not overlap the store or the manifest inputs")
   p_replay.add_argument("--backend", required=True, metavar="ID", help="Configured backend id from backends.options")
-  p_replay.add_argument("--mode", required=True, choices=list(MODES), help="Model stages to run")
+  p_replay.add_argument("--mode", required=True, choices=list(REPLAY_MODES), help="Model stages to run")
 
   p_experiment = sub.add_parser(
       "experiment",
@@ -198,6 +189,8 @@ def _cmd_lint() -> None:
 
 
 def _cmd_replay(args: argparse.Namespace) -> None:
+  from src.core.memory_replay import ReplayError, ReplayOptions, run_replay
+
   options = ReplayOptions(
       manifest=Path(args.input), output_dir=Path(args.output_dir), backend=args.backend, mode=args.mode)
   try:
@@ -217,6 +210,9 @@ def _cmd_replay(args: argparse.Namespace) -> None:
 
 
 def _cmd_experiment(args: argparse.Namespace) -> None:
+  from src.core.memory_replay import ReplayError, run_experiment
+  from src.core.memory_replay.experiment import ExperimentOptions
+
   options = ExperimentOptions(
       manifests=[Path(manifest) for manifest in args.input],
       output_dir=Path(args.output_dir),
@@ -260,6 +256,8 @@ def _experiment_arm_lines(summary_path: Path) -> list[str]:
 
 
 def _cmd_compare(args: argparse.Namespace) -> None:
+  from src.core.memory_replay import CompareOptions, ReplayError, run_comparison
+
   options = CompareOptions(run_dir=Path(args.run_dir), output_dir=Path(args.output_dir))
   try:
     outcome = run_comparison(options)

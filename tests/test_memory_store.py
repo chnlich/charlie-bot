@@ -601,6 +601,27 @@ def test_cli_add_rejects_bad_invocation(
   assert not (cfg.memory_dir / "staging").exists() or not list((cfg.memory_dir / "staging").glob("*.md"))
 
 
+def test_cli_replay_verb_lazy_imports_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+  """The replay verb's lazy import path resolves and surfaces the manifest failure as exit 1.
+
+  The replay stack loads only inside the verb path (the M98 import contract), so a valid
+  mode over a missing manifest exercises the lazy imports, the single-homed REPLAY_MODES
+  vocabulary in the parser choices, and run_replay's manifest gate — with the fake config
+  the other CLI tests patch in.
+  """
+  _patch_cli_cfg(monkeypatch, tmp_path)
+  monkeypatch.setattr("sys.argv", [
+      "charliebot memory", "replay", "--input", str(tmp_path / "manifest.yaml"),
+      "--output-dir", str(tmp_path / "out"), "--backend", "x", "--mode", "editor-only",
+  ])
+  import src.cli.memory as cli
+  with pytest.raises(SystemExit) as exc:
+    cli.main()
+  assert exc.value.code == 1
+  assert "cannot read replay manifest" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ("topic_values", "expected_err"),
     [

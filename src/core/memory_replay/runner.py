@@ -41,6 +41,7 @@ from pathlib import Path
 import structlog
 
 from src.core.config import CharlieBotConfig, get_config, require_backend_option
+from src.core.constants import REPLAY_MODES as MODES
 from src.core.memory_replay import validate
 from src.core.memory_replay.errors import (
     ReplayBackendError,
@@ -80,7 +81,6 @@ from src.core.memory_replay.variants import (
 
 log = structlog.get_logger()
 
-MODES = ("editor-only", "editor-review")
 PROPOSAL_SCHEMA = "memory-replay-proposal/1"
 # Run-record schema v2: attempt chains (per-attempt validation outcome, chosen flag, usage) and
 # the recorded recovery policy joined the record. Comparison dispatches on prompt versions, not

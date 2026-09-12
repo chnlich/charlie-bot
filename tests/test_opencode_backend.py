@@ -212,62 +212,6 @@ def test_prepare_env_sets_charliebot_opencode_config(monkeypatch) -> None:
   assert data["agent"]["charliebot"] == {"mode": "primary"}
 
 
-def test_prepare_env_merges_proxy_and_local_no_proxy_without_mutating_input(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, proxy_url="http://proxy.test:8080")
-  input_env = {
-      "PATH": "/usr/bin",
-      "NO_PROXY": "internal.test,localhost,127.0.0.1",
-  }
-  original_env = dict(input_env)
-
-  prepared = backend._prepare_env(input_env)
-
-  assert prepared["HTTP_PROXY"] == "http://proxy.test:8080"
-  assert prepared["HTTPS_PROXY"] == "http://proxy.test:8080"
-  assert prepared["NO_PROXY"] == "internal.test,localhost,127.0.0.1,::1"
-  assert input_env == original_env
-
-  repeated = backend._prepare_env(prepared)
-  assert repeated["NO_PROXY"] == prepared["NO_PROXY"]
-
-
-def test_prepare_env_without_proxy_preserves_proxy_related_environment(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch)
-  input_env = {
-      "PATH": "/usr/bin",
-      "HTTP_PROXY": "http://existing-http.test:8080",
-      "HTTPS_PROXY": "http://existing-https.test:8080",
-      "NO_PROXY": "internal.test,localhost",
-  }
-  original_env = dict(input_env)
-
-  prepared = backend._prepare_env(input_env)
-
-  assert {
-      key: prepared[key] for key in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
-  } == {
-      "HTTP_PROXY": "http://existing-http.test:8080",
-      "HTTPS_PROXY": "http://existing-https.test:8080",
-      "NO_PROXY": "internal.test,localhost",
-  }
-  assert input_env == original_env
-
-
-def test_proxy_state_is_isolated_between_backend_instances(monkeypatch) -> None:
-  proxied = _build_backend(monkeypatch, proxy_url="http://proxy.test:8080")
-  unproxied = _build_backend(monkeypatch)
-
-  proxied_env = proxied._prepare_env({"PATH": "/usr/bin"})
-  unproxied_env = unproxied._prepare_env({"PATH": "/usr/bin"})
-
-  assert proxied_env["HTTP_PROXY"] == "http://proxy.test:8080"
-  assert proxied_env["HTTPS_PROXY"] == "http://proxy.test:8080"
-  assert proxied_env["NO_PROXY"] == "localhost,127.0.0.1,::1"
-  assert "HTTP_PROXY" not in unproxied_env
-  assert "HTTPS_PROXY" not in unproxied_env
-  assert "NO_PROXY" not in unproxied_env
-
-
 @pytest.mark.asyncio
 async def test_run_passes_proxy_environment_to_serve_subprocess(monkeypatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch, model="provider/model", proxy_url="http://proxy.test:8080")

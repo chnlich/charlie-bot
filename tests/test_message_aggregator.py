@@ -10,7 +10,7 @@ from conftest import queued_user_reorder_events as _reorder_events
 
 from src.api.message_utils import events_to_messages, events_to_view
 from src.core import event_types as ET
-from src.core.message_aggregator import TOOL_OUTPUT_RENDER_CAP, MessageAggregator
+from src.core.message_aggregator import TOOL_OUTPUT_RENDER_CAP, TOOL_PREVIEW_CHARS, MessageAggregator
 
 VOICE_KEY = "is_" + "voice"
 
@@ -931,3 +931,45 @@ def test_stream_deltas_stay_bounded_after_a_giant_tool_result() -> None:
   # Every live delta re-serializes the whole buffered draft, so one uncapped
   # output would ride all of them; the cap bounds each snapshot instead.
   assert max(serialized) < TOOL_OUTPUT_RENDER_CAP + 100_000
+
+
+def test_stream_delta_tool_rows_carry_the_preview_shape() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": ET.TOOL_USE, "name": "Write", "input": {"file_path": "/tmp/a", "content": "c" * 5000}}))
+  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Write", "content": "o" * (TOOL_OUTPUT_RENDER_CAP + 1)}))
+  stream = next(d for d in agg.feed({"type": ET.THINKING, "content": "t"}) if d["type"] == "stream")
+
+  tool = stream["message"]["tools"][0]
+  assert tool["output"] == "o" * TOOL_PREVIEW_CHARS
+  assert tool["output_truncated"] is True
+  assert tool["input"]["content"] == "c" * TOOL_PREVIEW_CHARS
+  assert tool["input_truncated"] is True
+  assert tool["input"]["file_path"] == "/tmp/a"
+
+
+def test_stream_delta_leaves_the_committed_shape_at_the_render_cap() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"command": "x" * 5000}}))
+  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "y" * (TOOL_OUTPUT_RENDER_CAP + 1)}))
+
+  commit = next(d for d in agg.flush_pending() if d["type"] == "message")
+  tool = commit["message"]["tools"][0]
+  assert tool["output"] == "y" * TOOL_OUTPUT_RENDER_CAP
+  assert tool["output_truncated"] is True
+  assert "input_truncated" not in tool
+  assert tool["input"] == {"command": "x" * 5000}
+
+
+def test_stream_delta_shares_no_trimmed_state_with_the_buffer() -> None:
+  agg = MessageAggregator()
+  list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"command": "z" * 5000}}))
+  list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "w" * 5000}))
+  first = next(d for d in agg.feed({"type": ET.THINKING, "content": "t"}) if d["type"] == "stream")
+  second = next(d for d in agg.feed({"type": ET.THINKING, "content": "t2"}) if d["type"] == "stream")
+
+  # Each stream snapshot trims its own copies: the buffer the commit reads and
+  # the earlier snapshots' bytes stay untouched.
+  assert first["message"]["tools"][0]["output"] == "w" * TOOL_PREVIEW_CHARS
+  assert second["message"]["tools"][0]["output"] == "w" * TOOL_PREVIEW_CHARS
+  commit = next(d for d in agg.flush_pending() if d["type"] == "message")
+  assert commit["message"]["tools"][0]["output"] == "w" * 5000

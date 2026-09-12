@@ -31,6 +31,43 @@ from src.core.message_events import normalize_user_message_event
 # download, fork reference, review scans all read it there).
 TOOL_OUTPUT_RENDER_CAP = 20000
 
+# The renderer's preview bound for one tool row (renderToolActivity,
+# web/static/js/chat/rendering.js): an output's first 500 characters render
+# plain and an input feeds only a bounded summary (a Bash command renders 80
+# characters, other named tools 60, file tools their path or pattern), so
+# string tool content over this bound never renders from a wire shape. Both
+# wire shapes (the stream delta, the bootstrap payload) carry the bound; the
+# committed message keeps TOOL_OUTPUT_RENDER_CAP.
+TOOL_PREVIEW_CHARS = 500
+
+
+def tool_preview(tool: dict) -> dict:
+  """One tool row's wire-preview shape: string output and input values over
+  ``TOOL_PREVIEW_CHARS`` trim to the cap with their truncation markers set.
+
+  Passes the tool through by reference when nothing trims: the bootstrap
+  payload builder walks the projection memo's shared dicts and a message
+  copies only when one of its tools actually trims.
+  """
+  output = tool.get("output")
+  input_val = tool.get("input")
+  output_trims = isinstance(output, str) and len(output) > TOOL_PREVIEW_CHARS
+  input_trims = isinstance(input_val, dict) and any(
+      isinstance(value, str) and len(value) > TOOL_PREVIEW_CHARS for value in input_val.values())
+  if not output_trims and not input_trims:
+    return tool
+  preview = dict(tool)
+  if output_trims:
+    preview["output"] = output[:TOOL_PREVIEW_CHARS]
+    preview["output_truncated"] = True
+  if input_trims:
+    preview["input"] = {
+        key: (value[:TOOL_PREVIEW_CHARS] if isinstance(value, str) and len(value) > TOOL_PREVIEW_CHARS else value)
+        for key, value in input_val.items()
+    }
+    preview["input_truncated"] = True
+  return preview
+
 
 def _join_blocks(msg: dict | None, block_type: str) -> str:
   """Join the ``block_type`` field of every ``block_type``-typed content block."""
@@ -406,6 +443,10 @@ class MessageAggregator:
     msg = self.pending_draft_message()
     if msg is None:
       return None
+    # The streaming bubble paints content and thinking only (paintStreamDraft);
+    # each tool row rides the preview shape its renderer reads.
+    if msg.get("tools"):
+      msg["tools"] = [tool_preview(t) for t in msg["tools"]]
     return {"type": "stream", "message": msg}
 
   def _feed(self, ev: dict, idx: int) -> Iterator[dict]:

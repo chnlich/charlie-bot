@@ -40,6 +40,7 @@ from src.core.config import (
 )
 from src.core.event_types import BACKEND_SWITCHED
 from src.core.memo import BoundedMemo
+from src.core.message_aggregator import tool_preview
 from src.core.models import (
     BackendOption,
     BackendType,
@@ -100,59 +101,23 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
   }
 
 
-# The bootstrap payload (the SPA switch's fetch and the index page's embedded
-# SESSION_BOOTSTRAP alike) ships each tool's whole input and output, but the
-# renderer (web/static/js/chat/rendering.js renderToolActivity) displays only a
-# bounded preview without a click — an output's first 500 characters plain, an
-# input's summary line (80 chars for Bash, 60 for other named tools, the full
-# file path/pattern for the file tools) — inside a block hidden behind the "N
-# tool calls" toggle, inside turns that mostly render folded. The cap must
-# match the renderer's 500-character output split: at exactly the cap no dead
-# reveal toggle renders and the existing output_truncated note shows. A long
-# path/pattern summary the renderer would have shown in full trims to the cap
-# behind the input_truncated note. Full text stays on the persisted chat
-# event, the same home the M94 render cap points at.
-_SWITCH_TOOL_PREVIEW_CHARS = 500
-
-
-def _bootstrap_tool_preview(tool: dict) -> dict:
-  """One tool row's bootstrap-payload shape: string fields over the preview cap
-  trim to the cap with their truncation markers set."""
-  output = tool.get("output")
-  input_val = tool.get("input")
-  output_trims = isinstance(output, str) and len(output) > _SWITCH_TOOL_PREVIEW_CHARS
-  input_trims = isinstance(input_val, dict) and any(
-      isinstance(value, str) and len(value) > _SWITCH_TOOL_PREVIEW_CHARS for value in input_val.values())
-  if not output_trims and not input_trims:
-    return tool
-  preview = dict(tool)
-  if output_trims:
-    preview["output"] = output[:_SWITCH_TOOL_PREVIEW_CHARS]
-    preview["output_truncated"] = True
-  if input_trims:
-    preview["input"] = {
-        key:
-            (
-                value[:_SWITCH_TOOL_PREVIEW_CHARS]
-                if isinstance(value, str) and len(value) > _SWITCH_TOOL_PREVIEW_CHARS else value)
-        for key, value in input_val.items()
-    }
-    preview["input_truncated"] = True
-  return preview
+# The bootstrap payload's tool rows render through tool_preview: string output
+# and input values over TOOL_PREVIEW_CHARS trim to the cap with their
+# truncation markers set, one home shared with the stream delta's tool shape.
+# The projection memo's dicts stay shared with the events pages and the M26
+# digest, so a message copies only when one of its tools actually trims.
 
 
 def _bootstrap_tool_previews(messages: list[dict]) -> list[dict]:
   """The bootstrap payload's messages with tool input/output trimmed to the
-  preview cap. The projection memo's dicts are shared with the events pages and
-  the M26 digest, so a message copies only when one of its tools actually
-  trims; unchanged messages pass through by reference."""
+  preview cap."""
   out = []
   for msg in messages:
     tools = msg.get("tools") if isinstance(msg, dict) else None
     if not isinstance(tools, list):
       out.append(msg)
       continue
-    previews = [_bootstrap_tool_preview(tool) if isinstance(tool, dict) else tool for tool in tools]
+    previews = [tool_preview(tool) if isinstance(tool, dict) else tool for tool in tools]
     if all(new is old for new, old in zip(previews, tools)):
       out.append(msg)
       continue

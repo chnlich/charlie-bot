@@ -331,18 +331,32 @@ readable HTML report under the output root:
 ```
 
 The variants are defined once, in `src/core/memory_replay/variants.py`; the CLI
-and the pipeline only resolve names. They are, by content:
+and the pipeline only resolve names. They are, by content (the current definition is version 2):
 
-| variant | editor stage | reviewer stage | feedback view | rationale | reviewer capability |
+| variant | editor stage | reviewer stage | editing/review scope | feedback view | rationale |
 |---|---|---|---|---|---|
-| `baseline-original-flow` | baseline selector | baseline trim review | raw history | visible | trim-only |
-| `rationale-hidden-review` | baseline selector | baseline trim review | raw history | **hidden** | trim-only |
-| `whole-entry-review` | baseline selector | **whole-entry review** | raw history | visible | **whole-entry** |
-| `approved-edit-feedback` | baseline selector | baseline trim review | **selected structured** | visible | trim-only |
-| `combined-proposed-design` | **proposed design** | **proposed design** | **selected structured** | **hidden** | **whole-entry** |
+| `baseline-original-flow` | candidate-merge selector | trim review | candidate-merge | raw history | visible |
+| `rationale-hidden-review` | candidate-merge selector | trim review | candidate-merge | raw history | **hidden** |
+| `whole-entry-review` | **whole-entry editor** | **whole-entry review** | **whole-entry** | raw history | visible |
+| `approved-edit-feedback` | candidate-merge selector | trim review | candidate-merge | **selected structured** | visible |
+| `combined-proposed-design` | **whole-entry editor** | **whole-entry review** | **whole-entry** | **selected structured** | **hidden** |
 
 Each single-intervention variant changes exactly one bolded dimension relative
-to the baseline; the combined variant is the approved design. The baseline is
+to the baseline; the combined variant is exactly those three dimensions
+composed — nothing else. The **editing/review scope** dimension spans both
+stages: under `candidate-merge` the editor curates candidates one by one,
+merge-first, and the reviewer gates the proposed text line by line (writing no
+prose of its own); under `whole-entry` the editor reads the theme's base
+entries, candidates, and feedback view together and determines the
+complete-entry changes the theme needs, and the reviewer may rewrite proposed
+entries as wholes. The candidate-merge editor's merge-time trimming of a whole
+entry is original behavior the pinned guideline permits and stays available to
+it; whole-entry editing changes the decision unit, not a newly granted text
+permission. Every experimental editor — combined arm included — writes the
+same three Action/Home/Brevity proof lines under the same response schema, and
+the **rationale** dimension only decides whether the reviewer request (initial
+and repair) carries them; the proofs stay in the run audit and never enter the
+public proposal schema. The baseline is
 anchored to the authoritative original prompts
 `prompts/cron/memory_curator/memory_selector.md` and
 `prompts/cron/memory_curator/memory_reviewer.md`, pinned at git revision
@@ -352,26 +366,34 @@ the adaptation can be audited against exactly those texts (`git show`). Everythi
 the frozen source snapshots, guideline, allowed topics, candidate set,
 transport, JSON evidence payload, bounded recovery, validation, proposal
 finalization, and paired comparison — is shared, so a variant difference is
-attributable to its declared dimension alone.
+attributable to its declared dimensions alone.
 
 **What is adapted, in every variant alike** (the summary carries this list):
 mining, scheduling, the pending-proposal guard, and the production lint/report
 subprocesses are frozen out — candidates arrive as manifest sources and nothing
-touches the live store; the prompts' external reads (the guideline skill, the
-master prompt's Writing Style section) are replaced by the frozen guideline
-source, and every variant's prompts state the user's explicit English-memory
-requirement so the guideline's stale language clause never confounds a
-comparison; working-tree edits and `git checkout` restorations become
-base-relative entry operations; the selector's handoff sheet becomes recorded
-model output (dispositions plus the three Action/Home/Brevity proof lines),
-whose visibility in the reviewer request is the declared rationale dimension;
-and trim-only review is validated mechanically as **line removal** — a
-trim-only reviewer's returned text for a path must be the selector's proposed
-text for that path with whole lines removed, in order, which is the narrow
-mechanical form of the pinned reviewer's "deleted or trimmed" under its
-no-new-prose rule. Within-line rewriting is unavailable to it; a capability
-violation is a visible execution failure eligible for the same one bounded
-re-ask, never coerced into acceptance.
+touches the live store; the admission guideline the production prompts read
+from disk arrives as a frozen manifest source, while the master prompt's
+Writing Style section is **not** part of the frozen input unless the manifest
+itself carries it, and the experimental prompts claim none of its text; every
+variant's prompts state the user's explicit English-memory requirement so the
+guideline's stale language clause never confounds a comparison. The raw-history
+feedback view is the frozen-input replacement for the production selector's
+user-message digest (whose live 7-day session mining is frozen out); it is not
+claimed to be that digest itself. Working-tree edits and `git checkout`
+restorations become base-relative entry operations; the selector's handoff
+sheet becomes recorded model output (dispositions plus the three
+Action/Home/Brevity proof lines), whose visibility in the reviewer request is
+the declared rationale dimension; and trim-only review is validated
+mechanically as **line removal** — a trim-only reviewer's returned text for a
+path must be the editor's proposed text for that path with whole lines removed,
+in order, which is the narrow mechanical form of the pinned reviewer's "deleted
+or trimmed" under its no-new-prose rule. Within-line rewriting is unavailable
+to it; a capability violation is a visible execution failure eligible for the
+same one bounded re-ask, never coerced into acceptance. The rendered request
+instructions name the feedback keys each view actually carries
+(`feedback_history` under the raw-history view, `feedback` under the selected
+view), so prompt, parser, validation, and repair agree about the evidence
+shape.
 
 **Old-flow feedback is not no-feedback.** The production selector reads a
 user-message digest, so the baseline's *raw-history* view exposes the
@@ -392,24 +414,53 @@ response cannot cite a document its request never carried, or an approved
 change its feedback view never showed. Recorded v2/v3 runs keep their original
 wider citation meanings.
 
-**Reuse, failures, and exit codes.** A completed case x variant bundle is
+**Reuse, failures, and evidence preservation.** A completed case x variant bundle is
 identified by its inputs, mode, model, prompt versions, and the variant's
-behavioral definition; repeating the experiment reuses it without model calls.
-A failed or killed attempt under the same output root stays exactly as
-recorded — visible, with its attempt chain and usage — and is never silently
-deleted and rerun; a fresh output root is an intentional new experimental draw.
-The summary and report link the exact replay bundles and paired comparisons;
-each arm's editor-only control comes from the paired comparison of the same
-run, i.e. from the exact editor response that variant's reviewer consumed, not
-from a fresh editor call. Variants draw their own editor responses; the summary
-discloses which arms genuinely shared a byte-identical response, and a single
-stochastic draw never grounds a causal claim. Semantic quality stays unjudged:
-fewer lines, fewer proposals, or more deletions are recorded data, never a
-quality pass. The exit status is 0 when every arm completed execution, format
-validation, and its paired comparison; 1 when any arm failed (the summary is
-still written and the failures stay recorded); and 1 without a summary when
-the experiment itself could not run (bad arguments, manifest, backend, or
-output root).
+behavioral definition (name, definition version, editing/review scope,
+rationale visibility, feedback view); repeating the experiment reuses it
+without model calls. Before any replay can delete or replace evidence, the
+experiment validates the existing run records and the expected run-directory
+occupancy: a corrupted, missing, or unreadable run record, a record whose
+input identity disagrees with its own run directory, or an orphaned directory
+with partial attempt evidence **blocks the arm** — a visible failed condition
+that keeps every file byte-for-byte, makes no model call, and repairs nothing
+under the same output root. The other cases and variants continue with their
+denominators and usage intact, and a fresh output root is the intentional way
+to request a new draw. Records of different, legitimate input identities
+(earlier frozen inputs of the same case) coexist untouched in their own run
+directories — changed inputs are not corruption. A failed or killed attempt
+under the same output root stays exactly as recorded — visible, with its
+attempt chain and usage — and is never silently deleted and rerun. The summary
+and report link the exact replay bundles and paired comparisons; each arm's
+editor-only control comes from the paired comparison of the same run, i.e.
+from the exact editor response that variant's reviewer consumed, not from a
+fresh editor call.
+
+**Editor calls, not shared draws.** Every variant's editor is called for
+itself; the engine never feeds one variant's recorded response to another
+variant's editor. The summary records per-case, per-theme call provenance —
+the run-record reference, the chosen attempt and response reference, and the
+content digest — and reports the actual editor call count. Byte-identical
+recorded content across variants is labeled **identical content**, per theme:
+content equality is not shared sampling or a reused call, and it saves
+nothing — usage is the sum of actual attempts, so equal text costs the same as
+different text. Editor provenance stays visible even when a later reviewer
+stage failed, and every theme is accounted for rather than only the first
+one. Semantic quality stays unjudged: fewer lines, fewer proposals, or more
+deletions are recorded data, never a quality pass. The exit status is 0 when
+every arm completed execution, format validation, and its paired comparison;
+1 when any arm failed or was blocked (the summary is still written and the
+failures stay recorded); and 1 without a summary when the experiment itself
+could not run (bad arguments, manifest, backend, or output root).
+
+**Versioned definition.** The experimental definition, its prompt contracts,
+and the summary meaning are versioned (`memory-curation-variant-experiment/2`,
+variant definition version 2, `…-v2` prompt versions). Recorded runs carry
+their definition version, so an artifact recorded under an earlier definition
+is rejected with its version named when compared — its files stay intact, and
+it is never reinterpreted or relabeled as the corrected matrix. Standalone
+v2/v3 replay runs keep their original prompts, identities, and comparison
+meanings untouched.
 
 ## Out of scope in this delivery
 

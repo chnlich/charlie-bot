@@ -70,7 +70,7 @@ from src.core.memory_replay.transport import (
     request_model_for,
 )
 from src.core.memory_replay.validate import theme_output_errors
-from src.core.memory_replay.variants import ExperimentContract
+from src.core.memory_replay.variants import ENTRY_SCOPE_WHOLE_ENTRY, ExperimentContract
 
 log = structlog.get_logger()
 
@@ -84,6 +84,14 @@ RUN_SCHEMA = "memory-replay-run/2"
 # at most once, so a stage consumes at most two model responses. Model judgments are never
 # retried and transport/backend failures are never retried.
 MAX_STAGE_RESPONSES = 2
+# The bundle directory name is a fixed-length prefix of the input identity, so the experiment
+# boundary can predict which directory a replay will occupy before it lets one run.
+RUN_DIR_PREFIX_LEN = 16
+
+
+def run_directory_name(identity: str) -> str:
+  """The bundle directory name for one input identity: its fixed hex prefix."""
+  return identity[:RUN_DIR_PREFIX_LEN]
 
 
 def standalone_v3_contract() -> ExperimentContract:
@@ -105,9 +113,9 @@ def standalone_v3_contract() -> ExperimentContract:
       version=0,
       editor_stage="v3-editor",
       reviewer_stage="v3-reviewer",
+      entry_scope=ENTRY_SCOPE_WHOLE_ENTRY,
       feedback_view="selected-structured",
       rationale_visibility="hidden",
-      reviewer_capability="whole-entry",
       editor_prompt_version=EDITOR_PROMPT_VERSION,
       reviewer_prompt_version=REVIEWER_PROMPT_VERSION,
       editor_system=EDITOR_SYSTEM,
@@ -218,7 +226,7 @@ def run_replay(
         candidate_results=proposal["candidate_results"],
         changed_paths=_changed_paths_from_patch(proposal["reviewed_patch"]))
 
-  run_dir = runs_dir / identity[:16]
+  run_dir = runs_dir / run_directory_name(identity)
   if run_dir.exists():
     # Same identity, not completed: the leftover of a failed or killed run. Derived data, redone.
     shutil.rmtree(run_dir)

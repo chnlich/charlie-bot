@@ -8,7 +8,6 @@ import hashlib
 import json
 import multiprocessing
 import os
-import shutil
 import socket
 import subprocess
 import tempfile

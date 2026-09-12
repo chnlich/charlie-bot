@@ -45,20 +45,31 @@ from src.core.memory_replay.retrieval import FeedbackSelection
 EDITOR_PROMPT_VERSION = "memory-replay-editor-v3"
 REVIEWER_PROMPT_VERSION = "memory-replay-reviewer-v3"
 
-# The response contract, stated twice: prose for the model, types for the parser.
-_RESPONSE_SHAPE = """{
-  "entries": [
-    {"action": "new" | "rewrite" | "delete" | "keep",
+# The response contract, stated twice: prose for the model, types for the parser. The two row
+# fragments below are the single home of the v3 field lists; variants.py's editor shape reuses
+# them and splices the proofs field into the candidate row.
+_ENTRY_ROW_SHAPE = """    {"action": "new" | "rewrite" | "delete" | "keep",
      "path": "entries/<topic>/<slug>.md",
      "text": "<complete entry file text, front matter included; new/rewrite only>",
      "source_refs": ["<ref>"],
-     "reason": "<one sentence>"}
+     "reason": "<one sentence>"}"""
+
+
+def candidate_row_shape(trailing_fields: str = "") -> str:
+  """One candidates-array row of the response shape; ``trailing_fields`` adds fields before the brace."""
+  return (
+      '    {"source_ref": "<ref>", "outcome": "propose" | "no_change" | "needs_decision",\n'
+      '     "paths": ["entries/<topic>/<slug>.md"], "reason": "<one sentence>"' + trailing_fields + "}")
+
+
+_RESPONSE_SHAPE = f"""{{
+  "entries": [
+{_ENTRY_ROW_SHAPE}
   ],
   "candidates": [
-    {"source_ref": "<ref>", "outcome": "propose" | "no_change" | "needs_decision",
-     "paths": ["entries/<topic>/<slug>.md"], "reason": "<one sentence>"}
+{candidate_row_shape()}
   ]
-}"""
+}}"""
 
 _REQUEST_STRUCTURE = """The user content names the theme and then carries one JSON object under "## Evidence".
 That object holds every byte of evidence: "guidelines" (the admission policy), "entries" (the

@@ -115,16 +115,14 @@ def render_report(data: ReportData) -> str:
   parts.append("<h2>Final dispositions</h2>")
   parts.append(
       "<table><tr><th>source_ref</th><th>outcome</th><th>paths</th><th>reason</th></tr>" + "".join(
-          "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-              _e(row["source_ref"]), _e(row["outcome"]), _e(", ".join(row["paths"])), _e(row["reason"]))
+          _row(_e(row["source_ref"]), _e(row["outcome"]), _e(", ".join(row["paths"])), _e(row["reason"]))
           for row in data.candidate_results) + "</table>")
   parts.append("<h2>Changed paths &rarr; evidence</h2>")
   if data.changed_mapping:
     parts.append(
         "<table><tr><th>path</th><th>claiming dispositions</th></tr>" + "".join(
-            "<tr><td>{}</td><td>{}</td></tr>".format(
-                _e(item["path"]), _e("; ".join(f"{d['source_ref']} ({d['outcome']})"
-                                               for d in item["dispositions"])))
+            _row(_e(item["path"]), _e("; ".join(f"{d['source_ref']} ({d['outcome']})"
+                                                for d in item["dispositions"])))
             for item in data.changed_mapping) + "</table>")
   else:
     parts.append('<p class="muted">No paths changed.</p>')
@@ -278,7 +276,7 @@ def _run_section(data: ReportData) -> list[str]:
     validation = call.get("validation") or {}
     outcome = str(validation.get("status"))
     lines.append(
-        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+        _row(
             _e(str(call["name"])), _e(str(call.get("attempt"))), _e(outcome), _e("yes" if call.get("chosen") else "no"),
             _e("unknown" if call.get("latency_ms") is None else str(call["latency_ms"])),
             _e("unknown" if call.get("output_tokens") is None else str(call["output_tokens"])),
@@ -303,3 +301,12 @@ def _run_section(data: ReportData) -> list[str]:
 
 def _e(value: str) -> str:
   return html.escape(value, quote=True)
+
+
+def _row(*cells: object) -> str:
+  """One plain report-table row: the cells inside one <tr>, each wrapped in a <td>.
+
+  Cells arrive escaped or pre-built: the ``_e`` call stays at the site that
+  knows whether the value is trusted, so a spanning cell keeps its own markup.
+  """
+  return "<tr>" + "".join(f"<td>{cell}</td>" for cell in cells) + "</tr>"

@@ -204,7 +204,7 @@ class _FrozenDumper(yaml.SafeDumper):
   """
 
 
-def _represent_text(dumper: yaml.SafeDumper, value: str):
+def _represent_text(dumper: yaml.SafeDumper, value: str) -> yaml.ScalarNode:
   if "\n" in value:
     return dumper.represent_scalar("tag:yaml.org,2002:str", value, style="|")
   return dumper.represent_scalar("tag:yaml.org,2002:str", value)

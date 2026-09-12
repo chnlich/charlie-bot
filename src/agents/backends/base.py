@@ -602,7 +602,7 @@ class AgentBackend(ABC):
       resume_session_id: str | None = None,
       log_dir: Path | None = None,
       cgroup_session_id: str | None = None,
-      **_extra,
+      **_extra: object,
   ) -> None:
     self._model = model
     self._extra_flags = extra_flags or []

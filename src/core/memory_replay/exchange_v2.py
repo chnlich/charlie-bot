@@ -13,7 +13,7 @@ arm even though v3 allows optional citations there.
 """
 
 from src.core.memory_replay.exchange import ThemeOutput
-from src.core.memory_replay.manifest import Manifest, Theme
+from src.core.memory_replay.manifest import ApprovedChange, Manifest, Source, Theme
 from src.core.memory_replay.retrieval import FeedbackSelection
 
 EDITOR_PROMPT_VERSION = "memory-replay-editor-v2"
@@ -134,11 +134,11 @@ def _render_topics(manifest: Manifest) -> str:
   return "## Allowed topics (the only topics an entry may use)\n" + "\n".join(manifest.topics)
 
 
-def _render_source(source) -> str:
+def _render_source(source: Source) -> str:
   return f"[ref: {source.ref}]\n{source.text.rstrip()}"
 
 
-def _render_candidate(source) -> str:
+def _render_candidate(source: Source) -> str:
   marker = " (explicit remember request)" if source.remember_request else ""
   return f"[ref: {source.ref}]{marker}\n{source.text.rstrip()}"
 
@@ -168,7 +168,7 @@ _EMPTY_BEFORE_MARKER = "(empty: the approved revision created this text)"
 _EMPTY_AFTER_MARKER = "(empty: the approved revision deleted this text)"
 
 
-def _render_approved_change(change) -> list[str]:
+def _render_approved_change(change: ApprovedChange) -> list[str]:
   before = change.before.rstrip() if change.before.strip() else _EMPTY_BEFORE_MARKER
   after = change.after.rstrip() if change.after.strip() else _EMPTY_AFTER_MARKER
   return [

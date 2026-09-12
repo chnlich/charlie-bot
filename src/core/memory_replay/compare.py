@@ -74,7 +74,7 @@ from src.core.memory_replay.exchange import (
     parse_model_output,
 )
 from src.core.memory_replay.identity import approval_digest, canonical_bytes, input_identity, sha256_hex
-from src.core.memory_replay.manifest import Manifest, load_manifest
+from src.core.memory_replay.manifest import Manifest, Theme, load_manifest
 from src.core.memory_replay.report import _dispositions_table, _e, _page, _row
 from src.core.memory_replay.retrieval import FeedbackSelection
 from src.core.memory_replay.runner import (
@@ -141,11 +141,20 @@ def _permissive_role_validators(validate: Callable[..., None]) -> tuple[Callable
   """The v2/v3 validators are role-agnostic; the reviewer's takes the consumed editor output
   (unused there) so one call shape serves every contract."""
 
-  def editor_validate(output, *, role, manifest, theme, selections):
+  def editor_validate(
+      output: ThemeOutput, *, role: str, manifest: Manifest, theme: Theme, selections: list[FeedbackSelection]) -> None:
     del selections
     validate(output, role=role, manifest=manifest, theme=theme)
 
-  def reviewer_validate(output, *, role, manifest, theme, selections, editor_output):
+  def reviewer_validate(
+      output: ThemeOutput,
+      *,
+      role: str,
+      manifest: Manifest,
+      theme: Theme,
+      selections: list[FeedbackSelection],
+      editor_output: ThemeOutput | None,
+  ) -> None:
     del selections, editor_output
     validate(output, role=role, manifest=manifest, theme=theme)
 
@@ -198,13 +207,22 @@ def _experiment_contract_view(contract: variants.ExperimentContract) -> Exchange
   exact selector text the reviewer's responses derive from).
   """
 
-  def editor_validate(output, *, role, manifest, theme, selections):
+  def editor_validate(
+      output: ThemeOutput, *, role: str, manifest: Manifest, theme: Theme, selections: list[FeedbackSelection]) -> None:
     found = contract.editor_errors(
         output, role=role, manifest=manifest, theme=theme, selections=selections, editor_output=None)
     if found:
       raise errors.ReplayValidationError("\n".join(found))
 
-  def reviewer_validate(output, *, role, manifest, theme, selections, editor_output):
+  def reviewer_validate(
+      output: ThemeOutput,
+      *,
+      role: str,
+      manifest: Manifest,
+      theme: Theme,
+      selections: list[FeedbackSelection],
+      editor_output: ThemeOutput | None,
+  ) -> None:
     found = contract.reviewer_errors(
         output, role=role, manifest=manifest, theme=theme, selections=selections, editor_output=editor_output)
     if found:
@@ -748,7 +766,7 @@ def _stage_base_request(
     selections: dict[str, list[FeedbackSelection]],
     chosen_outputs: dict[str, ThemeOutput | None],
     role: str,
-    theme,
+    theme: Theme,
 ) -> str:
   """The base request of one stage for one theme, rebuilt under the recorded contract."""
   if role == "editor":
@@ -782,7 +800,7 @@ def _verify_chain_structure(
     contract: ExchangeContract,
     role: str,
     manifest: Manifest,
-    theme,
+    theme: Theme,
     attempts: list[StageAttempt],
     selections: dict[str, list[FeedbackSelection]],
     chosen_outputs: dict[str, ThemeOutput | None],
@@ -838,7 +856,7 @@ def _mechanical_error(
     role: str,
     contract: ExchangeContract,
     manifest: Manifest,
-    theme,
+    theme: Theme,
     selections: dict[str, list[FeedbackSelection]],
     editor_output: ThemeOutput | None,
 ) -> str | None:

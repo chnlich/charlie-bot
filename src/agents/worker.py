@@ -145,6 +145,7 @@ class Worker:
           "on_spawn": on_spawn,
           "instructions_content": self._instructions_content,
           "log_dir": self._events_log.parent,
+          "cgroup_session_id": self._thread.session_id,
       }
       if self._backend_option.type == BackendType.CC_CLAUDE:
         if self._resume_session_id:
@@ -168,6 +169,7 @@ class Worker:
         on_spawn=on_spawn,
         instructions_content=self._instructions_content,
         log_dir=self._events_log.parent,
+        cgroup_session_id=self._thread.session_id,
     )
 
   async def run(self) -> int:
@@ -220,6 +222,7 @@ class Worker:
         exit_code,
         self._backend.stderr_text,
         self._backend.hang_diagnostics,
+        cgroup_report=self._backend.cgroup_exit_report(),
         clamp_to=completion,
     )
     log.info("worker_finished", thread=self._thread.id, exit_code=exit_code)
@@ -336,6 +339,7 @@ class Worker:
           config_dir=nxt.config_dir,
           pre_tokens=self._context_tokens,
           persist_and_broadcast=persist,
+          cgroup_session_id=self._thread.session_id,
           log_context={
               "thread": self._thread.id,
               "account": nxt.label,
@@ -364,6 +368,7 @@ class Worker:
       stderr_text: str,
       hang_diagnostics: dict | None,
       *,
+      cgroup_report: str | None = None,
       clamp_to: datetime | None,
   ) -> None:
     """Persist/broadcast the synthesized post-run events shared by run() and resume()."""
@@ -396,6 +401,15 @@ class Worker:
       await append_ndjson(self._events_log, stderr_event)
       await streaming_manager.broadcast(self._thread.id, stderr_event)
       log.warning("worker_stderr", thread=self._thread.id, stderr=stderr_text[:500])
+
+    if cgroup_report:
+      # Session memory-cap / host-OOM attribution (plan_01 v3 §4.2): the
+      # worker failure message channel, so the report reaches the session chat
+      # through the same events log the finalize path reads.
+      cap_event = {"type": ET.ERROR, "content": cgroup_report, "timestamp": _clamp_ts(clamp_to)}
+      await append_ndjson(self._events_log, cap_event)
+      await streaming_manager.broadcast(self._thread.id, cap_event)
+      log.warning("worker_cgroup_exit_report", thread=self._thread.id, report=cgroup_report)
 
     # Emit final completion event
     final_event = {

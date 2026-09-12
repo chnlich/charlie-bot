@@ -27,7 +27,12 @@ from src.agents.backends.base import (
 )
 from src.core import event_types as ET
 from src.core.log_once import WarnOnceRegistry
-from src.core.process import make_pdeathsig_kill_preexec, wait_or_kill_group
+from src.core.process import (
+    compose_preexec,
+    make_pdeathsig_kill_preexec,
+    make_session_cgroup_preexec,
+    wait_or_kill_group,
+)
 from src.core.sse import iter_sse_lines
 from src.core.timeouts import (
     OPENCODE_ABORT_TIMEOUT,
@@ -890,6 +895,9 @@ class OpenCodeBackend(AgentBackend):
     ]
     env = self._prepare_env(dict(os.environ), opencode_config={"permission": {"*": "deny"}})
 
+    # One-shot pipe transport: pdeathsig preexec merged with the session
+    # cgroup move (behavior unchanged when cgroup control is off).
+    self._active_session_cgroup = self._prepare_session_cgroup()
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.DEVNULL,
@@ -898,7 +906,9 @@ class OpenCodeBackend(AgentBackend):
         env=env,
         limit=self._buffer_limit,
         start_new_session=True,
-        preexec_fn=make_pdeathsig_kill_preexec(),
+        preexec_fn=compose_preexec(
+            make_pdeathsig_kill_preexec(),
+            make_session_cgroup_preexec(self._active_session_cgroup.path if self._active_session_cgroup else None)),
     )
 
     async def _collect() -> str:

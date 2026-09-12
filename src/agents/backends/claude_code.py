@@ -14,7 +14,7 @@ from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR
 from src.core.log_once import WarnOnceRegistry
 from src.core.models import SESSION_ID_ENV_VAR
-from src.core.process import kill_process_group
+from src.core.process import kill_process_group, make_session_cgroup_preexec
 
 log = structlog.get_logger()
 
@@ -321,6 +321,10 @@ class ClaudeCodeBackend(AgentBackend):
     Print mode with tools disabled: no session persistence, prompt on stdin,
     plain-text stdout. The process group is killed on timeout.
     """
+    # Session-scoped one-shots land in the session's memory-cap cgroup; a
+    # backend built with cgroup_session_id=None (no session home) spawns
+    # exactly as before (preexec None).
+    self._active_session_cgroup = self._prepare_session_cgroup()
     proc = await asyncio.create_subprocess_exec(
         "claude",
         "-p",
@@ -337,6 +341,8 @@ class ClaudeCodeBackend(AgentBackend):
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
+        preexec_fn=make_session_cgroup_preexec(
+            self._active_session_cgroup.path if self._active_session_cgroup else None),
     )
     try:
       stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=timeout)

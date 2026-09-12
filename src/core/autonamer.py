@@ -220,7 +220,7 @@ async def maybe_auto_name(
 
     for option in options:
       try:
-        backend = build_backend(option, cfg)
+        backend = build_backend(option, cfg, cgroup_session_id=session_meta.id)
         raw = await backend.one_shot_text(f"{title_instruction}\n\n{prompt}", system_prompt, timeout=AUTONAMER_TIMEOUT)
       except Exception as e:
         log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))

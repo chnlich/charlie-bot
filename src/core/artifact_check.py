@@ -800,6 +800,8 @@ def run_probe(cfg: CharlieBotConfig, artifact: Path, trigger: str) -> ProbeResul
   attempts: list[tuple[str, str]] = []
   for option in options:
     try:
+      # No cgroup_session_id: the artifact probe runs from the CLI with no
+      # CharlieBot session home, so it cannot enter any session's cgroup.
       answer = asyncio.run(
           build_backend(option, cfg).one_shot_text(prompt, _PROBE_SYSTEM_PROMPT, timeout=ARTIFACT_PROBE_TIMEOUT))
       return ProbeResult(attempts=attempts, backend_id=option.id, answer=answer)

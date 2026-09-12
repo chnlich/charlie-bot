@@ -42,8 +42,8 @@ from src.agents.backends.claude_code import (
 )
 from src.core import claude_accounts
 from src.core import event_types as ET
-from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
-from src.core.process import kill_process_group
+from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, get_config
+from src.core.process import kill_process_group, make_session_cgroup_preexec, prepare_session_cgroup
 
 log = structlog.get_logger()
 
@@ -207,6 +207,7 @@ async def compact_with_sonnet(
     persist_and_broadcast: Callable[[dict], Awaitable[None]],
     log_context: dict,
     timeout: float = COMPACTION_TIMEOUT_SECONDS,
+    cgroup_session_id: str | None = None,
 ) -> bool:
   """Compact *cc_session_id*'s transcript under *config_dir* with Sonnet; True on success.
 
@@ -214,6 +215,10 @@ async def compact_with_sonnet(
   caller's pre-compaction reading, else the boundary row's own count) or one
   ``context_compact_failed`` (``error`` names the cause). Never raises for a
   failed run: the caller proceeds on the untouched transcript.
+
+  *cgroup_session_id* is the owning CharlieBot session, so the compaction
+  process lands in that session's memory-cap cgroup; None (no session home)
+  spawns exactly as before.
   """
   transcript = claude_accounts.transcript_path(config_dir, cc_session_id)
   if transcript is None:
@@ -221,6 +226,12 @@ async def compact_with_sonnet(
   before = count_compact_boundaries(transcript)
   cmd = compaction_command(cc_session_id)
   log.info("claude_compaction_starting", cc_session_id=cc_session_id, pre_tokens=pre_tokens, **log_context)
+  cfg = get_config()
+  session_cgroup = prepare_session_cgroup(
+      cgroup_session_id,
+      memory_max_mb=cfg.server.session_memory_max_mb,
+      swap_max_mb=cfg.server.session_swap_max_mb,
+  )
   try:
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -230,6 +241,7 @@ async def compact_with_sonnet(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
+        preexec_fn=make_session_cgroup_preexec(session_cgroup.path if session_cgroup else None),
     )
   except OSError as exc:
     return await _fail(persist_and_broadcast, log_context, f"could not start {cmd[0]}: {exc}")

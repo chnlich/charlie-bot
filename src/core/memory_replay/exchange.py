@@ -36,10 +36,10 @@ manifest cannot carry them.
 import json
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ValidationError
 
 from src.core.memory_replay.errors import ReplayModelOutputError
-from src.core.memory_replay.manifest import Manifest, Theme
+from src.core.memory_replay.manifest import Manifest, Theme, _StrictModel
 from src.core.memory_replay.retrieval import FeedbackSelection
 
 EDITOR_PROMPT_VERSION = "memory-replay-editor-v3"
@@ -173,10 +173,8 @@ REVIEWER_SYSTEM = _system(
 )
 
 
-class EntryOpSpec(BaseModel):
+class EntryOpSpec(_StrictModel):
   """One model-returned entry operation (response contract, parsed form)."""
-
-  model_config = ConfigDict(extra="forbid")
 
   action: str
   path: str
@@ -185,10 +183,8 @@ class EntryOpSpec(BaseModel):
   reason: str
 
 
-class CandidateRowSpec(BaseModel):
+class CandidateRowSpec(_StrictModel):
   """One model-returned candidate disposition (response contract, parsed form)."""
-
-  model_config = ConfigDict(extra="forbid")
 
   source_ref: str
   outcome: str
@@ -196,9 +192,7 @@ class CandidateRowSpec(BaseModel):
   reason: str
 
 
-class ModelOutputSpec(BaseModel):
-  model_config = ConfigDict(extra="forbid")
-
+class ModelOutputSpec(_StrictModel):
   entries: list[EntryOpSpec]
   candidates: list[CandidateRowSpec]
 

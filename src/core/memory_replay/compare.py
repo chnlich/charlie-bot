@@ -693,8 +693,7 @@ def _raise_request_mismatch(role: str, name: str, attempt: int) -> None:
 
 
 def _verify_chain_structure(
-    contract: ExchangeContract, role: str, manifest: Manifest, theme,
-    attempts: list[StageAttempt]) -> None:
+    contract: ExchangeContract, role: str, manifest: Manifest, theme, attempts: list[StageAttempt]) -> None:
   """The chain must be a bounded recovery chain: consecutive, at most two, failures recorded."""
   name = theme.name
   numbers = [a.attempt for a in attempts]

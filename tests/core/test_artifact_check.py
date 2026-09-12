@@ -944,7 +944,9 @@ def test_byte_integrity_passes_on_every_genre_template() -> None:
   for template in artifact_check._GENRE_TEMPLATES.values():
     artifact = _REPO_ROOT / "prompts" / template
     ctx = artifact_check._Context(
-        genre="explain", artifact=artifact, root=artifact_check._parse_dom(artifact.read_text(encoding="utf-8")),
+        genre="explain",
+        artifact=artifact,
+        root=artifact_check._parse_dom(artifact.read_text(encoding="utf-8")),
         cfg=None)
     assert [o.passed for o in artifact_check._check_byte_integrity(ctx)] == [True], template
 

@@ -28,19 +28,10 @@ def git_worktree_dir_name(branch_name: str) -> str:
 
 async def git_current_branch(repo_path: Path) -> str:
   """Get the current branch of the repo."""
-  proc = await asyncio.create_subprocess_exec(
-      "git",
-      "rev-parse",
-      "--abbrev-ref",
-      "HEAD",
-      cwd=str(repo_path),
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.PIPE,
-  )
   try:
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+    proc, stdout, stderr = await _git_proc_bytes(
+        repo_path, "rev-parse", "--abbrev-ref", "HEAD", timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
   except TimeoutError as e:
-    proc.kill()
     raise RuntimeError(f'git rev-parse timed out after {SUBPROCESS_GIT_READ_TIMEOUT_ASYNC}s in {repo_path}') from e
   if proc.returncode != 0:
     err_msg = stderr.decode().strip()
@@ -72,13 +63,17 @@ class BaseResolution:
   detail: str  # human-readable resolution summary for prompt/log audit
 
 
-async def _git_stdout(
-    repo_path: Path,
+async def _git_proc_bytes(
+    repo_path: Path | str,
     *args: str,
     timeout: int,
-    timeout_label: str,
-) -> tuple[bool, str, str]:
-  """Run a git command with timeout. Returns (success, stdout, stderr)."""
+) -> tuple[asyncio.subprocess.Process, bytes, bytes]:
+  """Spawn git, read both pipes under *timeout*, and kill the process on timeout.
+
+  The timeout surfaces as a re-raised TimeoutError so each caller keeps its own
+  timeout policy; the mechanics — the spawn, the pipe capture, and the kill
+  that stops a timed-out git — live only here.
+  """
   proc = await asyncio.create_subprocess_exec(
       "git",
       *args,
@@ -90,6 +85,20 @@ async def _git_stdout(
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
   except TimeoutError:
     proc.kill()
+    raise
+  return proc, stdout, stderr
+
+
+async def _git_stdout(
+    repo_path: Path,
+    *args: str,
+    timeout: int,
+    timeout_label: str,
+) -> tuple[bool, str, str]:
+  """Run a git command with timeout. Returns (success, stdout, stderr)."""
+  try:
+    proc, stdout, stderr = await _git_proc_bytes(repo_path, *args, timeout=timeout)
+  except TimeoutError:
     return False, "", f"{timeout_label} timed out after {timeout}s"
   if proc.returncode != 0:
     return False, stdout.decode().strip(), stderr.decode().strip()
@@ -310,22 +319,18 @@ async def git_create_worktree(
   """
   resolution = await resolve_base_branch(repo_path, base_branch, remote_tip=remote_tip)
   start_point = resolution.start_point
-  proc = await asyncio.create_subprocess_exec(
-      "git",
-      "worktree",
-      "add",
-      "-b",
-      branch_name,
-      str(wt_path),
-      start_point,
-      cwd=str(repo_path),
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.PIPE,
-  )
   try:
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_WRITE_TIMEOUT)
+    proc, stdout, stderr = await _git_proc_bytes(
+        repo_path,
+        "worktree",
+        "add",
+        "-b",
+        branch_name,
+        str(wt_path),
+        start_point,
+        timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
+    )
   except TimeoutError as e:
-    proc.kill()
     raise RuntimeError(f'git worktree add timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s for {branch_name}') from e
   if proc.returncode != 0:
     out = stdout.decode().strip()
@@ -490,20 +495,10 @@ async def git_worktree_remove(
       raise RuntimeError(f"refusing to remove non-directory worktree: {wt_path}")
     await _remove_local_worktree_artifacts(wt_path, thread_id)
 
-  proc = await asyncio.create_subprocess_exec(
-      "git",
-      "worktree",
-      "remove",
-      "--force",
-      str(wt_path),
-      cwd=repo_path,
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.PIPE,
-  )
   try:
-    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+    proc, _, stderr = await _git_proc_bytes(
+        repo_path, "worktree", "remove", "--force", str(wt_path), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
   except TimeoutError:
-    proc.kill()
     log.warning("worktree_remove_timeout", thread_id=thread_id, path=str(wt_path))
     return False
   if proc.returncode != 0:
@@ -613,18 +608,9 @@ async def git_quarantine_worktree(
 
 async def git_worktree_prune(repo_path: str, thread_id: str) -> None:
   """Prune stale worktree refs."""
-  prune_proc = await asyncio.create_subprocess_exec(
-      "git",
-      "worktree",
-      "prune",
-      cwd=repo_path,
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.PIPE,
-  )
   try:
-    await asyncio.wait_for(prune_proc.communicate(), timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+    await _git_proc_bytes(repo_path, "worktree", "prune", timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
   except TimeoutError:
-    prune_proc.kill()
     log.warning("worktree_prune_timeout", thread_id=thread_id)
 
 

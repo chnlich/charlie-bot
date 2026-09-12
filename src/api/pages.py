@@ -580,7 +580,7 @@ def _token_usage_context(tally: TokenTally) -> dict:
   top = max(rows, key=lambda r: r.total) if rows else None
   top_out = max(rows, key=lambda r: r.output) if rows else None
   per_src: dict[str, dict] = {}
-  for src in ("Claude Code", "Codex", "opencode"):
+  for src in ("Claude Code", "Codex", "opencode", "charlie-bot"):
     sub = [r for r in rows if r.source == src]
     per_src[src] = {
         "t_comp": _compact(sum(r.total for r in sub)),
@@ -610,7 +610,8 @@ def _token_usage_context(tally: TokenTally) -> dict:
                   "slot": {
                       "Claude Code": 1,
                       "Codex": 2,
-                      "opencode": 3
+                      "opencode": 3,
+                      "charlie-bot": 4
                   }[r.source],
                   "window": f"{r.first} → {r.last}",
               } for r in rows

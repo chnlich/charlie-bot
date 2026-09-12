@@ -163,6 +163,40 @@ async def test_token_usage_viewer_clears_inflight_task_after_render(
   assert calls == 2
 
 
+@pytest.mark.asyncio
+async def test_token_usage_route_labels_charliebot_source(
+    monkeypatch: pytest.MonkeyPatch, pages_config: CharlieBotConfig) -> None:
+  """The fourth source renders end to end: the row carries the charlie-bot slot and the
+  page's sources annotation names charlie-bot beside the three CLI sources."""
+  tally = _usage_tally([
+      _claude_row("2024-01-01", "2024-01-02"),
+      ModelRow(
+          model="gemini-3.8-flash",
+          source="charlie-bot",
+          calls=66,
+          in_fresh=100,
+          cache_write=0,
+          cache_read=0,
+          output=8,
+          total=108,
+          first="2024-01-01",
+          last="2024-01-02",
+          accounts=[AccountRow(name="charlie-code-gemini-3.8-flash", calls=66, output=8, total=108)]),
+  ])
+
+  monkeypatch.setattr(pages, "collect_token_usage", lambda **_kwargs: tally)
+
+  response = await pages.token_usage_viewer(make_page_request("/"))
+  assert response.status_code == 200
+  body = response.body.decode("utf-8")
+  assert "sources &middot; Claude Code / Codex / opencode / charlie-bot local logs" in body
+  assert "gemini-3.8-flash" in body
+  assert "charlie-code-gemini-3.8-flash" in body  # the account split row
+  assert "charlie-bot reads its own thread event logs" in body  # the Sources bullet
+  assert "their per-run usage lives only in the thread event logs" in body  # Not covered
+  assert "'charlie-bot':4" in body  # the JS payload's source slot
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="requires node on PATH")
 @pytest.mark.asyncio
 async def test_token_usage_inline_script_parses(

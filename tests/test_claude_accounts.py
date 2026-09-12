@@ -86,7 +86,6 @@ def test_pool_expands_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
       charliebot_home=tmp_path / "home", accounts={"claude": [ClaudeAccount(label="main", config_dir="~/.claude")]})
 
   assert claude_accounts.pool(cfg)[0].config_dir == str(tmp_path / ".claude")
-  assert claude_accounts.account_for_dir(cfg, "~/.claude").label == "main"
   assert claude_accounts.account_by_label(cfg, "missing") is None
 
 

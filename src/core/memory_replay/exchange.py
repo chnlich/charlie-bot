@@ -207,6 +207,11 @@ class CandidateRow:
   outcome: str
   paths: list[str]
   reason: str
+  # The selector's three admission proof lines (Action/Home/Brevity), present only in the
+  # baseline-flow editor contracts. Audit data: the run record keeps them, the public proposal
+  # schema never grows, and the reviewer request builder includes them exactly when the
+  # variant's declared rationale visibility says so.
+  proofs: dict[str, str] | None = None
 
 
 @dataclass
@@ -220,7 +225,7 @@ class ThemeOutput:
 
 def build_editor_request(manifest: Manifest, theme: Theme, selections: list[FeedbackSelection]) -> str:
   """The editor's user content: the theme plus the evidence JSON payload, deterministically ordered."""
-  return _render_request(theme, _evidence_payload(manifest, theme, selections))
+  return render_evidence_request(theme, evidence_payload(manifest, theme, selections))
 
 
 def build_reviewer_request(
@@ -230,7 +235,7 @@ def build_reviewer_request(
     editor_output: ThemeOutput,
 ) -> str:
   """The reviewer's user content: the editor's evidence plus its proposals, without its reasons."""
-  payload = _evidence_payload(manifest, theme, selections)
+  payload = evidence_payload(manifest, theme, selections)
   payload["editor_proposals"] = {
       "entries":
           [
@@ -243,7 +248,7 @@ def build_reviewer_request(
               } for op in editor_output.entries
           ]
   }
-  return _render_request(theme, payload)
+  return render_evidence_request(theme, payload)
 
 
 def build_repair_request(original_request: str, previous_response: str, errors: list[str]) -> str:
@@ -262,16 +267,52 @@ def build_repair_request(original_request: str, previous_response: str, errors: 
   return "\n\n".join(parts) + "\n"
 
 
-def _render_request(theme: Theme, payload: dict) -> str:
+def render_evidence_request(theme: Theme, payload: dict) -> str:
+  """The one request rendering: theme line plus one JSON payload, keys sorted for determinism."""
   evidence = json.dumps(payload, ensure_ascii=False, indent=1, sort_keys=True)
   return f"Theme: {theme.name}\n\n## Evidence\n\n{evidence}\n"
 
 
-def _evidence_payload(manifest: Manifest, theme: Theme, selections: list[FeedbackSelection]) -> dict:
-  """Every byte of frozen input for one theme, as one structured payload.
+def evidence_payload(manifest: Manifest, theme: Theme, selections: list[FeedbackSelection]) -> dict:
+  """The v3 evidence payload: the context payload plus the selected structured feedback view."""
+  payload = evidence_context_payload(manifest, theme)
+  payload["feedback"] = feedback_selections_payload(selections)
+  return payload
+
+
+def feedback_selections_payload(selections: list[FeedbackSelection]) -> list[dict]:
+  """The structured selected-feedback view: original comment, provenance, approved before/after.
+
+  The approved texts travel verbatim, the empty side of an approved deletion or creation
+  included; nothing invents placeholder prose for a side the user never wrote.
+  """
+  return [
+      {
+          "approved_change":
+              None if s.example.approved_change is None else {
+                  "after": s.example.approved_change.after,
+                  "approved_change_ref": s.example.approved_change.approved_change_ref,
+                  "before": s.example.approved_change.before,
+              },
+          "comment_event":
+              s.example.comment_event,
+          "comment_text":
+              s.example.comment_text,
+          "matched_principles":
+              list(s.matched_principles),
+          "score":
+              s.score,
+      } for s in selections
+  ]
+
+
+def evidence_context_payload(manifest: Manifest, theme: Theme) -> dict:
+  """Every frozen input byte for one theme except the feedback view, as one structured payload.
 
   The payload is the single serialization of the evidence: exact text strings with explicit
-  ref/path/kind fields, so no source text can masquerade as request structure.
+  ref/path/kind fields, so no source text can masquerade as request structure. Only the theme's
+  own assigned sources and the global guideline are included — unassigned sources stay inert and
+  must not become citable.
   """
   return {
       "allowed_topics": list(manifest.topics),
@@ -298,25 +339,6 @@ def _evidence_payload(manifest: Manifest, theme: Theme, selections: list[Feedbac
           "ref": s.ref,
           "text": s.text,
       } for s in manifest.theme_sources(theme, "entry")],
-      "feedback":
-          [
-              {
-                  "approved_change":
-                      None if s.example.approved_change is None else {
-                          "after": s.example.approved_change.after,
-                          "approved_change_ref": s.example.approved_change.approved_change_ref,
-                          "before": s.example.approved_change.before,
-                      },
-                  "comment_event":
-                      s.example.comment_event,
-                  "comment_text":
-                      s.example.comment_text,
-                  "matched_principles":
-                      list(s.matched_principles),
-                  "score":
-                      s.score,
-              } for s in selections
-          ],
       "guidelines": [{
           "ref": s.ref,
           "text": s.text

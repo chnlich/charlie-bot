@@ -143,12 +143,14 @@ def _spy_row_blobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   return projected
 
 
-def _collect(claude: Claude | None, codex: Codex | None, db: Path, cache: Path | None = None):
+def _collect(
+    claude: Claude | None, codex: Codex | None, db: Path, cache: Path | None = None, sessions: Path | None = None):
   return collect_token_usage(
       claude_homes=claude.dirs if claude else {},
       codex_homes=codex.homes if codex else {},
       opencode_db=db,
       cache_path=cache,
+      sessions_dir=sessions if sessions is not None else db.parent / "sessions",
   )
 
 
@@ -1289,7 +1291,13 @@ def test_incremental_partials_match_a_fresh_fold(tmp_path: Path) -> None:
     (d / f"{session}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
 
   def collect(label: str, homes: dict, with_cache: bool = True) -> None:
-    args = {"claude_homes": homes, "codex_homes": {}, "opencode_db": db, "cache_path": cache if with_cache else None}
+    args = {
+        "claude_homes": homes,
+        "codex_homes": {},
+        "opencode_db": db,
+        "cache_path": cache if with_cache else None,
+        "sessions_dir": tmp_path / "sessions",
+    }
     inc = collect_token_usage(**args)
     ref = _cold_reference(lambda: collect_token_usage(**{**args, "cache_path": tmp_path / "ref-cache.json"}))
     assert _tally_snapshot(inc) == _tally_snapshot(ref), label
@@ -1557,3 +1565,426 @@ def test_document_with_nan_literal_rebuilds_with_note(tmp_path: Path) -> None:
   served = _collect(None, None, db, cache)
   assert _row(served, "opencode", "oc-m").total == 6
   assert any("unreadable" in note for note in served.notes)
+
+
+# ---------------------------------------------------------------------------
+# charlie-bot source (thread event logs + master raw captures)
+# ---------------------------------------------------------------------------
+
+
+class _Option:
+  """One config.yaml backend option's shape the tally reads (id / type / model)."""
+
+  def __init__(self, id: str, type: str, model: str | None = None) -> None:
+    self.id, self.type, self.model = id, type, model
+
+
+class _Backends:
+  """The ``cfg.backends`` shape the collector reads."""
+
+  def __init__(self, options: list[_Option]) -> None:
+    self.options = options
+
+
+class _Registry:
+  """Stand-in for CharlieBotConfig's backend registry in the collector."""
+
+  def __init__(self, *options: _Option) -> None:
+    self.backends = _Backends(list(options))
+
+
+def _stub_registry(monkeypatch: pytest.MonkeyPatch, *options: _Option) -> None:
+  monkeypatch.setattr(tt, "get_config", lambda: _Registry(*options))
+
+
+_CLC_GEMINI = _Option("charlie-code-gemini-3.8-flash", "charlie-code", "openai/gemini-3.8-flash")
+_CLC_GLM = _Option("charlie-code-glm53-flash", "charlie-code", "openai/zai-org/GLM-5.3-Flash")
+
+
+class Charliebot:
+  """Synthetic charlie-bot corpus: session thread logs and master-run captures."""
+
+  def __init__(self, tmp_path: Path) -> None:
+    self.root = tmp_path / "sessions"
+
+  def thread(
+      self,
+      session: str,
+      tid: str,
+      backend: str | None = None,
+      model: str | None = None,
+      results: list[tuple[str, dict]] = [],
+      session_ids: list[str] = [],
+      meta: bool = True,
+  ) -> Path:
+    """One thread dir with its metadata.json (unless *meta* is False) and events.jsonl whose
+    lines are the bare session-id events followed by result events."""
+    data = self.root / session / "threads" / tid / "data"
+    data.mkdir(parents=True, exist_ok=True)
+    if meta:
+      doc: dict = {"id": tid, "session_id": session, "description": "d", "status": "completed"}
+      if backend is not None:
+        doc["backend"] = backend
+      if model is not None:
+        doc["model"] = model
+      (data.parent / "metadata.json").write_text(json.dumps(doc))
+    lines = [{"session_id": sid, "timestamp": "2026-07-01T00:00:00+00:00"} for sid in session_ids]
+    lines.extend({"type": "result", "result": "", "usage": usage, "timestamp": ts} for ts, usage in results)
+    with (data / "events.jsonl").open("w") as fh:
+      for line in lines:
+        fh.write(json.dumps(line) + "\n")
+    return data / "events.jsonl"
+
+  def master(self, session: str, started: str, lines: list[dict]) -> Path:
+    """One master-run capture; *lines* are the raw NDJSON events."""
+    run = self.root / session / "data" / "master_runs" / started
+    run.mkdir(parents=True, exist_ok=True)
+    with (run / "agent.raw.ndjson").open("w") as fh:
+      for line in lines:
+        fh.write(json.dumps(line) + "\n")
+    return run / "agent.raw.ndjson"
+
+  def raw_master(self, session: str, started: str, raw: str) -> Path:
+    """One master-run capture written verbatim (for shapes other writers produce)."""
+    run = self.root / session / "data" / "master_runs" / started
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "agent.raw.ndjson").write_text(raw)
+    return run / "agent.raw.ndjson"
+
+
+def _write_rollout(codex_home: Path, sid: str) -> None:
+  """A codex rollout file whose name embeds *sid* the way the CLI names them."""
+  day = codex_home / "sessions" / "2026" / "09" / "11"
+  day.mkdir(parents=True, exist_ok=True)
+  (day / f"rollout-2026-09-11T10-00-00-{sid}.jsonl").write_text("{}\n")
+
+
+def _result_usage(input_: int, output: int, cache_read: int = 0) -> dict:
+  return {
+      "input_tokens": input_,
+      "output_tokens": output,
+      "cache_read_input_tokens": cache_read,
+      "cache_creation_input_tokens": 0,
+  }
+
+
+def test_charliebot_thread_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """charlie-code-type threads count under their backend id; claude/opencode-type threads
+  (whose runs the CLI sources already carry) stay out entirely."""
+  _stub_registry(monkeypatch, _CLC_GEMINI)
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  cb.thread(
+      "s1",
+      "t2",
+      backend="claude-sonnet-5",
+      model="claude-sonnet-5",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(2000, 20))])
+  cb.thread(
+      "s1",
+      "t3",
+      backend="opencode-kimi-k3",
+      model="fpt-kimi-k3/moonshotai/Kimi-K3",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(3000, 30))])
+
+  tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
+
+  row = _row(tally, "charlie-bot", "gemini-3.8-flash")
+  assert row.calls == 1
+  # The envelope's numbers go in verbatim: input 1000 + output 50.
+  assert row.in_fresh == 1000 and row.cache_read == 0 and row.output == 50
+  assert row.total == 1050
+  assert [a.name for a in row.accounts] == ["charlie-code-gemini-3.8-flash"]
+  assert [(r.model, r.calls) for r in tally.rows if r.source == "charlie-bot"] == [("gemini-3.8-flash", 1)]
+  assert any(n == "charlie-bot: 1 usage results (CLC + offline codex)" for n in tally.notes)
+
+
+def test_charliebot_master_legs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A CLC-shaped capture counts once, with the context line's model and the registry's
+  backend id as the account; captures without the context line (the claude CLI's own
+  stream) or without a trailing result contribute nothing."""
+  _stub_registry(monkeypatch, _CLC_GLM)
+  cb = Charliebot(tmp_path)
+  cb.master(
+      "s1", "2026-09-11T21:11:10.460207+00:00", [
+          {
+              "type": "session",
+              "session_id": "clc-1"
+          },
+          {
+              "type": "context",
+              "step": 1,
+              "prompt_tokens": 10,
+              "model": "openai/zai-org/GLM-5.3-Flash"
+          },
+          {
+              "type": "thought",
+              "step": 1,
+              "text": "t"
+          },
+          {
+              "type": "result",
+              "completed": True,
+              "n_steps": 2,
+              "usage": {
+                  "n_calls": 3,
+                  "input_tokens": 500,
+                  "output_tokens": 25
+              }
+          },
+      ])
+  # A claude-shaped capture: compact separators, no context line, claude-style result.
+  cb.raw_master(
+      "s1", "2026-09-10T00:00:00+00:00", '{"type":"system","subtype":"init","session_id":"x"}\n'
+      '{"type":"result","usage":{"input_tokens":9,"output_tokens":1}}\n')
+  # A CLC shape killed mid-turn: context but no result yet.
+  cb.master(
+      "s1", "2026-09-09T00:00:00+00:00", [
+          {
+              "type": "context",
+              "step": 1,
+              "prompt_tokens": 1,
+              "model": "openai/zai-org/GLM-5.3-Flash"
+          },
+      ])
+
+  tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
+
+  row = _row(tally, "charlie-bot", "GLM-5.3-Flash")
+  assert row.calls == 1
+  assert row.total == 525
+  assert [a.name for a in row.accounts] == ["charlie-code-glm53-flash"]  # model matched the registry
+  assert row.first == "2026-09-11" and row.last == "2026-09-11"  # ts is the run dir's start time
+  assert [(r.model, r.calls) for r in tally.rows if r.source == "charlie-bot"] == [("GLM-5.3-Flash", 1)]
+
+
+def test_charliebot_master_account_falls_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A capture whose model matches no charlie-code backend still counts, under the
+  clc-master account, with a note saying so."""
+  _stub_registry(monkeypatch, _CLC_GLM)
+  cb = Charliebot(tmp_path)
+  cb.master(
+      "s1", "2026-09-11T21:11:10.460207+00:00", [
+          {
+              "type": "context",
+              "step": 1,
+              "prompt_tokens": 1,
+              "model": "openai/retired-model-x"
+          },
+          {
+              "type": "result",
+              "completed": True,
+              "usage": {
+                  "input_tokens": 10,
+                  "output_tokens": 2
+              }
+          },
+      ])
+
+  tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
+
+  row = _row(tally, "charlie-bot", "retired-model-x")
+  assert row.calls == 1 and row.total == 12
+  assert [a.name for a in row.accounts] == ["clc-master"]
+  assert any("clc-master" in n and "1 master results" in n for n in tally.notes)
+
+
+def test_charliebot_metadata_classification(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A null backend field classifies through the config model; an unknown model and an
+  unknown id with an unknown prefix land in the notes instead of any row."""
+  _stub_registry(monkeypatch, _CLC_GLM)
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend=None,
+      model="openai/zai-org/GLM-5.3-Flash",
+      results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5))])
+  cb.thread(
+      "s1", "t2", backend=None, model="mystery/model-x", results=[("2026-09-11T20:00:00+00:00", _result_usage(200, 5))])
+  cb.thread(
+      "s1", "t3", backend="weird-backend-x", model=None, results=[("2026-09-11T20:00:00+00:00", _result_usage(300, 5))])
+
+  tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
+
+  row = _row(tally, "charlie-bot", "GLM-5.3-Flash")
+  assert row.calls == 1 and row.total == 105
+  assert [a.name for a in row.accounts] == ["charlie-code-glm53-flash"]
+  assert not any(r.model in ("model-x", "weird-backend-x") for r in tally.rows if r.source == "charlie-bot")
+  assert any("weird-backend-x" in n and "1 results not counted" in n for n in tally.notes)
+  assert any("thread t2 (no backend id)" in n and "1 results not counted" in n for n in tally.notes)
+
+
+def test_charliebot_codex_reconciliation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A codex thread counts only when none of its session ids has a rollout on disk: one id
+  on disk skips, an id that only lives in the thread log counts, and a multi-id thread with
+  any id on disk skips whole with a note. A retired id not in config.yaml classifies by its
+  prefix and names its row after the id's own model segment."""
+  _stub_registry(monkeypatch, _Option("codex-gpt-5.6-luna", "codex", "gpt-5.6-luna"))
+  codex = Codex(tmp_path)
+  cb = Charliebot(tmp_path)
+  # Session ids in the rollout-name shape: five dash-separated groups, so the file-name
+  # extraction (the id is the last five) sees the same string the event log carries.
+  s1, s2, s3 = "01a09201-0000-7000-8000-000000000001", "01a09201-0000-7000-8000-000000000002", \
+      "01a09201-0000-7000-8000-000000000003"
+  multi_a, multi_b = "01a09201-0000-7000-8000-00000000000a", "01a09201-0000-7000-8000-00000000000b"
+  cb.thread(
+      "s1",
+      "t1",
+      backend="codex-gpt-5.6-luna",
+      model="gpt-5.6-luna",
+      session_ids=[s1],
+      results=[("2026-08-01T00:00:00+00:00", _result_usage(1000, 10, cache_read=800))])
+  _write_rollout(codex.home, s1)
+  cb.thread(
+      "s1",
+      "t2",
+      backend="codex-gpt-5.6-luna",
+      model="gpt-5.6-luna",
+      session_ids=[s2],
+      results=[("2026-08-02T00:00:00+00:00", _result_usage(2000, 20, cache_read=500))])
+  cb.thread(
+      "s1",
+      "t3",
+      backend="codex-gpt-5.5-personal",
+      model="gpt-5.5",
+      session_ids=[s3],
+      results=[("2026-08-03T00:00:00+00:00", _result_usage(3000, 30))])
+  cb.thread(
+      "s1",
+      "t4",
+      backend="codex-gpt-5.6-luna",
+      model="gpt-5.6-luna",
+      session_ids=[multi_a, multi_b],
+      results=[("2026-08-04T00:00:00+00:00", _result_usage(4000, 40))])
+  _write_rollout(codex.home, multi_a)
+
+  tally = _collect(None, codex, tmp_path / "db.sqlite", sessions=cb.root)
+
+  models = {r.model: r for r in tally.rows if r.source == "charlie-bot"}
+  assert set(models) == {"gpt-5.6-luna", "gpt-5.5-personal"}
+  assert models["gpt-5.6-luna"].calls == 1  # t2 only; t1 and t4 are on disk
+  assert models["gpt-5.6-luna"].total == 2520  # envelope buckets verbatim
+  assert models["gpt-5.5-personal"].calls == 1  # retired id, classified by prefix
+  assert models["gpt-5.5-personal"].accounts[0].name == "codex-gpt-5.5-personal"
+  skips = [n for n in tally.notes if n.startswith("charlie-bot: skipped codex thread")]
+  assert any("t1" in n and s1 in n for n in skips)
+  assert any("t4" in n and multi_a in n for n in skips)
+  assert any(n == "charlie-bot: 2 usage results (CLC + offline codex)" for n in tally.notes)
+
+
+def test_charliebot_missing_metadata_skips_with_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _stub_registry(monkeypatch)
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))],
+      meta=False)
+
+  tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
+
+  assert not any(r.source == "charlie-bot" for r in tally.rows)
+  assert any(n == "charlie-bot: skipped thread t1: no metadata.json" for n in tally.notes)
+  assert any(n == "charlie-bot: 0 usage results (CLC + offline codex)" for n in tally.notes)
+
+
+def test_charliebot_cache_serves_and_appends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Unchanged thread logs and captures serve from the document; an appended result event
+  shows up through the tail parse, and a trailing master result replaces the stored one."""
+  _stub_registry(monkeypatch, _CLC_GEMINI)
+  cb = Charliebot(tmp_path)
+  events = cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  capture = cb.master(
+      "s1", "2026-09-11T21:00:00+00:00", [
+          {
+              "type": "context",
+              "step": 1,
+              "prompt_tokens": 1,
+              "model": "openai/gemini-3.8-flash"
+          },
+          {
+              "type": "result",
+              "completed": True,
+              "usage": {
+                  "input_tokens": 100,
+                  "output_tokens": 5
+              }
+          },
+      ])
+  db, cache = tmp_path / "db.sqlite", tmp_path / "cache.json"
+  first = _collect(None, None, db, cache, sessions=cb.root)
+  assert _row(first, "charlie-bot", "gemini-3.8-flash").calls == 2
+
+  second = _collect(None, None, db, cache, sessions=cb.root)
+  assert second.scanned_bytes == 0  # everything served from the document
+  assert _row(second, "charlie-bot", "gemini-3.8-flash").total == \
+      _row(first, "charlie-bot", "gemini-3.8-flash").total
+
+  with events.open("a") as fh:
+    fh.write(
+        json.dumps(
+            {
+                "type": "result",
+                "result": "",
+                "usage": _result_usage(70, 3),
+                "timestamp": "2026-09-12T01:00:00+00:00"
+            }) + "\n")
+  with capture.open("a") as fh:
+    fh.write(
+        json.dumps({
+            "type": "result",
+            "completed": True,
+            "usage": {
+                "input_tokens": 200,
+                "output_tokens": 8
+            }
+        }) + "\n")
+  third = _collect(None, None, db, cache, sessions=cb.root)
+  row = _row(third, "charlie-bot", "gemini-3.8-flash")
+  assert row.calls == 3  # thread result appended + the capture's replaced trailing result
+  # Envelope buckets verbatim: thread 1000+50 and 70+3, the capture's new trailing 200+8.
+  assert row.total == (1000 + 50) + (70 + 3) + (200 + 8)
+  assert row.accounts[0].calls == 3
+  assert 0 < third.scanned_bytes < first.scanned_bytes  # only the two moved files re-parsed
+
+
+def test_charliebot_walk_errors_become_notes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A thread log unreadable at first parse is a note, and the rest of the corpus still counts.
+  (A log that turns unreadable AFTER its entry was cached keeps serving that entry, the same
+  contract every per-file source runs under: the stat pair still matches, so the file is
+  never reopened.)"""
+  _stub_registry(monkeypatch, _CLC_GEMINI)
+  cb = Charliebot(tmp_path)
+  events = cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:08:00+00:00", _result_usage(1000, 50))])
+  cb.thread(
+      "s1",
+      "t2",
+      backend="charlie-code-gemini-3.8-flash",
+      model="openai/gemini-3.8-flash",
+      results=[("2026-09-11T22:09:00+00:00", _result_usage(10, 1))])
+  events.chmod(0o000)
+  try:
+    tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
+  finally:
+    events.chmod(0o644)
+  assert any("unreadable" in n and "t1" in n for n in tally.notes)
+  row = _row(tally, "charlie-bot", "gemini-3.8-flash")
+  assert row.calls == 1 and row.total == 11  # only t2 counted

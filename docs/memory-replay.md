@@ -19,7 +19,9 @@ charliebot memory replay \
 ```
 
 A recorded `editor-review` run can then be compared against its own editor-only
-alternative (below).
+alternative (below). The fixed-input variant experiment — one command that runs
+the named curation variants over several frozen cases — is documented in
+[The fixed-input variant experiment](#the-fixed-input-variant-experiment).
 
 - `--backend` names a `backends.options` entry in the profile's `config.yaml`.
   Replay supports `charlie-code` and `cc-openai-compatible` entries (the
@@ -306,10 +308,113 @@ modified.
 - Proposed entry paths must match `entries/<topic>/<slug>.md` in the store's
   charsets, which rules out traversal; new entries must use a declared topic.
 
+## The fixed-input variant experiment
+
+```bash
+charliebot memory experiment \
+  --input <manifest.yaml> [<manifest.yaml> ...] \
+  --output-dir <directory> \
+  --backend <configured-id> \
+  [--variants NAME ...]
+```
+
+One invocation runs the selected variants against every supplied manifest case
+(each file's stem names the case) and writes a self-contained summary plus a
+readable HTML report under the output root:
+
+```
+<output-dir>/
+  experiment.json                          # the self-contained variant-comparison summary
+  report.html                              # the readable comparison page
+  cases/<case>/runs/<variant>/runs/<id>/    # one replay bundle per case x variant (full run record)
+  cases/<case>/comparisons/<variant>/       # the paired comparison of that run (editor-only control)
+```
+
+The variants are defined once, in `src/core/memory_replay/variants.py`; the CLI
+and the pipeline only resolve names. They are, by content:
+
+| variant | editor stage | reviewer stage | feedback view | rationale | reviewer capability |
+|---|---|---|---|---|---|
+| `baseline-original-flow` | baseline selector | baseline trim review | raw history | visible | trim-only |
+| `rationale-hidden-review` | baseline selector | baseline trim review | raw history | **hidden** | trim-only |
+| `whole-entry-review` | baseline selector | **whole-entry review** | raw history | visible | **whole-entry** |
+| `approved-edit-feedback` | baseline selector | baseline trim review | **selected structured** | visible | trim-only |
+| `combined-proposed-design` | **proposed design** | **proposed design** | **selected structured** | **hidden** | **whole-entry** |
+
+Each single-intervention variant changes exactly one bolded dimension relative
+to the baseline; the combined variant is the approved design. The baseline is
+anchored to the authoritative original prompts
+`prompts/cron/memory_curator/memory_selector.md` and
+`prompts/cron/memory_curator/memory_reviewer.md`, pinned at git revision
+`183fb29fa91b03a2c457ff7c73846299a44c420f` with their sha256 fingerprints
+carried in the variant definition (`src/core/memory_replay/variants.py`), so
+the adaptation can be audited against exactly those texts (`git show`). Everything else —
+the frozen source snapshots, guideline, allowed topics, candidate set,
+transport, JSON evidence payload, bounded recovery, validation, proposal
+finalization, and paired comparison — is shared, so a variant difference is
+attributable to its declared dimension alone.
+
+**What is adapted, in every variant alike** (the summary carries this list):
+mining, scheduling, the pending-proposal guard, and the production lint/report
+subprocesses are frozen out — candidates arrive as manifest sources and nothing
+touches the live store; the prompts' external reads (the guideline skill, the
+master prompt's Writing Style section) are replaced by the frozen guideline
+source, and every variant's prompts state the user's explicit English-memory
+requirement so the guideline's stale language clause never confounds a
+comparison; working-tree edits and `git checkout` restorations become
+base-relative entry operations; the selector's handoff sheet becomes recorded
+model output (dispositions plus the three Action/Home/Brevity proof lines),
+whose visibility in the reviewer request is the declared rationale dimension;
+and trim-only review is validated mechanically as **line removal** — a
+trim-only reviewer's returned text for a path must be the selector's proposed
+text for that path with whole lines removed, in order, which is the narrow
+mechanical form of the pinned reviewer's "deleted or trimmed" under its
+no-new-prose rule. Within-line rewriting is unavailable to it; a capability
+violation is a visible execution failure eligible for the same one bounded
+re-ask, never coerced into acceptance.
+
+**Old-flow feedback is not no-feedback.** The production selector reads a
+user-message digest, so the baseline's *raw-history* view exposes the
+manifest's whole prior-comment pool — verbatim comment texts with provenance
+ids, no approved revisions, exactly what the digest carried. The
+`approved-edit-feedback` intervention replaces that with the existing relevance
+selection and the structured original-comment / approved-before/after
+examples, supplied to both editing and review as in the new design. Both views
+render from the identical frozen pool; an absent approved after-text stays
+absent, and an approved creation or deletion keeps its empty side verbatim.
+
+**Citations follow the actual stage input.** For the experimental contracts the
+allowed citation set is derived from what a stage actually saw — its theme's
+assigned sources, the guideline, and exactly the feedback ids its view exposed
+(approved-change refs only when their content was exposed) — and the same set
+is enforced on the initial attempt, on repairs, and in the later comparison. A
+response cannot cite a document its request never carried, or an approved
+change its feedback view never showed. Recorded v2/v3 runs keep their original
+wider citation meanings.
+
+**Reuse, failures, and exit codes.** A completed case x variant bundle is
+identified by its inputs, mode, model, prompt versions, and the variant's
+behavioral definition; repeating the experiment reuses it without model calls.
+A failed or killed attempt under the same output root stays exactly as
+recorded — visible, with its attempt chain and usage — and is never silently
+deleted and rerun; a fresh output root is an intentional new experimental draw.
+The summary and report link the exact replay bundles and paired comparisons;
+each arm's editor-only control comes from the paired comparison of the same
+run, i.e. from the exact editor response that variant's reviewer consumed, not
+from a fresh editor call. Variants draw their own editor responses; the summary
+discloses which arms genuinely shared a byte-identical response, and a single
+stochastic draw never grounds a causal claim. Semantic quality stays unjudged:
+fewer lines, fewer proposals, or more deletions are recorded data, never a
+quality pass. The exit status is 0 when every arm completed execution, format
+validation, and its paired comparison; 1 when any arm failed (the summary is
+still written and the failures stay recorded); and 1 without a summary when
+the experiment itself could not run (bad arguments, manifest, backend, or
+output root).
+
 ## Out of scope in this delivery
 
 Live curator prompts, daily scheduling, the production approval/commit
 endpoints, and any claim of measured quality improvement are all later work.
-The private historical corpus and the baseline-versus-new-design comparison
-belong to the master's evaluation step; synthetic tests here assert only the
-observable boundaries of the core.
+The private historical corpus and the master's scoring of these runs belong to
+the master's evaluation step; synthetic tests here assert only the observable
+boundaries of the core.

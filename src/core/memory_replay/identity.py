@@ -5,7 +5,8 @@ UTF-8), give replay its reuse rule and its approval binding:
 
 - **input identity** covers everything the models can see plus everything that
   selects it: every source, the whole feedback pool, theme assignments, the
-  mode, the model identity, and the prompt versions. New relevant feedback,
+  mode, the model identity, the prompt versions, and — for the experimental
+  variant contracts — the variant's behavioral definition. New relevant feedback,
   rule, or document evidence changes it, so a completed run is reused only
   while its inputs are still current. Derived from artifacts alone — there is
   no workflow state machine behind a rerun.
@@ -35,8 +36,15 @@ def input_identity(
     model_identity: dict,
     editor_prompt_version: str,
     reviewer_prompt_version: str,
+    variant: dict | None = None,
 ) -> str:
-  """The identity a completed run is reused on: frozen inputs + selection inputs + transport."""
+  """The identity a completed run is reused on: frozen inputs + selection inputs + transport.
+
+  ``variant`` carries the behavioral definition of an experimental variant contract (name,
+  version, and its declared dimensions). It is absent — never an empty dict — for standalone
+  v2/v3 runs, so their recorded identities stay byte-stable and archived runs are never
+  silently reinterpreted under a variant key they were never run under.
+  """
   payload = {
       "manifest_version": 1,
       "base_commit": manifest.base_commit,
@@ -85,6 +93,8 @@ def input_identity(
           "reviewer": reviewer_prompt_version,
       },
   }
+  if variant is not None:
+    payload["variant"] = variant
   return sha256_hex(canonical_bytes(payload))
 
 

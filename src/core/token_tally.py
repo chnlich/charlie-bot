@@ -7,6 +7,8 @@ Sources, all local logs (no vendor usage API is called):
   Claude Code  <config_dir>/projects/**/*.jsonl   assistant message.usage + message.model
   Codex        ~/.codex/sessions/**/*.jsonl       token_count events, model from turn_context
   opencode     ~/.local/share/opencode/opencode.db   table message, JSON data.tokens + modelID
+  charlie-bot  ~/.charliebot/sessions/*/threads/*/data/events.jsonl thread result events, and
+               ~/.charliebot/sessions/*/data/master_runs/*/agent.raw.ndjson master-run captures
 
 Two accounting traps this handles:
   1. Claude Code replays history verbatim on resume and fork, so responses are deduped on
@@ -14,10 +16,17 @@ Two accounting traps this handles:
      host are replays.
   2. Codex subagent threads inherit the parent's cumulative total_token_usage, so per-request
      last_token_usage is summed instead; total_token_usage only cross-checks root sessions.
+  3. The charlie-bot source and the CLI sources describe overlapping runs: a cc-claude /
+     codex / opencode-type thread's result event restates what the CLI's own log records, so
+     those thread types are not collected here. codex-type threads whose rollout files are
+     gone from disk (history pruned) have their usage only in the thread log; each one is
+     admitted only when none of the codex session ids its event log carries matches a
+     rollout-*.jsonl file name still under the Codex homes — any match skips the whole
+     thread, which keeps a partially-pruned multi-session thread from being counted twice.
 
-Cache — one JSON document of per-file Claude and Codex contributions (the gigabyte-scale and
-hundred-megabyte-scale sources) plus the opencode db's whole contribution, so a page load
-re-parses only the sources that changed. On top of that document, an in-process aggregate
+Cache — one JSON document of per-file Claude, Codex and charlie-bot contributions (the
+gigabyte-scale, hundred-megabyte-scale and many-small-files sources) plus the opencode db's
+whole contribution, so a page load re-parses only the sources that changed. On top of that document, an in-process aggregate
 memo holds the merged Claude+Codex partial of the last collect, keyed on the walk signature:
 the home pairs, every log file's (path, mtime_ns, size), and the walk's own error strings.
 A hit serves the sums, spans and notes without replaying a single cached record; misses to
@@ -85,7 +94,10 @@ Vocabulary:
                cache_read, output]`` per token_count event, model resolved by file position;
                opencode v1 entries: ``[model, account, ts, in_fresh, cache_write, cache_read,
                output]`` per assistant message with token counts (v2 entries carry the same
-               records as the values of ``rows``)
+               records as the values of ``rows``); charlie-bot: ``[model, account, ts,
+               in_fresh, cache_write, cache_read, output]`` per result event (account carries
+               the backend id; a master-run entry holds at most one record, its trailing
+               result)
 Cross-file replay dedupe happens at merge (first record wins in walk order), which composed
 with within-file first-wins gives exactly the global first-wins a cacheless scan computes.
 
@@ -124,6 +136,7 @@ from src.core import event_types as ET
 from src.core.codex_usage import CODEX_EVENT_MSG, CODEX_SESSION_META, CODEX_TOKEN_COUNT, CODEX_TURN_CONTEXT
 from src.core.config import get_config
 from src.core.json_utils import atomic_write_stream
+from src.core.models import BackendType
 
 DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
 DEFAULT_CODEX_HOME = Path.home() / ".codex"
@@ -336,10 +349,11 @@ def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str) -> Call
   return _onerror
 
 
-def _iter_jsonl_stats(root: Path, t: _Tally, source: str,
-                      label: str) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
-  """Yield ``(path, stat, error)`` for every ``*.jsonl`` under *root*, recording a note when a
-  directory is unreadable.
+def _iter_jsonl_stats(
+    root: Path, t: _Tally, source: str, label: str,
+    suffixes: tuple[str, ...] = (".jsonl",)) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
+  """Yield ``(path, stat, error)`` for every file under *root* whose name ends in one of
+  *suffixes*, recording a note when a directory is unreadable.
 
   ``Path.rglob`` swallows ``PermissionError`` while walking (shell-glob semantics), so an
   unreadable directory would vanish silently instead of surfacing. ``os.walk``'s ``onerror`` hook
@@ -362,16 +376,56 @@ def _iter_jsonl_stats(root: Path, t: _Tally, source: str,
         if entry.is_dir():
           if not entry.is_symlink():
             stack.append(entry.path)
-        elif entry.name.endswith(".jsonl"):
+        elif entry.name.endswith(suffixes):
           try:
             yield entry.path, entry.stat(follow_symlinks=True), None
           except OSError as exc:
             yield entry.path, None, repr(exc)
 
 
-def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path]) -> tuple:
-  """Walk signature of the Claude+Codex corpus: home pairs, every jsonl's stat pair, and the
-  walk's own error strings. Any corpus or permission move changes the tuple."""
+def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str, os.stat_result | None, str | None]]:
+  """Yield ``(kind, path, stat, error)`` over the charlie-bot corpus: every session directory's
+  thread event logs (``threads/*/data/events.jsonl``, kind ``"thread"``) and master raw
+  captures (``data/master_runs/*/agent.raw.ndjson``, kind ``"master"``).
+
+  The two shapes are scoped by subtree, not by name: under ``threads/`` the only jsonl files
+  are event logs, and under ``data/master_runs/`` the only ndjson files are raw captures, so
+  the walk never sees the session-level ``chat_events.jsonl`` or the workers' own
+  ``threads/*/data/agent.raw.ndjson`` (those runs' usage is already in their thread's event
+  log). A missing sessions root or session subtree is an empty corpus, not an error — the
+  same contract _iter_jsonl_stats runs under; anything else unreadable becomes a note.
+  """
+  try:
+    scandir = os.scandir(sessions)
+  except OSError as exc:
+    if not isinstance(exc, FileNotFoundError):
+      t.notes.append(f"charlie-bot: unreadable {sessions}: {exc}")
+    return
+  with scandir:
+    for entry in scandir:
+      if not entry.is_dir() or entry.is_symlink():
+        continue
+      session = Path(entry.path)
+      for kind, sub, suffixes in (("thread", "threads", (".jsonl",)), ("master", "data/master_runs", (".ndjson",))):
+        for path, st, error in _iter_jsonl_stats(session / sub, t, "charlie-bot", kind, suffixes):
+          yield kind, path, st, error
+
+
+def _charliebot_signature(sessions: Path) -> tuple:
+  """Walk signature of the charlie-bot corpus: the root, every corpus file's (kind, path, stat
+  pair), and the walk's own error strings. Thread event logs and master captures only — a
+  metadata.json rewrite never moves it (its backend/model fields are write-once, and the
+  parse reads them on the round the log itself moves)."""
+  probe = _Tally()
+  entries = []
+  for kind, path, st, error in _iter_charliebot_logs(sessions, probe):
+    entries.append((kind, path, st.st_mtime_ns, st.st_size) if st is not None else (kind, path, None, error))
+  return ("charlie-bot", str(sessions), tuple(sorted(entries)), tuple(probe.notes))
+
+
+def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path], sessions: Path) -> tuple:
+  """Walk signature of the Claude+Codex+charlie-bot corpus: home pairs, every log file's stat
+  pair, and the walk's own error strings. Any corpus or permission move changes the tuple."""
   sig = []
   for source, homes, sub in (("Claude Code", claude_homes, "projects"), ("Codex", codex_homes, "sessions")):
     probe = _Tally()
@@ -383,6 +437,7 @@ def _corpus_signature(claude_homes: dict[str, Path], codex_homes: dict[str, Path
       entries.append((label, tuple(sorted(per_home))))
     home_pairs = tuple(sorted((label, str(path)) for label, path in homes.items()))
     sig.append((source, home_pairs, tuple(entries), tuple(probe.notes)))
+  sig.append(_charliebot_signature(sessions))
   return tuple(sig)
 
 
@@ -1036,6 +1091,335 @@ def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None) -
         f"{len(check)} root sessions; /compact resets a session total, so the per-request sum leads)")
 
 
+# ---------------------------------------------------------------------------
+# charlie-bot source: this host's own thread event logs and master raw captures
+# ---------------------------------------------------------------------------
+
+# Every record the tally reads (thread result events, the bare session-id event, the
+# claude-style init envelope, master-run context/result lines) serializes its type as a
+# quoted literal with a space after the colon — charlie-bot writes json.dumps defaults —
+# so the substring filter cannot skip a record the full parse would see; it only skips
+# parsing irrelevant lines. The claude CLI's own stream (no space) never matches.
+_CHARLIEBOT_THREAD_MARKERS = (b'"type": "result"', b'"session_id"')
+_CHARLIEBOT_MASTER_MARKERS = (b'"type": "context"', b'"type": "result"')
+
+# Account label for a master-run capture whose context model matches no charlie-code
+# backend in config.yaml (a retired backend's master runs, or an ad-hoc model).
+_CLC_MASTER_ACCOUNT = "clc-master"
+
+
+def _bare_model(model: str) -> str:
+  """The row name for a backend config model: the last path segment ("openai/zai-org/
+  GLM-5.3-Flash" -> "GLM-5.3-Flash"). Page rows carry the bare model name."""
+  return model.rsplit("/", 1)[-1]
+
+
+def _backend_registry() -> dict[str, object]:
+  """config.yaml's backend options by id. Re-read per collect: a backend added or retired
+  reclassifies the corpus on the next fresh fold without touching any cached parse."""
+  return {opt.id: opt for opt in get_config().backends.options}
+
+
+def _thread_row_model(meta: dict, registry: dict) -> str:
+  """The row name for one thread: the backend's config model (bare) when the id is still
+  registered, else the id's own model segment ("codex-gpt-5.6-sol-personal" ->
+  "gpt-5.6-sol-personal" — retired backends are off config, and their id is
+  "<type prefix>-<model name>" by convention), else the metadata model (bare)."""
+  backend = meta.get("backend")
+  if backend:
+    opt = registry.get(backend)
+    if opt is not None and opt.model:
+      return _bare_model(opt.model)
+    return str(backend).split("-", 1)[-1]
+  model = meta.get("model")
+  return _bare_model(model) if model else "unknown"
+
+
+def _thread_metadata(path: str) -> dict | None:
+  """The thread's ``{backend, model}`` pair from its metadata.json, or None when the file is
+  absent. Any other read/parse failure propagates: the collect loop notes it and skips the
+  thread, same contract as an unreadable log file."""
+  meta_path = Path(path).parent.parent / "metadata.json"
+  try:
+    with open(meta_path, "rb") as fh:
+      meta = json.loads(fh.read())
+  except FileNotFoundError:
+    return None
+  if not isinstance(meta, dict):
+    raise ValueError(f"{meta_path}: metadata is not an object")
+  return {"backend": meta.get("backend"), "model": meta.get("model")}
+
+
+def _thread_records(objects: list[dict], meta: dict | None, registry: dict) -> tuple[list[list], list[str]]:
+  """(records, session ids) from prefiltered thread event lines.
+
+  Each result event folds into ``[model, backend id, ts, input, cache write, cache read,
+  output]`` — the envelope's four usage numbers verbatim (missing keys are 0; a CLC result
+  carries no cache fields, a codex result's input arrives with its cached reads included in
+  the same field the envelope names). Session ids come off every line carrying one at top
+  level: the codex translation emits one bare ``session_id`` event per thread.started, and
+  the claude-style init envelope embeds its own — both feed the rollout reconciliation.
+  """
+  if meta is None:
+    return [], []
+  model = _thread_row_model(meta, registry)
+  backend = meta.get("backend") or ""
+  records: list[list] = []
+  ids: list[str] = []
+  for obj in objects:
+    if obj.get("type") == ET.RESULT:
+      usage = obj.get("usage") or {}
+      records.append(
+          [
+              model,
+              backend,
+              obj.get("timestamp"),
+              usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0,
+              usage.get(ET.USAGE_CACHE_CREATION_INPUT_TOKENS, 0) or 0,
+              usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0,
+              usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0,
+          ])
+    elif obj.get("session_id"):
+      sid = obj["session_id"]
+      if isinstance(sid, str):
+        ids.append(sid)
+  return records, sorted(set(ids))
+
+
+def _thread_contribution(path: str, registry: dict, prev: dict | None = None) -> tuple[dict, int]:
+  """Parse one thread event log into its cache entry; return (entry, bytes read).
+
+  *prev* is the file's cached entry under an older signature; when the guard proves the
+  prefix unchanged, only the appended tail parses, the cached records ride forward, and the
+  classification they were parsed under rides with them (metadata's backend/model are
+  write-once). A first parse reads metadata.json beside the log; a thread without one yields
+  an entry with no records and meta None, which the fold skips with a note.
+  """
+  if prev is not None:
+    tail = _tail_parse(path, prev, _CHARLIEBOT_THREAD_MARKERS)
+    if tail is not None:
+      objects, sig, end = tail
+      meta = prev["meta"]
+      records, ids = _thread_records(objects, meta, registry)
+      entry = {
+          "sig": sig,
+          "records": prev["records"] + records,
+          "ids": sorted(set(prev["ids"]) | set(ids)),
+          "meta": meta,
+          "dupes": 0,
+          "end": end,
+      }
+      entry["guard"] = _boundary_guard(path, end)
+      return entry, end - prev["end"]
+  meta = _thread_metadata(path)
+  sig, objects, end = _prefiltered_jsonl(path, _CHARLIEBOT_THREAD_MARKERS)
+  records, ids = _thread_records(objects, meta, registry)
+  entry = {"sig": sig, "records": records, "ids": ids, "meta": meta, "dupes": 0, "end": end}
+  entry["guard"] = _boundary_guard(path, end)
+  return entry, end
+
+
+def _master_records(objects: list[dict],
+                    path: str,
+                    registry: dict,
+                    model: str | None = None) -> tuple[list[list], str | None]:
+  """The capture's (records, trailing context model): one record per trailing result event,
+  at most one.
+
+  A CLC-shaped capture self-identifies with ``type: context`` lines that carry the model;
+  its trailing ``type: result`` line carries the run's usage (no cache fields — they stay
+  0). *model* is the prefix's trailing context on an append-tail round, where the tail
+  carries no context line of its own. The timestamp is the master_runs directory name, the
+  run's recorded start time: stable across re-parses, unlike the file mtime a growing log
+  keeps moving. Captures without any context model (the claude CLI's own stream, already
+  covered by the Claude Code source) or without a trailing result (a run killed mid-turn)
+  contribute nothing.
+  """
+  last = None
+  for obj in objects:
+    if obj.get("type") == "context" and obj.get("model"):
+      model = obj["model"]
+    elif obj.get("type") == ET.RESULT:
+      last = obj
+  if model is None or last is None:
+    return [], model
+  usage = last.get("usage") or {}
+  opt = next((o for o in registry.values() if o.type == BackendType.CHARLIE_CODE and o.model == model), None)
+  account = opt.id if opt is not None else _CLC_MASTER_ACCOUNT
+  ts = Path(path).parts[-2]  # the master_runs/<started_at> directory name
+  return (
+      [
+          [
+              _bare_model(model),
+              account,
+              ts,
+              usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0,
+              usage.get(ET.USAGE_CACHE_CREATION_INPUT_TOKENS, 0) or 0,
+              usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0,
+              usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0,
+          ]
+      ], model)
+
+
+def _master_contribution(path: str, registry: dict, prev: dict | None = None) -> tuple[dict, int]:
+  """Parse one master raw capture into its cache entry; return (entry, bytes read).
+
+  Same append-tail contract as the thread leg: the cached record rides forward unless the
+  tail carries a newer result line, which replaces it (the entry always describes the file's
+  trailing result).
+  """
+  if prev is not None:
+    tail = _tail_parse(path, prev, _CHARLIEBOT_MASTER_MARKERS)
+    if tail is not None:
+      objects, sig, end = tail
+      records, model = _master_records(objects, path, registry, prev.get("model_ctx"))
+      entry = {
+          "sig": sig,
+          "records": records or prev["records"],
+          "model_ctx": model,
+          "dupes": 0,
+          "end": end,
+      }
+      entry["guard"] = _boundary_guard(path, end)
+      return entry, end - prev["end"]
+  sig, objects, end = _prefiltered_jsonl(path, _CHARLIEBOT_MASTER_MARKERS)
+  records, model = _master_records(objects, path, registry)
+  entry = {"sig": sig, "records": records, "model_ctx": model, "dupes": 0, "end": end}
+  entry["guard"] = _boundary_guard(path, end)
+  return entry, end
+
+
+def _rollout_session_ids(codex_homes: dict[str, Path], t: _Tally) -> set[str]:
+  """The codex session ids whose rollout files are still on disk, taken from the file names
+  (``rollout-<started>-<session id>.jsonl`` — the id is the last five dash-separated
+  segments; a bare ``rollout-<session id>.jsonl`` names the same five). The same homes the
+  Codex source walks, so a rollout the CLI source can see is exactly one the reconciliation
+  can see."""
+  ids: set[str] = set()
+  for label, home in codex_homes.items():
+    for path, st, error in _iter_jsonl_stats(home / "sessions", t, "charlie-bot", f"{label} rollouts"):
+      name = os.path.basename(path)
+      if not name.startswith("rollout-") or not name.endswith(".jsonl"):
+        continue
+      stem = name[len("rollout-"):-len(".jsonl")]
+      ids.add("-".join(stem.rsplit("-", 5)[-5:]))
+  return ids
+
+
+def _classify_backend(backend: str, registry: dict) -> str | None:
+  """One thread backend id's disposition: ``"include"`` (charlie-code type or prefix),
+  ``"codex"`` (rollout reconciliation first), ``"skip"`` (the CLI sources already carry
+  those runs), or None when neither the registry nor the id prefix can name the type."""
+  opt = registry.get(backend)
+  btype = str(opt.type) if opt is not None else None
+  if btype is None:
+    for prefix, verdict in (("charlie-code-", "include"), ("codex-", "codex"), ("claude-", "skip"), ("opencode-",
+                                                                                                     "skip")):
+      if backend.startswith(prefix):
+        return verdict
+    return None
+  if btype == BackendType.CHARLIE_CODE:
+    return "include"
+  if btype == BackendType.CODEX:
+    return "codex"
+  return "skip"
+
+
+def _fold_charliebot_records(t: _Tally, records: list[list]) -> int:
+  """Fold one entry's records into the accumulator; returns the folded count."""
+  for model, account, ts, in_fresh, cache_write, cache_read, output in records:
+    t.add(
+        "charlie-bot",
+        model,
+        account,
+        ts,
+        in_fresh=in_fresh,
+        cache_write=cache_write,
+        cache_read=cache_read,
+        output=output)
+  return len(records)
+
+
+def collect_charliebot(t: _Tally, sessions: Path, codex_homes: dict[str, Path], cache: TallyCache | None) -> None:
+  """Tally the charlie-bot corpus into the accumulator: thread event logs and master raw
+  captures, served per file from the cache document like the CLI sources.
+
+  Inclusion is decided per collect, not baked into the entries: charlie-code-type threads
+  fold, codex-type threads fold only when none of the session ids their event log carries
+  matches a rollout file still on disk (the CLI source owns those runs), claude/opencode
+  types never fold, and a backend id neither the registry nor its prefix can classify is
+  reported in the notes instead of any row. Master captures fold only their CLC shape.
+  """
+  registry = _backend_registry()
+  rollout_ids = _rollout_session_ids(codex_homes, t)
+  folded = 0
+  undetermined: dict[str, int] = {}
+  clc_master = 0
+  for kind, path, st, error in _iter_charliebot_logs(sessions, t):
+    if st is None:
+      t.notes.append(f"charlie-bot: unreadable {path}: {error}")
+      continue
+    entry = cache.lookup_sig("charlie-bot", path, [st.st_mtime_ns, st.st_size]) if cache is not None else None
+    if entry is None:
+      prev = cache.prev("charlie-bot", path) if cache is not None else None
+      parse = _thread_contribution if kind == "thread" else _master_contribution
+      try:
+        entry, nbytes = parse(path, registry, prev)
+      except (OSError, ValueError) as exc:
+        t.notes.append(f"charlie-bot: unreadable {path}: {exc}")
+        continue
+      t.scanned_bytes += nbytes
+      if cache is not None:
+        cache.store_sig("charlie-bot", path, entry)
+    if kind == "master":
+      folded += _fold_charliebot_records(t, entry["records"])
+      clc_master += sum(1 for rec in entry["records"] if rec[1] == _CLC_MASTER_ACCOUNT)
+      continue
+    meta = entry["meta"]
+    if meta is None:
+      t.notes.append(f"charlie-bot: skipped thread {Path(path).parts[-3]}: no metadata.json")
+      continue
+    records = entry["records"]
+    if not records:
+      continue
+    backend = meta.get("backend")
+    verdict = _classify_backend(backend, registry) if backend else None
+    if verdict is None and not backend:
+      # No id to classify: the metadata model is the only witness. Registered backends'
+      # models are unique strings, so a match names both the type and the row.
+      opt = next((o for o in registry.values() if o.model == meta.get("model")), None) \
+          if meta.get("model") else None
+      if opt is not None:
+        backend = opt.id
+        verdict = _classify_backend(backend, registry)
+        # The recovered id is the records' account; relabel the fold's copies (never the
+        # cached entry's lists).
+        records = [rec[:1] + [backend] + rec[2:] for rec in records]
+    if verdict is None:
+      label = backend if backend else f"thread {Path(path).parts[-3]} (no backend id)"
+      undetermined[label] = undetermined.get(label, 0) + len(records)
+      continue
+    if verdict == "skip":
+      continue
+    if verdict == "codex":
+      on_disk = sorted(set(entry["ids"]) & rollout_ids)
+      if on_disk:
+        t.notes.append(
+            f"charlie-bot: skipped codex thread {backend} ({Path(path).parts[-3]}): "
+            f"session id {', '.join(on_disk)} has a rollout on disk")
+        continue
+    folded += _fold_charliebot_records(t, records)
+  for label, count in sorted(undetermined.items()):
+    t.notes.append(
+        f"charlie-bot: backend id {label} not classifiable (not in config.yaml, prefix unknown) "
+        f"— {count} results not counted")
+  if clc_master:
+    t.notes.append(
+        f"charlie-bot: {clc_master} master results matched no charlie-code backend in "
+        f"config.yaml, counted as {_CLC_MASTER_ACCOUNT}")
+  t.notes.append(f"charlie-bot: {folded:,} usage results (CLC + offline codex)")
+
+
 # The cold-pass scan projects each matching row's tally fields inside SQLite: json_extract
 # in C there beats a Python round trip plus json.loads per row (measured ~4x slower over this
 # host's 36k-row message table). json_valid keeps the old json.loads failure mode: the LIKE
@@ -1421,13 +1805,15 @@ def collect_token_usage(
     codex_homes: dict[str, Path] | None = None,
     opencode_db: Path | None = None,
     cache_path: Path | None = None,
+    sessions_dir: Path | None = None,
 ) -> TokenTally:
   """A failing source records a note instead of raising; see the module docstring for the cache.
 
   Roots default to this host's on-disk layout: data is discovered from config.yaml plus the
-  defaults ``~/.claude``, ``~/.codex`` and the opencode database. Tests pass explicit roots.
-  ``cache_path`` is the only state the collection persists: the per-file contribution document
-  described at module level. None collects cacheless.
+  defaults ``~/.claude``, ``~/.codex`` and the opencode database; the charlie-bot corpus root
+  is the config's own session tree (``charliebot_home`` / ``sessions`` — no separate knob).
+  Tests pass explicit roots. ``cache_path`` is the only state the collection persists: the
+  per-file contribution document described at module level. None collects cacheless.
   """
   start = time.perf_counter()
   if claude_homes is None or codex_homes is None:
@@ -1436,9 +1822,11 @@ def collect_token_usage(
     codex_homes = codex_homes if codex_homes is not None else discovered_codex
   if opencode_db is None:
     opencode_db = DEFAULT_OPENCODE_DB
+  if sessions_dir is None:
+    sessions_dir = get_config().sessions_dir
 
   global _aggregate_memo, _tally_memo
-  signature = _corpus_signature(claude_homes, codex_homes)
+  signature = _corpus_signature(claude_homes, codex_homes, sessions_dir)
   lookup_sig = _opencode_db_signature(opencode_db)
   tally_memo = _tally_memo
   if lookup_sig is not None and tally_memo is not None and tally_memo[0][:2] == (signature, lookup_sig):
@@ -1481,6 +1869,7 @@ def collect_token_usage(
     notes_from = len(t.notes)
     collect_claude(t, claude_homes, cache)
     collect_codex(t, codex_homes, cache)
+    collect_charliebot(t, sessions_dir, codex_homes, cache)
     _aggregate_memo = (signature, _SourceAggregate.snapshot(t, notes_from))
   else:
     _aggregate_memo[1].apply(t)

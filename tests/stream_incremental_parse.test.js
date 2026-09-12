@@ -1,7 +1,8 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const test = require('node:test');
 const { loadRendererContext } = require('./marked_renderer_harness');
-const { largestAssistantDraft } = require('./stream_collector_common');
+const { LIVE_CHAT_ROOT, largestAssistantDraft } = require('./stream_collector_common');
 
 // The streaming paint path, exactly as usage.js's paintStreamDraft drives it.
 function paint(context, draft) {
@@ -146,7 +147,10 @@ test('a list continued across a blank line never freezes a mid-list cut', async 
   }
 });
 
-test('the largest on-disk draft paints identically on every step of its replay', async () => {
+test('the largest on-disk draft paints identically on every step of its replay', async (t) => {
+  // The corpus is host-local: a host without ~/.charliebot/sessions (CI, fresh
+  // checkouts) has nothing to replay, so the subtest skips instead of failing.
+  if (!fs.existsSync(LIVE_CHAT_ROOT)) t.skip(`no live chat corpus at ${LIVE_CHAT_ROOT} on this host`);
   const context = await loadRendererContext({
     getLanguage: () => null,
     highlightAuto: (code) => ({ value: code }),

@@ -23,6 +23,7 @@ _NODE_TESTS = [
     "chat_session_bump.test.js",
     "chat_single_tilde_literal.test.js",
     "chat_url_ascii_boundary.test.js",
+    "code_block_wc2ch.test.js",
     "comment_post.test.js",
     "compact_button.test.js",
     "cron_broken_ui.test.js",
@@ -41,6 +42,7 @@ _NODE_TESTS = [
     "sidebar_rename_prefill.test.js",
     "sidebar_session_model.test.js",
     "sidebar_usage_poll.test.js",
+    "stream_incremental_parse.test.js",
     "stream_tail_skip.test.js",
     "tailwind_class_coverage.test.js",
     "terminal_b64.test.js",
@@ -49,6 +51,7 @@ _NODE_TESTS = [
     "test_sidebar_delete_backfill.test.js",
     "test_switch_session_telemetry.test.js",
     "thinking_toggle.test.js",
+    "trigger_fire_time_roundtrip.test.js",
     "tui_status_scope.test.js",
     "usage_stream_render.test.js",
     "voice_input_run.test.js",
@@ -65,3 +68,12 @@ _NODE_TESTS = [
 @pytest.mark.parametrize("js_name", _NODE_TESTS)
 def test_frontend_js(js_name: str) -> None:
   run_node_js_test(Path(__file__).parent / js_name, "node is required for the frontend JS tests")
+
+
+def test_node_tests_list_covers_every_suite() -> None:
+  """``_NODE_TESTS`` matches the node suites on disk exactly: no omission, no duplicate, no stale entry."""
+  on_disk = sorted(
+      p.name
+      for pattern in ("*.test.js", "*.test.mjs")
+      for p in Path(__file__).parent.glob(pattern))
+  assert sorted(_NODE_TESTS) == on_disk

@@ -55,6 +55,7 @@ from src.core.memory_replay.runner import (
     resolve_backend_identity,
     run_directory_name,
     run_replay,
+    write_pretty_json,
 )
 from src.core.memory_replay.validate import apply_unified_patch, canonical_text
 
@@ -176,7 +177,7 @@ def run_experiment(
   options.output_dir.mkdir(parents=True, exist_ok=True)
   summary_path = options.output_dir / "experiment.json"
   report_path = options.output_dir / "report.html"
-  summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+  write_pretty_json(summary_path, summary)
   report_path.write_text(render_experiment_report(summary), encoding="utf-8")
   failed_arms = [
       f"{arm['case']}/{arm['variant']}" for arm in arms

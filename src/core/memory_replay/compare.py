@@ -83,6 +83,7 @@ from src.core.memory_replay.runner import (
     _aggregate_candidate_results,
     _require_store_disjoint_output_root,
     _timestamp,
+    write_pretty_json,
 )
 from src.core.memory_replay.validate import (
     build_patch,
@@ -369,8 +370,7 @@ def _run_comparison(options: CompareOptions, *, cfg: CharlieBotConfig, now: date
   options.output_dir.mkdir(parents=True, exist_ok=True)
   comparison_path = options.output_dir / "comparison.json"
   report_path = options.output_dir / "report.html"
-  comparison_path.write_text(
-      json.dumps(comparison, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+  write_pretty_json(comparison_path, comparison)
   report_path.write_text(render_comparison_report(comparison), encoding="utf-8")
   return CompareOutcome(
       comparison_path=comparison_path,

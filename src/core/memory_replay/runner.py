@@ -565,6 +565,18 @@ def _record_artifact_hash(run_dir: Path, record: dict, relpath: str) -> str:
   return digest
 
 
+def write_pretty_json(path: Path, payload: object) -> None:
+  """The recorded-JSON artifact encoding: UTF-8 text with ``ensure_ascii=False``,
+  ``indent=2``, sorted keys, and one trailing newline.
+
+  Every recorded artifact file (``proposal.json``, ``run.json``, ``comparison.json``,
+  ``experiment.json``) is written here and nowhere else: ``bundle_integrity`` digests the
+  exact bytes this encoding produces and the comparison rechecks those digests, so a change
+  here re-digests every future bundle while old recorded bytes stay verifiable as written.
+  """
+  path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _write_bundle(
     *,
     run_dir: Path,
@@ -600,8 +612,7 @@ def _write_bundle(
       "reviewed_patch": result.patch,
       "approval_digest": approval_digest(manifest.base_commit, result.patch),
   }
-  (run_dir / "proposal.json").write_text(
-      json.dumps(proposal, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+  write_pretty_json(run_dir / "proposal.json", proposal)
   _record_artifact_hash(run_dir, record, "proposal.json")
   changed_mapping = [
       {
@@ -746,8 +757,7 @@ def _outcome(run_dir: Path, *, reused: bool, candidate_results: list[dict], chan
 
 
 def _write_record(run_dir: Path, record: dict) -> None:
-  (run_dir / "run.json").write_text(
-      json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+  write_pretty_json(run_dir / "run.json", record)
 
 
 def _timestamp(now: datetime | None) -> str:

@@ -1,4 +1,4 @@
-"""CLI: labeled-entry memory store (query / add / lint).
+"""CLI: labeled-entry memory store (query / add / lint / replay).
 
 Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
 (``~/.charliebot/memory/``). See ``src/core/memory.py`` for the store contract.
@@ -6,6 +6,11 @@ Pure-local; no server dependency. The store lives at ``cfg.memory_dir``
   charliebot memory query --topic <t> [--audience A] [--index] [--resident]
   charliebot memory add [--file F]
   charliebot memory lint
+  charliebot memory replay --input <manifest> --output-dir <dir> --backend <id> \
+      --mode editor-only|editor-review
+
+``replay`` runs the isolated offline curation pipeline over a frozen manifest
+(docs/memory-replay.md); it never reads or writes the live store.
 """
 
 import argparse
@@ -16,6 +21,7 @@ from pathlib import Path
 
 from src.core import memory
 from src.core.config import CharlieBotConfig, get_config
+from src.core.memory_replay import MODES, ReplayError, ReplayOptions, run_replay
 
 
 def main() -> None:
@@ -35,6 +41,18 @@ def main() -> None:
 
   sub.add_parser("lint", help="Validate the store; exit nonzero on violations")
 
+  p_replay = sub.add_parser(
+      "replay", help="Run the isolated offline curation replay over a frozen manifest (never touches the store)")
+  p_replay.add_argument(
+      "--input", required=True, metavar="MANIFEST", help="Replay manifest (YAML); format in docs/memory-replay.md")
+  p_replay.add_argument(
+      "--output-dir",
+      required=True,
+      metavar="DIR",
+      help="Output root for the proposal bundle and run records; must not overlap the store or the manifest inputs")
+  p_replay.add_argument("--backend", required=True, metavar="ID", help="Configured backend id from backends.options")
+  p_replay.add_argument("--mode", required=True, choices=list(MODES), help="Model stages to run")
+
   args = parser.parse_args()
   if args.command == "query":
     _cmd_query(args)
@@ -42,6 +60,8 @@ def main() -> None:
     _cmd_add(args)
   elif args.command == "lint":
     _cmd_lint()
+  elif args.command == "replay":
+    _cmd_replay(args)
 
 
 def _cmd_query(args: argparse.Namespace) -> None:
@@ -113,6 +133,25 @@ def _cmd_lint() -> None:
       print(v)
     sys.exit(1)
   print("clean")
+
+
+def _cmd_replay(args: argparse.Namespace) -> None:
+  options = ReplayOptions(
+      manifest=Path(args.input), output_dir=Path(args.output_dir), backend=args.backend, mode=args.mode)
+  try:
+    outcome = run_replay(options)
+  except ReplayError as e:
+    print(f"error: {e}", file=sys.stderr)
+    sys.exit(1)
+  prefix = "reused completed run" if outcome.reused else "replay complete"
+  print(f"{prefix}: {args.mode}")
+  print(f"run: {outcome.run_dir}")
+  print(f"proposal: {outcome.proposal_path}")
+  print(f"report: {outcome.report_path}")
+  print(
+      f"dispositions: propose {outcome.propose}, no_change {outcome.no_change}, "
+      f"needs_decision {outcome.needs_decision}")
+  print(f"changed paths: {len(outcome.changed_paths)}")
 
 
 def _slugify(text: str) -> str:

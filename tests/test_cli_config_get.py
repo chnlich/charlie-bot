@@ -32,7 +32,13 @@ def test_server_section_prints_exact_json(
   save_yaml(profile_home / "config.yaml", {"server": {"port": 18498}})
   code, out, err = _run_get(monkeypatch, capsys, "server")
   assert code == 0
-  assert json.loads(out) == {"host": "127.0.0.1", "port": 18498, "subprocess_buffer_limit_mb": 1024}
+  assert json.loads(out) == {
+      "host": "127.0.0.1",
+      "port": 18498,
+      "subprocess_buffer_limit_mb": 1024,
+      "session_memory_max_mb": 12288,
+      "session_swap_max_mb": 2048,
+  }
   assert err == ""
 
 

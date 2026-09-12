@@ -100,10 +100,66 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
   }
 
 
+# The switch bootstrap ships each tool's whole input and output, but the
+# renderer (web/static/js/chat/rendering.js renderToolActivity) displays only a
+# bounded preview without a click — an output's first 500 characters plain, an
+# input's 60-80 character summary line — inside a block hidden behind the "N
+# tool calls" toggle, inside turns that mostly render folded. The cap must
+# match the renderer's 500-character output split: at exactly the cap no dead
+# reveal toggle renders and the existing output_truncated note shows. Full text
+# stays on the persisted chat event, the same home the M94 render cap points at.
+_SWITCH_TOOL_PREVIEW_CHARS = 500
+
+
+def _switch_tool_preview(tool: dict) -> dict:
+  """One tool row's switch-payload shape: string fields over the preview cap
+  trim to the cap with their truncation markers set."""
+  output = tool.get("output")
+  input_val = tool.get("input")
+  output_trims = isinstance(output, str) and len(output) > _SWITCH_TOOL_PREVIEW_CHARS
+  input_trims = isinstance(input_val, dict) and any(
+      isinstance(value, str) and len(value) > _SWITCH_TOOL_PREVIEW_CHARS for value in input_val.values())
+  if not output_trims and not input_trims:
+    return tool
+  preview = dict(tool)
+  if output_trims:
+    preview["output"] = output[:_SWITCH_TOOL_PREVIEW_CHARS]
+    preview["output_truncated"] = True
+  if input_trims:
+    preview["input"] = {
+        key: (value[:_SWITCH_TOOL_PREVIEW_CHARS]
+              if isinstance(value, str) and len(value) > _SWITCH_TOOL_PREVIEW_CHARS else value)
+        for key, value in input_val.items()
+    }
+    preview["input_truncated"] = True
+  return preview
+
+
+def _switch_tool_previews(messages: list[dict]) -> list[dict]:
+  """The switch bootstrap's messages with tool input/output trimmed to the
+  preview cap. The projection memo's dicts are shared with the events pages and
+  the M26 digest, so a message copies only when one of its tools actually
+  trims; unchanged messages pass through by reference."""
+  out = []
+  for msg in messages:
+    tools = msg.get("tools") if isinstance(msg, dict) else None
+    if not isinstance(tools, list):
+      out.append(msg)
+      continue
+    previews = [_switch_tool_preview(tool) if isinstance(tool, dict) else tool for tool in tools]
+    if all(new is old for new, old in zip(previews, tools)):
+      out.append(msg)
+      continue
+    trimmed = dict(msg)
+    trimmed["tools"] = previews
+    out.append(trimmed)
+  return out
+
+
 def _bootstrap_payload(bootstrap: SessionBootstrapData, cfg: CharlieBotConfig) -> dict:
   payload = {
       "session": bootstrap.session.model_dump(mode="json"),
-      "messages": bootstrap.messages,
+      "messages": _switch_tool_previews(bootstrap.messages),
       "pending_draft": bootstrap.pending_draft,
       "event_count": bootstrap.total_event_count,
       "oldest_message_ordinal": bootstrap.oldest_message_ordinal,

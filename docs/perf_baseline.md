@@ -105,6 +105,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M93 thread-detail 500s, per 24 h server log | M93 collector below | 500 responses per newest server log for `GET /api/threads/{sid}/threads/{tid}` (the workers panel's per-thread detail fetch and its 5 s `?attach=1` poll — a 500 here fails the poll continuously while the panel is open, and each failure ships a ~30-line traceback into the log) | 0 | 9 (the AttributeError 500s the 2026-09-11 cli-binary fix removed; the live server carries the fix from its next deploy on) |
 | M94 projection page + stream-delta serialization, giant-tool-output corpus | M94 collector below | tail-40 page body bytes + its json.dumps wall + the projection build wall; streamed replay serialized MB + dumps wall (the live broadcast shape: one json.dumps per emitted delta) | page body median < 1 MB; streamed replay serialized median < 30 MB and dumps wall median < 0.06 s | — (introduced with its first history row) |
 | M95 worker-log newest-first scans, reviewer completion + failed improve iteration | M95 collector below | seconds per reviewer-completion worker-summary scan (early stop at the first answer); seconds per failed-iteration judgment pair (the quota scan and the summary sharing one newest-first pass), worst on-disk worker log | review median < 0.005 s; judgment-pair median < 0.050 s (the pair's no-match exhaustion parses the whole worst log, the ~10 MB single-line corpus's orjson floor) | — (introduced with its first history row) |
+| M96 switch-bootstrap chat payload, active-session sweep | M96 collector below | body bytes per `GET /api/sessions/{id}/bootstrap` over the active-session set (the SPA switch's fetch — the live `diag_switch` telemetry carries the client-measured switch elapsed it feeds); the after-cap body carries each tool's 500-char input/output previews with their truncation markers, full text on the persisted event | median body < 0.15 MB; max body < 0.60 MB | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -5906,10 +5907,55 @@ print(f"{best_n / 1e6:.1f} MB worker log; newest-first scans: review-scan median
 EOF
 ```
 
+M96 — switch-bootstrap chat payload, active-session sweep. The SPA switch
+(`switchSession`, web/static/js/sidebar/session-view.js) fetches
+``GET /api/sessions/{id}/bootstrap`` inside its started→completed window, and the
+live ``diag_switch`` telemetry (1751 switched sessions per 40 h on the 2026-09-12
+log, joined to their bootstrap server lines) reads: server 6 % of the switch,
+client transfer + parse + mount 94 % — median 164 ms elapsed against a 14 ms
+server call. The payload's weight is the messages' ``tools`` arrays (95 % of the
+body before the trim), each carrying whole input and output although the
+renderer displays only a bounded preview (an output's first 500 characters
+plain, an input's 60-80 character summary line) inside a block hidden behind the
+"N tool calls" toggle, inside turns that mostly render folded. The collector
+measures the body bytes of every active session's bootstrap (live home
+read-only); the healthy range is set from the post-trim body. Evidence while the
+live server runs older code is a scratch-instance A/B: live-before GETs against
+the running server, scratch-after GETs through a TestClient on the changed
+checkout with a scratch ``CHARLIEBOT_HOME`` holding the same active sessions
+(metadata + data, ``master_runs`` excluded), asserting every message's
+non-tools fields byte-identical across arms and every trimmed tool a strict
+prefix with its truncation marker set.
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import json, statistics, sys, urllib.request
+sys.path.insert(0, "/home/chaoli/workspace/charlie-bot")
+from src.core.config import get_credentials
+
+KEY = get_credentials().require("charliebot", "access_key")
+BASE = "http://127.0.0.1:18498"
+
+def get(url):
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {KEY}"})
+    return urllib.request.urlopen(req, timeout=20).read()
+
+sessions = json.loads(get(BASE + "/api/sessions/"))
+sizes = []
+for s in sessions:
+    sizes.append(len(get(f"{BASE}/api/sessions/{s['id']}/bootstrap")))
+sizes.sort()
+n = len(sizes)
+print(f"{n} active sessions; bootstrap body bytes: median {sizes[n // 2]}, p90 {sizes[int(n * 0.9)]}, "
+      f"max {sizes[-1]}, total {sum(sizes)}")
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-12 | this PR | M96 switch-bootstrap body over the 25 active sessions: median 244912 → 97465 B, −60 %, p90 815424 → 229316 B, −72 %, max 1066055 → 371036 B, −65 %, total 9274862 → 3261927 B, −65 % (live-before GETs against the running server vs scratch-after GETs through a TestClient on the branch checkout, scratch CHARLIEBOT_HOME holding the same 25 sessions' metadata + data with master_runs excluded, live home read-only; 0 mismatches outside the trim contract — every message's non-tools fields byte-identical across arms, every trimmed tool a strict prefix with its marker set); live-log attribution joining each of 869 completed `diag_switch` client reports to its bootstrap server line (40 h server log): server share median 6 % (14 ms of 164 ms), client transfer+parse+mount 94 % — the body's tools arrays read 95 % of the pre-trim body (output 3.31 MB + input 3.42 MB across the 25 bootstraps' 2440 tools against 54 KB of content), while the renderer displays only a bounded preview (output's first 500 chars, input's 60-80 char summary) inside a block hidden behind the "N tool calls" toggle; switch elapsed median 164 ms, p90 386 ms (the after numbers for the elapsed ride the next deploy's live telemetry — the collector's client-side half cannot move the running server); 5477-passed suite plus 2 new payload contract tests (trim over cap with markers, ≤500 untouched by identity) and the 3-test node note suite; M96 definition and healthy ranges introduced with this PR | the switch bootstrap shipped every tail tool's whole input and output — a 40-message tail weighed 245 KB median / 1.07 MB max — although the renderer displays only a bounded preview inside a block hidden behind the "N tool calls" toggle, inside turns that mostly render folded; the switch payload now caps each tool's output and each input string field at 500 chars (the renderer's own output split, so a capped output renders plain with the existing truncation note and no dead reveal toggle), marks output_truncated/input_truncated, and copies only messages that actually trim (the projection memo's dicts stay shared with the events pages and the M26 digest, re-read byte-identical after the payload build); full text stays on the persisted chat event where the raw download and the review scans already read it |
 | 2026-09-12 | this PR | M92 CLI invocation wall, `charliebot schedule-trigger --help` median 0.351/0.347/0.357 → 0.285/0.291/0.291 s, −17 % to −19 %, maxima 0.358-0.364 → 0.288-0.296 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after, back-to-back at load 0.64-0.74 one-minute, checkout resolved cwd-first per arm); `memory query --index` (config-bound, imports no `src.cli.common`) 0.361/0.366/0.367 → 0.356/0.367/0.368 s unchanged within noise — its structlog import rides another module, outside this diff; component attribution (`-X importtime`): config's top-level `import structlog` cum 67 ms of the src.cli.common 302 ms chain, structlog.dev (rich.traceback 32 ms, structlog.tracebacks 28 ms, pygments 20 ms) the bulk — imported eagerly by structlog itself, unreachable by any config-time skip; 5475-passed suite plus the structlog entry in the import-weight contract and the defer-until-first-log probe; no-regression witnesses on the branch: M53 broken steady state onset 1 warning + 1 re-parse / steady 0 + 0 / fingerprint-move 1 re-parse + 0 new warnings and call wall 0.00 ms (the collector's real warning path through the proxy), M58 per-request config read 5.4 µs median | config's module-level `log = structlog.get_logger()` made every CLI invocation pay structlog's own eager structlog.dev import (rich + pygments + the traceback formatter, ~67 ms) although config logs only on warning paths a CLI command never reaches; the module logger is now a forwarding proxy that imports structlog on first attribute use — the resolved shape, identity, and monkeypatch surface unchanged, the cost paid only when a warning path actually fires |
 | 2026-09-12 | this PR | M34 full fetch body 9744203 → 251479 B, −97 %; full fetch median 0.0208/0.0202/0.0215 → 0.0025/0.0029/0.0028 s, −86 % to −88 %, maxima 0.0212-0.0218 → 0.0030-0.0033 s, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 9.8 MB / 232-event worst on-disk worker log carrying one 9.1 MB top-level tool_result line, scratch CHARLIEBOT_HOME per arm, live home read-only; after=total steady poll unchanged within noise 0.0018-0.0022 s, body 39 B both arms); no-regression witnesses interleaved ×2: M13 steady-state read+transform 0.0000 s both arms, M31 events-summary read 0.0008-0.0009 s both arms, M85 verify-final report read 0.6-0.7 ms medians both arms (one 1.3 ms branch round inside the standing band), M95 review scan 0.60-0.64 ms / failed-iteration judgment pair 39.7-40.9 ms both arms; 5468-passed suite plus 3 new contract tests (message-nested cap, top-level tool_result cap, incremental-append parity with the marker) and the node marker-note test; M34 full-fetch body bound added to the healthy range with this PR | the worker-events projection carried each tool_result's full content, so the worst on-disk log's 9.1 MB top-level tool_result line rode every full panel-open fetch whole — 9.7 MB of serialize+transfer+gzip per panel open against the after= poll's 39 B, and the panel embedded the full tail into the row's innerHTML; the projection now caps rendered output at TOOL_OUTPUT_RENDER_CAP (20000 chars — the bound the chat aggregator has applied since the M94 landing) and marks the row `output_truncated`, which the workers panel surfaces as a truncation note; the persisted events log keeps the full text, and the message-nested and top-level tool_result shapes share one cap constant |
 | 2026-09-12 | this PR | M91 worst single event 75.8/79.4/80.1 → 13.0/13.6/14.4 ms, −82 % to −84 %, every paired round faster (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 9.8 MB / 232-event worst on-disk worker log carrying one 9.5 MB tool_result line, scratch append target, live home read-only, load 1.1-2.4 one-minute; replay wall median 0.0774/0.0791/0.0807 → 0.0144/0.0148/0.0152 s, −81 % to −82 %, replay max 0.0776-0.0820 → 0.0145-0.0163 s; per-event median 5.4-5.6 µs both arms; component attribution on the pre-fix arm, measured standalone on the 9.5 MB event: orjson.dumps 9.1 ms, the `.decode("utf-8")` +24 ms, the `+ "\n"` str concat +26 ms, the `.encode("utf-8")` re-encode +14 ms — ~64 of the 76 ms the str round trip, against the bytes form's 0.42 ms `dumps + b"\n"`; the after arm's residual 13-14 ms is the 9.5 MB line's orjson dumps + page-cache write floor, the same corpus-drift floor the M95 row attributed); no-regression witnesses interleaved ×2: M82 events-log append 2-3 µs medians both arms with the standing collector repaired to build its probe line through the checkout's own `_event_line` (the collector's hand-built str line raised TypeError against the bytes signature — loud failure, the vacuous-read class the #1358 repair called out, avoided); 5466-passed suite; M91 worst-single-event range recalibrated < 1.0 ms → < 0.020 s with this PR | every persisted worker event serialized with orjson to bytes, decoded the whole payload to str, concatenated the newline, and re-encoded the str back to bytes for the write — three full payload copies plus two transcode passes per event, paid by every streamed delta, tool use, tool result, and thinking event on the append the #1327 landing moved on-loop; the line now stays bytes end to end (`orjson.dumps(event) + b"\n"` straight into the shared write-all), byte-identical output since orjson's compact UTF-8 form is exactly what the decode+encode round trip reproduced; M82's collector repair rides this PR (collector command only) |

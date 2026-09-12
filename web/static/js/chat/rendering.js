@@ -53,6 +53,9 @@ function renderToolActivity(tools) {
         outputHtml += '<div class="mt-1 text-xs text-slate-500">output truncated &mdash; full text in the session\'s raw events</div>';
       }
     }
+    if (tool.input_truncated) {
+      outputHtml += '<div class="mt-1 text-xs text-slate-500">input truncated &mdash; full text in the session\'s raw events</div>';
+    }
     var borderCls = i > 0 ? 'border-t border-slate-600/50 ' : '';
     var truncCls = (limit > 0 && text.length > limit) ? '' : 'truncate ';
     return '<div class="' + borderCls + 'py-1.5">'

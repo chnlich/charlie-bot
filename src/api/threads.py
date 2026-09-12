@@ -356,8 +356,11 @@ def _list_response(body: bytes, etag_value: str, etag: str | None) -> Response:
   """The list body's answer: a bodyless 204 when the poll repeats the rendered tag."""
   if etag == etag_value:
     return Response(status_code=204, headers={"ETag": etag_value, "Cache-Control": "no-store"})
-  return Response(content=body, media_type="application/json",
-                  headers={"ETag": etag_value, "Cache-Control": "no-store"})
+  return Response(
+      content=body, media_type="application/json", headers={
+          "ETag": etag_value,
+          "Cache-Control": "no-store"
+      })
 
 
 # The session view's threads array rides the same row proof as the list body:
@@ -465,6 +468,7 @@ async def list_threads(
   _list_body_memo.store(session_id, (sig, body, etag_value))
   _sig_gate.mark_proven(session_id, rev)
   return _list_response(body, etag_value, etag)
+
 
 @router.get("/{session_id}/threads/{thread_id}")
 async def get_thread(

@@ -50,13 +50,8 @@ rejected with their version named — never reinterpreted under this definition.
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from pydantic import ValidationError
-
 from src.core.memory_replay import exchange
-from src.core.memory_replay.errors import (
-    ReplayError,
-    ReplayModelOutputError,
-)
+from src.core.memory_replay.errors import ReplayError
 from src.core.memory_replay.exchange import (
     _CONSTRAINTS,
     _EDITOR_DECISIONS,
@@ -66,7 +61,6 @@ from src.core.memory_replay.exchange import (
     _REVIEWER_DECISIONS,
     CandidateRow,
     CandidateRowSpec,
-    EntryOp,
     ModelOutputSpec,
     ThemeOutput,
     candidate_row_shape,
@@ -544,17 +538,11 @@ class _EditorOutputSpec(ModelOutputSpec):
 
 def parse_editor_output(raw: str, *, role: str) -> ThemeOutput:
   """Parse one experimental editor response: the shared schema plus the per-candidate proofs."""
-  payload = exchange.parse_model_json(raw, role=role)
-  try:
-    spec = _EditorOutputSpec.model_validate(payload)
-  except ValidationError as e:
-    raise ReplayModelOutputError(f"{role}: response does not match the required JSON shape: {e}") from e
-  entries = [
-      EntryOp(
-          action=item.action, path=item.path, text=item.text, source_refs=list(item.source_refs), reason=item.reason)
-      for item in spec.entries
-  ]
-  candidates = [
+  return exchange.parse_stage_output(raw, _EditorOutputSpec, _candidate_rows_with_proofs, role=role)
+
+
+def _candidate_rows_with_proofs(spec: _EditorOutputSpec) -> list[CandidateRow]:
+  return [
       CandidateRow(
           source_ref=row.source_ref,
           outcome=row.outcome,
@@ -566,7 +554,6 @@ def parse_editor_output(raw: str, *, role: str) -> ThemeOutput:
               "home": row.proofs.home,
           }) for row in spec.candidates
   ]
-  return ThemeOutput(entries=entries, candidates=candidates, raw=raw)
 
 
 def _proof_errors(output: ThemeOutput, *, role: str) -> list[str]:

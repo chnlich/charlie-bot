@@ -189,8 +189,9 @@ def _dispositions_block(feedback_view: str) -> str:
 # The editor's response shape: the shared v3 schema plus the proofs field every experimental
 # editor writes. The reviewers' shape is the plain v3 schema (no proofs field) — matching their
 # parser, which rejects any extra key.
-_PROOFS_FIELDS = (',\n     "proofs": {"action": "<one sentence>", "home": "<one sentence>", '
-                  '"brevity": "<one sentence>"}')
+_PROOFS_FIELDS = (
+    ',\n     "proofs": {"action": "<one sentence>", "home": "<one sentence>", '
+    '"brevity": "<one sentence>"}')
 
 _EDITOR_SHAPE = f"""JSON shape:
 {{

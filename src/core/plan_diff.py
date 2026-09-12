@@ -796,8 +796,7 @@ def _offset_after_insertions(offset: int, insertions: dict[int, list[str]]) -> i
   and sit ahead of it, which is where the replaced full re-parse read the
   position too.
   """
-  return offset + sum(
-      sum(len(piece) for piece in pieces) for at, pieces in insertions.items() if at < offset)
+  return offset + sum(sum(len(piece) for piece in pieces) for at, pieces in insertions.items() if at < offset)
 
 
 def _append_style_and_header(source: str, insertions: dict[int, list[str]], root: _Node) -> str:

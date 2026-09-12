@@ -18,7 +18,8 @@ from src.core import improve_command
 from src.core.improve_command import (
     ImproveLoopAlreadyRunningError,
     ImproveState,
-    _quota_blocker_reason,
+    _extract_iteration_summary,
+    _failed_iteration_judgments,
     clear_active_loop_lock,
     find_running_loop,
     load_loop_state,
@@ -266,7 +267,7 @@ async def test_stop_completed_loop_returns_false(tmp_path: Path) -> None:
 def test_quota_blocker_reason_detects_overage_rejected() -> None:
   """overageStatus == 'rejected' is treated as quota exhaustion (legacy shape)."""
   events = [{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "overageStatus": "rejected"}}]
-  assert _quota_blocker_reason(events) is not None
+  assert _failed_iteration_judgments(iter(reversed(events)), 1, "failed")[0] is not None
 
 
 def test_quota_blocker_reason_detects_top_level_status_rejected() -> None:
@@ -286,7 +287,7 @@ def test_quota_blocker_reason_detects_top_level_status_rejected() -> None:
               },
       }
   ]
-  assert _quota_blocker_reason(events) is not None
+  assert _failed_iteration_judgments(iter(reversed(events)), 1, "failed")[0] is not None
 
 
 def test_quota_blocker_reason_detects_out_of_tokens_error() -> None:
@@ -295,13 +296,54 @@ def test_quota_blocker_reason_detects_out_of_tokens_error() -> None:
       "type": "error",
       "content": "Provider rejected the request: out of tokens for this model.",
   }]
-  assert _quota_blocker_reason(events) is not None
+  assert _failed_iteration_judgments(iter(reversed(events)), 1, "failed")[0] is not None
 
 
 def test_quota_blocker_reason_ignores_allowed_rate_limit_event() -> None:
   """A fully allowed rate_limit_event yields no blocker reason."""
   events = [{"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "overageStatus": "allowed"}}]
-  assert _quota_blocker_reason(events) is None
+  assert _failed_iteration_judgments(iter(reversed(events)), 1, "failed")[0] is None
+
+
+def test_quota_blocker_reason_scans_newest_first() -> None:
+  """The newest event's match names the blocker: the stream is consumed to the
+  first match, so an older rejection never renames a newer one."""
+  events = [
+      {
+          "type": "rate_limit_event",
+          "rate_limit_info": {
+              "status": "rejected",
+              "rateLimitType": "five_hour",
+              "overageStatus": "allowed",
+          },
+      },
+      {
+          "type": "error",
+          "content": "Provider rejected the request: insufficient quota."
+      },
+  ]
+  reason, _ = _failed_iteration_judgments(iter(reversed(events)), 1, "failed")
+  assert reason == "provider quota/token/rate-limit rejection (insufficient quota)"
+
+
+def test_extract_iteration_summary_prefers_newest_result_or_assistant() -> None:
+  """The newest event carrying text wins, whichever kind it is."""
+  events = [
+      {
+          "type": "result",
+          "result": "older result text"
+      },
+      {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "newest words",
+              }]
+          },
+      },
+  ]
+  assert _extract_iteration_summary(iter(reversed(events)), 3, "failed") == "newest words"
 
 
 class _FakeImproveSessionManager:

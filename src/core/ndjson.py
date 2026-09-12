@@ -192,9 +192,11 @@ def iter_ndjson_events_from_end(path: Path, *, log_event: str, log_fields: dict[
   Same skip contract as :func:`iter_ndjson_events` (an empty or
   whitespace-only line is invisible, a line the parser rejects logs and
   yields nothing).
-  _TAIL_WINDOW_SIZE segments from the end walk lines backwards, the segment's
-  left-truncated first line carried into the next older segment, so a consumer
-  that stops early never reads the bytes past its answer. A missing file
+  _TAIL_WINDOW_SIZE segments from the end walk lines backwards, so a consumer
+  that stops early never reads the bytes past its answer. A line longer than
+  the window accumulates one window-piece per walk step and joins them once
+  at the line's closing newline — O(line) total, where a re-concatenated
+  carry would pay O(line x segments) on multi-megabyte lines. A missing file
   yields nothing.
   """
   if not path.exists():
@@ -202,17 +204,33 @@ def iter_ndjson_events_from_end(path: Path, *, log_event: str, log_fields: dict[
   with open(path, "rb") as f:
     f.seek(0, 2)
     pos = f.tell()
-    carry = b""  # the current segment's left-truncated first line, completed by the next older segment
+    pending: list[bytes] = []  # the line spanning pos, one window-piece per step, oldest piece first
     while pos > 0:
       start = max(0, pos - _TAIL_WINDOW_SIZE)
       f.seek(start)
-      lines = (f.read(pos - start) + carry).split(b"\n")
-      carry = b""
+      window = f.read(pos - start)
+      nl = window.rfind(b"\n")
+      if nl < 0:
+        # The whole window sits inside the line spanning pos: keep its bytes
+        # and walk older; the join happens once at the line's closing newline.
+        pending.insert(0, window)
+        if start == 0:
+          # The file's first line closes at the file start — no older segment
+          # follows, so the pending pieces are the whole line.
+          yield from iter_ndjson_events([b"".join(pending)], log_event=log_event, log_fields=log_fields)
+        pos = start
+        continue
+      lines = window[:nl].split(b"\n")
+      spanning = window[nl + 1:]
+      if pending:
+        lines.append(b"".join([spanning, *pending]))
+      elif spanning:
+        lines.append(spanning)
       if start > 0:
-        carry = lines[0]
+        pending = [lines[0]]  # this segment's left-truncated first line, completed by the next older segment
         lines = lines[1:]
-      if lines and lines[-1] == b"":
-        lines = lines[:-1]
+      else:
+        pending = []
       yield from iter_ndjson_events(reversed(lines), log_event=log_event, log_fields=log_fields)
       pos = start
 

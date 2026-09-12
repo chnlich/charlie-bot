@@ -8,6 +8,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 - Master/worker/reviewer delegation in isolated git worktrees with ff-only merge
 - Pluggable backends: Claude Code, Kimi, OpenAI-compatible, Codex, Gemini CLI, OpenCode, Charlie Code, Antigravity CLI
+- Chat file uploads: text attachments ride the message's path text; image attachments reach the Charlie Code CLI as repeated `--image` flags when its backend entry declares `image_input: true`, and are refused with one error event (nothing sent) when it does not
 - `charliebot improve` autonomous change-run-verify iteration loops
 - Plan registry (`charliebot plan`) with HTML plan artifacts and anchored comments
 

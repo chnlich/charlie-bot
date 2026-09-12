@@ -1,9 +1,13 @@
 """CharlieCodeBackend — AgentBackend wrapping the `charlie-code --json` CLI.
 
 The task text reaches the child through a `task.md` file in the run's
-transport directory, passed via `--task-file`; it never rides argv.
+transport directory, passed via `--task-file`; it never rides argv. Image
+attachments reach the child as repeated `--image` flags when the endpoint
+declares ``image_input`` (its config option); without it, a message carrying
+images is refused with one error event and nothing is sent.
 """
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import structlog
@@ -24,6 +28,11 @@ from src.agents.backends.base import (
 from src.core import event_types as ET
 
 log = structlog.get_logger()
+
+# Filename extensions accepted as `--image` attachments — same set as
+# opencode.py's _IMAGE_MIME_BY_EXT keys. Other attachment kinds never produce
+# flags and keep riding the task text's [Attached files] path list.
+_IMAGE_EXTS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
 
 
 def _context_reading_int(field: str, value: object) -> int | None:
@@ -54,6 +63,7 @@ class CharlieCodeBackend(AgentBackend):
       model: str,
       api_base: str | None = None,
       context_window: int | None = None,
+      image_input: bool = False,
       api_key: str | None = None,
       **kwargs,
   ) -> None:
@@ -63,9 +73,43 @@ class CharlieCodeBackend(AgentBackend):
       raise ValueError(
           "charlie-code backend requires api_base (set api_base on its backends.options entry in config.yaml)")
     self._context_window = context_window
+    self._image_input = image_input
     self._api_key = api_key
     self._bin = resolve_binary("charlie-code", USER_LOCAL_BIN)
     self._transport_dir: Path | None = None
+    # Absolute paths of the current run's image attachments; run() fills it
+    # before delegating and _build_command reads it while assembling flags.
+    self._image_paths: list[str] = []
+
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
+    """Refuse image attachments on endpoints without image input; otherwise hand them to the CLI as --image flags.
+
+    Image refs are picked out of ``uploaded_files`` by filename extension
+    (``_IMAGE_EXTS``). An endpoint whose option does not declare
+    ``image_input`` gets exactly one error event and nothing else — no
+    subprocess, no result. Non-image refs never produce flags; they keep
+    riding the [Attached files] path text inside the task.
+    """
+    image_refs = [
+        ref for ref in (uploaded_files or []) if str(ref.get("filename", "")).rsplit(".", 1)[-1].lower() in _IMAGE_EXTS
+    ]
+    if image_refs and not self._image_input:
+      names = ", ".join(Path(str(ref.get("filename", ""))).name for ref in image_refs)
+      yield make_error_event(
+          f"refused: image attachments not sent — this endpoint declares no image input "
+          f"(image_input not set): {names}")
+      return
+    self._image_paths = [str(ref.get("path", "")) for ref in image_refs]
+    # No try/finally on the clear: every run() overwrites the attribute before
+    # delegating, and _build_command (its only reader) runs inline within
+    # super().run() before the first event surfaces.
+    async for event in super().run(prompt, cwd, env, uploaded_files):
+      yield event
+    self._image_paths = []
 
   def _prepare_transport(self, log_dir: Path) -> None:
     """Record the transport dir the task file will be written into."""
@@ -93,6 +137,8 @@ class CharlieCodeBackend(AgentBackend):
     if self._resume_session_id:
       cmd += ["--resume", self._resume_session_id]
     cmd += self._extra_flags
+    for image_path in self._image_paths:
+      cmd += ["--image", image_path]
     cmd += ["--task-file", str(task_path)]
     return cmd
 

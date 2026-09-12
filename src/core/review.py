@@ -22,7 +22,7 @@ from src.core.models import (
     ThreadMetadata,
     backend_type_allows_missing_model,
 )
-from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events, parse_ndjson_file
+from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events, iter_ndjson_events_from_end
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 from src.core.threads import ThreadManager, thread_events_log_path
@@ -172,6 +172,33 @@ def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:
   return None
 
 
+def _worker_summary_from_events_log(worker_log: Path) -> str | None:
+  """The worker's own closing words: the newest non-empty result-or-assistant
+  text, whichever kind is newer, or None.
+
+  Streams the log from the end and stops at the first event that settles the
+  answer — the newest-first contract of the full-parse loop this replaced;
+  blank, malformed and missing-file cases follow the shared walk's skip
+  contract (None, never an error).
+  """
+  for event in iter_ndjson_events_from_end(worker_log, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}):
+    ev_type = event.get("type")
+    if ev_type == ET.RESULT:
+      val = event.get("result")
+      if isinstance(val, str):
+        stripped = val.strip()
+        if stripped:
+          return stripped
+      # empty / non-string: fall through to look for assistant text
+      continue
+    if ev_type == ET.ASSISTANT:
+      msg = event.get("message") if isinstance(event.get("message"), dict) else None
+      text = extract_text_from_message(msg).strip()
+      if text:
+        return text
+  return None
+
+
 async def extract_review_context(
     session_id: str,
     thread_id: str,
@@ -201,27 +228,7 @@ async def extract_review_context(
 
   try:
     worker_log = thread_events_log_path(session_dir, thread_id)
-    events = await asyncio.to_thread(parse_ndjson_file, worker_log)
-    result_text: str | None = None
-    assistant_text: str | None = None
-    for ev in reversed(events):
-      ev_type = ev.get("type")
-      if result_text is None and ev_type == ET.RESULT:
-        val = ev.get("result")
-        if isinstance(val, str):
-          stripped = val.strip()
-          if stripped:
-            result_text = stripped
-            break
-        # empty / non-string: fall through to look for assistant text
-        continue
-      if assistant_text is None and ev_type == ET.ASSISTANT:
-        msg = ev.get("message") if isinstance(ev.get("message"), dict) else None
-        text = extract_text_from_message(msg).strip()
-        if text:
-          assistant_text = text
-          break
-    chosen = result_text or assistant_text
+    chosen = await asyncio.to_thread(_worker_summary_from_events_log, worker_log)
     if chosen:
       worker_summary = chosen
       has_worker_summary = True

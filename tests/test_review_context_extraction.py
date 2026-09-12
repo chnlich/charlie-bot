@@ -100,6 +100,49 @@ async def test_both_missing_returns_none_none(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_summary_prefers_newest_assistant_over_older_result(tmp_path: Path) -> None:
+  # The scan is newest-first and stops at the first event carrying text: an
+  # assistant message newer than a result wins, whichever kind came first.
+  session_id, thread_id = "sess-1", "thr-1"
+  chat_log, worker_log = _setup_paths(tmp_path, session_id, thread_id)
+  append_events(chat_log, [{"type": ET.TASK_DELEGATED, "thread_id": thread_id, "description": "Do X"}])
+  append_events(
+      worker_log, [
+          {
+              "type": ET.RESULT,
+              "result": "older result text"
+          },
+          {
+              "type": ET.ASSISTANT,
+              "message": {
+                  "content": [{
+                      "type": "text",
+                      "text": "newest words",
+                  }]
+              },
+          },
+      ])
+
+  _, worker_summary = await extract_review_context(session_id, thread_id, tmp_path)
+  assert worker_summary == "newest words"
+
+
+@pytest.mark.asyncio
+async def test_worker_summary_skips_malformed_tail_lines(tmp_path: Path) -> None:
+  # The from-the-end walk skips blank and malformed lines; a torn tail must
+  # not hide the result event below it.
+  session_id, thread_id = "sess-1", "thr-1"
+  chat_log, worker_log = _setup_paths(tmp_path, session_id, thread_id)
+  append_events(chat_log, [{"type": ET.TASK_DELEGATED, "thread_id": thread_id, "description": "Do X"}])
+  append_events(worker_log, [{"type": ET.RESULT, "result": "Worker did X successfully."}])
+  with open(worker_log, "a", encoding="utf-8") as stream:
+    stream.write("\n{broken json\n")
+
+  _, worker_summary = await extract_review_context(session_id, thread_id, tmp_path)
+  assert worker_summary == "Worker did X successfully."
+
+
+@pytest.mark.asyncio
 async def test_first_delegation_wins_even_with_empty_description(tmp_path: Path) -> None:
   # The scan stops at the FIRST task_delegated naming the thread, description
   # or not; a later delegation carrying text must not resurrect the request.

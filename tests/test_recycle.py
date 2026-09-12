@@ -744,8 +744,12 @@ def _switch_payload_messages(mgr: SessionManager, session: SessionMetadata) -> t
   """The bootstrap's messages and the switch payload's trimmed copy of them."""
   messages = projection_messages(mgr, session.id)
   bootstrap = SessionBootstrapData(
-      session=session, messages=messages, pending_draft=None,
-      total_event_count=0, oldest_message_ordinal=0, has_more=False)
+      session=session,
+      messages=messages,
+      pending_draft=None,
+      total_event_count=0,
+      oldest_message_ordinal=0,
+      has_more=False)
   payload = _bootstrap_payload(bootstrap, mgr._cfg)
   return messages, payload["messages"]
 
@@ -760,32 +764,51 @@ async def test_bootstrap_payload_trims_tool_previews_over_cap(tmp_path: Path) ->
           "type": ET.TOOL_USE,
           "id": "tool-0",
           "name": "Read",
-          "input": {"file_path": "a.txt"},
+          "input": {
+              "file_path": "a.txt"
+          },
           "timestamp": "2026-05-10T00:00:00Z",
       },
       {
           "type": ET.USER,
           "id": "tool-result-1",
-          "message": {"content": [{"type": "tool_result", "content": big_output}]},
+          "message": {
+              "content": [{
+                  "type": "tool_result",
+                  "content": big_output
+              }]
+          },
           "timestamp": "2026-05-10T00:00:01Z",
       },
       {
           "type": ET.TOOL_USE,
           "id": "tool-1",
           "name": "Bash",
-          "input": {"command": big_command},
+          "input": {
+              "command": big_command
+          },
           "timestamp": "2026-05-10T00:00:02Z",
       },
       {
           "type": ET.USER,
           "id": "tool-result-2",
-          "message": {"content": [{"type": "tool_result", "content": "ok"}]},
+          "message": {
+              "content": [{
+                  "type": "tool_result",
+                  "content": "ok"
+              }]
+          },
           "timestamp": "2026-05-10T00:00:03Z",
       },
       {
           "type": ET.ASSISTANT,
           "id": "assistant-3",
-          "message": {"content": [{"type": "text", "text": "done"}]},
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "done"
+              }]
+          },
           "timestamp": "2026-05-10T00:00:04Z",
       },
       {
@@ -819,19 +842,31 @@ async def test_bootstrap_payload_leaves_small_tools_untouched(tmp_path: Path) ->
           "type": ET.TOOL_USE,
           "id": "tool-0",
           "name": "Read",
-          "input": {"file_path": "a.txt"},
+          "input": {
+              "file_path": "a.txt"
+          },
           "timestamp": "2026-05-10T00:00:00Z",
       },
       {
           "type": ET.USER,
           "id": "tool-result-1",
-          "message": {"content": [{"type": "tool_result", "content": "x" * 499}]},
+          "message": {
+              "content": [{
+                  "type": "tool_result",
+                  "content": "x" * 499
+              }]
+          },
           "timestamp": "2026-05-10T00:00:01Z",
       },
       {
           "type": ET.ASSISTANT,
           "id": "assistant-2",
-          "message": {"content": [{"type": "text", "text": "done"}]},
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": "done"
+              }]
+          },
           "timestamp": "2026-05-10T00:00:02Z",
       },
       {

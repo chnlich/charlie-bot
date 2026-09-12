@@ -80,8 +80,7 @@ def choose_turn_account(
     rejected = reading is not None and reading.rejected_until is not None and reading.rejected_until > moment
     if reading is None or (reading.utilization < claude_accounts.WARNING_UTILIZATION and not rejected):
       return current, cold
-  chosen = claude_accounts.select(
-      cfg, model, current=current.label if current else None, busy_accounts=busy, now=moment)
+  chosen = claude_accounts.select(cfg, model, busy_accounts=busy, now=moment)
   return chosen, cold
 
 

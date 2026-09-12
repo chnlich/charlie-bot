@@ -157,7 +157,7 @@ def move_to_next_account(
   """
   if not cc_session_id:
     return None, "Claude account relay impossible: the run produced no session id to resume."
-  nxt = claude_accounts.select(cfg, model, current=None, exclude={current.label}, now=now)
+  nxt = claude_accounts.select(cfg, model, exclude={current.label}, now=now)
   if nxt is None:
     return None, pool_exhausted_message(cfg, now)
   try:
@@ -179,7 +179,7 @@ def pin_pool_account(cfg: CharlieBotConfig, option: BackendOption) -> tuple[Back
   """
   if not claude_accounts.is_pooled(option, cfg):
     return option, None
-  account = claude_accounts.select(cfg, option.model, current=None)
+  account = claude_accounts.select(cfg, option.model)
   if account is None:
     raise PoolExhaustedError(pool_exhausted_message(cfg))
   return option, account

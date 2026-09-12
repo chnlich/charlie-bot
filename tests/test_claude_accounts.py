@@ -453,10 +453,10 @@ def test_select_prefers_most_headroom_and_breaks_near_ties_by_lru(tmp_path: Path
   # The clear headroom leader wins whatever the tie-break state.
   assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW).label == "ext-1"
 
-  # A near-tie (within 0.02) breaks by least-recent use, not by the current
-  # account: ext-2's event reading is the older one, so it is tried first.
+  # A near-tie (within 0.02) breaks by least-recent use: ext-2's event
+  # reading is the older one, so it is tried first.
   claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.115, 0.05), now=NOW)
-  assert claude_accounts.select(cfg, FABLE_MODEL, current="ext-1", now=NOW).label == "ext-2"
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW).label == "ext-2"
 
 
 def test_select_tries_a_never_active_account_before_a_near_tied_active_one(tmp_path: Path) -> None:
@@ -533,8 +533,8 @@ def test_select_skips_excluded_rejected_and_unhealthy_accounts(tmp_path: Path) -
       "ext-1", _event("rejected", 1.0, 0.10, (NOW + timedelta(hours=1)).timestamp()), now=NOW)
   write_pool_credentials(tmp_path / "claude-ext-2", access_token="")  # emptied credential store
 
-  assert claude_accounts.select(cfg, FABLE_MODEL, current="main", exclude={"main"}, now=NOW) is None
-  assert claude_accounts.select(cfg, FABLE_MODEL, current="ext-1", now=NOW).label == "main"
+  assert claude_accounts.select(cfg, FABLE_MODEL, exclude={"main"}, now=NOW) is None
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW).label == "main"
   assert claude_accounts.earliest_reset(cfg, now=NOW) == NOW + timedelta(hours=1)
 
 

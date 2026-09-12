@@ -1,0 +1,78 @@
+# Replay manifest (schema v1) — the complete synthetic fixture behind docs/memory-replay.md.
+#
+# Everything here is frozen input for one offline replay: candidate material,
+# the current complete entries, owning-document evidence, the admission
+# guideline, and the pool of prior user comments with approved before/after
+# texts. Evaluation metadata (scoring answers, holdout labels) never goes in
+# this file — unknown keys are rejected — and stays in separate files the
+# runner never reads.
+version: 1
+base_commit: mem-base-0001 # opaque label of the frozen official-memory base revision
+topics: # frozen topics vocabulary; proposed entries may not grow it
+  - render
+sources:
+  - ref: guideline
+    kind: guideline # global: sent to both stages in every theme
+    text: |
+      Admission bar (synthetic stand-in): an entry must name a recurring action it changes and be
+      the shortest honest statement of it; details the owning document already carries stay there.
+  - ref: entry-cache-eviction
+    kind: entry # a current complete entry; `path` is its store path and diff path
+    path: entries/render/cache-eviction.md
+    text: |
+      ---
+      scope: user
+      topic: render
+      audience: master, worker
+      title: cache-eviction threshold: one knob gates eviction and alerting
+      ---
+      - `render.cache_eviction.evict_below` is the single threshold behind both the eviction order and
+        the alert; tune it on full warm-up replay, not on alert moments.
+      - Warm-up instance chart-2077 idled at 12% for three hours before serving.
+  - ref: capture-eviction
+    kind: candidate # frozen staged capture awaiting curation
+    text: |
+      # render cache eviction (capture)
+
+      The eviction and alert thresholds are one knob (`render.cache_eviction.evict_below`); warm-up
+      instance chart-2077 idled at 12% for hours. Record the mechanism so tuning keeps it in view.
+  - ref: doc-render-runbook
+    kind: document # evidence from the owning document
+    text: |
+      # render runbook (synthetic)
+
+      Cache tuning is owned by the runbook's Tuning chapter; this document carries the current
+      values and the tuning procedure.
+feedback_examples:
+  - comment_event: fb-001 # opaque stable provenance id of the user comment
+    comment_text: |
+      Drop the per-run warm-up instance names; keep the threshold mechanism and its tuning range.
+    tags: [instance-names-out, mechanism-in] # rebuildable retrieval index, never a user rule
+    approved_change: # nullable: null = comment only, no approved revision yet
+      approved_change_ref: approved-001
+      before: |
+        ---
+        scope: user
+        topic: render
+        audience: master, worker
+        title: cache-eviction threshold: one knob gates eviction and alerting
+        ---
+        - `render.cache_eviction.evict_below` is the single threshold behind both the eviction order
+          and the alert; tune it on full warm-up replay, not on alert moments.
+        - Warm-up instance chart-2077 idled at 12% for three hours before serving.
+      after: |
+        ---
+        scope: user
+        topic: render
+        audience: master, worker
+        title: cache-eviction threshold: one knob gates eviction and alerting
+        ---
+        - `render.cache_eviction.evict_below` is the single threshold behind both the eviction order
+          and the alert; tune it on full warm-up replay, not on alert moments.
+themes: # optional explicit assignments; without this block one implicit theme
+  # "default" groups every candidate with every entry and document source.
+  eviction:
+    principles: [instance-names-out] # the tags retrieval matches on
+    candidate_refs: [capture-eviction]
+    entry_refs: [entry-cache-eviction]
+    document_refs: [doc-render-runbook]

@@ -1,0 +1,161 @@
+# Memory replay
+
+The offline curation pipeline behind the approved memory-curation redesign's
+first delivery. One command turns a frozen manifest — candidate material,
+current complete entries, owning-document evidence, the admission guideline,
+and a pool of prior user comments with approved before/after texts — into a
+complete-entry proposal bundle. It is the core the upcoming controlled
+historical evaluation runs on; production approval wiring and daily scheduling
+are later deliveries and are deliberately untouched.
+
+## Invocation
+
+```bash
+charliebot memory replay \
+  --input <manifest.yaml> \
+  --output-dir <directory> \
+  --backend <configured-id> \
+  --mode editor-only|editor-review
+```
+
+- `--backend` names a `backends.options` entry in the profile's `config.yaml`.
+  Replay supports `charlie-code` and `cc-openai-compatible` entries (the
+  content-only chat-completions transports); any other type, or an unknown id,
+  fails visibly instead of routing to a substitute. Backend ids, model names,
+  endpoints, and credentials stay runtime configuration — none belong in
+  example files.
+- `--mode editor-only` runs the editor stage only. `--mode editor-review` runs
+  the reviewer over the same evidence, the same selected feedback, and the
+  editor's proposed entries — never the editor's admission justifications. The
+  editor request is byte-identical across the two modes, which is what makes
+  editor-only a usable control for the historical comparison.
+- Argument and manifest validation complete before any model call: a missing or
+  malformed input exits nonzero without touching an endpoint.
+
+The pipeline lives in `src/core/memory_replay/` (manifest, retrieval, exchange,
+validation, transport, report, runner); `src/cli/memory.py` only parses
+arguments and prints the outcome.
+
+## Manifest format
+
+Schema v1, YAML, documented in full by the module docstring of
+`src/core/memory_replay/manifest.py` and by the complete synthetic fixture at
+[`examples/memory-replay-manifest.yaml`](examples/memory-replay-manifest.yaml).
+Sections:
+
+- `base_commit` — an opaque label of the frozen official-memory base revision
+  the diff is computed against. Replay never verifies it against the live
+  store; the later approval integration re-binds it at approval time.
+- `topics` — the frozen topics vocabulary. A proposed entry outside it fails
+  mechanical validation, so a replay cannot grow the vocabulary.
+- `sources` — the frozen evidence, one entry each with a unique `ref` and a
+  `kind`:
+  - `candidate`: staged capture material awaiting curation;
+  - `entry`: a current complete entry; `path` (shape
+    `entries/<topic>/<slug>.md`) is its store path and the diff path;
+  - `document`: evidence from an owning document;
+  - `guideline`: the admission policy; global, sent to both stages.
+
+  Text is inline (`text:`) or an external frozen file (`file:`, relative to the
+  manifest). Unknown keys are rejected, so evaluation metadata cannot ride
+  inside the manifest; keep scoring answers and holdout labels in separate
+  files the runner never reads.
+- `feedback_examples` — the pool of prior user comments: `comment_event`
+  (opaque provenance id), the original `comment_text`, optional retrieval
+  `tags`, and an optional `approved_change` carrying `approved_change_ref`,
+  `before`, and `after` texts. Tags are a rebuildable index over the user's own
+  words, never user rules; original comments and provenance always travel
+  intact.
+- `themes` (optional) — explicit assignments for reproducible replay: each
+  theme lists its `candidate_refs` (every candidate must be assigned exactly
+  once), plus the `entry_refs` and `document_refs` that form its context.
+  Without the block, one implicit theme `default` groups everything.
+
+Relevance selection over the feedback pool is deliberately simple and
+inspectable (`src/core/memory_replay/retrieval.py`): a comment is selected when
+its tags match the theme's declared principles or its words overlap the theme's
+texts — the principle axis is what makes an otherwise matching correction
+survive a project rename. The selection with its matched tags and terms is
+recorded in `run.json`.
+
+## What the models see and may do
+
+Each stage gets one content-only chat-completions request: every byte of
+evidence is inline, no tools are offered, and the reply is one JSON object. A
+model therefore has no read path beyond the supplied evidence and no write path
+at all — the isolation is a property of the transport, not of an instruction
+saying "do not write".
+
+- **Editor** returns complete proposed entries (rewrite with full replacement
+  text, delete, keep, or new) plus one disposition row per candidate
+  (`propose`, `no_change`, `needs_decision`). An explicit remember request
+  keeps a visible row naming it.
+- **Reviewer** (editor-review mode only) sees the same evidence, the same
+  selected feedback, and the editor's proposed entries. It may keep, delete, or
+  rewrite, and its rows become the final dispositions; a change it initiates
+  gets a row naming the existing entry it touches. The editor's reasons stay in
+  the audit record and are withheld from the reviewer request.
+
+## Mechanical validation and the proposal
+
+After the stages, deterministic code (`src/core/memory_replay/validate.py`)
+checks entry formats through the store's own parser, topic vocabulary
+membership, source-ref resolution, path shapes (no traversal), disposition
+coverage, and that the generated diff round-trips. Then it writes the bundle:
+
+```
+<output-dir>/runs/<input-identity prefix>/
+  proposal.json        # exactly the plan 4.1 schema
+  report.html          # final diff and dispositions first, evidence folded
+  sources/<ref>.md     # frozen evidence snapshots (sha256 in proposal.json)
+  run.json             # identity, model identity, selection, usage, timing, status
+  raw/                 # the exact request and response text of every model call
+```
+
+`proposal.json` carries exactly the schema fields: `base_commit`, `sources`
+(`ref`/`sha256`/`snapshot`), `feedback_refs`
+(`comment_event`/`approved_change_ref`, the latter nullable),
+`candidate_results` (`source_ref`/`outcome`/`paths`/`reason`),
+`reviewed_patch` (unified diff against the base), and `approval_digest` —
+SHA-256 over the canonical JSON encoding of `base_commit` and
+`reviewed_patch` jointly. Every changed path maps back through a `propose`
+disposition to evidence, reviewer-initiated changes included.
+
+Run records (`run.json`, `raw/`) hold the raw model outputs, the selected
+feedback references, the input identity, the model identity, and whatever
+usage the endpoint reported (output tokens and latency; cost only when
+actually known). They are local artifacts for the later evaluation — keep the
+output directory out of git.
+
+## Reuse and exit codes
+
+A completed run is identified by its inputs: every source, the whole feedback
+pool, theme assignments, the mode, the model identity, and the prompt versions.
+Re-running identical inputs reuses the completed bundle without a model call;
+new relevant feedback, rule, or document evidence changes the identity and
+invalidates reuse. There is no workflow state machine — the bundles themselves
+are the state.
+
+Exit status reflects execution only: `0` for a completed or reused proposal
+(including one whose dispositions say `needs_decision`), `1` for a load,
+transport, parse, or mechanical-validation failure. A failed run leaves its
+directory with `run.json` `status: "failed"` and no proposal; the next identical
+run redoes it. Model judgments never fail the command.
+
+## Isolation guarantees
+
+- The live memory store is never opened for reading or writing: the manifest
+  supplies the frozen store state, and nothing in the pipeline touches
+  `cfg.memory_dir`.
+- The output root must not overlap the live store or any frozen input file
+  (either direction of containment); violations are rejected before any write.
+- Proposed entry paths must match `entries/<topic>/<slug>.md` in the store's
+  charsets, which rules out traversal; new entries must use a declared topic.
+
+## Out of scope in this delivery
+
+Live curator prompts, daily scheduling, the production approval/commit
+endpoints, and any claim of measured quality improvement are all later work.
+The private historical corpus and the baseline-versus-new-design comparison
+belong to the master's evaluation step; synthetic tests here assert only the
+observable boundaries of the core.

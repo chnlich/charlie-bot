@@ -57,7 +57,7 @@ from src.core.memory_replay.exchange import (
 )
 from src.core.memory_replay.identity import approval_digest, canonical_bytes, input_identity, sha256_hex
 from src.core.memory_replay.manifest import Manifest, load_manifest
-from src.core.memory_replay.report import REPORT_CSS, _e
+from src.core.memory_replay.report import _e, _page
 from src.core.memory_replay.retrieval import FeedbackSelection
 from src.core.memory_replay.runner import PROPOSAL_SCHEMA, _aggregate_candidate_results, _timestamp
 from src.core.memory_replay.validate import build_patch, canonical_text, finalize, validate_theme_output
@@ -829,19 +829,7 @@ def render_comparison_report(comparison: dict) -> str:
   """Static HTML over the comparison dict; every dynamic value goes through ``html.escape``."""
   source = comparison["source_run"]
   arms = comparison["arms"]
-  parts = [
-      "<!doctype html>",
-      '<html lang="en">',
-      "<head>",
-      '<meta charset="utf-8">',
-      "<title>Memory replay — paired editor/reviewer comparison</title>",
-      "<style>",
-      "body{font:14px/1.5 -apple-system,sans-serif;margin:24px auto;max-width:1150px;color:#1b2430}",
-      *REPORT_CSS,
-      ".failed{background:#ffebe9;border:1px solid #ff818266;border-radius:6px;padding:10px 14px;margin:8px 0}",
-      "</style>",
-      "</head>",
-      "<body>",
+  body = [
       "<h1>Memory replay &mdash; paired editor/reviewer comparison</h1>",
       f'<p class="muted">{_e(comparison["note"])}</p>',
       "<h2>Source run</h2>",
@@ -865,9 +853,10 @@ def render_comparison_report(comparison: dict) -> str:
       "<h2>Quality</h2>",
       '<div class="needs"><strong>Unjudged.</strong> '
       f'{_e(comparison["quality"]["note"])}</div>',
-      "</body></html>",
   ]
-  return "\n".join(parts) + "\n"
+  return _page(
+      "Memory replay — paired editor/reviewer comparison", 1150,
+      [".failed{background:#ffebe9;border:1px solid #ff818266;border-radius:6px;padding:10px 14px;margin:8px 0}"], body)
 
 
 def _provenance_table(shared: dict) -> str:

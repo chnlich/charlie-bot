@@ -113,10 +113,15 @@
   <h2><span class="n">1</span>Summary</h2>
   <ul>
     <li><b>Scale by platform:</b>
-      Claude Code {{ ctx.per_src["Claude Code"]["t_comp"] }} ({{ "%.0f"%ctx.per_src["Claude Code"]["share"] }}%, {{ ctx.per_src["Claude Code"]["models"] }} models),
-      opencode {{ ctx.per_src["opencode"]["t_comp"] }} ({{ "%.0f"%ctx.per_src["opencode"]["share"] }}%, {{ ctx.per_src["opencode"]["models"] }}),
-      Codex {{ ctx.per_src["Codex"]["t_comp"] }} ({{ "%.0f"%ctx.per_src["Codex"]["share"] }}%, {{ ctx.per_src["Codex"]["models"] }}),
-      charlie-bot {{ ctx.per_src["charlie-bot"]["t_comp"] }} ({{ "%.0f"%ctx.per_src["charlie-bot"]["share"] }}%, {{ ctx.per_src["charlie-bot"]["models"] }}).
+      {#- A clause renders only for a source the serving tally's per_src carries: the template
+          reloads from disk while the serving process runs the python it started with, so a
+          freshly added source's key stays absent until that process restarts. -#}
+      {%- set known = ["Claude Code", "opencode", "Codex", "charlie-bot"] | select("in", ctx.per_src) | list -%}
+      {%- for src in known -%}
+        {%- set ps = ctx.per_src[src] -%}
+        {{- " " if loop.first else ", " -}}
+        {{- src }} {{ ps["t_comp"] }} ({{"%.0f"%ps["share"]}}%, {{ ps["models"] }}{% if src == "Claude Code" %} models{% endif %}){{ "." if loop.last }}
+      {%- endfor -%}
     </li>
     <li><b>The total mostly measures cache reuse, not work done:</b> {{ "%.1f"%cache_share }}% of tokens were cache reads,
       because a long session re-reads its whole context every turn. Ranking by output tokens reflects real production,

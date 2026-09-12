@@ -1954,7 +1954,7 @@ def make_worker(tmp_path: Path, thread_id: str) -> Worker:
   )
 
 
-async def process_worker_event(worker: Worker, tmp_path: Path, event: dict, monkeypatch) -> str:
+async def process_worker_event(worker: Worker, tmp_path: Path, event: dict, monkeypatch: pytest.MonkeyPatch) -> str:
   """Append one event through Worker._process_event with the broadcast seam stubbed.
 
   The events log is driven through a real O_APPEND fd and closed even when the

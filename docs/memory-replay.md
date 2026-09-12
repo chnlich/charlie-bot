@@ -89,35 +89,83 @@ texts — the principle axis is what makes an otherwise matching correction
 survive a project rename. The selection with its matched tags and terms is
 recorded in `run.json`.
 
-## What the models see and may do
+## The exchange contract (v3)
 
-Each stage gets one content-only chat-completions request: every byte of
-evidence is inline, no tools are offered, and the reply is one JSON object. A
-model therefore has no read path beyond the supplied evidence and no write path
-at all — the isolation is a property of the transport, not of an instruction
-saying "do not write".
+Each stage gets one content-only chat-completions request: no tools are
+offered, and the reply is exactly one JSON object. A model therefore has no
+read path beyond the supplied evidence and no write path at all — the isolation
+is a property of the transport, not of an instruction saying "do not write".
 
-The request states the frozen topics vocabulary (`## Allowed topics`) and shows
-each current entry's store path together with its `ref` — a model cannot honor
-vocabulary it never sees.
+**Evidence is one JSON payload.** After the theme name, the user content
+carries a single JSON object under `## Evidence` holding every byte of frozen
+input: `guidelines` (the admission policy), `entries` (the current base
+entries, each with its store `path` and `ref`), `documents`, `candidates`,
+`feedback` (the selected prior user comments with provenance ids), the
+`allowed_topics` vocabulary, and the finite `disposition_refs` domain. Every
+text is an exact JSON string, so arbitrary entry or capture content — headings,
+JSON fragments, anything — stays data and cannot be confused with request
+structure; there are no prose sections around evidence and no second rendering
+of it.
 
-- **Editor** returns complete proposed entries (rewrite with full replacement
-  text, delete, keep, or new) plus one disposition row per candidate
-  (`propose`, `no_change`, `needs_decision`). An explicit remember request
-  keeps a visible row naming it.
+**Every operation is relative to the original frozen base.** `keep` retains the
+base entry and carries no text — it never expresses different content;
+`rewrite` replaces it with the complete text; `delete` removes it; `new` adds
+an absent path in a declared topic. A reviewer that accepts an editor's
+new/rewrite proposal re-emits that operation with the complete text it
+approves — never `keep` with changed text — and drops an editor-created entry
+by omitting the operation and updating the candidate's final disposition.
+
+**Disposition rows name only the finite ref domain.** Exactly one row per
+candidate ref (`disposition_refs.candidates`); the only other allowed
+`source_ref` is a base entry's ref (`disposition_refs.entries`) for a change
+the stage initiates on its own. Feedback comment ids and approved-change refs
+are evidence provenance — citable in `source_refs`, never disposition rows.
+`new`/`rewrite` rows must cite supporting evidence; `keep`/`delete` rows may
+carry optional citations, which are validated against the actually available
+evidence, so their presence alone never rejects a no-write operation — but an
+unknown ref still fails.
+
+- **Editor** returns complete proposed entries plus one disposition row per
+  candidate (`propose`, `no_change`, `needs_decision`). An explicit remember
+  request keeps a visible row naming it.
 - **Reviewer** (editor-review mode only) sees the same evidence, the same
-  selected feedback, and the editor's proposed entries. It may keep, delete, or
-  rewrite, and its rows become the final dispositions; a change it initiates
-  gets a row whose `source_ref` is the touched entry's `ref`, with the store
-  path kept separately in the row's `paths`. The editor's reasons stay in the
-  audit record and are withheld from the reviewer request.
+  selected feedback, and the editor's proposed operations
+  (`evidence.editor_proposals`) — never the editor's justifications, which stay
+  in the audit record. Its rows become the final dispositions; a change it
+  initiates gets a row whose `source_ref` is the touched entry's `ref`, with
+  the store path kept separately in the row's `paths`.
+
+The frozen guideline inside the evidence remains the authoritative admission
+policy; nothing in the request adds rules beyond it. Scoring answers have no
+channel into either request.
+
+## Bounded mechanical repair
+
+A stage response that fails mechanical validation — JSON shape, unknown ref,
+path or entry-format violation, disposition-coverage gap, or a
+patch/disposition inconsistency in the stage's own final state — is re-asked
+**at most once** (two model responses maximum). The re-ask's input is the
+original authorized evidence, that stage's own previous raw response, and the
+concrete validation errors; the reviewer's repair input never contains the
+editor's rationale. Model judgments (`no_change`, `needs_decision`, rejecting
+every candidate) are never retry triggers, and backend, auth, and transport
+failures are never retried — they fail the run immediately. A second invalid
+response fails visibly: nothing is coerced into a valid output, no real
+candidate is discarded, and no failed response becomes `no_change`. Cross-theme
+conflicts (two themes driving one path) cannot appear inside a stage and stay
+visible at final assembly.
 
 ## Mechanical validation and the proposal
 
 After the stages, deterministic code (`src/core/memory_replay/validate.py`)
 checks entry formats through the store's own parser, topic vocabulary
-membership, source-ref resolution, path shapes (no traversal), disposition
-coverage, and that the generated diff round-trips under a strict unified-diff
+membership, source-ref resolution (optional keep/delete citations included),
+path shapes (no traversal), disposition coverage, and that each stage's own
+final state agrees with its propose rows — a changed path with no propose row
+has no evidence mapping, and a propose row over an unchanged path points at
+nothing; both are attributed to the stage that made them, where the bounded
+repair can reach them. Final assembly additionally rejects cross-theme
+conflicts, and the generated diff must round-trip under a strict unified-diff
 applicator: hunks land exactly where their headers say, in order, without
 overlap, and the unchanged text around them — prefix, between hunks, and the
 trailing suffix — survives, so the applied state is the complete file. Then it
@@ -129,14 +177,20 @@ writes the bundle:
   report.html          # final diff and dispositions first, evidence folded
   sources/<ref>.md     # frozen evidence snapshots (sha256 in proposal.json)
   frozen/manifest.yaml # the fully inlined frozen inputs (self-contained)
-  run.json             # identity, model identity, selection, usage, timing, status,
-                       # system-prompt fingerprints, bundle write-time hashes
-  raw/                 # the exact request and response text of every model call
+  run.json             # identity, model identity, selection, status, prompt versions,
+                       # system-prompt fingerprints, bundle write-time hashes, the recovery
+                       # policy, and every recorded attempt with its validation outcome,
+                       # chosen flag, and usage
+  raw/                 # the exact request and response text of every model attempt,
+                       # named <role>-<theme>.attempt-<n>.{request,response}.txt
 ```
 
 The frozen inputs are written before the first model call, so failed runs are
-self-contained too. `run.json` records the SHA-256 of every bundle file at the
-moment the run wrote it (`bundle_integrity`) and fingerprints of the exact
+self-contained too. Every attempt's request, response, mechanical validation
+result, and available usage is persisted — failed repair attempts included,
+with unknown usage recorded as null. `run.json` records the SHA-256 of every
+bundle file at the moment the run wrote it (`bundle_integrity`; the record
+itself and the derived report are excluded) and fingerprints of the exact
 system prompts sent to each stage (`system_prompts`); a later comparison fails
 visibly when a recorded file or the prompt contract changed.
 
@@ -151,11 +205,12 @@ SHA-256 over the canonical JSON encoding of `base_commit` and
 `reviewed_patch` jointly. Every changed path maps back through a `propose`
 disposition to evidence, reviewer-initiated changes included.
 
-Run records (`run.json`, `raw/`) hold the raw model outputs, the selected
-feedback references, the input identity, the model identity, and whatever
-usage the endpoint reported (output tokens and latency; cost only when
-actually known). They are local artifacts for the later evaluation — keep the
-output directory out of git.
+Run records (`run.json`, `raw/`) hold every attempt's raw request and
+response, the validation outcome and chosen flag, the selected feedback
+references, the input identity, the model identity, and whatever usage the
+endpoint reported (output tokens and latency; cost only when actually known,
+null when unknown). They are local artifacts for the later evaluation — keep
+the output directory out of git.
 
 ## Reuse and exit codes
 
@@ -177,12 +232,18 @@ run redoes it. Model judgments never fail the command.
 `charliebot memory compare --run-dir <editor-review-run> --output-dir <dir>`
 is the offline, deterministic second half of the evaluation. It re-derives
 BOTH arms of an `editor-review` run from the run's own recorded outputs — the
-editor-only arm from the exact editor response the reviewer consumed, the
-post-review arm from the recorded reviewer responses — with **no model calls
-and no live memory writes**. Comparing a fresh editor-only invocation against
-a recorded review would confound review gain with a new stochastic editor
-draw; this comparison cannot, because both arms parse the same recorded
-response.
+editor-only arm from the exact chosen editor response the reviewer consumed,
+the post-review arm from the recorded chosen reviewer responses — with **no
+model calls and no live memory writes**. Comparing a fresh editor-only
+invocation against a recorded review would confound review gain with a new
+stochastic editor draw; this comparison cannot, because both arms parse the
+same recorded response.
+
+The run's recorded prompt versions select the exchange contract used for
+every check: v3 runs are read under the v3 contract, v2 runs under the v2
+contract with its original operation and validation meanings (a v2 run's known
+failed arms stay failed — v3's wider citation allowance does not reach back
+into old records), and anything else fails explicitly.
 
 Before reporting anything, the comparison proves its inputs are the recorded
 run's inputs and fails visibly otherwise:
@@ -191,33 +252,44 @@ run's inputs and fails visibly otherwise:
   self-contained bundles existed, the manifest at the path the run record
   names) must reproduce the run's recorded input identity;
 - every bundle file hashed at run time must still match that hash;
+- the recorded attempt chain of every stage must reconstruct: attempt 1's
+  request must be the request the recorded contract builds, a repair attempt's
+  request must be the bounded repair request over the same evidence, the
+  previous recorded response, and that attempt's recorded validation errors,
+  the chosen attempt must be the last one, and a response recorded as failed
+  must still fail mechanical validation;
 - each recorded editor request must be byte-identical to the request
   reconstructed from the frozen inputs and the recorded feedback selection,
   and each recorded reviewer request byte-identical to the request
   reconstructed from the frozen inputs and the recorded editor response — the
   proof that the reviewer actually consumed that response;
-- the recorded system-prompt fingerprints must match the current replay
-  prompts;
+- the recorded system-prompt fingerprints must match the prompts of the
+  recorded contract;
 - a recorded proposal must still match the finalization of the recorded
   reviewer responses (base, sources, patch, approval digest, final
   dispositions).
 
 `comparison.json` and `report.html` are self-contained. They carry the source
-run identity and base, explicit provenance that both arms share one recorded
-editor response (with per-theme request/response hashes), the verification
-results, per-theme full final texts, diffs, and candidate dispositions for
+run identity and base with the contract used to interpret it, explicit
+provenance that both arms share one recorded editor response (with per-theme
+request/response hashes and the full per-attempt chains), the verification
+results, a stage-recovery section naming the themes that needed a re-ask,
+per-theme full final texts, diffs, and candidate dispositions for
 both arms (maintenance changes included), fixed theme and input-candidate
 denominators with `no_change` and `needs_decision` rows visible, editor and
-reviewer output token counts and elapsed request times exactly as recorded
-(missing values `null`; the incremental review cost is the review calls
-only), and any execution/parse/validation failure. A failed arm is reported
+reviewer output token counts and elapsed request times exactly as recorded —
+every recorded attempt included, failed repairs and transport-failed calls
+too, missing values `null` (the incremental review cost is the review calls
+only) — and any execution/parse/validation failure. A failed arm is reported
 as failed — never substituted with empty or no-change output — and stays in
 the denominators.
 
 Quality is reported as **unjudged**: fewer lines, more deletions, or fewer
-proposed paths do not establish better quality. The exit status communicates
-mechanical execution and format success only, never whether review improved
-quality. Runs recorded before this provenance metadata existed are supported
+proposed paths do not establish better quality, and a recovered stage response
+is stage execution/recovery after a mechanical failure — not independent-review
+quality gain — because a retry can change a judgment. The exit status
+communicates mechanical execution and format success only, never whether
+review improved quality. Runs recorded before this provenance metadata existed are supported
 when every check their record can support passes, and the comparison
 explicitly declares what such a record never saved instead of silently
 certifying it. The comparison writes only into its own output root, which

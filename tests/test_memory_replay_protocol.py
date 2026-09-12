@@ -643,7 +643,7 @@ def write_v2_run_bundle(
   """
   from src.core.memory_replay import exchange_v2
   from src.core.memory_replay.retrieval import select_feedback
-  from src.core.memory_replay.runner import RUN_SCHEMA, _aggregate_candidate_results, _theme_context_text
+  from src.core.memory_replay.runner import _aggregate_candidate_results, _theme_context_text
   from src.core.memory_replay.validate import canonical_text, finalize, validate_theme_output_v2
 
   manifest_path = base.write_manifest(tmp_path, name=manifest_name)
@@ -699,7 +699,7 @@ def write_v2_run_bundle(
         })
 
   record = {
-      "schema": RUN_SCHEMA,
+      "schema": "memory-replay-run/1",  # the v2-era record layout
       "status": status,
       "created_at": "2026-09-10T00:00:00Z",
       "mode": "editor-review",

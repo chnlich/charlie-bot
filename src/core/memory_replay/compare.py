@@ -75,7 +75,7 @@ from src.core.memory_replay.exchange import (
 )
 from src.core.memory_replay.identity import approval_digest, canonical_bytes, input_identity, sha256_hex
 from src.core.memory_replay.manifest import Manifest, load_manifest
-from src.core.memory_replay.report import _e, _page
+from src.core.memory_replay.report import _e, _page, _row
 from src.core.memory_replay.retrieval import FeedbackSelection
 from src.core.memory_replay.runner import MAX_STAGE_RESPONSES, PROPOSAL_SCHEMA, _aggregate_candidate_results, _timestamp
 from src.core.memory_replay.validate import (
@@ -1288,7 +1288,7 @@ def render_comparison_report(comparison: dict) -> str:
       f'<p class="muted">{_e(comparison["note"])}</p>',
       "<h2>Source run</h2>",
       "<table><tr><th>field</th><th>value</th></tr>" + "".join(
-          "<tr><td>{}</td><td><code>{}</code></td></tr>".format(_e(key), _e(str(source[key]))) for key in (
+          _row(_e(key), f"<code>{_e(str(source[key]))}</code>") for key in (
               "run_dir", "status", "error", "created_at", "mode", "input_identity", "base_commit", "model",
               "prompt_versions", "exchange_contract", "manifest_path_recorded")) + "</table>",
       "<h2>Provenance &mdash; one recorded editor response</h2>",
@@ -1360,14 +1360,15 @@ def _verification_section(verification: dict) -> str:
   parts = ["<table><tr><th>check</th><th>result</th></tr>"]
   manifest_inputs = verification["manifest_inputs"]
   parts.append(
-      "<tr><td>frozen inputs</td><td>source <code>{}</code>, identity verified <code>{}</code>, "
-      "external manifest <code>{}</code></td></tr>".format(
-          _e(str(manifest_inputs["source"])), _e(str(manifest_inputs["identity_verified"])),
-          _e(str(manifest_inputs["external_manifest"].get("state")))))
+      _row(
+          "frozen inputs", f"source <code>{_e(str(manifest_inputs['source']))}</code>, "
+          f"identity verified <code>{_e(str(manifest_inputs['identity_verified']))}</code>, "
+          f"external manifest <code>{_e(str(manifest_inputs['external_manifest'].get('state')))}</code>"))
   for key in ("artifacts", "source_snapshots", "system_prompts", "editor_requests", "reviewer_requests", "proposal"):
     parts.append(
-        "<tr><td>{}</td><td><code>{}</code> {}</td></tr>".format(
-            _e(key), _e(str(verification[key].get("status"))), _e(str(verification[key].get("detail", "")))))
+        _row(
+            _e(key), f"<code>{_e(str(verification[key].get('status')))}</code> "
+            f"{_e(str(verification[key].get('detail', '')))}"))
   parts.append("</table>")
   limitations = verification.get("limitations") or []
   if limitations:
@@ -1378,9 +1379,7 @@ def _verification_section(verification: dict) -> str:
 
 
 def _denominators_section(denominators: dict) -> str:
-  rows = "".join(
-      "<tr><td>{}</td><td>{}</td></tr>".format(_e(theme), count)
-      for theme, count in sorted(denominators["candidates_per_theme"].items()))
+  rows = "".join(_row(_e(theme), count) for theme, count in sorted(denominators["candidates_per_theme"].items()))
   return (
       "<table><tr><th>theme</th><th>input candidates</th></tr>" + rows + "</table>"
       f'<p class="muted">themes <code>{denominators["themes"]}</code> · input candidates '
@@ -1394,7 +1393,7 @@ def _usage_section(usage: dict) -> str:
   ]
   for call in usage["editor"]["per_call"] + usage["reviewer"]["per_call"]:
     parts.append(
-        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+        _row(
             _e(str(call["name"])), _e(str(call["role"])), _e(str(call["theme"])), _e(str(call["attempt"])),
             _e(str(call["validation"])), _e(str(call["latency_ms"])), _e(str(call["output_tokens"]))))
   parts.append("</table>")
@@ -1427,8 +1426,7 @@ def _arm_section(title: str, arm: dict) -> str:
         f"{_e(', '.join(section['changed_paths'])) or 'none'}</summary>")
     parts.append(
         "<table><tr><th>source_ref</th><th>outcome</th><th>paths</th><th>reason</th></tr>" + "".join(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-                _e(row["source_ref"]), _e(row["outcome"]), _e(", ".join(row["paths"])), _e(row["reason"]))
+            _row(_e(row["source_ref"]), _e(row["outcome"]), _e(", ".join(row["paths"])), _e(row["reason"]))
             for row in section["dispositions"]) + "</table>")
     for path in section["changed_paths"]:
       parts.append(f"<p class='mono'>{_e(path)}</p><pre>{_e(section['diffs'][path])}</pre>")

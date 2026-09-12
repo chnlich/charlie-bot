@@ -46,7 +46,7 @@ from src.core.memory_replay.compare import CompareOptions, _denominators, _usage
 from src.core.memory_replay.errors import ReplayError
 from src.core.memory_replay.identity import sha256_hex
 from src.core.memory_replay.manifest import REF_RE, Manifest, load_manifest
-from src.core.memory_replay.report import _e, _page
+from src.core.memory_replay.report import _e, _page, _row
 from src.core.memory_replay.runner import (
     ReplayOptions,
     _require_disjoint_output_root,
@@ -757,7 +757,7 @@ def render_experiment_report(summary: dict) -> str:
             _e(variant["title"]), _e(variant["name"])))
     parts.append(
         "<table><tr><th>dimension</th><th>value</th></tr>" + "".join(
-            "<tr><td>{}</td><td><code>{}</code></td></tr>".format(_e(field), _e(str(variant[field])))
+            _row(_e(field), f"<code>{_e(str(variant[field]))}</code>")
             for field in ("editor_stage", "reviewer_stage", "entry_scope", "feedback_view", "rationale_visibility")) +
         "</table>")
     parts.append(
@@ -819,8 +819,7 @@ def _case_arm_table(case: dict) -> str:
     if comparison and comparison.get("report"):
       links.append(f'<a href="{_e(comparison["report"])}">comparison</a>')
     rows.append(
-        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-            f"<strong>{_e(arm['variant'])}</strong>", run_cell, editor_status, post_status, counts, chars, tokens) +
+        _row(f"<strong>{_e(arm['variant'])}</strong>", run_cell, editor_status, post_status, counts, chars, tokens) +
         f"<tr><td></td><td colspan=\"6\">{' · '.join(links) or '<span class=\"muted\">no artifacts</span>'}"
         f" · identity <code>{_e(str(arm['input_identity'])[:16])}</code></td></tr>")
   return (

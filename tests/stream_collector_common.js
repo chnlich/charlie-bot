@@ -27,13 +27,17 @@ function fetchUrl(url) {
   });
 }
 
+// The live-corpus root liveChatFiles walks. Exported so a bridge-registered
+// suite can skip hosts that carry no live corpus (CI, fresh checkouts); the
+// collectors themselves fail loud on it.
+const LIVE_CHAT_ROOT = path.join(process.env.HOME, '.charliebot', 'sessions');
+
 // Every live session's chat file as { p, size }, skipping the sessions whose
 // file is absent or unreadable. The one census both corpora below walk.
 function liveChatFiles() {
-  const root = path.join(process.env.HOME, '.charliebot', 'sessions');
   const files = [];
-  for (const d of fs.readdirSync(root)) {
-    const p = path.join(root, d, 'data', 'chat_events.jsonl');
+  for (const d of fs.readdirSync(LIVE_CHAT_ROOT)) {
+    const p = path.join(LIVE_CHAT_ROOT, d, 'data', 'chat_events.jsonl');
     try { files.push({ p, size: fs.statSync(p).size }); } catch { continue; }
   }
   return files;
@@ -159,6 +163,7 @@ function finalFrameParity(markedSrc, text, finalHtml, { harnessOptions } = {}) {
 
 module.exports = {
   HLJS_URL,
+  LIVE_CHAT_ROOT,
   fetchUrl,
   largestAssistantDraft,
   assistantTexts,

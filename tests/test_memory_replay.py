@@ -30,6 +30,7 @@ from src.core.memory_replay.errors import (
 from src.core.memory_replay.exchange import parse_model_output
 from src.core.memory_replay.identity import approval_digest
 from src.core.memory_replay.manifest import load_manifest
+from src.core.memory_replay.retrieval import FeedbackSelection
 from src.core.memory_replay.transport import TransportResult, request_model_for
 from src.core.memory_replay.validate import apply_unified_patch, build_patch, canonical_text
 
@@ -1410,3 +1411,758 @@ def test_cli_replay_reports_errors_without_traceback(
   assert exc_info.value.code == 1
   err = capsys.readouterr().err
   assert err.startswith("error: ") and "not in backends.options" in err
+
+
+# --- paired comparison (charliebot memory compare) ------------------------------
+#
+# The comparison re-derives BOTH arms of an editor-review run from the run's own
+# recorded outputs: the editor-only arm from the exact editor response the
+# reviewer consumed, the post-review arm from the recorded reviewer responses.
+# The fixtures below exercise the provenance checks (identity, artifact hashes,
+# request reconstruction, proposal cross-check), arm/failure reporting, the
+# fixed denominators, and the unjudged-quality contract.
+
+
+def run_compare(tmp_path: Path, run_dir: Path, output_dir: Path | None = None):
+  from src.core.memory_replay import CompareOptions, run_comparison
+
+  return run_comparison(CompareOptions(run_dir=run_dir, output_dir=output_dir or tmp_path / "cmp"))
+
+
+def read_comparison(output_dir: Path) -> dict:
+  return json.loads((output_dir / "comparison.json").read_text(encoding="utf-8"))
+
+
+def strip_post_v2_record(record_path: Path) -> None:
+  """Rewind a run record to the v2 era: no frozen inputs, no prompt fingerprints, no artifact hashes.
+
+  v2-era records carried none of the self-containment metadata, so this is how the tests
+  exercise the legacy support path against bundles produced by the current runner.
+  """
+  record = json.loads(record_path.read_text(encoding="utf-8"))
+  for key in ("frozen_inputs", "system_prompts", "bundle_integrity"):
+    record.pop(key, None)
+  record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def raw_path(run_dir: Path, name: str) -> Path:
+  return run_dir / "raw" / name
+
+
+def sha256_of(path: Path) -> str:
+  return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class UsageTransport:
+  """Fake transport carrying per-call usage values, so comparison totals are checkable."""
+
+  def __init__(self, responses: list[tuple[str, int | None, int | None, int]]):
+    self.responses = list(responses)
+    self.calls: list[dict] = []
+
+  def complete(self, *, system: str, user: str) -> TransportResult:
+    self.calls.append({"system": system, "user": user})
+    if not self.responses:
+      raise AssertionError("usage transport ran out of scripted responses")
+    text, prompt_tokens, output_tokens, latency_ms = self.responses.pop(0)
+    return TransportResult(
+        text=text, model="fake-model", prompt_tokens=prompt_tokens, output_tokens=output_tokens, latency_ms=latency_ms)
+
+
+def run_review_with_transport(
+    tmp_path: Path, transport, *, mode: str = "editor-review", manifest_dict: dict | None = None):
+  manifest_path = write_manifest(
+      tmp_path,
+      manifest_dict if manifest_dict is not None else base_manifest_dict(),
+      name="two-themes.yaml" if manifest_dict is not None else "manifest.yaml")
+  return run_replay(
+      ReplayOptions(manifest=manifest_path, output_dir=tmp_path / "out", backend="fake-clc", mode=mode),
+      cfg=replay_cfg(tmp_path),
+      transport_factory=lambda: transport)
+
+
+PLOT_TITLE = "axis-scale: one export path owns plot scaling"
+
+
+def entry_for(topic: str, title: str, body_lines: list[str]) -> str:
+  header = ["---", "scope: user", f"topic: {topic}", "audience: master, worker", f"title: {title}", "---"]
+  return "\n".join(header + body_lines) + "\n"
+
+
+PLOT_ENTRY_WITH_INSTANCE = entry_for(
+    "plotting", PLOT_TITLE, [
+        "- `plot.export.scale` is the single export scaling path; set it in config, not per script.",
+        "- Instance chart-9012 rendered at 40% until the scale flag landed."
+    ])
+PLOT_ENTRY_WITHOUT_INSTANCE = entry_for(
+    "plotting", PLOT_TITLE,
+    ["- `plot.export.scale` is the single export scaling path; set it in config, not per script."])
+PLOT_CAPTURE_TEXT = (
+    "# plotting export scale (capture)\n\nPlot export scaling is one flag (`plot.export.scale`); "
+    "instance chart-9012 rendered small until it was set. Keep the single-path rule visible.\n")
+
+
+def two_theme_manifest_dict() -> dict:
+  return {
+      "version": 1,
+      "base_commit": "mem-base-0002",
+      "topics": ["render", "plotting"],
+      "sources":
+          [
+              {
+                  "ref": "guideline",
+                  "kind": "guideline",
+                  "text": GUIDELINE_TEXT
+              },
+              {
+                  "ref": "entry-cache-eviction",
+                  "kind": "entry",
+                  "path": "entries/render/cache-eviction.md",
+                  "text": ENTRY_WITH_INSTANCE,
+              },
+              {
+                  "ref": "entry-axis-scale",
+                  "kind": "entry",
+                  "path": "entries/plotting/axis-scale.md",
+                  "text": PLOT_ENTRY_WITH_INSTANCE,
+              },
+              {
+                  "ref": "capture-eviction",
+                  "kind": "candidate",
+                  "text": CAPTURE_TEXT
+              },
+              {
+                  "ref": "capture-axis-scale",
+                  "kind": "candidate",
+                  "text": PLOT_CAPTURE_TEXT
+              },
+          ],
+      "feedback_examples":
+          [
+              {
+                  "comment_event": "fb-001",
+                  "comment_text":
+                      "Drop the per-run warm-up instance names; keep the mechanism and its tuning range. "
+                      "fb-comment-marker",
+                  "tags": ["instance-names-out", "mechanism-in"],
+                  "approved_change":
+                      {
+                          "approved_change_ref": "approved-001",
+                          "before": ENTRY_WITH_INSTANCE,
+                          "after": ENTRY_WITHOUT_INSTANCE,
+                      },
+              }
+          ],
+      "themes":
+          {
+              "eviction":
+                  {
+                      "principles": ["instance-names-out"],
+                      "candidate_refs": ["capture-eviction"],
+                      "entry_refs": ["entry-cache-eviction"],
+                      "document_refs": [],
+                  },
+              "plotting":
+                  {
+                      "principles": ["instance-names-out"],
+                      "candidate_refs": ["capture-axis-scale"],
+                      "entry_refs": ["entry-axis-scale"],
+                      "document_refs": [],
+                  },
+          },
+  }
+
+
+def plot_rewrite(text: str, path: str = "entries/plotting/axis-scale.md") -> dict:
+  return {
+      "action": "rewrite",
+      "path": path,
+      "text": text,
+      "source_refs": ["capture-axis-scale", "entry-axis-scale"],
+      "reason": "merged the capture and dropped the instance detail",
+  }
+
+
+def eviction_editor_response() -> str:
+  return editor_json(
+      [rewrite_op(ENTRY_WITHOUT_INSTANCE)],
+      [row("capture-eviction", "propose", ["entries/render/cache-eviction.md"], "merged the render capture")])
+
+
+def plotting_editor_response() -> str:
+  return editor_json(
+      [plot_rewrite(PLOT_ENTRY_WITHOUT_INSTANCE)],
+      [row("capture-axis-scale", "propose", ["entries/plotting/axis-scale.md"], "merged the plot capture")])
+
+
+def eviction_keep_response(reason: str) -> str:
+  return editor_json([keep_op()], [row("capture-eviction", "no_change", [], reason)])
+
+
+def plotting_keep_response(reason: str) -> str:
+  return editor_json([keep_op("entries/plotting/axis-scale.md")], [row("capture-axis-scale", "no_change", [], reason)])
+
+
+def plotting_needs_decision_response(reason: str) -> str:
+  return editor_json(
+      [keep_op("entries/plotting/axis-scale.md")], [row("capture-axis-scale", "needs_decision", [], reason)])
+
+
+def test_compare_derives_both_arms_with_zero_model_calls_and_declared_provenance(tmp_path: Path) -> None:
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
+  # A config with no backends at all: if the comparison had any model path it could not even resolve one.
+  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": []})
+  from src.core.memory_replay import CompareOptions, run_comparison
+
+  run_comparison(CompareOptions(run_dir=outcome.run_dir, output_dir=tmp_path / "cmp"), cfg=cfg)
+  data = read_comparison(tmp_path / "cmp")
+  assert data["model_calls_made"] == 0
+  assert data["schema"] == "memory-replay-comparison/1"
+  assert "Paired editor/reviewer" in data["note"]
+  assert "not a rerun of the old production selector/reviewer pipeline" in data["note"]
+  shared = data["provenance"]["shared_editor_response"]
+  assert shared["editor_response_complete"] is True
+  assert shared["themes"]["eviction"]["editor_response_sha256"] == sha256_of(
+      raw_path(outcome.run_dir, "editor-eviction.response.txt")), (
+          "the provenance must name the exact recorded editor response both arms derive from")
+  assert shared["themes"]["eviction"]["reviewer_request_sha256"] == sha256_of(
+      raw_path(outcome.run_dir, "reviewer-eviction.request.txt"))
+  assert data["arms"]["editor-only"]["status"] == "established"
+  assert data["arms"]["post-review"]["status"] == "established"
+  assert data["verification"]["manifest_inputs"]["source"] == "run-bundle-frozen"
+  assert data["verification"]["manifest_inputs"]["identity_verified"] is True
+  assert data["verification"]["limitations"] == []
+  report = (tmp_path / "cmp" / "report.html").read_text(encoding="utf-8")
+  assert "paired editor/reviewer comparison" in report
+
+
+def test_compare_arms_can_differ_with_accurate_incremental_usage(tmp_path: Path) -> None:
+  reviewer_render = rewrite_op(entry_text([MECHANISM_LINE, "- Tune the threshold on warm replay data."]))
+  reviewer_plot = plot_rewrite(
+      entry_for("plotting", PLOT_TITLE, ["- `plot.export.scale` is the single export scaling path."]))
+  reviewer_render_response = editor_json(
+      [reviewer_render],
+      [row("capture-eviction", "propose", ["entries/render/cache-eviction.md"], "reviewer reworded")])
+  reviewer_plot_response = editor_json(
+      [reviewer_plot], [row("capture-axis-scale", "propose", ["entries/plotting/axis-scale.md"], "reviewer reworded")])
+  transport = UsageTransport(
+      [
+          (eviction_editor_response(), 100, 30, 400),
+          (plotting_editor_response(), 101, 31, 410),
+          (reviewer_render_response, 200, 12, 90),
+          (reviewer_plot_response, 201, 13, 95),
+      ])
+  outcome = run_review_with_transport(tmp_path, transport, manifest_dict=two_theme_manifest_dict())
+  assert len(transport.calls) == 4
+  comp = run_compare(tmp_path, outcome.run_dir)
+  data = read_comparison(comp.comparison_path.parent)
+  arms = data["arms"]
+  assert arms["editor-only"]["status"] == "established" and arms["post-review"]["status"] == "established"
+  assert arms["editor-only"]["reviewed_patch"] != arms["post-review"]["reviewed_patch"], (
+      "editor-only and post-review outputs may differ; the comparison must show the actual difference")
+  assert arms["editor-only"]["themes"]["eviction"]["entries"][0]["final_text"] == canonical_text(
+      ENTRY_WITHOUT_INSTANCE), "the editor arm carries the recorded editor's proposed texts verbatim"
+  assert arms["editor-only"]["themes"]["plotting"]["entries"][0]["final_text"] == canonical_text(
+      PLOT_ENTRY_WITHOUT_INSTANCE)
+  assert arms["post-review"]["themes"]["eviction"]["entries"][0]["final_text"] == canonical_text(
+      reviewer_render["text"]), "the post-review arm carries the recorded reviewer's final texts"
+  assert arms["post-review"]["themes"]["plotting"]["entries"][0]["final_text"] == canonical_text(reviewer_plot["text"])
+  assert "single export scaling path." in arms["post-review"]["themes"]["plotting"]["diffs"][
+      "entries/plotting/axis-scale.md"]
+  usage = data["usage"]
+  assert usage["editor"]["output_tokens"] == 61 and usage["editor"]["latency_ms"] == 810
+  assert usage["reviewer"]["output_tokens"] == 25 and usage["reviewer"]["latency_ms"] == 185
+  incremental = usage["incremental_review"]
+  assert incremental["output_tokens"] == 25 and incremental["latency_ms"] == 185 and incremental["calls"] == 2
+  assert incremental["note"].startswith("the review calls only"), (
+      "the incremental review cost must be the review calls only, not the shared editor base")
+  assert data["denominators"]["themes"] == 2 and data["denominators"]["input_candidates"] == 2
+
+
+def test_compare_usage_is_null_when_the_endpoint_reported_nothing(tmp_path: Path) -> None:
+  transport = UsageTransport(
+      [
+          (eviction_keep_response("nothing to do"), 100, None, 400),
+          (eviction_keep_response("kept as proposed"), 200, 12, 90),
+      ])
+  outcome = run_review_with_transport(tmp_path, transport)
+  data = read_comparison(run_compare(tmp_path, outcome.run_dir).comparison_path.parent)
+  assert data["usage"]["editor"]["output_tokens"] is None, "a missing editor count stays null"
+  assert data["usage"]["reviewer"]["output_tokens"] == 12
+  assert data["usage"]["incremental_review"]["output_tokens"] == 12
+
+
+def test_compare_catches_tampered_bundle_artifacts(tmp_path: Path) -> None:
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
+  run_dir = outcome.run_dir
+  editor_response = raw_path(run_dir, "editor-eviction.response.txt")
+  editor_response.write_text(
+      editor_response.read_text(encoding="utf-8").replace("evict_below", "evict_below!"), encoding="utf-8")
+  with pytest.raises(ReplayError, match="no longer matches the hash recorded at run time"):
+    run_compare(tmp_path, run_dir)
+
+  frozen = run_dir / "frozen" / "manifest.yaml"
+  frozen.write_text(frozen.read_text(encoding="utf-8") + "\n# tampered\n", encoding="utf-8")
+  with pytest.raises(ReplayError, match="no longer matches the hash recorded at run time"):
+    run_compare(tmp_path, run_dir)
+
+  proposal_path = run_dir / "proposal.json"
+  proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+  proposal["candidate_results"][0]["reason"] = "tampered reason"
+  proposal_path.write_text(json.dumps(proposal, indent=2), encoding="utf-8")
+  with pytest.raises(ReplayError, match="no longer matches the hash recorded at run time"):
+    run_compare(tmp_path, run_dir)
+
+
+def test_compare_catches_a_changed_raw_editor_response_through_request_reconstruction(tmp_path: Path) -> None:
+  """The v2-era proof: with no artifact hashes recorded, the reviewer request still pins the response.
+
+  The recorded reviewer request embeds the editor's proposed entries, so any change to the
+  recorded editor response that the reviewer consumed breaks the reconstruction.
+  """
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
+  strip_post_v2_record(outcome.run_dir / "run.json")
+  editor_response = raw_path(outcome.run_dir, "editor-eviction.response.txt")
+  payload = json.loads(editor_response.read_text(encoding="utf-8"))
+  payload["entries"][0]["text"] = ENTRY_WITH_INSTANCE  # the reviewer consumed the merge; undo it
+  swapped = json.dumps(payload)
+  assert swapped != editor_response.read_text(encoding="utf-8")
+  editor_response.write_text(swapped, encoding="utf-8")
+  with pytest.raises(ReplayError, match="reviewer did not verifiably consume that response"):
+    run_compare(tmp_path, outcome.run_dir)
+
+
+def test_compare_catches_a_wrong_recorded_reviewer_request(tmp_path: Path) -> None:
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
+  strip_post_v2_record(outcome.run_dir / "run.json")
+  reviewer_request = raw_path(outcome.run_dir, "reviewer-eviction.request.txt")
+  reviewer_request.write_text(
+      reviewer_request.read_text(encoding="utf-8").replace("chart-2077", "chart-9999"), encoding="utf-8")
+  with pytest.raises(ReplayError, match="recorded reviewer request for theme 'eviction' does not match"):
+    run_compare(tmp_path, outcome.run_dir)
+
+
+def test_compare_catches_a_tampered_proposal_on_a_legacy_record(tmp_path: Path) -> None:
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
+  strip_post_v2_record(outcome.run_dir / "run.json")
+  proposal_path = outcome.run_dir / "proposal.json"
+  proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
+  proposal["candidate_results"][0]["reason"] = "tampered after the run"
+  proposal_path.write_text(json.dumps(proposal, indent=2), encoding="utf-8")
+  with pytest.raises(ReplayError, match="final dispositions do not match the recorded reviewer responses"):
+    run_compare(tmp_path, outcome.run_dir)
+
+
+def test_compare_catches_a_changed_reviewer_response_behind_a_legacy_proposal(tmp_path: Path) -> None:
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
+  strip_post_v2_record(outcome.run_dir / "run.json")
+  reviewer_response = raw_path(outcome.run_dir, "reviewer-eviction.response.txt")
+  swapped = editor_json(
+      [rewrite_op(entry_text([MECHANISM_LINE, "- The threshold also gates the alert."]))],
+      [row("capture-eviction", "propose", ["entries/render/cache-eviction.md"], "rewritten after the fact")])
+  assert swapped != reviewer_response.read_text(encoding="utf-8")
+  reviewer_response.write_text(swapped, encoding="utf-8")
+  with pytest.raises(ReplayError, match="reviewed_patch does not match the finalization"):
+    run_compare(tmp_path, outcome.run_dir)
+
+
+def test_compare_survives_external_manifest_change_and_relocation_when_selfcontained(tmp_path: Path) -> None:
+  manifest_path = write_manifest(tmp_path)
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE], manifest_path=manifest_path)
+  run_dir = outcome.run_dir
+  # The original manifest changed after the run: the frozen bundle copy still identifies the run.
+  manifest_path.write_text(
+      yaml.safe_dump({
+          **base_manifest_dict(), "base_commit": "mem-base-CHANGED"
+      }, sort_keys=False), encoding="utf-8")
+  comp = run_compare(tmp_path, run_dir)
+  data = read_comparison(comp.comparison_path.parent)
+  assert data["verification"]["manifest_inputs"]["source"] == "run-bundle-frozen"
+  external = data["verification"]["manifest_inputs"]["external_manifest"]
+  assert external["state"] == "differs-from-the-recorded-identity"
+  assert "frozen copy" in external["detail"]
+
+  # The original manifest disappears entirely: relocation is supported for self-contained runs.
+  manifest_path.unlink()
+  comp = run_compare(tmp_path, run_dir, output_dir=tmp_path / "cmp2")
+  data = read_comparison(comp.comparison_path.parent)
+  assert data["verification"]["manifest_inputs"]["external_manifest"]["state"] == "absent"
+  assert data["arms"]["post-review"]["status"] == "established"
+
+
+def test_compare_supports_external_file_sources_through_the_frozen_copy(tmp_path: Path) -> None:
+  (tmp_path / "frozen-evidence").mkdir()
+  (tmp_path / "frozen-evidence" / "capture.txt").write_text(CAPTURE_TEXT, encoding="utf-8")
+  manifest = base_manifest_dict()
+  manifest["sources"][2] = {"ref": "capture-eviction", "kind": "candidate", "file": "frozen-evidence/capture.txt"}
+  manifest_path = write_manifest(tmp_path, manifest)
+  outcome, _ = run_replay_with(
+      tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE], manifest_path=manifest_path, output_dir=tmp_path / "out")
+  manifest_path.unlink()
+  (tmp_path / "frozen-evidence" / "capture.txt").unlink()
+  comp = run_compare(tmp_path, outcome.run_dir)
+  data = read_comparison(comp.comparison_path.parent)
+  assert data["arms"]["post-review"]["status"] == "established", (
+      "inlining the file: sources into the frozen copy keeps the comparison possible after they move")
+
+
+def test_compare_supports_v2_records_with_declared_verification_limits(tmp_path: Path) -> None:
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
+  strip_post_v2_record(outcome.run_dir / "run.json")
+  comp = run_compare(tmp_path, outcome.run_dir)
+  data = read_comparison(comp.comparison_path.parent)
+  assert data["verification"]["manifest_inputs"]["source"] == "recorded-manifest-path"
+  assert data["verification"]["manifest_inputs"]["identity_verified"] is True
+  prompts = data["verification"]["system_prompts"]
+  assert prompts["recorded"] is None and prompts["match_current"] is None
+  assert data["verification"]["artifacts"]["status"] == "not-recorded"
+  limitations = data["verification"]["limitations"]
+  assert len(limitations) == 2, "a v2 record must declare what it never saved, not silently certify it"
+  assert any("system-prompt fingerprinting" in item for item in limitations)
+  assert any("artifact hashing" in item for item in limitations)
+  assert data["arms"]["editor-only"]["status"] == "established"
+  assert data["arms"]["post-review"]["status"] == "established"
+
+
+def test_compare_rejects_v2_records_whose_manifest_disappeared(tmp_path: Path) -> None:
+  manifest_path = write_manifest(tmp_path)
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE], manifest_path=manifest_path)
+  strip_post_v2_record(outcome.run_dir / "run.json")
+  manifest_path.unlink()
+  with pytest.raises(ReplayError, match="no longer exists"):
+    run_compare(tmp_path, outcome.run_dir)
+
+
+def test_compare_rejects_v2_records_whose_manifest_changed(tmp_path: Path) -> None:
+  manifest_path = write_manifest(tmp_path)
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE], manifest_path=manifest_path)
+  strip_post_v2_record(outcome.run_dir / "run.json")
+  changed = base_manifest_dict()
+  changed["sources"][2]["text"] = CAPTURE_TEXT.replace("warm-up instance", "cold-start instance")
+  manifest_path.write_text(yaml.safe_dump(changed, sort_keys=False), encoding="utf-8")
+  with pytest.raises(ReplayError, match="input identity"):
+    run_compare(tmp_path, outcome.run_dir)
+
+
+def test_compare_rejects_a_tampered_frozen_copy(tmp_path: Path) -> None:
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
+  frozen = outcome.run_dir / "frozen" / "manifest.yaml"
+  changed = base_manifest_dict()
+  changed["sources"][2]["text"] = CAPTURE_TEXT.replace("warm-up instance", "cold-start instance")
+  frozen.write_text(yaml.safe_dump(changed, sort_keys=False), encoding="utf-8")
+  with pytest.raises(ReplayError, match="no longer matches the hash recorded at run time"):
+    run_compare(tmp_path, outcome.run_dir)
+
+
+def test_compare_reports_a_failed_reviewer_and_keeps_the_editor_arm(tmp_path: Path) -> None:
+  transport = UsageTransport(
+      [
+          (eviction_editor_response(), 100, 30, 400),
+          (plotting_editor_response(), 101, 31, 400),
+          (eviction_keep_response("kept as proposed"), 200, 12, 90),
+          ("I would suggest reviewing the entries first.", 210, 12, 90),
+      ])
+  with pytest.raises(ReplayModelOutputError, match="no JSON object"):
+    run_review_with_transport(tmp_path, transport, manifest_dict=two_theme_manifest_dict())
+  run_dir = next((tmp_path / "out" / "runs").iterdir())
+  record = run_record(run_dir)
+  assert record["status"] == "failed" and "no JSON object" in record["error"]
+  comp = run_compare(tmp_path, run_dir)
+  data = read_comparison(comp.comparison_path.parent)
+  arms = data["arms"]
+  assert arms["editor-only"]["status"] == "established"
+  assert arms["post-review"]["status"] == "failed"
+  assert "reviewer[plotting]" in arms["post-review"]["error"], "the failed arm names the stage that failed"
+  assert arms["post-review"]["reviewed_patch"] is None and arms["post-review"]["dispositions"] is None, (
+      "a failed arm must not be substituted with empty or no-change output")
+  assert data["denominators"]["themes"] == 2 and data["denominators"]["input_candidates"] == 2, (
+      "a failed arm stays in the denominator")
+  assert data["verification"]["proposal"]["status"] == "absent"
+  assert data["usage"]["reviewer"]["calls"] == 2
+  assert "reported, not substituted" in comp.report_path.read_text(encoding="utf-8")
+
+
+def test_compare_reports_a_reviewer_transport_failure_with_the_editor_arm_intact(tmp_path: Path) -> None:
+  """A transport failure after the editor stage: the editor result can still be established."""
+  scripted = [eviction_editor_response(), plotting_editor_response(), eviction_keep_response("kept as proposed")]
+
+  class DyingTransport:
+
+    def __init__(self):
+      self.calls = 0
+
+    def complete(self, *, system: str, user: str) -> TransportResult:
+      self.calls += 1
+      if self.calls == 3:
+        raise ReplayError("model endpoint returned HTTP 503: down")
+      return TransportResult(text=scripted[self.calls - 1], model="m", prompt_tokens=1, output_tokens=2, latency_ms=3)
+
+  with pytest.raises(ReplayError, match="HTTP 503"):
+    run_review_with_transport(tmp_path, DyingTransport(), manifest_dict=two_theme_manifest_dict())
+  run_dir = next((tmp_path / "out" / "runs").iterdir())
+  record = run_record(run_dir)
+  assert record["status"] == "failed" and "HTTP 503" in record["error"]
+  assert raw_path(run_dir, "reviewer-eviction.request.txt").exists()
+  assert not raw_path(run_dir, "reviewer-eviction.response.txt").exists()
+  comp = run_compare(tmp_path, run_dir)
+  data = read_comparison(comp.comparison_path.parent)
+  assert data["arms"]["editor-only"]["status"] == "established"
+  assert data["arms"]["post-review"]["status"] == "failed"
+  assert "no recorded reviewer response for theme 'eviction'" in data["arms"]["post-review"]["error"]
+  assert data["verification"]["reviewer_requests"]["status"] == "partial"
+  assert data["verification"]["reviewer_requests"]["themes_without_recorded_request"] == ["plotting"]
+
+
+def test_compare_keeps_no_change_and_needs_decision_rows_visible(tmp_path: Path) -> None:
+  manifest_path = write_manifest(tmp_path, two_theme_manifest_dict(), name="two-themes.yaml")
+  transport = UsageTransport(
+      [
+          (eviction_keep_response("nothing in the capture changes the entry"), 100, 10, 400),
+          (plotting_needs_decision_response("evidence conflicts on the scaling path"), 101, 11, 400),
+          (eviction_keep_response("confirmed: no change"), 200, 9, 90),
+          (plotting_needs_decision_response("still conflicts; needs a human call"), 201, 8, 90),
+      ])  # keep paths are per theme, so each response names its own theme's entry
+  outcome = run_replay(
+      ReplayOptions(manifest=manifest_path, output_dir=tmp_path / "out", backend="fake-clc", mode="editor-review"),
+      cfg=replay_cfg(tmp_path),
+      transport_factory=lambda: transport)
+  assert outcome.needs_decision == 1 and outcome.changed_paths == []
+  data = read_comparison(run_compare(tmp_path, outcome.run_dir).comparison_path.parent)
+  for arm_name in ("editor-only", "post-review"):
+    arm = data["arms"][arm_name]
+    assert arm["status"] == "established"
+    assert arm["counts"] == {"propose": 0, "no_change": 1, "needs_decision": 1}
+    outcomes = {row["source_ref"]: row["outcome"] for row in arm["dispositions"]}
+    assert outcomes == {"capture-eviction": "no_change", "capture-axis-scale": "needs_decision"}
+    assert arm["themes"]["eviction"]["changed_paths"] == []
+    assert arm["themes"]["plotting"]["changed_paths"] == []
+  report = (tmp_path / "cmp" / "report.html").read_text(encoding="utf-8")
+  assert "needs_decision" in report and "no_change" in report
+
+
+def test_compare_quality_stays_unjudged_even_when_the_reviewer_deletes(tmp_path: Path) -> None:
+  """Deleting every line must not read as an improvement: quality fields stay null."""
+  editor = editor_json(
+      [rewrite_op(ENTRY_WITHOUT_INSTANCE)],
+      [row("capture-eviction", "propose", ["entries/render/cache-eviction.md"], "merged")])
+  reviewer = editor_json(
+      [{
+          "action": "delete",
+          "path": "entries/render/cache-eviction.md",
+          "reason": "the whole entry fails the bar",
+      }], [
+          row("capture-eviction", "no_change", [], "nothing survives the deletion"),
+          row("entry-cache-eviction", "propose", ["entries/render/cache-eviction.md"], "reversal: entry fails the bar"),
+      ])
+  outcome, _ = run_replay_with(tmp_path, [editor, reviewer])
+  data = read_comparison(run_compare(tmp_path, outcome.run_dir).comparison_path.parent)
+  assert data["arms"]["post-review"]["changed_paths"] == ["entries/render/cache-eviction.md"]
+  quality = data["quality"]
+  assert quality["status"] == "unjudged"
+  assert quality["editor_only"] is None and quality["post_review"] is None
+  assert "do not establish better quality" in quality["note"]
+  assert "Unjudged" in (tmp_path / "cmp" / "report.html").read_text(encoding="utf-8")
+  serialized = json.dumps(data)
+  assert "quality_score" not in serialized and "line_delta" not in serialized, (
+      "no derived quality metric may ride along with the comparison")
+
+
+def test_compare_rejects_overlapping_outputs_and_leaves_inputs_untouched(tmp_path: Path) -> None:
+  cfg = replay_cfg(tmp_path)
+  _write_store(cfg.charliebot_home)
+  before_store = _hash_tree(cfg.charliebot_home / "memory")
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE], cfg=cfg)
+  run_dir = outcome.run_dir
+  before_bundle = _hash_tree(run_dir)
+
+  from src.core.memory_replay import CompareOptions, run_comparison
+
+  for bad_output in (run_dir, run_dir / "sub", run_dir.parent, tmp_path / "out", cfg.charliebot_home / "memory"):
+    with pytest.raises(ReplayIsolationError, match="overlaps"):
+      run_comparison(CompareOptions(run_dir=run_dir, output_dir=bad_output), cfg=cfg)
+  assert _hash_tree(run_dir) == before_bundle, "a rejected comparison must not touch its inputs"
+  assert _hash_tree(cfg.charliebot_home / "memory") == before_store
+
+  run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=cfg)
+  assert _hash_tree(run_dir) == before_bundle, "a completed comparison must leave the run bundle byte-identical"
+  assert (tmp_path / "cmp" / "comparison.json").exists() and (tmp_path / "cmp" / "report.html").exists()
+
+
+def test_compare_rejects_editor_only_and_unsettled_runs(tmp_path: Path) -> None:
+  only_outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE], mode="editor-only", output_dir=tmp_path / "out")
+  with pytest.raises(ReplayError, match="editor-review"):
+    run_compare(tmp_path, only_outcome.run_dir)
+
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE], output_dir=tmp_path / "out2")
+  record_path = outcome.run_dir / "run.json"
+  record = json.loads(record_path.read_text(encoding="utf-8"))
+  record["status"] = "running"
+  record_path.write_text(json.dumps(record), encoding="utf-8")
+  with pytest.raises(ReplayError, match="not settled"):
+    run_compare(tmp_path, outcome.run_dir)
+
+
+def test_compare_fails_visibly_on_a_directory_without_run_json(tmp_path: Path) -> None:
+  with pytest.raises(ReplayError, match="run.json is missing"):
+    run_compare(tmp_path, tmp_path / "not-a-run")
+
+
+def test_cli_compare_reports_the_paired_arms(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+  import tests.conftest as conftest_module
+  from src.cli import memory as memory_cli
+
+  _write_cli_profile_config()
+  conftest_module.reset_config_caches()
+  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
+  monkeypatch.setattr(
+      sys, "argv",
+      ["charliebot memory", "compare", "--run-dir",
+       str(outcome.run_dir), "--output-dir",
+       str(tmp_path / "cli-cmp")])
+  memory_cli.main()
+  out = capsys.readouterr().out
+  assert "comparison complete: paired editor/reviewer (no model calls)" in out
+  assert "arms: editor-only established, post-review established" in out
+  assert (tmp_path / "cli-cmp" / "comparison.json").exists()
+
+
+def test_cli_compare_reports_errors_without_traceback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+  import tests.conftest as conftest_module
+  from src.cli import memory as memory_cli
+
+  _write_cli_profile_config()
+  conftest_module.reset_config_caches()
+  monkeypatch.setattr(
+      sys, "argv",
+      ["charliebot memory", "compare", "--run-dir",
+       str(tmp_path / "nope"), "--output-dir",
+       str(tmp_path / "cmp")])
+  with pytest.raises(SystemExit) as exc_info:
+    memory_cli.main()
+  assert exc_info.value.code == 1
+  err = capsys.readouterr().err
+  assert err.startswith("error: ") and "run.json is missing" in err
+
+
+# --- approved creation/deletion feedback ----------------------------------------
+#
+# An approved deletion has a nonempty before and an empty after; an approved
+# creation the reverse. The empty side is real data and must survive loading,
+# rendering, retrieval, and identity — never replaced with placeholder prose.
+
+
+def deletion_feedback_manifest_dict() -> dict:
+  manifest = base_manifest_dict()
+  manifest["feedback_examples"][0]["comment_text"] = (
+      "This quirk entry is obsolete now that the tool fixed it; delete the entry. fb-comment-marker")
+  manifest["feedback_examples"][0]["approved_change"] = {
+      "approved_change_ref": "approved-del",
+      "before": ENTRY_WITH_INSTANCE,
+      "after": "",
+  }
+  return manifest
+
+
+def creation_feedback_manifest_dict() -> dict:
+  manifest = base_manifest_dict()
+  manifest["feedback_examples"][0]["approved_change"] = {
+      "approved_change_ref": "approved-new",
+      "before": "",
+      "after": ENTRY_WITHOUT_INSTANCE,
+  }
+  return manifest
+
+
+def test_manifest_preserves_approved_deletion_and_creation_empty_sides(tmp_path: Path) -> None:
+  deletion = load_manifest(write_manifest(tmp_path, deletion_feedback_manifest_dict()))
+  change = deletion.feedback_examples[0].approved_change
+  assert change.before == ENTRY_WITH_INSTANCE
+  assert change.after == "", "the approved deletion's empty after must be preserved verbatim"
+
+  creation = load_manifest(write_manifest(tmp_path, creation_feedback_manifest_dict(), name="m2.yaml"))
+  change = creation.feedback_examples[0].approved_change
+  assert change.before == "", "the approved creation's empty before must be preserved verbatim"
+  assert change.after == ENTRY_WITHOUT_INSTANCE
+
+
+def test_manifest_rejects_both_empty_and_non_changing_approved_pairs(tmp_path: Path) -> None:
+  manifest = deletion_feedback_manifest_dict()
+  manifest["feedback_examples"][0]["approved_change"] = {
+      "approved_change_ref": "approved-x",
+      "before": "",
+      "after": "",
+  }
+  with pytest.raises(ReplayManifestError, match="changes nothing: before and after are both empty"):
+    load_manifest(write_manifest(tmp_path, manifest))
+
+  manifest["feedback_examples"][0]["approved_change"] = {
+      "approved_change_ref": "approved-x",
+      "before": ENTRY_WITH_INSTANCE,
+      "after": ENTRY_WITH_INSTANCE,
+  }
+  with pytest.raises(ReplayManifestError, match="before and after are identical"):
+    load_manifest(write_manifest(tmp_path, manifest, name="m3.yaml"))
+
+
+def test_empty_approved_sides_render_explicitly_and_change_identity(tmp_path: Path) -> None:
+  from src.core.memory_replay.exchange import build_editor_request
+  from src.core.memory_replay.identity import input_identity
+
+  def request_and_identity(name: str, manifest_dict: dict) -> tuple[str, str]:
+    manifest = load_manifest(write_manifest(tmp_path, manifest_dict, name=name))
+    example = manifest.feedback_examples[0]
+    selection = FeedbackSelection(example=example, score=2, matched_principles=list(example.tags), matched_terms=[])
+    request = build_editor_request(manifest, manifest.themes[0], [selection])
+    identity = input_identity(
+        manifest=manifest,
+        mode="editor-review",
+        model_identity={
+            "backend": "b",
+            "backend_type": "t",
+            "model": "m"
+        },
+        editor_prompt_version="e",
+        reviewer_prompt_version="r")
+    return request, identity
+
+  deletion_request, deletion_identity = request_and_identity("del.yaml", deletion_feedback_manifest_dict())
+  assert "(empty: the approved revision deleted this text)" in deletion_request, (
+      "the rendering must name the deletion instead of leaving a bare section header")
+  creation_request, creation_identity = request_and_identity("new.yaml", creation_feedback_manifest_dict())
+  assert "(empty: the approved revision created this text)" in creation_request
+
+  nonempty_request, nonempty_identity = request_and_identity("base.yaml", base_manifest_dict())
+  assert "(empty:" not in nonempty_request, "nonempty sides render exactly as before"
+  assert "--- before ---" in nonempty_request and "--- after ---" in nonempty_request
+  assert len({deletion_identity, creation_identity, nonempty_identity
+             }) == 3, ("an empty before/after side is part of what the models see, so it changes the input identity")
+
+
+def test_deletion_feedback_round_trips_through_replay_and_comparison(tmp_path: Path) -> None:
+  """Actual deletion feedback survives the whole path: request, proposal refs, frozen copy, comparison."""
+  editor = eviction_keep_response("the comment asks to delete an entry, not to add material")
+  reviewer = eviction_keep_response("agreed; the named entry is not part of this theme's material")
+  outcome, transport = run_replay_with(
+      tmp_path, [editor, reviewer], manifest_path=write_manifest(tmp_path, deletion_feedback_manifest_dict()))
+  request = transport.calls[0]["user"]
+  assert "approved-del" in request
+  assert "(empty: the approved revision deleted this text)" in request
+  proposal = read_proposal(outcome.run_dir)
+  assert proposal["feedback_refs"] == [{"comment_event": "fb-001", "approved_change_ref": "approved-del"}]
+  comp = run_compare(tmp_path, outcome.run_dir)
+  data = read_comparison(comp.comparison_path.parent)
+  assert data["arms"]["post-review"]["status"] == "established"
+  assert data["verification"]["proposal"]["status"] == "verified"
+
+
+def test_frozen_manifest_round_trips_empty_approved_sides(tmp_path: Path) -> None:
+  from src.core.memory_replay.manifest import dump_manifest
+
+  manifest = load_manifest(write_manifest(tmp_path, deletion_feedback_manifest_dict()))
+  frozen_path = tmp_path / "frozen.yaml"
+  frozen_path.write_text(dump_manifest(manifest), encoding="utf-8")
+  reloaded = load_manifest(frozen_path)
+  assert reloaded.feedback_examples[0].approved_change.after == ""
+  assert reloaded.feedback_examples[0].approved_change.before == ENTRY_WITH_INSTANCE

@@ -7,6 +7,7 @@ the topics vocabulary, and every piece of evidence arrive frozen in the
 manifest, and the only writes go to the requested output root.
 """
 
+from src.core.memory_replay.compare import CompareOptions, CompareOutcome, run_comparison
 from src.core.memory_replay.errors import (
     ReplayBackendError,
     ReplayError,
@@ -20,6 +21,8 @@ from src.core.memory_replay.runner import MODES, ReplayOptions, ReplayOutcome, r
 
 __all__ = [
     "MODES",
+    "CompareOptions",
+    "CompareOutcome",
     "ReplayBackendError",
     "ReplayError",
     "ReplayIsolationError",
@@ -29,5 +32,6 @@ __all__ = [
     "ReplayOutcome",
     "ReplayTransportError",
     "ReplayValidationError",
+    "run_comparison",
     "run_replay",
 ]

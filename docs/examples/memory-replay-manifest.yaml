@@ -49,6 +49,8 @@ feedback_examples:
       Drop the per-run warm-up instance names; keep the threshold mechanism and its tuning range.
     tags: [instance-names-out, mechanism-in] # rebuildable retrieval index, never a user rule
     approved_change: # nullable: null = comment only, no approved revision yet
+      # An approved deletion carries a nonempty `before` and `after: ''`; an approved creation
+      # the reverse. The empty side is preserved verbatim — never replaced with placeholder prose.
       approved_change_ref: approved-001
       before: |
         ---

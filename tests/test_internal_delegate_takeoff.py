@@ -450,6 +450,155 @@ def test_takeoff_gate_scan_matches_forward_walk_on_randomized_histories() -> Non
     assert scan_verdict[0] == reference_verdict[0], (events, now, scan_verdict, reference_verdict)
 
 
+def _gate_verdict(mgr: Any, now: datetime) -> bool:
+  try:
+    check_takeoff_gate("session-id", mgr, now=now)
+    return True
+  except DelegationBlockedError:
+    return False
+
+
+def test_takeoff_gate_memo_matches_forward_walk_across_appended_turns() -> None:
+  """Verdict parity across the memo's suffix folds: each round appends one
+  event to the same list the live chat-events cache grows in place, and the
+  gate's verdict must equal the forward reference over the grown history —
+  the streamed-turn shape where the busiest master session appends between
+  delegations."""
+  rng = random.Random(20260911)
+  phrase_pool = [
+      "take off",
+      "TAKE   OFF",
+      "pre take off",
+      "please proceed",
+      "pre take off then take off",
+      "no authorization here",
+  ]
+  stamp_pool = [
+      None,
+      "not-a-timestamp",
+      "2026-07-18T12:00:00",  # tz-less: fails closed
+      "2026-07-18T12:00:00+00:00",
+      "2026-07-20T12:00:00+00:00",
+  ]
+  now_base = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+  for _ in range(40):
+    events = [user_event(rng.choice(phrase_pool), rng.choice(stamp_pool)) for _ in range(rng.randint(0, 6))]
+    mgr = FakeSessionManager(events)
+    for _ in range(10):
+      now = now_base + timedelta(hours=rng.randint(0, 13))
+      assert _gate_verdict(mgr, now) == _forward_verdict(events, now), (events, now)
+      events.append(user_event(rng.choice(phrase_pool), rng.choice(stamp_pool)))
+
+
+def _forward_verdict(events: list[dict[str, Any]], now: datetime) -> bool:
+  try:
+    _reference_takeoff_gate(events, now)
+    return True
+  except DelegationBlockedError:
+    return False
+
+
+def test_takeoff_gate_memo_suffix_user_message_with_older_stamp_stays_allowed_until_expiry() -> None:
+  """The corner the early-break scan under-filled: the file-last user message
+  carries the takeoff phrase, so the stored stamp answer stayed unset; a later
+  ordinary user message must fall back to the older stamp's window, not to
+  blocked."""
+  issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+  mgr = FakeSessionManager(
+      [
+          user_event("pre take off", issued_at.isoformat()),
+          user_event("work in progress"),
+          user_event("take off"),
+      ])
+  assert _gate_verdict(mgr, issued_at + timedelta(hours=48))
+  mgr.events.append(user_event("an ordinary follow-up"))
+  assert _gate_verdict(mgr, issued_at + timedelta(hours=11))
+  with pytest.raises(DelegationBlockedError):
+    check_takeoff_gate("session-id", mgr, now=issued_at + timedelta(hours=12))
+
+
+def test_takeoff_gate_memo_suffix_stamp_overrides_older_prefix_stamp() -> None:
+  first_issued_at = datetime(2026, 7, 17, 12, 0, tzinfo=UTC)
+  second_issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+  mgr = FakeSessionManager([
+      user_event("pre take off", first_issued_at.isoformat()),
+      user_event("ordinary"),
+  ])
+  assert _gate_verdict(mgr, first_issued_at + timedelta(hours=11))
+  mgr.events.append(user_event("pre take off", second_issued_at.isoformat()))
+  mgr.events.append(user_event("ordinary again"))
+  assert _gate_verdict(mgr, second_issued_at + timedelta(hours=11))
+  with pytest.raises(DelegationBlockedError):
+    check_takeoff_gate("session-id", mgr, now=second_issued_at + timedelta(hours=12))
+  # The older prefix stamp must not resurrect once the newer one expires.
+  with pytest.raises(DelegationBlockedError):
+    check_takeoff_gate("session-id", mgr, now=second_issued_at + timedelta(hours=13))
+
+
+def test_takeoff_gate_memo_suffix_without_user_message_keeps_takeoff_window() -> None:
+  issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+  mgr = FakeSessionManager([
+      user_event("take off"),
+      user_event("pre take off", issued_at.isoformat()),
+  ])
+  assert _gate_verdict(mgr, issued_at + timedelta(hours=48))
+  for _ in range(3):
+    mgr.events.append({"type": ET.ASSISTANT, "content": "streamed delta"})
+  assert _gate_verdict(mgr, issued_at + timedelta(hours=11))
+  assert _gate_verdict(mgr, issued_at + timedelta(hours=12))
+
+
+def test_takeoff_gate_memo_rebuilds_on_list_replacement() -> None:
+  """A wholesale list replacement (a new object, the archive-recycle shape)
+  rebuilds from a fresh walk: the replaced list's answers must not serve."""
+  issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+  mgr = FakeSessionManager([user_event("take off")])
+  assert _gate_verdict(mgr, issued_at + timedelta(hours=48))
+  replaced = [user_event("please proceed")]
+  mgr.events = replaced
+  with pytest.raises(DelegationBlockedError):
+    check_takeoff_gate("session-id", mgr, now=issued_at + timedelta(hours=48))
+
+
+def test_takeoff_gate_memo_empty_history_blocks_and_stays_blocked_on_append() -> None:
+  mgr = FakeSessionManager([])
+  issued_at = datetime(2026, 7, 18, 12, 0, tzinfo=UTC)
+  with pytest.raises(DelegationBlockedError):
+    check_takeoff_gate("session-id", mgr, now=issued_at)
+  mgr.events.append({"type": ET.ASSISTANT, "content": "take off"})
+  with pytest.raises(DelegationBlockedError):
+    check_takeoff_gate("session-id", mgr, now=issued_at)
+  mgr.events.append(user_event("take off"))
+  assert _gate_verdict(mgr, issued_at)
+
+
+def test_takeoff_gate_memo_cold_walk_claims_only_the_walked_span(monkeypatch: pytest.MonkeyPatch) -> None:
+  """An append landing while the cold walk runs must not be claimed unseen:
+  the store claims the pre-walk length, so the next call re-scans the
+  appended message and its take-off phrase lands — the streamed-turn race
+  (the gate walks on an executor thread while save_chat_event appends on the
+  event loop), the store contract the usage-fold memo pins."""
+  from src.core import takeoff_gate
+
+  mgr = FakeSessionManager([user_event("please proceed") for _ in range(50)])
+  real = takeoff_gate._is_real_user_message
+  seen = {"n": 0}
+
+  def spy(event: dict[str, Any]) -> bool:
+    result = real(event)
+    seen["n"] += 1
+    if seen["n"] == 10:
+      mgr.events.append(user_event("take off"))
+    return result
+
+  monkeypatch.setattr(takeoff_gate, "_is_real_user_message", spy)
+  with pytest.raises(DelegationBlockedError):
+    check_takeoff_gate("session-id", mgr)
+  assert seen["n"] >= 10
+  monkeypatch.setattr(takeoff_gate, "_is_real_user_message", real)
+  check_takeoff_gate("session-id", mgr)
+
+
 @pytest.mark.asyncio
 async def test_delegate_task_returns_403_when_takeoff_gate_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
   req = _build_request()

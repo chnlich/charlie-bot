@@ -173,8 +173,8 @@ def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:
 
 
 def _worker_summary_from_events_log(worker_log: Path) -> str | None:
-  """The worker's own closing words: the newest non-empty result text, else the
-  newest non-empty assistant text before it, or None.
+  """The worker's own closing words: the newest non-empty result-or-assistant
+  text, whichever kind is newer, or None.
 
   Streams the log from the end and stops at the first event that settles the
   answer — the newest-first contract of the full-parse loop this replaced;

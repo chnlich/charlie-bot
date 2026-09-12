@@ -610,7 +610,8 @@ async def _run_single_iteration(
   status = thread_meta.status.value if thread_meta else "unknown"
   events_path = await thread_mgr.get_events_log_path(session_id, thread.id)
   if thread_meta and thread_meta.status == ThreadStatus.FAILED:
-    blocker_reason, summary = _failed_iteration_judgments(_newest_first_events(events_path), i, status)
+    blocker_reason, summary = await asyncio.to_thread(
+        _failed_iteration_judgments, _newest_first_events(events_path), i, status)
     if blocker_reason:
       log.warning("improve_iteration_blocked", session=session_id, iteration=i, reason=blocker_reason)
       raise _ImproveLoopBlockedError(i, blocker_reason, summary)
@@ -631,7 +632,7 @@ async def _run_single_iteration(
   # (loop context comes from report files or invalid-iteration syntheses); the
   # blocked path above delivers its own extracted copy to the successor.
   if not await asyncio.to_thread(report_path.exists):
-    fallback_body = _extract_iteration_summary(_newest_first_events(events_path), i, status)
+    fallback_body = await asyncio.to_thread(_extract_iteration_summary, _newest_first_events(events_path), i, status)
     await asyncio.to_thread(
         report_path.write_text, "<!-- runner fallback: worker wrote no report -->\n" + fallback_body)
 

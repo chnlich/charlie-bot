@@ -11,6 +11,7 @@ import structlog
 
 from src.core.config import CharlieBotConfig
 from src.core.json_utils import write_model_json_atomically
+from src.core.memo import StatSignatureMemo
 from src.core.models import (
     TERMINAL_THREAD_STATUSES,
     SessionMetadata,
@@ -32,6 +33,11 @@ METADATA_NAME = "metadata.json"
 # creation skeleton lays it down and every scanner (sidebar probe, storage-cool
 # scan, boot recovery) walks it by name, so all sides must agree on this name.
 THREADS_DIR_NAME = "threads"
+
+# Backstop cap on ThreadManager's parse memo: each walk drops the entries for
+# files it did not see, so the resident set tracks the walked thread files and
+# the cap only bounds a burst of walks across many sessions.
+_THREAD_LIST_MEMO_LIMIT = 1024
 
 
 def thread_events_log_path(session_dir: Path, thread_id: str) -> Path:
@@ -65,14 +71,16 @@ class ThreadManager:
 
   def __init__(self, cfg: CharlieBotConfig) -> None:
     self._cfg = cfg
-    # metadata.json path -> (mtime_ns, size, parsed meta). Re-validating every
-    # thread file on each 3 s workers-panel poll costs ~176 us per thread; a
-    # rewrite always moves (mtime_ns, size), so the stale-key case cannot serve
-    # old data. Entries for files missing from the latest scan are dropped, so
-    # a deleted thread never lingers. Callers only read the returned metas:
-    # the update path (update_status) re-reads through the uncached get_thread,
-    # so no in-place mutation of a memoized instance exists to leak.
-    self._list_memo: dict[str, tuple[int, int, ThreadMetadata]] = {}
+    # StatSignatureMemo keyed by metadata.json path. Re-validating every thread
+    # file on each 3 s workers-panel poll costs ~176 us per thread; the
+    # stat-before-read contract keeps a rewrite from serving old data (a
+    # rewrite always moves (mtime_ns, size)). Each walk drops the entries for
+    # files it did not see, so a deleted thread never lingers, and concurrent
+    # executor walks serialize on the memo's lock. Callers only read the
+    # returned metas: the update path (update_status) re-reads through the
+    # uncached get_thread, so no in-place mutation of a memoized instance
+    # exists to leak.
+    self._list_memo: StatSignatureMemo[str, ThreadMetadata] = StatSignatureMemo(_THREAD_LIST_MEMO_LIMIT)
 
   async def create_thread(
       self,
@@ -134,36 +142,34 @@ class ThreadManager:
     aligns position-for-position with *pairs*: a file the walk statted but
     that vanished before its read yields ``None`` at its position (the same
     no-thread-row verdict the walk's stat failure gives), so callers pairing
-    metas back with pairs stay aligned. The parse memo and its swap are
-    ``list_threads``'s: a hit costs no read, a miss reads the file, and files
-    absent from *pairs* drop out of the memo.
+    metas back with pairs stay aligned. The parse memo is ``list_threads``'s:
+    a hit costs no read, a miss reads the file, and files absent from *pairs*
+    drop out of the memo.
     """
     return self._metas_from_stats(pairs)
 
   def _metas_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]]) -> list[ThreadMetadata | None]:
-    memo = self._list_memo
-    refreshed: dict[str, tuple[int, int, ThreadMetadata]] = {}
+    walked: set[str] = set()
     metas: list[ThreadMetadata | None] = []
     for meta_path, st in pairs:
-      hit = memo.get(meta_path)
-      if hit is not None and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
-        meta: ThreadMetadata | None = hit[2]
-      else:
-        try:
-          with open(meta_path, encoding="utf-8") as f:
-            meta = ThreadMetadata.model_validate_json(f.read())
-        except OSError as e:
-          # The walk statted this file, so a read failure here means the file
-          # vanished (session GC) between the walk and this read; the walk's
-          # stat failure gets the same no-thread-row verdict.
-          log.debug("thread_metadata_read_failed", path=meta_path, error=str(e))
-          meta = None
+      walked.add(meta_path)
+      meta = self._list_memo.fresh(meta_path, st)
       if meta is not None:
-        refreshed[meta_path] = (st.st_mtime_ns, st.st_size, meta)
+        metas.append(meta)
+        continue
+      try:
+        with open(meta_path, encoding="utf-8") as f:
+          meta = ThreadMetadata.model_validate_json(f.read())
+      except OSError as e:
+        # The walk statted this file, so a read failure here means the file
+        # vanished (session GC) between the walk and this read; the walk's
+        # stat failure gets the same no-thread-row verdict.
+        log.debug("thread_metadata_read_failed", path=meta_path, error=str(e))
+        meta = None
+      else:
+        self._list_memo.record(meta_path, st, meta)
       metas.append(meta)
-    # Swap whole dicts: concurrent load_all calls in the executor never mutate
-    # the live map, and the swap keeps the memo down to threads still on disk.
-    self._list_memo = refreshed
+    self._list_memo.drop_where(lambda key: key not in walked)
     return metas
 
   async def update_status(

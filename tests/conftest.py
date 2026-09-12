@@ -702,6 +702,32 @@ def make_cron_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> Test
   return make_router_client(cfg, session_mgr, cron_router, "/api/cron")
 
 
+def make_http_scope(url: str, *, headers: list[tuple[bytes, bytes]]) -> dict[str, Any]:
+  """HTTP ASGI scope for the tests that drive an app directly, no server boot.
+
+  *url* splits into ``path``, ``raw_path`` (the full URL, uvicorn's wire shape),
+  and ``query_string``; *headers* rides verbatim as the scope's header list.
+  """
+  path, _, qs = url.partition("?")
+  return {
+      "type": "http",
+      "asgi": {
+          "version": "3.0",
+          "spec_version": "2.3"
+      },
+      "http_version": "1.1",
+      "method": "GET",
+      "scheme": "http",
+      "path": path,
+      "raw_path": url.encode(),
+      "query_string": qs.encode(),
+      "root_path": "",
+      "headers": headers,
+      "client": ("t", 1),
+      "server": ("t", 80),
+  }
+
+
 def make_page_request(path: str) -> Request:
   """Starlette Request for a GET against path with the full test-server scope (scheme/server/client);
   a test needing headers, cookies, or a non-GET method builds its own scope."""

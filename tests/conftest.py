@@ -1875,6 +1875,10 @@ class ScriptedRelayBackend:
   def detach(self) -> None:
     pass
 
+  def cgroup_exit_report(self) -> str | None:
+    """Session memory-cap attribution read: doubles never run inside a cgroup, so None."""
+    return None
+
   async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
     self.prompt = prompt
     self.cwd = cwd
@@ -1923,6 +1927,10 @@ class TerminateFlagBackend:
 
   async def terminate(self) -> None:
     self.terminated = True
+
+  def cgroup_exit_report(self) -> str | None:
+    """Session memory-cap attribution read: doubles never run inside a cgroup, so None."""
+    return None
 
 
 class FakeBackend(TerminateFlagBackend):

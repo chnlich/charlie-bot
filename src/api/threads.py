@@ -154,13 +154,22 @@ async def _attach_available(thread: ThreadMetadata, cfg: CharlieBotConfig) -> bo
   return False
 
 
+def _epoch_ms(dt: datetime) -> int:
+  """The UTC timestamp as epoch milliseconds, the wire form of the list row timestamps."""
+  return int(dt.timestamp() * 1000)
+
+
 def _thread_list_item(t: ThreadMetadata) -> dict:
   """One thread row of the workers-panel list and session-view payloads.
 
   The description ships as a prefix: the card it backs paints one CSS-truncated
   line and the full-text modal fetches the thread row on click, so neither
   payload ships task-spec-length descriptions (~KB each). A truncated row
-  carries ``description_full_len`` so the client knows to fetch.
+  carries ``description_full_len`` so the client knows to fetch. Timestamps
+  ship as epoch milliseconds: the client reads both fields through ``new
+  Date()``, which accepts the integer and the ISO string alike, and the int
+  form halves their wire bytes on a body that scales with the session's thread
+  count.
   """
   description = t.description or ""
   item = {
@@ -168,8 +177,8 @@ def _thread_list_item(t: ThreadMetadata) -> dict:
       "id": t.id,
       "description": description[:_LIST_DESCRIPTION_CAP],
       "status": t.status.value,
-      "created_at": t.created_at.isoformat(),
-      "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+      "created_at": _epoch_ms(t.created_at),
+      "completed_at": _epoch_ms(t.completed_at) if t.completed_at else None,
       "backend": t.backend,
   }
   if len(description) > _LIST_DESCRIPTION_CAP:
@@ -273,14 +282,19 @@ def _thread_list_items(
 
 
 def _trigger_list_item(tr: PendingTrigger) -> dict:
-  """One trigger row of the workers-panel list payload."""
+  """One trigger row of the workers-panel list payload.
+
+  Timestamps ride the same epoch-ms wire form as the thread rows: ``_list_body``
+  sorts both row kinds by ``created_at``, so the mixed sort stays homogeneous,
+  and the client's ``new Date()`` reads the integer form unchanged.
+  """
   return {
       "type": "trigger",
       "id": tr.id,
       "message": tr.message,
       "status": tr.status.value,
-      "fire_at": tr.fire_at.isoformat(),
-      "created_at": tr.created_at.isoformat(),
+      "fire_at": _epoch_ms(tr.fire_at),
+      "created_at": _epoch_ms(tr.created_at),
   }
 
 

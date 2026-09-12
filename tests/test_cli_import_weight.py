@@ -42,10 +42,9 @@ PLAN_HEAVY_MODULES = HEAVY_MODULES + (
 
 
 def _modules_loaded_after_import(module_expr: str, heavy: tuple[str, ...]) -> list[str]:
-  code = (
-      "import json, sys; "
-      f"{module_expr}; "
-      f"print(json.dumps(sorted(set(sys.modules) & {set(heavy)!r})))")
+  code = ("import json, sys; "
+          f"{module_expr}; "
+          f"print(json.dumps(sorted(set(sys.modules) & {set(heavy)!r})))")
   proc = subprocess.run(
       [sys.executable, "-c", code],
       cwd=REPO_ROOT,
@@ -70,8 +69,7 @@ def test_plan_chain_imports_without_the_heavy_chains() -> None:
   # choices ride src.core.constants, so parser build stays light too); the heavy
   # chains load only inside the verb paths that need them (artifact check inside
   # the validation to_thread hop).
-  loaded = _modules_loaded_after_import(
-      "import src.cli.plan; src.cli.plan._build_parser()", PLAN_HEAVY_MODULES)
+  loaded = _modules_loaded_after_import("import src.cli.plan; src.cli.plan._build_parser()", PLAN_HEAVY_MODULES)
   assert loaded == [], (
       "the plan command chain pulled the server's heavy chains into the CLI "
       f"process: {loaded}; the M97 command wall (docs/perf_baseline.md) depends "

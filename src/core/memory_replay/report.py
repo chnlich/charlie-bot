@@ -162,24 +162,28 @@ def _editor_section(editor_dispositions: list[dict]) -> list[str]:
 def _run_section(data: ReportData) -> list[str]:
   """Every recorded model attempt: its validation outcome, whether it was chosen, and its usage."""
   lines = [f"<details><summary>Run record ({len(data.calls)} model attempts)</summary>"]
-  lines.append("<table><tr><th>call</th><th>attempt</th><th>outcome</th><th>chosen</th>"
-               "<th>latency ms</th><th>output tokens</th><th>cost</th></tr>")
+  lines.append(
+      "<table><tr><th>call</th><th>attempt</th><th>outcome</th><th>chosen</th>"
+      "<th>latency ms</th><th>output tokens</th><th>cost</th></tr>")
   for call in data.calls:
     validation = call.get("validation") or {}
     outcome = str(validation.get("status"))
     lines.append(
         "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
-            _e(str(call["name"])), _e(str(call.get("attempt"))), _e(outcome),
-            _e("yes" if call.get("chosen") else "no"),
+            _e(str(call["name"])), _e(str(call.get("attempt"))), _e(outcome), _e("yes" if call.get("chosen") else "no"),
             _e("unknown" if call.get("latency_ms") is None else str(call["latency_ms"])),
             _e("unknown" if call.get("output_tokens") is None else str(call["output_tokens"])),
             _e("unknown (endpoint reports no pricing)")))
   lines.append("</table>")
   lines.append(f'<p class="mono">prompt versions: {_e(str(data.prompt_versions))}</p>')
-  if any(len([c for c in data.calls if c["role"] == role and c["theme"] == theme]) > 1
-         for role in ("editor", "reviewer") for theme in {c["theme"] for c in data.calls}):
-    lines.append('<p class="muted">A recovered response is stage execution/recovery after a mechanical '
-                 'validation failure &mdash; not independent-review quality gain.</p>')
+  if any(len([c
+              for c in data.calls
+              if c["role"] == role and c["theme"] == theme]) > 1
+         for role in ("editor", "reviewer")
+         for theme in {c["theme"] for c in data.calls}):
+    lines.append(
+        '<p class="muted">A recovered response is stage execution/recovery after a mechanical '
+        'validation failure &mdash; not independent-review quality gain.</p>')
   if data.unused_sources:
     lines.append(
         '<p class="muted">Sources not assigned to any theme (inert): '

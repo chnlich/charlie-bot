@@ -13,8 +13,8 @@ arm even though v3 allows optional citations there.
 """
 
 from src.core.memory_replay.exchange import ThemeOutput
-from src.core.memory_replay.retrieval import FeedbackSelection
 from src.core.memory_replay.manifest import Manifest, Theme
+from src.core.memory_replay.retrieval import FeedbackSelection
 
 EDITOR_PROMPT_VERSION = "memory-replay-editor-v2"
 REVIEWER_PROMPT_VERSION = "memory-replay-reviewer-v2"

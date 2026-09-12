@@ -108,8 +108,9 @@ def _build_client(cfg: CharlieBotConfig, thread_mgr: ThreadManager) -> TestClien
   return TestClient(app)
 
 
-@pytest.mark.asyncio
-async def test_thread_metadata_endpoint_exposes_derived_attach_fields(tmp_path: Path) -> None:
+async def _saved_opus_thread(
+    tmp_path: Path, **thread_overrides
+) -> tuple[CharlieBotConfig, ThreadManager, Path, ThreadMetadata]:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       backends={
@@ -124,8 +125,15 @@ async def test_thread_metadata_endpoint_exposes_derived_attach_fields(tmp_path: 
       session_id="session-id",
       worktree_path=str(worktree),
       claude_session_id="session-123",
+      **thread_overrides,
   )
   await thread_mgr.save_metadata(thread)
+  return cfg, thread_mgr, worktree, thread
+
+
+@pytest.mark.asyncio
+async def test_thread_metadata_endpoint_exposes_derived_attach_fields(tmp_path: Path) -> None:
+  cfg, thread_mgr, worktree, thread = await _saved_opus_thread(tmp_path)
 
   with _build_client(cfg, thread_mgr) as client:
     response = client.get(f"/api/threads/{thread.session_id}/threads/{thread.id}")
@@ -149,23 +157,7 @@ async def test_thread_metadata_endpoint_exposes_derived_attach_fields(tmp_path: 
 
 @pytest.mark.asyncio
 async def test_thread_metadata_endpoint_attach_mode_serves_only_the_pair(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "home",
-      backends={
-          "options": [backend_option(id="claude-opus", label="Claude", type="cc-claude", model="claude-opus-4-8"),],
-      },
-  )
-  thread_mgr = ThreadManager(cfg)
-  worktree = tmp_path / "worktree"
-  worktree.mkdir()
-  thread = _thread(
-      backend="claude-opus",
-      session_id="session-id",
-      worktree_path=str(worktree),
-      claude_session_id="session-123",
-      description="x" * 5000,
-  )
-  await thread_mgr.save_metadata(thread)
+  cfg, thread_mgr, worktree, thread = await _saved_opus_thread(tmp_path, description="x" * 5000)
 
   with _build_client(cfg, thread_mgr) as client:
     attach_data = client.get(f"/api/threads/{thread.session_id}/threads/{thread.id}?attach=1").json()

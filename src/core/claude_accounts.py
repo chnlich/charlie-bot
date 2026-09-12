@@ -6,7 +6,8 @@ rate-limited account ends the master turn and the user switches by hand; the
 pool moves that choice into the system. ``accounts.claude`` in config.yaml
 lists the logins, every selection reads each
 login's health (a usable credential file, no recent authentication failure) and
-headroom (the newest rate-limit reading), and a relay to another login is a
+headroom (the newest rate-limit reading, where a live model-scoped weekly window
+is never masked by a newer generic one), and a relay to another login is a
 transcript copy into the target's ``projects`` tree followed by a same-id
 ``--resume`` there.
 
@@ -26,7 +27,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections.abc import Iterable
+from collections.abc import Iterable, Set
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -59,6 +60,20 @@ _EVENT_WINDOWS = ("five_hour", "seven_day")
 
 # A rejected event without ``resetsAt`` keeps the account out for this long.
 _REJECTED_WITHOUT_RESET = timedelta(hours=1)
+
+# Last-active timestamp of an account with no event reading: a never-active
+# account sorts before every active one.
+_NEVER_ACTIVE = datetime.min.replace(tzinfo=UTC)
+
+# A live window that resets within a day earns its account up to
+# ``_RESET_BONUS_SCALE`` of bonus headroom: quota about to lapse is spent
+# before it lapses, but only from an account that still has room to spend.
+_RESET_BONUS_SCALE = 0.10
+_RESET_BONUS_HORIZON = 24 * 3600.0
+_RESET_BONUS_MIN_HEADROOM = 0.10
+
+# Scores closer than this are a near-tie, broken by least-recent event activity.
+_SCORE_TIE = 0.02
 
 
 @dataclass(frozen=True)
@@ -276,40 +291,76 @@ def panel_window_expired(window: dict[str, Any], sampled: datetime | None, now: 
   return False
 
 
-def _panel_reading(label: str, model: str | None, now: datetime | None = None) -> RateLimitReading | None:
-  """The panel reading folded for *model*: plan-wide windows plus its scoped bucket.
+def _live_windows(label: str, model: str | None, now: datetime) -> list[dict[str, Any]]:
+  """The stored panel windows of *label* that are live at *now* and readable by *model*.
 
-  Windows the shared ``panel_window_expired`` rule marks expired are dropped
-  before the fold, so a window whose reset has passed stops pressing the
-  headroom; with every stored window expired there is no panel reading at all.
+  Windows the shared ``panel_window_expired`` rule marks expired are dropped,
+  so a window whose reset has passed stops pressing the headroom; a scoped
+  window counts only when its scope names *model*'s family, and a model-less
+  query reads the plan-wide windows alone.
   """
   stored = _panel_readings.get(label)
   if stored is None:
-    return None
-  moment = now_or(now)
+    return []
   family = model_family(model)
-  values: list[float] = []
+  live: list[dict[str, Any]] = []
   for window in stored["windows"]:
-    if panel_window_expired(window, stored["at"], moment):
-      continue
-    value = window.get("utilization")
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
+    if panel_window_expired(window, stored["at"], now):
       continue
     scope = window.get("scope_label")
     if scope and not (family and family in str(scope).lower()):
       continue
-    values.append(float(value) / 100.0)
+    live.append(window)
+  return live
+
+
+def _panel_reading(label: str, model: str | None, now: datetime | None = None) -> RateLimitReading | None:
+  """The panel reading folded for *model* over its live windows."""
+  stored = _panel_readings.get(label)
+  if stored is None:
+    return None
+  values: list[float] = []
+  for window in _live_windows(label, model, now_or(now)):
+    value = window.get("utilization")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+      values.append(float(value) / 100.0)
   if not values:
     return None
   return RateLimitReading(at=stored["at"], utilization=max(values))
 
 
 def latest_reading(label: str, model: str | None, now: datetime | None = None) -> RateLimitReading | None:
-  """The newer of the account's event reading and its panel reading, or None."""
-  candidates = [reading for reading in (_event_readings.get(label), _panel_reading(label, model, now)) if reading]
-  if not candidates:
-    return None
-  return max(candidates, key=lambda reading: reading.at)
+  """The account's effective reading for *model*: its windows fused orthogonally.
+
+  A live model-scoped panel window (the Fable weekly bucket) is never masked by
+  a newer generic reading: the effective utilization is the max across the
+  general reading -- the newer of the event reading and the plan-wide panel
+  fold -- and the model-scoped fold, so a fresh 20 percent 5h event cannot wash
+  an 85 percent weekly bucket back down. The rejection of a rejected event
+  reading holds the fusion to zero until its reset. With no live scoped window
+  the reading is the general one alone.
+  """
+  moment = now_or(now)
+  general = _newest_reading(_event_readings.get(label), _panel_reading(label, None, moment))
+  if model is None or not any(window.get("scope_label") for window in _live_windows(label, model, moment)):
+    return general
+  scoped = _panel_reading(label, model, moment)
+  if scoped is None:
+    return general
+  rejected_until = None
+  if general is not None and general.rejected_until is not None and general.rejected_until > moment:
+    rejected_until = general.rejected_until
+  return RateLimitReading(
+      at=max(general.at if general else _NEVER_ACTIVE, scoped.at),
+      utilization=max(general.utilization if general else 0.0, scoped.utilization),
+      rejected_until=rejected_until,
+  )
+
+
+def _newest_reading(*readings: RateLimitReading | None) -> RateLimitReading | None:
+  """The newest of the given readings, ignoring the missing ones."""
+  present = [reading for reading in readings if reading is not None]
+  return max(present, key=lambda reading: reading.at) if present else None
 
 
 def headroom(label: str, model: str | None, now: datetime | None = None) -> float:
@@ -331,25 +382,80 @@ def select(
     model: str | None,
     current: str | None = None,
     exclude: Iterable[str] = (),
+    busy_accounts: Set[str] | None = None,
     now: datetime | None = None,
 ) -> ClaudeAccount | None:
-  """The healthy account with the most headroom for *model*; ties keep *current*.
+  """The healthy account with the most headroom for *model*, ranked statelessly.
 
-  *exclude* names accounts a relay is leaving. An account with no headroom (a
-  rejection whose reset is still ahead) is unavailable rather than a last resort:
-  running there would only be rejected again. None when no account qualifies,
-  which the caller reports loudly together with ``earliest_reset``.
+  The score is headroom plus a bonus for a window that resets within a day --
+  quota about to lapse is spent before it lapses -- and scores closer than
+  ``_SCORE_TIE`` break by least-recent event activity (a never-active account
+  sorts first), so turns spread over the pool with no cursor state to restore
+  after a restart. *current* is accepted for the callers' sake but no longer
+  owns ties; warm-cache stickiness is the caller's decision.
+
+  *busy_accounts* names accounts another running session holds: an idle account
+  wins outright, and only when every healthy account is busy does the choice
+  fall back to all of them. *exclude* names accounts a relay is leaving. An
+  account with no headroom (a rejection whose reset is still ahead) is
+  unavailable rather than a last resort: running there would only be rejected
+  again. None when no account qualifies, which the caller reports loudly
+  together with ``earliest_reset``.
   """
+  del current  # ranking is stateless: near-ties break by LRU, not by the current account
+  moment = now_or(now)
   excluded = set(exclude)
-  ranked = [
-      (headroom(account.label, model, now), account.label == current, account)
-      for account in pool(cfg)
-      if account.label not in excluded and healthy(account, now)
-  ]
-  available = [entry for entry in ranked if entry[0] > 0.0]
+  available: list[tuple[ClaudeAccount, float]] = []
+  for account in pool(cfg):
+    if account.label in excluded or not healthy(account, moment):
+      continue
+    if (hr := headroom(account.label, model, moment)) > 0.0:
+      available.append((account, hr))
   if not available:
     return None
-  return max(available, key=lambda entry: entry[:2])[2]
+  idle = [(account, hr) for account, hr in available if busy_accounts is None or account.label not in busy_accounts]
+  contenders = idle if idle else available
+  scored = [(hr + _reset_bonus(account.label, model, moment, hr), account) for account, hr in contenders]
+  best = max(score for score, _account in scored)
+  tied = [account for score, account in scored if best - score <= _SCORE_TIE]
+  return min(tied, key=lambda account: _last_active_at(account.label))
+
+
+def _last_active_at(label: str) -> datetime:
+  """When the account's newest rate-limit event was read; a never-active account sorts first."""
+  reading = _event_readings.get(label)
+  return reading.at if reading is not None else _NEVER_ACTIVE
+
+
+def _time_to_reset(label: str, model: str | None, now: datetime) -> float | None:
+  """Seconds until the binding panel window for *model* resets, or None when unknown.
+
+  The binding window is the live window with the highest utilization -- the one
+  the headroom is pressed by, a model-scoped weekly bucket competing with the
+  plan-wide ones. A missing or unparseable ``resets_at`` reads as no
+  information rather than a guess.
+  """
+  limiting: tuple[float, dict[str, Any]] | None = None
+  for window in _live_windows(label, model, now):
+    value = window.get("utilization")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+      continue
+    if limiting is None or float(value) > limiting[0]:
+      limiting = (float(value), window)
+  if limiting is None:
+    return None
+  resets_at = parse_iso_utc(limiting[1].get("resets_at"))
+  return (resets_at - now).total_seconds() if resets_at is not None else None
+
+
+def _reset_bonus(label: str, model: str | None, moment: datetime, headroom_left: float) -> float:
+  """Bonus for a live window that resets within a day: spend the quota before it lapses."""
+  if headroom_left <= _RESET_BONUS_MIN_HEADROOM:
+    return 0.0
+  ttr = _time_to_reset(label, model, moment)
+  if ttr is None or not 0.0 <= ttr < _RESET_BONUS_HORIZON:
+    return 0.0
+  return _RESET_BONUS_SCALE * (1.0 - ttr / _RESET_BONUS_HORIZON)
 
 
 def earliest_reset(cfg: CharlieBotConfig, now: datetime | None = None) -> datetime | None:

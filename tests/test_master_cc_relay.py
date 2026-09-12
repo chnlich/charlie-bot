@@ -23,7 +23,7 @@ from conftest import (
     write_pool_credentials,
 )
 
-from src.agents import master_cc_relay, master_cc_run
+from src.agents import master_cc_relay, master_cc_run, master_cc_state
 from src.agents.backends import base as backend_base
 from src.api import ext_usage as ext_usage_mod
 from src.core import claude_accounts, claude_relay
@@ -97,6 +97,39 @@ def test_choose_turn_account_reselects_on_a_cold_cache_or_at_the_warning_line(tm
 
   fresh_pick, _ = master_cc_relay.choose_turn_account(cfg, _session_on(None, None), FABLE_MODEL, None, NOW)
   assert fresh_pick.label == "ext-1"
+
+
+@pytest.mark.asyncio
+async def test_choose_turn_account_breaks_warm_stickiness_when_another_session_runs_the_account(tmp_path: Path) -> None:
+  cfg = fable_pool_cfg(tmp_path)
+  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
+  other = SessionMetadata(id="s2", name="other", backend=POOLED_FABLE_ID, claude_account="main")
+  master_cc_state._current_items["s2"] = make_work_item(cfg, other, cfg.backends.options[0])
+  try:
+    chosen, cold = master_cc_relay.choose_turn_account(
+        cfg, _session_on("main"), FABLE_MODEL, NOW - timedelta(minutes=10), now=NOW)
+  finally:
+    master_cc_state._current_items.pop("s2", None)
+
+  # The cache is warm and main is healthy under the warning line, but another
+  # running session holds main: the stickiness breaks and an idle account wins.
+  assert (chosen.label, cold) == ("ext-1", False)
+
+
+@pytest.mark.asyncio
+async def test_choose_turn_account_ignores_the_session_itself_in_the_busy_set(tmp_path: Path) -> None:
+  cfg = fable_pool_cfg(tmp_path)
+  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
+  meta = _session_on("main")
+  master_cc_state._current_items[meta.id] = make_work_item(cfg, meta, cfg.backends.options[0])
+  try:
+    chosen, cold = master_cc_relay.choose_turn_account(cfg, meta, FABLE_MODEL, NOW - timedelta(minutes=10), now=NOW)
+  finally:
+    master_cc_state._current_items.pop(meta.id, None)
+
+  # The consumer parks the turn's own work item under the session id while it
+  # runs; only another session's item may break the warm stickiness.
+  assert (chosen.label, cold) == ("main", False)
 
 
 def test_choose_turn_account_returns_none_when_the_pool_is_exhausted(tmp_path: Path) -> None:

@@ -248,6 +248,88 @@ def test_panel_scoped_window_counts_only_for_its_model_family() -> None:
   assert claude_accounts.headroom("ext-1", SONNET, now=NOW) == pytest.approx(0.90)
 
 
+def test_headroom_fuses_a_live_scoped_panel_window_with_a_newer_event_reading() -> None:
+  """The Fable weekly bucket survives a newer generic reading: 85 percent weekly keeps
+  pressing the headroom even though the 5h event (20 percent) is the newer reading."""
+  claude_accounts.observe_usage_panel(
+      "ext-1", {
+          "windows":
+              [
+                  {
+                      "window_minutes": 300,
+                      "utilization": 20.0,
+                      "resets_at": (NOW + timedelta(hours=2)).isoformat(),
+                  },
+                  {
+                      "window_minutes": 10080,
+                      "utilization": 85.0,
+                      "scope_label": "Fable 5.1",
+                      "resets_at": (NOW + timedelta(days=4)).isoformat(),
+                  },
+              ],
+          "fetched_at": (NOW - timedelta(minutes=10)).isoformat(),
+      })
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.20, 0.10), now=NOW)
+
+  reading = claude_accounts.latest_reading("ext-1", FABLE_MODEL, now=NOW)
+  assert reading is not None
+  assert reading.utilization == pytest.approx(0.85)
+  assert reading.at == NOW, "the newer general reading stamps the fusion"
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW) == pytest.approx(0.15)
+  # Without the scoped bucket the newer generic reading is the whole story.
+  assert claude_accounts.headroom("ext-1", SONNET, now=NOW) == pytest.approx(0.80)
+
+
+def test_fused_reading_keeps_a_live_rejection_from_the_event_reading() -> None:
+  claude_accounts.observe_usage_panel(
+      "ext-1", {
+          "windows":
+              [
+                  {
+                      "window_minutes": 10080,
+                      "utilization": 85.0,
+                      "scope_label": "Fable 5.1",
+                      "resets_at": (NOW + timedelta(days=4)).isoformat(),
+                  }
+              ],
+          "fetched_at": (NOW - timedelta(minutes=10)).isoformat(),
+      })
+  resets_at = (NOW + timedelta(minutes=30)).timestamp()
+  claude_accounts.observe_rate_limit("ext-1", _event("rejected", 0.99, 0.40, resets_at), now=NOW)
+
+  # The rejection holds the fusion to zero until its reset passes; afterwards the
+  # rejected event's own utilization (0.99) is what presses the headroom.
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW) == 0.0
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=NOW + timedelta(minutes=31)) == pytest.approx(0.01)
+
+
+def test_fusion_falls_back_past_an_expired_scoped_window() -> None:
+  fetched_at = EXPIRY_NOW - timedelta(hours=2)
+  claude_accounts.observe_usage_panel(
+      "ext-1", {
+          "windows":
+              [
+                  {
+                      "window_minutes": 10080,
+                      "utilization": 85.0,
+                      "scope_label": "Fable 5.1",
+                      "resets_at": (EXPIRY_NOW - timedelta(hours=1)).isoformat(),
+                  },
+                  {
+                      "window_minutes": 10080,
+                      "utilization": 17.0,
+                      "resets_at": (EXPIRY_NOW + timedelta(days=3)).isoformat(),
+                  },
+              ],
+          "fetched_at": fetched_at.isoformat(),
+      })
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.50, 0.10), now=EXPIRY_NOW)
+
+  # The scoped weekly window's reset has passed: it stops pressing the headroom
+  # and the newer generic event reading is the only one left.
+  assert claude_accounts.headroom("ext-1", FABLE_MODEL, now=EXPIRY_NOW) == pytest.approx(0.50)
+
+
 # ---------------------------------------------------------------------------
 # Panel expiry: the shared predicate and the pool fold that drops expired windows
 # ---------------------------------------------------------------------------
@@ -362,15 +444,86 @@ def test_panel_fold_keeps_a_live_weekly_window_whose_sample_has_aged() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_select_prefers_most_headroom_and_keeps_current_on_a_tie(tmp_path: Path) -> None:
+def test_select_prefers_most_headroom_and_breaks_near_ties_by_lru(tmp_path: Path) -> None:
   cfg = _pool_cfg(tmp_path)
   claude_accounts.observe_rate_limit("main", _event("allowed", 0.50, 0.10), now=NOW)
-  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.10, 0.05), now=NOW)
-  claude_accounts.observe_rate_limit("ext-2", _event("allowed", 0.10, 0.05), now=NOW)
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.05, 0.05), now=NOW)
+  claude_accounts.observe_rate_limit("ext-2", _event("allowed", 0.10, 0.05), now=NOW - timedelta(minutes=10))
 
-  assert claude_accounts.select(cfg, FABLE_MODEL, current="ext-2", now=NOW).label == "ext-2"
-  assert claude_accounts.select(cfg, FABLE_MODEL, current="ext-1", now=NOW).label == "ext-1"
-  assert claude_accounts.select(cfg, FABLE_MODEL, current="main", now=NOW).label in {"ext-1", "ext-2"}
+  # The clear headroom leader wins whatever the tie-break state.
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW).label == "ext-1"
+
+  # A near-tie (within 0.02) breaks by least-recent use, not by the current
+  # account: ext-2's event reading is the older one, so it is tried first.
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.115, 0.05), now=NOW)
+  assert claude_accounts.select(cfg, FABLE_MODEL, current="ext-1", now=NOW).label == "ext-2"
+
+
+def test_select_tries_a_never_active_account_before_a_near_tied_active_one(tmp_path: Path) -> None:
+  cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
+  claude_accounts.observe_rate_limit("main", _event("allowed", 0.015, 0.01), now=NOW)
+
+  # ext-1 has no reading at all: within the tie band it sorts before main's
+  # fresh reading, so the untouched login is tried first.
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW).label == "ext-1"
+
+
+def test_select_keeps_pool_order_when_scores_and_activity_tie(tmp_path: Path) -> None:
+  cfg = _pool_cfg(tmp_path)
+  # No readings anywhere: every account scores a full window and none has been active.
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW).label == "main"
+
+
+def test_select_skips_busy_accounts_while_any_idle_account_remains(tmp_path: Path) -> None:
+  cfg = _pool_cfg(tmp_path, labels=("ext-1", "ext-2"))
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.20, 0.10), now=NOW)
+  claude_accounts.observe_rate_limit("ext-2", _event("allowed", 0.30, 0.10), now=NOW)
+
+  # ext-1 has more headroom but another session holds it: the idle account wins.
+  assert claude_accounts.select(cfg, FABLE_MODEL, busy_accounts={"ext-1"}, now=NOW).label == "ext-2"
+  # Every healthy account busy: the hard slot filter falls back to the full set.
+  assert claude_accounts.select(cfg, FABLE_MODEL, busy_accounts={"ext-1", "ext-2"}, now=NOW).label == "ext-1"
+
+
+def test_select_prefers_an_account_whose_window_resets_sooner(tmp_path: Path) -> None:
+  cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
+  claude_accounts.observe_usage_panel(
+      "main", {
+          "windows":
+              [{
+                  "window_minutes": 10080,
+                  "utilization": 60.0,
+                  "resets_at": (NOW + timedelta(hours=3)).isoformat(),
+              }],
+          "fetched_at": NOW.isoformat(),
+      })
+  claude_accounts.observe_usage_panel(
+      "ext-1", {
+          "windows":
+              [{
+                  "window_minutes": 10080,
+                  "utilization": 55.0,
+                  "resets_at": (NOW + timedelta(days=5)).isoformat(),
+              }],
+          "fetched_at": NOW.isoformat(),
+      })
+
+  # main: headroom 0.40 plus 0.0875 of reset bonus (3h to reset); ext-1: 0.45,
+  # too far from its reset to earn a bonus -- the bonus flips the ranking.
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW).label == "main"
+
+  # Push main's reset beyond the bonus horizon and plain headroom rules again.
+  claude_accounts.observe_usage_panel(
+      "main", {
+          "windows":
+              [{
+                  "window_minutes": 10080,
+                  "utilization": 60.0,
+                  "resets_at": (NOW + timedelta(days=5)).isoformat(),
+              }],
+          "fetched_at": NOW.isoformat(),
+      })
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW).label == "ext-1"
 
 
 def test_select_skips_excluded_rejected_and_unhealthy_accounts(tmp_path: Path) -> None:

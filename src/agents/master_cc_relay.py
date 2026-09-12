@@ -6,10 +6,12 @@ loop: which account a turn starts on, and how the turn continues on the next one
 The event reading and the relay mechanics themselves are shared with delegated
 workers in src/core/claude_relay.py.
 
-Turn start: the session keeps its account while the prompt cache is warm and the
-account has headroom; a cold cache (more than an hour since the last request)
-or an account at the warning line frees the turn to pick the account with the
-most headroom, moving the transcript with it and, on a cold cache, compacting a
+Turn start: the session keeps its account while the prompt cache is warm, the
+account has headroom, and no other running session holds that account (one
+account carries one turn; a busy account breaks the warm stickiness). A cold
+cache (more than an hour since the last request), an account at the warning
+line, or a busy one frees the turn to pick the idle account with the most
+headroom, moving the transcript with it and, on a cold cache, compacting a
 large Fable context with Sonnet first (src/core/claude_compaction.py).
 
 Relay: the transcript moves to the account with the most headroom among the
@@ -58,19 +60,28 @@ def choose_turn_account(
 ) -> tuple[ClaudeAccount | None, bool]:
   """The account this turn runs on and whether the cache is cold.
 
-  The current account stays while the cache is warm, it is healthy and its
-  newest reading sits under the warning line with no rejection pending; every
-  other case re-selects (a tie keeps the current account).
+  The current account stays while the cache is warm, it is healthy, its newest
+  reading sits under the warning line with no rejection pending, and no other
+  running session holds it; every other case re-selects among idle accounts.
+  The busy set is derived read-only from the running work items -- one account
+  carries one turn -- so two sessions never pile onto one login, and when every
+  healthy account is busy the choice falls back to all of them.
   """
   moment = claude_accounts.now_or(now)
   current = claude_accounts.account_by_label(cfg, session_meta.claude_account)
   cold = claude_compaction.cache_expired(last_request_at, moment)
-  if current is not None and not cold and claude_accounts.healthy(current, moment):
+  busy = {
+      item.session_meta.claude_account
+      for sid, item in master_cc_state._current_items.items()
+      if sid != session_meta.id and item.session_meta and item.session_meta.claude_account
+  }
+  if current is not None and current.label not in busy and not cold and claude_accounts.healthy(current, moment):
     reading = claude_accounts.latest_reading(current.label, model)
     rejected = reading is not None and reading.rejected_until is not None and reading.rejected_until > moment
     if reading is None or (reading.utilization < claude_accounts.WARNING_UTILIZATION and not rejected):
       return current, cold
-  chosen = claude_accounts.select(cfg, model, current=current.label if current else None, now=moment)
+  chosen = claude_accounts.select(
+      cfg, model, current=current.label if current else None, busy_accounts=busy, now=moment)
   return chosen, cold
 
 

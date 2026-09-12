@@ -36,6 +36,23 @@ def replay_cfg(tmp_path: Path) -> CharlieBotConfig:
   return base.replay_cfg(tmp_path)
 
 
+def keep_with_text_reviewer() -> str:
+  """A reviewer response whose keep row carries the editor's replacement text.
+
+  Every contract version rejects this shape (the pilot's first failure), so the
+  validator, repair, and v2-record tests below all exercise the same response.
+  """
+  return base.editor_json(
+      [
+          {
+              "action": "keep",
+              "path": "entries/render/cache-eviction.md",
+              "text": base.ENTRY_WITHOUT_INSTANCE,
+              "reason": "kept as proposed",
+          }
+      ], [base.row("capture-eviction", "no_change", [], "kept as proposed")])
+
+
 class ScriptedTransport:
   """Fake transport with per-call usage, so attempt costs are assertable."""
 
@@ -81,10 +98,6 @@ def run_with(tmp_path: Path, responses: list[str], *, mode: str = "editor-review
       cfg=replay_cfg(tmp_path),
       transport_factory=lambda: transport)
   return outcome, transport
-
-
-def read_record(run_dir: Path) -> dict:
-  return json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
 
 
 def calls_for(record: dict, role: str, theme: str = "eviction") -> list[dict]:
@@ -194,15 +207,7 @@ def test_reviewer_retaining_a_base_entry_the_editor_deleted_omits_the_delete(tmp
 
 def test_keep_with_changed_text_is_never_a_valid_output(tmp_path: Path) -> None:
   """The pilot's first failure: keep carrying the editor's replacement text cannot mean 'accept'."""
-  bad = base.editor_json(
-      [
-          {
-              "action": "keep",
-              "path": "entries/render/cache-eviction.md",
-              "text": base.ENTRY_WITHOUT_INSTANCE,
-              "reason": "kept as proposed",
-          }
-      ], [base.row("capture-eviction", "no_change", [], "kept as proposed")])
+  bad = keep_with_text_reviewer()
   errors = theme_output_errors(
       base.parse_model_output(bad, role="reviewer[t]"),
       role="reviewer[t]",
@@ -299,7 +304,7 @@ def test_feedback_comment_ids_are_evidence_provenance_not_dispositions(tmp_path:
   good_reviewer = base.editor_json(
       [base.keep_op()], [base.row("capture-eviction", "no_change", [], "final: no change needed")])
   outcome, transport = run_with(tmp_path, [editor, bad_reviewer, good_reviewer])
-  record = read_record(outcome.run_dir)
+  record = base.run_record(outcome.run_dir)
   reviewer_attempts = calls_for(record, "reviewer")
   assert [c["attempt"] for c in reviewer_attempts] == [1, 2] and [c["chosen"] for c in reviewer_attempts
                                                                  ] == [False, True]
@@ -356,7 +361,7 @@ def test_repair_input_is_original_evidence_plus_own_response_plus_errors(tmp_pat
   good_editor = MERGE
   reviewer = MERGE
   outcome, transport = run_with(tmp_path, [bad_editor, good_editor, reviewer])
-  record = read_record(outcome.run_dir)
+  record = base.run_record(outcome.run_dir)
   assert [c["attempt"] for c in calls_for(record, "editor")] == [1, 2]
   repair = attempt_request(outcome.run_dir, "editor", "eviction", 2)
   original = attempt_request(outcome.run_dir, "editor", "eviction", 1)
@@ -373,15 +378,7 @@ def test_repair_never_sees_editor_rationale_or_scoring_answers(tmp_path: Path) -
   editor = base.editor_json(
       [base.rewrite_op(base.ENTRY_WITHOUT_INSTANCE)],
       [base.row("capture-eviction", "propose", ["entries/render/cache-eviction.md"], f"{marker} merged")])
-  bad_reviewer = base.editor_json(
-      [
-          {
-              "action": "keep",
-              "path": "entries/render/cache-eviction.md",
-              "text": base.ENTRY_WITHOUT_INSTANCE,
-              "reason": "kept as proposed",
-          }
-      ], [base.row("capture-eviction", "no_change", [], "kept as proposed")])
+  bad_reviewer = keep_with_text_reviewer()
   good_reviewer = MERGE
   (tmp_path / "eval-answers.json").write_text('{"score": "SCORING-ANSWER-MARKER"}', encoding="utf-8")
   outcome, transport = run_with(tmp_path, [editor, bad_reviewer, good_reviewer])
@@ -397,7 +394,7 @@ def test_valid_model_judgments_never_trigger_a_retry(tmp_path: Path) -> None:
   needs_decision = base.editor_json([], [base.row("capture-eviction", "needs_decision", [], "evidence conflicts")])
   outcome, transport = run_with(tmp_path, [needs_decision], mode="editor-only")
   assert len(transport.calls) == 1, "a needs_decision row is a judgment, not a validation failure"
-  assert read_record(outcome.run_dir)["status"] == "completed"
+  assert base.run_record(outcome.run_dir)["status"] == "completed"
 
   rejecting_all = base.editor_json(
       [base.keep_op()], [base.row("capture-eviction", "no_change", [], "every path rejected on the evidence")])
@@ -420,7 +417,7 @@ def test_transport_failures_are_never_retried_and_fail_visibly(tmp_path: Path) -
         cfg=replay_cfg(tmp_path),
         transport_factory=lambda: transport)
   assert transport.calls == 1, "a transport failure is never retried"
-  record = read_record(next((tmp_path / "out" / "runs").iterdir()))
+  record = base.run_record(next((tmp_path / "out" / "runs").iterdir()))
   call = record["calls"][0]
   assert call["validation"]["status"] == "transport-failed" and call["chosen"] is False
   assert call["output_tokens"] is None, "unknown usage stays null"
@@ -444,7 +441,7 @@ def test_second_invalid_response_fails_visibly_and_both_attempts_are_kept(tmp_pa
   with pytest.raises(ReplayError, match="failed mechanical validation after 1 re-ask"):
     run_with(tmp_path, [garbage, garbage])
   run_dir = next((tmp_path / "out" / "runs").iterdir())
-  record = read_record(run_dir)
+  record = base.run_record(run_dir)
   assert record["status"] == "failed" and "no JSON object" in record["error"]
   attempts = calls_for(record, "editor")
   assert [c["attempt"] for c in attempts] == [1, 2] and all(not c["chosen"] for c in attempts)
@@ -461,7 +458,7 @@ def test_patch_disposition_inconsistency_is_recovered_at_the_stage(tmp_path: Pat
       [base.rewrite_op(base.ENTRY_WITHOUT_INSTANCE)],
       [base.row("capture-eviction", "propose", ["entries/render/cache-eviction.md"], "merged")])
   outcome, _ = run_with(tmp_path, [inconsistent, consistent], mode="editor-only")
-  record = read_record(outcome.run_dir)
+  record = base.run_record(outcome.run_dir)
   attempts = calls_for(record, "editor")
   assert [c["attempt"] for c in attempts] == [1, 2]
   assert any("the final diff does not change" in e for e in attempts[0]["validation"]["errors"]), (
@@ -577,7 +574,7 @@ def test_compare_verifies_the_repair_request_was_built_from_the_recorded_errors(
       ], [base.row("capture-eviction", "propose", ["entries/render/cache-eviction.md"], "r")])
   good_reviewer = MERGE
   outcome, _ = run_with(tmp_path, [MERGE, invalid_reviewer, good_reviewer])
-  record = read_record(outcome.run_dir)
+  record = base.run_record(outcome.run_dir)
   recorded_errors = calls_for(record, "reviewer")[0]["validation"]["errors"]
   expected = build_repair_request(
       attempt_request(outcome.run_dir, "reviewer", "eviction", 1),
@@ -806,15 +803,7 @@ def test_v2_failed_editor_arm_stays_failed_under_v3(tmp_path: Path) -> None:
 
 
 def test_v2_failed_reviewer_arm_stays_failed_and_the_editor_arm_stands(tmp_path: Path) -> None:
-  bad_reviewer = base.editor_json(
-      [
-          {
-              "action": "keep",
-              "path": "entries/render/cache-eviction.md",
-              "text": base.ENTRY_WITHOUT_INSTANCE,
-              "reason": "kept as proposed",
-          }
-      ], [base.row("capture-eviction", "no_change", [], "kept as proposed")])
+  bad_reviewer = keep_with_text_reviewer()
   run_dir = write_v2_run_bundle(
       tmp_path,
       editor_responses={"eviction": MERGE},

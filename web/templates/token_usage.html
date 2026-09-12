@@ -4,17 +4,17 @@
   {% include 'partials/standalone_base_styles.html' %}
   :root {
     --grid:#e6eaef;
-    --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a;
+    --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a; --series-4:#7c5cd6;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
       --grid:#2c2c2b;
-      --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70;
+      --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#9d7ff0;
     }
   }
   :root[data-theme="dark"] {
     --grid:#2c2c2b;
-    --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70;
+    --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#9d7ff0;
   }
   .sub { color:var(--mut); margin:0 0 16px; font-size:13.5px; max-width:82ch }
   .meta { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 22px }
@@ -90,7 +90,7 @@
   (<code>{{ ctx.top_out_compact }}</code>). Usage for the same model across multiple subscription accounts is merged into one row.</p>
   <div class="meta">
     <span class="mtag">window &middot; {{ window[0] }} &rarr; {{ window[1] }}</span>
-    <span class="mtag">sources &middot; Claude Code / Codex / opencode local logs</span>
+    <span class="mtag">sources &middot; Claude Code / Codex / opencode / charlie-bot local logs</span>
     <span class="mtag">scope &middot; one model = one row (merged across subscriptions)</span>
     <span class="mtag">API calls &middot; {{ ctx.tot_calls }}</span>
     <span class="mtag">generated &middot; {{ generated }}</span>
@@ -115,7 +115,8 @@
     <li><b>Scale by platform:</b>
       Claude Code {{ ctx.per_src["Claude Code"]["t_comp"] }} ({{ "%.0f"%ctx.per_src["Claude Code"]["share"] }}%, {{ ctx.per_src["Claude Code"]["models"] }} models),
       opencode {{ ctx.per_src["opencode"]["t_comp"] }} ({{ "%.0f"%ctx.per_src["opencode"]["share"] }}%, {{ ctx.per_src["opencode"]["models"] }}),
-      Codex {{ ctx.per_src["Codex"]["t_comp"] }} ({{ "%.0f"%ctx.per_src["Codex"]["share"] }}%, {{ ctx.per_src["Codex"]["models"] }}).
+      Codex {{ ctx.per_src["Codex"]["t_comp"] }} ({{ "%.0f"%ctx.per_src["Codex"]["share"] }}%, {{ ctx.per_src["Codex"]["models"] }}),
+      charlie-bot {{ ctx.per_src["charlie-bot"]["t_comp"] }} ({{ "%.0f"%ctx.per_src["charlie-bot"]["share"] }}%, {{ ctx.per_src["charlie-bot"]["models"] }}).
     </li>
     <li><b>The total mostly measures cache reuse, not work done:</b> {{ "%.1f"%cache_share }}% of tokens were cache reads,
       because a long session re-reads its whole context every turn. Ranking by output tokens reflects real production,
@@ -141,15 +142,21 @@
     <li><b>Sources:</b> Claude Code reads each assistant message's <code>usage</code> from
       <code>projects/**/*.jsonl</code> in every config dir; Codex reads <code>token_count</code> events from
       <code>sessions/**/*.jsonl</code> in every home, with the model name taken from the same file&rsquo;s
-      <code>turn_context</code>; opencode reads the <code>message</code> table of its local database. All three are local logs;
-      no vendor usage API is called.</li>
+      <code>turn_context</code>; opencode reads the <code>message</code> table of its local database;
+      charlie-bot reads its own thread event logs (<code>result</code> events in
+      <code>threads/*/data/events.jsonl</code> under each session directory) and master-run captures
+      (<code>agent.raw.ndjson</code> under <code>data/master_runs/</code>) &mdash; charlie-code-type
+      backends in full, codex-type history only when no rollout file for the thread's session id remains
+      on disk. All four are local logs; no vendor usage API is called.</li>
     <li><b>Dedupe:</b> Claude Code replays history verbatim on resume / fork, so responses are deduped on <code>message.id</code>.</li>
     <li><b>Codex cumulative totals are not additive:</b> subagent threads inherit the parent&rsquo;s
       <code>total_token_usage</code>, so summing across files double counts; the per-request
       <code>last_token_usage</code> is summed instead, and the cumulative value only cross-checks root sessions.</li>
-    <li><b>Not covered:</b> Gemini (<code>gemini.api_key</code> direct) has no local token log; any call made on another
+    <li><b>Not covered:</b> backend types with no collection rule here (e.g. antigravity) are not in this
+      table &mdash; their per-run usage lives only in the thread event logs stored beside each session&rsquo;s
+      threads. Gemini (<code>gemini.api_key</code> direct) has no local token log; any call made on another
       machine, or outside the Claude login directories listed under <code>accounts.claude</code> in <code>config.yaml</code>,
-      or the default <code>~/.codex</code> home, is not in this table.</li>
+      or the default <code>~/.codex</code> home, is not in this table either.</li>
     <li><b>Retention:</b> the left edge {{ window[0] }} is the date of the oldest local log file, not an account start date;
       earlier sessions that have been pruned cannot be counted.</li>
     <li><b>Cost:</b> this reports tokens only and does not convert to money — these calls run on subscriptions, not per-token.</li>
@@ -169,9 +176,9 @@
 
 <script>
 const DATA = {{ payload|safe }};
-const SLOT = {1:'var(--series-1)', 2:'var(--series-2)', 3:'var(--series-3)'};
-const LEG = [[1,"Claude Code"],[2,"Codex"],[3,"opencode"]];
-const SRC_SLOT = {'Claude Code':1,'Codex':2,'opencode':3};
+const SLOT = {1:'var(--series-1)', 2:'var(--series-2)', 3:'var(--series-3)', 4:'var(--series-4)'};
+const LEG = [[1,"Claude Code"],[2,"Codex"],[3,"opencode"],[4,"charlie-bot"]];
+const SRC_SLOT = {'Claude Code':1,'Codex':2,'opencode':3,'charlie-bot':4};
 const fmt = n => n.toLocaleString('en-US');
 const compact = n => {
   for (const [c,s] of [[1e9,'B'],[1e6,'M'],[1e3,'K']])

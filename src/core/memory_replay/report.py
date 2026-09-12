@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from src.core.memory_replay.manifest import Source
 from src.core.memory_replay.retrieval import FeedbackSelection
 
-# <style> rules shared by the memory-replay HTML pages. Each page pins its own
-# body width and appends page-only rules around this list.
+# <style> rules shared by the memory-replay HTML pages; _page wraps them with
+# each page's body-width pin and page-only rules.
 REPORT_CSS = [
     "h1{font-size:20px}h2{font-size:15px;border-bottom:1px solid #d9dfe6;padding-bottom:4px;margin-top:26px}",
     "table{border-collapse:collapse;width:100%;font-size:12.5px}",
@@ -23,6 +23,32 @@ REPORT_CSS = [
     ".needs{background:#fff4e5;border:1px solid #e6d09b;border-radius:6px;padding:10px 14px;margin:8px 0}",
     ".muted{color:#5b6774;font-size:12px}",
 ]
+
+
+def _page(title: str, body_width_px: int, extra_css: list[str], body_parts: list[str]) -> str:
+  """One static memory-replay page, newline-joined with a trailing newline.
+
+  *title* is a static literal (never user text). *body_width_px* and *extra_css*
+  are the per-page pins around REPORT_CSS; the caller pre-escapes every dynamic
+  body value with :func:`_e`, so body_parts are trusted markup fragments.
+  """
+  parts = [
+      "<!doctype html>",
+      '<html lang="en">',
+      "<head>",
+      '<meta charset="utf-8">',
+      f"<title>{title}</title>",
+      "<style>",
+      f"body{{font:14px/1.5 -apple-system,sans-serif;margin:24px auto;max-width:{body_width_px}px;color:#1b2430}}",
+      *REPORT_CSS,
+      *extra_css,
+      "</style>",
+      "</head>",
+      "<body>",
+      *body_parts,
+      "</body></html>",
+  ]
+  return "\n".join(parts) + "\n"
 
 
 @dataclass
@@ -48,17 +74,6 @@ class ReportData:
 def render_report(data: ReportData) -> str:
   needs_decision = [row for row in data.candidate_results if row["outcome"] == "needs_decision"]
   parts = [
-      "<!doctype html>",
-      '<html lang="en">',
-      "<head>",
-      '<meta charset="utf-8">',
-      "<title>Memory replay proposal</title>",
-      "<style>",
-      "body{font:14px/1.5 -apple-system,sans-serif;margin:24px auto;max-width:1100px;color:#1b2430}",
-      *REPORT_CSS,
-      "</style>",
-      "</head>",
-      "<body>",
       "<h1>Memory replay proposal</h1>",
       f'<p class="muted">mode <code>{_e(data.mode)}</code> · base_commit <code>{_e(data.base_commit)}</code> · '
       f'model <code>{_e(str(data.model_identity))}</code> · input identity <code>{_e(data.input_identity[:16])}</code> · '
@@ -93,8 +108,7 @@ def render_report(data: ReportData) -> str:
   parts.extend(_feedback_section(data.selections))
   parts.extend(_editor_section(data.editor_dispositions))
   parts.extend(_run_section(data))
-  parts.append("</body></html>")
-  return "\n".join(parts) + "\n"
+  return _page("Memory replay proposal", 1100, [], parts)
 
 
 def _sources_section(sources: list[Source]) -> list[str]:

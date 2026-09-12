@@ -45,6 +45,7 @@ from src.core.models import (
     utc_now,
 )
 from src.core.ndjson import append_ndjson
+from src.core.process import cleanup_session_cgroup
 from src.core.scheduled_sessions import (
     # re-export: src/api/cron.py imports ScheduledSessionBusyError from this module
     ScheduledSessionBusyError,
@@ -1617,6 +1618,10 @@ class SessionManager:
       meta = await self.get_session(session_id)
       await self._backend_destroy_hook(session_id, meta)
       await asyncio.to_thread(shutil.rmtree, session_dir)
+      # The session's memory-cap cgroup: removed only when empty (no live
+      # member left); a retained directory is logged debug and reclaimed by
+      # the kernel once its last process exits.
+      await asyncio.to_thread(cleanup_session_cgroup, session_id)
       self._drop_session_runtime_state(session_id)
       self._invalidate_cache(session_id)
       # Popping the lock from the dict while holding it is safe: the popped lock

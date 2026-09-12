@@ -48,6 +48,7 @@ from src.core.init import (
 )
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import BackendType, SessionMetadata, utc_now
+from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgroups
 from src.core.scheduler import Scheduler
 from src.core.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
 from src.core.streaming import streaming_manager
@@ -242,6 +243,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   # Ensure home directory structure exists (fast, mandatory part of startup).
   await init_charliebot_home()
   log.info("charliebot_home_ready", path=str(cfg.charliebot_home))
+
+  # Session memory-cap cgroups (plan_01 v3): the one boot line stating whether
+  # the feature is on for this host (off when the cap is 0 or the delegated
+  # app.slice is missing/unwritable), plus a warning when a configured backend
+  # spawns through the shared tmux server (claude-sub / tui-cli) and therefore
+  # escapes fork-time cgroup placement. Then sweep cgroup directories a
+  # previous server life left behind (empty ones only).
+  uncovered_backends = any(
+      option.type == BackendType.TUI_CLI or
+      (option.type == BackendType.CC_CLAUDE and option.cli_binary == "claude-sub") for option in cfg.backends.options)
+  log_session_cgroup_startup(cfg.server.session_memory_max_mb, cfg.server.session_swap_max_mb, uncovered_backends)
+  sweep_stale_session_cgroups()
 
   # Crash recovery / worktree quarantine / stale-thinking cleanup scans every
   # thread's metadata (O(history)). Run it off the critical path so the server

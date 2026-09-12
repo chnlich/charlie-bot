@@ -300,15 +300,11 @@ def run_variant(
   return outcome, transport
 
 
-def run_record(run_dir: Path) -> dict:
-  return json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
-
-
 def run_variant_expect_failure(tmp_path: Path, variant: str, *, transport, output_dir: Path, match: str) -> dict:
   """A run that must fail visibly; returns the preserved failed record."""
   with pytest.raises(ReplayError, match=match):
     run_variant(tmp_path, variant, transport=transport, output_dir=output_dir)
-  return run_record(next(iter((output_dir / "runs").iterdir())))
+  return base.run_record(next(iter((output_dir / "runs").iterdir())))
 
 
 def payload_of(request_text: str) -> dict:
@@ -556,7 +552,7 @@ def test_editor_scope_contrasts_the_task_framing_of_the_two_editor_units() -> No
 
 def test_selector_proofs_are_recorded_model_output_and_hand_off_to_the_reviewer(tmp_path: Path) -> None:
   outcome, transport = run_variant(tmp_path, "baseline-original-flow")
-  record = run_record(outcome.run_dir)
+  record = base.run_record(outcome.run_dir)
   proofs_rows = [row for row in record["editor_dispositions"] if row.get("proofs")]
   assert proofs_rows and proofs_rows[0]["proofs"] == PROOFS, "the proofs are the model's own rows"
   raw_response = (outcome.run_dir / "raw" / "editor-eviction.attempt-1.response.txt").read_text(encoding="utf-8")
@@ -576,7 +572,7 @@ def test_hidden_rationale_excludes_proofs_from_the_initial_and_repair_requests(t
       reviewer_responses=[NEW_PROSE_RESPONSE, TRIM_ACCEPT_RESPONSE],  # force one bounded reviewer re-ask
   )
   outcome, _ = run_variant(tmp_path, "rationale-hidden-review", transport=transport)
-  record = run_record(outcome.run_dir)
+  record = base.run_record(outcome.run_dir)
   reviewer_calls = [call for call in record["calls"] if call["role"] == "reviewer"]
   assert len(reviewer_calls) == 2, "the mechanically invalid first response was re-asked once"
   for call in reviewer_calls:
@@ -595,7 +591,7 @@ def test_combined_editor_writes_the_shared_proofs_and_hides_them_from_review(tmp
   """The combined arm keeps the editor's proof contract; its review sees none of the rationale."""
   transport = VariantScriptedTransport(editor_response=SELECTOR_EDITOR_RESPONSE, reviewer_response=TRIM_ACCEPT_RESPONSE)
   outcome, transport = run_variant(tmp_path, "combined-proposed-design", transport=transport)
-  record = run_record(outcome.run_dir)
+  record = base.run_record(outcome.run_dir)
   proofs_rows = [row for row in record["editor_dispositions"] if row.get("proofs")]
   assert proofs_rows and proofs_rows[0]["proofs"] == PROOFS, "the combined editor writes the same three proofs"
   raw_response = (outcome.run_dir / "raw" / "editor-eviction.attempt-1.response.txt").read_text(encoding="utf-8")
@@ -978,7 +974,7 @@ def test_approved_change_refs_are_citable_only_where_their_content_was_exposed(t
                             editor_with_refs("approved-001")],
           reviewer_response=TRIM_ACCEPT_RESPONSE),
       output_dir=tmp_path / "out-selected")
-  assert run_record(outcome.run_dir)["status"] == "completed", (
+  assert base.run_record(outcome.run_dir)["status"] == "completed", (
       "the selected structured view exposes the approved change, so it is citable")
 
   record = run_variant_expect_failure(
@@ -1003,7 +999,7 @@ def test_unselected_comment_ids_are_citable_only_in_the_raw_history_view(tmp_pat
           editor_responses=[editor_with_refs("fb-002"), editor_with_refs("fb-002")],
           reviewer_response=TRIM_ACCEPT_RESPONSE),
       output_dir=tmp_path / "out-raw")
-  assert run_record(
+  assert base.run_record(
       outcome.run_dir)["status"] == "completed", ("the raw-history view exposes every pool comment, selected or not")
 
   record = run_variant_expect_failure(
@@ -1035,7 +1031,7 @@ def test_reviewer_citations_follow_the_same_visible_view(tmp_path: Path) -> None
       transport=VariantScriptedTransport(
           editor_response=SELECTOR_EDITOR_RESPONSE, reviewer_response=reviewer_with_refs),
       output_dir=tmp_path / "out-raw")
-  assert run_record(outcome.run_dir)["status"] == "completed"
+  assert base.run_record(outcome.run_dir)["status"] == "completed"
 
   record = run_variant_expect_failure(
       tmp_path,
@@ -1059,7 +1055,7 @@ def test_repair_requests_carry_the_same_feedback_view_as_the_initial_request(
   transport = VariantScriptedTransport(
       editor_responses=[bad, SELECTOR_EDITOR_RESPONSE], reviewer_response=TRIM_ACCEPT_RESPONSE)
   outcome, _ = run_variant(tmp_path, variant, transport=transport, output_dir=tmp_path / f"out-{variant}")
-  record = run_record(outcome.run_dir)
+  record = base.run_record(outcome.run_dir)
   assert record["status"] == "completed"
   editor_stage_calls = [call for call in record["calls"] if call["role"] == "editor"]
   assert len(editor_stage_calls) == 2
@@ -1113,7 +1109,7 @@ def test_standalone_v3_replay_records_no_variant_and_keeps_its_identity(tmp_path
 
   manifest_path = base.write_manifest(tmp_path)
   outcome, _ = base.run_replay_with(tmp_path, [base.MERGE_RESPONSE, base.MERGE_RESPONSE], manifest_path=manifest_path)
-  record = run_record(outcome.run_dir)
+  record = base.run_record(outcome.run_dir)
   assert "variant" not in record, "standalone v3 bundles keep their exact historical shape"
   manifest = base.load_manifest(manifest_path)
   assert record["input_identity"] == input_identity(
@@ -1538,7 +1534,7 @@ def test_comparison_rejects_unknown_drifted_or_misversioned_variants(tmp_path: P
   from src.core.memory_replay.compare import _contract_for
 
   run_dir = completed_variant_run(tmp_path)
-  record = run_record(run_dir)
+  record = base.run_record(run_dir)
   unknown = dict(record)
   unknown["variant"] = dict(record["variant"], name="no-such-variant")
   with pytest.raises(ReplayError, match="does not define"):
@@ -1562,7 +1558,7 @@ def test_legacy_v1_variant_records_are_rejected_under_their_version_and_kept_int
   from src.core.memory_replay.compare import _contract_for
 
   run_dir = completed_variant_run(tmp_path)
-  record = run_record(run_dir)
+  record = base.run_record(run_dir)
   legacy = dict(record)
   legacy["variant"] = {
       "name": record["variant"]["name"],

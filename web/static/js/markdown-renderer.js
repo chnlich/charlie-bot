@@ -690,29 +690,37 @@ function flushDeferredCodeHighlights() {
     else highlightRootRefs.delete(ref);
   }
   for (const [id, rec] of deferredBlocks) {
-    const run = () => (rec.lang
-      ? hljs.highlight(rec.code, { language: rec.lang }).value
-      : hljs.highlightAuto(rec.code).value);
-    const highlighted = cachedHighlight(rec.lang, rec.code, run);
-    const settledBlock = codeBlockHtml(rec.displayLang, rec.isMarkdown, highlighted, null);
-    const cached = proseParseCache.get(rec.text);
-    if (cached !== undefined && cached.includes(rec.plainBlock)) {
-      // The replacer function keeps the highlighted bytes literal: String's
-      // replacement string would read $$/$&/$`/$' patterns out of them.
-      proseParseCache.set(rec.text, cached.replace(rec.plainBlock, () => settledBlock));
+    // The settled bytes build once per record and the retries only re-sweep
+    // for markers: a pass that finds none repeats up to
+    // HIGHLIGHT_FLUSH_MAX_ATTEMPTS times, so re-running the block build and
+    // the memo swap per pass turns every bounded retry into that work again.
+    // The memo swap rides the same first build — plainBlock embeds the
+    // record's unique id, so a later pass can never find it again.
+    if (rec.settledBlock === undefined) {
+      const run = () => (rec.lang
+        ? hljs.highlight(rec.code, { language: rec.lang }).value
+        : hljs.highlightAuto(rec.code).value);
+      rec.highlighted = cachedHighlight(rec.lang, rec.code, run);
+      rec.settledBlock = codeBlockHtml(rec.displayLang, rec.isMarkdown, rec.highlighted, null);
+      const cached = proseParseCache.get(rec.text);
+      if (cached !== undefined && cached.includes(rec.plainBlock)) {
+        // The replacer function keeps the highlighted bytes literal: String's
+        // replacement string would read $$/$&/$`/$' patterns out of them.
+        proseParseCache.set(rec.text, cached.replace(rec.plainBlock, () => rec.settledBlock));
+      }
     }
     const selector = `code[data-hl="${id}"]`;
     let found = false;
     for (const el of document.querySelectorAll(selector)) {
       // Same wrap codeBlockHtml applied to the settled memo bytes: the DOM
       // write and the memo entry stay byte-identical.
-      el.innerHTML = wrapWideChars(highlighted);
+      el.innerHTML = wrapWideChars(rec.highlighted);
       el.removeAttribute('data-hl');
       found = true;
     }
     for (const root of roots) {
       for (const el of root.querySelectorAll(selector)) {
-        el.innerHTML = wrapWideChars(highlighted);
+        el.innerHTML = wrapWideChars(rec.highlighted);
         el.removeAttribute('data-hl');
         found = true;
       }

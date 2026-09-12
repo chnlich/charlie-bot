@@ -23,21 +23,21 @@ from collections.abc import Callable, Iterator
 from src.core import event_types as ET
 from src.core.message_events import normalize_user_message_event
 
-# One message's ``tools`` array rides every render path: each page payload
-# (bootstrap, events, view), each ``stream`` delta snapshot re-serializes the
-# whole buffered draft, so an uncapped tool output turns one big tool_result
-# into megabytes on every delta and every switch back to the session. The cap
-# bounds the rendered text; the persisted event keeps the full content (raw
-# download, fork reference, review scans all read it there).
+# The worker-events projection's output cap (src/api/threads.py): a thread
+# event's tool_result content caps here and the persisted event keeps the full
+# text.
 TOOL_OUTPUT_RENDER_CAP = 20000
 
 # The renderer's preview bound for one tool row (renderToolActivity,
 # web/static/js/chat/rendering.js): an output's first 500 characters render
 # plain and an input feeds only a bounded summary (a Bash command renders 80
 # characters, other named tools 60, file tools their path or pattern), so
-# string tool content over this bound never renders from a wire shape. Both
-# wire shapes (the stream delta, the bootstrap payload) carry the bound; the
-# committed message keeps TOOL_OUTPUT_RENDER_CAP.
+# string tool content over this bound never renders from a wire shape. Every
+# chat wire shape carries the bound — the stream delta, the committed message
+# behind the events pages, and the bootstrap payload — because the trim lands
+# at ingestion (tool_preview on every buffered row); the persisted event keeps
+# the full content (raw download, fork reference, review scans all read it
+# there).
 TOOL_PREVIEW_CHARS = 500
 
 
@@ -359,8 +359,10 @@ class MessageAggregator:
     Feeding the clone continues from the same position without mutating the
     original; the message projection uses that to evaluate its still-open
     interval region speculatively while the fed aggregator stays clean for
-    the next ingest. ``_tools_buf`` dicts are copied because USER events
-    carrying tool_result blocks mutate them in place.
+    the next ingest. Tool rows are replaced, never mutated, after ingestion
+    (``_buffer_tool``/``_attach_tool_output`` rebind the slot), so the clone
+    shares them; only the list itself is copied, keeping the clone's appends
+    and rebinds local.
     """
     copied = MessageAggregator(self._idx_offset, emit_stream_deltas=self.emit_stream_deltas)
     copied._processed = self._processed
@@ -369,7 +371,7 @@ class MessageAggregator:
     copied._last_assistant_ts = self._last_assistant_ts
     copied._last_event_idx = self._last_event_idx
     copied._last_event_id = self._last_event_id
-    copied._tools_buf = [dict(t) for t in self._tools_buf]
+    copied._tools_buf = list(self._tools_buf)
     return copied
 
   def flush_pending(self) -> Iterator[dict]:
@@ -415,27 +417,21 @@ class MessageAggregator:
 
   def _buffer_tool(self, name: object, tool_input: object) -> None:
     """Open one buffered tool slot; its output arrives later via _attach_tool_output."""
-    self._tools_buf.append({
-        'name': name,
-        'input': tool_input,
-        'output': '',
-        'is_error': False,
-    })
+    row = {"name": name, "input": tool_input, "output": "", "is_error": False}
+    self._tools_buf.append(tool_preview(row))
 
   def _attach_tool_output(self, output: object, is_error: object) -> None:
     """Store one tool_result's renderable output on the newest buffered tool.
 
-    The output rides every render path (each stream delta snapshot
-    re-serializes the whole buffered draft), so a string over
-    TOOL_OUTPUT_RENDER_CAP is capped and marked ``output_truncated``; the
-    persisted event keeps the full content. Non-string output (a tool_result
-    whose content is not text) is stored as-is.
+    The row rides every render path (each page payload re-serializes the whole
+    buffered draft), so ``tool_preview`` bounds it at ingestion: a string
+    output or input value over TOOL_PREVIEW_CHARS trims to the cap with its
+    truncation marker, and the persisted event keeps the full content.
+    Non-string output (a tool_result whose content is not text) is stored
+    as-is.
     """
-    tail = self._tools_buf[-1]
-    tail["output"] = output[:TOOL_OUTPUT_RENDER_CAP] if isinstance(output, str) else output
-    if isinstance(output, str) and len(output) > TOOL_OUTPUT_RENDER_CAP:
-      tail["output_truncated"] = True
-    tail["is_error"] = bool(is_error)
+    row = {**self._tools_buf[-1], "output": output, "is_error": bool(is_error)}
+    self._tools_buf[-1] = tool_preview(row)
 
   def _stream_delta(self) -> dict | None:
     if not self.emit_stream_deltas:

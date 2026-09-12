@@ -9,6 +9,7 @@ from src.core.models import (
     MODEL_OPTIONAL_ROUTING_BACKEND_TYPES,
     BackendBase,
     BackendType,
+    CharlieCodeBackend,
 )
 
 # Field names the flat BackendOption carried that exist on no typed class; extra='forbid'
@@ -66,3 +67,12 @@ def test_model_optional_only_for_routing_types(cls: type[BackendBase]) -> None:
   else:
     with pytest.raises(ValidationError):
       BACKEND_OPTION_ADAPTER.validate_python(payload)
+
+
+def test_charlie_code_image_input_accepted_and_defaults_false() -> None:
+  """image_input is a charlie-code-only option: accepted on its entries, defaulting to false."""
+  payload = minimal_payload(CharlieCodeBackend)
+  assert BACKEND_OPTION_ADAPTER.validate_python(payload).image_input is False
+  accepted = BACKEND_OPTION_ADAPTER.validate_python({**payload, "image_input": True})
+  assert accepted.image_input is True
+  assert type(accepted) is CharlieCodeBackend

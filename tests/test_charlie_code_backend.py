@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
@@ -434,9 +435,11 @@ def test_prepare_env_without_api_key_leaves_env_untouched(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("field", "value", "attr"), [
-    ("context_window", 262144, "_context_window"),
-])
+@pytest.mark.parametrize(
+    ("field", "value", "attr"), [
+        ("context_window", 262144, "_context_window"),
+        ("image_input", True, "_image_input"),
+    ])
 def test_registry_propagates_option_fields_into_charlie_code_backend(
     monkeypatch, field: str, value: object, attr: str) -> None:
   monkeypatch.setattr(
@@ -488,3 +491,133 @@ def test_api_base_required(monkeypatch) -> None:
 
   with pytest.raises(ValueError, match="api_base"):
     CharlieCodeBackend(model="charlie-code-test-model")
+
+
+# ---------------------------------------------------------------------------
+# Image attachments: refusal without image_input, --image command assembly.
+# ---------------------------------------------------------------------------
+
+
+async def _drive_run_halted_at_spawn_with_attachments(
+    backend: CharlieCodeBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    uploaded_files: list[dict] | None = None,
+) -> tuple[list[dict], object]:
+  """Drive backend.run() with the conftest stub spawn; return (events, spawn mock).
+
+  on_spawn raises the file's _HaltAtSpawn sentinel so the run halts right after
+  the (stubbed) spawn — the spawn call's argv is the contract surface.
+  """
+  monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: ("image-test-start", "R"))
+  process = MagicMock()
+  process.pid = 4242
+  # A locally built AsyncMock (per the conftest stub's own docstring) so the test holds
+  # the call reference `await_args` reads.
+  spawn = AsyncMock(return_value=process)
+  monkeypatch.setattr(BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, spawn)
+
+  async def on_spawn(pid: int) -> None:
+    raise _HaltAtSpawn
+
+  backend._on_spawn = on_spawn
+  events: list[dict] = []
+  with pytest.raises(_HaltAtSpawn):
+    async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}, uploaded_files=uploaded_files):
+      events.append(event)
+  return events, spawn
+
+
+@pytest.mark.asyncio
+async def test_run_refuses_images_without_image_input(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """image_input unset + an image ref: exactly one error event, no spawn, no result."""
+  backend = _build_backend(monkeypatch, log_dir=tmp_path / "logs")
+  monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: ("refusal-test-start", "R"))
+  process = MagicMock()
+  process.pid = 4242
+  # A locally built AsyncMock (per the conftest stub's own docstring) so the test holds
+  # the call reference `await_args` reads.
+  spawn = AsyncMock(return_value=process)
+  monkeypatch.setattr(BASE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, spawn)
+
+  events = [
+      event async for event in backend.run(
+          "what is this error",
+          str(tmp_path), {"PATH": "/usr/bin:/bin"},
+          uploaded_files=[{
+              "filename": "error-shot.png",
+              "path": str(tmp_path / "error-shot.png"),
+          }])
+  ]
+
+  expected = (
+      "refused: image attachments not sent — this endpoint declares no image input "
+      "(image_input not set): error-shot.png")
+  assert events == [{"type": ET.ERROR, "message": expected, "content": expected}]
+  # Nothing is sent: no subprocess spawn and no result event.
+  assert spawn.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_run_with_image_input_sends_images_in_reference_order_before_task_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch, image_input=True, log_dir=tmp_path / "logs")
+  _events, spawn = await _drive_run_halted_at_spawn_with_attachments(
+      backend,
+      monkeypatch,
+      tmp_path,
+      uploaded_files=[
+          {
+              "filename": "a.png",
+              "path": str(tmp_path / "a.png")
+          },
+          {
+              "filename": "b.png",
+              "path": str(tmp_path / "b.png")
+          },
+      ],
+  )
+
+  cmd = list(spawn.await_args.args)
+  first = cmd.index("--image")
+  assert cmd[first:first + 4] == ["--image", str(tmp_path / "a.png"), "--image", str(tmp_path / "b.png")]
+  assert cmd.count("--image") == 2
+  assert first < cmd.index("--task-file")
+
+
+@pytest.mark.asyncio
+async def test_run_with_image_input_and_only_non_image_refs_produces_no_image_flags(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  backend = _build_backend(monkeypatch, image_input=True, log_dir=tmp_path / "logs")
+  _events, spawn = await _drive_run_halted_at_spawn_with_attachments(
+      backend,
+      monkeypatch,
+      tmp_path,
+      uploaded_files=[{
+          "filename": "notes.txt",
+          "path": str(tmp_path / "notes.txt")
+      }],
+  )
+
+  cmd = list(spawn.await_args.args)
+  assert "--image" not in cmd
+  assert cmd[-2:] == ["--task-file", str(tmp_path / "logs" / "task.md")]
+
+
+@pytest.mark.asyncio
+async def test_run_without_attachments_keeps_command_byte_identical(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """Zero image refs: the argv is exactly the pre-image-flags command."""
+  backend = _build_backend(monkeypatch, image_input=True, log_dir=tmp_path / "logs")
+  _events, spawn = await _drive_run_halted_at_spawn_with_attachments(backend, monkeypatch, tmp_path)
+
+  assert spawn.await_args.args == (
+      "/usr/bin/charlie-code",
+      "--json",
+      "--model",
+      "charlie-code-test-model",
+      "--api-base",
+      "http://test.invalid/v1",
+      "--task-file",
+      str(tmp_path / "logs" / "task.md"),
+  )

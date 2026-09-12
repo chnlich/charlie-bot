@@ -75,7 +75,7 @@ from src.core.memory_replay.exchange import (
 )
 from src.core.memory_replay.identity import approval_digest, canonical_bytes, input_identity, sha256_hex
 from src.core.memory_replay.manifest import Manifest, load_manifest
-from src.core.memory_replay.report import _e, _page, _row
+from src.core.memory_replay.report import _dispositions_table, _e, _page, _row
 from src.core.memory_replay.retrieval import FeedbackSelection
 from src.core.memory_replay.runner import (
     MAX_STAGE_RESPONSES,
@@ -1421,10 +1421,7 @@ def _arm_section(title: str, arm: dict) -> str:
     parts.append(
         f"<details><summary>theme {_e(theme)} &mdash; changed: "
         f"{_e(', '.join(section['changed_paths'])) or 'none'}</summary>")
-    parts.append(
-        "<table><tr><th>source_ref</th><th>outcome</th><th>paths</th><th>reason</th></tr>" + "".join(
-            _row(_e(row["source_ref"]), _e(row["outcome"]), _e(", ".join(row["paths"])), _e(row["reason"]))
-            for row in section["dispositions"]) + "</table>")
+    parts.append(_dispositions_table(section["dispositions"]))
     for path in section["changed_paths"]:
       parts.append(f"<p class='mono'>{_e(path)}</p><pre>{_e(section['diffs'][path])}</pre>")
       for entry in section["entries"]:

@@ -113,10 +113,7 @@ def render_report(data: ReportData) -> str:
           f'<div class="needs"><strong>{_e(row["source_ref"])}</strong> — {_e(row["reason"])} '
           f'<span class="muted">(paths: {_e(", ".join(row["paths"])) or "none"})</span></div>')
   parts.append("<h2>Final dispositions</h2>")
-  parts.append(
-      "<table><tr><th>source_ref</th><th>outcome</th><th>paths</th><th>reason</th></tr>" + "".join(
-          _row(_e(row["source_ref"]), _e(row["outcome"]), _e(", ".join(row["paths"])), _e(row["reason"]))
-          for row in data.candidate_results) + "</table>")
+  parts.append(_dispositions_table(data.candidate_results))
   parts.append("<h2>Changed paths &rarr; evidence</h2>")
   if data.changed_mapping:
     parts.append(
@@ -310,3 +307,11 @@ def _row(*cells: object) -> str:
   knows whether the value is trusted, so a spanning cell keeps its own markup.
   """
   return "<tr>" + "".join(f"<td>{cell}</td>" for cell in cells) + "</tr>"
+
+
+def _dispositions_table(rows: list[dict]) -> str:
+  """One dispositions table: a (source_ref, outcome, paths, reason) dict per row."""
+  return (
+      "<table><tr><th>source_ref</th><th>outcome</th><th>paths</th><th>reason</th></tr>" + "".join(
+          _row(_e(row["source_ref"]), _e(row["outcome"]), _e(", ".join(row["paths"])), _e(row["reason"]))
+          for row in rows) + "</table>")

@@ -34,13 +34,14 @@ behavior this module has always had; the experimental variants
 
 import json
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
 
-from src.core.config import CharlieBotConfig, get_config, require_backend_option
+from src.core.config import BackendOption, CharlieBotConfig, get_config, require_backend_option
 from src.core.constants import REPLAY_MODES as MODES
 from src.core.memory_replay import validate
 from src.core.memory_replay.errors import (
@@ -109,7 +110,15 @@ def standalone_v3_contract() -> ExperimentContract:
   existed.
   """
 
-  def v3_errors(output, *, role, manifest, theme, selections, editor_output):
+  def v3_errors(
+      output: ThemeOutput,
+      *,
+      role: str,
+      manifest: Manifest,
+      theme: Theme,
+      selections: list[FeedbackSelection],
+      editor_output: ThemeOutput | None,
+  ) -> list[str]:
     del selections, editor_output
     return theme_output_errors(output, role=role, manifest=manifest, theme=theme, allow_no_write_citations=True)
 
@@ -191,7 +200,7 @@ def run_replay(
     options: ReplayOptions,
     *,
     cfg: CharlieBotConfig | None = None,
-    transport_factory=None,
+    transport_factory: Callable[[], ReplayTransport] | None = None,
     now: datetime | None = None,
     contract: ExperimentContract | None = None,
 ) -> ReplayOutcome:
@@ -369,7 +378,7 @@ def _stage_output_validator(
     theme: Theme,
     selections: list[FeedbackSelection],
     editor_output: ThemeOutput | None = None,
-):
+) -> Callable[[str], tuple[ThemeOutput | None, list[str]]]:
   """The mechanical gate of one stage's responses: the contract's parser, then its validator.
 
   The same gate runs on the initial attempt and on every repair attempt, and the comparison
@@ -426,8 +435,8 @@ def _run_stage(
     role: str,
     theme: Theme,
     system: str,
-    build_request,
-    validate,
+    build_request: Callable[[], str],
+    validate: Callable[[str], tuple[ThemeOutput | None, list[str]]],
     run_dir: Path,
     record: dict,
 ) -> ThemeOutput:
@@ -704,14 +713,17 @@ def _require_disjoint_output_root(
           "output root")
 
 
-def _resolve_backend(cfg: CharlieBotConfig, backend_id: str):
+def _resolve_backend(cfg: CharlieBotConfig, backend_id: str) -> BackendOption:
   try:
     return require_backend_option(cfg, backend_id, subject="replay ")
   except ValueError as e:
     raise ReplayBackendError(str(e)) from e
 
 
-def _build_transport(transport_factory, option):
+def _build_transport(
+    transport_factory: Callable[[], ReplayTransport] | None,
+    option: BackendOption,
+) -> ReplayTransport:
   if transport_factory is not None:
     return transport_factory()
   return OpenAICompatibleTransport.from_config(option)

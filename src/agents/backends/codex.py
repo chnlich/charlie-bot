@@ -37,7 +37,7 @@ class CodexBackend(AgentBackend):
       model: str,
       model_reasoning_effort: str | None = None,
       model_auto_compact_token_limit: int | None = None,
-      **kwargs) -> None:
+      **kwargs: object) -> None:
     if not model:
       raise ValueError("codex backend requires a model (set model on its backends.options entry in config.yaml)")
     super().__init__(model=model, **kwargs)

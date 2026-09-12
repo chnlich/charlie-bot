@@ -21,8 +21,8 @@ from pathlib import Path
 
 from src.core import memory
 from src.core.memory_replay.errors import ReplayValidationError
-from src.core.memory_replay.exchange import ThemeOutput
-from src.core.memory_replay.manifest import ENTRY_PATH_RE, Manifest, Theme
+from src.core.memory_replay.exchange import EntryOp, ThemeOutput
+from src.core.memory_replay.manifest import ENTRY_PATH_RE, Manifest, Source, Theme
 
 ACTIONS = ("new", "rewrite", "delete", "keep")
 OUTCOMES = ("propose", "no_change", "needs_decision")
@@ -150,7 +150,9 @@ def _available_ref_ids(manifest: Manifest) -> set[str]:
   return ids | {s.ref for s in manifest.sources}
 
 
-def _entry_text_errors(op, *, role: str, manifest: Manifest, existing, available_refs: set[str] | None) -> list[str]:
+def _entry_text_errors(
+    op: EntryOp, *, role: str, manifest: Manifest, existing: Source | None,
+    available_refs: set[str] | None) -> list[str]:
   errors: list[str] = []
   if not op.text or not op.text.strip():
     errors.append(f"{role}: {op.action} on {op.path} needs the complete entry text")

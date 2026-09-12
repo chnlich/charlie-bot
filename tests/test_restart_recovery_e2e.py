@@ -56,6 +56,7 @@ from src.core import event_types as ET
 from src.core import init as init_module
 from src.core import runs
 from src.core import spawner as spawner_module
+from src.core.finalize_effects import master_woke_after_summary
 from src.core.git import git_create_worktree, git_worktree_dir_name
 from src.core.models import (
     CreateSessionRequest,
@@ -371,13 +372,21 @@ async def _settle_finalize_window(home: Path, session_id: str, original_id: str)
   once) spawned reviewer thread's own completion. The reviewer's own spawn_worker
   task is unnamed (dispatched from spawn_review_worker), so _await_recovery_tasks()
   alone cannot see it — only the disk state can.
+
+  Terminal status lands before the finalize chain's master wake: a round that
+  returns between the two lets the next round's wake judgment read pre-ack
+  state and fire a second wake. Wait until every terminal reviewer's wake is
+  visible to the same judgment the next round runs — the pure scan over the
+  events file, which is also what a fresh recovery pass's cold cache loads.
   """
   await _await_recovery_tasks()
   deadline = time.monotonic() + 20.0
   while time.monotonic() < deadline:
     reviewers = [m for m in _thread_metas(home, session_id) if m.get("review_of") == original_id]
     if reviewers and all(m.get("status") in ("completed", "failed", "cancelled") for m in reviewers):
-      return
+      chat_events = read_chat_events(home, session_id)
+      if all(master_woke_after_summary(chat_events, m["id"]) for m in reviewers):
+        return
     await asyncio.sleep(0.05)
   raise TimeoutError("reviewer thread never settled")
 

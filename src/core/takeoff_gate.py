@@ -145,8 +145,10 @@ def _settled_user_answers(
         pre_takeoff_at = suffix_pre_takeoff_at
       _gate_answers_memo.store(session_id, (events, covered + len(suffix), has_takeoff, pre_takeoff_at))
     return has_takeoff, pre_takeoff_at
-  has_takeoff, pre_takeoff_at, _ = _backward_user_answers(events, session_id)
-  _gate_answers_memo.store(session_id, (events, len(events), has_takeoff, pre_takeoff_at))
+  count = len(events)
+  span = events[:count]  # the walked span is the claimed span: an append landing mid-walk is not claimed unseen
+  has_takeoff, pre_takeoff_at, _ = _backward_user_answers(span, session_id)
+  _gate_answers_memo.store(session_id, (events, count, has_takeoff, pre_takeoff_at))
   return has_takeoff, pre_takeoff_at
 
 

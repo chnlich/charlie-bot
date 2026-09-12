@@ -572,6 +572,33 @@ def test_takeoff_gate_memo_empty_history_blocks_and_stays_blocked_on_append() ->
   assert _gate_verdict(mgr, issued_at)
 
 
+def test_takeoff_gate_memo_cold_walk_claims_only_the_walked_span(monkeypatch: pytest.MonkeyPatch) -> None:
+  """An append landing while the cold walk runs must not be claimed unseen:
+  the store claims the pre-walk length, so the next call re-scans the
+  appended message and its take-off phrase lands — the streamed-turn race
+  (the gate walks on an executor thread while save_chat_event appends on the
+  event loop), the store contract the usage-fold memo pins."""
+  from src.core import takeoff_gate
+
+  mgr = FakeSessionManager([user_event("please proceed") for _ in range(50)])
+  real = takeoff_gate._is_real_user_message
+  seen = {"n": 0}
+
+  def spy(event: dict[str, Any]) -> bool:
+    result = real(event)
+    seen["n"] += 1
+    if seen["n"] == 10:
+      mgr.events.append(user_event("take off"))
+    return result
+
+  monkeypatch.setattr(takeoff_gate, "_is_real_user_message", spy)
+  with pytest.raises(DelegationBlockedError):
+    check_takeoff_gate("session-id", mgr)
+  assert seen["n"] >= 10
+  monkeypatch.setattr(takeoff_gate, "_is_real_user_message", real)
+  check_takeoff_gate("session-id", mgr)
+
+
 @pytest.mark.asyncio
 async def test_delegate_task_returns_403_when_takeoff_gate_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
   req = _build_request()

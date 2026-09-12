@@ -398,3 +398,13 @@ Known-alive symbols:
   them by attribute read when a backend feeds a prompt over stdin, so nothing in the repo
   reads the names statically. Vulture flags each write as an unused attribute. Same
   dynamic-read class as the `speedup` stub entry above.
+- `search_sessions` (the `SessionManager` method in `src/core/sessions.py`) — deliberately
+  retained two-tier search API, not an orphan. The `/api/sessions/search` route serves
+  `search_sessions_readonly` (the cap before per-row work, shared cache references), so the
+  wrapper's owned-copy + sidebar-state-fold form has zero production callers since that
+  switch — but the same change added a cross-check test pinning that the wrapper serves the
+  same rows, and the search-content, master-cc-consumer, pending-trigger-state, and
+  archived-pagination tests plus `docs/perf_baseline.md`'s search benchmark drive the
+  wrapper as the semantics reference. A src-only vulture scan flags it as an unused method;
+  a whole-repo grep finds only those tests, one docstring cross-reference, the same-named
+  route handler in `src/api/sessions.py`, and the perf doc.

@@ -129,16 +129,17 @@ Decide:
 
 
 def _system(role_intro: str, decisions: str) -> str:
-  return "\n\n".join([
-      role_intro,
-      _REQUEST_STRUCTURE,
-      decisions,
-      _OPERATIONS,
-      _DISPOSITIONS,
-      _CITATIONS,
-      _CONSTRAINTS,
-      f"JSON shape:\n{_RESPONSE_SHAPE}",
-  ]) + "\n"
+  return "\n\n".join(
+      [
+          role_intro,
+          _REQUEST_STRUCTURE,
+          decisions,
+          _OPERATIONS,
+          _DISPOSITIONS,
+          _CITATIONS,
+          _CONSTRAINTS,
+          f"JSON shape:\n{_RESPONSE_SHAPE}",
+      ]) + "\n"
 
 
 EDITOR_SYSTEM = _system(
@@ -284,20 +285,19 @@ def _evidence_payload(manifest: Manifest, theme: Theme, selections: list[Feedbac
                   } if s.remember_request else {}),
               } for s in manifest.theme_sources(theme, "candidate")
           ],
-      "disposition_refs":
-          {
-              "candidates": sorted(theme.candidate_refs),
-              "entries": sorted(theme.entry_refs),
-          },
-      "documents": [{"ref": s.ref, "text": s.text} for s in manifest.theme_sources(theme, "document")],
-      "entries":
-          [
-              {
-                  "path": s.path,
-                  "ref": s.ref,
-                  "text": s.text,
-              } for s in manifest.theme_sources(theme, "entry")
-          ],
+      "disposition_refs": {
+          "candidates": sorted(theme.candidate_refs),
+          "entries": sorted(theme.entry_refs),
+      },
+      "documents": [{
+          "ref": s.ref,
+          "text": s.text
+      } for s in manifest.theme_sources(theme, "document")],
+      "entries": [{
+          "path": s.path,
+          "ref": s.ref,
+          "text": s.text,
+      } for s in manifest.theme_sources(theme, "entry")],
       "feedback":
           [
               {
@@ -307,13 +307,20 @@ def _evidence_payload(manifest: Manifest, theme: Theme, selections: list[Feedbac
                           "approved_change_ref": s.example.approved_change.approved_change_ref,
                           "before": s.example.approved_change.before,
                       },
-                  "comment_event": s.example.comment_event,
-                  "comment_text": s.example.comment_text,
-                  "matched_principles": list(s.matched_principles),
-                  "score": s.score,
+                  "comment_event":
+                      s.example.comment_event,
+                  "comment_text":
+                      s.example.comment_text,
+                  "matched_principles":
+                      list(s.matched_principles),
+                  "score":
+                      s.score,
               } for s in selections
           ],
-      "guidelines": [{"ref": s.ref, "text": s.text} for s in manifest.guidelines()],
+      "guidelines": [{
+          "ref": s.ref,
+          "text": s.text
+      } for s in manifest.guidelines()],
   }
 
 

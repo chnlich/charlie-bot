@@ -53,14 +53,12 @@ mechanical execution and format success only.
 """
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 import structlog
-
-from collections.abc import Callable
-from dataclasses import dataclass
 
 from src.core.config import CharlieBotConfig, get_config
 from src.core.memory_replay import errors, exchange_v2
@@ -80,7 +78,13 @@ from src.core.memory_replay.manifest import Manifest, load_manifest
 from src.core.memory_replay.report import _e, _page
 from src.core.memory_replay.retrieval import FeedbackSelection
 from src.core.memory_replay.runner import MAX_STAGE_RESPONSES, PROPOSAL_SCHEMA, _aggregate_candidate_results, _timestamp
-from src.core.memory_replay.validate import build_patch, canonical_text, finalize, validate_theme_output, validate_theme_output_v2
+from src.core.memory_replay.validate import (
+    build_patch,
+    canonical_text,
+    finalize,
+    validate_theme_output,
+    validate_theme_output_v2,
+)
 
 log = structlog.get_logger()
 
@@ -134,8 +138,7 @@ def _contract_for(record: dict) -> ExchangeContract:
         build_reviewer_request=build_reviewer_request,
         validate_output=validate_theme_output,
         bounded_recovery=True)
-  if (editor_version == exchange_v2.EDITOR_PROMPT_VERSION
-      and reviewer_version == exchange_v2.REVIEWER_PROMPT_VERSION):
+  if (editor_version == exchange_v2.EDITOR_PROMPT_VERSION and reviewer_version == exchange_v2.REVIEWER_PROMPT_VERSION):
     return ExchangeContract(
         name="v2",
         editor_system=exchange_v2.EDITOR_SYSTEM,
@@ -220,16 +223,29 @@ def _run_comparison(options: CompareOptions, *, cfg: CharlieBotConfig, now: date
   reviewer_stage = _read_stage_attempts(run_dir, manifest, record, "reviewer", contract)
 
   run_error = record.get("error")
-  editor_outputs, editor_parse_errors = _parse_chosen_outputs(manifest, editor_stage, role="editor", run_error=run_error)
+  editor_outputs, editor_parse_errors = _parse_chosen_outputs(
+      manifest, editor_stage, role="editor", run_error=run_error)
   reviewer_outputs, reviewer_parse_errors = _parse_chosen_outputs(
       manifest, reviewer_stage, role="reviewer", run_error=run_error)
 
   _verify_stage_chain(
-      contract=contract, record=record, manifest=manifest, selections=selections, role="editor",
-      stage_attempts=editor_stage, chosen_outputs=editor_outputs, verification=verification)
+      contract=contract,
+      record=record,
+      manifest=manifest,
+      selections=selections,
+      role="editor",
+      stage_attempts=editor_stage,
+      chosen_outputs=editor_outputs,
+      verification=verification)
   _verify_stage_chain(
-      contract=contract, record=record, manifest=manifest, selections=selections, role="reviewer",
-      stage_attempts=reviewer_stage, chosen_outputs=editor_outputs, verification=verification)
+      contract=contract,
+      record=record,
+      manifest=manifest,
+      selections=selections,
+      role="reviewer",
+      stage_attempts=reviewer_stage,
+      chosen_outputs=editor_outputs,
+      verification=verification)
 
   _fill_provenance(provenance, manifest, editor_stage, reviewer_stage)
 
@@ -512,7 +528,11 @@ def _read_recorded_raw(run_dir: Path, rel: str, kind: str) -> str:
 
 
 def _read_stage_attempts(
-    run_dir: Path, manifest: Manifest, record: dict, stage: str, contract: ExchangeContract,
+    run_dir: Path,
+    manifest: Manifest,
+    record: dict,
+    stage: str,
+    contract: ExchangeContract,
 ) -> dict[str, list[StageAttempt]]:
   """The recorded attempt chain of one stage, per theme, requests and responses included.
 
@@ -525,9 +545,7 @@ def _read_stage_attempts(
   return _read_single_raw(run_dir, manifest, record, stage)
 
 
-def _read_single_raw(
-    run_dir: Path, manifest: Manifest, record: dict, stage: str
-) -> dict[str, list[StageAttempt]]:
+def _read_single_raw(run_dir: Path, manifest: Manifest, record: dict, stage: str) -> dict[str, list[StageAttempt]]:
   """The v2 layout: one fixed-name request/response pair per stage and theme, no attempt metadata."""
   attempts: dict[str, list[StageAttempt]] = {theme.name: [] for theme in manifest.themes}
   for theme in manifest.themes:
@@ -540,9 +558,8 @@ def _read_single_raw(
           "request; the bundle changed after the run")
     if response is not None:
       attempts[name] = [
-          StageAttempt(attempt=1, request=request, response=response, chosen=True, validation={
-              "status": "not-recorded"
-          })
+          StageAttempt(
+              attempt=1, request=request, response=response, chosen=True, validation={"status": "not-recorded"})
       ]
       continue
     if record["status"] == "completed":
@@ -550,16 +567,12 @@ def _read_single_raw(
           f"the completed run at {run_dir} is incomplete: no recorded {stage} response for theme {name!r}")
     if request is not None:
       attempts[name] = [
-          StageAttempt(attempt=1, request=request, response=None, chosen=False, validation={
-              "status": "not-recorded"
-          })
+          StageAttempt(attempt=1, request=request, response=None, chosen=False, validation={"status": "not-recorded"})
       ]
   return attempts
 
 
-def _read_attempt_chain(
-    run_dir: Path, manifest: Manifest, record: dict, stage: str
-) -> dict[str, list[StageAttempt]]:
+def _read_attempt_chain(run_dir: Path, manifest: Manifest, record: dict, stage: str) -> dict[str, list[StageAttempt]]:
   """The v3 layout: the run record's calls, grouped per theme into ordered attempt chains."""
   attempts: dict[str, list[StageAttempt]] = {theme.name: [] for theme in manifest.themes}
   for call in record.get("calls", []):
@@ -683,22 +696,19 @@ def _raise_request_mismatch(role: str, name: str, attempt: int) -> None:
 
 def _verify_chain_structure(
     contract: ExchangeContract, record_status: str | None, role: str, manifest: Manifest, theme,
-    attempts: list[StageAttempt]
-) -> None:
+    attempts: list[StageAttempt]) -> None:
   """The chain must be a bounded recovery chain: consecutive, at most two, failures recorded."""
   name = theme.name
   numbers = [a.attempt for a in attempts]
   if numbers != list(range(1, len(numbers) + 1)):
-    raise errors.ReplayError(
-        f"the recorded {role} attempts for theme {name!r} are not a consecutive chain: {numbers}")
+    raise errors.ReplayError(f"the recorded {role} attempts for theme {name!r} are not a consecutive chain: {numbers}")
   if len(attempts) > MAX_STAGE_RESPONSES:
     raise errors.ReplayError(
         f"the recorded {role} attempts for theme {name!r} exceed the bounded recovery budget "
         f"({len(attempts)} responses > {MAX_STAGE_RESPONSES})")
   chosen = [a for a in attempts if a.chosen]
   if len(chosen) > 1:
-    raise errors.ReplayError(
-        f"the recorded {role} attempts for theme {name!r} mark {len(chosen)} responses as chosen")
+    raise errors.ReplayError(f"the recorded {role} attempts for theme {name!r} mark {len(chosen)} responses as chosen")
   if chosen and chosen[0].attempt != attempts[-1].attempt:
     raise errors.ReplayError(
         f"the chosen {role} response for theme {name!r} is not the last recorded attempt; the attempt "
@@ -706,8 +716,7 @@ def _verify_chain_structure(
   for a in attempts:
     if a.chosen:
       if a.validation.get("status") != "passed":
-        raise errors.ReplayError(
-            f"the chosen {role} attempt {a.attempt} for theme {name!r} is not recorded as passed")
+        raise errors.ReplayError(f"the chosen {role} attempt {a.attempt} for theme {name!r} is not recorded as passed")
       continue
     status = a.validation.get("status")
     if status == "transport-failed":
@@ -720,10 +729,9 @@ def _verify_chain_structure(
         raise errors.ReplayError(
             f"the failed {role} attempt {a.attempt} for theme {name!r} records no validation errors")
       if a.response is None:
-        raise errors.ReplayError(
-            f"the failed {role} attempt {a.attempt} for theme {name!r} has no recorded response")
-      if _mechanical_error(
-          a.response, role=f"{role}[{name}]", contract=contract, manifest=manifest, theme=theme) is None:
+        raise errors.ReplayError(f"the failed {role} attempt {a.attempt} for theme {name!r} has no recorded response")
+      if _mechanical_error(a.response, role=f"{role}[{name}]", contract=contract, manifest=manifest,
+                           theme=theme) is None:
         raise errors.ReplayError(
             f"the {role} attempt {a.attempt} for theme {name!r} is recorded as failed but its response "
             "passes mechanical validation; the attempt chain is inconsistent")
@@ -995,14 +1003,10 @@ def _fill_provenance(
     editor_chosen = _chosen_attempt(editor_stage.get(name, []))
     reviewer_chosen = _chosen_attempt(reviewer_stage.get(name, []))
     shared["themes"][name] = {
-        "editor_request_sha256":
-            sha256_hex(editor_chosen.request.encode("utf-8")) if editor_chosen else None,
-        "editor_response_sha256":
-            sha256_hex(editor_chosen.response.encode("utf-8")) if editor_chosen else None,
-        "reviewer_request_sha256":
-            sha256_hex(reviewer_chosen.request.encode("utf-8")) if reviewer_chosen else None,
-        "reviewer_response_sha256":
-            sha256_hex(reviewer_chosen.response.encode("utf-8")) if reviewer_chosen else None,
+        "editor_request_sha256": sha256_hex(editor_chosen.request.encode("utf-8")) if editor_chosen else None,
+        "editor_response_sha256": sha256_hex(editor_chosen.response.encode("utf-8")) if editor_chosen else None,
+        "reviewer_request_sha256": sha256_hex(reviewer_chosen.request.encode("utf-8")) if reviewer_chosen else None,
+        "reviewer_response_sha256": sha256_hex(reviewer_chosen.response.encode("utf-8")) if reviewer_chosen else None,
         "attempts":
             {
                 "editor": _attempt_provenance(editor_stage.get(name, [])),
@@ -1030,8 +1034,8 @@ def _source_run_section(run_dir: Path, record: dict, manifest: Manifest, contrac
 
 
 def _recovery_section(
-    manifest: Manifest, editor_stage: dict[str, list[StageAttempt]],
-    reviewer_stage: dict[str, list[StageAttempt]]) -> dict:
+    manifest: Manifest, editor_stage: dict[str, list[StageAttempt]], reviewer_stage: dict[str,
+                                                                                          list[StageAttempt]]) -> dict:
   """What the bounded recovery did on this run, and what a recovery must not be read as."""
   recovered = []
   for stage_name, stage in (("editor", editor_stage), ("reviewer", reviewer_stage)):
@@ -1114,8 +1118,9 @@ def _usage(record: dict) -> dict:
               "calls": len(reviewer_rows),
               "output_tokens": total(reviewer_rows, "output_tokens"),
               "latency_ms": total(reviewer_rows, "latency_ms"),
-              "note": "the review calls only, failed recovery attempts included; the editor calls are "
-                      "the shared base cost of both arms",
+              "note":
+                  "the review calls only, failed recovery attempts included; the editor calls are "
+                  "the shared base cost of both arms",
           },
   }
 
@@ -1212,8 +1217,8 @@ def _recovery_section_html(recovery: dict) -> str:
   ]
   if recovery["themes_with_multiple_attempts"]:
     parts.append(
-        "<p>themes with a recovered response: <code>" +
-        _e(", ".join(recovery["themes_with_multiple_attempts"])) + "</code></p>")
+        "<p>themes with a recovered response: <code>" + _e(", ".join(recovery["themes_with_multiple_attempts"])) +
+        "</code></p>")
   else:
     parts.append('<p class="muted">no stage needed a re-ask on this run.</p>')
   return "".join(parts)
@@ -1251,8 +1256,10 @@ def _denominators_section(denominators: dict) -> str:
 
 
 def _usage_section(usage: dict) -> str:
-  parts = ["<table><tr><th>call</th><th>role</th><th>theme</th><th>attempt</th><th>outcome</th>"
-           "<th>latency ms</th><th>output tokens</th></tr>"]
+  parts = [
+      "<table><tr><th>call</th><th>role</th><th>theme</th><th>attempt</th><th>outcome</th>"
+      "<th>latency ms</th><th>output tokens</th></tr>"
+  ]
   for call in usage["editor"]["per_call"] + usage["reviewer"]["per_call"]:
     parts.append(
         "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(

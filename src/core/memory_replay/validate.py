@@ -35,8 +35,7 @@ def canonical_text(text: str) -> str:
 
 
 def theme_output_errors(
-    output: ThemeOutput, *, role: str, manifest: Manifest, theme: Theme,
-    allow_no_write_citations: bool) -> list[str]:
+    output: ThemeOutput, *, role: str, manifest: Manifest, theme: Theme, allow_no_write_citations: bool) -> list[str]:
   """Every mechanical violation of one stage's response for one theme, in check order.
 
   Empty means the response is valid. ``allow_no_write_citations`` is the one
@@ -63,8 +62,7 @@ def theme_output_errors(
       errors.append(f"{role}: unknown entry action {op.action!r}")
       continue  # the remaining checks are action-specific
     if op.action in ("rewrite", "delete", "keep") and op.path not in entry_paths:
-      errors.append(
-          f"{role}: {op.action} targets {op.path}, which is not one of this theme's current entries")
+      errors.append(f"{role}: {op.action} targets {op.path}, which is not one of this theme's current entries")
     if op.action in ("delete", "keep"):
       if op.text is not None:
         errors.append(f"{role}: {op.action} on {op.path} must not carry text")
@@ -80,8 +78,8 @@ def theme_output_errors(
       errors.append(f"{role}: {op.action} on {op.path} needs a non-empty reason")
     if op.action in ("new", "rewrite"):
       errors.extend(_entry_text_errors(op, role=role, manifest=manifest, existing=entry_paths.get(op.path)))
-  covered, claimed_entries = _disposition_errors(output, role=role, manifest=manifest, theme=theme, errors=errors,
-                                                 entry_by_ref=entry_by_ref)
+  covered, claimed_entries = _disposition_errors(
+      output, role=role, manifest=manifest, theme=theme, errors=errors, entry_by_ref=entry_by_ref)
   missing = sorted(set(theme.candidate_refs) - covered)
   if missing:
     errors.append(f"{role}: no disposition row for candidate(s): {', '.join(missing)}")
@@ -144,8 +142,7 @@ def _entry_text_errors(op, *, role: str, manifest: Manifest, existing) -> list[s
       errors.append(f"{role}: {op.action} on {op.path} cites unknown source ref {ref!r}")
   if not op.source_refs:
     errors.append(f"{role}: {op.action} on {op.path} cites no source refs as evidence")
-  if op.action == "rewrite" and existing is not None and canonical_text(op.text or "") == canonical_text(
-      existing.text):
+  if op.action == "rewrite" and existing is not None and canonical_text(op.text or "") == canonical_text(existing.text):
     errors.append(f"{role}: rewrite of {op.path} is identical to the current entry (use keep, or change the text)")
   if not (op.text or "").strip():
     return errors
@@ -186,8 +183,9 @@ def _disposition_errors(
       if row.source_ref.startswith("entries/"):
         hint = " (a store path is not a source_ref; use the entry's ref shown in evidence.entries)"
       elif row.source_ref.startswith("comment_event:") or row.source_ref in _available_ref_ids(manifest):
-        hint = (" (a feedback id is evidence provenance, never a disposition source_ref; dispositions name "
-                "candidate refs or current-entry refs only)")
+        hint = (
+            " (a feedback id is evidence provenance, never a disposition source_ref; dispositions name "
+            "candidate refs or current-entry refs only)")
       errors.append(
           f"{role}: disposition row names {row.source_ref!r}, which is neither a candidate of this theme nor "
           f"the ref of one of its current entries{hint}")
@@ -211,8 +209,7 @@ def _disposition_errors(
 
 
 def _remember_request_errors(
-    output: ThemeOutput, *, role: str, manifest: Manifest, theme: Theme, covered: set[str],
-    errors: list[str]) -> None:
+    output: ThemeOutput, *, role: str, manifest: Manifest, theme: Theme, covered: set[str], errors: list[str]) -> None:
   """An explicit remember request always keeps a visible disposition naming it."""
   by_ref = {row.source_ref: row for row in output.candidates}
   for ref in theme.candidate_refs:
@@ -245,12 +242,11 @@ def _consistency_errors(output: ThemeOutput, *, role: str, base: dict[str, str])
   errors: list[str] = []
   unclaimed = [p for p in changed if p not in propose_paths]
   if unclaimed:
-    errors.append(f"{role}: changed path(s) with no propose disposition mapping them to evidence: " +
-                  ", ".join(unclaimed))
+    errors.append(
+        f"{role}: changed path(s) with no propose disposition mapping them to evidence: " + ", ".join(unclaimed))
   stale = sorted(propose_paths - set(changed))
   if stale:
-    errors.append(f"{role}: propose disposition(s) listing path(s) the final diff does not change: " +
-                  ", ".join(stale))
+    errors.append(f"{role}: propose disposition(s) listing path(s) the final diff does not change: " + ", ".join(stale))
   return errors
 
 

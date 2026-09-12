@@ -333,8 +333,8 @@ def test_store_path_is_not_a_disposition_source_ref(tmp_path: Path) -> None:
               "entries/render/cache-eviction.md", "propose", ["entries/render/cache-eviction.md"],
               "v1-shaped row: the store path where a source ref belongs"),
       ])
-  with pytest.raises(ReplayValidationError, match="store path is not a source_ref"):
-    run_replay_with(tmp_path, [editor, reviewer])
+  with pytest.raises(ReplayError, match="store path is not a source_ref"):
+    run_replay_with(tmp_path, [editor, reviewer, reviewer])
 
 
 def test_editor_initiated_maintenance_without_a_candidate_ask(tmp_path: Path) -> None:
@@ -370,15 +370,32 @@ def test_reviewer_initiated_maintenance_without_a_candidate_ask(tmp_path: Path) 
       "the reviewer-initiated rewrite is the final state")
 
 
+def evidence_payload(request_text: str) -> dict:
+  """The one JSON payload under '## Evidence' — the request's only serialization of the inputs."""
+  head, _, body = request_text.partition("## Evidence\n\n")
+  assert head.startswith("Theme: ") and body, "the request carries the theme and one evidence payload"
+  return json.loads(body)
+
+
 def test_both_stages_see_entry_refs_and_topic_vocabulary(tmp_path: Path) -> None:
   _, transport = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
   assert len(transport.calls) == 2
   for stage, call in zip(("editor", "reviewer"), transport.calls):
-    assert "### entries/render/cache-eviction.md (ref: entry-cache-eviction)" in call["user"], (
-        f"the {stage} must see the current entry's store path together with its canonical ref")
-    assert "## Allowed topics" in call["user"], f"the {stage} must see the allowed topic vocabulary"
-    assert "plotting" in call["user"], (
-        f"the {stage} must see every allowed topic; 'plotting' appears nowhere else in the corpus")
+    payload = evidence_payload(call["user"])
+    assert payload["entries"] == [
+        {
+            "path": "entries/render/cache-eviction.md",
+            "ref": "entry-cache-eviction",
+            "text": ENTRY_WITH_INSTANCE,
+        }
+    ], f"the {stage} must see the current entry's store path together with its canonical ref"
+    assert payload["allowed_topics"] == [
+        "render", "plotting"
+    ], (f"the {stage} must see the allowed topic vocabulary; 'plotting' appears nowhere else in the corpus")
+    assert payload["disposition_refs"] == {
+        "candidates": ["capture-eviction"],
+        "entries": ["entry-cache-eviction"]
+    }, (f"the {stage} must see the finite disposition ref domain")
 
 
 def test_reviewer_request_excludes_editor_rationale_and_scoring_answers(tmp_path: Path) -> None:
@@ -404,8 +421,9 @@ def test_editor_only_shares_editor_input_and_skips_the_reviewer(tmp_path: Path) 
   review_outcome, review_transport = run_replay_with(
       tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE], mode="editor-review", output_dir=tmp_path / "out-review")
   assert len(only_transport.calls) == 1 and len(review_transport.calls) == 2
-  only_request = (only_outcome.run_dir / "raw" / "editor-eviction.request.txt").read_text(encoding="utf-8")
-  review_request = (review_outcome.run_dir / "raw" / "editor-eviction.request.txt").read_text(encoding="utf-8")
+  only_request = (only_outcome.run_dir / "raw" / "editor-eviction.attempt-1.request.txt").read_text(encoding="utf-8")
+  review_request = (review_outcome.run_dir / "raw" /
+                    "editor-eviction.attempt-1.request.txt").read_text(encoding="utf-8")
   assert only_request == review_request, "the editor-only control must share the editor-review editor input"
 
 
@@ -570,9 +588,9 @@ def test_remember_request_keeps_a_visible_disposition(tmp_path: Path) -> None:
   report = (outcome.run_dir / "report.html").read_text(encoding="utf-8")
   assert "remember request" in report
   bad = editor_json([keep_op()], [row("capture-eviction", "no_change", [], "not stored")])
-  with pytest.raises(ReplayValidationError, match="remember request"):
+  with pytest.raises(ReplayError, match="remember request"):
     run_replay_with(
-        tmp_path, [bad],
+        tmp_path, [bad, bad],
         manifest_path=write_manifest(tmp_path, manifest, name="m2.yaml"),
         mode="editor-only",
         output_dir=tmp_path / "out-bad")
@@ -585,8 +603,9 @@ def test_unparseable_model_output_fails_visibly_with_no_proposal(tmp_path: Path)
   cfg = replay_cfg(tmp_path)
   _write_store(cfg.charliebot_home)
   snapshot = _hash_tree(cfg.charliebot_home / "memory")
-  with pytest.raises(ReplayModelOutputError, match="no JSON object"):
-    run_replay_with(tmp_path, ["I would suggest reviewing the entries first."], cfg=cfg)
+  garbage = "I would suggest reviewing the entries first."
+  with pytest.raises(ReplayError, match="no JSON object"):
+    run_replay_with(tmp_path, [garbage, garbage], cfg=cfg)
   run_dir = next((tmp_path / "out" / "runs").iterdir())
   assert not (run_dir / "proposal.json").exists()
   assert not (run_dir / "report.html").exists()
@@ -596,16 +615,17 @@ def test_unparseable_model_output_fails_visibly_with_no_proposal(tmp_path: Path)
 
 
 def test_wrong_json_shape_fails_visibly(tmp_path: Path) -> None:
-  with pytest.raises(ReplayModelOutputError, match="required JSON shape"):
-    run_replay_with(tmp_path, [json.dumps({"entries": "all good"})])
+  bad = json.dumps({"entries": "all good"})
+  with pytest.raises(ReplayError, match="required JSON shape"):
+    run_replay_with(tmp_path, [bad, bad])
 
 
 def test_unknown_source_ref_fails(tmp_path: Path) -> None:
   bad = editor_json(
       [rewrite_op(ENTRY_WITHOUT_INSTANCE, refs=["ghost-ref"])],
       [row("capture-eviction", "propose", ["entries/render/cache-eviction.md"])])
-  with pytest.raises(ReplayValidationError, match="unknown source ref 'ghost-ref'"):
-    run_replay_with(tmp_path, [bad])
+  with pytest.raises(ReplayError, match="unknown source ref 'ghost-ref'"):
+    run_replay_with(tmp_path, [bad, bad])
 
 
 def test_feedback_ids_are_citable_evidence(tmp_path: Path) -> None:
@@ -623,8 +643,8 @@ def test_path_traversal_is_rejected(tmp_path: Path) -> None:
   bad = editor_json(
       [rewrite_op(ENTRY_WITHOUT_INSTANCE, path="entries/render/../evil.md")],
       [row("capture-eviction", "propose", ["entries/render/../evil.md"])])
-  with pytest.raises(ReplayValidationError, match="not entries/<topic>/<slug>.md"):
-    run_replay_with(tmp_path, [bad])
+  with pytest.raises(ReplayError, match="not entries/<topic>/<slug>.md"):
+    run_replay_with(tmp_path, [bad, bad])
 
 
 def test_new_entry_with_undeclared_topic_fails(tmp_path: Path) -> None:
@@ -641,26 +661,26 @@ def test_new_entry_with_undeclared_topic_fails(tmp_path: Path) -> None:
               "reason": "new topic entry",
           }
       ], [row("capture-eviction", "propose", ["entries/ghost/fresh.md", "entries/render/cache-eviction.md"])])
-  with pytest.raises(ReplayValidationError, match="violates the entry format"):
-    run_replay_with(tmp_path, [bad], manifest_path=write_manifest(tmp_path, manifest))
+  with pytest.raises(ReplayError, match="violates the entry format"):
+    run_replay_with(tmp_path, [bad, bad], manifest_path=write_manifest(tmp_path, manifest))
 
 
 def test_changed_path_without_evidence_mapping_fails(tmp_path: Path) -> None:
   bad = editor_json([rewrite_op(ENTRY_WITHOUT_INSTANCE)], [row("capture-eviction", "no_change", [], "kept")])
-  with pytest.raises(ReplayValidationError, match="no propose disposition"):
-    run_replay_with(tmp_path, [bad], mode="editor-only")
+  with pytest.raises(ReplayError, match="no propose disposition"):
+    run_replay_with(tmp_path, [bad, bad], mode="editor-only")
 
 
 def test_propose_path_that_does_not_change_fails(tmp_path: Path) -> None:
   bad = editor_json([keep_op()], [row("capture-eviction", "propose", ["entries/render/cache-eviction.md"])])
-  with pytest.raises(ReplayValidationError, match="the final diff does not change"):
-    run_replay_with(tmp_path, [bad], mode="editor-only")
+  with pytest.raises(ReplayError, match="the final diff does not change"):
+    run_replay_with(tmp_path, [bad, bad], mode="editor-only")
 
 
 def test_missing_candidate_disposition_fails(tmp_path: Path) -> None:
   bad = editor_json([keep_op()], [])
-  with pytest.raises(ReplayValidationError, match="no disposition row"):
-    run_replay_with(tmp_path, [bad])
+  with pytest.raises(ReplayError, match="no disposition row"):
+    run_replay_with(tmp_path, [bad, bad])
 
 
 def test_unappliable_patch_fails_visibly(tmp_path: Path) -> None:
@@ -1433,11 +1453,11 @@ def read_comparison(output_dir: Path) -> dict:
   return json.loads((output_dir / "comparison.json").read_text(encoding="utf-8"))
 
 
-def strip_post_v2_record(record_path: Path) -> None:
-  """Rewind a run record to the v2 era: no frozen inputs, no prompt fingerprints, no artifact hashes.
+def strip_bundle_selfcontainment(record_path: Path) -> None:
+  """Drop the self-containment metadata from a run record: no frozen inputs, no fingerprints, no hashes.
 
-  v2-era records carried none of the self-containment metadata, so this is how the tests
-  exercise the legacy support path against bundles produced by the current runner.
+  This is how the tests exercise the reconstruction-only detection path (no artifact hashes to
+  lean on) against bundles produced by the current runner.
   """
   record = json.loads(record_path.read_text(encoding="utf-8"))
   for key in ("frozen_inputs", "system_prompts", "bundle_integrity"):
@@ -1447,6 +1467,11 @@ def strip_post_v2_record(record_path: Path) -> None:
 
 def raw_path(run_dir: Path, name: str) -> Path:
   return run_dir / "raw" / name
+
+
+def chosen_raw_path(run_dir: Path, stage: str, theme: str, *, attempt: int = 1, kind: str = "response") -> Path:
+  """The recorded raw file of one stage's chosen attempt (attempt 1 unless a repair ran)."""
+  return raw_path(run_dir, f"{stage}-{theme}.attempt-{attempt}.{kind}.txt")
 
 
 def sha256_of(path: Path) -> str:
@@ -1619,10 +1644,33 @@ def test_compare_derives_both_arms_with_zero_model_calls_and_declared_provenance
   shared = data["provenance"]["shared_editor_response"]
   assert shared["editor_response_complete"] is True
   assert shared["themes"]["eviction"]["editor_response_sha256"] == sha256_of(
-      raw_path(outcome.run_dir, "editor-eviction.response.txt")), (
-          "the provenance must name the exact recorded editor response both arms derive from")
+      chosen_raw_path(
+          outcome.run_dir, "editor",
+          "eviction")), ("the provenance must name the exact recorded editor response both arms derive from")
   assert shared["themes"]["eviction"]["reviewer_request_sha256"] == sha256_of(
-      raw_path(outcome.run_dir, "reviewer-eviction.request.txt"))
+      chosen_raw_path(outcome.run_dir, "reviewer", "eviction", kind="request"))
+  assert shared["themes"]["eviction"]["attempts"] == {
+      "editor":
+          [
+              {
+                  "attempt": 1,
+                  "chosen": True,
+                  "validation": "passed",
+                  "request_sha256": sha256_of(chosen_raw_path(outcome.run_dir, "editor", "eviction", kind="request")),
+                  "response_sha256": sha256_of(chosen_raw_path(outcome.run_dir, "editor", "eviction")),
+              }
+          ],
+      "reviewer":
+          [
+              {
+                  "attempt": 1,
+                  "chosen": True,
+                  "validation": "passed",
+                  "request_sha256": sha256_of(chosen_raw_path(outcome.run_dir, "reviewer", "eviction", kind="request")),
+                  "response_sha256": sha256_of(chosen_raw_path(outcome.run_dir, "reviewer", "eviction")),
+              }
+          ],
+  }, "the provenance must record the attempt chain, not just the chosen responses"
   assert data["arms"]["editor-only"]["status"] == "established"
   assert data["arms"]["post-review"]["status"] == "established"
   assert data["verification"]["manifest_inputs"]["source"] == "run-bundle-frozen"
@@ -1691,7 +1739,7 @@ def test_compare_usage_is_null_when_the_endpoint_reported_nothing(tmp_path: Path
 def test_compare_catches_tampered_bundle_artifacts(tmp_path: Path) -> None:
   outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
   run_dir = outcome.run_dir
-  editor_response = raw_path(run_dir, "editor-eviction.response.txt")
+  editor_response = chosen_raw_path(run_dir, "editor", "eviction")
   editor_response.write_text(
       editor_response.read_text(encoding="utf-8").replace("evict_below", "evict_below!"), encoding="utf-8")
   with pytest.raises(ReplayError, match="no longer matches the hash recorded at run time"):
@@ -1717,8 +1765,8 @@ def test_compare_catches_a_changed_raw_editor_response_through_request_reconstru
   recorded editor response that the reviewer consumed breaks the reconstruction.
   """
   outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
-  strip_post_v2_record(outcome.run_dir / "run.json")
-  editor_response = raw_path(outcome.run_dir, "editor-eviction.response.txt")
+  strip_bundle_selfcontainment(outcome.run_dir / "run.json")
+  editor_response = chosen_raw_path(outcome.run_dir, "editor", "eviction")
   payload = json.loads(editor_response.read_text(encoding="utf-8"))
   payload["entries"][0]["text"] = ENTRY_WITH_INSTANCE  # the reviewer consumed the merge; undo it
   swapped = json.dumps(payload)
@@ -1730,17 +1778,17 @@ def test_compare_catches_a_changed_raw_editor_response_through_request_reconstru
 
 def test_compare_catches_a_wrong_recorded_reviewer_request(tmp_path: Path) -> None:
   outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
-  strip_post_v2_record(outcome.run_dir / "run.json")
-  reviewer_request = raw_path(outcome.run_dir, "reviewer-eviction.request.txt")
+  strip_bundle_selfcontainment(outcome.run_dir / "run.json")
+  reviewer_request = chosen_raw_path(outcome.run_dir, "reviewer", "eviction", kind="request")
   reviewer_request.write_text(
       reviewer_request.read_text(encoding="utf-8").replace("chart-2077", "chart-9999"), encoding="utf-8")
   with pytest.raises(ReplayError, match="recorded reviewer request for theme 'eviction' does not match"):
     run_compare(tmp_path, outcome.run_dir)
 
 
-def test_compare_catches_a_tampered_proposal_on_a_legacy_record(tmp_path: Path) -> None:
+def test_compare_catches_a_tampered_proposal_without_recorded_hashes(tmp_path: Path) -> None:
   outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
-  strip_post_v2_record(outcome.run_dir / "run.json")
+  strip_bundle_selfcontainment(outcome.run_dir / "run.json")
   proposal_path = outcome.run_dir / "proposal.json"
   proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
   proposal["candidate_results"][0]["reason"] = "tampered after the run"
@@ -1749,10 +1797,10 @@ def test_compare_catches_a_tampered_proposal_on_a_legacy_record(tmp_path: Path) 
     run_compare(tmp_path, outcome.run_dir)
 
 
-def test_compare_catches_a_changed_reviewer_response_behind_a_legacy_proposal(tmp_path: Path) -> None:
+def test_compare_catches_a_changed_reviewer_response_behind_a_stripped_proposal(tmp_path: Path) -> None:
   outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
-  strip_post_v2_record(outcome.run_dir / "run.json")
-  reviewer_response = raw_path(outcome.run_dir, "reviewer-eviction.response.txt")
+  strip_bundle_selfcontainment(outcome.run_dir / "run.json")
+  reviewer_response = chosen_raw_path(outcome.run_dir, "reviewer", "eviction")
   swapped = editor_json(
       [rewrite_op(entry_text([MECHANISM_LINE, "- The threshold also gates the alert."]))],
       [row("capture-eviction", "propose", ["entries/render/cache-eviction.md"], "rewritten after the fact")])
@@ -1802,44 +1850,6 @@ def test_compare_supports_external_file_sources_through_the_frozen_copy(tmp_path
       "inlining the file: sources into the frozen copy keeps the comparison possible after they move")
 
 
-def test_compare_supports_v2_records_with_declared_verification_limits(tmp_path: Path) -> None:
-  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
-  strip_post_v2_record(outcome.run_dir / "run.json")
-  comp = run_compare(tmp_path, outcome.run_dir)
-  data = read_comparison(comp.comparison_path.parent)
-  assert data["verification"]["manifest_inputs"]["source"] == "recorded-manifest-path"
-  assert data["verification"]["manifest_inputs"]["identity_verified"] is True
-  prompts = data["verification"]["system_prompts"]
-  assert prompts["recorded"] is None and prompts["match_current"] is None
-  assert data["verification"]["artifacts"]["status"] == "not-recorded"
-  limitations = data["verification"]["limitations"]
-  assert len(limitations) == 2, "a v2 record must declare what it never saved, not silently certify it"
-  assert any("system-prompt fingerprinting" in item for item in limitations)
-  assert any("artifact hashing" in item for item in limitations)
-  assert data["arms"]["editor-only"]["status"] == "established"
-  assert data["arms"]["post-review"]["status"] == "established"
-
-
-def test_compare_rejects_v2_records_whose_manifest_disappeared(tmp_path: Path) -> None:
-  manifest_path = write_manifest(tmp_path)
-  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE], manifest_path=manifest_path)
-  strip_post_v2_record(outcome.run_dir / "run.json")
-  manifest_path.unlink()
-  with pytest.raises(ReplayError, match="no longer exists"):
-    run_compare(tmp_path, outcome.run_dir)
-
-
-def test_compare_rejects_v2_records_whose_manifest_changed(tmp_path: Path) -> None:
-  manifest_path = write_manifest(tmp_path)
-  outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE], manifest_path=manifest_path)
-  strip_post_v2_record(outcome.run_dir / "run.json")
-  changed = base_manifest_dict()
-  changed["sources"][2]["text"] = CAPTURE_TEXT.replace("warm-up instance", "cold-start instance")
-  manifest_path.write_text(yaml.safe_dump(changed, sort_keys=False), encoding="utf-8")
-  with pytest.raises(ReplayError, match="input identity"):
-    run_compare(tmp_path, outcome.run_dir)
-
-
 def test_compare_rejects_a_tampered_frozen_copy(tmp_path: Path) -> None:
   outcome, _ = run_replay_with(tmp_path, [MERGE_RESPONSE, MERGE_RESPONSE])
   frozen = outcome.run_dir / "frozen" / "manifest.yaml"
@@ -1850,19 +1860,27 @@ def test_compare_rejects_a_tampered_frozen_copy(tmp_path: Path) -> None:
     run_compare(tmp_path, outcome.run_dir)
 
 
-def test_compare_reports_a_failed_reviewer_and_keeps_the_editor_arm(tmp_path: Path) -> None:
+def test_compare_reports_an_exhausted_reviewer_and_keeps_the_editor_arm(tmp_path: Path) -> None:
+  """The reviewer burned its repair budget on one theme: that arm fails there, visibly and unsubstituted."""
+  garbage = "I would suggest reviewing the entries first."
   transport = UsageTransport(
       [
           (eviction_editor_response(), 100, 30, 400),
           (plotting_editor_response(), 101, 31, 400),
           (eviction_keep_response("kept as proposed"), 200, 12, 90),
-          ("I would suggest reviewing the entries first.", 210, 12, 90),
+          (garbage, 210, 12, 90),
+          (garbage, 210, 12, 90),
       ])
-  with pytest.raises(ReplayModelOutputError, match="no JSON object"):
+  with pytest.raises(ReplayError, match="no JSON object"):
     run_review_with_transport(tmp_path, transport, manifest_dict=two_theme_manifest_dict())
   run_dir = next((tmp_path / "out" / "runs").iterdir())
   record = run_record(run_dir)
   assert record["status"] == "failed" and "no JSON object" in record["error"]
+  reviewer_attempts = [c for c in record["calls"] if c["role"] == "reviewer" and c["theme"] == "plotting"]
+  assert [c["attempt"] for c in reviewer_attempts] == [1, 2], "both reviewer attempts are recorded"
+  assert [c["chosen"] for c in reviewer_attempts] == [False, False]
+  assert all(c["validation"]["status"] == "failed" for c in reviewer_attempts)
+  assert all(c["output_tokens"] == 12 for c in reviewer_attempts), "failed attempts keep their real usage"
   comp = run_compare(tmp_path, run_dir)
   data = read_comparison(comp.comparison_path.parent)
   arms = data["arms"]
@@ -1874,7 +1892,9 @@ def test_compare_reports_a_failed_reviewer_and_keeps_the_editor_arm(tmp_path: Pa
   assert data["denominators"]["themes"] == 2 and data["denominators"]["input_candidates"] == 2, (
       "a failed arm stays in the denominator")
   assert data["verification"]["proposal"]["status"] == "absent"
-  assert data["usage"]["reviewer"]["calls"] == 2
+  assert data["usage"]["reviewer"]["calls"] == 3
+  assert data["usage"]["reviewer"]["output_tokens"] == 36, "exhausted-attempt cost is counted"
+  assert data["recovery"]["themes_with_multiple_attempts"] == ["reviewer[plotting]"]
   assert "reported, not substituted" in comp.report_path.read_text(encoding="utf-8")
 
 
@@ -1898,8 +1918,12 @@ def test_compare_reports_a_reviewer_transport_failure_with_the_editor_arm_intact
   run_dir = next((tmp_path / "out" / "runs").iterdir())
   record = run_record(run_dir)
   assert record["status"] == "failed" and "HTTP 503" in record["error"]
-  assert raw_path(run_dir, "reviewer-eviction.request.txt").exists()
-  assert not raw_path(run_dir, "reviewer-eviction.response.txt").exists()
+  failed_call = next(c for c in record["calls"] if c["role"] == "reviewer")
+  assert failed_call["validation"]["status"] == "transport-failed" and failed_call["chosen"] is False
+  assert failed_call["prompt_tokens"] is None and failed_call["output_tokens"] is None, (
+      "a transport-failed call records unknown usage as null, never a guess")
+  assert chosen_raw_path(run_dir, "reviewer", "eviction", kind="request").exists()
+  assert not chosen_raw_path(run_dir, "reviewer", "eviction").exists()
   comp = run_compare(tmp_path, run_dir)
   data = read_comparison(comp.comparison_path.parent)
   assert data["arms"]["editor-only"]["status"] == "established"
@@ -2102,7 +2126,8 @@ def test_manifest_rejects_both_empty_and_non_changing_approved_pairs(tmp_path: P
     load_manifest(write_manifest(tmp_path, manifest, name="m3.yaml"))
 
 
-def test_empty_approved_sides_render_explicitly_and_change_identity(tmp_path: Path) -> None:
+def test_empty_approved_sides_are_exact_data_and_change_identity(tmp_path: Path) -> None:
+  """An empty approved-change side travels as an exact empty JSON string — real data, no invented prose."""
   from src.core.memory_replay.exchange import build_editor_request
   from src.core.memory_replay.identity import input_identity
 
@@ -2124,14 +2149,18 @@ def test_empty_approved_sides_render_explicitly_and_change_identity(tmp_path: Pa
     return request, identity
 
   deletion_request, deletion_identity = request_and_identity("del.yaml", deletion_feedback_manifest_dict())
-  assert "(empty: the approved revision deleted this text)" in deletion_request, (
-      "the rendering must name the deletion instead of leaving a bare section header")
+  payload = evidence_payload(deletion_request)
+  change = payload["feedback"][0]["approved_change"]
+  assert change["before"] == ENTRY_WITH_INSTANCE and change["after"] == "", (
+      "the approved deletion's empty after must reach the model as an exact empty string")
   creation_request, creation_identity = request_and_identity("new.yaml", creation_feedback_manifest_dict())
-  assert "(empty: the approved revision created this text)" in creation_request
+  change = evidence_payload(creation_request)["feedback"][0]["approved_change"]
+  assert change["before"] == "" and change["after"] == ENTRY_WITHOUT_INSTANCE, (
+      "the approved creation's empty before must reach the model as an exact empty string")
 
   nonempty_request, nonempty_identity = request_and_identity("base.yaml", base_manifest_dict())
-  assert "(empty:" not in nonempty_request, "nonempty sides render exactly as before"
-  assert "--- before ---" in nonempty_request and "--- after ---" in nonempty_request
+  change = evidence_payload(nonempty_request)["feedback"][0]["approved_change"]
+  assert change["before"] == ENTRY_WITH_INSTANCE and change["after"] == ENTRY_WITHOUT_INSTANCE
   assert len({deletion_identity, creation_identity, nonempty_identity
              }) == 3, ("an empty before/after side is part of what the models see, so it changes the input identity")
 
@@ -2144,7 +2173,8 @@ def test_deletion_feedback_round_trips_through_replay_and_comparison(tmp_path: P
       tmp_path, [editor, reviewer], manifest_path=write_manifest(tmp_path, deletion_feedback_manifest_dict()))
   request = transport.calls[0]["user"]
   assert "approved-del" in request
-  assert "(empty: the approved revision deleted this text)" in request
+  change = evidence_payload(request)["feedback"][0]["approved_change"]
+  assert change["after"] == "", "the approved deletion's empty after reaches the model verbatim"
   proposal = read_proposal(outcome.run_dir)
   assert proposal["feedback_refs"] == [{"comment_event": "fb-001", "approved_change_ref": "approved-del"}]
   comp = run_compare(tmp_path, outcome.run_dir)

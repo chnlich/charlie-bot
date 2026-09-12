@@ -52,7 +52,6 @@ from src.core.memory_replay.exchange import (
     build_reviewer_request,
     parse_model_output,
 )
-from src.core.memory_replay.validate import theme_output_errors
 from src.core.memory_replay.identity import approval_digest, input_identity, sha256_hex
 from src.core.memory_replay.manifest import Manifest, Theme, dump_manifest, load_manifest
 from src.core.memory_replay.report import ReportData, render_report
@@ -63,6 +62,7 @@ from src.core.memory_replay.transport import (
     TransportResult,
     request_model_for,
 )
+from src.core.memory_replay.validate import theme_output_errors
 
 log = structlog.get_logger()
 
@@ -167,8 +167,9 @@ def run_replay(
       "stage_recovery":
           {
               "max_responses_per_stage": MAX_STAGE_RESPONSES,
-              "retrigger": "mechanical validation failure only; model judgments and transport "
-                           "failures are never retried",
+              "retrigger":
+                  "mechanical validation failure only; model judgments and transport "
+                  "failures are never retried",
           },
       "themes": [],
       "unused_sources": manifest.unused_refs(),
@@ -307,11 +308,18 @@ def _run_stage(
   """
   base_request = build_request()
   previous: tuple[str, list[str]] | None = None  # (raw response, its mechanical errors)
+  failed_attempts: list[list[str]] = []
   for attempt in range(1, MAX_STAGE_RESPONSES + 1):
     user = base_request if previous is None else build_repair_request(base_request, previous[0], previous[1])
     result, call_entry = _call_attempt(
-        transport=transport, role=role, theme_name=theme.name, attempt=attempt, system=system, user=user,
-        run_dir=run_dir, record=record)
+        transport=transport,
+        role=role,
+        theme_name=theme.name,
+        attempt=attempt,
+        system=system,
+        user=user,
+        run_dir=run_dir,
+        record=record)
     output, errors = _parse_and_validate(result.text, role=role, manifest=manifest, theme=theme)
     call_entry["chosen"] = not errors
     call_entry["validation"] = {"status": "passed"} if not errors else {"status": "failed", "errors": errors}
@@ -319,9 +327,11 @@ def _run_stage(
     if not errors:
       return output
     previous = (result.text, errors)
+    failed_attempts.append(errors)
+  detail = " | ".join(error for errors in failed_attempts for error in errors)
   raise ReplayError(
       f"{role}[{theme.name}]: stage response failed mechanical validation after 1 re-ask "
-      f"({MAX_STAGE_RESPONSES} responses); errors of the last response: {previous[1][-1]}")
+      f"({MAX_STAGE_RESPONSES} responses, all recorded); errors: {detail}")
 
 
 def _call_attempt(
@@ -354,7 +364,9 @@ def _call_attempt(
       "attempt": attempt,
       "request_file": request_rel,
       "response_file": None,
-      "validation": {"status": "transport-failed"},
+      "validation": {
+          "status": "transport-failed"
+      },
       "chosen": False,
       "latency_ms": None,
       "prompt_tokens": None,
@@ -379,7 +391,8 @@ def _call_attempt(
   return result, entry
 
 
-def _parse_and_validate(raw: str, *, role: str, manifest: Manifest, theme: Theme) -> tuple[ThemeOutput | None, list[str]]:
+def _parse_and_validate(raw: str, *, role: str, manifest: Manifest,
+                        theme: Theme) -> tuple[ThemeOutput | None, list[str]]:
   """The mechanical gate of one stage response: parse, then validate, collecting every error."""
   role_ctx = f"{role}[{theme.name}]"
   try:

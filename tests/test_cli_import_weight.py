@@ -40,6 +40,22 @@ PLAN_HEAVY_MODULES = HEAVY_MODULES + (
     "src.agents.backends.registry",
 )
 
+# The memory chain's ban set: structlog (the log proxy defers it) and the replay-curation
+# stack, which only the replay/experiment/compare verbs run (lazy imports inside the _cmd_
+# functions). config + models + pydantic stay out of the ban set: the get_config
+# module-attribute contract (tests/test_memory_store.py) and every verb's config read
+# bind them at import.
+MEMORY_HEAVY_MODULES = (
+    "src.agents.backends.base",
+    "src.core.threads",
+    "src.core.sessions",
+    "src.core.runs",
+    "numpy",
+    "structlog",
+    "requests",
+    "src.core.memory_replay",
+)
+
 
 def _modules_loaded_after_import(module_expr: str, heavy: tuple[str, ...]) -> list[str]:
   code = (
@@ -98,6 +114,38 @@ def test_plan_constants_match_the_model_literals() -> None:
   assert amend_tuple == amend_literal and close_tuple == close_literal, (
       "src.core.constants' plan vocabularies drifted from the models Literals: "
       f"{amend_tuple} vs {amend_literal}; {close_tuple} vs {close_literal}")
+
+
+def test_memory_chain_imports_without_the_heavy_chains() -> None:
+  loaded = _modules_loaded_after_import("import src.cli.memory", MEMORY_HEAVY_MODULES)
+  assert loaded == [], (
+      "the memory command chain pulled the replay stack or structlog into the CLI "
+      f"process: {loaded}; the M98 invocation wall (docs/perf_baseline.md) depends "
+      "on these staying out — the replay verbs import their stack inside the verb "
+      "path, and src.core.memory's log proxy defers structlog to first use")
+
+
+def test_memory_defers_structlog_until_the_first_log_call() -> None:
+  # The probe's warning line and the result JSON both reach the subprocess's
+  # streams; the JSON rides stderr so the parse sees it alone.
+  code = (
+      "import json, sys; import src.core.memory; "
+      "before = 'structlog' in sys.modules; src.core.memory.log.warning('m98_probe'); "
+      "sys.stderr.write(json.dumps([before, 'structlog' in sys.modules]))")
+  proc = subprocess.run(
+      [sys.executable, "-c", code],
+      cwd=REPO_ROOT,
+      capture_output=True,
+      text=True,
+      timeout=120,
+      check=True,
+  )
+  before, after = json.loads(proc.stderr)
+  assert before is False, (
+      "src.core.memory imported structlog at module import; every memory CLI "
+      "invocation pays structlog.dev (rich, pygments) for the error-path log "
+      "lines a read command never emits")
+  assert after is True, "memory.log did not resolve structlog on first use"
 
 
 def test_config_defers_structlog_until_the_first_log_call() -> None:

@@ -54,6 +54,14 @@ AUTONAMER_TIMEOUT = 30.0  # seconds
 ARTIFACT_PROBE_TIMEOUT = 300.0  # seconds
 
 # ---------------------------------------------------------------------------
+# Artifact wrap (KaTeX vendoring)
+# ---------------------------------------------------------------------------
+
+# One-shot GET that fetches katex.min.js from the allowlisted CDN into the
+# profile's vendor dir; a slow CDN must not hang the `artifact wrap` assembly.
+KATEX_CDN_FETCH_TIMEOUT = 60  # seconds
+
+# ---------------------------------------------------------------------------
 # HTTP client timeouts (outbound requests)
 # ---------------------------------------------------------------------------
 

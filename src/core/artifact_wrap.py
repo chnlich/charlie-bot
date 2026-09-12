@@ -15,6 +15,7 @@ from pathlib import Path
 import requests
 
 from src.core import artifact_check
+from src.core.timeouts import KATEX_CDN_FETCH_TIMEOUT
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PRERENDER_DRIVER = _REPO_ROOT / "scripts" / "prerender_math.js"
@@ -34,7 +35,7 @@ def ensure_vendored_katex(vendor_path: Path) -> Path:
     return vendor_path
   vendor_path.parent.mkdir(parents=True, exist_ok=True)
   try:
-    response = requests.get(KATEX_CDN_URL, timeout=60)
+    response = requests.get(KATEX_CDN_URL, timeout=KATEX_CDN_FETCH_TIMEOUT)
     response.raise_for_status()
   except requests.RequestException as e:
     raise RuntimeError(

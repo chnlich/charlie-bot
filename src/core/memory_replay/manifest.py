@@ -164,10 +164,6 @@ class Manifest:
     return self._by_ref.get(ref)
 
   @property
-  def topic_set(self) -> frozenset[str]:
-    return frozenset(self.topics)
-
-  @property
   def base_paths(self) -> set[str]:
     return {s.path for s in self.sources if s.kind == "entry"}
 

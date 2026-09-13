@@ -6,7 +6,7 @@ import json
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, Callable
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -189,15 +189,9 @@ async def test_archive_range_repeat_reads_reuse_memo(tmp_path: Path) -> None:
 
   first, _ = mgr.load_chat_events_range(session.id, 0, 3)
 
-  real_open = open
-  archive_opens = []
+  archive_opens: list[str] = []
 
-  def counting_open(file, *args, **kwargs):
-    if "archives" in str(file):
-      archive_opens.append(str(file))
-    return real_open(file, *args, **kwargs)
-
-  with patch("builtins.open", counting_open):
+  with patch("builtins.open", _count_opens_of(lambda path: "archives" in path, open, archive_opens)):
     second, _ = mgr.load_chat_events_range(session.id, 0, 3)
 
   assert [e["content"] for e in second] == [e["content"] for e in first] == ["e0", "e1", "e2"]
@@ -282,15 +276,11 @@ async def test_live_range_repeat_reads_reuse_memo(tmp_path: Path) -> None:
 
   first, _ = mgr.load_chat_events_range(session.id, 5, 8)
 
-  real_open = open
-  live_opens = []
+  live_opens: list[str] = []
 
-  def counting_open(file, *args, **kwargs):
-    if str(file).endswith("chat_events.jsonl") and "archives" not in str(file):
-      live_opens.append(str(file))
-    return real_open(file, *args, **kwargs)
-
-  with patch("builtins.open", counting_open):
+  with patch(
+      "builtins.open", _count_opens_of(
+          lambda path: path.endswith("chat_events.jsonl") and "archives" not in path, open, live_opens)):
     second, _ = mgr.load_chat_events_range(session.id, 5, 8)
 
   assert [e["content"] for e in second] == [e["content"] for e in first] == ["f0", "f1", "f2"]
@@ -329,34 +319,7 @@ async def test_live_range_append_extends_memo_without_full_reparse(tmp_path: Pat
       }) + "\n"
 
   read_bytes: list[int] = []
-
-  class _CountingReader:
-
-    def __init__(self, inner: IO[bytes]) -> None:
-      self._inner = inner
-
-    def read(self, *args: Any, **kwargs: Any) -> bytes:
-      data: bytes = self._inner.read(*args, **kwargs)
-      read_bytes.append(len(data))
-      return data
-
-    def seek(self, *args: Any, **kwargs: Any) -> int:
-      return self._inner.seek(*args, **kwargs)
-
-    def __enter__(self) -> "_CountingReader":
-      self._inner.__enter__()
-      return self
-
-    def __exit__(self, *args: Any, **kwargs: Any) -> bool:
-      return bool(self._inner.__exit__(*args, **kwargs))
-
-  real_open = open
-
-  def counting_open(file: Any, *args: Any, **kwargs: Any) -> IO[bytes] | _CountingReader:
-    handle = real_open(file, *args, **kwargs)
-    if str(file) == str(live_path):
-      return _CountingReader(handle)
-    return handle
+  counting_open = _count_reads_of(live_path, open, read_bytes)
 
   with patch("builtins.open", counting_open):
     after, _ = mgr.load_chat_events_range(session.id, 5, 9)
@@ -469,15 +432,25 @@ def _count_reads_of(live_path: Path, real_open: Any, reads: list[int]) -> Any:
   return counting_open
 
 
+def _count_opens_of(matches: Callable[[str], bool], real_open: Any, opens: list[str]) -> Any:
+  """A builtins.open patch appending str(file) of every open whose path matches *matches*."""
+
+  def counting_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+    if matches(str(file)):
+      opens.append(str(file))
+    return real_open(file, *args, **kwargs)
+
+  return counting_open
+
+
 @pytest.mark.asyncio
 async def test_live_range_walk_serves_tail_window_without_full_read(tmp_path: Path) -> None:
   mgr, session, live_path, _cutoff = await _walk_rig(tmp_path)
   file_size = live_path.stat().st_size
   count_ndjson_lines(live_path)  # the bootstrap's tail read warms the count memo first
 
-  real_open = open
   reads: list[int] = []
-  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)), \
+  with patch("builtins.open", _count_reads_of(live_path, open, reads)), \
           patch("src.core.chat_events._WALK_CHUNK_BYTES", 64):
     got, has_more = mgr.load_chat_events_range(session.id, 9, 11)
   # The walk read the window's tail span, not the whole file.
@@ -487,7 +460,7 @@ async def test_live_range_walk_serves_tail_window_without_full_read(tmp_path: Pa
 
   # The walked suffix entry serves the repeat with zero file bytes.
   reads.clear()
-  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)):
+  with patch("builtins.open", _count_reads_of(live_path, open, reads)):
     again, _ = mgr.load_chat_events_range(session.id, 9, 11)
   assert reads == []
   assert [e["content"] for e in again] == ["f4", "f5"]
@@ -502,9 +475,8 @@ async def test_live_range_backward_extension_serves_scroll_below_walked_window(t
   first, _ = mgr.load_chat_events_range(session.id, 9, 11)
   assert [e["content"] for e in first] == ["f4", "f5"]
 
-  real_open = open
   reads: list[int] = []
-  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)), \
+  with patch("builtins.open", _count_reads_of(live_path, open, reads)), \
           patch("src.core.chat_events._WALK_CHUNK_BYTES", 64):
     second, _ = mgr.load_chat_events_range(session.id, 7, 9)
   # The backward extension read the page's span, not the whole file.
@@ -512,7 +484,7 @@ async def test_live_range_backward_extension_serves_scroll_below_walked_window(t
   assert [e["content"] for e in second] == ["f2", "f3"]
 
   reads.clear()
-  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)):
+  with patch("builtins.open", _count_reads_of(live_path, open, reads)):
     repeat, _ = mgr.load_chat_events_range(session.id, 7, 9)
   assert reads == []
   assert [e["content"] for e in repeat] == ["f2", "f3"]
@@ -568,9 +540,8 @@ async def test_live_range_walk_budget_falls_back_to_full_build(tmp_path: Path) -
   file_size = live_path.stat().st_size
   count_ndjson_lines(live_path)
 
-  real_open = open
   reads: list[int] = []
-  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)), \
+  with patch("builtins.open", _count_reads_of(live_path, open, reads)), \
           patch("src.core.chat_events._WALK_BYTE_BUDGET", 128), \
           patch("src.core.chat_events._WALK_CHUNK_BYTES", 64):
     got, _ = mgr.load_chat_events_range(session.id, 9, 11)
@@ -591,16 +562,15 @@ async def test_live_range_walk_entry_extends_after_append(tmp_path: Path) -> Non
   appended = json.dumps({"type": "user", "content": "f9", "timestamp": stamp}) + "\n"
   _append_events(live_path, [{"type": "user", "content": "f9", "timestamp": stamp}])
 
-  real_open = open
   reads: list[int] = []
-  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)):
+  with patch("builtins.open", _count_reads_of(live_path, open, reads)):
     after, _ = mgr.load_chat_events_range(session.id, 9, 15)
   # The extension parsed the appended tail only.
   assert reads == [len(appended.encode("utf-8"))]
   assert [e["content"] for e in after] == ["f4", "f5", "f6", "f7", "f8", "f9"]
 
   reads.clear()
-  with patch("builtins.open", _count_reads_of(live_path, real_open, reads)):
+  with patch("builtins.open", _count_reads_of(live_path, open, reads)):
     repeat, _ = mgr.load_chat_events_range(session.id, 9, 15)
   assert reads == []
   assert [e["content"] for e in repeat] == ["f4", "f5", "f6", "f7", "f8", "f9"]
@@ -622,15 +592,9 @@ async def test_unarchived_range_serves_warm_events_cache_without_disk_read(tmp_p
   warm = mgr.load_chat_events_sync(session.id)
   assert len(cold) == 4
 
-  real_open = open
-  live_opens = []
+  live_opens: list[str] = []
 
-  def counting_open(file, *args, **kwargs):
-    if str(file) == str(live_path):
-      live_opens.append(str(file))
-    return real_open(file, *args, **kwargs)
-
-  with patch("builtins.open", counting_open):
+  with patch("builtins.open", _count_opens_of(lambda path: path == str(live_path), open, live_opens)):
     got, has_more = mgr.load_chat_events_range(session.id, 1, 4)
 
   assert live_opens == [], "a warm events cache must serve the unarchived range without re-reading the file"

@@ -983,7 +983,9 @@ async def test_run_improve_loop_fails_when_goal_file_missing_mid_loop(
 
 def _valid_report(iteration: int, *, em_dash: bool = True) -> str:
   dash = "\u2014" if em_dash else "-"
-  return f"## Iter {iteration} {dash} completed\n### What Changed\n- did the work\n### Commits\n- 1111111 did the work\n"
+  return (
+      f"## Iter {iteration} {dash} completed\n### What Changed\n- did the work\n"
+      f"### Commits\n- 1111111 did the work\n")
 
 
 def _nothing_done_report(iteration: int) -> str:

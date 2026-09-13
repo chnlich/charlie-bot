@@ -235,7 +235,8 @@ def _collect_roofline(kernels: list[dict]) -> dict:
       peak_memory_byte_per_cycle = required[_ROOFLINE_PEAK_TRAFFIC_PER_CYCLE]
       dram_clock_hz = required[_ROOFLINE_DRAM_CLOCK]
       achieved_traffic_bytes_s = required[_ROOFLINE_ACHIEVED_TRAFFIC]
-      if peak_compute_flop_per_cycle <= 0 or peak_sm_clock_hz <= 0 or peak_memory_byte_per_cycle <= 0 or dram_clock_hz <= 0:
+      if (peak_compute_flop_per_cycle <= 0 or peak_sm_clock_hz <= 0 or peak_memory_byte_per_cycle <= 0 or
+          dram_clock_hz <= 0):
         continue
       if achieved_sm_clock_hz <= 0 or achieved_traffic_bytes_s <= 0:
         continue

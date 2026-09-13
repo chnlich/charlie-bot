@@ -79,12 +79,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # same-commit re-push is a git no-op ("Everything up-to-date") and would leave a
 # duplicated reviewer run undetectable from the origin repo's commit count alone.
 REVIEWER_SHIM = """#!/bin/sh
-echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"REVIEWER-ASSISTANT-MARKER"}]}}'
+echo '{"type":"assistant","message":{"role":"assistant","content":'\
+'[{"type":"text","text":"REVIEWER-ASSISTANT-MARKER"}]}}'
 echo "reviewer touch $$" > "reviewer_shim_$$.txt"
 git add "reviewer_shim_$$.txt"
 git commit -m "reviewer shim commit $$" 1>&2
 git push origin HEAD:main 1>&2
-echo '{"type":"result","subtype":"success","is_error":false,"result":"REVIEWER-RESULT-MARKER","usage":{"input_tokens":1,"output_tokens":1}}'
+echo '{"type":"result","subtype":"success","is_error":false,"result":"REVIEWER-RESULT-MARKER",'\
+'"usage":{"input_tokens":1,"output_tokens":1}}'
 exit 0
 """
 
@@ -102,14 +104,16 @@ exit 1
 CLEAN_RETRY_SHIM = """#!/bin/sh
 cat >/dev/null
 echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ATTEMPT-2-MARKER"}]}}'
-echo '{"type":"result","subtype":"success","is_error":false,"result":"ATTEMPT-2-RESULT","usage":{"input_tokens":1,"output_tokens":1}}'
+echo '{"type":"result","subtype":"success","is_error":false,"result":"ATTEMPT-2-RESULT",'\
+'"usage":{"input_tokens":1,"output_tokens":1}}'
 exit 0
 """
 
 FAKE_SHIM = """#!/bin/sh
 echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"E2E-ASSISTANT-MARKER"}]}}'
 sleep "$FAKE_RESULT_DELAY"
-echo '{"type":"result","subtype":"success","is_error":false,"result":"E2E-RESULT-MARKER","usage":{"input_tokens":1,"output_tokens":1}}'
+echo '{"type":"result","subtype":"success","is_error":false,"result":"E2E-RESULT-MARKER",'\
+'"usage":{"input_tokens":1,"output_tokens":1}}'
 exit 0
 """
 

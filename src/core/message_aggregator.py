@@ -92,7 +92,11 @@ def extract_thinking_from_message(msg: dict | None) -> str:
 
 
 def extract_tool_result_text(block: dict) -> str:
-  """Return the renderable text of a CC ``tool_result`` block; ``content`` is either a plain string or a list of typed parts where only ``{"type": "text"}`` parts contribute."""
+  """Return the renderable text of a CC ``tool_result`` block.
+
+  ``content`` is either a plain string or a list of typed parts where only
+  ``{"type": "text"}`` parts contribute.
+  """
   raw = block.get("content", "")
   if isinstance(raw, list):
     return "\n".join(p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")

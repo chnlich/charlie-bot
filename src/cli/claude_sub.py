@@ -518,8 +518,8 @@ async def _check_cli_capabilities() -> None:
   if version < _MIN_CLAUDE_VERSION:
     raise ClaudeSubError(
         f"Claude Code {'.'.join(str(part) for part in version)} is below the minimum compatible version "
-        f"{'.'.join(str(part) for part in _MIN_CLAUDE_VERSION)} (target {'.'.join(str(part) for part in _TARGET_CLAUDE_VERSION)})"
-    )
+        f"{'.'.join(str(part) for part in _MIN_CLAUDE_VERSION)} "
+        f"(target {'.'.join(str(part) for part in _TARGET_CLAUDE_VERSION)})")
 
   rc, stdout, stderr = await _run_cli_capture("claude", "--help", "--", "claude-sub-leading-dash-probe")
   if rc != 0:

@@ -128,7 +128,8 @@ def build_review_prompt(
       f"before judging the diff. Apply the task spec's `## Reviewer Checklist`. For control-flow or "
       f"state-machine tasks, verify the implementation against `## Required Behavior`; do not rely only "
       f"on tests.\n\n"
-      f"The work is on branch `{branch_name}` in worktree `{wt_path}`. All git operations below run from the worktree.\n\n"
+      f"The work is on branch `{branch_name}` in worktree `{wt_path}`. "
+      f"All git operations below run from the worktree.\n\n"
       f"1. `cd {wt_path}`\n"
       f"2. Fetch the latest base branch: `git fetch origin {base_branch}`\n"
       f"3. Review the changes: `git diff origin/{base_branch}...{branch_name}`\n"
@@ -146,8 +147,8 @@ def build_review_prompt(
       f"11. Fetch the latest base branch: `git fetch origin {base_branch}`\n"
       f"12. Rebase onto the remote base: `git rebase origin/{base_branch}`\n"
       f"13. Push to remote base branch from the worktree: `git push origin HEAD:{base_branch}`\n"
-      f"14. Verify: `git log --oneline -1 HEAD` and `git log --oneline -1 origin/{base_branch}` must show the same commit."
-  )
+      f"14. Verify: `git log --oneline -1 HEAD` and `git log --oneline -1 origin/{base_branch}` "
+      f"must show the same commit.")
 
 
 def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:

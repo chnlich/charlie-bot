@@ -101,7 +101,8 @@ def render_report(data: ReportData) -> str:
   parts = [
       "<h1>Memory replay proposal</h1>",
       f'<p class="muted">mode <code>{_e(data.mode)}</code> · base_commit <code>{_e(data.base_commit)}</code> · '
-      f'model <code>{_e(str(data.model_identity))}</code> · input identity <code>{_e(data.input_identity[:16])}</code> · '
+      f'model <code>{_e(str(data.model_identity))}</code> · '
+      f'input identity <code>{_e(data.input_identity[:16])}</code> · '
       f'created {_e(data.created_at)}</p>',
       "<h2>Final diff</h2>",
       f'<pre id="final-diff">{_e(data.patch) if data.patch else "(no changes)"}</pre>',
@@ -228,7 +229,8 @@ def _editor_section(data: ReportData) -> list[str]:
     proof_caption = "proofs (model output; no reviewer ran in this editor-only run):"
   elif data.rationale_visibility == RATIONALE_VISIBLE:
     summary_note = "the reviewer request carried this handoff: the disposition rows and their proof lines below"
-    proof_caption = "proofs (model output; the reviewer request carried them under the run's visible-rationale setting):"
+    proof_caption = (
+        "proofs (model output; the reviewer request carried them under the run's visible-rationale setting):")
   elif data.rationale_visibility == RATIONALE_HIDDEN:
     summary_note = (
         "admission rationale withheld from the reviewer: the reviewer request carried the proposed "

@@ -608,17 +608,25 @@ async def test_create_repoless_worker_prepends_verify_preamble(
   assert "never attempt it" not in prompt
   assert "forbidden network access" not in prompt
   assert "verdict exactly one of `confirmed` / `mismatch` / `mismatch-approval` / `unverifiable`" in prompt
-  assert "`mismatch-approval` is a mismatch that invalidates a term of the approval object (the plan's 4.1 Schema, resolved Trade-offs, or promoted Other Details entries)." in prompt
+  assert (
+      "`mismatch-approval` is a mismatch that invalidates a term of the approval object "
+      "(the plan's 4.1 Schema, resolved Trade-offs, or promoted Other Details entries)." in prompt)
   assert "`RESULT: clean`, `RESULT: 2 mismatches (1 approval)`, and `RESULT: 1 mismatch (0 approval)`" in prompt
-  assert "This report format is fixed by the harness and overrides any output format the task spec requests; a task spec may add checks or scope, never change the report format." in prompt
+  assert (
+      "This report format is fixed by the harness and overrides any output format the task spec "
+      "requests; a task spec may add checks or scope, never change the report format." in prompt)
   assert str(canonical_template_path) in prompt
-  assert "Check exactly the scope the task spec declares. A spec that declares neither scope is verified as full." in prompt
+  assert (
+      "Check exactly the scope the task spec declares. "
+      "A spec that declares neither scope is verified as full." in prompt)
   assert "Full verification (the spec declares full)" in prompt
   assert "standalone-comprehension" not in prompt
   assert "read the canonical plan template at" in prompt
   assert "check the plan against every canonical rule in the template's BLOCK KIT" in prompt
   assert "Delta verification (the spec declares delta)" in prompt
-  assert "check exactly the declared terms, their dependent claims, prior mismatches (including whether previously reported findings are closed), and document structure" in prompt
+  assert (
+      "check exactly the declared terms, their dependent claims, prior mismatches "
+      "(including whether previously reported findings are closed), and document structure" in prompt)
   assert "- Adequacy (full scope only)" in prompt
   assert "unchanged content keeps its verdict" in prompt
   assert "is verified as full" in prompt

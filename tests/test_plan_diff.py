@@ -208,7 +208,9 @@ def test_details_on_a_mark_path_open_and_unrelated_details_stay_closed() -> None
 
 
 def test_deleted_rows_and_list_items_stay_in_their_containers() -> None:
-  base = "<html><body><ul><li>gone</li><li>kept</li></ul><table><tbody><tr><td>gone row</td></tr><tr><td>kept row</td></tr></tbody></table></body></html>"
+  base = (
+      "<html><body><ul><li>gone</li><li>kept</li></ul>"
+      "<table><tbody><tr><td>gone row</td></tr><tr><td>kept row</td></tr></tbody></table></body></html>")
   new = "<html><body><ul><li>kept</li></ul><table><tbody><tr><td>kept row</td></tr></tbody></table></body></html>"
   annotated = annotate(base, new)
   dom = _parse(annotated)
@@ -387,7 +389,9 @@ def test_four_invariants_hold_for_boundary_pair() -> None:
 
 def test_ghost_follows_a_heading_that_carries_its_own_inline_mark() -> None:
   new = '<html><body><h2>Head</h2><p>tail</p></body></html>'
-  repro = '<html><body><h2>Head<span class="revbadge">X</span></h2><div class="revnote">NOTE</div><p>tail</p></body></html>'
+  repro = (
+      '<html><body><h2>Head<span class="revbadge">X</span></h2>'
+      '<div class="revnote">NOTE</div><p>tail</p></body></html>')
   control = '<html><body><h2>Head</h2><div class="revnote">NOTE</div><p>tail</p></body></html>'
   for base, badge in ((control, False), (repro, True)):
     annotated = _assert_invariants(base, new)

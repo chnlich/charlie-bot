@@ -9,7 +9,9 @@ from core import byte_count_open
 from src.core.message_aggregator import extract_text_from_message
 from src.core.verify_trailer import _resolve_final_report, verify_result_trailer_error
 
-EMPTY_ERROR = "Verifier final report is empty; expected a final `RESULT: (?:clean|[1-9][0-9]* mismatch(?:es)? \\([0-9]+ approval\\))` line."
+EMPTY_ERROR = (
+    "Verifier final report is empty; expected a final "
+    '`RESULT: (?:clean|[1-9][0-9]* mismatch(?:es)? \\([0-9]+ approval\\))` line.')
 MALFORMED_ERROR = (
     "Verifier final report has a missing or malformed `RESULT:` trailer; expected a final "
     '`RESULT: (?:clean|[1-9][0-9]* mismatch(?:es)? \\([0-9]+ approval\\))` line.')

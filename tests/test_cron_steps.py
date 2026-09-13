@@ -27,6 +27,7 @@ from conftest import (
     SCHEDULER_GET_CONFIG_PATCH_TARGET,
     SCHEDULER_SPAWN_WORKER_PATCH_TARGET,
     _noop,
+    assistant_text_event,
     build_scheduler_cfg,
     close_create_logged_task,
     make_scheduler_setup,
@@ -425,16 +426,7 @@ async def test_last_step_completion_wakes_master_once_with_block_per_step(
           "thread_id": step1.id,
           "status": "completed"
       })
-  await session_mgr.persist_and_broadcast(
-      session.id, {
-          "type": ET.ASSISTANT,
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "done"
-              }]
-          }
-      })
+  await session_mgr.persist_and_broadcast(session.id, assistant_text_event("done"))
   again = await task_chain.handle_step_completion(session.id, step1, 0, thread_mgr, session_mgr, cfg)
   assert again is True
   master.assert_awaited_once()

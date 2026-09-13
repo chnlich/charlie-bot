@@ -205,10 +205,10 @@ def test_flat_tool_result_attaches_to_last_tool() -> None:
 
 def test_text_and_flat_tools_interleave() -> None:
   agg = MessageAggregator()
-  list(agg.feed({"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": "hi "}]}}))
+  list(agg.feed(_assistant_text_event("hi ")))
   list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"cmd": "ls"}}))
   list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "/home"}))
-  deltas = list(agg.feed({"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": "done"}]}}))
+  deltas = list(agg.feed(_assistant_text_event("done")))
 
   finalized = [delta for delta in deltas if delta["type"] == "message"]
   assert len(finalized) == 1
@@ -806,14 +806,7 @@ def _mixed_event_sequence() -> list[dict]:
           "timestamp": "t0"
       },
       {
-          "type": ET.ASSISTANT,
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "working "
-              }]
-          },
-          "timestamp": "t1"
+          **_assistant_text_event("working "), "timestamp": "t1"
       },
       {
           "type": ET.THINKING,
@@ -835,14 +828,7 @@ def _mixed_event_sequence() -> list[dict]:
           "timestamp": "t4"
       },
       {
-          "type": ET.ASSISTANT,
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "done"
-              }]
-          },
-          "timestamp": "t5"
+          **_assistant_text_event("done"), "timestamp": "t5"
       },
       {
           "type": ET.MASTER_DONE,
@@ -850,14 +836,7 @@ def _mixed_event_sequence() -> list[dict]:
           "timestamp": "t6"
       },
       {
-          "type": ET.ASSISTANT,
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "tail draft"
-              }]
-          },
-          "timestamp": "t7"
+          **_assistant_text_event("tail draft"), "timestamp": "t7"
       },
   ]
 
@@ -936,7 +915,7 @@ def test_stream_deltas_stay_bounded_after_a_giant_tool_result() -> None:
 
   serialized = []
   for i in range(20):
-    list(agg.feed({"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": f"delta {i}"}]}}))
+    list(agg.feed(_assistant_text_event(f"delta {i}")))
     draft = agg.pending_draft_message()
     serialized.append(len(json.dumps(draft)))
 

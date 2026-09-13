@@ -23,6 +23,7 @@ from conftest import (
 )
 from conftest import append_events as _append_events
 from conftest import assistant_event as _assistant_event
+from conftest import assistant_text_event as _assistant_text_event
 from conftest import queued_user_reorder_events as _reorder_events
 
 from src.api.message_utils import events_to_messages
@@ -47,15 +48,7 @@ def _pending_draft_events() -> list[dict]:
           "timestamp": "t1"
       },
       {
-          "id": "assistant-1",
-          "type": ET.ASSISTANT,
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "draft response"
-              }]
-          },
-          "timestamp": "t2",
+          **_assistant_event("draft response", event_id="assistant-1"), "timestamp": "t2"
       },
   ]
 
@@ -724,19 +717,7 @@ async def test_lru_eviction_cannot_serve_stale_after_dirty_mark(tmp_path: Path) 
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "first", "timestamp": "t1"})
-    await mgr.persist_and_broadcast(
-        session.id,
-        {
-            "type": "assistant",
-            "message": {
-                "content": [{
-                    "type": "text",
-                    "text": "draft"
-                }]
-            },
-            "timestamp": "t2"
-        },
-    )
+    await mgr.persist_and_broadcast(session.id, {**_assistant_text_event("draft"), "timestamp": "t2"})
 
   projection = mgr.get_message_projection(session.id)
   assert projection is not None

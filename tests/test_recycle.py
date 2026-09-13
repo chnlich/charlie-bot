@@ -758,8 +758,6 @@ def _payload_ts(seconds: int) -> str:
   return f"2026-05-10T00:00:{seconds:02d}Z"
 
 
-# Omitting `timestamp` (not setting it to None) is load-bearing: the raw-page
-# test feeds timestamp-less events so the pre-aggregation surface stays raw.
 def _tool_use_event(event_id: str, name: str, tool_input: dict, ts: str | None = None) -> dict:
   event: dict[str, Any] = {"type": ET.TOOL_USE, "id": event_id, "name": name, "input": tool_input}
   if ts is not None:

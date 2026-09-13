@@ -1,6 +1,7 @@
 import asyncio
 import signal
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -20,7 +21,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 
 
-def _build_backend(monkeypatch, **kwargs) -> CodexBackend:
+def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> CodexBackend:
   return build_cli_backend(
       monkeypatch,
       CodexBackend,
@@ -35,7 +36,8 @@ def _build_backend(monkeypatch, **kwargs) -> CodexBackend:
     pytest.param(None, id="fresh"),
     pytest.param("sess-123", id="resume"),
 ])
-def test_build_command_uses_double_dash_separator_for_prompt(monkeypatch, resume_session_id: str | None) -> None:
+def test_build_command_uses_double_dash_separator_for_prompt(
+    monkeypatch: pytest.MonkeyPatch, resume_session_id: str | None) -> None:
   backend = _build_backend(monkeypatch, model="codex-test-model", resume_session_id=resume_session_id)
 
   cmd = backend._build_command(FLAG_LIKE_PROMPT)
@@ -45,7 +47,7 @@ def test_build_command_uses_double_dash_separator_for_prompt(monkeypatch, resume
     assert resume_session_id in cmd
 
 
-def test_build_command_defaults_to_xhigh_reasoning_effort(monkeypatch) -> None:
+def test_build_command_defaults_to_xhigh_reasoning_effort(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model="codex-test-model")
 
   cmd = backend._build_command("do the thing")
@@ -55,7 +57,7 @@ def test_build_command_defaults_to_xhigh_reasoning_effort(monkeypatch) -> None:
   assert cmd[idx - 1] == "--config"
 
 
-def test_build_command_uses_custom_reasoning_effort(monkeypatch) -> None:
+def test_build_command_uses_custom_reasoning_effort(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model="codex-test-model", model_reasoning_effort="ultra")
 
   cmd = backend._build_command("do the thing")
@@ -65,7 +67,7 @@ def test_build_command_uses_custom_reasoning_effort(monkeypatch) -> None:
   assert cmd[idx - 1] == "--config"
 
 
-def test_thread_started_translates_to_the_typed_session_attach_signal(monkeypatch) -> None:
+def test_thread_started_translates_to_the_typed_session_attach_signal(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model="gpt-5.5")
 
   translated = backend.translate_event({"type": "thread.started", "thread_id": "thread-9"})
@@ -73,7 +75,7 @@ def test_thread_started_translates_to_the_typed_session_attach_signal(monkeypatc
   assert translated == [{"type": ET.SESSION_ATTACHED, "session_id": "thread-9"}]
 
 
-def test_turn_completed_includes_codex_cost(monkeypatch) -> None:
+def test_turn_completed_includes_codex_cost(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model="gpt-5.5")
 
   translated = backend.translate_event(
@@ -154,7 +156,7 @@ _FILE_CHANGE_ROWS = [
 
 @pytest.mark.parametrize(("files", "changes", "event_type", "status", "expected_paths"), _FILE_CHANGE_ROWS)
 def test_file_change_translation(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     files: dict[str, str],
     changes: list[tuple[str, str]],
@@ -267,7 +269,7 @@ def test_file_change_translation(
         ),
     ])
 def test_translate_todo_list_renders_one_text_delta(
-    monkeypatch, event_type: str, items: list, expected_text: str) -> None:
+    monkeypatch: pytest.MonkeyPatch, event_type: str, items: list, expected_text: str) -> None:
   backend = _build_backend(monkeypatch)
 
   translated = backend.translate_event({"type": event_type, "item": {"type": "todo_list", "items": items}})
@@ -290,7 +292,7 @@ def _todo_list_event(event_type: str, inspect_completed: bool) -> dict[str, obje
   return {"type": event_type, "item": item}
 
 
-def test_translate_todo_list_suppresses_duplicate_snapshots(monkeypatch) -> None:
+def test_translate_todo_list_suppresses_duplicate_snapshots(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   started = backend.translate_event(_todo_list_event("item.started", inspect_completed=False))
@@ -324,7 +326,8 @@ _TOOL_ITEM_ROWS = [
 
 @pytest.mark.parametrize(("item_type", "payload_field", "payload_value", "output", "tool"), _TOOL_ITEM_ROWS)
 def test_translate_tool_item_maps_one_started_completed_pair_onto_one_tool_event(
-    monkeypatch, item_type: str, payload_field: str, payload_value: str, output: str, tool: str) -> None:
+    monkeypatch: pytest.MonkeyPatch, item_type: str, payload_field: str, payload_value: str, output: str,
+    tool: str) -> None:
   backend = _build_backend(monkeypatch)
   item = {"id": "item-1", "type": item_type, payload_field: payload_value, "output": output}
 
@@ -337,7 +340,7 @@ def test_translate_tool_item_maps_one_started_completed_pair_onto_one_tool_event
   assert not updated
 
 
-def test_reasoning_item_emits_thinking_deltas(monkeypatch) -> None:
+def test_reasoning_item_emits_thinking_deltas(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   first = backend.translate_event(
@@ -382,7 +385,8 @@ def test_reasoning_item_emits_thinking_deltas(monkeypatch) -> None:
     pytest.param(None, id="fresh"),
     pytest.param("sess-1", id="resume"),
 ])
-def test_build_command_omits_auto_compact_when_absent(monkeypatch, resume_session_id: str | None) -> None:
+def test_build_command_omits_auto_compact_when_absent(
+    monkeypatch: pytest.MonkeyPatch, resume_session_id: str | None) -> None:
   backend = _build_backend(monkeypatch, model="codex-test-model", resume_session_id=resume_session_id)
 
   cmd = backend._build_command("do the thing")
@@ -394,7 +398,8 @@ def test_build_command_omits_auto_compact_when_absent(monkeypatch, resume_sessio
     pytest.param(None, id="fresh"),
     pytest.param("sess-1", id="resume"),
 ])
-def test_build_command_emits_auto_compact_once_when_configured(monkeypatch, resume_session_id: str | None) -> None:
+def test_build_command_emits_auto_compact_once_when_configured(
+    monkeypatch: pytest.MonkeyPatch, resume_session_id: str | None) -> None:
   backend = _build_backend(
       monkeypatch,
       model="codex-test-model",
@@ -412,7 +417,7 @@ def test_build_command_emits_auto_compact_once_when_configured(monkeypatch, resu
     assert cmd.index(resume_session_id) > idx
 
 
-def test_registry_propagates_auto_compact_limit_into_codex_backend(monkeypatch) -> None:
+def test_registry_propagates_auto_compact_limit_into_codex_backend(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(
       CODEX_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/codex",
@@ -437,7 +442,7 @@ def test_registry_propagates_auto_compact_limit_into_codex_backend(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_one_shot_text_raises_structured_error(monkeypatch) -> None:
+async def test_one_shot_text_raises_structured_error(monkeypatch: pytest.MonkeyPatch) -> None:
   proc = fake_one_shot_proc(
       [
           b'{"type":"error","error":{"message":"unsupported reasoning effort: ultra"}}\n',
@@ -452,7 +457,7 @@ async def test_one_shot_text_raises_structured_error(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_one_shot_text_raises_turn_failed_diagnostic(monkeypatch) -> None:
+async def test_one_shot_text_raises_turn_failed_diagnostic(monkeypatch: pytest.MonkeyPatch) -> None:
   proc = fake_one_shot_proc(
       [
           b'{"type":"turn.failed","error":{"message":"context window exceeded"}}\n',
@@ -467,7 +472,7 @@ async def test_one_shot_text_raises_turn_failed_diagnostic(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_one_shot_text_raises_nonzero_exit_with_bounded_stderr(monkeypatch) -> None:
+async def test_one_shot_text_raises_nonzero_exit_with_bounded_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
   stderr = b"codex process failed\n" + b"x" * 10000
   proc = fake_one_shot_proc([], stderr=stderr, returncode=2)
 
@@ -482,7 +487,7 @@ async def test_one_shot_text_raises_nonzero_exit_with_bounded_stderr(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_one_shot_text_ignores_non_agent_assistant_events(monkeypatch) -> None:
+async def test_one_shot_text_ignores_non_agent_assistant_events(monkeypatch: pytest.MonkeyPatch) -> None:
   proc = fake_one_shot_proc(
       [
           b'{"type":"item.completed","item":{"type":"todo_list","id":"todo-1",'
@@ -496,7 +501,7 @@ async def test_one_shot_text_ignores_non_agent_assistant_events(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_one_shot_text_kills_process_group_on_timeout(monkeypatch) -> None:
+async def test_one_shot_text_kills_process_group_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
   class _BlockingStdout:
 

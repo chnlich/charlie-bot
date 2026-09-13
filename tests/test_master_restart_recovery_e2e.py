@@ -55,6 +55,7 @@ from conftest import (
     await_recovery_tasks,
     patch_instructions_content,
     read_chat_events,
+    user_event,
 )
 from structlog.testing import capture_logs
 
@@ -936,9 +937,9 @@ async def test_uncovered_transport_turn_cleared_not_drained(
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend="oc")
   user_event_id = None
   if with_user_message:
-    user_event = {"type": "user", "content": "message A"}
-    await session_mgr.save_chat_event(meta.id, user_event)
-    user_event_id = user_event["id"]
+    event = user_event("message A")
+    await session_mgr.save_chat_event(meta.id, event)
+    user_event_id = event["id"]
   record = MasterRunRecord(
       pid=999999,
       pid_start="1",
@@ -987,8 +988,8 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(
   cfg = _uncovered_transport_cfg(home, shim)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"), backend="oc")
-  user_event = {"type": "user", "content": "message A"}
-  await session_mgr.save_chat_event(meta.id, user_event)
+  event = user_event("message A")
+  await session_mgr.save_chat_event(meta.id, event)
 
   # A live stand-in for the persisted turn's process instance: reconcile must
   # prove liveness off the REAL (pid, pid_start) pair, never off the test's say-so.
@@ -1001,7 +1002,7 @@ async def test_uncovered_transport_alive_turn_reported_kept_not_replayed(
         pid_start=stat_pair[0],
         started_at=datetime.now(UTC) - timedelta(seconds=5),
         raw_log=str(home / "sessions" / meta.id / "data" / "master_runs" / "live" / runs.RAW_LOG_NAME),
-        user_event_id=user_event["id"],
+        user_event_id=event["id"],
     )
     await session_mgr.persist_master_run(meta.id, record)
 
@@ -1038,14 +1039,14 @@ async def test_undrainable_dead_turn_replayed_with_marker(
   cfg = _cfg(home, shim)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"))
-  user_event = {"type": "user", "content": "message A"}
-  await session_mgr.save_chat_event(meta.id, user_event)
+  event = user_event("message A")
+  await session_mgr.save_chat_event(meta.id, event)
   record = MasterRunRecord(
       pid=pid,
       pid_start=pid_start,
       started_at=datetime.now(UTC) - timedelta(seconds=5),
       raw_log=str(home / "sessions" / meta.id / "data" / "master_runs" / "gone" / runs.RAW_LOG_NAME),
-      user_event_id=user_event["id"],
+      user_event_id=event["id"],
   )
   await session_mgr.persist_master_run(meta.id, record)
 

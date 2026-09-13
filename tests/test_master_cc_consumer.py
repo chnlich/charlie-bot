@@ -25,6 +25,7 @@ from conftest import (
     patch_resume_seams,
     run_resume_round,
     run_session_consumer,
+    user_event,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -345,7 +346,7 @@ async def test_every_metadata_return_path_overwrites_stamp(tmp_path: Path, monke
   # One chat event so fork/elone have history to reference.
   events_path = mgr.get_chat_events_path(created.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)
-  events_path.write_text(json.dumps({"type": "user", "content": "hi"}) + "\n", encoding="utf-8")
+  events_path.write_text(json.dumps(user_event("hi")) + "\n", encoding="utf-8")
 
   renamed = await mgr.rename_session(created.id, "walk-2")
   assert renamed is not None

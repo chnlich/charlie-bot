@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from conftest import (
     JSON_UTILS_OS_REPLACE_PATCH_TARGET,
+    assistant_text_event,
     backend_option,
     build_chain_cfg,
     build_light_cc_cfg,
@@ -15,6 +16,7 @@ from conftest import (
     make_one_shot_chain,
     make_os_replace_spy,
     make_read_at_os_replace,
+    user_event,
 )
 from conftest import append_events as _append_events
 
@@ -210,19 +212,8 @@ async def test_extract_recap_memoizes_repeats_at_one_divider(tmp_path: Path) -> 
   _append_events(
       mgr.get_chat_events_path(session.id),
       [
-          {
-              "type": "user",
-              "content": "first ask"
-          },
-          {
-              "type": "assistant",
-              "message": {
-                  "content": [{
-                      "type": "text",
-                      "text": "first answer"
-                  }]
-              }
-          },
+          user_event("first ask"),
+          assistant_text_event("first answer"),
       ],
   )
 
@@ -232,19 +223,8 @@ async def test_extract_recap_memoizes_repeats_at_one_divider(tmp_path: Path) -> 
     _append_events(
         mgr.get_chat_events_path(session.id),
         [
-            {
-                "type": "user",
-                "content": "second ask"
-            },
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [{
-                        "type": "text",
-                        "text": "second answer"
-                    }]
-                }
-            },
+            user_event("second ask"),
+            assistant_text_event("second answer"),
         ],
     )
     repeat = recap.extract_recap(mgr, session.id, upto=1)
@@ -265,7 +245,7 @@ async def test_extract_memo_drops_with_session_runtime_state(tmp_path: Path) -> 
   the drop the new conversation would be served the deleted one's extraction.
   """
   _cfg, mgr, session = await make_home_session(tmp_path, name="memo-drop")
-  _append_events(mgr.get_chat_events_path(session.id), [{"type": "user", "content": "ask"}])
+  _append_events(mgr.get_chat_events_path(session.id), [user_event("ask")])
 
   recap.extract_recap(mgr, session.id)
   assert any(key[0] == session.id for key in recap._extract_memo)
@@ -282,7 +262,7 @@ async def test_extract_recap_memo_hit_serves_repeat_without_scan(tmp_path: Path)
   caller to the threaded path, which re-checks the memo before scanning.
   """
   _cfg, mgr, session = await make_home_session(tmp_path, name="memo-hit")
-  _append_events(mgr.get_chat_events_path(session.id), [{"type": "user", "content": "ask"}])
+  _append_events(mgr.get_chat_events_path(session.id), [user_event("ask")])
 
   assert recap.extract_recap_memo_hit(session.id, 0) is None  # cold memo
   recap.extract_recap(mgr, session.id, upto=0)

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_ID, build_sessions_cfg
+from conftest import OPUS_BACKEND_ID, build_sessions_cfg, user_event
 from conftest import make_sessions_client as _build_client
 
 from src.core.models import CreateSessionRequest, SessionStatus
@@ -32,7 +32,7 @@ async def test_archive_non_empty_session_keeps_files_and_marks_archived(tmp_path
   cfg = build_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="Non-empty"), backend=OPUS_BACKEND_ID)
-  await session_mgr.save_chat_event(meta.id, {"type": "user", "content": "hello"})
+  await session_mgr.save_chat_event(meta.id, user_event("hello"))
   session_dir = cfg.sessions_dir / meta.id
   events_path = session_mgr.get_chat_events_path(meta.id)
 

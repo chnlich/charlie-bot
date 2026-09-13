@@ -8,8 +8,10 @@ import pytest
 from conftest import (
     CHAT_RUN_AND_FINALIZE_PATCH_TARGET,
     OPUS_BACKEND_ID,
+    assistant_text_event,
     build_two_backend_cfg,
     close_create_logged_task,
+    user_event,
 )
 from conftest import make_sessions_client as _build_client
 from conftest import session_dir_names as _session_dir_names
@@ -26,19 +28,8 @@ async def _seed_parent(session_mgr: SessionManager, *, backend: str = OPUS_BACKE
   events_path.write_text(
       "\n".join(
           [
-              json.dumps({
-                  "type": "user",
-                  "content": "hello"
-              }),
-              json.dumps({
-                  "type": "assistant",
-                  "message": {
-                      "content": [{
-                          "type": "text",
-                          "text": "world"
-                      }]
-                  }
-              }),
+              json.dumps(user_event("hello")),
+              json.dumps(assistant_text_event("world")),
           ]) + "\n",
       encoding="utf-8",
   )

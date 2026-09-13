@@ -47,6 +47,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from src.core.memory import TOPIC_NAME_RE
 from src.core.memory_replay.errors import ReplayManifestError
 
 MANIFEST_VERSION = 1
@@ -56,7 +57,6 @@ MANIFEST_VERSION = 1
 # returns and every entry path a manifest declares.
 ENTRY_PATH_RE = re.compile(r"^entries/([a-z0-9][a-z0-9-]*)/([A-Za-z0-9._-]+)\.md$")
 REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 SOURCE_KINDS = ("candidate", "entry", "guideline", "document")
 
@@ -314,7 +314,7 @@ def _check_topics(spec: ManifestSpec, path: Path) -> None:
     raise ReplayManifestError(f"replay manifest {path}: topics must list at least one topic name")
   seen: set[str] = set()
   for name in spec.topics:
-    if not TOPIC_RE.match(name):
+    if not TOPIC_NAME_RE.match(name):
       raise ReplayManifestError(f"replay manifest {path}: topic {name!r} is not a valid topic name")
     if name in seen:
       raise ReplayManifestError(f"replay manifest {path}: duplicate topic {name!r}")

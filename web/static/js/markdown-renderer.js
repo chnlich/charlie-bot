@@ -3,7 +3,7 @@
 // When an outer ``` fence contains inner ``` fences, upgrade the outer
 // delimiter to use more backticks/tildes than any nested fence.
 // The fence-close rule (same char, len >= top.len, bare info string) lives in
-// scanFences alone; fixNestedFences and openFenceTail are its two consumers.
+// scanFences alone; fixNestedFences is its only consumer.
 // ---------------------------------------------------------------------------
 // The fence-line rule both the scanner and the delimiter rewrite share.
 var FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)/;
@@ -82,7 +82,7 @@ function applyFenceUpgrades(lines, upgrades) {
 
 // The streaming paint's state, owned here and driven by usage.js's
 // paintStreamDraft: null on every render path except the streaming paint's
-// parse, where it holds an array that walkTokens fills with the parse's code
+// parse, where it holds an array that recordCodeTokens fills with the parse's code
 // tokens in document order. The block still growing at the draft's end is the
 // LAST of them (an unterminated fence runs to EOF), so renderer.code can skip
 // its highlight by token identity — no model of marked's block structure
@@ -475,7 +475,7 @@ function recordCodeTokens(tokens) {
     const lang = (typeof token === 'object' ? token.lang : arguments[1]) || '';
     const trimmed = code.replace(/\n$/, '');
     const resolvedLang = (lang && hljs.getLanguage(lang)) ? lang : '';
-    // The growing tail skips by token identity: walkTokens recorded this
+    // The growing tail skips by token identity: recordCodeTokens recorded this
     // parse's code tokens in document order, the unterminated block is the
     // last of them, and its raw not ending on a closing fence says it never
     // closed. The cache check first keeps a completed block that shares the

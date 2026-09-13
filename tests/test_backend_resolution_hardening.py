@@ -35,7 +35,7 @@ def _write_transcript(config_dir: Path, cc_session_id: str) -> None:
   (project / f"{cc_session_id}.jsonl").write_text("{}\n", encoding="utf-8")
 
 
-def test_load_config_reads_proxy_url_per_backend(tmp_path: Path, monkeypatch) -> None:
+def test_load_config_reads_proxy_url_per_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   home = tmp_path / "charliebot"
   home.mkdir()
   (home / "config.yaml").write_text(
@@ -67,12 +67,12 @@ backends:
   assert claude.id == "claude"
 
 
-def test_registry_scopes_opencode_proxy_to_opencode_constructor(monkeypatch) -> None:
+def test_registry_scopes_opencode_proxy_to_opencode_constructor(monkeypatch: pytest.MonkeyPatch) -> None:
   captured: dict[str, dict] = {}
 
   class _FakeOpenCodeBackend:
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: object) -> None:
       captured["opencode"] = kwargs
 
   monkeypatch.setattr(registry, "OpenCodeBackend", _FakeOpenCodeBackend)
@@ -123,7 +123,7 @@ def _write_port_2222(cfg_path: Path) -> None:
   os.utime(cfg_path, (0, 0))  # force a different mtime
 
 
-def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypatch) -> None:
+def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A reload must update the existing instance so earlier holders see new values."""
   cfg_path = _reload_rig(tmp_path, monkeypatch)
 
@@ -138,7 +138,7 @@ def test_get_config_refreshes_in_place_keeping_identity(tmp_path: Path, monkeypa
   assert holder.server.port == 2222
 
 
-def test_get_config_keeps_previous_value_when_reload_fails(tmp_path: Path, monkeypatch) -> None:
+def test_get_config_keeps_previous_value_when_reload_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg_path = _reload_rig(tmp_path, monkeypatch)
 
   first = core_config.get_config()

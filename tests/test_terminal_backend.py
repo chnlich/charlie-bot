@@ -13,14 +13,14 @@ from typing import ClassVar
 
 import pytest
 from conftest import (
-    SERVER_CHECK_WS_AUTH_PATCH_TARGET,
-    TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET,
-    make_fake_run_tmux,
+  SERVER_CHECK_WS_AUTH_PATCH_TARGET,
+  TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET,
+  make_fake_run_tmux,
 )
-from fastapi import WebSocketDisconnect
+from fastapi import WebSocket, WebSocketDisconnect
 
 from src.agents.backends import pty_common, terminal, tui
-from src.agents.backends.pty_common import PTY_INPUT, PTY_RESIZE
+from src.agents.backends.pty_common import PTY_INPUT, PTY_RESIZE, PtyAttachment
 from src.core.config import CHARLIEBOT_HOME_ENV
 
 
@@ -88,7 +88,7 @@ async def test_run_tmux_strips_session_env(monkeypatch: pytest.MonkeyPatch) -> N
     async def wait(self) -> None:
       return None
 
-  async def fake_create_subprocess_exec(*args, **kwargs):
+  async def fake_create_subprocess_exec(*args: object, **kwargs: object) -> FakeProcess:
     captured["env"] = kwargs["env"]
     return FakeProcess()
 
@@ -235,7 +235,7 @@ async def test_run_terminal_attachment_attaches_and_handles_input(monkeypatch: p
   async def fake_ensure_terminal_session() -> None:
     ensured.append(True)
 
-  async def fake_pump(_attachment, _websocket) -> None:
+  async def fake_pump(_attachment: PtyAttachment, _websocket: WebSocket) -> None:
     await asyncio.sleep(60)
 
   monkeypatch.setattr(terminal, "ensure_terminal_session", fake_ensure_terminal_session)
@@ -276,12 +276,12 @@ async def test_tui_attachment_still_uses_shared_pty_path(
   async def fake_ensure_tmux_session(session_id: str, working_dir: Path) -> None:
     ensured.append((session_id, working_dir))
 
-  async def fake_pump(_attachment, _websocket) -> None:
+  async def fake_pump(_attachment: PtyAttachment, _websocket: WebSocket) -> None:
     await asyncio.sleep(60)
 
   class FakeSessionManager:
 
-    async def get_session(self, _session_id: str):
+    async def get_session(self, _session_id: str) -> None:
       return None
 
   monkeypatch.setattr(tui, "ensure_tmux_session", fake_ensure_tmux_session)
@@ -310,11 +310,11 @@ async def test_terminal_websocket_ws_auth_gate(monkeypatch: pytest.MonkeyPatch, 
   checked = []
   attached = []
 
-  async def fake_check_ws_auth(websocket) -> bool:
+  async def fake_check_ws_auth(websocket: WebSocket) -> bool:
     checked.append(websocket)
     return auth_ok
 
-  async def fake_run_terminal_attachment(websocket) -> None:
+  async def fake_run_terminal_attachment(websocket: WebSocket) -> None:
     attached.append(websocket)
 
   monkeypatch.setattr(SERVER_CHECK_WS_AUTH_PATCH_TARGET, fake_check_ws_auth)

@@ -57,7 +57,7 @@ async def _expect_pin_hard_fail(
 
 
 @pytest.mark.asyncio
-async def test_message_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monkeypatch) -> None:
+async def test_message_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """No backends.options entry starts with codex — the pin still must not be
   substituted onto anything."""
   cfg = CharlieBotConfig(
@@ -76,7 +76,7 @@ async def test_message_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, mo
 
 
 @pytest.mark.asyncio
-async def test_wake_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monkeypatch) -> None:
+async def test_wake_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Same session/pin as above, driven through the async-wake entry instead
   of the message path — guards delegation merge / improve completion /
   schedule triggers / review wakes, which all funnel through trigger_master."""
@@ -96,7 +96,8 @@ async def test_wake_path_unresolvable_codex_pin_hard_fails(tmp_path: Path, monke
 
 
 @pytest.mark.asyncio
-async def test_unresolvable_codex_pin_lands_on_none_of_several_codex_options(tmp_path: Path, monkeypatch) -> None:
+async def test_unresolvable_codex_pin_lands_on_none_of_several_codex_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """With several codex-type entries configured, an unresolvable codex-prefixed
   pin must hard-fail rather than land on any of them."""
   cfg = CharlieBotConfig(
@@ -131,7 +132,8 @@ async def test_unresolvable_codex_pin_lands_on_none_of_several_codex_options(tmp
 
 
 @pytest.mark.asyncio
-async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_zero(tmp_path: Path, monkeypatch) -> None:
+async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """replay_user_message never passes backend_option — the only caller that
   doesn't. A resolvable pin that isn't backends.options[0] must still win."""
   cfg = build_two_backend_cfg(tmp_path)
@@ -151,7 +153,8 @@ async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_ze
 
 
 @pytest.mark.asyncio
-async def test_replay_unresolvable_pin_hard_fails_not_substituted(tmp_path: Path, monkeypatch) -> None:
+async def test_replay_unresolvable_pin_hard_fails_not_substituted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Replay of an unresolvable pin must reach the hard fail, same as the
   message and wake paths — never a substitution onto backends.options[0]."""
   cfg = build_two_backend_cfg(tmp_path)
@@ -171,7 +174,8 @@ async def test_replay_unresolvable_pin_hard_fails_not_substituted(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_empty_pin_no_option_rejects_not_backend_options_zero(tmp_path: Path, monkeypatch) -> None:
+async def test_empty_pin_no_option_rejects_not_backend_options_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """No pin at all and no explicit option must hard-fail, not fall back to
   backends.options[0] (the wake-path fallback was removed)."""
   cfg = build_two_backend_cfg(tmp_path)

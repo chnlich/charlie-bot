@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -21,7 +22,7 @@ _UPSTREAM_BASE = "http://upstream.example/v1"
 _AUTH_TOKEN = "charliebot-key"
 
 
-def _option(**overrides) -> Any:
+def _option(**overrides: Any) -> Any:
   base: dict[str, Any] = {
       "id": _BACKEND_ID,
       "label": "CC GLM-5.2",
@@ -93,7 +94,7 @@ def _build_client(cfg: CharlieBotConfig) -> TestClient:
   return TestClient(app)
 
 
-def _mock_upstream(monkeypatch: pytest.MonkeyPatch, handler) -> None:
+def _mock_upstream(monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]) -> None:
   client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
   def _factory() -> httpx.AsyncClient:

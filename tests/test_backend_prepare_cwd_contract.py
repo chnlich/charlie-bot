@@ -53,7 +53,7 @@ def _build_backend(
     patch_target: str | None,
     fake_binary: str,
     monkeypatch: pytest.MonkeyPatch,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentBackend:
   if patch_target is None:
     return backend_cls(**ctor_kwargs, **kwargs)
@@ -106,7 +106,7 @@ def test_prepare_cwd_skips_instructions_file_when_unset(
   assert not (tmp_path / filename).exists()
 
 
-def test_opencode_prepare_cwd_writes_agents_md_even_when_config_exists(monkeypatch, tmp_path: Path) -> None:
+def test_opencode_prepare_cwd_writes_agents_md_even_when_config_exists(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """AGENTS.md must be written even when opencode.json already exists (resumed sessions)."""
   backend = _build_backend(
       OpenCodeBackend, {},

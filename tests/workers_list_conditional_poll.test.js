@@ -28,17 +28,17 @@ function stubFetch(rounds) {
   return {fetch, calls};
 }
 
-test('the workers poll repeats the rendered ETag via ?etag= and skips the repaint on 204', async () => {
+// The poll harness: the tab-workers container plus the document lookup
+// workers.js reads, wired to a fetch that serves `rounds` in order. Every
+// poll test drives the same DOM; only the rounds differ.
+function buildPollHarness(rounds) {
   const container = {
     innerHTML: '',
     children: [],
     prepend(child) { this.children.unshift(child); },
     appendChild(child) { this.children.push(child); },
   };
-  const {fetch, calls} = stubFetch([
-    {status: 200, etag: '"e1"', items: [ROW]},
-    {status: 204},
-  ]);
+  const {fetch, calls} = stubFetch(rounds);
   const context = loadSidebarWorkersContext({
     document: {
       createElement: () => ({className: '', innerHTML: '', children: [], prepend() {}, appendChild() {}}),
@@ -48,6 +48,14 @@ test('the workers poll repeats the rendered ETag via ?etag= and skips the repain
     startPageTimer: () => {},
     fetch,
   });
+  return {context, calls, container};
+}
+
+test('the workers poll repeats the rendered ETag via ?etag= and skips the repaint on 204', async () => {
+  const {context, calls, container} = buildPollHarness([
+    {status: 200, etag: '"e1"', items: [ROW]},
+    {status: 204},
+  ]);
 
   await context.ensureWorkersLoadedForActiveSession({force: true});
   assert.equal(calls[0].url, '/api/threads/session-a/list');
@@ -61,25 +69,10 @@ test('the workers poll repeats the rendered ETag via ?etag= and skips the repain
 });
 
 test('a 200 after a 204 refreshes the stored ETag for the next poll', async () => {
-  const container = {
-    innerHTML: '',
-    children: [],
-    prepend(child) { this.children.unshift(child); },
-    appendChild(child) { this.children.push(child); },
-  };
-  const {fetch, calls} = stubFetch([
+  const {context, calls} = buildPollHarness([
     {status: 200, etag: '"e1"', items: [ROW]},
     {status: 200, etag: '"e2"', items: [Object.assign({}, ROW, {id: 'thread-2'})]},
   ]);
-  const context = loadSidebarWorkersContext({
-    document: {
-      createElement: () => ({className: '', innerHTML: '', children: [], prepend() {}, appendChild() {}}),
-      getElementById: (id) => (id === 'tab-workers' ? container : null),
-      querySelectorAll: () => [],
-    },
-    startPageTimer: () => {},
-    fetch,
-  });
 
   await context.ensureWorkersLoadedForActiveSession({force: true});
   await context.pollWorkers();

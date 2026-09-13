@@ -18,10 +18,7 @@ import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, BinaryIO
-
-if TYPE_CHECKING:
-  import asyncio
+from typing import BinaryIO
 
 import numpy as np
 import structlog
@@ -132,36 +129,31 @@ def voice_model_paths(cfg: CharlieBotConfig) -> VoiceModelPaths:
   )
 
 
-def start_model_provisioning(cfg: CharlieBotConfig) -> asyncio.Task[None] | None:
-  """Start non-blocking speech model provisioning and verification."""
-  import asyncio
+def provision_models(cfg: CharlieBotConfig) -> None:
+  """Provision the speech models once per process; failures park the error.
 
-  global _provisioning_started, _provisioning_error
+  Runs on a worker thread (server._provision_speech_models): this module's numpy
+  import and everything torch-adjacent behind it must stay off the event loop's
+  startup path, so the caller imports this module inside its thread. A provisioning
+  failure lands in _provisioning_error for get_ready_model_paths to raise.
+  """
+  global _provisioning_started, _provisioning_error, _ready_paths
   with _state_lock:
     if _provisioning_started:
-      return None
+      return
     _provisioning_started = True
     _provisioning_error = None
-
-  async def _run() -> None:
-    global _ready_paths, _provisioning_error, _provisioning_started
-    try:
-      paths = await asyncio.to_thread(ensure_models_cached, cfg)
-    except asyncio.CancelledError:
-      with _state_lock:
-        _provisioning_started = False
-      raise
-    except Exception as exc:
-      with _state_lock:
-        _provisioning_error = str(exc)
-        _provisioning_started = False
-      log.exception("speech_model_provisioning_failed")
-      return
+  try:
+    paths = ensure_models_cached(cfg)
+  except Exception as exc:
     with _state_lock:
-      _ready_paths = paths
-    log.info("speech_models_ready", cache_dir=str(paths.cache_dir))
-
-  return asyncio.create_task(_run(), name="speech-model-provisioning")
+      _provisioning_error = str(exc)
+      _provisioning_started = False
+    log.exception("speech_model_provisioning_failed")
+    return
+  with _state_lock:
+    _ready_paths = paths
+  log.info("speech_models_ready", cache_dir=str(paths.cache_dir))
 
 
 def get_ready_model_paths() -> VoiceModelPaths:

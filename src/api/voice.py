@@ -7,18 +7,16 @@ import json
 import wave
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 
-from src.agents.transcriber import (
-    SAMPLE_RATE,
-    SimulatedStreamingTranscriptionSession,
-    SpeechModelsNotReady,
-    create_transcription_session,
-)
 from src.core.config import CharlieBotConfig, get_config
+
+if TYPE_CHECKING:
+  from src.agents.transcriber import SimulatedStreamingTranscriptionSession
 
 log = structlog.get_logger()
 
@@ -28,6 +26,10 @@ _active_voice_lock = asyncio.Lock()
 
 async def handle_voice_websocket(websocket: WebSocket, session_id: str) -> None:
   """Run one local streaming transcription WebSocket."""
+  # src.agents.transcriber carries the numpy import; the transcription stack
+  # loads here, off the server import path the M99 collector measures.
+  from src.agents.transcriber import SpeechModelsNotReady, create_transcription_session
+
   cfg = get_config()
   try:
     session = await asyncio.to_thread(create_transcription_session, cfg)
@@ -141,6 +143,8 @@ def _persist_voice_dump(cfg: CharlieBotConfig, session_id: str, audio_bytes: byt
 
 
 def _write_wav(path: Path, pcm_bytes: bytes) -> None:
+  from src.agents.transcriber import SAMPLE_RATE
+
   with wave.open(str(path), "wb") as wav:
     wav.setnchannels(1)
     wav.setsampwidth(2)

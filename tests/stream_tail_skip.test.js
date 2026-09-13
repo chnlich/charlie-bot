@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { loadRendererContext, MARKED_URL } = require('./marked_renderer_harness');
+const { loadRendererContext, MARKED_URL, paint } = require('./marked_renderer_harness');
 
 // hljs stand-in whose output visibly marks the path taken: HL[AUTO]/HL[LANG]
 // prefix the input, so a skipped block (escaped-plain) and a highlighted block
@@ -16,16 +16,6 @@ function countingHljs() {
       highlight: (code) => { calls.lang += 1; return { value: 'HL[LANG]' + code }; },
     },
   };
-}
-
-// One streaming paint against the real marked + renderer, exactly the shape
-// usage.js's paintStreamDraft drives: the recorder filled by parseStreamDraft's
-// own token walk, cleared after.
-function paint(context, draft) {
-  context.streamPaintCodeTokens = [];
-  const html = context.parseStreamDraft(context.fixNestedFences(draft));
-  context.streamPaintCodeTokens = null;
-  return html;
 }
 
 test('the growing tail paints escaped-plain and highlights once the fence closes', async () => {

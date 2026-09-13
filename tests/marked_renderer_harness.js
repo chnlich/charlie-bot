@@ -74,4 +74,14 @@ async function loadStockMarked() {
   return context.marked;
 }
 
-module.exports = { MARKED_URL, loadRenderer, loadRendererContext, loadStockMarked };
+// One streaming paint over a loadRendererContext() context, the exact parse
+// window usage.js's paintStreamDraft opens: streamPaintCodeTokens filled by
+// parseStreamDraft's own token walk and closed after.
+function paint(context, draft) {
+  context.streamPaintCodeTokens = [];
+  const html = context.parseStreamDraft(context.fixNestedFences(draft));
+  context.streamPaintCodeTokens = null;
+  return html;
+}
+
+module.exports = { MARKED_URL, loadRenderer, loadRendererContext, loadStockMarked, paint };

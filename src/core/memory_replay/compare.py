@@ -73,7 +73,13 @@ from src.core.memory_replay.exchange import (
     build_reviewer_request,
     parse_model_output,
 )
-from src.core.memory_replay.identity import approval_digest, canonical_bytes, input_identity, sha256_hex
+from src.core.memory_replay.identity import (
+    approval_digest,
+    canonical_bytes,
+    input_identity,
+    sha256_hex,
+    system_prompt_fingerprints,
+)
 from src.core.memory_replay.manifest import Manifest, Theme, load_manifest
 from src.core.memory_replay.report import _dispositions_table, _e, _page, _row
 from src.core.memory_replay.retrieval import FeedbackSelection
@@ -554,10 +560,7 @@ def _verify_source_snapshots(run_dir: Path, manifest: Manifest, verification: di
 
 def _verify_prompt_fingerprints(record: dict, contract: ExchangeContract, verification: dict) -> None:
   """The recorded system prompts must match the prompts of the recorded contract."""
-  current = {
-      "editor": sha256_hex(contract.editor_system.encode("utf-8")),
-      "reviewer": sha256_hex(contract.reviewer_system.encode("utf-8")),
-  }
+  current = system_prompt_fingerprints(contract.editor_system, contract.reviewer_system)
   recorded = record.get("system_prompts")
   if not recorded:
     verification["system_prompts"] = {

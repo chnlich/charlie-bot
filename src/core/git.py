@@ -121,6 +121,13 @@ async def _git_rev_parse(repo_path: Path, ref: str) -> str | None:
 
 _SYMREF_PREFIX = "ref: refs/heads/"
 
+# A probe consumes only the ref advertisement, which protocol v0 serves in the
+# one GET; v2 adds a second POST round trip for its ls-refs command (~+110 ms
+# per probe measured against this host's GitHub origin). ls-remote uses no
+# v2-only feature, and path/file remotes ignore the version, so the override
+# changes no answer — only the probe's wall time.
+_PROBE_LS_REMOTE_ARGS: tuple[str, ...] = ("-c", "protocol.version=0")
+
 
 def _heads_ref(branch: str) -> str:
   """The ref a branch lives at: ``refs/heads/<branch>``."""
@@ -168,6 +175,7 @@ async def git_remote_default_branch_and_tip(repo_path: Path) -> tuple[str, str |
   """
   ok, out, err = await _git_stdout(
       repo_path,
+      *_PROBE_LS_REMOTE_ARGS,
       "ls-remote",
       "--symref",
       "origin",
@@ -246,6 +254,7 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
   if origin_configured and remote_tip is None:
     ok, out, ls_err = await _git_stdout(
         repo_path,
+        *_PROBE_LS_REMOTE_ARGS,
         "ls-remote",
         "origin",
         _heads_ref(branch),

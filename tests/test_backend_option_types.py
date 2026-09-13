@@ -10,6 +10,7 @@ from src.core.models import (
     BackendBase,
     BackendType,
     CharlieCodeBackend,
+    CodexBackend,
 )
 
 # Field names the flat BackendOption carried that exist on no typed class; extra='forbid'
@@ -87,3 +88,36 @@ def test_charlie_code_only_option_defaults_then_accepts_explicit(field: str, def
 def test_charlie_code_timeout_seconds_rejects_nonpositive(bad: int) -> None:
   with pytest.raises(ValidationError):
     BACKEND_OPTION_ADAPTER.validate_python({**minimal_payload(CharlieCodeBackend), "timeout_seconds": bad})
+
+
+@pytest.mark.parametrize(
+    ("cls", "field", "explicit"),
+    [
+        (CodexBackend, "model_auto_compact_token_limit", 50000),
+        (CharlieCodeBackend, "context_window", 262144),
+    ],
+    ids=["codex-model_auto_compact_token_limit", "charlie-code-context_window"],
+)
+def test_type_option_positive_int_defaults_none_then_accepts_explicit(
+    cls: type[BackendBase], field: str, explicit: int) -> None:
+  """A per-type positive-int option defaults to None on a minimal entry and keeps one explicitly set value."""
+  payload = minimal_payload(cls)
+  assert getattr(BACKEND_OPTION_ADAPTER.validate_python(payload), field) is None
+  accepted = BACKEND_OPTION_ADAPTER.validate_python({**payload, field: explicit})
+  assert type(accepted) is cls
+  assert getattr(accepted, field) == explicit
+
+
+@pytest.mark.parametrize(
+    ("cls", "field", "bads"),
+    [
+        (CodexBackend, "model_auto_compact_token_limit", (0, -1, -1000)),
+        (CharlieCodeBackend, "context_window", (0, -1)),
+    ],
+    ids=["codex-model_auto_compact_token_limit", "charlie-code-context_window"],
+)
+def test_type_option_positive_int_rejects_nonpositive(
+    cls: type[BackendBase], field: str, bads: tuple[int, ...]) -> None:
+  for bad in bads:
+    with pytest.raises(ValidationError):
+      BACKEND_OPTION_ADAPTER.validate_python({**minimal_payload(cls), field: bad})

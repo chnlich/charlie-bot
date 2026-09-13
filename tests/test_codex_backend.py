@@ -13,7 +13,6 @@ from conftest import (
     build_cli_backend,
     fake_one_shot_proc,
 )
-from pydantic import ValidationError
 
 from src.agents.backends.codex import CodexBackend
 from src.agents.backends.registry import build_backend
@@ -403,34 +402,6 @@ def test_build_command_emits_auto_compact_once_when_configured(monkeypatch, resu
   assert cmd[-2:] == ["--", "do the thing"]
   if resume_session_id is not None:
     assert cmd.index(resume_session_id) > idx
-
-
-def test_backend_option_defaults_auto_compact_limit_to_none() -> None:
-  option = backend_option(id="codex-o3", label="Codex", type="codex", model="o3")
-  assert option.model_auto_compact_token_limit is None
-
-
-def test_backend_option_accepts_positive_auto_compact_limit() -> None:
-  option = backend_option(
-      id="codex-o3",
-      label="Codex",
-      type="codex",
-      model="o3",
-      model_auto_compact_token_limit=50000,
-  )
-  assert option.model_auto_compact_token_limit == 50000
-
-
-@pytest.mark.parametrize("bad", [0, -1, -1000])
-def test_backend_option_rejects_nonpositive_auto_compact_limit(bad: int) -> None:
-  with pytest.raises(ValidationError):
-    backend_option(
-        id="codex-o3",
-        label="Codex",
-        type="codex",
-        model="o3",
-        model_auto_compact_token_limit=bad,
-    )
 
 
 def test_registry_propagates_auto_compact_limit_into_codex_backend(monkeypatch) -> None:

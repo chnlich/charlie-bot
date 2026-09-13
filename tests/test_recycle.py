@@ -754,67 +754,66 @@ def _switch_payload_messages(mgr: SessionManager, session: SessionMetadata) -> t
   return messages, payload["messages"]
 
 
+def _payload_ts(seconds: int) -> str:
+  return f"2026-05-10T00:00:{seconds:02d}Z"
+
+
+# Omitting `timestamp` (not setting it to None) is load-bearing: the raw-page
+# test feeds timestamp-less events so the pre-aggregation surface stays raw.
+def _tool_use_event(event_id: str, name: str, tool_input: dict, ts: str | None = None) -> dict:
+  event: dict[str, Any] = {"type": ET.TOOL_USE, "id": event_id, "name": name, "input": tool_input}
+  if ts is not None:
+    event["timestamp"] = ts
+  return event
+
+
+def _tool_result_event(event_id: str, content: str, ts: str | None = None) -> dict:
+  event: dict[str, Any] = {
+      "type": ET.USER,
+      "id": event_id,
+      "message": {
+          "content": [{
+              "type": "tool_result",
+              "content": content
+          }]
+      },
+  }
+  if ts is not None:
+    event["timestamp"] = ts
+  return event
+
+
+def _assistant_event(event_id: str, text: str, ts: str | None = None) -> dict:
+  event: dict[str, Any] = {
+      "type": ET.ASSISTANT,
+      "id": event_id,
+      "message": {
+          "content": [{
+              "type": "text",
+              "text": text
+          }]
+      },
+  }
+  if ts is not None:
+    event["timestamp"] = ts
+  return event
+
+
 @pytest.mark.asyncio
 async def test_bootstrap_payload_trims_tool_previews_over_cap(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   big_output = "o" * (500 + 40000)
   big_command = "git " + "x" * (500 + 40000)
   events = [
-      {
-          "type": ET.TOOL_USE,
-          "id": "tool-0",
-          "name": "Read",
-          "input": {
-              "file_path": "a.txt"
-          },
-          "timestamp": "2026-05-10T00:00:00Z",
-      },
-      {
-          "type": ET.USER,
-          "id": "tool-result-1",
-          "message": {
-              "content": [{
-                  "type": "tool_result",
-                  "content": big_output
-              }]
-          },
-          "timestamp": "2026-05-10T00:00:01Z",
-      },
-      {
-          "type": ET.TOOL_USE,
-          "id": "tool-1",
-          "name": "Bash",
-          "input": {
-              "command": big_command
-          },
-          "timestamp": "2026-05-10T00:00:02Z",
-      },
-      {
-          "type": ET.USER,
-          "id": "tool-result-2",
-          "message": {
-              "content": [{
-                  "type": "tool_result",
-                  "content": "ok"
-              }]
-          },
-          "timestamp": "2026-05-10T00:00:03Z",
-      },
-      {
-          "type": ET.ASSISTANT,
-          "id": "assistant-3",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "done"
-              }]
-          },
-          "timestamp": "2026-05-10T00:00:04Z",
-      },
+      _tool_use_event("tool-0", "Read", {"file_path": "a.txt"}, _payload_ts(0)),
+      _tool_result_event("tool-result-1", big_output, _payload_ts(1)),
+      _tool_use_event("tool-1", "Bash", {"command": big_command}, _payload_ts(2)),
+      _tool_result_event("tool-result-2", "ok", _payload_ts(3)),
+      _assistant_event("assistant-3", "done", _payload_ts(4)),
       {
           "type": ET.MASTER_DONE,
           "thinking_seconds": 1,
-          "timestamp": "2026-05-10T00:00:05Z",
+          "timestamp": _payload_ts(5),
       },
   ]
   _append_events(mgr.get_chat_events_path(session.id), events)
@@ -838,41 +837,13 @@ async def test_bootstrap_payload_trims_tool_previews_over_cap(tmp_path: Path) ->
 async def test_bootstrap_payload_leaves_small_tools_untouched(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   events = [
-      {
-          "type": ET.TOOL_USE,
-          "id": "tool-0",
-          "name": "Read",
-          "input": {
-              "file_path": "a.txt"
-          },
-          "timestamp": "2026-05-10T00:00:00Z",
-      },
-      {
-          "type": ET.USER,
-          "id": "tool-result-1",
-          "message": {
-              "content": [{
-                  "type": "tool_result",
-                  "content": "x" * 499
-              }]
-          },
-          "timestamp": "2026-05-10T00:00:01Z",
-      },
-      {
-          "type": ET.ASSISTANT,
-          "id": "assistant-2",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "done"
-              }]
-          },
-          "timestamp": "2026-05-10T00:00:02Z",
-      },
+      _tool_use_event("tool-0", "Read", {"file_path": "a.txt"}, _payload_ts(0)),
+      _tool_result_event("tool-result-1", "x" * 499, _payload_ts(1)),
+      _assistant_event("assistant-2", "done", _payload_ts(2)),
       {
           "type": ET.MASTER_DONE,
           "thinking_seconds": 1,
-          "timestamp": "2026-05-10T00:00:03Z",
+          "timestamp": _payload_ts(3),
       },
   ]
   _append_events(mgr.get_chat_events_path(session.id), events)
@@ -888,34 +859,9 @@ async def test_bootstrap_payload_leaves_small_tools_untouched(tmp_path: Path) ->
 async def test_events_page_returns_raw_next_before_for_aggregated_messages(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   events = [
-      {
-          "type": ET.TOOL_USE,
-          "id": "tool-0",
-          "name": "Read",
-          "input": {
-              "file_path": "a.txt"
-          }
-      },
-      {
-          "type": ET.USER,
-          "id": "tool-result-1",
-          "message": {
-              "content": [{
-                  "type": "tool_result",
-                  "content": "ok"
-              }]
-          }
-      },
-      {
-          "type": ET.ASSISTANT,
-          "id": "assistant-2",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "done"
-              }]
-          }
-      },
+      _tool_use_event("tool-0", "Read", {"file_path": "a.txt"}),
+      _tool_result_event("tool-result-1", "ok"),
+      _assistant_event("assistant-2", "done"),
   ]
   _append_events(mgr.get_chat_events_path(session.id), events)
 

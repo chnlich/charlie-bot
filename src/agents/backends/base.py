@@ -540,8 +540,6 @@ async def tail_follow_events(
         await on_silence()
       await asyncio.sleep(poll_interval)
 
-    # Only the unprocessed tail past the last newline is a torn final write;
-    # it rides the carry into the next round's read.
     if carry.strip():
       # Dropping it makes a restart replay the run's tail as at most a
       # duplicate — never a loss.

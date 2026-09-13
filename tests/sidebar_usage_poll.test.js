@@ -10,6 +10,18 @@ const { baseSessionContext, buildSidebarFilterElements, buildUsageElements, crea
 
 const WEBSOCKET_JS = readStatic('websocket.js');
 
+// The usage payload the usage-header tests render: the fields every test shares
+// with one value. Each call passes the fields it varies (context_tokens, model,
+// context_compact_at) so a payload-shape change lands in this one place.
+function usagePayload(overrides = {}) {
+  return {
+    context_full: 258400,
+    context_compact_at: 180000,
+    total_cost_usd: 1.25,
+    ...overrides,
+  };
+}
+
 function buildContext(overrides = {}) {
   const fetchCalls = [];
   const fetchRequests = [];
@@ -30,12 +42,7 @@ function buildContext(overrides = {}) {
         async json() {
           return {
             session: {id: 'session-a', thinking_since: '2026-03-31T20:42:52Z'},
-            usage: {
-              context_tokens: 49179,
-              context_full: 258400,
-              context_compact_at: 180000,
-              total_cost_usd: 1.25,
-            },
+            usage: usagePayload({context_tokens: 49179}),
             active_backend: context.ACTIVE_BACKEND_ID,
           };
         },
@@ -126,12 +133,7 @@ test('pollActiveSessionView refreshes usage from the lazy usage endpoint', async
   await context.pollActiveSessionView();
 
   assert.deepEqual(fetchCalls, ['/api/sessions/session-a/usage']);
-  assert.deepEqual(renderedUsage, {
-    context_tokens: 49179,
-    context_full: 258400,
-    context_compact_at: 180000,
-    total_cost_usd: 1.25,
-  });
+  assert.deepEqual(renderedUsage, usagePayload({context_tokens: 49179}));
   assert.equal(context.THINKING_SINCE, '2026-03-31T20:42:52Z');
 });
 
@@ -143,13 +145,7 @@ test('renderUsageFromData draws the compact line at the right percentage', () =>
   const elements = buildUsageElements();
   const {context} = buildContext({elements});
 
-  context.renderUsageFromData({
-    context_tokens: 100000,
-    context_full: 258400,
-    context_compact_at: 180000,
-    total_cost_usd: 1.25,
-    model: 'codex-test',
-  });
+  context.renderUsageFromData(usagePayload({context_tokens: 100000, model: 'codex-test'}));
 
   const line = elements.get('usage-compact-line');
   assert.doesNotMatch(line.className, /hidden/);
@@ -161,13 +157,7 @@ test('renderUsageFromData draws no compact line when context_compact_at is null'
   const elements = buildUsageElements();
   const {context} = buildContext({elements});
 
-  context.renderUsageFromData({
-    context_tokens: 100000,
-    context_full: 258400,
-    context_compact_at: null,
-    total_cost_usd: 1.25,
-    model: 'codex-test',
-  });
+  context.renderUsageFromData(usagePayload({context_tokens: 100000, context_compact_at: null, model: 'codex-test'}));
 
   const line = elements.get('usage-compact-line');
   assert.match(line.className, /hidden/);
@@ -181,13 +171,10 @@ test('renderUsageFromData bar turns red past the compaction line', () => {
   const elements = buildUsageElements();
   const {context} = buildContext({elements});
 
-  context.renderUsageFromData({
+  context.renderUsageFromData(usagePayload({
     context_tokens: 200000,  // past the line at 180000
-    context_full: 258400,
-    context_compact_at: 180000,
-    total_cost_usd: 1.25,
     model: 'codex-test',
-  });
+  }));
 
   const bar = elements.get('usage-bar');
   assert.match(bar.className, /bg-red-500/);
@@ -199,13 +186,10 @@ test('renderUsageFromData bar is yellow at 50%-100% of the compaction line', () 
   const elements = buildUsageElements();
   const {context} = buildContext({elements});
 
-  context.renderUsageFromData({
+  context.renderUsageFromData(usagePayload({
     context_tokens: 100000,  // 100000 / 180000 ~ 55% of the line
-    context_full: 258400,
-    context_compact_at: 180000,
-    total_cost_usd: 1.25,
     model: 'codex-test',
-  });
+  }));
 
   assert.match(elements.get('usage-bar').className, /bg-yellow-500/);
 });

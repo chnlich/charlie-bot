@@ -96,7 +96,9 @@ def test_build_command_prepends_instructions_to_prompt(monkeypatch) -> None:
 
   cmd = backend._build_command("do the work")
 
-  expected_prompt = "<system-instructions>\n# Antigravity Instructions\nBuild stuff.\n</system-instructions>\n\ndo the work"
+  expected_prompt = (
+      "<system-instructions>\n# Antigravity Instructions\nBuild stuff.\n"
+      "</system-instructions>\n\ndo the work")
   assert cmd[1] == f"--print={expected_prompt}"
 
 
@@ -143,7 +145,8 @@ async def test_run_translates_envelope_into_session_text_and_result_events(monke
       tmp_path,
       """
 cat <<'JSON'
-{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"the answer","usage":{"input_tokens":10,"output_tokens":12,"thinking_tokens":11,"cache_read_tokens":3}}
+{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,
+"response":"the answer","usage":{"input_tokens":10,"output_tokens":12,"thinking_tokens":11,"cache_read_tokens":3}}
 JSON
 """,
   )
@@ -176,7 +179,8 @@ _SYSTEM_MESSAGE_CASES = [
     pytest.param(
         """
 cat <<'JSON'
-{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"<SYSTEM_MESSAGE>\\nblock A\\n</SYSTEM_MESSAGE>\\n<SYSTEM_MESSAGE>\\nblock B\\n</SYSTEM_MESSAGE>\\n\\nthe answer"}
+{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":
+"<SYSTEM_MESSAGE>\\nblock A\\n</SYSTEM_MESSAGE>\\n<SYSTEM_MESSAGE>\\nblock B\\n</SYSTEM_MESSAGE>\\n\\nthe answer"}
 JSON
 """,
         "the answer",
@@ -184,7 +188,8 @@ JSON
     pytest.param(
         """
 cat <<'JSON'
-{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"<SYSTEM_MESSAGE>block A</SYSTEM_MESSAGE><SYSTEM_MESSAGE>block B</SYSTEM_MESSAGE>"}
+{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,
+"response":"<SYSTEM_MESSAGE>block A</SYSTEM_MESSAGE><SYSTEM_MESSAGE>block B</SYSTEM_MESSAGE>"}
 JSON
 """,
         "",

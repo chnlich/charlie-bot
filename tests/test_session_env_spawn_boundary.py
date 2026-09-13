@@ -30,7 +30,8 @@ _SHIM_TEMPLATE = """#!/bin/sh
 env > '{dump}'
 cat > /dev/null
 echo '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"SHIM"}}]}}}}'
-echo '{{"type":"result","subtype":"success","is_error":false,"result":"SHIM","usage":{{"input_tokens":1,"output_tokens":1}}}}'
+echo '{{"type":"result","subtype":"success","is_error":false,"result":"SHIM",'\
+'"usage":{{"input_tokens":1,"output_tokens":1}}}}'
 exit 0
 """
 

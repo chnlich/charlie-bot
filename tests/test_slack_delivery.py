@@ -59,7 +59,9 @@ _PERMALINK = "https://fake.slack.test/archives/C_TEST/p1700000000000100"
 # A summon prompt embeds prompts/slack_reply_format.md, which names the reply
 # command; the audit reads that name off the summon to know its contract.
 _SUMMON_CONTENT = f"Slack 线程召唤：{_PERMALINK}\n\nPost the reply with `charliebot slack reply --file <path>`."
-_MARKER_ERA_CONTENT = f"Slack 线程召唤：{_PERMALINK}\n\nThe reply begins after a line that reads exactly `SLACK REPLY:`."
+_MARKER_ERA_CONTENT = (
+    f"Slack 线程召唤：{_PERMALINK}\n\n"
+    "The reply begins after a line that reads exactly `SLACK REPLY:`.")
 
 
 class _FakeSlackClient:

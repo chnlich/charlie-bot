@@ -311,7 +311,8 @@ def test_cli_session_send_requires_a_message_source() -> None:
 
 def test_cli_session_send_missing_file_is_usage_error(tmp_path: Path) -> None:
   cfg = _mock_cli_config(tmp_path)
-  with patch("sys.argv", ["session", "send", "target-id", "--file", str(tmp_path / "nope.txt"), "--session", "caller"]), \
+  with patch("sys.argv", ["session", "send", "target-id", "--file",
+                          str(tmp_path / "nope.txt"), "--session", "caller"]), \
        patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg), \
        pytest.raises(SystemExit) as exc_info:
     session_cli_main()

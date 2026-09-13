@@ -70,7 +70,8 @@ _SITREP_TITLES = ["What waits on you?", "What is this and why?", "What was verif
 def _sitrep_ok_doc() -> str:
   return _genre_doc(
       "sitrep", '<section><h2><span class="n">1</span> What waits on you?</h2><p>Nothing.</p></section>'
-      '<section><h2><span class="n">2</span> What is this and why?</h2><p>Why. <span class="req">r1</span></p></section>'
+      '<section><h2><span class="n">2</span> What is this and why?</h2>'
+      '<p>Why. <span class="req">r1</span></p></section>'
       '<section><h2><span class="n">3</span> What was verified?</h2><p>Done. <span class="src">s</span></p></section>'
       '<section><h2><span class="n">4</span> Risks</h2>'
       '<p><span class="tag fact">Fact</span> The reading holds. <span class="src">s</span></p></section>'
@@ -497,9 +498,14 @@ def test_ordinal_named_document_word_marks_external(tmp_path: Path) -> None:
 def test_ordinal_named_first_use_order(tmp_path: Path) -> None:
   """A naming sentence before a bare use passes; the bare use before the naming sentence fails on
   the earlier sentence alone."""
-  named_first = _genre_doc("debug", _sections([f"S{i}" for i in range(1, 6)]) + "<p>plan 3：这样收</p><p>plan 3 的收法</p>")
+  named_first = _genre_doc(
+      "debug",
+      _sections([f"S{i}" for i in range(1, 6)]) + "<p>plan 3：这样收</p>"
+      "<p>plan 3 的收法</p>")
   assert _run("debug", _write(tmp_path, named_first))["ordinal-named"][0].passed
-  bare_first = _genre_doc("debug", _sections([f"S{i}" for i in range(1, 6)]) + "<p>plan 3 的收法</p><p>plan 3：这样收</p>")
+  bare_first = _genre_doc("debug",
+                          _sections([f"S{i}" for i in range(1, 6)]) + "<p>plan 3 的收法</p>"
+                          "<p>plan 3：这样收</p>")
   (outcome,) = _run("debug", _write(tmp_path, bare_first))["ordinal-named"]
   assert not outcome.passed
   assert "plan 3 的收法" in outcome.detail

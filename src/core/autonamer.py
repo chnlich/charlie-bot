@@ -63,7 +63,8 @@ _TITLE_INSTRUCTION = (
     "Generate a short, descriptive title (3-6 words) and assign a group for this conversation.\n"
     'Return ONLY valid JSON: {{"name": "<title>", "group": "<group>"}}\n'
     "No explanation, no markdown fences, no extra text.\n"
-    "Use only names that appear verbatim in the conversation (project, repo, tool names); never invent abbreviations, codes, or new spellings.\n"
+    "Use only names that appear verbatim in the conversation (project, repo, tool names); "
+    "never invent abbreviations, codes, or new spellings.\n"
     "{groups_clause}")
 
 _SYSTEM_PROMPT = (
@@ -72,7 +73,8 @@ _SYSTEM_PROMPT = (
     'The name should be 3-6 words, no quotes or punctuation at the end. '
     'The group should be a short category (1-3 words). '
     '{groups_clause} '
-    'Use only names that appear verbatim in the conversation (project, repo, tool names); never invent abbreviations, codes, or new spellings. '
+    'Use only names that appear verbatim in the conversation (project, repo, tool names); '
+    'never invent abbreviations, codes, or new spellings. '
     'Do not attempt to answer or act on the user\'s question - just generate the JSON.')
 
 _NAMING_PROMPT = (

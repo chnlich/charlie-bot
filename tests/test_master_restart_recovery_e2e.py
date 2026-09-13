@@ -82,7 +82,8 @@ while [ -e "$state/inv-$n.argv" ]; do
 done
 printf '%s\n' "$@" > "$state/inv-$n.argv"
 cat > "$state/inv-$n.prompt"
-echo "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ASSISTANT-INV-$n\"}]}}"
+echo "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":"\
+"[{\"type\":\"text\",\"text\":\"ASSISTANT-INV-$n\"}]}}"
 case "$mode" in
   hang)
     while :; do sleep 60; done
@@ -97,7 +98,8 @@ if [ "$mode" = "delegate" ]; then
       > "$state/delegate.stdout" 2> "$state/delegate.stderr"
   echo "$?" > "$state/delegate.rc"
 fi
-echo "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"RESULT-INV-$n\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"
+echo "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"RESULT-INV-$n\","\
+"\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"
 exit 0
 """
 

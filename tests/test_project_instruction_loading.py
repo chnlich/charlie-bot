@@ -566,7 +566,8 @@ async def test_run_cc_fails_turn_on_project_error(
     make_cfg: Callable[[Path], SimpleNamespace],
     error_fragments: tuple[str, ...],
 ) -> None:
-  """A broken project — unreadable body, duplicated destinations, dangling directory — fails the turn before any backend spawn."""
+  """A broken project — unreadable body, duplicated destinations, dangling directory — fails the
+  turn before any backend spawn."""
   cfg = SimpleNamespace(
       **{
           **vars(make_cfg(tmp_path)), "sessions_dir": tmp_path / "sessions",

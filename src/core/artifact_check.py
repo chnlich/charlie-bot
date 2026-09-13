@@ -421,9 +421,11 @@ ORD = re.compile(
     r"(?<![A-Za-z0-9_.])(?:(?:Trade-offs?|sections?|Section|fork|Fork|round|Round|divergence|Divergence|question|Question|item|Item|plan|Plan)(?:\s+\(|\s*)(\d+)\)?(?!\w)"
     r"|第\s*([0-9一二三四五六七八九十]+)\s*(?:节|章|题|轮|条|项|问)"
     r"|分歧\s*([0-9一二三四五六七八九十]+)"
-    r"|(?:(?<=§)|(?<=section )|(?<=Section ))\s*([1-9])\.(\d)(?![\d.%])|(?<![\d.])([1-9])\.(\d)(?=\s*(?:节|Schema|Design Details|reading note))"
+    r"|(?:(?<=§)|(?<=section )|(?<=Section ))\s*([1-9])\.(\d)(?![\d.%])"
+    r"|(?<![\d.])([1-9])\.(\d)(?=\s*(?:节|Schema|Design Details|reading note))"
     r")")
-# Labels that order the page's own sequence (rounds, items, questions) are internal unless a document word qualifies them.
+# Labels that order the page's own sequence (rounds, items, questions) are internal unless a
+# document word qualifies them.
 INTERNAL_UNLESS_QUALIFIED = re.compile(r"round|Round|question|Question|item|Item|轮|条|项|题|问")
 # Document words: a label directly after one of these points off the page.
 QUAL = re.compile(

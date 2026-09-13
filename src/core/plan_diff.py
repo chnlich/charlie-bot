@@ -30,7 +30,8 @@ _BLOCK_TAGS = frozenset(
         "thead", "tr", "ul"
     })
 _CBD_STYLE = """\
-.cbd-header { margin: 0 0 14px; padding: 8px 12px; border: 1px solid #d9dfe6; border-radius: 7px; background: #fff8df; color: #7a5a00; font-weight: 600; }
+.cbd-header { margin: 0 0 14px; padding: 8px 12px; border: 1px solid #d9dfe6; border-radius: 7px; \
+background: #fff8df; color: #7a5a00; font-weight: 600; }
 .cbd-header::before { content: attr(data-cbd-header); }
 ins.cbd-ins { background: rgba(46, 160, 67, .18); text-decoration: none; }
 .cbd-del::after { content: attr(data-del); color: #cf222e; text-decoration: line-through; }

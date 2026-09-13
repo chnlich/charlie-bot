@@ -17,14 +17,14 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import structlog
 from fastapi import WebSocket
 
 from src.agents.backends.base import make_context_compact_failed_event, make_context_compacted_event
 from src.core import event_types as ET
+from src.core.log_once import LazyStructlogLogger
 from src.core.tasks import create_logged_task
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # The client already paints stream drafts at a 200 ms cadence (usage.js
 # showStreaming), so a matching coalesce window adds at most one window of

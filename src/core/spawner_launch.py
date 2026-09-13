@@ -4,8 +4,6 @@ import time
 import uuid
 from pathlib import Path
 
-import structlog
-
 from src.agents.worker import Worker
 from src.core import claude_relay, spawner_backends, spawner_prompt
 from src.core.config import CharlieBotConfig
@@ -14,6 +12,7 @@ from src.core.git import (
     git_remote_default_branch_and_tip,
     git_worktree_dir_name,
 )
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
     BackendType,
     SpawnRequest,
@@ -24,7 +23,7 @@ from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.verify_trailer import VERIFY_RESULT_TRAILER_EXPECTED
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 async def _construct_worker(

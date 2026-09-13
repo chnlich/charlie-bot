@@ -19,13 +19,12 @@ rides.
 
 from datetime import UTC, datetime, timedelta
 
-import structlog
-
 from src.core import event_types as ET
+from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo
 from src.core.sessions import SessionManager
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 _PRE_TAKEOFF_PHRASE = "pre take off"
 _TAKEOFF_PHRASE = "take off"

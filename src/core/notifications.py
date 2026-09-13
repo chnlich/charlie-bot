@@ -1,12 +1,11 @@
 """Telegram notification support for CharlieBot."""
 
-import structlog
-
 from src.core.config import CharlieBotConfig, get_credentials
 from src.core.http import get_http_client
+from src.core.log_once import LazyStructlogLogger
 from src.core.timeouts import NOTIFICATION_TIMEOUT
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 

@@ -7,8 +7,6 @@ import traceback
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-import structlog
-
 from src.agents.worker import QuotaExhaustedException, Worker
 from src.core import (
     claude_relay,
@@ -18,12 +16,13 @@ from src.core import (
     spawner_launch,
 )
 from src.core.config import CharlieBotConfig
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import SpawnRequest, TaskType, ThreadMetadata
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 
 async def spawn_worker(

@@ -3,7 +3,6 @@
 import asyncio
 from collections.abc import Callable
 
-import structlog
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel
@@ -17,8 +16,9 @@ from src.core.latex import (
     get_tex_path,
     reject_proposal,
 )
+from src.core.log_once import LazyStructlogLogger
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 router = APIRouter()
 

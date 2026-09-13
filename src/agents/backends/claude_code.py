@@ -7,16 +7,14 @@ import signal
 from collections.abc import Mapping
 from pathlib import Path
 
-import structlog
-
 from src.agents.backends.base import SKIP_PERMISSIONS_FLAG, AgentBackend
 from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR
-from src.core.log_once import WarnOnceRegistry
+from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.models import SESSION_ID_ENV_VAR
 from src.core.process import kill_process_group, make_session_cgroup_preexec
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # Disable Claude Code tools that are unsafe in CharlieBot headless one-shot mode.
 # Besides scheduling/monitoring (scheduling tools are no-ops in -p mode, and Monitor

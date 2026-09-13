@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import Any
 
 import aiofiles
-import structlog
 
 from src.api.message_utils import build_scheduled_trigger_event
 from src.core.config import CharlieBotConfig, get_config
 from src.core.json_utils import write_model_json_atomically
+from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import (
@@ -33,7 +33,7 @@ from src.core.sessions import SessionManager
 from src.core.sidebar_state import mark_sidebar_dirty
 from src.core.tasks import create_logged_task
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 _SYS_pidfd_open = {"x86_64": 434, "aarch64": 434}
 

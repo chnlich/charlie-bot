@@ -27,17 +27,16 @@ import re
 from collections.abc import Iterator
 from pathlib import Path
 
-import structlog
-
 from src.agents.backends.registry import build_backend
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendOption, SessionMetadata
 from src.core.sessions import SessionManager
 from src.core.streaming import streaming_manager
 from src.core.timeouts import AUTONAMER_TIMEOUT
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # Matches true defaults ("Session 7") and legacy empty placeholders ("7: ").
 # Does NOT match already-renamed titles like "7: My Topic".

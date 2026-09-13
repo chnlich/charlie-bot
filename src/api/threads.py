@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from src.agents.backends.pty_common import (
@@ -23,6 +22,7 @@ from src.api.deps import get_config_on_loop, get_thread_manager, get_trigger_man
 from src.api.responses import FastJsonResponse
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.message_aggregator import TOOL_OUTPUT_RENDER_CAP, extract_text_from_message, extract_tool_result_text
 from src.core.models import (
@@ -40,7 +40,7 @@ from src.core.sidebar_state import RevisionSweepGate, session_revision, take_mar
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME, ThreadManager, iter_thread_meta_stats
 from src.core.triggers import TriggerManager
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 router = APIRouter()
 

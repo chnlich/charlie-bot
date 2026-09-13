@@ -6,13 +6,13 @@ import subprocess
 import time
 from pathlib import Path
 
-import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.core.config import CharlieBotConfig, get_config
+from src.core.log_once import LazyStructlogLogger
 
 router = APIRouter()
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 _CODE_SERVER_HOST = "127.0.0.1"
 _CONNECT_TIMEOUT_SEC = 0.2

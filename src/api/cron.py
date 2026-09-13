@@ -5,7 +5,6 @@ import copy
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import structlog
 from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
@@ -27,12 +26,13 @@ from src.core.config import (
     master_task_project_error,
     require_backend_option,
 )
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata
 from src.core.scheduler import scheduled_task_session_binding
 from src.core.sessions import ScheduledSessionBusyError, SessionManager
 from src.core.yaml_utils import load_yaml, save_yaml
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 router = APIRouter()
 
 # Wire sentence of the cron editor's 404 for a missing task file. Both raisers

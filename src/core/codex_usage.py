@@ -9,15 +9,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import structlog
-
 from src.core import event_types as ET
 from src.core.codex_pricing import calculate_codex_usage_cost_usd
 from src.core.config import CharlieBotConfig
+from src.core.log_once import LazyStructlogLogger
 from src.core.models import BackendType
 from src.core.ndjson import iter_ndjson_events, iter_ndjson_events_from_end
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # Codex rollout record-type wire names: session_meta opens a thread file,
 # turn_context carries the model in force, and event_msg wraps the token_count

@@ -3,9 +3,9 @@
 import asyncio
 from collections.abc import Coroutine
 
-import structlog
+from src.core.log_once import LazyStructlogLogger
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # Keep strong references to background tasks so they aren't garbage collected mid-execution.
 _background_tasks: set[asyncio.Task] = set()

@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, NamedTuple
 
 import aiofiles
-import structlog
 
 from src.core import event_types as ET
 
@@ -30,7 +29,7 @@ from src.core.json_utils import (
     load_json_meta,
     write_json_atomically,
 )
-from src.core.log_once import WarnOnceRegistry
+from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection
@@ -64,7 +63,7 @@ from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 # do not broadcast them raw -- the deltas are the wire format.
 _RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset({ET.ASSISTANT, ET.USER, ET.SCHEDULED_TRIGGER})
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # The fork/elone API routes (src/api/sessions.py) open their auto-injected
 # bootstrap prompts with these lines, and src.core.recap._AUTO_INJECTED_PREFIXES

@@ -11,7 +11,6 @@ from pathlib import Path
 
 import httpx
 import orjson
-import structlog
 
 from src.agents.backends.base import (
     IMAGE_MIME_BY_EXT,
@@ -28,7 +27,7 @@ from src.agents.backends.base import (
     resolve_binary,
 )
 from src.core import event_types as ET
-from src.core.log_once import WarnOnceRegistry
+from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.process import (
     compose_preexec,
     make_pdeathsig_kill_preexec,
@@ -43,7 +42,7 @@ from src.core.timeouts import (
     OPENCODE_STDOUT_DRAIN_TIMEOUT,
 )
 
-log = structlog.get_logger()
+log = LazyStructlogLogger()
 
 # The serve URL is plain localhost HTTP, so no TLS ever rides these clients;
 # the context exists only because httpx builds a fresh default SSL context per

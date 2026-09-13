@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import (
@@ -18,7 +19,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 
 
-def _build_backend(monkeypatch, **kwargs) -> AntigravityCliBackend:
+def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> AntigravityCliBackend:
   return build_cli_backend(
       monkeypatch, AntigravityCliBackend, ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/agy", **kwargs)
 
@@ -51,7 +52,7 @@ async def _consume_raising(backend: AntigravityCliBackend, cwd: Path, events: li
     events.append(event)
 
 
-def test_build_command_passes_prompt_as_print_flag_value(monkeypatch) -> None:
+def test_build_command_passes_prompt_as_print_flag_value(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, extra_flags=["--sandbox"])
 
   cmd = backend._build_command("--dash-prefixed prompt")
@@ -69,7 +70,7 @@ def test_build_command_passes_prompt_as_print_flag_value(monkeypatch) -> None:
   assert "--model" not in cmd
 
 
-def test_print_timeout_override_reaches_command(monkeypatch) -> None:
+def test_print_timeout_override_reaches_command(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, print_timeout="30m")
 
   cmd = backend._build_command("hello")
@@ -77,7 +78,7 @@ def test_print_timeout_override_reaches_command(monkeypatch) -> None:
   assert cmd[cmd.index("--print-timeout") + 1] == "30m"
 
 
-def test_registry_forwards_print_timeout_option(monkeypatch) -> None:
+def test_registry_forwards_print_timeout_option(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(
       ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/agy",
@@ -91,7 +92,7 @@ def test_registry_forwards_print_timeout_option(monkeypatch) -> None:
   assert cmd[cmd.index("--print-timeout") + 1] == "30m"
 
 
-def test_build_command_prepends_instructions_to_prompt(monkeypatch) -> None:
+def test_build_command_prepends_instructions_to_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, instructions_content="# Antigravity Instructions\nBuild stuff.")
 
   cmd = backend._build_command("do the work")
@@ -102,7 +103,8 @@ def test_build_command_prepends_instructions_to_prompt(monkeypatch) -> None:
   assert cmd[1] == f"--print={expected_prompt}"
 
 
-def test_prepare_cwd_does_not_write_agents_md_when_instructions_provided(monkeypatch, tmp_path: Path) -> None:
+def test_prepare_cwd_does_not_write_agents_md_when_instructions_provided(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch, instructions_content="# Antigravity Instructions\nBuild stuff.")
 
   backend._prepare_cwd(str(tmp_path))
@@ -111,7 +113,7 @@ def test_prepare_cwd_does_not_write_agents_md_when_instructions_provided(monkeyp
   assert not agents_md.exists()
 
 
-def test_build_command_append_conversation_flag_exactly_once_when_resuming(monkeypatch) -> None:
+def test_build_command_append_conversation_flag_exactly_once_when_resuming(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(
       ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/agy",
@@ -125,7 +127,7 @@ def test_build_command_append_conversation_flag_exactly_once_when_resuming(monke
   assert cmd[cmd.index("--conversation") + 1] == "session-123"
 
 
-def test_build_command_never_uses_continue_flag(monkeypatch) -> None:
+def test_build_command_never_uses_continue_flag(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(
       ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/agy",
@@ -139,7 +141,8 @@ def test_build_command_never_uses_continue_flag(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_translates_envelope_into_session_text_and_result_events(monkeypatch, tmp_path: Path) -> None:
+async def test_run_translates_envelope_into_session_text_and_result_events(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   _install_fake_agy(
       monkeypatch,
       tmp_path,
@@ -217,7 +220,7 @@ JSON
 @pytest.mark.asyncio
 @pytest.mark.parametrize("agy_script, expected_text", _SYSTEM_MESSAGE_CASES)
 async def test_run_system_message_block_handling(
-    monkeypatch, tmp_path: Path, agy_script: str, expected_text: str) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, agy_script: str, expected_text: str) -> None:
   _install_fake_agy(monkeypatch, tmp_path, agy_script)
   backend = AntigravityCliBackend()
 
@@ -228,7 +231,7 @@ async def test_run_system_message_block_handling(
 
 
 @pytest.mark.asyncio
-async def test_run_emits_nonzero_stdout_as_error(monkeypatch, tmp_path: Path) -> None:
+async def test_run_emits_nonzero_stdout_as_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   _install_fake_agy(
       monkeypatch,
       tmp_path,
@@ -250,7 +253,7 @@ exit 7
 
 
 @pytest.mark.asyncio
-async def test_nonzero_exit_envelope_error_names_budget_cause(monkeypatch, tmp_path: Path) -> None:
+async def test_nonzero_exit_envelope_error_names_budget_cause(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   _install_fake_agy(
       monkeypatch,
       tmp_path,
@@ -271,7 +274,7 @@ exit 1
   assert "print-timeout" in message
 
 
-def test_prepare_env_strips_api_keys_for_oauth(monkeypatch) -> None:
+def test_prepare_env_strips_api_keys_for_oauth(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   env = backend._prepare_env(
@@ -288,7 +291,7 @@ def test_prepare_env_strips_api_keys_for_oauth(monkeypatch) -> None:
   assert "/usr/bin" in env.get("PATH", "")
 
 
-def test_registry_builds_antigravity_backend(monkeypatch) -> None:
+def test_registry_builds_antigravity_backend(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(
       ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/agy",
@@ -311,7 +314,8 @@ def test_registry_builds_antigravity_backend(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_accepts_uploaded_files_keyword_and_ignores_it(monkeypatch, tmp_path: Path) -> None:
+async def test_run_accepts_uploaded_files_keyword_and_ignores_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """Signature compat with the base run()'s optional uploaded_files: an agy
   session with attachments must not TypeError, and the keyword changes nothing
   (the CLI has no attachment channel)."""
@@ -347,7 +351,7 @@ def test_base_run_uploaded_files_defaults_to_none() -> None:
 
 
 @pytest.mark.asyncio
-async def test_envelope_error_status_yields_error_event(monkeypatch, tmp_path: Path) -> None:
+async def test_envelope_error_status_yields_error_event(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   _install_fake_agy(
       monkeypatch,
       tmp_path,
@@ -385,7 +389,8 @@ _GUARD_CASES = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stdout_payload, expected_match, resume_session_id", _GUARD_CASES)
 async def test_envelope_guard_violation_raises_and_yields_only_an_error(
-    monkeypatch, tmp_path: Path, stdout_payload: str, expected_match: str, resume_session_id: str | None) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stdout_payload: str, expected_match: str,
+    resume_session_id: str | None) -> None:
   _install_fake_agy(monkeypatch, tmp_path, f"printf '%s' '{stdout_payload}'\n")
   backend = AntigravityCliBackend(resume_session_id=resume_session_id)
 
@@ -398,7 +403,8 @@ async def test_envelope_guard_violation_raises_and_yields_only_an_error(
 
 
 @pytest.mark.asyncio
-async def test_typed_session_attach_event_is_adopted_as_anchor_by_handle_event(monkeypatch, tmp_path: Path) -> None:
+async def test_typed_session_attach_event_is_adopted_as_anchor_by_handle_event(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   _install_fake_agy(
       monkeypatch,
       tmp_path,

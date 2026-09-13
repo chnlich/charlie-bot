@@ -183,8 +183,8 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
 # The server import floor's ban set (docs/perf_baseline.md M99): numpy rides
 # src.agents.transcriber (voice) and the two SIMD scanners (ndjson's count,
 # sessions' parent-reference frames), all of which load lazily at their use
-# sites; structlog rides the log proxy (structlog.dev — rich, pygments, ~77 ms
-# of the floor for lines the import path never emits).
+# sites; structlog rides the log proxy (~77 ms of the floor, lines the import
+# path never emits).
 SERVER_HEAVY_MODULES = ("numpy", "src.agents.transcriber", "structlog")
 
 

@@ -888,7 +888,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       if decision is None:
         if exit_code != 0 and backend.stderr_text and not backend.terminated:
           error_msg = backend.stderr_text[:500]
-        # Session memory-cap / host-OOM attribution (plan_01 v3 §4.2): the
+        # Session memory-cap / host-OOM attribution: the
         # routing report supersedes a bare stderr tail ("Killed") whenever the
         # cgroup's counters moved.
         error_msg = backend.cgroup_exit_report() or error_msg

@@ -407,7 +407,7 @@ class Worker:
       log.warning("worker_stderr", thread=self._thread.id, stderr=stderr_text[:500])
 
     if cgroup_report:
-      # Session memory-cap / host-OOM attribution (plan_01 v3 §4.2): the
+      # Session memory-cap / host-OOM attribution: the
       # worker failure message channel, so the report reaches the session chat
       # through the same events log the finalize path reads.
       cap_event = {"type": ET.ERROR, "content": cgroup_report, "timestamp": _clamp_ts(clamp_to)}

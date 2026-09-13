@@ -129,14 +129,15 @@ def make_pdeathsig_kill_preexec() -> Callable[[], None] | None:
 
 
 # ---------------------------------------------------------------------------
-# Session memory-cap cgroups (plan_01 v3)
+# Session memory-cap cgroups
 #
 # systemd delegates the user's app.slice subtree, so an unprivileged server can
 # create one cgroup per session under it, hold every agent process the session
 # spawns to hard memory.max / memory.swap.max limits, and let the kernel kill
-# only the cgroup's largest process on a breach. Mechanism verified on this
-# host 2026-09-11 (spike: mkdir + memory.max write + cgroup.procs move under
-# asyncio.create_subprocess_exec with start_new_session=True).
+# only the cgroup's largest process on a breach. The parent creates the
+# directory and writes the limits; the child-side preexec move runs only under
+# asyncio.create_subprocess_exec with start_new_session=True — keep both the
+# flag and the preexec hook on every session spawn path.
 # ---------------------------------------------------------------------------
 
 # The user-delegated cgroup v2 subtree the session cgroups live under.
@@ -167,7 +168,7 @@ def ensure_session_cgroup(session_id: str, memory_max_mb: int, swap_max_mb: int)
   ``memory.max`` / ``memory.swap.max``; an existing directory (the session's
   later spawns) just has its limit files rewritten to the current config
   values. Any OSError degrades to None with one logged warning — cgroup
-  control never blocks a spawn (plan_01 v3 §4.2 host guard).
+  control never blocks a spawn (the host guard).
   """
   path = session_cgroup_path(session_id)
   try:
@@ -257,7 +258,7 @@ def compose_preexec(*preexecs: Callable[[], None] | None) -> Callable[[], None] 
 
 @dataclass(frozen=True)
 class SessionCgroup:
-  """One spawn's handle on the session memory-cap cgroup (plan_01 v3).
+  """One spawn's handle on the session memory-cap cgroup.
 
   Carries the cgroup directory, the configured cap (for the report text), and
   the ``memory.events`` counters captured before the spawn — the baseline the
@@ -363,7 +364,7 @@ def sweep_stale_session_cgroups() -> int:
 
 
 def log_session_cgroup_startup(memory_max_mb: int, swap_max_mb: int, uncovered_backends: bool) -> None:
-  """The one startup line stating whether session cgroup control is on (plan_01 v3 host guard).
+  """The one startup line stating whether session cgroup control is on (the host guard).
 
   *uncovered_backends* is the caller's judgment that a configured backend
   spawns through the shared tmux server (claude-sub / tui-cli): those agent

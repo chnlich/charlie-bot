@@ -1,4 +1,4 @@
-"""Session memory-cap cgroup helpers (plan_01 v3): config schema, naming, degradation, attribution."""
+"""Session memory-cap cgroup helpers: config schema, naming, degradation, attribution."""
 
 from pathlib import Path
 
@@ -23,7 +23,7 @@ from src.core.process import (
 SESSION_ID = "abcd1234-ef56-7890-abcd-ef1234567890"
 
 # ---------------------------------------------------------------------------
-# Config schema (plan_01 v3 §4.1)
+# Config schema
 # ---------------------------------------------------------------------------
 
 
@@ -157,7 +157,7 @@ def test_compose_preexec_single_fn_returned_directly():
 
 
 # ---------------------------------------------------------------------------
-# memory.events reading and exit attribution (plan_01 v3 §4.2)
+# memory.events reading and exit attribution
 # ---------------------------------------------------------------------------
 
 

@@ -429,7 +429,7 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
   captures (``data/master_runs/*/agent.raw.ndjson``, kind ``"master"``).
 
   Both file names are pinned by their writers — a thread's event log is always
-  ``events.jsonl`` under its ``data/`` (threads.thread_events_path) and a run's capture always
+  ``events.jsonl`` under its ``data/`` (threads.thread_events_log_path) and a run's capture always
   ``agent.raw.ndjson`` (runs.RAW_LOG_NAME) — so the walk lists only the three levels whose
   entries it must discover (the sessions root, each ``threads/``, each ``data/master_runs/``,
   each memoized on the directory's own stat pair by ``_charliebot_listing``) and stats each

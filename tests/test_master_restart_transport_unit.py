@@ -33,6 +33,7 @@ from conftest import (
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
     backend_option,
     make_work_item,
+    mocked_callback_fields,
     patch_instructions_content,
     run_session_consumer,
 )
@@ -177,10 +178,7 @@ def _make_callbacks(persist_order: list[str]) -> SessionCallbacks:
 
   return SessionCallbacks(
       persist_and_broadcast=persist_and_broadcast,
-      update_thinking_state=AsyncMock(),
-      mark_unread=AsyncMock(),
-      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
-      has_completed_round=AsyncMock(return_value=False),
+      **mocked_callback_fields(),
       persist_master_run=persist_master_run,
   )
 
@@ -249,10 +247,7 @@ def _persisting_callbacks(session_mgr: SessionManager, *, mark_unread=None) -> S
   """Real persist_master_run against a tmp-home manager; everything else mocked."""
   return SessionCallbacks(
       persist_and_broadcast=AsyncMock(),
-      update_thinking_state=AsyncMock(),
-      mark_unread=mark_unread if mark_unread is not None else AsyncMock(),
-      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
-      has_completed_round=AsyncMock(return_value=False),
+      **mocked_callback_fields(mark_unread=mark_unread if mark_unread is not None else AsyncMock()),
       persist_master_run=session_mgr.persist_master_run,
   )
 

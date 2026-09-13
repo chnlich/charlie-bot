@@ -64,8 +64,8 @@ def _count_lines(f: BinaryIO) -> int:
 PARSE_SKIP_LOG_EVENT = "ndjson_parse_skip"
 
 
-def parse_ndjson_line(line: str | bytes | bytearray | memoryview, *, log_event: str,
-                      log_fields: dict[str, Any]) -> dict | None:
+def parse_ndjson_line(
+    line: str | bytes | bytearray | memoryview, *, log_event: str, log_fields: dict[str, Any]) -> dict | None:
   """Parse one line under the NDJSON reader skip contract, or None when the line skips.
 
   The one definition of the NDJSON reader skip contract: an empty or

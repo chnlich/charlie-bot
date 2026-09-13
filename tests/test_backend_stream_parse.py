@@ -142,8 +142,7 @@ async def test_tail_follow_events_carries_partial_line_across_read_rounds() -> N
   """A line written in two appends yields exactly once: the first round's
   trailing partial rides the carry into the next round's read, never
   processed half."""
-  events = await _collect_staged_tail(
-      b'{"type": "assistant", "seq": 9, "pad": "', b'xx"}\n')
+  events = await _collect_staged_tail(b'{"type": "assistant", "seq": 9, "pad": "', b'xx"}\n')
   assert [event["seq"] for event in events] == [9]
 
 

@@ -1,10 +1,12 @@
 """FastJsonResponse render contract.
 
 The hot JSON endpoints serve pre-built plain payloads, so the render is the
-remaining per-request cost. The fast render escapes non-ASCII instead of
-emitting raw UTF-8, which CPython's C JSON encoder produces several times
-faster on CJK-bearing payloads; callers rely on the parsed content being
-identical and on NaN failing loudly instead of emitting invalid JSON.
+remaining per-request cost. orjson renders parsed-identically to the stdlib
+encoder and emits raw UTF-8, so callers rely on the parsed content being
+identical while the wire body shrinks on non-ASCII payloads. The serializer
+boundaries are deliberate and pinned here: NaN/Infinity renders as null
+(valid JSON — the wire never breaks), and a non-str dict key raises instead
+of the stdlib's silent str coercion.
 """
 
 import json
@@ -29,12 +31,12 @@ def test_parsed_content_matches_the_starlette_render() -> None:
   assert json.loads(bytes(fast.body)) == json.loads(bytes(slow.body))
 
 
-def test_body_is_ascii_escaped() -> None:
+def test_body_is_raw_utf8() -> None:
   body = bytes(FastJsonResponse(_CJK_PAYLOAD).body)
-  assert body.isascii()
-  # The escaping is the only body difference: same keys, separators, ordering.
-  assert b'"next_before":7' in body
-  assert b'"\\u95ee\\u5019\\u8bed' in body
+  # The non-ASCII text rides raw UTF-8, not \uXXXX escapes — the wire bytes
+  # shrink on CJK-bearing payloads and the parsed content is unchanged.
+  assert "问候语".encode("utf-8") in body
+  assert json.loads(body) == _CJK_PAYLOAD
 
 
 def test_media_type_is_json() -> None:
@@ -43,10 +45,17 @@ def test_media_type_is_json() -> None:
   assert response.headers["content-type"] == "application/json"
 
 
-def test_nan_raises_instead_of_emitting_invalid_json() -> None:
+def test_nan_renders_as_null_not_invalid_json() -> None:
+  body = bytes(FastJsonResponse({"a": float("nan"), "b": float("inf")}).body)
+  # orjson's boundary: NaN/Infinity render as null — valid JSON on the wire,
+  # the same boundary the stream funnels accepted at their orjson swap.
+  assert json.loads(body) == {"a": None, "b": None}
+
+
+def test_non_str_dict_key_raises_instead_of_silent_coercion() -> None:
   try:
-    FastJsonResponse({"a": float("nan")})
-  except ValueError:
+    FastJsonResponse({1: "a"})
+  except TypeError:
     pass
   else:
-    raise AssertionError("NaN must fail the render, not emit NaN into the body")
+    raise AssertionError("a non-str dict key must fail the render loudly")

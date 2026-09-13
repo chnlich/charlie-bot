@@ -139,7 +139,8 @@ async def dispatch_slash_command(
 
   For shell commands: runs the command and returns the result.
   For prompt commands: substitutes args and returns the prompt text.
-  Returns ``SlashDispatchKind.NOT_FOUND`` if the command doesn't exist in the registry.
+  Returns a ``SlashDispatchResult`` whose ``kind`` is ``SlashDispatchKind.NOT_FOUND``
+  when the command doesn't exist in the registry.
   """
   commands = {c.name: c for c in await asyncio.to_thread(load_slash_commands)}
   cmd = commands.get(name)

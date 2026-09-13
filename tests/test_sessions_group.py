@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, OPUS_BACKEND_ID
+from conftest import BROADCAST_PATCH_TARGET, OPUS_BACKEND_ID, user_event
 from conftest import make_session_mgr as _make_session_mgr
 
 from src.core import event_types as ET
@@ -27,7 +27,7 @@ async def _seed_parent(
   await mgr.save_metadata(parent)
   events_path = mgr.get_chat_events_path(parent.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)
-  events_path.write_text(json.dumps({"type": "user", "content": "hello"}) + "\n")
+  events_path.write_text(json.dumps(user_event("hello")) + "\n")
   return parent
 
 

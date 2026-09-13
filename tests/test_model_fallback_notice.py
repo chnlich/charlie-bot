@@ -17,6 +17,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     TerminateFlagBackend,
+    assistant_text_event,
     backend_option,
     make_work_item,
     mock_session_callbacks,
@@ -188,7 +189,7 @@ def test_no_pin_synthetic_and_missing_model_stay_silent() -> None:
   synthetic_round = [_assistant("<synthetic>", "synthetic text")]
   assert out_of_family_served_models(synthetic_round, CONFIGURED) == []
 
-  missing_model_round = [{"type": ET.ASSISTANT, "message": {"content": [{"type": "text", "text": "hi"}]}}]
+  missing_model_round = [assistant_text_event("hi")]
   assert out_of_family_served_models(missing_model_round, CONFIGURED) == []
 
   tool_only_round = [

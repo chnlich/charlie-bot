@@ -290,7 +290,3 @@ it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backen
 - `~/.charliebot/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `publish`, `telegram`); `~/.charliebot/credentials.yaml` holds every secret as section → key and is the single source of truth for API keys — no environment variables
 - `backends.options`: configurable list of LLM backends (see that file for the current list)
 - `backends.preference`: ordered list of backend IDs for cross-backend reviewer selection
-
-### 11.2 Pending / Not Yet Implemented
-
-- Claude plan usage tracking and automatic fallback for workers when near quota limits

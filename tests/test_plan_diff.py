@@ -193,9 +193,16 @@ def test_four_invariants_hold_for_synthetic_pair() -> None:
   assert annotated.count('class="cbd-del"') == 2
 
 
+def _fixture_pair() -> tuple[str, str]:
+  """The real captured plan page pair the whole-pipeline tests annotate: v10 base, v11 new."""
+  data = _ROOT / "tests/data"
+  base = (data / "plan_move2-direct-kill_v10.html").read_text(encoding="utf-8")
+  new = (data / "plan_move2-direct-kill_v11.html").read_text(encoding="utf-8")
+  return base, new
+
+
 def test_four_invariants_hold_for_real_fixture_pair() -> None:
-  base = (_ROOT / "tests/data/plan_move2-direct-kill_v10.html").read_text(encoding="utf-8")
-  new = (_ROOT / "tests/data/plan_move2-direct-kill_v11.html").read_text(encoding="utf-8")
+  base, new = _fixture_pair()
   annotated = _assert_invariants(base, new)
   assert '<span class="cbd-del" data-del="v10"></span>' in annotated
   assert '<ins class="cbd-ins">v11</ins>' in annotated
@@ -414,8 +421,7 @@ def test_ghost_follows_the_heading_when_a_section_drops_badge_and_block_together
 
 
 def test_same_document_has_no_marks_and_diff_text_names_real_changes() -> None:
-  base = (_ROOT / "tests/data/plan_move2-direct-kill_v10.html").read_text(encoding="utf-8")
-  new = (_ROOT / "tests/data/plan_move2-direct-kill_v11.html").read_text(encoding="utf-8")
+  base, new = _fixture_pair()
   same = annotate(base, base)
   assert not _marks(same)
   assert diff_text(base, base) == ""
@@ -498,9 +504,7 @@ def test_header_offset_matches_a_full_reparse_of_the_spliced_page() -> None:
 
   plan_diff._append_style_and_header = capture
   try:
-    fixture_base = (_ROOT / "tests/data/plan_move2-direct-kill_v10.html").read_text(encoding="utf-8")
-    fixture_new = (_ROOT / "tests/data/plan_move2-direct-kill_v11.html").read_text(encoding="utf-8")
-    pairs = [(fixture_base, fixture_new)]
+    pairs = [_fixture_pair()]
     rng = random.Random(20260912)
     for _ in range(300):
       doc = _fuzz_document(rng)
@@ -620,7 +624,6 @@ def test_boundary_anchors_match_the_full_parse_on_a_randomized_corpus() -> None:
 def test_boundary_anchors_match_the_full_parse_on_the_fixture_pair_and_spliced_output() -> None:
   from src.core.plan_diff import _parse_anchors, annotate
 
-  base = (_ROOT / "tests/data/plan_move2-direct-kill_v10.html").read_text(encoding="utf-8")
-  new = (_ROOT / "tests/data/plan_move2-direct-kill_v11.html").read_text(encoding="utf-8")
+  base, new = _fixture_pair()
   for source in (base, new, annotate(base, new)):
     assert _anchors_as_quads(_parse_anchors(source)) == _anchors_from_full_parse(source)

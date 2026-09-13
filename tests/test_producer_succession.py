@@ -253,6 +253,42 @@ def _make_review_thread_mgr(tmp_path: Path) -> MagicMock:
   return thread_mgr
 
 
+async def _run_cleanup_error_review(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mgr: SessionManager,
+    session_id: str,
+) -> MagicMock:
+  """Run maybe_spawn_reviewer with the review chain's cleanup error patched in.
+
+  The delivery primitive rides a pass-through spy, so the tests see the event
+  ``deliver_to_successor`` received; returns that spy.
+  """
+  real_deliver = mgr.deliver_to_successor
+
+  async def fake_deliver(session, event):
+    return await real_deliver(session, event)
+
+  _patch_review_reviewer_chain(monkeypatch, cleanup_error="Worktree cleanup failed for /x: boom")
+  thread = MagicMock(id="reviewer-1", description="original", backend=OPUS_BACKEND_ID)
+  with (
+      _broadcast_patch(),
+      patch.object(mgr, "deliver_to_successor", side_effect=fake_deliver) as mock_deliver,
+  ):
+    await review.maybe_spawn_reviewer(
+        session_id,
+        thread,
+        exit_code=0,
+        events_summary="events",
+        full_summary="summary",
+        thread_mgr=_make_review_thread_mgr(tmp_path),
+        session_mgr=mgr,
+        cfg=build_worktree_cfg(tmp_path),
+    )
+  mock_deliver.assert_awaited_once()
+  return mock_deliver
+
+
 @pytest.mark.asyncio
 async def test_review_cleanup_error_is_routed_to_successor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The review-chain cleanup error write goes through deliver_to_successor.
@@ -265,31 +301,8 @@ async def test_review_cleanup_error_is_routed_to_successor(tmp_path: Path, monke
   parent_id = await _make_parent(mgr)
   child_id = await _elone(mgr, parent_id)
 
-  real_deliver = mgr.deliver_to_successor
+  mock_deliver = await _run_cleanup_error_review(tmp_path, monkeypatch, mgr, parent_id)
 
-  async def fake_deliver(session, event):
-    return await real_deliver(session, event)
-
-  _patch_review_reviewer_chain(monkeypatch, cleanup_error="Worktree cleanup failed for /x: boom")
-  thread_mgr = _make_review_thread_mgr(tmp_path)
-
-  thread = MagicMock(id="reviewer-1", description="original", backend=OPUS_BACKEND_ID)
-  with (
-      _broadcast_patch(),
-      patch.object(mgr, "deliver_to_successor", side_effect=fake_deliver) as mock_deliver,
-  ):
-    await review.maybe_spawn_reviewer(
-        parent_id,
-        thread,
-        exit_code=0,
-        events_summary="events",
-        full_summary="summary",
-        thread_mgr=thread_mgr,
-        session_mgr=mgr,
-        cfg=build_worktree_cfg(tmp_path),
-    )
-
-  mock_deliver.assert_awaited_once()
   called_session, called_event = mock_deliver.await_args.args
   assert called_session == parent_id
   assert called_event["type"] == ET.ERROR
@@ -305,31 +318,8 @@ async def test_review_cleanup_error_no_successor_writes_into_itself_without_orig
   mgr = SessionManager(build_worktree_cfg(tmp_path))
   session_id = await _make_parent(mgr)
 
-  real_deliver = mgr.deliver_to_successor
+  await _run_cleanup_error_review(tmp_path, monkeypatch, mgr, session_id)
 
-  async def fake_deliver(session, event):
-    return await real_deliver(session, event)
-
-  _patch_review_reviewer_chain(monkeypatch, cleanup_error="Worktree cleanup for /x: boom")
-  thread_mgr = _make_review_thread_mgr(tmp_path)
-
-  thread = MagicMock(id="reviewer-1", description="original", backend=OPUS_BACKEND_ID)
-  with (
-      _broadcast_patch(),
-      patch.object(mgr, "deliver_to_successor", side_effect=fake_deliver) as mock_deliver,
-  ):
-    await review.maybe_spawn_reviewer(
-        session_id,
-        thread,
-        exit_code=0,
-        events_summary="events",
-        full_summary="summary",
-        thread_mgr=thread_mgr,
-        session_mgr=mgr,
-        cfg=build_worktree_cfg(tmp_path),
-    )
-
-  mock_deliver.assert_awaited_once()
   own_events = mgr.load_chat_events_sync(session_id)
   error = next(ev for ev in own_events if ev.get("type") == ET.ERROR)
   assert "boom" in error["content"]

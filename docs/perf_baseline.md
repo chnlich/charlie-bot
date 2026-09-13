@@ -81,7 +81,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
 | M70 artifact clean-view serve, steady state | M70 collector below | seconds per repeat credentialed view of the worst on-disk artifact page, scratch home | repeat-view median < 0.010 s | — (introduced with its first history row) |
 | M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.006 s | — (introduced with its first history row) |
-| M72 file-browser directory listing | M72 collector below | seconds per `GET /files/<dir>` request, worst on-disk listing corpus (the sessions root); the changed-round rebuild (one corpus move since the stored page keyed — a metadata rename into a session dir; the harness drops the page memo per timed round, row memo warm, builder level) | repeat-view median < 0.008 s; changed-round median < 0.007 s | — (introduced with its first history row) |
+| M72 file-browser directory listing | M72 collector below | seconds per `GET /files/<dir>` request, worst on-disk listing corpus (the sessions root), the served path (the production gzip middleware mounted, Accept-Encoding: gzip — the browser shape; a bare app without the middleware reads the walk's floor alone, the vacuous-read class the M70 repair called out); the changed-round rebuild (one corpus move since the stored page keyed — a metadata rename into a session dir; the harness drops the page memo per timed round, row memo warm, builder level) | repeat-view median < 0.008 s; changed-round median < 0.007 s | — (introduced with its first history row) |
 | M73 plan-verb validation event-loop lag | M73 collector below | seconds of loop lag + wall per amend validation (the registration gate: the DOM assertion set plus the headless-Chrome page-height render), scratch home, copied passing plan page (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.2 s (warm steady state; the first validation after a process start pays the one-time browser launch) | — (introduced with its first history row) |
 | M74 master turn-end raw-log rescan | M74 collector below | seconds of loop lag + wall per fallback-notice projection (whole read+parse+project of the turn's raw log), worst on-disk master-run raw log, fresh cc-claude translate (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.030 s | — (introduced with its first history row) |
 | M75 live-aggregator catch-up, first streamed event | M75 collector below | seconds of loop lag + wall per first-`persist_and_broadcast` catch-up (whole read+feed of the live corpus), worst on-disk live chat corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.020 s | — (introduced with its first history row) |
@@ -4306,9 +4306,12 @@ serve as strings and only the moved entries re-render. The cost is a
 navigation click, invisible to the standing HTTP probes (the chat log's
 file-server traffic is artifact pages, the M70 shape; directory listings are
 rare — 16 in the 78.85 h live log sampled 2026-09-07), so the collector drives
-the files router through TestClient over the sessions root — the file browser's
-own starting directory and the largest entry count the UI navigates on this
-host, read-only — from the checkout under test: one cold pass, as at the first
+the files router through TestClient behind the production gzip middleware over
+the sessions root — the file browser's own starting directory and the largest
+entry count the UI navigates on this host, read-only — from the checkout under
+test, with the browser's Accept-Encoding: gzip request shape and a fail-loud
+negotiation assert (a bare app reads the walk floor alone; the M70 repair's
+vacuous-read class): one cold pass, as at the first
 browser open, then nine timed requests, with the served-body sha1 so a corpus
 difference between arms cannot masquerade as a payload difference.
 
@@ -4320,6 +4323,7 @@ sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from src.api.files import router as files_router
+from server import _CharlieBotGZipMiddleware
 
 # Worst listing corpus: the sessions root — the file browser's starting
 # directory and the largest entry count the UI navigates on this host.
@@ -4328,20 +4332,26 @@ n = sum(1 for _ in os.scandir(corpus))
 
 app = FastAPI()
 app.include_router(files_router, prefix="/files")
+# The production middleware chain: every served response passes the whole-body
+# gzip whose deflate is part of the view's cost — a bare app reads the walk
+# floor alone.
+app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
 client = TestClient(app)
 url = f"/files{corpus}"
+HEADERS = {"Accept-Encoding": "gzip"}  # the browser shape
 
-r = client.get(url)  # cold pass, as at the first browser open; not timed
+r = client.get(url, headers=HEADERS)  # cold pass, as at the first browser open; not timed
 assert r.status_code == 200, (r.status_code, r.text[:200])
+assert r.headers.get("content-encoding") == "gzip", "browser shape served without gzip"
 times, body = [], None
 for _ in range(9):
     t0 = time.perf_counter()
-    r = client.get(url)
+    r = client.get(url, headers=HEADERS)
     times.append(time.perf_counter() - t0)
     body = r.content
 times.sort()
-print(f"{n} entries; listing request median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms, "
-      f"body {len(body)} B, sha1 {hashlib.sha1(body).hexdigest()[:12]}")
+print(f"{n} entries; served-path listing repeat median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms, "
+      f"decoded body {len(body)} B, sha1 {hashlib.sha1(body).hexdigest()[:12]}")
 EOF
 ```
 
@@ -6217,6 +6227,7 @@ EOF
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-13 | this PR | M72 served-path repeat view, repaired collector: 9.08/9.51/8.73 → 7.05/7.34/6.73 ms, −22 % to −29 %, maxima 10.24-11.05 → 8.57-9.70 ms, every paired round faster (three interleaved rounds of the repaired collector — main checkout before vs branch worktree after back-to-back, 1165-entry sessions root, live state read-only, decoded body 255692 B sha1 6219a0514d10 identical across all six arms, load 1.00-1.16 one-minute; the standing collector had read this metric 7.09 ms since its landing because its bare FastAPI app mounted no gzip middleware and sent no Accept-Encoding header — the served-path deflate was invisible to it, the vacuous-read class the M68/M89/M90/M70 repairs called out, and the repaired collector's before reading sat above the 0.008 s line); component attribution: the middleware's off-loop level-1 deflate of the 255692 B page measured 1.16 ms standalone plus the responder's to_thread round-trip, both gone from a repeat view that now serves the memoized compressed form; no-regression witnesses on the branch: the bare collector's no-Accept-Encoding arm 7.09 ms with the same sha1 (the identity path untouched), changed-round rebuild 5.33 ms (standing band 5.33-6.67), M70 clean view 7.3 ms (standing band 7.3-7.7), M55 compare view 2.4 ms with digest be3110683106 byte-identical to the standing reading; 5533-passed suite plus 4 new listing-gzip tests (precompressed ship through the middleware, no-gzip-accept plain body, repeat-view zero deflate, corpus-move recompress) | every browser navigation click on the file browser paid the server's whole-body gzip middleware a level-1 deflate of the memoized listing page plus its off-loop thread hop per view — the artifact view's identical pathology received the memoized-gzip fix in the M70 landing; the listing now memoizes the compressed form beside the plain one under the same walked-state key and ships it with Content-Encoding: gzip set upstream, which is what makes the middleware skip its own deflate, and a client sending no Accept-Encoding: gzip still reads the plain body |
 | 2026-09-13 | this PR | M80 churn changed-round wall median 0.1429/0.1529/0.1502 → 0.1106/0.1121/0.1052 s, −27 % to −31 % (four after rounds 0.1052-0.1121 s including an initial 0.1101 s before the interleaved trio), scanned 1.45 MB and rows digest df92885496c3 identical across all seven arms (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back at load 1.31-3.22 one-minute); M7 changed-round collect median 0.156/0.155/0.147 → 0.112/0.111/0.110 s, −28 % to −29 %, 19 rows and 0.0 MB re-read both arms (three interleaved rounds of the verbatim harness, the branch arm with its sys.path line at the worktree root); component attribution: the warm charlie-bot corpus walk measured standalone 0.1056/0.1070/0.1050 → 0.0679/0.0678/0.0673 s median, −36 %, 6352 rows both arms; whole-corpus cold pass rows digest 100098c6f26a and scanned 2059.4 MB identical, wall 7.223 → 6.877 s; 5529-passed suite plus 4 new walk-contract tests (a late candidate file's discovery, absent-candidate silence, the never-listed deep directories, symlinked-entry skip) | the walk listed and statted every intermediate directory — 1164 session dirs × (threads/ + every thread dir + its data/ + master_runs/ + every run dir) ≈ 33 k stats per collect against 6352 corpus files, the corpus signature's floor paid on every /token-usage page load — while both file names are writer-pinned constants (threads.thread_events_log_path, runs.RAW_LOG_NAME), so the deep listings discover nothing the fresh per-candidate stat does not; the walk now lists only the three discovery levels (the sessions root, each threads/, each data/master_runs/, still memoized on the directory's own stat pair) and stats each candidate directly — a deep file's appearance or disappearance moves only its own containing directory, which the walk never lists, so the fresh stat is the only thing that can see it; one stat per candidate plus one per discovered directory is the walk's floor, and the stat count now scales with candidates (6352 present + 8504 known-absent) instead of with corpus directories |
 | 2026-09-13 | this PR | M54 stream-draft paint work, three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back at load 2.41-2.95 one-minute: paint-work median 0.144/0.164/0.153 → 0.123/0.107/0.112 s, −15 % to −35 %, maxima 0.262/0.243/0.242 → 0.152/0.146/0.156 s, −39 % to −40 %, every paired round faster, final-frame parity true all six arms; component attribution: hljs.highlightAuto ran 2 calls for 123.7 ms of the 261.0 ms worst replay pre-fix — the pinned build's first-call grammar compilation — and post-fix paint#1's first real auto reads 21.1 ms (was 113.2 ms), the compile absorbed by the idle warm outside the timed paints; no-regression witnesses interleaved: M33 replay wall median 0.035-0.039 s (standing 0.037 s), M60 cold first paint 0.049 s / highlight flush 0.182 s (standing 0.049/0.190 s), M81 page re-render 1.03 ms with 0 walks (standing 1.12 ms); 607-passed node suite plus the rIC-only warm, 5525-passed suite, ruff clean | highlight.js compiles each grammar on first use and the whole compile (~113 ms across the 36-language common build) landed inside the first paint that highlights code — a streamed turn's paint#1 or a committed render's highlight flush — on every page load's first code-bearing turn; one idle auto-highlight over a prose-plus-fence snippet now compiles the grammars chat content exercises in one pass off the render path, and the stream harness's new idle queue lets the M54 replay charge the warm to page load, where the browser pays it, never to a timed paint (rIC-only scheduling keeps the warm out of the timer queue the deferred highlight flush drives) |
 | 2026-09-13 | #1490 (row recorded in this docs-only follow-up per the #1046 precedent, the landing PR shipped without it) | M35 chat message-page responses on the 20534-event worst projection corpus (shared snapshot home), three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back at load 0.6-1.0 one-minute: events page median 2.53/2.52/2.66 → 2.46/2.45/2.41 ms (body 347923 → 293374 B, −16 %), view median 3.20/3.16/3.48 → 3.04/2.83/2.82 ms (body 135521 → 119739 B, −12 %), bootstrap median 2.60/2.55/2.65 → 2.24/2.46/2.29 ms (body 93303 → 77563 B, −17 %), every paired round faster on view/bootstrap; component attribution: the pure render of the 91992 B bootstrap payload median 0.265 → 0.023 ms (~11x), body 76264 B; the events-page timed repeats ride the projection's body cache, so the render saving lands on each slice's cold first render; no-regression witnesses interleaved ×2: M56 status poll 2.06/2.09 → 2.27/1.97 ms with the spliced body digest byte-identical across all four arms (8b79ddc76566), M8 search 0.002-0.003 s both arms, M3 401 path 0.001 s both arms; 5523-passed suite plus the re-pinned render contract | the request-path render rode the stdlib C encoder in ensure_ascii=True mode — 0.265 ms on the 92 KB bootstrap payload where orjson spends 0.023 ms — and the escaped body carried \uXXXX escapes where raw UTF-8 serves the same parsed content 16-17 % smaller on the CJK-bearing corpora; the swap's two serializer boundaries are deliberate and test-pinned (NaN/Infinity renders as null — valid JSON, the stream funnels' boundary; non-str dict keys raise instead of the stdlib's silent coercion) |

@@ -1,6 +1,8 @@
 """Regression tests for master cancel endpoint behavior."""
 
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -31,7 +33,11 @@ class _StderrOnlyBackend(AgentBackend):
   def _build_command(self, prompt: str) -> list[str]:
     raise AssertionError("_build_command should not be called")
 
-  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     if self._terminate_before_stderr:
       await self.terminate()
     self.exit_code = 1
@@ -56,7 +62,8 @@ async def _run_cc_with_backend(
   )
   callbacks = mock_session_callbacks()
 
-  def fake_build_backend(option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs):
+  def fake_build_backend(
+      option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs: Any) -> AgentBackend:
     return backend
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
@@ -72,7 +79,7 @@ async def _run_cc_with_stderr_backend(
     monkeypatch: pytest.MonkeyPatch,
     *,
     terminate_before_stderr: bool,
-):
+) -> tuple[models.SessionCallbacks, tuple[str | None, int, str | None, dict]]:
   return await _run_cc_with_backend(
       tmp_path,
       monkeypatch,
@@ -124,7 +131,7 @@ async def test_cancel_master_agent_no_active_master_broadcasts_error() -> None:
 
 @pytest.mark.asyncio
 async def test_run_cc_suppresses_assistant_error_only_for_user_terminated_stderr(
-    tmp_path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   stopped_callbacks, stopped_result = await _run_cc_with_stderr_backend(
@@ -165,7 +172,11 @@ class _ScriptedBackend(AgentBackend):
   def _build_command(self, prompt: str) -> list[str]:
     raise AssertionError("_build_command should not be called")
 
-  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     self.exit_code = 0
     self.stderr_text = ""
     for event in self._events:
@@ -188,7 +199,7 @@ async def _run_cc_with_scripted_events(
   return callbacks
 
 
-def _synthesized_notice_events(callbacks) -> list[str]:
+def _synthesized_notice_events(callbacks: models.SessionCallbacks) -> list[str]:
   texts = []
   for call in callbacks.persist_and_broadcast.await_args_list:
     event = call.args[1]
@@ -204,7 +215,7 @@ def _synthesized_notice_events(callbacks) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_silent_turn_salvaged(tmp_path, monkeypatch) -> None:
+async def test_silent_turn_salvaged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   deltas = ["first thinking ", "second thinking ", "third thinking"]
   callbacks = await _run_cc_with_scripted_events(
       tmp_path,
@@ -236,7 +247,7 @@ async def test_silent_turn_salvaged(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_normal_turn_untouched(tmp_path, monkeypatch) -> None:
+async def test_normal_turn_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   callbacks = await _run_cc_with_scripted_events(
       tmp_path,
       monkeypatch,
@@ -256,7 +267,7 @@ async def test_normal_turn_untouched(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_cut_before_settlement_not_salvaged(tmp_path, monkeypatch) -> None:
+async def test_stream_cut_before_settlement_not_salvaged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   callbacks = await _run_cc_with_scripted_events(
       tmp_path,
       monkeypatch,
@@ -271,7 +282,7 @@ async def test_stream_cut_before_settlement_not_salvaged(tmp_path, monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_claude_family_thinking_block_salvaged(tmp_path, monkeypatch) -> None:
+async def test_claude_family_thinking_block_salvaged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   thinking = "claude-family buried reasoning"
   callbacks = await _run_cc_with_scripted_events(
       tmp_path,

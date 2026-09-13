@@ -530,7 +530,7 @@ async def test_identity_judgment_runs_before_any_new_turn_door(tmp_path: Path, m
   monkeypatch.setattr(Scheduler, "stop", AsyncMock())
   monkeypatch.setattr(TriggerManager, "recover_pending", fake_recover_pending)
   # Background starters are not the doors under test; keep them off the net.
-  monkeypatch.setattr(server.transcriber, "start_model_provisioning", lambda cfg: None)
+  monkeypatch.setattr(server, "_provision_speech_models", lambda cfg: None)
   monkeypatch.setattr(server.ext_usage, "start_poller", AsyncMock())
   monkeypatch.setattr(server.ext_usage, "stop_poller", AsyncMock())
 

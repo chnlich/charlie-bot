@@ -27,62 +27,65 @@ def _home(tmp_path: Path) -> Path:
   return home
 
 
-def test_write_voice_engine_appends_when_absent(tmp_path: Path) -> None:
+_CONFIG_WRITE_CASES = [
+    # (config.yaml text written before the call, expected action, expected file text after).
+    pytest.param(
+        "# host config\nserver:\n  port: 18498\n",
+        "appended",
+        "# host config\nserver:\n  port: 18498\nvoice:\n  engine: qwen3_hf\n",
+        id="appends-when-absent",
+    ),
+    pytest.param(
+        "server:\n  port: 18498\nvoice:\n  engine: qwen3_hf\n",
+        "skipped",
+        "server:\n  port: 18498\nvoice:\n  engine: qwen3_hf\n",
+        id="skips-when-already-enabled",
+    ),
+    pytest.param(
+        "server:\n  port: 18498\nvoice:\n  engine: sherpa  # keep cpu\n# trailing comment\n",
+        "updated",
+        "server:\n  port: 18498\nvoice:\n  engine: qwen3_hf\n# trailing comment\n",
+        id="updates-in-place",
+    ),
+    pytest.param(
+        None,
+        "appended",
+        "voice:\n  engine: qwen3_hf\n",
+        id="creates-missing-config",
+    ),
+]
+
+_REJECT_CASES = [
+    # (config.yaml text, the ValueError fragment).
+    pytest.param("- just\n- a list\n", "top-level mapping", id="non-mapping-config"),
+    pytest.param("voice:\n  engine: sherpa\n  engine: qwen3_hf\n", "2 lines", id="duplicate-key-lines"),
+]
+
+
+@pytest.mark.parametrize(("config_text", "expected_action", "expected_text"), _CONFIG_WRITE_CASES)
+def test_write_voice_engine_config_write_outcome(
+    tmp_path: Path, config_text: str | None, expected_action: str, expected_text: str) -> None:
+  """Each reachable config-write state takes exactly its documented action, and the
+  file text after the call matches — including the comments and trailing lines the
+  textual rewrite promises to preserve."""
   home = _home(tmp_path)
-  (home / "config.yaml").write_text("# host config\nserver:\n  port: 18498\n", encoding="utf-8")
+  if config_text is not None:
+    (home / "config.yaml").write_text(config_text, encoding="utf-8")
 
   action = voice_setup.write_voice_engine(home)
 
-  assert action == "appended"
-  text = (home / "config.yaml").read_text(encoding="utf-8")
-  assert text == "# host config\nserver:\n  port: 18498\nvoice:\n  engine: qwen3_hf\n"
+  assert action == expected_action
+  assert (home / "config.yaml").read_text(encoding="utf-8") == expected_text
 
 
-def test_write_voice_engine_skips_when_already_enabled(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("config_text", "match"), _REJECT_CASES)
+def test_write_voice_engine_rejects_malformed_config(tmp_path: Path, config_text: str, match: str) -> None:
+  """Malformed config.yaml raises before any write, never falls through to a
+  best-effort edit."""
   home = _home(tmp_path)
-  original = "server:\n  port: 18498\nvoice:\n  engine: qwen3_hf\n"
-  (home / "config.yaml").write_text(original, encoding="utf-8")
+  (home / "config.yaml").write_text(config_text, encoding="utf-8")
 
-  action = voice_setup.write_voice_engine(home)
-
-  assert action == "skipped"
-  assert (home / "config.yaml").read_text(encoding="utf-8") == original
-
-
-def test_write_voice_engine_updates_in_place(tmp_path: Path) -> None:
-  home = _home(tmp_path)
-  (home / "config.yaml").write_text(
-      "server:\n  port: 18498\nvoice:\n  engine: sherpa  # keep cpu\n# trailing comment\n", encoding="utf-8")
-
-  action = voice_setup.write_voice_engine(home)
-
-  assert action == "updated"
-  text = (home / "config.yaml").read_text(encoding="utf-8")
-  assert text == "server:\n  port: 18498\nvoice:\n  engine: qwen3_hf\n# trailing comment\n"
-
-
-def test_write_voice_engine_creates_missing_config(tmp_path: Path) -> None:
-  home = _home(tmp_path)
-
-  action = voice_setup.write_voice_engine(home)
-
-  assert action == "appended"
-  assert (home / "config.yaml").read_text(encoding="utf-8") == "voice:\n  engine: qwen3_hf\n"
-
-
-def test_write_voice_engine_rejects_non_mapping_config(tmp_path: Path) -> None:
-  home = _home(tmp_path)
-  (home / "config.yaml").write_text("- just\n- a list\n", encoding="utf-8")
-
-  with pytest.raises(ValueError, match="top-level mapping"):
-    voice_setup.write_voice_engine(home)
-
-
-def test_write_voice_engine_rejects_duplicate_key_lines(tmp_path: Path) -> None:
-  home = _home(tmp_path)
-  (home / "config.yaml").write_text("voice:\n  engine: sherpa\n  engine: qwen3_hf\n", encoding="utf-8")
-
-  with pytest.raises(ValueError, match="2 lines"):
+  with pytest.raises(ValueError, match=match):
     voice_setup.write_voice_engine(home)
 
 

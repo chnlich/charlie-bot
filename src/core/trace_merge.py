@@ -243,8 +243,8 @@ def _merge_all(paths: list[Path], out_path: Path, slim: bool) -> None:
   with out_path.open("wb") as compressed, subprocess.Popen(["gzip", f"-{_MERGE_COMPRESSLEVEL}"], stdin=subprocess.PIPE,
                                                            stdout=compressed, stderr=subprocess.PIPE) as gzip_proc:
     try:
-      fcntl.fcntl(gzip_proc.stdin.fileno(), fcntl.F_SETPIPE_SZ, _MERGE_PIPE_BYTES)
       output = gzip_proc.stdin
+      fcntl.fcntl(output.fileno(), fcntl.F_SETPIPE_SZ, _MERGE_PIPE_BYTES)
       output.write(b'{"traceEvents":[')
       batcher = _EventBatcher(output)
       for file_index, path in enumerate(paths):

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import assistant_text_event as _assistant_event
 from conftest import backend_option, stub_credentials
 
 from src.agents.worker import Worker
@@ -123,7 +124,7 @@ def test_translate_only_degrade_falls_back_to_identity_translate(
     backend = worker._build_backend(None)
 
   assert isinstance(backend, ClaudeCodeBackend)
-  event = {"type": "assistant", "message": {"content": [{"type": "text", "text": "x"}]}}
+  event = _assistant_event("x")
   assert backend.translate_event(event) == [event]
 
   warnings = [entry for entry in logs if entry.get("event") == "translate_backend_unresolved"]

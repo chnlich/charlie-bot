@@ -535,8 +535,9 @@ def test_editor_scope_contrasts_the_task_framing_of_the_two_editor_units() -> No
   assert "one decision over the theme's base, candidates, and feedback together" in whole.editor_system
   # The baseline keeps its original merge-time whole-entry trimming; whole-entry editing is a
   # decision-unit change, not a newly granted text permission.
-  assert "Trimming a merged entry down to what a future action needs — whole lines included — is the "
-  "original merge-time behavior, permitted by the guideline." in baseline.editor_system
+  assert (
+      "Trimming a merged entry down to what a future action needs — whole lines included — is the "
+      "original merge-time behavior, permitted by the guideline.") in baseline.editor_system
   assert "merge-time trimming of a whole entry is original behavior the guideline permits" in whole.editor_system
   # The reviewer sides contrast the same way: trim-only gating vs whole-entry authority.
   assert "You write no new entry prose" in baseline.reviewer_system

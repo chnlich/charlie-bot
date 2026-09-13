@@ -2,7 +2,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import CLEAN_EXIT_OUTCOME, OPUS_BACKEND_ID, JudgmentShim, append_events, build_finalize_ctx
+from conftest import (
+    CLEAN_EXIT_OUTCOME,
+    OPUS_BACKEND_ID,
+    JudgmentShim,
+    append_events,
+    assistant_text_event,
+    build_finalize_ctx,
+)
 from conftest import THREE_BACKEND_OPTIONS as BACKEND_OPTIONS
 
 from src.core import event_types as ET
@@ -185,24 +192,7 @@ async def test_verify_completion_uses_untruncated_result_without_task_spec_prefi
 async def test_verify_final_report_falls_back_to_untruncated_last_assistant_message(tmp_path: Path) -> None:
   report = "confirmed | claim | URL | " + "y" * 1200 + "\nRESULT: clean"
   events_path = tmp_path / "events.jsonl"
-  append_events(
-      events_path,
-      [
-          {
-              "type": ET.ASSISTANT,
-              "message": {
-                  "content": [{
-                      "type": "text",
-                      "text": report
-                  }]
-              },
-          },
-          {
-              "type": ET.RESULT,
-              "result": ""
-          },
-      ],
-  )
+  append_events(events_path, [assistant_text_event(report), {"type": ET.RESULT, "result": ""}])
   thread = ThreadMetadata(id="verify-thread-id", session_id="session-id", description="Verify")
 
   result = await read_verify_final_report(thread.session_id, thread.id, FakeThreadManager(thread, events_path))

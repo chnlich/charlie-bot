@@ -47,15 +47,7 @@ def _pending_draft_events() -> list[dict]:
           "timestamp": "t1"
       },
       {
-          "id": "assistant-1",
-          "type": ET.ASSISTANT,
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "draft response"
-              }]
-          },
-          "timestamp": "t2",
+          **_assistant_event("draft response", event_id="assistant-1"), "timestamp": "t2"
       },
   ]
 

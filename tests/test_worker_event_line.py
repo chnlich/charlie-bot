@@ -50,8 +50,7 @@ async def test_process_event_persists_the_attach_signal_without_broadcasting_it(
   subscriber reads it and the projection skips it, so it appends exactly one
   typed line and broadcasts nothing."""
   worker = make_worker(tmp_path, "attach-signal")
-  broadcast = AsyncMock()
-  monkeypatch.setattr(worker_module.streaming_manager, "broadcast", broadcast)
+  monkeypatch.setattr(worker_module.streaming_manager, "broadcast", AsyncMock())
   event = {"type": ET.SESSION_ATTACHED, "session_id": "oc-s-1"}
   lines = (await process_worker_event(worker, tmp_path, event, monkeypatch)).splitlines()
   assert len(lines) == 1
@@ -59,4 +58,6 @@ async def test_process_event_persists_the_attach_signal_without_broadcasting_it(
   assert persisted["type"] == ET.SESSION_ATTACHED
   assert persisted["session_id"] == "oc-s-1"
   assert persisted["timestamp"]
-  broadcast.assert_not_called()
+  # process_worker_event installs its own broadcast seam mock; the funnel must
+  # have left it uncalled (the live mock, not the test's pre-installed one).
+  assert worker_module.streaming_manager.broadcast.await_count == 0

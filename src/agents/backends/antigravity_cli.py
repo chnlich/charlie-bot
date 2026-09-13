@@ -159,9 +159,9 @@ class AntigravityCliBackend(AgentBackend):
           f"antigravity envelope guard: resume envelope id {conversation_id} does not match "
           f"anchor {self._resume_session_id}")
 
-    # Session-adopt event first so the master captures it as the frozen anchor
-    # (never persisted: the persist funnels skip ET.SESSION_ATTACHED), then
-    # assistant text, then usage.
+    # Session-adopt event first so the master captures it as the frozen anchor;
+    # the chat persist is the run-start marker, the worker projection skips it
+    # (ET.SESSION_ATTACHED), then assistant text, then usage.
     yield {"type": ET.SESSION_ATTACHED, "session_id": conversation_id}
     yield make_text_event(_strip_platform_notifications(envelope.get("response", "")))
     usage = envelope.get("usage", {}) or {}

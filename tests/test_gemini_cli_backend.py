@@ -82,7 +82,10 @@ def test_translate_event_mappings(monkeypatch) -> None:
   assert backend.translate_event({
       "type": "init",
       "session_id": "sid"
-  }) == [{"type": ET.SESSION_ATTACHED, "session_id": "sid"}]
+  }) == [{
+      "type": ET.SESSION_ATTACHED,
+      "session_id": "sid"
+  }]
   assert not backend.translate_event({"type": "message", "role": "user", "content": "ignored"})
   assert backend.translate_event({
       "type": "message",

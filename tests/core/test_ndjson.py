@@ -10,21 +10,22 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from typing import IO
 
 import pytest
 
 from core import byte_count_open
 from src.core.ndjson import (
-    _COUNT_MEMO_LIMIT,
-    _TAIL_WINDOW_SIZE,
-    append_ndjson,
-    count_ndjson_lines,
-    iter_ndjson_events,
-    iter_ndjson_events_from_end,
-    parse_ndjson_file,
-    parse_ndjson_line,
-    parse_ndjson_tail,
-    parse_ndjson_tail_parseable,
+  _COUNT_MEMO_LIMIT,
+  _TAIL_WINDOW_SIZE,
+  append_ndjson,
+  count_ndjson_lines,
+  iter_ndjson_events,
+  iter_ndjson_events_from_end,
+  parse_ndjson_file,
+  parse_ndjson_line,
+  parse_ndjson_tail,
+  parse_ndjson_tail_parseable,
 )
 
 
@@ -364,7 +365,7 @@ def _spy_opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   calls: list[str] = []
   real_open = open
 
-  def spy(file, mode="r", *args, **kwargs):
+  def spy(file: str, mode: str = "r", *args: object, **kwargs: object) -> IO[str]:
     calls.append(str(file))
     return real_open(file, mode, *args, **kwargs)
 

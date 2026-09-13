@@ -16,16 +16,18 @@ import test_memory_replay as base
 import yaml
 
 from src.core.memory_replay import (
-    CompareOptions,
-    ExperimentOutcome,
-    ReplayError,
-    ReplayOptions,
-    run_comparison,
-    run_replay,
-    variants,
+  CompareOptions,
+  ExperimentOutcome,
+  ReplayError,
+  ReplayOptions,
+  run_comparison,
+  run_replay,
+  variants,
 )
 from src.core.memory_replay.experiment import ExperimentOptions, run_experiment
 from src.core.memory_replay.identity import sha256_hex
+from src.core.memory_replay.runner import ReplayOutcome
+from src.core.memory_replay.transport import TransportResult
 
 # --- synthetic frozen corpus ----------------------------------------------------
 
@@ -249,7 +251,7 @@ class VariantScriptedTransport:
       reviewer_response: str | None = None,
       die_on_call: int | None = None,
       editor_responses: list[str] | None = None,
-      reviewer_responses: list[str] | None = None):
+      reviewer_responses: list[str] | None = None) -> None:
     # A single scripted response repeats for every stage call of its kind; an explicit list is
     # consumed in order and runs out loudly. One editor queue serves every editor scope: the
     # candidate-merge selector and the whole-entry editor share the same proof contract, so the
@@ -261,9 +263,7 @@ class VariantScriptedTransport:
     self.die_on_call = die_on_call
     self.calls: list[dict] = []
 
-  def complete(self, *, system: str, user: str):
-    from src.core.memory_replay.transport import TransportResult
-
+  def complete(self, *, system: str, user: str) -> TransportResult:
     self.calls.append({"system": system, "user": user})
     if self.die_on_call is not None and len(self.calls) == self.die_on_call:
       raise ReplayError("model endpoint returned HTTP 502: bad gateway")
@@ -285,7 +285,7 @@ def run_variant(
     transport: VariantScriptedTransport | None = None,
     manifest_path: Path | None = None,
     output_dir: Path | None = None,
-):
+) -> tuple[ReplayOutcome, VariantScriptedTransport]:
   contract = variants.resolve_variant(variant)
   transport = transport or VariantScriptedTransport(
       editor_response=SELECTOR_EDITOR_RESPONSE, reviewer_response=TRIM_ACCEPT_RESPONSE)
@@ -301,7 +301,9 @@ def run_variant(
   return outcome, transport
 
 
-def run_variant_expect_failure(tmp_path: Path, variant: str, *, transport, output_dir: Path, match: str) -> dict:
+def run_variant_expect_failure(
+    tmp_path: Path, variant: str, *, transport: VariantScriptedTransport, output_dir: Path, match: str
+) -> dict:
   """A run that must fail visibly; returns the preserved failed record."""
   with pytest.raises(ReplayError, match=match):
     run_variant(tmp_path, variant, transport=transport, output_dir=output_dir)
@@ -1563,11 +1565,11 @@ class _SharedStubTransportClass:
   def __init__(self) -> None:
     assert _SharedStubTransportClass.shared is not None
 
-  def __getattr__(self, name: str):
+  def __getattr__(self, name: str) -> object:
     return getattr(_SharedStubTransportClass.shared, name)
 
   @classmethod
-  def from_config(cls, option, cfg=None):
+  def from_config(cls, option: object, cfg: object = None) -> VariantScriptedTransport:
     return cls.shared
 
 

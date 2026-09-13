@@ -1,6 +1,7 @@
 """Tests for startup worktree quarantine: git helper, sweep selection, and trash listing."""
 
 import shutil
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from src.core import init_worker_recovery as worker_recovery_module
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, utc_now
 from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
 
 
 async def _make_session(cfg: CharlieBotConfig, session_id: str) -> None:
@@ -438,7 +440,7 @@ async def test_maybe_respawn_verify_task_cross_models_backend_when_omitted(
   would defeat verify's "checked by a different model" invariant.
   """
   from src.core import spawner as spawner_module
-  from src.core.models import SessionMetadata, TaskType
+  from src.core.models import SessionMetadata, SpawnRequest, TaskType
 
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
@@ -460,7 +462,15 @@ async def test_maybe_respawn_verify_task_cross_models_backend_when_omitted(
 
   captured: dict[str, Any] = {}
 
-  async def fake_spawn_worker(session_id, description, thread_id, cfg, session_mgr, thread_mgr, request=None) -> None:
+  async def fake_spawn_worker(
+      session_id: str,
+      description: str,
+      thread_id: str,
+      cfg: CharlieBotConfig,
+      session_mgr: SessionManager,
+      thread_mgr: ThreadManager | None,
+      request: SpawnRequest | None = None,
+  ) -> None:
     captured["request"] = request
 
   monkeypatch.setattr(spawner_module, "spawn_worker", fake_spawn_worker)
@@ -672,16 +682,16 @@ async def test_reconcile_stalled_run_reattaches_reports_and_sends_no_signal(
   resume_calls: list[bool] = []
 
   async def fake_resume_worker(
-      session_id,
-      description,
-      thread_id,
-      cfg,
-      session_mgr,
-      thread_mgr,
+      session_id: str,
+      description: str,
+      thread_id: str,
+      cfg: CharlieBotConfig,
+      session_mgr: SessionManager,
+      thread_mgr: ThreadManager | None,
       *,
-      is_alive,
-      interrupt_reason="",
-      on_silence=None) -> None:
+      is_alive: Callable[[], bool],
+      interrupt_reason: str = "",
+      on_silence: Callable[[], Awaitable[None]] | None = None) -> None:
     resume_calls.append(is_alive())
 
   monkeypatch.setattr(SPAWNER_RESUME_WORKER_PATCH_TARGET, fake_resume_worker)

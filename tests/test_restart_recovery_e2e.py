@@ -37,18 +37,18 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-    OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
-    REVIEW_TRIGGER_MASTER_PATCH_TARGET,
-    _assert_failed_with_transport_reason,
-    _await_recovery_tasks,
-    _cfg,
-    _kill_driver_mid_run,
-    _read_meta,
-    _recover,
-    _terminal_summaries,
-    _wait_for,
-    build_recovery_cfg,
-    read_chat_events,
+  OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
+  REVIEW_TRIGGER_MASTER_PATCH_TARGET,
+  _assert_failed_with_transport_reason,
+  _await_recovery_tasks,
+  _cfg,
+  _kill_driver_mid_run,
+  _read_meta,
+  _recover,
+  _terminal_summaries,
+  _wait_for,
+  build_recovery_cfg,
+  read_chat_events,
 )
 
 from src.agents.worker import QuotaExhaustedException, Worker
@@ -56,14 +56,15 @@ from src.core import event_types as ET
 from src.core import init as init_module
 from src.core import runs
 from src.core import spawner as spawner_module
+from src.core.config import CharlieBotConfig
 from src.core.git import git_create_worktree, git_worktree_dir_name
 from src.core.models import (
-    CreateSessionRequest,
-    SpawnRequest,
-    TaskType,
-    ThreadMetadata,
-    ThreadStatus,
-    utc_now,
+  CreateSessionRequest,
+  SpawnRequest,
+  TaskType,
+  ThreadMetadata,
+  ThreadStatus,
+  utc_now,
 )
 from src.core.process import kill_process_group
 from src.core.sessions import SessionManager
@@ -442,7 +443,8 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
   # the wake still missing and re-fire it. ---
   master_wakes: list[str] = []
 
-  async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
+  async def fake_trigger_master(
+      session_id: str, summary: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
     master_wakes.append(summary)
     await session_mgr.persist_and_broadcast(
         session_id, {
@@ -466,7 +468,7 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
   # works. Neutering
   # only the worktree-removal step (a test-side no-op) lets every round walk the
   # judgment for real. ---
-  async def fake_finalize_review_chain(*args, **kwargs) -> None:
+  async def fake_finalize_review_chain(*args: object, **kwargs: object) -> None:
     return None
 
   monkeypatch.setattr("src.core.review.finalize_review_chain", fake_finalize_review_chain)
@@ -741,7 +743,7 @@ async def test_graceful_shutdown_in_setup_phase_reaches_never_started_row(
 
   setup_entered = asyncio.Event()
 
-  async def hang_in_setup(*args, **kwargs) -> None:
+  async def hang_in_setup(*args: object, **kwargs: object) -> None:
     setup_entered.set()
     await asyncio.Event().wait()
 
@@ -913,7 +915,8 @@ async def test_ui_cancel_endpoint_still_finalizes_cancelled(tmp_path: Path, monk
 
   master_wakes: list[str] = []
 
-  async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
+  async def fake_trigger_master(
+      session_id: str, summary: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
     master_wakes.append(summary)
 
   monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)

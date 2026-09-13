@@ -24,13 +24,15 @@ from conftest import REVIEW_TRIGGER_MASTER_PATCH_TARGET, _cfg, _recovery_reports
 
 from src.agents.worker import Worker
 from src.core import spawner
-from src.core.models import CreateSessionRequest, ThreadStatus
+from src.core.config import CharlieBotConfig
+from src.core.models import CreateSessionRequest, SessionMetadata, ThreadMetadata, ThreadStatus
 from src.core.sessions import SessionManager
 from src.core.spawner_lifecycle import RESUME_EXCEPTION_ALIVE_REASON
 from src.core.threads import ThreadManager
 
 
-async def _make_running_thread(home: Path):
+async def _make_running_thread(
+    home: Path) -> tuple[CharlieBotConfig, SessionManager, ThreadManager, SessionMetadata, ThreadMetadata]:
   cfg = _cfg(home)
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
@@ -41,14 +43,16 @@ async def _make_running_thread(home: Path):
   return cfg, session_mgr, thread_mgr, session_meta, thread
 
 
-async def _boom_resume(self, *, is_alive, on_silence=None) -> int:
+async def _boom_resume(
+    self: Worker, *, is_alive: Callable[[], bool], on_silence: Callable[[], Awaitable[None]] | None = None) -> int:
   raise RuntimeError("resume exploded")
 
 
 def _hang_resume(entered: asyncio.Event) -> Callable[..., Awaitable[int]]:
   """A Worker.resume stand-in that signals entry through ``entered``, then hangs."""
 
-  async def hang(self, *, is_alive, on_silence=None) -> int:
+  async def hang(
+      self: Worker, *, is_alive: Callable[[], bool], on_silence: Callable[[], Awaitable[None]] | None = None) -> int:
     entered.set()
     await asyncio.Event().wait()  # never returns; only cancellation gets out
     return -1
@@ -64,7 +68,8 @@ def _thread_status(home: Path, session_id: str, thread_id: str) -> str:
 @pytest.fixture
 def _no_master_wake(monkeypatch: pytest.MonkeyPatch) -> None:
 
-  async def fake_trigger_master(session_id: str, summary: str, cfg, session_mgr) -> None:
+  async def fake_trigger_master(
+      session_id: str, summary: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
     pass
 
   monkeypatch.setattr(REVIEW_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)

@@ -19,11 +19,13 @@ import test_memory_replay as base
 from src.core.memory_replay import CompareOptions, ReplayOptions, run_comparison, run_replay
 from src.core.memory_replay.errors import ReplayError, ReplayValidationError
 from src.core.memory_replay.exchange import (
-    EDITOR_PROMPT_VERSION,
-    build_repair_request,
+  EDITOR_PROMPT_VERSION,
+  build_repair_request,
 )
 from src.core.memory_replay.identity import input_identity, sha256_hex
 from src.core.memory_replay.manifest import load_manifest
+from src.core.memory_replay.runner import ReplayOutcome
+from src.core.memory_replay.transport import TransportResult
 from src.core.memory_replay.validate import theme_output_errors
 
 # --- shared fixtures ------------------------------------------------------------
@@ -51,13 +53,11 @@ def keep_with_text_reviewer() -> str:
 class ScriptedTransport:
   """Fake transport with per-call usage, so attempt costs are assertable."""
 
-  def __init__(self, responses: list[tuple[str, int]]):
+  def __init__(self, responses: list[tuple[str, int]]) -> None:
     self.responses = list(responses)
     self.calls: list[dict] = []
 
-  def complete(self, *, system: str, user: str):
-    from src.core.memory_replay.transport import TransportResult
-
+  def complete(self, *, system: str, user: str) -> TransportResult:
     self.calls.append({"system": system, "user": user})
     if not self.responses:
       raise AssertionError("scripted transport ran out of responses")
@@ -68,21 +68,24 @@ class ScriptedTransport:
 class DyingTransport:
   """Fake transport that fails with a transport error at a scripted call number."""
 
-  def __init__(self, responses: list[str], die_on_call: int):
+  def __init__(self, responses: list[str], die_on_call: int) -> None:
     self.responses = list(responses)
     self.die_on_call = die_on_call
     self.calls = 0
 
-  def complete(self, *, system: str, user: str):
-    from src.core.memory_replay.transport import TransportResult
-
+  def complete(self, *, system: str, user: str) -> TransportResult:
     self.calls += 1
     if self.calls == self.die_on_call:
       raise ReplayError("model endpoint returned HTTP 401: bad credentials")
     return TransportResult(text=self.responses.pop(0), model="m", prompt_tokens=1, output_tokens=2, latency_ms=3)
 
 
-def run_with(tmp_path: Path, responses: list[str], *, mode: str = "editor-review", manifest_path=None, output_dir=None):
+def run_with(tmp_path: Path,
+             responses: list[str],
+             *,
+             mode: str = "editor-review",
+             manifest_path: Path | None = None,
+             output_dir: Path | None = None) -> tuple[ReplayOutcome, ScriptedTransport]:
   transport = ScriptedTransport([(text, 10 + i) for i, text in enumerate(responses)])
   outcome = run_replay(
       ReplayOptions(

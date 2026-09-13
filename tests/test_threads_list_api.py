@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -34,7 +35,7 @@ from src.core.triggers import TriggerManager
 LONG_DESCRIPTION = "spec " * 300  # 1500 chars, over the list cap
 
 
-def _seeded_client(tmp_path: Path):
+def _seeded_client(tmp_path: Path) -> tuple[TestClient, str, dict]:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   sessions = SessionManager(cfg)
 
@@ -132,7 +133,9 @@ def test_rows_skip_the_walk_until_a_mark_or_the_sweep(
   walks = {"n": 0}
   real = threads_api._row_source_stats
 
-  def counting(threads_dir: str, triggers_dir: str):
+  def counting(
+      threads_dir: str, triggers_dir: str
+  ) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
     walks["n"] += 1
     return real(threads_dir, triggers_dir)
 
@@ -422,7 +425,9 @@ def test_sweep_survives_continuous_marked_polls(tmp_path: Path, monkeypatch: pyt
   walks = {"n": 0}
   real = threads_api._row_source_stats
 
-  def counting(threads_dir: str, triggers_dir: str):
+  def counting(
+      threads_dir: str, triggers_dir: str
+  ) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
     walks["n"] += 1
     return real(threads_dir, triggers_dir)
 

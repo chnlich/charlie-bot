@@ -356,6 +356,13 @@ def test_codex_usage_transform_raw_rate_limit_shapes(rate_limits: dict, expected
   assert usage == expected_usage
 
 
+def _capture_warnings(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+  """Capture ext_usage's warning lines in order as ``{"event": name, **fields}`` dicts."""
+  warns: list[dict] = []
+  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  return warns
+
+
 def test_codex_usage_transform_drops_unreadable_credits_and_warns(monkeypatch: pytest.MonkeyPatch) -> None:
   """An unreadable credits shape emits no payload and no state, and warns instead.
 
@@ -363,8 +370,7 @@ def test_codex_usage_transform_drops_unreadable_credits_and_warns(monkeypatch: p
   credits key blocks the unlimited fallback even when the credits object
   itself cannot be read.
   """
-  warns: list[dict] = []
-  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  warns = _capture_warnings(monkeypatch)
 
   def transform(credits: Any) -> dict:
     rate_limits = {"primary": None, "secondary": None, "plan_type": "business", "credits": credits}
@@ -1471,8 +1477,7 @@ def test_transform_response_scopes_are_sorted_before_planwide() -> None:
 
 
 def test_transform_response_scoped_skip_and_warn_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-  warns: list[dict] = []
-  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  warns = _capture_warnings(monkeypatch)
 
   raw = _plan_raw(
       limits=[
@@ -1507,8 +1512,7 @@ def test_transform_response_scoped_skip_and_warn_paths(monkeypatch: pytest.Monke
 
 def test_transform_response_unknown_shape_warns_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
   """An unchanged response re-transformed every poll round fires its alarm once, not every round."""
-  warns: list[dict] = []
-  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  warns = _capture_warnings(monkeypatch)
 
   raw = _plan_raw(
       nimbus_quill={
@@ -1551,8 +1555,7 @@ def test_transform_response_unknown_shape_warns_once_per_process(monkeypatch: py
 
 def test_read_credentials_tokenless_file_warns_once_per_streak(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """A tokenless file re-read every poll round fires its alarm once, not every round."""
-  warns: list[dict] = []
-  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  warns = _capture_warnings(monkeypatch)
   credentials_path = tmp_path / ".credentials.json"
   _write_credentials(credentials_path, access="")
 
@@ -1568,8 +1571,7 @@ def test_read_credentials_tokenless_file_warns_once_per_streak(monkeypatch: pyte
 
 def test_read_credentials_recovery_rearms_the_warning(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """A token read clears the streak: a later relapse is a new onset and earns one new line."""
-  warns: list[dict] = []
-  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  warns = _capture_warnings(monkeypatch)
   credentials_path = tmp_path / ".credentials.json"
   _write_credentials(credentials_path, access="")
   _read_credentials(credentials_path)
@@ -1588,8 +1590,7 @@ def test_read_credentials_recovery_rearms_the_warning(monkeypatch: pytest.Monkey
 def test_read_credentials_missing_and_tokenless_are_separate_alarms(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """A path whose failure state changes warns once per state, not once per path forever."""
-  warns: list[dict] = []
-  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  warns = _capture_warnings(monkeypatch)
   credentials_path = tmp_path / ".credentials.json"
 
   for _ in range(60):
@@ -1613,8 +1614,7 @@ def test_read_credentials_flip_without_success_stays_one_line_per_event(
   missing logs the missing alarm once, the tokenless alarm once, and no
   third line, because the relapsed missing sighting repeats a fired alarm.
   """
-  warns: list[dict] = []
-  monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
+  warns = _capture_warnings(monkeypatch)
   credentials_path = tmp_path / ".credentials.json"
 
   for _ in range(60):

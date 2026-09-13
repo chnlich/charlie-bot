@@ -1,17 +1,29 @@
 """JSON response rendering for the request-path endpoints.
 
 The hot JSON endpoints return pre-built plain payloads, so the remaining
-per-request cost is the render itself. Starlette's JSONResponse renders with
-``ensure_ascii=False``, and CPython's C JSON encoder is several times slower
-on non-ASCII-bearing payloads in that mode (~3x measured on a 559 KB CJK-heavy
-chat page; the sessions corpus on this deployment is Chinese-heavy). Rendering
-ASCII-escaped keeps the parsed content identical and is never slower, also on
-ASCII-only payloads.
+per-request cost is the render itself. orjson renders the same payload
+parsed-identically several times faster than CPython's C JSON encoder and
+emits raw UTF-8 instead of ``\\uXXXX`` escapes, shrinking non-ASCII-bearing
+bodies on the wire. Callers rely on: the parsed content equals the stdlib
+render, splices built from ``fast_json_bytes`` segments stay byte-identical
+to a fresh render of the merged payload, and unsupported payload types raise
+loudly at render time.
+
+Two deliberate serializer boundaries ride orjson, both test-pinned: a
+NaN/Infinity float renders as null — valid JSON, so the wire never breaks,
+the same boundary the stream funnels accepted at their orjson swap — and a
+non-str dict key raises TypeError instead of the stdlib's silent str
+coercion.
+
+The splice byte-identity holds because orjson renders a dict context-free in
+the dict's own key order, and the splice sites' hand-rolled scalar pieces
+(src/api/sessions.py) render byte-identically to orjson's for their
+code-fixed types (None, bool, int, ASCII strings).
 """
 
-import json
 from typing import Any
 
+import orjson
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
@@ -19,23 +31,16 @@ from starlette.responses import Response
 def fast_json_bytes(content: Any) -> bytes:
   """Render *content* to the FastJsonResponse body bytes.
 
-  Callers rely on: the parsed content equals the ensure_ascii=False render
-  (\\uXXXX decodes to the same string; only the raw bytes differ, and the
-  escaped body is ASCII), and a NaN/Infinity payload raises ValueError at
-  render time instead of emitting invalid JSON (Starlette's allow_nan=False
-  contract).
+  Callers rely on: the parsed content equals the stdlib render (only the raw
+  bytes differ — raw UTF-8 where the stdlib emitted ``\\uXXXX`` escapes), the
+  compact no-space separators, and a NaN/Infinity float rendering as null
+  rather than invalid JSON.
   """
-  return json.dumps(
-      content,
-      ensure_ascii=True,
-      allow_nan=False,
-      indent=None,
-      separators=(",", ":"),
-  ).encode("utf-8")
+  return orjson.dumps(content)
 
 
 class FastJsonResponse(JSONResponse):
-  """JSONResponse whose render escapes non-ASCII as \\uXXXX escapes."""
+  """JSONResponse whose render goes through :func:`fast_json_bytes`."""
 
   def render(self, content: Any) -> bytes:
     return fast_json_bytes(content)

@@ -549,8 +549,8 @@ def _json_scalar_bytes(value: object) -> bytes:
   """Render one overlay value as JSON bytes.
 
   The overlay's value types are code-fixed (None, bool, int, and the ISO
-  strings the two datetime slots carry); these renderings are
-  ``json.dumps(ensure_ascii=True)``'s own for those types, and an ISO 8601
+  strings the two datetime slots carry); these renderings are byte-identical
+  to the response render's own (orjson's) for those types, and an ISO 8601
   string is pure ASCII with no quote or backslash, so the quoted form needs no
   escape pass. Any other type fails loudly instead of rendering.
   """

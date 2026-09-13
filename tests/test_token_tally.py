@@ -11,8 +11,9 @@ import json
 import os
 import shutil
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import codex_token_count_event, fresh_state_fixture
@@ -46,7 +47,7 @@ class Claude:
     self.ext = tmp_path / ".claude-ext-1"
     self.dirs = {"work (default)": self.work, "ext-1": self.ext}
 
-  def write(self, home: Path, session: str, records: list[dict], subagents=None) -> None:
+  def write(self, home: Path, session: str, records: list[dict], subagents: list[list[dict]] | None = None) -> None:
     sess_dir = home / "projects" / "rel" / session
     sess_dir.mkdir(parents=True, exist_ok=True)
     with (sess_dir / f"{session}.jsonl").open("w") as fh:
@@ -75,7 +76,7 @@ class Codex:
         fh.write(json.dumps(rec) + "\n")
 
 
-def _codex_meta(**payload) -> dict:
+def _codex_meta(**payload: Any) -> dict:
   return {"type": "session_meta", "payload": payload}
 
 
@@ -156,7 +157,11 @@ def _spy_row_blobs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 def _collect(
-    claude: Claude | None, codex: Codex | None, db: Path, cache: Path | None = None, sessions: Path | None = None):
+    claude: Claude | None,
+    codex: Codex | None,
+    db: Path,
+    cache: Path | None = None,
+    sessions: Path | None = None) -> tt.TokenTally:
   return collect_token_usage(
       claude_homes=claude.dirs if claude else {},
       codex_homes=codex.homes if codex else {},
@@ -166,7 +171,7 @@ def _collect(
   )
 
 
-def _row(tally, source: str, model: str):
+def _row(tally: tt.TokenTally, source: str, model: str) -> tt.ModelRow:
   return next(r for r in tally.rows if r.source == source and r.model == model)
 
 
@@ -662,7 +667,7 @@ def test_tally_memo_serves_unchanged_collect(tmp_path: Path, monkeypatch: pytest
   _write_opencode(db, [_oc_row()])
   first = _collect(claude, None, db, cache)
 
-  def boom(*args, **kwargs) -> None:
+  def boom(*args: Any, **kwargs: Any) -> None:
     raise AssertionError("whole-tally memo hit re-touched the cache document or the db")
 
   monkeypatch.setattr(tt.TallyCache, "load", boom)
@@ -932,7 +937,7 @@ def test_tally_memo_survives_wal_noise_without_row_change(tmp_path: Path, monkey
   def no_parse(data: str) -> tuple[list | None, int]:
     raise AssertionError("row blob re-read when the WAL noise touched no message row")
 
-  def no_cache_doc(*args, **kwargs) -> None:
+  def no_cache_doc(*args: Any, **kwargs: Any) -> None:
     raise AssertionError("cache document loaded on an epoch-proof hit")
 
   monkeypatch.setattr(tt, "_opencode_row_data", no_parse)
@@ -955,7 +960,7 @@ def test_wal_noise_hit_reproves_until_the_next_write(tmp_path: Path, monkeypatch
   second = _collect(None, None, db, cache)
   assert second.rows == first.rows
 
-  def boom(*args, **kwargs) -> None:
+  def boom(*args: Any, **kwargs: Any) -> None:
     raise AssertionError("quiet db reopened on a signature fast hit")
 
   monkeypatch.setattr(tt.sqlite3, "connect", boom)
@@ -1194,7 +1199,7 @@ def test_row_memo_probe_skips_the_key_scan_on_wal_noise(tmp_path: Path, monkeypa
   con.execute("insert into other values ('noise2', 'x')")
   con.commit()
 
-  def boom(*args, **kwargs) -> None:
+  def boom(*args: Any, **kwargs: Any) -> None:
     raise AssertionError("key scan ran although the proof aggregates saw no message row move")
 
   monkeypatch.setattr(tt, "_scan_opencode_rows", boom)
@@ -1502,7 +1507,7 @@ def test_stored_partial_adopts_without_replay(tmp_path: Path, monkeypatch: pytes
 
   tt._reset_aggregate_memo()
 
-  def boom(*args, **kwargs) -> None:
+  def boom(*args: Any, **kwargs: Any) -> None:
     raise AssertionError("the stored partial's buckets were rebuilt by a record replay")
 
   monkeypatch.setattr(tt, "_replay_opencode_records", boom)
@@ -1971,7 +1976,7 @@ def test_charliebot_dir_listing_memo(tmp_path: Path, monkeypatch: pytest.MonkeyP
   real_scandir = os.scandir
   calls = {"n": 0}
 
-  def counting_scandir(path):
+  def counting_scandir(path: str) -> Iterator[os.DirEntry[str]]:
     calls["n"] += 1
     return real_scandir(path)
 
@@ -2095,14 +2100,14 @@ def test_charliebot_walk_never_lists_or_stats_the_deep_dirs(tmp_path: Path, monk
   listed: list[str] = []
   real_scandir = os.scandir
 
-  def spy_scandir(path):
+  def spy_scandir(path: str) -> Iterator[os.DirEntry[str]]:
     listed.append(os.fspath(path))
     return real_scandir(path)
 
   statted: list[str] = []
   real_stat = os.stat
 
-  def spy_stat(path, *args, **kwargs):
+  def spy_stat(path: str, *args: Any, **kwargs: Any) -> os.stat_result:
     statted.append(os.fspath(path))
     return real_stat(path, *args, **kwargs)
 

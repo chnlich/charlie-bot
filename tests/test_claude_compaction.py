@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -100,7 +101,8 @@ def test_floors_follow_the_config_override(tmp_path: Path) -> None:
   assert claude_compaction.expired_cache_compaction_wanted(cfg, FABLE, 30_000, cold, now=NOW) is True
 
 
-def test_compaction_command_and_env_pin_sonnet_and_the_login_dir(tmp_path: Path, monkeypatch) -> None:
+def test_compaction_command_and_env_pin_sonnet_and_the_login_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/elsewhere")
   monkeypatch.setenv("CLAUDECODE", "1")
   cmd = claude_compaction.compaction_command("uuid-1")
@@ -128,7 +130,13 @@ def test_count_compact_boundaries_reads_on_disk_rows(tmp_path: Path) -> None:
 class _FakeProc:
   pid = 4242
 
-  def __init__(self, *, returncode: int, stdout: bytes, on_communicate=None, delay: float = 0.0) -> None:
+  def __init__(
+      self,
+      *,
+      returncode: int,
+      stdout: bytes,
+      on_communicate: Callable[[], None] | None = None,
+      delay: float = 0.0) -> None:
     self.returncode = returncode
     self._stdout = stdout
     self._on_communicate = on_communicate
@@ -164,7 +172,7 @@ def _result_json(models: list[str], *, is_error: bool = False) -> bytes:
       }).encode("utf-8")
 
 
-def _install_fake_exec(monkeypatch, proc: _FakeProc) -> dict[str, Any]:
+def _install_fake_exec(monkeypatch: pytest.MonkeyPatch, proc: _FakeProc) -> dict[str, Any]:
   captured: dict[str, Any] = {}
 
   async def fake_exec(*args: Any, **kwargs: Any) -> _FakeProc:
@@ -190,12 +198,13 @@ def _append_boundary(transcript: Path) -> None:
             }) + "\n")
 
 
-async def _run(tmp_path: Path,
-               monkeypatch,
-               proc: _FakeProc,
-               *,
-               pre_tokens: int | None = 120_000,
-               timeout: float = 5.0) -> tuple[bool, list[dict], dict[str, Any]]:
+async def _run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    proc: _FakeProc,
+    *,
+    pre_tokens: int | None = 120_000,
+    timeout: float = 5.0) -> tuple[bool, list[dict], dict[str, Any]]:
   login = tmp_path / "login"
   _write_transcript(login, "uuid-3")
   captured = _install_fake_exec(monkeypatch, proc)
@@ -217,7 +226,7 @@ async def _run(tmp_path: Path,
 
 
 @pytest.mark.asyncio
-async def test_success_emits_context_compacted_naming_sonnet(tmp_path: Path, monkeypatch) -> None:
+async def test_success_emits_context_compacted_naming_sonnet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   login = tmp_path / "login"
   transcript = login / "projects" / SLUG / "uuid-3.jsonl"
   proc = _FakeProc(returncode=0, stdout=_result_json([SONNET]), on_communicate=lambda: _append_boundary(transcript))
@@ -234,7 +243,8 @@ async def test_success_emits_context_compacted_naming_sonnet(tmp_path: Path, mon
 
 
 @pytest.mark.asyncio
-async def test_success_without_a_caller_reading_uses_the_boundary_row(tmp_path: Path, monkeypatch) -> None:
+async def test_success_without_a_caller_reading_uses_the_boundary_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   transcript = tmp_path / "login" / "projects" / SLUG / "uuid-3.jsonl"
   proc = _FakeProc(returncode=0, stdout=_result_json([SONNET]), on_communicate=lambda: _append_boundary(transcript))
 
@@ -256,8 +266,8 @@ async def test_success_without_a_caller_reading_uses_the_boundary_row(tmp_path: 
 )
 @pytest.mark.asyncio
 async def test_failed_runs_emit_context_compact_failed_and_return_false(
-    tmp_path: Path, monkeypatch, returncode: int, models: list[str], add_boundary: bool, is_error: bool,
-    fragment: str) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int, models: list[str], add_boundary: bool,
+    is_error: bool, fragment: str) -> None:
   transcript = tmp_path / "login" / "projects" / SLUG / "uuid-3.jsonl"
   proc = _FakeProc(
       returncode=returncode,
@@ -275,14 +285,14 @@ async def test_failed_runs_emit_context_compact_failed_and_return_false(
 
 
 @pytest.mark.asyncio
-async def test_unparseable_stdout_fails_loudly(tmp_path: Path, monkeypatch) -> None:
+async def test_unparseable_stdout_fails_loudly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   ok, events, _captured = await _run(tmp_path, monkeypatch, _FakeProc(returncode=0, stdout=b"not json"))
   assert ok is False
   assert "no JSON result" in events[0]["error"]
 
 
 @pytest.mark.asyncio
-async def test_timeout_kills_the_process_group_and_fails(tmp_path: Path, monkeypatch) -> None:
+async def test_timeout_kills_the_process_group_and_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   killed: list[int] = []
   monkeypatch.setattr(claude_compaction, "kill_process_group", lambda pid, *a, **k: killed.append(pid) or True)
   proc = _FakeProc(returncode=0, stdout=_result_json([SONNET]), delay=0.2)
@@ -296,7 +306,7 @@ async def test_timeout_kills_the_process_group_and_fails(tmp_path: Path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_missing_transcript_fails_without_spawning(tmp_path: Path, monkeypatch) -> None:
+async def test_missing_transcript_fails_without_spawning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   spawned = []
 
   async def fake_exec(*args: Any, **kwargs: Any) -> None:

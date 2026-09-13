@@ -336,12 +336,17 @@ def test_fusion_falls_back_past_an_expired_scoped_window() -> None:
 EXPIRY_NOW = datetime(2026, 9, 10, 16, 0, tzinfo=UTC)
 
 
-def test_panel_window_expired_when_the_reset_passed_after_the_sample() -> None:
-  window = {
+def _dead_5h_window() -> dict:
+  """The dead 5h panel window: expired one hour before EXPIRY_NOW at 91 percent."""
+  return {
       "window_minutes": 300,
       "utilization": 91.0,
       "resets_at": (EXPIRY_NOW - timedelta(hours=1)).isoformat(),
   }
+
+
+def test_panel_window_expired_when_the_reset_passed_after_the_sample() -> None:
+  window = _dead_5h_window()
   sampled = EXPIRY_NOW - timedelta(hours=2)
 
   assert claude_accounts.panel_window_expired(window, sampled, EXPIRY_NOW) is True
@@ -364,11 +369,7 @@ def test_panel_window_expired_ignores_an_illegal_reset_and_falls_to_the_age_rule
 
 
 def test_panel_window_expired_reads_a_missing_sample_as_live() -> None:
-  window = {
-      "window_minutes": 300,
-      "utilization": 91.0,
-      "resets_at": (EXPIRY_NOW - timedelta(hours=1)).isoformat(),
-  }
+  window = _dead_5h_window()
 
   assert claude_accounts.panel_window_expired(window, None, EXPIRY_NOW) is False
 
@@ -377,11 +378,7 @@ def test_panel_fold_drops_an_expired_window_whatever_its_utilization() -> None:
   """Pool invariance: an expired window's number is free to vary — the headroom is
   the dropped-window value either way (incident shape: dead 5h beside a live 7d)."""
   fetched_at = EXPIRY_NOW - timedelta(hours=2)
-  dead = {
-      "window_minutes": 300,
-      "utilization": 91.0,
-      "resets_at": (EXPIRY_NOW - timedelta(hours=1)).isoformat(),
-  }
+  dead = _dead_5h_window()
   live = {
       "window_minutes": 10080,
       "utilization": 17.0,
@@ -403,11 +400,7 @@ def test_panel_fold_drops_an_expired_window_whatever_its_utilization() -> None:
 
 def test_panel_fold_all_windows_expired_falls_back_past_the_panel() -> None:
   fetched_at = (EXPIRY_NOW - timedelta(hours=2)).isoformat()
-  dead = {
-      "window_minutes": 300,
-      "utilization": 91.0,
-      "resets_at": (EXPIRY_NOW - timedelta(hours=1)).isoformat(),
-  }
+  dead = _dead_5h_window()
   claude_accounts.observe_usage_panel("ext-1", {"windows": [dead], "fetched_at": fetched_at})
 
   # No event reading: with no panel reading either, the account scores a full window.

@@ -407,6 +407,24 @@ def assistant_text_tool_use_event(text: str, tool_name: str, tool_input: dict, t
   }
 
 
+def delegate_invocation(**overrides: Any) -> dict:
+  """The canonical ``delegate_invocation`` payload: the delegation metadata a TASK_DELEGATED chat
+  event carries and the delegate CLI posts in its request body. A test needing different values
+  passes the replacement keys as keyword overrides; the gate tests that feed minimal metadata
+  build their partial dict by hand."""
+  invocation: dict[str, Any] = {
+      "task_type": "implement",
+      "repo_path": "/tmp/repo",
+      "base_branch": "main",
+      "task_spec_file": None,
+      "reviewer_context_file": None,
+      "keep_worktree": False,
+      "backend": "codex-o3",
+  }
+  invocation.update(overrides)
+  return invocation
+
+
 def rate_limit_event(status: str, utilization: float, resets_in: timedelta = timedelta(hours=3)) -> dict:
   """A Claude RATE_LIMIT_EVENT: five_hour window at *utilization*, seven_day at a low fixed value."""
   return {

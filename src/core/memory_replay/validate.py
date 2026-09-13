@@ -34,6 +34,25 @@ def canonical_text(text: str) -> str:
   return stripped + "\n" if stripped else ""
 
 
+def apply_entry_ops(base: dict[str, str], entry_ops: list[EntryOp]) -> dict[str, str]:
+  """One stage's entry operations applied to the base, in list order: ``delete``
+  removes the path, ``rewrite``/``new`` store the canonicalized text, and
+  ``keep`` changes nothing. The one application rule the consistency check and
+  the final assembly both run, so a drift between them is impossible."""
+  final = dict(base)
+  for op in entry_ops:
+    if op.action == "delete":
+      final.pop(op.path, None)
+    elif op.action in ("rewrite", "new"):
+      final[op.path] = canonical_text(op.text or "")
+  return final
+
+
+def changed_paths(base: dict[str, str], final: dict[str, str]) -> list[str]:
+  """The paths whose content differs between the base and the final state, sorted."""
+  return sorted(p for p in set(base) | set(final) if final.get(p) != base.get(p))
+
+
 def theme_output_errors(
     output: ThemeOutput,
     *,
@@ -261,13 +280,8 @@ def _consistency_errors(output: ThemeOutput, *, role: str, base: dict[str, str])
   each theme sees only its own operations — and stay visible at final assembly
   in :func:`finalize`.
   """
-  final = dict(base)
-  for op in output.entries:
-    if op.action == "delete":
-      final.pop(op.path, None)
-    elif op.action in ("rewrite", "new"):
-      final[op.path] = canonical_text(op.text or "")
-  changed = sorted(p for p in set(base) | set(final) if final.get(p) != base.get(p))
+  final = apply_entry_ops(base, output.entries)
+  changed = changed_paths(base, final)
   propose_paths = {p for row in output.candidates if row.outcome == "propose" for p in row.paths}
   errors: list[str] = []
   unclaimed = [p for p in changed if p not in propose_paths]
@@ -304,11 +318,8 @@ def finalize(base: dict[str, str], theme_outputs: list[tuple[Theme, ThemeOutput]
         raise ReplayValidationError(
             f"cross-theme conflict: {theme.name} and {targeted_by[op.path]} both target {op.path}")
       targeted_by[op.path] = theme.name
-      if op.action == "delete":
-        final.pop(op.path, None)
-      elif op.action in ("rewrite", "new"):
-        final[op.path] = canonical_text(op.text or "")
-  changed = sorted(p for p in set(base) | set(final) if final.get(p) != base.get(p))
+    final = apply_entry_ops(final, output.entries)
+  changed = changed_paths(base, final)
   patch = build_patch(base, final)
   applied = apply_unified_patch(base, patch)
   for path in set(base) | set(final):

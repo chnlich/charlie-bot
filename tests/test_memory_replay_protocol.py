@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 import test_memory_replay as base
 
-from src.core.config import CharlieBotConfig
 from src.core.memory_replay import CompareOptions, ReplayOptions, run_comparison, run_replay
 from src.core.memory_replay.errors import ReplayError, ReplayValidationError
 from src.core.memory_replay.exchange import (
@@ -30,10 +29,6 @@ from src.core.memory_replay.validate import theme_output_errors
 # --- shared fixtures ------------------------------------------------------------
 
 MERGE = base.MERGE_RESPONSE
-
-
-def replay_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return base.replay_cfg(tmp_path)
 
 
 def keep_with_text_reviewer() -> str:
@@ -95,7 +90,7 @@ def run_with(tmp_path: Path, responses: list[str], *, mode: str = "editor-review
           output_dir=output_dir or tmp_path / "out",
           backend="fake-clc",
           mode=mode),
-      cfg=replay_cfg(tmp_path),
+      cfg=base.replay_cfg(tmp_path),
       transport_factory=lambda: transport)
   return outcome, transport
 
@@ -414,7 +409,7 @@ def test_transport_failures_are_never_retried_and_fail_visibly(tmp_path: Path) -
             output_dir=tmp_path / "out",
             backend="fake-clc",
             mode="editor-review"),
-        cfg=replay_cfg(tmp_path),
+        cfg=base.replay_cfg(tmp_path),
         transport_factory=lambda: transport)
   assert transport.calls == 1, "a transport failure is never retried"
   record = base.run_record(next((tmp_path / "out" / "runs").iterdir()))
@@ -431,7 +426,7 @@ def test_transport_failures_are_never_retried_and_fail_visibly(tmp_path: Path) -
             output_dir=tmp_path / "out-b",
             backend="fake-clc",
             mode="editor-review"),
-        cfg=replay_cfg(tmp_path),
+        cfg=base.replay_cfg(tmp_path),
         transport_factory=lambda: transport)
   assert transport.calls == 2, "the budget is spent on the repair attempt, and the failure ends the run"
 
@@ -511,7 +506,7 @@ def test_failed_attempt_cost_is_counted_and_the_chosen_response_is_shared(tmp_pa
   reviewer_request = transport.calls[2]["user"]
   assert "final editor text" in reviewer_request and "INSTANCE" not in reviewer_request, (
       "the reviewer consumed the chosen (second) editor response")
-  run_comparison(CompareOptions(run_dir=outcome.run_dir, output_dir=tmp_path / "cmp"), cfg=replay_cfg(tmp_path))
+  run_comparison(CompareOptions(run_dir=outcome.run_dir, output_dir=tmp_path / "cmp"), cfg=base.replay_cfg(tmp_path))
   data = json.loads((tmp_path / "cmp" / "comparison.json").read_text(encoding="utf-8"))
   assert data["arms"]["editor-only"]["status"] == "established"
   arm_entry = data["arms"]["editor-only"]["themes"]["eviction"]["entries"][0]
@@ -542,7 +537,7 @@ def test_compare_rejects_tampered_retry_provenance(tmp_path: Path) -> None:
   tampered["calls"][0]["validation"]["errors"] = ["fabricated: unrelated error"]
   write_record(tampered)
   with pytest.raises(ReplayError, match="repair request .* does not match"):
-    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp-a"), cfg=replay_cfg(tmp_path))
+    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp-a"), cfg=base.replay_cfg(tmp_path))
 
   # Tamper with the chosen-attempt reference: two chosen responses break the chain.
   tampered = json.loads(json.dumps(original))
@@ -550,7 +545,7 @@ def test_compare_rejects_tampered_retry_provenance(tmp_path: Path) -> None:
   tampered["calls"][0]["chosen"] = True
   write_record(tampered)
   with pytest.raises(ReplayError, match="mark 2 responses as chosen"):
-    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp-b"), cfg=replay_cfg(tmp_path))
+    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp-b"), cfg=base.replay_cfg(tmp_path))
 
   # A response recorded as failed must still fail validation: swap the failed attempt's response
   # for a validating one (hashes stripped, so the chain checks are the only line of defense).
@@ -558,7 +553,7 @@ def test_compare_rejects_tampered_retry_provenance(tmp_path: Path) -> None:
   base.strip_bundle_selfcontainment(record_path)
   (run_dir / "raw" / "editor-eviction.attempt-1.response.txt").write_text(MERGE, encoding="utf-8")
   with pytest.raises(ReplayError, match="recorded as failed but its response passes mechanical validation"):
-    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp-c"), cfg=replay_cfg(tmp_path))
+    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp-c"), cfg=base.replay_cfg(tmp_path))
 
 
 def test_compare_verifies_the_repair_request_was_built_from_the_recorded_errors(tmp_path: Path) -> None:
@@ -583,7 +578,7 @@ def test_compare_verifies_the_repair_request_was_built_from_the_recorded_errors(
       outcome.run_dir, "reviewer", "eviction",
       2) == expected, ("the repair request is exactly evidence + previous response + recorded errors")
   # A comparison reconstructs the same request from the frozen inputs and verifies it byte-for-byte.
-  run_comparison(CompareOptions(run_dir=outcome.run_dir, output_dir=tmp_path / "cmp"), cfg=replay_cfg(tmp_path))
+  run_comparison(CompareOptions(run_dir=outcome.run_dir, output_dir=tmp_path / "cmp"), cfg=base.replay_cfg(tmp_path))
   data = json.loads((tmp_path / "cmp" / "comparison.json").read_text(encoding="utf-8"))
   assert data["arms"]["post-review"]["status"] == "established"
   attempts = data["provenance"]["shared_editor_response"]["themes"]["eviction"]["attempts"]["reviewer"]
@@ -762,7 +757,7 @@ def write_v2_run_bundle(
 def test_v2_completed_run_interprets_with_v2_meanings_and_declared_limits(tmp_path: Path) -> None:
   run_dir = write_v2_run_bundle(
       tmp_path, editor_responses={"eviction": MERGE}, reviewer_responses={"eviction": MERGE}, status="completed")
-  run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=replay_cfg(tmp_path))
+  run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=base.replay_cfg(tmp_path))
   data = json.loads((tmp_path / "cmp" / "comparison.json").read_text(encoding="utf-8"))
   assert data["arms"]["editor-only"]["status"] == "established"
   assert data["arms"]["post-review"]["status"] == "established"
@@ -792,7 +787,7 @@ def test_v2_failed_editor_arm_stays_failed_under_v3(tmp_path: Path) -> None:
       reviewer_responses={},
       status="failed",
       run_error="editor[eviction]: keep on entries/render/cache-eviction.md must not carry source_refs")
-  run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=replay_cfg(tmp_path))
+  run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=base.replay_cfg(tmp_path))
   data = json.loads((tmp_path / "cmp" / "comparison.json").read_text(encoding="utf-8"))
   assert data["arms"]["editor-only"]["status"] == "failed"
   assert "must not carry source_refs" in data["arms"]["editor-only"]["error"], (
@@ -810,7 +805,7 @@ def test_v2_failed_reviewer_arm_stays_failed_and_the_editor_arm_stands(tmp_path:
       reviewer_responses={"eviction": bad_reviewer},
       status="failed",
       run_error="reviewer[eviction]: no disposition row for candidate(s): capture-eviction")
-  run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=replay_cfg(tmp_path))
+  run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=base.replay_cfg(tmp_path))
   data = json.loads((tmp_path / "cmp" / "comparison.json").read_text(encoding="utf-8"))
   assert data["arms"]["editor-only"]["status"] == "established"
   assert data["arms"]["post-review"]["status"] == "failed"
@@ -824,7 +819,7 @@ def test_v2_tampered_proposal_is_rejected(tmp_path: Path) -> None:
   proposal["candidate_results"][0]["reason"] = "tampered after the run"
   proposal_path.write_text(json.dumps(proposal, indent=2), encoding="utf-8")
   with pytest.raises(ReplayError, match="final dispositions do not match"):
-    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=replay_cfg(tmp_path))
+    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=base.replay_cfg(tmp_path))
 
 
 def test_v2_bundle_needs_its_recorded_manifest(tmp_path: Path) -> None:
@@ -833,7 +828,7 @@ def test_v2_bundle_needs_its_recorded_manifest(tmp_path: Path) -> None:
   manifest_path = Path(json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["manifest"])
   manifest_path.unlink()
   with pytest.raises(ReplayError, match="no longer exists"):
-    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp-a"), cfg=replay_cfg(tmp_path))
+    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp-a"), cfg=base.replay_cfg(tmp_path))
 
   run_dir2 = write_v2_run_bundle(
       tmp_path,
@@ -847,7 +842,7 @@ def test_v2_bundle_needs_its_recorded_manifest(tmp_path: Path) -> None:
   Path(json.loads((run_dir2 / "run.json").read_text(encoding="utf-8"))["manifest"]).write_text(
       json.dumps(changed), encoding="utf-8")
   with pytest.raises(ReplayError, match="input identity"):
-    run_comparison(CompareOptions(run_dir=run_dir2, output_dir=tmp_path / "cmp-b"), cfg=replay_cfg(tmp_path))
+    run_comparison(CompareOptions(run_dir=run_dir2, output_dir=tmp_path / "cmp-b"), cfg=base.replay_cfg(tmp_path))
 
 
 def test_v2_record_with_wrong_prompt_fingerprint_is_rejected(tmp_path: Path) -> None:
@@ -860,4 +855,4 @@ def test_v2_record_with_wrong_prompt_fingerprint_is_rejected(tmp_path: Path) -> 
   record["system_prompts"]["editor"] = sha256_hex(V3_EDITOR_SYSTEM.encode("utf-8"))
   record_path.write_text(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
   with pytest.raises(ReplayError, match="system prompt fingerprint"):
-    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=replay_cfg(tmp_path))
+    run_comparison(CompareOptions(run_dir=run_dir, output_dir=tmp_path / "cmp"), cfg=base.replay_cfg(tmp_path))

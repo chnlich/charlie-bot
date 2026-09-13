@@ -156,7 +156,8 @@ async def test_construct_worker_pins_the_pool_account_onto_the_worker_only(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_worker_relays_a_rejected_run_onto_another_account(tmp_path: Path, monkeypatch) -> None:
+async def test_worker_relays_a_rejected_run_onto_another_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   source_transcript = make_transcript(tmp_path / "claude-main", CC_ID)
   first = ScriptedRelayBackend([_assistant("working"), rate_limit_event("rejected", 1.0)], exit_code=1)
@@ -180,7 +181,8 @@ async def test_worker_relays_a_rejected_run_onto_another_account(tmp_path: Path,
 
 
 @pytest.mark.asyncio
-async def test_worker_terminates_at_the_safe_point_after_a_far_warning_and_relays(tmp_path: Path, monkeypatch) -> None:
+async def test_worker_terminates_at_the_safe_point_after_a_far_warning_and_relays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", CC_ID)
   first = ScriptedRelayBackend(
@@ -200,7 +202,8 @@ async def test_worker_terminates_at_the_safe_point_after_a_far_warning_and_relay
 
 
 @pytest.mark.asyncio
-async def test_worker_outside_the_pool_still_raises_on_rejection(tmp_path: Path, monkeypatch) -> None:
+async def test_worker_outside_the_pool_still_raises_on_rejection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL)]},
@@ -213,7 +216,8 @@ async def test_worker_outside_the_pool_still_raises_on_rejection(tmp_path: Path,
 
 
 @pytest.mark.asyncio
-async def test_worker_raises_pool_exhausted_when_no_account_is_left(tmp_path: Path, monkeypatch) -> None:
+async def test_worker_raises_pool_exhausted_when_no_account_is_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path, labels=("main", "ext-1"))
   make_transcript(tmp_path / "claude-main", CC_ID)
   _reject("ext-1")
@@ -225,7 +229,7 @@ async def test_worker_raises_pool_exhausted_when_no_account_is_left(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_worker_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -> None:
+async def test_worker_stops_after_the_relay_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path, labels=("main", "a", "b", "c"))
   make_transcript(tmp_path / "claude-main", CC_ID)
   backends = [ScriptedRelayBackend([rate_limit_event("rejected", 1.0)], exit_code=1) for _ in range(4)]
@@ -240,7 +244,8 @@ async def test_worker_stops_after_the_relay_limit(tmp_path: Path, monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_worker_login_failure_marks_the_account_and_notifies_the_session(tmp_path: Path, monkeypatch) -> None:
+async def test_worker_login_failure_marks_the_account_and_notifies_the_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", CC_ID)
   first = ScriptedRelayBackend([_assistant("Failed to authenticate. Please run /login")], exit_code=1)
@@ -263,7 +268,7 @@ async def test_worker_login_failure_marks_the_account_and_notifies_the_session(t
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("prompt_tokens", "compacted"), [(150_000, True), (20_000, False)])
 async def test_worker_relay_compacts_a_large_fable_context_on_the_new_account(
-    tmp_path: Path, monkeypatch, prompt_tokens: int, compacted: bool) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, prompt_tokens: int, compacted: bool) -> None:
   cfg = fable_pool_cfg(tmp_path)
   make_transcript(tmp_path / "claude-main", CC_ID)
   compact = AsyncMock()
@@ -325,7 +330,7 @@ class _LifecycleThreadManager(_ThreadManager):
 
 @pytest.mark.asyncio
 async def test_stream_worker_events_reports_an_exhausted_pool_as_quota_with_the_reset(
-    tmp_path: Path, monkeypatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path, labels=("main", "ext-1"))
   make_transcript(tmp_path / "claude-main", CC_ID)
   _reject("ext-1")
@@ -343,7 +348,8 @@ async def test_stream_worker_events_reports_an_exhausted_pool_as_quota_with_the_
 
 
 @pytest.mark.asyncio
-async def test_spawn_worker_treats_an_exhausted_pool_at_launch_as_quota_exhaustion(tmp_path: Path, monkeypatch) -> None:
+async def test_spawn_worker_treats_an_exhausted_pool_at_launch_as_quota_exhaustion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path)
   thread = ThreadMetadata(id="t1", session_id="s1", description="task")
   thread_mgr = _LifecycleThreadManager(thread, tmp_path / "events.jsonl")

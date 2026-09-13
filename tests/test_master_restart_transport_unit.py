@@ -23,8 +23,10 @@ import asyncio
 import json
 import signal
 import time
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -173,7 +175,7 @@ def _make_callbacks(persist_order: list[str]) -> SessionCallbacks:
     if event.get("type") == "master_done":
       persist_order.append("master_done")
 
-  async def persist_master_run(session_id: str, record) -> None:
+  async def persist_master_run(session_id: str, record: MasterRunRecord | None) -> None:
     if record is None:
       persist_order.append("master_run_cleared")
 
@@ -190,7 +192,7 @@ async def test_consumer_clears_master_run_after_master_done() -> None:
   callbacks = _make_callbacks(persist_order)
   session_meta = SessionMetadata(id="session-clear", name="t")
 
-  async def fake_run_cc(item: master_cc._WorkItem):
+  async def fake_run_cc(item: master_cc._WorkItem) -> tuple[str | None, int, str | None, dict]:
     return "cc-1", 0, None, {}
 
   item = make_work_item(_cfg(Path("/tmp/charliebot-unit")), session_meta, None, user_content="hi", callbacks=callbacks)
@@ -225,7 +227,11 @@ class _HungBackend:
     # Set the moment the run loop starts, before any spawn callback.
     self.run_entered = asyncio.Event()
 
-  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     self.run_entered.set()
     if self._fire_spawn:
       await self.on_spawn(4242)
@@ -236,7 +242,7 @@ class _HungBackend:
 
 def _install_backend(monkeypatch: pytest.MonkeyPatch, backend: _HungBackend) -> None:
 
-  def _build(*args, **kwargs):
+  def _build(*args: Any, **kwargs: Any) -> _HungBackend:
     backend.on_spawn = kwargs["on_spawn"]
     return backend
 
@@ -244,7 +250,7 @@ def _install_backend(monkeypatch: pytest.MonkeyPatch, backend: _HungBackend) -> 
   patch_instructions_content(monkeypatch)
 
 
-def _persisting_callbacks(session_mgr: SessionManager, *, mark_unread=None) -> SessionCallbacks:
+def _persisting_callbacks(session_mgr: SessionManager, *, mark_unread: AsyncMock | None = None) -> SessionCallbacks:
   """Real persist_master_run against a tmp-home manager; everything else mocked."""
   return SessionCallbacks(
       persist_and_broadcast=AsyncMock(),
@@ -507,11 +513,12 @@ async def test_identity_judgment_runs_before_any_new_turn_door(tmp_path: Path, m
 
   calls: list[str] = []
 
-  async def fake_identity(cfg, session_mgr, boot_time):
+  async def fake_identity(cfg: CharlieBotConfig, session_mgr: SessionManager,
+                          boot_time: datetime) -> dict[str, set[str]]:
     calls.append("identity")
     return {}
 
-  async def fake_recovery(cfg, boot_time, identity=None) -> None:
+  async def fake_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task | None = None) -> None:
     calls.append("crash_recovery")
 
   async def fake_scheduler_start(self) -> None:
@@ -546,7 +553,7 @@ async def test_identity_judgment_runs_before_any_new_turn_door(tmp_path: Path, m
 async def test_queued_user_event_ids_covers_running_and_queued_items() -> None:
   gate = asyncio.Event()
 
-  async def blocked_run_cc(item: master_cc._WorkItem):
+  async def blocked_run_cc(item: master_cc._WorkItem) -> tuple[str | None, int, str | None, dict]:
     await gate.wait()
     return None, 0, None, {}
 

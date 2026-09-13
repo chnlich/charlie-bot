@@ -6,7 +6,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-from conftest import assert_cli_reject, assert_cli_reject_exit2, make_sessions_dir_config, patched_cli_post
+from conftest import (
+    assert_cli_reject,
+    assert_cli_reject_exit2,
+    delegate_invocation,
+    make_sessions_dir_config,
+    patched_cli_post,
+)
 from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.delegate import main
@@ -118,15 +124,8 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypa
   assert payload["backend"] == "codex-o3"
   assert payload["description"] == task_spec
   assert payload["task_type"] == "implement"
-  assert payload["delegate_invocation"] == {
-      "task_type": "implement",
-      "repo_path": str(tmp_path),
-      "base_branch": "main",
-      "task_spec_file": str(task_spec_file),
-      "reviewer_context_file": None,
-      "keep_worktree": False,
-      "backend": "codex-o3",
-  }
+  assert payload["delegate_invocation"] == delegate_invocation(
+      repo_path=str(tmp_path), task_spec_file=str(task_spec_file))
   assert "context" not in payload
 
 
@@ -187,15 +186,8 @@ def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.
   assert payload["task_type"] == "verify"
   assert "repo_path" not in payload
   assert "base_branch" not in payload
-  assert payload["delegate_invocation"] == {
-      "task_type": "verify",
-      "repo_path": None,
-      "base_branch": None,
-      "task_spec_file": str(task_spec_file),
-      "reviewer_context_file": None,
-      "keep_worktree": False,
-      "backend": None,
-  }
+  assert payload["delegate_invocation"] == delegate_invocation(
+      task_type="verify", repo_path=None, base_branch=None, task_spec_file=str(task_spec_file), backend=None)
 
 
 @pytest.mark.parametrize("flag", ["--repo", "--base-branch"])

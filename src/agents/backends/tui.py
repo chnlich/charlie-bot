@@ -26,7 +26,9 @@ from src.agents.backends.pty_common import (
     _run_pty_relay,
     _start_tmux_session,
     _tmux_binary,
-    kill_tmux_session,  # noqa: F401  # re-export: imported from this module by src/api/sessions.py + src/core/sessions.py and monkeypatched here by tests
+    # re-export: imported from this module by src/api/sessions.py + src/core/sessions.py
+    # and monkeypatched here by tests
+    kill_tmux_session,  # noqa: F401
     tmux_session_exists,
     tmux_session_name,
 )

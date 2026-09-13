@@ -170,7 +170,8 @@ async def _drive_antigravity(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
   """antigravity custom run() harness (test_antigravity_cli_backend.py's real-script shape)."""
   fake_agy = tmp_path / "agy"
   fake_agy.write_text(
-      "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"SUCCESS\",\"conversation_id\":\"conv-abc\",\"response\":\"contract answer\",\"usage\":{}}'\n",
+      "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"SUCCESS\",\"conversation_id\":\"conv-abc\","
+      "\"response\":\"contract answer\",\"usage\":{}}'\n",
       encoding="utf-8")
   fake_agy.chmod(0o755)
   monkeypatch.setattr(ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: str(fake_agy))

@@ -59,8 +59,8 @@ def _prerender_math(fragment: Path, vendor_path: Path) -> str:
   )
   if proc.returncode != 0:
     raise RuntimeError(
-        f"math pre-render driver failed (exit {proc.returncode}): {proc.stderr.decode('utf-8', errors='replace').strip()}"
-    )
+        f"math pre-render driver failed (exit {proc.returncode}): "
+        f"{proc.stderr.decode('utf-8', errors='replace').strip()}")
   return proc.stdout.decode("utf-8")
 
 

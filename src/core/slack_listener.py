@@ -80,7 +80,8 @@ SLACK_NS = uuid.UUID("1b4e28ba-2fa1-4d7a-9f0c-8d5e7a3b6c11")
 
 # Fixed citation boundary appended to every Slack-sourced prompt so the master
 # scopes its citations to the channel/thread and public content only.
-CITATION_BOUNDARY = ("引用边界：只引用这条频道／线程本身、公开仓库、公开频道；现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。")
+CITATION_BOUNDARY = ("引用边界：只引用这条频道／线程本身、公开仓库、公开频道；"
+                     "现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。")
 
 _ACCEPTANCE_REACTION = "eyes"
 

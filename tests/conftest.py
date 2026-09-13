@@ -70,7 +70,8 @@ def fake_backends() -> dict[str, list[models.BackendBase]]:
 
 @pytest.fixture(autouse=True)
 def _stub_headless_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
-  """The suite's renderer is the write_stub_chrome shell script (answers --dump-dom only); give the drive seam that shape."""
+  """The suite's renderer is the write_stub_chrome shell script (answers --dump-dom only);
+  give the drive seam that shape."""
 
   def dump_dom_drive(chrome_bin: Path, probe_uri: str) -> int:
     proc = subprocess.run(

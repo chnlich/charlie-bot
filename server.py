@@ -244,7 +244,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   await init_charliebot_home()
   log.info("charliebot_home_ready", path=str(cfg.charliebot_home))
 
-  # Session memory-cap cgroups (plan_01 v3): the one boot line stating whether
+  # Session memory-cap cgroups: the one boot line stating whether
   # the feature is on for this host (off when the cap is 0 or the delegated
   # app.slice is missing/unwritable), plus a warning when a configured backend
   # spawns through the shared tmux server (claude-sub / tui-cli) and therefore

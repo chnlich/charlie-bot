@@ -745,7 +745,7 @@ class AgentBackend(ABC):
     Returns None when cgroup control was off for this spawn, when the run was
     deliberately terminated (a user stop or shutdown kill is our own -9, not
     the kernel's), or when the memory.events counters did not move in the
-    plan_01 v3 §4.2 attribution shape.
+    attribution shape ``classify_exit`` checks for.
     """
     if self.terminated:
       return None

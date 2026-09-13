@@ -188,6 +188,17 @@ function stubPageTimers(context) {
   context.clearTimeout = () => {};
 }
 
+// The inline-fire twin: every timer callback runs inside the call that
+// schedules it, so a flow's own timer-driven work (a refresh scheduled during
+// a paint) is observed before the assertions run and a leaked fetch cannot
+// hide behind a pending timer. Call before createChatSidebarContext.
+function inlinePageTimers(context) {
+  context.setInterval = () => 0;
+  context.setTimeout = (fn) => { fn(); return 0; };
+  context.clearInterval = () => {};
+  context.clearTimeout = () => {};
+}
+
 // Map keys are the element ids web/static/js/sidebar/filters.js reaches:
 // getElementById('filter-' + name) over the registered filter names plus
 // getElementById('cron-add-btn'), and the 'filter-pill' class filterPillClass
@@ -225,4 +236,5 @@ module.exports = {
   bootstrapPayload,
   installSessionDocumentLookups,
   stubPageTimers,
+  inlinePageTimers,
 };

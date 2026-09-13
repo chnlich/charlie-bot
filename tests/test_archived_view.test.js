@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
-const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext,
+const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, inlinePageTimers,
   makeSessionMeta } = require('./session_context_stub');
 
 function makeArchivedSession(id, overrides = {}) {
@@ -41,10 +41,7 @@ function buildContext(overrides = {}) {
   context.SESSION_ID = 'session-live';
   context.INITIAL_SESSIONS = [];
   context.INITIAL_LOAD_ERRORS = [];
-  context.setInterval = () => 0;
-  context.setTimeout = (fn) => { fn(); return 0; };
-  context.clearInterval = () => {};
-  context.clearTimeout = () => {};
+  inlinePageTimers(context);
   context.document.getElementById = (id) => elements.get(id) || null;
   context.document.querySelectorAll = overrides.querySelectorAll || (() => []);
   context.document.querySelector = () => null;

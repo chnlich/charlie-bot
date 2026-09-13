@@ -13,7 +13,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
-const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext,
+const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, inlinePageTimers,
   makeSessionMeta } = require('./session_context_stub');
 
 function makeSession(id, overrides = {}) {
@@ -61,10 +61,7 @@ function buildContext({sessionId = 'session-live', rows = [], fetchHandler} = {}
   context.SESSION_ID = sessionId;
   context.INITIAL_SESSIONS = [];
   context.INITIAL_LOAD_ERRORS = [];
-  context.setInterval = () => 0;
-  context.setTimeout = (fn) => { fn(); return 0; };
-  context.clearInterval = () => {};
-  context.clearTimeout = () => {};
+  inlinePageTimers(context);
   context.document.getElementById = (id) => elements.get(id) || null;
   context.document.querySelectorAll = (selector) => (selector === 'a[id^="session-"]' ? rows : []);
   context.document.querySelector = () => null;

@@ -244,6 +244,10 @@ _ListingKey = tuple[str, str, tuple[tuple[bool, str, int, float], ...]]
 
 _listing_memo: BoundedMemo[_ListingKey, str] = BoundedMemo(_LISTING_MEMO_LIMIT)
 
+# The gzip form of the same page, keyed and bounded alike. It lives in its own
+# memo so a client that sends no Accept-Encoding: gzip never pays the deflate.
+_listing_gzip_memo: BoundedMemo[_ListingKey, bytes] = BoundedMemo(_LISTING_MEMO_LIMIT)
+
 # A row's bytes are a pure function of its key: the entry's walked tuple plus
 # the URL prefix the href embeds — the same walked-state ground the page memo's
 # key stands on. A rebuild after a corpus move re-renders only the entries whose
@@ -295,10 +299,19 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
   entry once; a repeat view of unchanged state serves the memo and pays only
   that walk.
   """
+  return _dir_listing_page(dir_path, url_prefix, diff_param)[0]
+
+
+def _dir_listing_page(dir_path: Path, url_prefix: str, diff_param: str | None) -> tuple[str | None, _ListingKey | None]:
+  """The listing page and its memo key, or (None, None) when *dir_path* is not a directory.
+
+  The key is the walked state the page is a pure function of; the route's gzip
+  arm memoizes the page's compressed form under it (``_listing_page_gzip``).
+  """
   try:
     scandir_iter = os.scandir(os.fspath(dir_path))
   except NotADirectoryError:
-    return None
+    return None, None
   except PermissionError as e:
     # The diff 400 outranks the unreadable 403: the route contract checks the
     # diff target before it tries to read the directory.
@@ -320,7 +333,7 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
   key: _ListingKey = (os.fspath(dir_path), url_prefix, tuple(entries))
   hit = _listing_memo.get(key)
   if hit is not None:
-    return hit
+    return hit, key
   entries.sort(key=lambda e: (not e[0], e[1].lower()))
 
   rows = []
@@ -357,13 +370,30 @@ def _dir_listing_html(dir_path: Path, url_prefix: str, diff_param: str | None) -
   display_path = html.escape("/" + dir_path.as_posix().lstrip("/"))
   listing = _DIR_LISTING_TEMPLATE.format(display_path=display_path, rows=''.join(rows))
   _listing_memo.store(key, listing)
-  return listing
+  return listing, key
 
 
-def _resolve_and_list(path: str, url_prefix: str, diff_param: str | None) -> tuple[Path, str | None, bool]:
+def _listing_page_gzip(key: _ListingKey, listing: str) -> bytes:
+  """The listing page's gzip form, memoized beside the plain page.
+
+  The route ships these bytes with Content-Encoding: gzip set upstream, which
+  is what makes the server's gzip middleware skip its own whole-body deflate.
+  mtime=0 keeps the compressed bytes deterministic across processes.
+  """
+  hit = _listing_gzip_memo.get(key)
+  if hit is not None:
+    return hit
+  compressed = gzip.compress(listing.encode("utf-8"), compresslevel=1, mtime=0)
+  _listing_gzip_memo.store(key, compressed)
+  return compressed
+
+
+def _resolve_and_list(path: str, url_prefix: str,
+                      diff_param: str | None) -> tuple[Path, tuple[str, _ListingKey] | None, bool]:
   """Resolve the request path and attempt its listing in one executor hop.
 
-  Returns ``(resolved_path, listing_html, exists)``. The exists half carries the
+  Returns ``(resolved_path, page, exists)`` where *page* is the listing page
+  and its memo key. The exists half carries the
   old two-hop ``exists()`` answer: a listing or a ``NotADirectoryError`` proves
   the path present (scandir reached it), and only the ambiguous not-a-directory
   case — a missing path whose parent is a file raises the same error as a plain
@@ -372,11 +402,11 @@ def _resolve_and_list(path: str, url_prefix: str, diff_param: str | None) -> tup
   """
   fs_path = (Path("/") / path).resolve()
   try:
-    listing = _dir_listing_html(fs_path, url_prefix, diff_param)
+    page = _dir_listing_page(fs_path, url_prefix, diff_param)
   except FileNotFoundError:
     return fs_path, None, False
-  if listing is not None:
-    return fs_path, listing, True
+  if page[0] is not None:
+    return fs_path, (page[0], page[1]), True
   return fs_path, None, os.path.exists(fs_path)
 
 
@@ -392,10 +422,20 @@ async def serve_file(path: str, request: Request) -> Response:
   # One executor hop carries the resolve, the exists answer, and the whole
   # listing build; None means a file, falling through to the artifact and
   # FileResponse arms.
-  fs_path, listing, exists = await asyncio.to_thread(_resolve_and_list, path, url_prefix, diff_param)
+  fs_path, page, exists = await asyncio.to_thread(_resolve_and_list, path, url_prefix, diff_param)
   if not exists:
     raise HTTPException(status_code=404, detail="Not found")
-  if listing is not None:
+  if page is not None:
+    listing, listing_key = page
+    if "gzip" in request.headers.get("accept-encoding", ""):
+      # The same check the gzip middleware makes on the way in; answering with
+      # the pre-compressed body and the header set is what skips its deflate.
+      body = await asyncio.to_thread(_listing_page_gzip, listing_key, listing)
+      return Response(
+          content=body, media_type="text/html", headers={
+              "Content-Encoding": "gzip",
+              "Vary": "Accept-Encoding"
+          })
     return HTMLResponse(listing)
 
   # Standalone artifact HTML gets the review UI injected here — the single chokepoint

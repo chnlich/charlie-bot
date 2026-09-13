@@ -18,9 +18,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.middleware.gzip import GZipMiddleware
 
+import src.api.files as files_api
 from src.api.files import _DIR_LISTING_TEMPLATE, _dir_listing_html, _format_mtime, _listing_memo, _row_memo
 from src.api.files import router as files_router
 
@@ -28,6 +31,15 @@ from src.api.files import router as files_router
 def _client() -> TestClient:
   app = FastAPI()
   app.include_router(files_router, prefix="/files")
+  return TestClient(app)
+
+
+def _gzip_client() -> TestClient:
+  """The files router behind the gzip middleware every production request
+  passes through, so the test sees the skip the pre-compressed response buys."""
+  app = FastAPI()
+  app.include_router(files_router, prefix="/files")
+  app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
   return TestClient(app)
 
 
@@ -150,6 +162,82 @@ def test_the_diff_400_outranks_the_unreadable_403(tmp_path: Path) -> None:
 def test_an_absent_path_is_a_404(tmp_path: Path) -> None:
   response = _client().get(f"/files{tmp_path / 'gone'}")
   assert response.status_code == 404
+
+
+# --- the listing's gzip form ships pre-compressed so the server's gzip
+# middleware skips its own whole-body deflate ---
+
+
+def test_listing_gzip_view_ships_precompressed_page(tmp_path: Path) -> None:
+  corpus = _listing_corpus(tmp_path)
+  url = f"/files{corpus}"
+
+  resp = _gzip_client().get(url, headers={"Accept-Encoding": "gzip"})
+  assert resp.status_code == 200
+  # The route set the encoding upstream — that header is what makes the
+  # middleware skip its own deflate — and carries the negotiation vary.
+  assert resp.headers["content-encoding"] == "gzip"
+  assert resp.headers["vary"] == "Accept-Encoding"
+  # What ships is the listing page, compressed: the decoded body is byte-exact
+  # against the independent reference walk.
+  assert resp.text == _reference_listing(corpus, f"/files{corpus}")
+
+
+def test_listing_without_gzip_accept_gets_plain_page(tmp_path: Path) -> None:
+  """The compressed form is memoized per encoding negotiation: a client whose
+  Accept-Encoding names no gzip reads the plain page, no encoding set."""
+  corpus = _listing_corpus(tmp_path)
+
+  resp = _client().get(f"/files{corpus}", headers={"Accept-Encoding": "br"})
+  assert resp.status_code == 200
+  assert "content-encoding" not in resp.headers
+  assert resp.text == _reference_listing(corpus, f"/files{corpus}")
+
+
+def test_listing_gzip_repeat_view_recompresses_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A repeat gzip view of an unchanged corpus must serve the stored compressed
+  body with zero deflate calls."""
+  corpus = _listing_corpus(tmp_path)
+  client = _gzip_client()
+  url = f"/files{corpus}"
+  first = client.get(url, headers={"Accept-Encoding": "gzip"})
+  assert first.status_code == 200
+
+  def explode_compress(*args: object, **kwargs: object) -> bytes:
+    raise AssertionError("repeat gzip view re-ran the deflate")
+
+  monkeypatch.setattr(files_api.gzip, "compress", explode_compress)
+  resp = client.get(url, headers={"Accept-Encoding": "gzip"})
+  assert resp.status_code == 200
+  assert resp.headers["content-encoding"] == "gzip"
+  assert resp.text == first.text
+
+
+def test_listing_gzip_recompresses_when_corpus_moves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A corpus move keys the gzip memo miss on the same walked state the page
+  memo keys on — the move must re-run the deflate, never serve the old form."""
+  corpus = _listing_corpus(tmp_path)
+  client = _gzip_client()
+  url = f"/files{corpus}"
+  first = client.get(url, headers={"Accept-Encoding": "gzip"})
+  assert first.status_code == 200
+
+  real_compress = files_api.gzip.compress
+  calls: list[bytes] = []
+
+  def counting_compress(data: bytes, *args: object, **kwargs: object) -> bytes:
+    calls.append(data)
+    return real_compress(data, *args, **kwargs)
+
+  monkeypatch.setattr(files_api.gzip, "compress", counting_compress)
+  os.utime(corpus / "alpha.txt", None)
+  resp = client.get(url, headers={"Accept-Encoding": "gzip"})
+  assert resp.status_code == 200
+  assert resp.headers["content-encoding"] == "gzip"
+  # The move ran the deflate once, over the fresh page: the served form is the
+  # new walked state's, not the previous one's bytes.
+  assert len(calls) == 1
+  assert resp.text == _reference_listing(corpus, f"/files{corpus}")
 
 
 def test_mtime_text_is_utc(tmp_path: Path) -> None:

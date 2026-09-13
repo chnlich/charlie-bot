@@ -125,6 +125,7 @@ const TIMED_REPLAYS = 5;
 // the coalesced flush instead — M54's call sequence; M33 has no leading paint.
 function replayDraft(markedSrc, text, { harnessOptions, leadEmptyPaint = false } = {}) {
   const h = buildStreamHarness(markedSrc, harnessOptions);
+  h.flushIdle(); // the page's idle warm (hljs grammar pre-compile) fires before any streamed turn
   const deltas = Math.ceil(text.length / REPLAY_DELTA_BYTES);
   if (leadEmptyPaint) h.showStreaming({ content: '' });
   for (let i = 1; i <= deltas; i++) {

@@ -27,6 +27,8 @@ const read = (name) => fs.readFileSync(path.join(CHECKOUT, 'web/static/js', name
 function buildStreamHarness(markedSource, options = {}) {
   let virtualNow = 0, paintMs = 0, nextTimerId = 1, htmlStore = '';
   const timers = new Map(), elements = new Map(), frames = [];
+  const idleQueue = [];
+  let nextIdleId = 1;
   const mkEl = () => ({ classList: { add() {}, remove() {} }, scrollTop: 0, scrollHeight: 0 });
   const context = {
     console: { error() {}, warn() {}, log() {} },
@@ -54,6 +56,14 @@ function buildStreamHarness(markedSource, options = {}) {
       return id;
     },
     clearTimeout(id) { timers.delete(id); },
+    // Idle callbacks queue outside the timer map: replayDraft flushes them
+    // once after load (the page's idle pre-warm) so they never land inside a
+    // timed paint, and tests that never flush simply never run them.
+    requestIdleCallback(fn) {
+      idleQueue.push(fn);
+      return nextIdleId++;
+    },
+    cancelIdleCallback() {},
   };
   // options.hljsSource loads the page's real highlight.js build; without it the
   // stub keeps the M33 metric on the marked-parse cost alone.
@@ -90,7 +100,13 @@ function buildStreamHarness(markedSource, options = {}) {
       }
     }
   };
-  return { context, showStreaming, advance, stats: () => ({ paintMs, timerCount: timers.size, frames }) };
+  const flushIdle = () => {
+    while (idleQueue.length) {
+      const fn = idleQueue.shift();
+      fn();
+    }
+  };
+  return { context, showStreaming, advance, flushIdle, stats: () => ({ paintMs, timerCount: timers.size, frames }) };
 }
 
 module.exports = { buildStreamHarness, FAKE_MARKED_SRC };

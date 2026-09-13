@@ -6,6 +6,7 @@ from copy import deepcopy
 import pytest
 from conftest import assistant_event as _assistant_event
 from conftest import assistant_text_tool_use_event as _assistant_text_tool_use_event
+from conftest import delegate_invocation as _delegate_invocation
 from conftest import queued_user_reorder_events as _reorder_events
 
 from src.api.message_utils import events_to_messages, events_to_view
@@ -120,6 +121,7 @@ def test_master_done_with_still_thinking_skips_separator() -> None:
 def test_task_delegated_message_exposes_metadata_without_full_description_body() -> None:
   agg = MessageAggregator()
   long_description = "## Goal\nDo a long task spec that belongs in Workers."
+  invocation = _delegate_invocation(task_spec_file="/tmp/task.md", reviewer_context_file="/tmp/reviewer.md")
 
   deltas = list(
       agg.feed(
@@ -130,16 +132,7 @@ def test_task_delegated_message_exposes_metadata_without_full_description_body()
               "timestamp": "2026-07-01T12:00:00Z",
               "backend": "codex-o3",
               "model": "o3",
-              "delegate_invocation":
-                  {
-                      "task_type": "implement",
-                      "repo_path": "/tmp/repo",
-                      "base_branch": "main",
-                      "task_spec_file": "/tmp/task.md",
-                      "reviewer_context_file": "/tmp/reviewer.md",
-                      "keep_worktree": False,
-                      "backend": "codex-o3",
-                  },
+              "delegate_invocation": invocation,
           }))
 
   assert deltas == [
@@ -150,16 +143,7 @@ def test_task_delegated_message_exposes_metadata_without_full_description_body()
                   "role": "task_delegated",
                   "content": "Task delegated",
                   "thread_id": "thread-id",
-                  "delegate_invocation":
-                      {
-                          "task_type": "implement",
-                          "repo_path": "/tmp/repo",
-                          "base_branch": "main",
-                          "task_spec_file": "/tmp/task.md",
-                          "reviewer_context_file": "/tmp/reviewer.md",
-                          "keep_worktree": False,
-                          "backend": "codex-o3",
-                      },
+                  "delegate_invocation": invocation,
                   "backend": "codex-o3",
                   "model": "o3",
                   "event_index": 0,

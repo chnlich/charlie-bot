@@ -12,6 +12,7 @@ from conftest import (
     OPUS_BACKEND_OPTION,
     FakeSessionManager,
     capture_create_logged_task,
+    delegate_invocation,
     scheduled_trigger_event,
     user_event,
 )
@@ -233,16 +234,7 @@ def test_takeoff_gate_allows_repeated_ordinary_takeoff_after_task_delegated_even
               "timestamp": "2026-07-18T12:00:00+00:00",
               "backend": "codex-o3",
               "model": "o3",
-              "delegate_invocation":
-                  {
-                      "task_type": "implement",
-                      "repo_path": "/tmp/repo",
-                      "base_branch": "main",
-                      "task_spec_file": None,
-                      "reviewer_context_file": None,
-                      "keep_worktree": False,
-                      "backend": "codex-o3",
-                  },
+              "delegate_invocation": delegate_invocation(),
           },
       ])
 
@@ -746,15 +738,7 @@ async def test_delegate_task_verify_skips_takeoff_gate_and_spawns_repoless(monke
   assert task_event["description"] == req.description
   assert task_event["backend"] == "codex-o3"
   assert task_event["model"] == "o3"
-  assert task_event["delegate_invocation"] == {
-      "task_type": "verify",
-      "repo_path": None,
-      "base_branch": None,
-      "task_spec_file": None,
-      "reviewer_context_file": None,
-      "keep_worktree": False,
-      "backend": "codex-o3",
-  }
+  assert task_event["delegate_invocation"] == delegate_invocation(task_type="verify", repo_path=None, base_branch=None)
 
 
 @pytest.mark.asyncio
@@ -815,15 +799,7 @@ async def test_delegate_task_does_not_pass_takeoff_gate_to_spawn_worker(monkeypa
   assert task_event["description"] == req.description
   assert task_event["backend"] == "codex-o3"
   assert task_event["model"] == "o3"
-  assert task_event["delegate_invocation"] == {
-      "task_type": "implement",
-      "repo_path": "/tmp/repo",
-      "base_branch": "main",
-      "task_spec_file": None,
-      "reviewer_context_file": None,
-      "keep_worktree": False,
-      "backend": "codex-o3",
-  }
+  assert task_event["delegate_invocation"] == delegate_invocation()
 
 
 @pytest.mark.asyncio

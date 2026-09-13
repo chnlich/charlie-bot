@@ -566,3 +566,32 @@ async def test_remote_default_branch_and_tip_reads_both_from_one_call(remote_def
   branch, tip = await git_remote_default_branch_and_tip(clone)
   assert branch == "develop"
   assert tip == _git(origin, "rev-parse", "refs/heads/develop")
+
+
+@pytest.mark.asyncio
+async def test_probe_ls_remote_runs_protocol_v0(
+    remote_default_repo: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+  """Both ls-remote probes carry the protocol-v0 override: a probe consumes only
+  the ref advertisement, which v0 serves in the one GET, while v2 adds a second
+  POST round trip for its ls-refs command."""
+  from src.core import git as git_mod
+
+  clone = remote_default_repo["clone"]
+  real_stdout = git_mod._git_stdout
+  ls_remote_argv: list[tuple[str, ...]] = []
+
+  async def _recording_stdout(repo_path: Path, *args: str, **kwargs: Any) -> tuple[bool, str, str]:
+    if "ls-remote" in args:
+      ls_remote_argv.append(args)
+    return await real_stdout(repo_path, *args, **kwargs)
+
+  monkeypatch.setattr(git_mod, "_git_stdout", _recording_stdout)
+
+  branch, tip = await git_mod.git_remote_default_branch_and_tip(clone)
+  assert branch == "main"
+  assert tip is not None
+
+  await git_mod.resolve_base_branch(clone, "main")
+  assert ls_remote_argv, "no ls-remote probe observed"
+  for args in ls_remote_argv:
+    assert args[:3] == ("-c", "protocol.version=0", "ls-remote"), args

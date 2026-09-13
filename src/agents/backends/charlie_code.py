@@ -13,6 +13,7 @@ from pathlib import Path
 import structlog
 
 from src.agents.backends.base import (
+    IMAGE_MIME_BY_EXT,
     USER_LOCAL_BIN,
     AgentBackend,
     apply_proxy_env,
@@ -29,11 +30,6 @@ from src.agents.backends.base import (
 from src.core import event_types as ET
 
 log = structlog.get_logger()
-
-# Filename extensions accepted as `--image` attachments — same set as
-# opencode.py's _IMAGE_MIME_BY_EXT keys. Other attachment kinds never produce
-# flags and keep riding the task text's [Attached files] path list.
-_IMAGE_EXTS = frozenset({"png", "jpg", "jpeg", "gif", "webp"})
 
 
 def _context_reading_int(field: str, value: object) -> int | None:
@@ -96,13 +92,14 @@ class CharlieCodeBackend(AgentBackend):
     """Refuse image attachments on endpoints without image input; otherwise hand them to the CLI as --image flags.
 
     Image refs are picked out of ``uploaded_files`` by filename extension
-    (``_IMAGE_EXTS``). An endpoint whose option does not declare
-    ``image_input`` gets exactly one error event and nothing else — no
+    (the ``IMAGE_MIME_BY_EXT`` keys). An endpoint whose option does not
+    declare ``image_input`` gets exactly one error event and nothing else — no
     subprocess, no result. Non-image refs never produce flags; they keep
     riding the [Attached files] path text inside the task.
     """
     image_refs = [
-        ref for ref in (uploaded_files or []) if str(ref.get("filename", "")).rsplit(".", 1)[-1].lower() in _IMAGE_EXTS
+        ref for ref in (uploaded_files or [])
+        if str(ref.get("filename", "")).rsplit(".", 1)[-1].lower() in IMAGE_MIME_BY_EXT
     ]
     if image_refs and not self._image_input:
       names = ", ".join(Path(str(ref.get("filename", ""))).name for ref in image_refs)

@@ -1,7 +1,9 @@
 """Tests for the /scheduled next-run memo: hit, expiry, and key separation."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
+from typing import Any
 
+import pytest
 from conftest import fresh_state_fixture
 
 import src.api.cron as cron_api
@@ -10,12 +12,12 @@ from src.api.cron import next_run_iso
 clear_next_run_memo = fresh_state_fixture(cron_api._NEXT_RUN_MEMO.clear)
 
 
-def counting_croniter(monkeypatch) -> list:
+def counting_croniter(monkeypatch: pytest.MonkeyPatch) -> list[int]:
   """Swap croniter for a counting wrapper around the real one; return the call count list."""
   real = cron_api.croniter
   calls = []
 
-  def wrapped(*args, **kwargs):
+  def wrapped(*args: Any, **kwargs: Any) -> Any:
     calls.append(1)
     return real(*args, **kwargs)
 
@@ -23,7 +25,7 @@ def counting_croniter(monkeypatch) -> list:
   return calls
 
 
-def test_repeat_call_serves_the_memo(monkeypatch) -> None:
+def test_repeat_call_serves_the_memo(monkeypatch: pytest.MonkeyPatch) -> None:
   calls = counting_croniter(monkeypatch)
   now = datetime.now(UTC)
   first = next_run_iso("17 3 * * 2", "America/Los_Angeles", now)
@@ -32,14 +34,14 @@ def test_repeat_call_serves_the_memo(monkeypatch) -> None:
   assert len(calls) == 1
 
 
-def test_expired_entry_recomputes(monkeypatch) -> None:
+def test_expired_entry_recomputes(monkeypatch: pytest.MonkeyPatch) -> None:
   calls = counting_croniter(monkeypatch)
   fake_now = [datetime(2026, 1, 5, 12, 0, 30, tzinfo=UTC)]  # a Monday
 
   class FakeDatetime(datetime):
 
     @classmethod
-    def now(cls, tz=None):
+    def now(cls, tz: tzinfo | None = None) -> datetime:
       return fake_now[0] if tz is None else fake_now[0].astimezone(tz)
 
   monkeypatch.setattr(cron_api, "datetime", FakeDatetime)
@@ -57,7 +59,7 @@ def test_expired_entry_recomputes(monkeypatch) -> None:
   assert len(calls) == 2
 
 
-def test_keys_separate_by_cron_and_timezone(monkeypatch) -> None:
+def test_keys_separate_by_cron_and_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
   calls = counting_croniter(monkeypatch)
   now = datetime.now(UTC)
   a = next_run_iso("17 3 * * 2", "America/Los_Angeles", now)

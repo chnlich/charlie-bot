@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -35,7 +36,7 @@ def _mk_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMo
   """
   queues: dict[tuple[str | None, int], list[str]] = {k: list(v) for k, v in scripted.items()}
 
-  async def _factory(*args, **kwargs):
+  async def _factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
     if args[0] == "ssh":
       # Layout: ssh -o BatchMode=yes -o ConnectTimeout=10 HOST "sacct -j ID ..."
       host = args[5]
@@ -115,7 +116,7 @@ async def test_probe_sacct_skips_array_task_rows() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _failing_sacct_factory(*args, **kwargs):
+async def _failing_sacct_factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
   """Always return a failed remote sacct probe (ssh non-zero exit)."""
   return FakeAsyncProcess(
       stdout=b"",
@@ -181,7 +182,7 @@ async def test_unreachable_host_fires_early_with_note(tmp_path: Path) -> None:
   _, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
   calls = [0]
 
-  async def _factory(*args, **kwargs):
+  async def _factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
     calls[0] += 1
     if calls[0] == 1:
       # verify-on-create succeeds so the trigger is persisted and the wait task starts

@@ -21,6 +21,7 @@ from conftest import dump_yaml as _dump
 from conftest import write_cron_task as _write_task_text
 
 import src.core.config as cm
+from src.core.config import CharlieBotConfig
 
 
 @pytest.fixture
@@ -28,7 +29,7 @@ def sent(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   """Replace Telegram delivery with a recording stub."""
   messages: list[str] = []
 
-  async def fake_send_telegram(message: str, cfg) -> None:
+  async def fake_send_telegram(message: str, cfg: CharlieBotConfig) -> None:
     messages.append(message)
 
   monkeypatch.setattr(NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET, fake_send_telegram)
@@ -89,7 +90,7 @@ def test_no_event_loop_skips_send_without_persisting(
 
 def test_telegram_failure_is_log_only(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
-  async def raising_send_telegram(message: str, cfg) -> None:
+  async def raising_send_telegram(message: str, cfg: CharlieBotConfig) -> None:
     raise RuntimeError("telegram delivery failed")
 
   monkeypatch.setattr(NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET, raising_send_telegram)

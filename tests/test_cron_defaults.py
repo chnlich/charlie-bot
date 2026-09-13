@@ -14,6 +14,7 @@ per-file failure isolation of ``config.d/cron.d/<name>.yaml``, and the shipped
 import asyncio
 import copy
 import os
+from collections.abc import Callable
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -21,9 +22,11 @@ import pytest
 from conftest import cron_d_dir as _cron_d_dir
 from conftest import dump_yaml as _dump
 from conftest import write_cron_task as _write_task_text
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from src.core.config import (
+    CharlieBotConfig,
     ScheduledTaskConfig,
     _load_cron_file,
     _resolve_local_timezone,
@@ -384,7 +387,7 @@ _BROKEN_CASE_IDS = [
 @pytest.mark.parametrize(("inject", "expected_name", "expected_path"), _BROKEN_CASES, ids=_BROKEN_CASE_IDS)
 def test_single_broken_file_isolated(
     temp_home: Path,
-    inject,
+    inject: Callable[[Path], Path],
     expected_name: str,
     expected_path: str,
 ) -> None:
@@ -506,9 +509,8 @@ def test_broken_prompt_file_missing_path(temp_home: Path) -> None:
 # --- API: GET /tasks is total and includes broken entries --------------------
 
 
-def _client(cfg):
+def _client(cfg: CharlieBotConfig) -> TestClient:
   from fastapi import FastAPI
-  from fastapi.testclient import TestClient
 
   from src.api import cron as api_cron
   from src.api.deps import get_session_manager
@@ -526,7 +528,8 @@ def _client(cfg):
     [(inject, name) for inject, name, _ in _BROKEN_CASES],
     ids=_BROKEN_CASE_IDS,
 )
-def test_list_tasks_never_500_with_broken(temp_home: Path, inject, expected_name: str) -> None:
+def test_list_tasks_never_500_with_broken(
+    temp_home: Path, inject: Callable[[Path], Path], expected_name: str) -> None:
   _write_healthy(temp_home, "task-a", "0 0 * * *", "a body")
   _write_healthy(temp_home, "task-b", "0 1 * * *", "b body")
   inject(temp_home)

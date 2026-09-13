@@ -1076,7 +1076,7 @@ class _FakeStreamContextManager:
   async def __aenter__(self) -> _FakeDelayedStreamResponse:
     return self._response
 
-  async def __aexit__(self, *exc) -> bool:
+  async def __aexit__(self, *exc: object) -> bool:
     return False
 
 
@@ -1089,7 +1089,7 @@ class _FakeRunHttpClient:
   async def __aenter__(self) -> "_FakeRunHttpClient":
     return self
 
-  async def __aexit__(self, *exc) -> bool:
+  async def __aexit__(self, *exc: object) -> bool:
     return False
 
   def stream(self, method: str, path: str, timeout: float | None = None) -> _FakeStreamContextManager:
@@ -1252,7 +1252,7 @@ class _StubStreamContext:
   async def __aenter__(self) -> _StubEventStreamResponse:
     return self._response
 
-  async def __aexit__(self, *exc) -> bool:
+  async def __aexit__(self, *exc: object) -> bool:
     return False
 
 
@@ -1277,7 +1277,7 @@ class _StubServeHttpClient:
   async def __aenter__(self) -> "_StubServeHttpClient":
     return self
 
-  async def __aexit__(self, *exc) -> bool:
+  async def __aexit__(self, *exc: object) -> bool:
     return False
 
   async def get(self, path: str) -> _StubHttpResponse:
@@ -1631,13 +1631,13 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch: pytest.Mon
 
   class _KwargsClient:
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: object) -> None:
       captured.append(kwargs)
 
     async def __aenter__(self) -> "_KwargsClient":
       return self
 
-    async def __aexit__(self, *exc) -> bool:
+    async def __aexit__(self, *exc: object) -> bool:
       return False
 
     async def get(self, path: str) -> _StubHttpResponse:

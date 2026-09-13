@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -68,7 +69,7 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
 
   observed_cc_session_ids: list = []
 
-  async def fake_run_cc(item: master_cc._WorkItem):
+  async def fake_run_cc(item: master_cc._WorkItem) -> tuple[str | None, int, str | None, dict]:
     observed_cc_session_ids.append(item.session_meta.cc_session_id)
     return ("cc-id-from-bootstrap", 0, None, {})
 
@@ -421,7 +422,8 @@ class _NoopBackend(TerminateFlagBackend):
   exit_code = 0
   stderr_text = ""
 
-  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
+  async def run(
+      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     if False:
       yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine
 
@@ -572,7 +574,8 @@ class _EventsBackend(TerminateFlagBackend):
     self.exit_code = exit_code
     self.stderr_text = stderr_text
 
-  async def run(self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None):
+  async def run(
+      self, prompt: str, cwd: str, env: dict, uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
     for event in self.events:
       yield event
 

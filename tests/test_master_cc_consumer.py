@@ -806,7 +806,10 @@ async def test_handle_event_adopts_the_typed_session_attach_signal_and_persists_
     persisted.append(event)
 
   cc_session_id = await master_cc_run._handle_event(
-      {"type": ET.SESSION_ATTACHED, "session_id": "oc-s-1"}, "session-id", None, persist)
+      {
+          "type": ET.SESSION_ATTACHED,
+          "session_id": "oc-s-1"
+      }, "session-id", None, persist)
 
   assert cc_session_id == "oc-s-1"
   assert persisted == [{"type": ET.SESSION_ATTACHED, "session_id": "oc-s-1"}]
@@ -822,7 +825,10 @@ async def test_handle_event_keeps_an_already_adopted_session_id_over_the_signal(
     persisted.append(event)
 
   cc_session_id = await master_cc_run._handle_event(
-      {"type": ET.SESSION_ATTACHED, "session_id": "oc-late"}, "session-id", "oc-early", persist)
+      {
+          "type": ET.SESSION_ATTACHED,
+          "session_id": "oc-late"
+      }, "session-id", "oc-early", persist)
 
   assert cc_session_id == "oc-early"
   assert [e.get("type") for e in persisted] == [ET.SESSION_ATTACHED]

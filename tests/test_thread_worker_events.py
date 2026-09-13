@@ -175,14 +175,15 @@ def test_session_attach_signal_is_never_a_panel_row(tmp_path: Path) -> None:
   row construction — no row, and none of the validation failure the bare
   pre-typed spelling forced on every cold read."""
   path = tmp_path / "events.jsonl"
-  _write_events(path, [
-      json.dumps({
-          "type": ET.SESSION_ATTACHED,
-          "session_id": "oc-s-1",
-          "timestamp": TS
-      }) + "\n",
-      _assistant_block("hello"),
-  ])
+  _write_events(
+      path, [
+          json.dumps({
+              "type": ET.SESSION_ATTACHED,
+              "session_id": "oc-s-1",
+              "timestamp": TS
+          }) + "\n",
+          _assistant_block("hello"),
+      ])
 
   events = threads_api.read_thread_worker_events(path)
 

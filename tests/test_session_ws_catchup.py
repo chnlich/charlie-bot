@@ -6,6 +6,7 @@ import pytest
 from conftest import FakeWebSocket, assistant_text_event, scheduled_trigger_event, user_event
 
 from server import _catchup_frames, _replay_aggregated_catchup, _send_session_catchup
+from src.core.models import SessionMetadata
 
 VOICE_KEY = "is_" + "voice"
 
@@ -24,7 +25,7 @@ class _CountOnlySessionManager:
     self.count = count
     self.full_load_called = False
 
-  def get_chat_event_count_sync(self, session_id: str, meta) -> int:
+  def get_chat_event_count_sync(self, session_id: str, meta: SessionMetadata | None) -> int:
     assert session_id == "s"
     assert meta.archive_offset == 5
     return self.count

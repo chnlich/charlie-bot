@@ -11,6 +11,8 @@ re-checked at every slice boundary) discards the unfinished init and reruns.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -41,7 +43,7 @@ async def _seed_session(mgr: SessionManager) -> str:
 
 
 @pytest.mark.asyncio
-async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path) -> None:
+async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   mgr = SessionManager(cfg)
   sid = await _seed_session(mgr)
@@ -58,7 +60,7 @@ async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_concurrent_first_persists_catch_up_once(tmp_path) -> None:
+async def test_concurrent_first_persists_catch_up_once(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   mgr = SessionManager(cfg)
   sid = await _seed_session(mgr)
@@ -66,7 +68,7 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path) -> None:
   inits = 0
   original = SessionManager._init_live_aggregator
 
-  async def counting_init(self, session_id, epoch):
+  async def counting_init(self, session_id: str, epoch: int) -> sessions_module.MessageAggregator | None:
     nonlocal inits
     inits += 1
     return await original(self, session_id, epoch)
@@ -83,7 +85,7 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_drop_during_catchup_discards_stale_init(tmp_path) -> None:
+async def test_drop_during_catchup_discards_stale_init(tmp_path: Path) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   mgr = SessionManager(cfg)
   sid = await _seed_session(mgr)
@@ -91,7 +93,7 @@ async def test_drop_during_catchup_discards_stale_init(tmp_path) -> None:
   original = SessionManager._load_aggregator_init_inputs
   loads = 0
 
-  def dropping_load(self, session_id):
+  def dropping_load(self, session_id: str) -> tuple[list[dict], int]:
     nonlocal loads
     loads += 1
     inputs = original(self, session_id)
@@ -110,7 +112,7 @@ async def test_drop_during_catchup_discards_stale_init(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_drop_mid_feed_discards_and_reruns(tmp_path, monkeypatch) -> None:
+async def test_drop_mid_feed_discards_and_reruns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   mgr = SessionManager(cfg)
   sid = await _seed_session(mgr)
@@ -120,7 +122,7 @@ async def test_drop_mid_feed_discards_and_reruns(tmp_path, monkeypatch) -> None:
 
   class DropMidFeed(real_aggregator):
 
-    def feed(self, event):
+    def feed(self, event: dict) -> Iterator[dict]:
       nonlocal feeds
       feeds += 1
       if feeds == 2:

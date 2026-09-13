@@ -470,7 +470,7 @@ async def test_deliver_to_successor_reresolves_when_successor_appears_between_re
   real_read = mgr.read_metadata_fresh
   calls = {"n": 0}
 
-  async def flaky_read(session_id: str):
+  async def flaky_read(session_id: str) -> SessionMetadata | None:
     if session_id == gen0:
       calls["n"] += 1
       meta = await real_read(session_id)
@@ -700,7 +700,7 @@ async def test_failed_write_back_rolls_back_the_succession(
 
   write_failure = OSError("forced yaml write failure")
 
-  def boom(path: Path, data: dict, **_kwargs) -> None:
+  def boom(path: Path, data: dict, **_kwargs: object) -> None:
     raise write_failure
 
   monkeypatch.setattr("src.core.scheduled_sessions.save_yaml", boom)

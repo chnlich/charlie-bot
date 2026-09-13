@@ -1,6 +1,7 @@
 """Regression tests for fork/Elon-e backend resolution at the API route layer."""
 
 import json
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from conftest import make_sessions_client as _build_client
 from conftest import session_dir_names as _session_dir_names
 
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest
+from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 
 
@@ -39,7 +40,9 @@ async def _seed_parent(session_mgr: SessionManager, *, backend: str = OPUS_BACKE
 def _capture_bootstrap(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
   calls: list[dict[str, Any]] = []
 
-  def fake_run_and_finalize(cfg, meta, content, session_mgr, **kwargs):
+  def fake_run_and_finalize(
+      cfg: CharlieBotConfig, meta: SessionMetadata, content: str, session_mgr: SessionManager, **kwargs: object
+  ) -> Awaitable[None]:
     calls.append({"meta": meta, "content": content, "kwargs": kwargs})
 
     async def noop() -> None:

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -44,7 +45,7 @@ from src.core.triggers import TriggerManager
 _clean_sidebar_state = fresh_state_fixture(sidebar_state.reset_for_tests)
 
 
-async def _status_json(**kwargs) -> dict:
+async def _status_json(**kwargs: object) -> dict:
   """Decode the status handler's FastJsonResponse body for direct-call assertions."""
   return json.loads((await sessions_api.all_sessions_status(**kwargs)).body)
 
@@ -58,9 +59,9 @@ def _counting_probes(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
       "plan": sessions_core.has_pending_plan_approval_sync,
   }
 
-  def _wrap(name: str):
+  def _wrap(name: str) -> Callable[..., object]:
 
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: object, **kwargs: object) -> object:
       calls[name] += 1
       return reals[name](*args, **kwargs)
 
@@ -190,7 +191,7 @@ async def test_fork_marks_child_session_dirty(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _expected_status(mgr, session_id: str, *, archived: bool) -> dict:
+async def _expected_status(mgr: sessions_core.SessionManager, session_id: str, *, archived: bool) -> dict:
   """Direct-probe ground truth for one session (archived: constant-False shortcut)."""
   meta = await mgr.get_session(session_id)
   assert meta is not None
@@ -414,7 +415,7 @@ async def test_sweep_poll_answers_without_awaiting_the_sweep_and_is_single_fligh
   calls = {"running": 0}
   real_running = sessions_core.has_running_tasks_sync
 
-  def gated_running(*args, **kwargs):
+  def gated_running(*args: object, **kwargs: object) -> bool:
     gate.wait(timeout=5)
     calls["running"] += 1
     return real_running(*args, **kwargs)

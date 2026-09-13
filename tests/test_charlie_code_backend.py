@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -22,7 +23,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 
 
-def _build_backend(monkeypatch, **kwargs) -> CharlieCodeBackend:
+def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> CharlieCodeBackend:
   return build_cli_backend(
       monkeypatch,
       CharlieCodeBackend,
@@ -36,7 +37,7 @@ def _build_backend(monkeypatch, **kwargs) -> CharlieCodeBackend:
   )
 
 
-def test_translate_success_stream_preserves_tool_pair_ids_and_usage(monkeypatch) -> None:
+def test_translate_success_stream_preserves_tool_pair_ids_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   command = backend.translate_event({
@@ -98,7 +99,7 @@ def test_translate_success_stream_preserves_tool_pair_ids_and_usage(monkeypatch)
   ]
 
 
-def test_translate_failure_stream_preserves_error_message(monkeypatch) -> None:
+def test_translate_failure_stream_preserves_error_message(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   translated = backend.translate_event({
@@ -115,7 +116,7 @@ def test_translate_failure_stream_preserves_error_message(monkeypatch) -> None:
   ]
 
 
-def test_translate_thought_and_unknown(monkeypatch) -> None:
+def test_translate_thought_and_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   assert backend.translate_event({
@@ -126,7 +127,7 @@ def test_translate_thought_and_unknown(monkeypatch) -> None:
   assert not backend.translate_event({"type": "future-event"})
 
 
-def test_translate_compact_event_and_unknown_still_dropped(monkeypatch) -> None:
+def test_translate_compact_event_and_unknown_still_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   translated = backend.translate_event(
@@ -152,7 +153,7 @@ def test_translate_compact_event_and_unknown_still_dropped(monkeypatch) -> None:
   assert backend.translate_event({"type": "future-event"}) == []
 
 
-def test_translate_context_event_yields_persisted_reading_shape(monkeypatch) -> None:
+def test_translate_context_event_yields_persisted_reading_shape(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   translated = backend.translate_event(
@@ -180,7 +181,7 @@ def test_translate_context_event_yields_persisted_reading_shape(monkeypatch) -> 
   ]
 
 
-def test_translate_context_null_tokens_silent_and_string_window_warns(monkeypatch) -> None:
+def test_translate_context_null_tokens_silent_and_string_window_warns(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
   warnings: list[dict] = []
   monkeypatch.setattr(charlie_code_mod.log, "warning", lambda event, **kw: warnings.append({"event": event, **kw}))
@@ -209,7 +210,7 @@ def test_translate_context_null_tokens_silent_and_string_window_warns(monkeypatc
   }]
 
 
-def test_translate_session_event(monkeypatch) -> None:
+def test_translate_session_event(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   assert backend.translate_event({
@@ -221,7 +222,7 @@ def test_translate_session_event(monkeypatch) -> None:
   }]
 
 
-def test_build_command_writes_task_file_and_flags(monkeypatch, tmp_path: Path) -> None:
+def test_build_command_writes_task_file_and_flags(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch, instructions_content="Use concise answers.")
   session_cwd = tmp_path / "cwd"
   session_cwd.mkdir()
@@ -254,7 +255,8 @@ def test_build_command_writes_task_file_and_flags(monkeypatch, tmp_path: Path) -
   assert not any(FLAG_LIKE_PROMPT in arg for arg in cmd)
 
 
-def test_no_instructions_skips_agents_md_and_writes_bare_task_file(monkeypatch, tmp_path: Path) -> None:
+def test_no_instructions_skips_agents_md_and_writes_bare_task_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch)
   session_cwd = tmp_path / "cwd"
   session_cwd.mkdir()
@@ -267,7 +269,8 @@ def test_no_instructions_skips_agents_md_and_writes_bare_task_file(monkeypatch, 
   assert (tmp_path / "task.md").read_bytes() == FLAG_LIKE_PROMPT.encode("utf-8")
 
 
-def test_build_command_resume_passes_raw_prompt_and_resume_flag(monkeypatch, tmp_path: Path) -> None:
+def test_build_command_resume_passes_raw_prompt_and_resume_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   backend = _build_backend(
       monkeypatch,
       instructions_content="Use concise answers.",
@@ -283,7 +286,8 @@ def test_build_command_resume_passes_raw_prompt_and_resume_flag(monkeypatch, tmp
   assert (tmp_path / "task.md").read_text(encoding="utf-8") == FLAG_LIKE_PROMPT
 
 
-def test_build_command_emits_context_window_only_when_configured(monkeypatch, tmp_path: Path) -> None:
+def test_build_command_emits_context_window_only_when_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch, context_window=262144)
   backend._prepare_transport(tmp_path)
 
@@ -298,7 +302,8 @@ def test_build_command_emits_context_window_only_when_configured(monkeypatch, tm
   assert "--context-window" not in default_backend._build_command(FLAG_LIKE_PROMPT)
 
 
-def test_build_command_emits_no_stream_and_timeout_seconds_when_declared(monkeypatch, tmp_path: Path) -> None:
+def test_build_command_emits_no_stream_and_timeout_seconds_when_declared(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """stream: false + timeout_seconds land as --no-stream and --timeout-seconds 600, with the
   other option-derived flags before --task-file."""
   backend = _build_backend(monkeypatch, stream=False, timeout_seconds=600)
@@ -314,7 +319,8 @@ def test_build_command_emits_no_stream_and_timeout_seconds_when_declared(monkeyp
   assert timeout_idx < task_idx
 
 
-def test_build_command_without_call_strategy_fields_keeps_pre_change_command(monkeypatch, tmp_path: Path) -> None:
+def test_build_command_without_call_strategy_fields_keeps_pre_change_command(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """An entry setting neither field emits neither flag: the argv is byte-identical to the
   command built before the fields existed, so older charlie-code builds keep working."""
   backend = _build_backend(monkeypatch)
@@ -336,14 +342,14 @@ def test_build_command_without_call_strategy_fields_keeps_pre_change_command(mon
   ]
 
 
-def test_build_command_before_prepare_transport_raises(monkeypatch) -> None:
+def test_build_command_before_prepare_transport_raises(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   with pytest.raises(RuntimeError, match="_prepare_transport must run before _build_command"):
     backend._build_command(FLAG_LIKE_PROMPT)
 
 
-def test_build_command_overwrites_task_file_on_retry(monkeypatch, tmp_path: Path) -> None:
+def test_build_command_overwrites_task_file_on_retry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch)
   backend._prepare_transport(tmp_path)
 
@@ -427,7 +433,7 @@ async def test_run_temp_transport_dir_exists_at_hook_and_removed_after(
 # ---------------------------------------------------------------------------
 
 
-def test_prepare_env_injects_api_key_when_configured(monkeypatch) -> None:
+def test_prepare_env_injects_api_key_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, api_key="test-api-key-placeholder")
 
   prepared = backend._prepare_env({"PATH": "/usr/bin"})
@@ -435,7 +441,7 @@ def test_prepare_env_injects_api_key_when_configured(monkeypatch) -> None:
   assert prepared["CHARLIE_CODE_API_KEY"] == "test-api-key-placeholder"
 
 
-def test_prepare_env_without_api_key_leaves_env_untouched(monkeypatch) -> None:
+def test_prepare_env_without_api_key_leaves_env_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
   input_env = {"PATH": f"{USER_LOCAL_BIN}:/usr/bin", "HOME": "/home/test"}
 
@@ -464,7 +470,7 @@ def test_backend_option_proxy_url_defaults_to_none() -> None:
         ("proxy_url", "http://proxy.test:8080", "_proxy_url"),
     ])
 def test_registry_propagates_option_fields_into_charlie_code_backend(
-    monkeypatch, field: str, value: object, attr: str) -> None:
+    monkeypatch: pytest.MonkeyPatch, field: str, value: object, attr: str) -> None:
   monkeypatch.setattr(
       CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/charlie-code",
@@ -484,7 +490,7 @@ def test_registry_propagates_option_fields_into_charlie_code_backend(
   assert getattr(backend, attr) == value
 
 
-def test_registry_resolves_credential_into_charlie_code_api_key(monkeypatch) -> None:
+def test_registry_resolves_credential_into_charlie_code_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
   """credential: <section> reads the api_key from credentials; the value lands on the backend's api_key."""
   monkeypatch.setattr(
       CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
@@ -506,7 +512,7 @@ def test_registry_resolves_credential_into_charlie_code_api_key(monkeypatch) -> 
   assert backend._api_key == "test-api-key-placeholder"
 
 
-def test_api_base_required(monkeypatch) -> None:
+def test_api_base_required(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(
       CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/charlie-code",

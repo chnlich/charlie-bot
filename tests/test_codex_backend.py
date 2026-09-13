@@ -32,25 +32,18 @@ def _build_backend(monkeypatch, **kwargs) -> CodexBackend:
   )
 
 
-def test_build_command_uses_double_dash_separator_for_prompt(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="codex-test-model")
+@pytest.mark.parametrize("resume_session_id", [
+    pytest.param(None, id="fresh"),
+    pytest.param("sess-123", id="resume"),
+])
+def test_build_command_uses_double_dash_separator_for_prompt(monkeypatch, resume_session_id: str | None) -> None:
+  backend = _build_backend(monkeypatch, model="codex-test-model", resume_session_id=resume_session_id)
 
   cmd = backend._build_command(FLAG_LIKE_PROMPT)
 
   assert cmd[-2:] == ["--", FLAG_LIKE_PROMPT]
-
-
-def test_build_command_resume_uses_double_dash_separator_for_prompt(monkeypatch) -> None:
-  backend = _build_backend(
-      monkeypatch,
-      model="codex-test-model",
-      resume_session_id="sess-123",
-  )
-
-  cmd = backend._build_command(FLAG_LIKE_PROMPT)
-
-  assert cmd[-2:] == ["--", FLAG_LIKE_PROMPT]
-  assert "sess-123" in cmd
+  if resume_session_id is not None:
+    assert resume_session_id in cmd
 
 
 def test_build_command_defaults_to_xhigh_reasoning_effort(monkeypatch) -> None:
@@ -390,22 +383,16 @@ def test_build_command_omits_auto_compact_when_absent(monkeypatch, resume_sessio
   assert not any("model_auto_compact_token_limit" in arg for arg in cmd)
 
 
-def test_build_command_emits_auto_compact_once_when_configured(monkeypatch) -> None:
-  backend = _build_backend(monkeypatch, model="codex-test-model", model_auto_compact_token_limit=50000)
-
-  cmd = backend._build_command("do the thing")
-
-  assert cmd.count("model_auto_compact_token_limit=50000") == 1
-  idx = cmd.index("model_auto_compact_token_limit=50000")
-  assert cmd[idx - 1] == "--config"
-
-
-def test_build_command_resume_emits_auto_compact_once_when_configured(monkeypatch) -> None:
+@pytest.mark.parametrize("resume_session_id", [
+    pytest.param(None, id="fresh"),
+    pytest.param("sess-1", id="resume"),
+])
+def test_build_command_emits_auto_compact_once_when_configured(monkeypatch, resume_session_id: str | None) -> None:
   backend = _build_backend(
       monkeypatch,
       model="codex-test-model",
       model_auto_compact_token_limit=50000,
-      resume_session_id="sess-1",
+      resume_session_id=resume_session_id,
   )
 
   cmd = backend._build_command("do the thing")
@@ -414,7 +401,8 @@ def test_build_command_resume_emits_auto_compact_once_when_configured(monkeypatc
   idx = cmd.index("model_auto_compact_token_limit=50000")
   assert cmd[idx - 1] == "--config"
   assert cmd[-2:] == ["--", "do the thing"]
-  assert cmd.index("sess-1") > idx
+  if resume_session_id is not None:
+    assert cmd.index(resume_session_id) > idx
 
 
 def test_backend_option_defaults_auto_compact_limit_to_none() -> None:

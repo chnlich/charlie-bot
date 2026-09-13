@@ -106,13 +106,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Resume thinking indicator if session was mid-thought.
-  // Keep send button enabled on page load — the user may want to type while
-  // the master is still processing (especially auto-triggered background runs).
-  if (THINKING_SINCE) {
-    thinkingStart = new Date(THINKING_SINCE).getTime();
-    startThinking({keepSendEnabled: true});
-  }
+  resumeThinkingIfMidThought();
   ensureActiveSessionViewPolling();
 
   // SPA back/forward navigation

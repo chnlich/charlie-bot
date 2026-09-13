@@ -358,6 +358,17 @@ function startThinking(opts) {
   globalThis.ensureActiveSessionViewPolling();
 }
 
+// Resumes the indicator when a page load or SPA switch lands while the master
+// is mid-thought. THINKING_SINCE is the server-stamped start the session view
+// and status polls refresh; keepSendEnabled leaves typing available while the
+// run is still processing.
+function resumeThinkingIfMidThought() {
+  if (THINKING_SINCE) {
+    thinkingStart = new Date(THINKING_SINCE).getTime();
+    startThinking({keepSendEnabled: true});
+  }
+}
+
 function stopThinking(opts) {
   masterThinking = false;
   document.getElementById('thinking').classList.add('hidden');
@@ -428,6 +439,7 @@ const API = {
   refreshSessionStatusNow,
   pollSessionStatus,
   startThinking,
+  resumeThinkingIfMidThought,
   stopThinking,
   updateThinkingTime,
   cancelMaster,

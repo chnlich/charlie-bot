@@ -7,11 +7,14 @@ escapes, and every reader JSON-parses the log per line.
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from conftest import make_worker, process_worker_event
 
+from src.agents import worker as worker_module
 from src.agents.worker import _event_line
+from src.core import event_types as ET
 
 
 def test_event_line_round_trips_the_event() -> None:
@@ -37,3 +40,17 @@ async def test_process_event_persists_a_line_that_parses_back(tmp_path: Path, mo
   event = {"type": "user", "message": {"content": [{"type": "text", "text": "café ✓"}]}}
   lines = (await process_worker_event(worker, tmp_path, event, monkeypatch)).splitlines()
   assert len(lines) == 1 and json.loads(lines[0]) == event
+
+
+@pytest.mark.asyncio
+async def test_process_event_never_persists_the_session_attach_signal(tmp_path: Path, monkeypatch) -> None:
+  """The run-start adoption signal carries no renderable content: it appends no
+  worker-log line and broadcasts nothing, so no read of the log ever pays the
+  WorkerEvent validation failure a type-less line forces."""
+  worker = make_worker(tmp_path, "attach-signal")
+  broadcast = AsyncMock()
+  monkeypatch.setattr(worker_module.streaming_manager, "broadcast", broadcast)
+  event = {"type": ET.SESSION_ATTACHED, "session_id": "oc-s-1"}
+  lines = (await process_worker_event(worker, tmp_path, event, monkeypatch)).splitlines()
+  assert lines == []
+  broadcast.assert_not_called()

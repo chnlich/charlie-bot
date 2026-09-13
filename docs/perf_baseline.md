@@ -109,6 +109,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M97 plan-CLI command wall, common-family verb | M97 collector below | seconds per `charliebot plan list --session <sid>` wall (fresh process: the plan chain's import+dispatch plus the live GET; a verb command — present/amend/approve/close — pays the same floor plus its POST, the server side validates) | median < 0.40 s | — (introduced with its first history row) |
 | M98 memory-CLI invocation wall, read verb | M98 collector below | seconds per `charliebot memory query --topic <t> --index` wall (fresh process: the memory chain's import+dispatch plus the live store read; a replay/experiment/compare verb pays the replay stack it runs) | median < 0.30 s | — (introduced with its first history row) |
 | M99 server import floor, fresh process | M99 collector below | seconds per `import server` wall (fresh process: the module uvicorn imports; the speech stack — numpy via src.agents.transcriber plus the two SIMD scanners — must stay out, loading on the provisioning thread and at the voice use sites) | median < 0.75 s | — (introduced with its first history row) |
+| M100 run-start session-adopt signal through the two persist funnels | M100 collector below | seconds per run-start signal through the master funnel (the real fdatasync chat append + aggregator feed + wire broadcast) and the worker funnel (the events-log append + broadcast), scratch home; the lines each signal persists and the cold read+transform raw rows it forces | master persist median < 0.0005 s; worker persist median < 0.0005 s; 0 type-less lines persisted per signal; 0 raw rows | — (introduced with its first history row) |
 
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
@@ -6096,10 +6097,129 @@ print(f"checkout {os.path.basename(checkout)}: import server median "
 EOF
 ```
 
+M100 — run-start session-adopt signal through the two persist funnels. Every
+opencode/codex/gemini/charlie-code/antigravity run opens its event stream with the
+session-adopt signal naming the attached session id. The persist funnels must capture that id
+and skip the wire: a funnel without the skip persists the signal as a chat event (the real
+fdatasync append, plus the aggregator feed and the wire broadcast) on the master path and as a
+worker-log line on the worker path, where a signal without a type fails WorkerEvent validation
+on every cold read+transform of that log and renders a `type='raw'` row in the workers panel.
+The signal writes state, so the collector drives both funnels over a scratch `CHARLIEBOT_HOME`
+under /tmp (scratch chat file and scratch worker log; live home untouched): the master funnel
+through the real `persist_and_broadcast`, the worker funnel through a real Worker on a real
+O_APPEND fd, then one cold read+transform of the log. The signal shape is the checkout's own —
+the typed `ET.SESSION_ATTACHED` event where the constant exists, the bare `{"session_id": …}`
+dict where the checkout predates it — asserted loud in both directions (a checkout that
+declares the constant without emitting it fails the collector instead of timing a shape
+nothing produces). Evidence points the same collector at the before and after checkouts
+(`CHECKOUT` at each root), the same shape as the M7 protocol:
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, inspect, os, shutil, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.agents.master_cc_run import _handle_event
+from src.agents.worker import Worker
+from src.api.threads import read_thread_worker_events
+from src.core import event_types as ET
+from src.core.config import CharlieBotConfig
+from src.core.models import CreateSessionRequest, ThreadMetadata
+from src.core.sessions import SessionManager
+from src.core.threads import ThreadManager
+import src.agents.backends.opencode as oc_mod
+
+# The run-start signal this checkout's backends yield: the typed
+# SESSION_ATTACHED event where the constant exists, the bare session-adopt
+# dict where the checkout predates it. The pairing is loud: a checkout that
+# declares the constant but does not emit it from the opencode backend fails
+# the collector instead of timing a shape nothing produces.
+attach_type = getattr(ET, "SESSION_ATTACHED", None)
+if attach_type is None:
+  SIGNAL = {"session_id": "oc-attach-probe"}
+else:
+  if "ET.SESSION_ATTACHED" not in inspect.getsource(oc_mod):
+    raise SystemExit("checkout declares SESSION_ATTACHED but its opencode backend does not emit it")
+  SIGNAL = {"type": attach_type, "session_id": "oc-attach-probe"}
+
+# Isolation: scratch CHARLIEBOT_HOME under /tmp; the chat append target is the
+# scratch session's own chat file, the worker append target a scratch log;
+# live home untouched.
+home = Path(tempfile.mkdtemp(prefix="m100-attach-home-", dir="/tmp"))
+cfg = CharlieBotConfig(charliebot_home=home,
+                       backends={"options": [{"id": "m100", "label": "M100", "type": "cc-claude",
+                                              "model": "claude-opus-4-6"}]})
+sessions = SessionManager(cfg)
+threads = ThreadManager(cfg)
+
+
+async def main():
+  session = await sessions.create_session(CreateSessionRequest(name="M100"))
+  meta = await threads.create_thread(session, "m100")
+
+  # Master funnel: the signal rides persist_and_broadcast — the real
+  # fdatasync chat append plus the aggregator feed and the wire broadcast —
+  # on a funnel without the skip; with it the signal is captured and nothing
+  # is persisted.
+  await _handle_event(dict(SIGNAL), session.id, None, sessions.persist_and_broadcast)  # cold pass; not timed
+  master_times = []
+  captured = None
+  for _ in range(5):
+    t0 = time.perf_counter()
+    captured = await _handle_event(dict(SIGNAL), session.id, None, sessions.persist_and_broadcast)
+    master_times.append(time.perf_counter() - t0)
+  master_times.sort()
+  chat_path = home / "sessions" / session.id / "data" / "chat_events.jsonl"
+  chat_lines = sum(1 for _ in chat_path.open(errors="replace")) if chat_path.is_file() else 0
+  junk_chat = sum(1 for line in chat_path.open(errors="replace")) if chat_path.is_file() else 0
+
+  # Worker funnel: _process_event appends and broadcasts the signal on a
+  # funnel without the skip; with it the signal never reaches the log.
+  log_path = home / "sessions" / session.id / "threads" / meta.id / "data" / "events.jsonl"
+  worker = Worker(ThreadMetadata.model_construct(id=meta.id), home, log_path, "", cfg)
+  fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+  try:
+    await worker._process_event(dict(SIGNAL), fd)  # cold pass; not timed
+    worker_times = []
+    for _ in range(50):
+      t0 = time.perf_counter()
+      await worker._process_event(dict(SIGNAL), fd)
+      worker_times.append(time.perf_counter() - t0)
+  finally:
+    os.close(fd)
+  worker_times.sort()
+  worker_lines = sum(1 for _ in log_path.open(errors="replace")) if log_path.is_file() else 0
+
+  # Read trip: the persisted signal line fails WorkerEvent validation (no
+  # type), so every cold read+transform of the log pays the pydantic error
+  # construction plus the debug emit and renders a type='raw' row.
+  raw_rows = 0
+  if log_path.is_file() and worker_lines:
+    t0 = time.perf_counter()
+    rows = read_thread_worker_events(log_path)
+    read_wall = time.perf_counter() - t0
+    raw_rows = sum(1 for r in rows if r.type == "raw")
+  else:
+    read_wall = 0.0
+
+  print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]} signal "
+        f"{'typed ' + str(attach_type) if attach_type else 'bare'}: master persist median "
+        f"{master_times[2] * 1000:.3f} ms, max {master_times[-1] * 1000:.3f} ms over 5; worker persist median "
+        f"{worker_times[25] * 1e6:.1f} us, max {worker_times[-1] * 1e6:.1f} us over 50; chat lines {chat_lines} "
+        f"(type-less {junk_chat}); worker-log lines {worker_lines}; cold read+transform wall {read_wall * 1000:.2f} ms, "
+        f"raw rows {raw_rows}; captured session id {captured!r}")
+  shutil.rmtree(home)
+
+
+asyncio.run(main())
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
 | --- | --- | --- | --- |
+| 2026-09-12 | this PR | M100 master-funnel persist wall median 3.328/3.152/3.206 → 0.001/0.001/0.001 ms, −99.97 %, maxima 3.562-3.938 → 0.002-0.003 ms; worker-funnel persist wall median 5.9/6.3/6.1 → 0.4/0.6/0.6 us; type-less lines persisted per signal: chat 6 → 0, worker log 51 → 0; cold read+transform of the written log: raw rows 51 → 0, wall 3.01-4.37 → 0.00 ms (three interleaved rounds of the new collector — main checkout before vs branch worktree after back-to-back, scratch CHARLIEBOT_HOME per arm, live home read-only, load 2.31 one-minute; captured session id 'oc-attach-probe' identical across all six arms — the adoption contract holds both sides); M100 definition, healthy range, and collector introduced with this PR; the corpus's standing waste, read-only counts: 11,910 type-less lines across the sessions' chat files and 4,071 across the worker events logs (one per opencode/codex/gemini/charlie-code/antigravity run since inception), each still failing WorkerEvent validation on every cold read+transform of its log until the log ages out | every covered backend opened its run with a bare `{"session_id": …}` adopt signal the persist funnels could not distinguish from content: the master funnel persisted it as a chat event — the real fdatasync append (~3 ms on this host's storage), the aggregator feed, and the wire broadcast on every master turn start — and the worker funnel appended it to the events log, where its missing type failed WorkerEvent validation on every cold read+transform (~61 us of pydantic error construction + debug emit per line) and rendered a `type='raw'` row in the workers panel; the signal now carries `ET.SESSION_ATTACHED`, both funnels capture the session id and return before the persist, and the corpus stops growing junk lines |
 | 2026-09-12 | this PR | M99 server import floor, `import server` (fresh process) median 0.779/0.800/0.799 → 0.737/0.712/0.717 s, −5 % to −11 %, maxima 0.824-0.864 → 0.738-0.771 s, every paired round faster (three interleaved rounds of the new collector — main checkout before vs branch worktree after back-to-back, five timed imports per arm per round, load 0.98-1.51 one-minute; component attribution (`-X importtime`): numpy cum 71.4 ms + src.agents.transcriber cum 139.9 ms on the before arm, both absent on the after arm, src.core.ndjson 249 → 218 µs — the lazy import line is free; the wall delta (~60-85 ms) reads under the transcriber subtree's 140 ms because its src.core.config child is shared with the deps chain the server still pays); M99 definition, healthy range, and collector introduced with this PR; the speech stack's absence pinned by the import-weight contract's new server case | every server start imported the speech stack at module scope — `server.py` imported `src.agents.transcriber` for one background provisioning call and the voice router imported its four names for handlers — paying numpy (~90 ms with its transcriber host) plus the module's ndjson SIMD import on the event loop's startup path, although provisioning runs on a worker thread and transcription only runs when a voice socket opens; the provisioning machinery is now a sync `provision_models` on the thread, the voice handlers import transcriber at their use sites, and the two numpy SIMD scanners (ndjson's line count, sessions' parent-reference frames) import numpy inside their functions |
 | 2026-09-12 | this PR | M66 merged build median 4.26/4.31/4.31 → 3.78/3.83/3.88 s, −11 % to −12 %, maxima 4.26-4.34 → 3.80-4.00 s (three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, 307.3 MB worst on-disk trace /home/chaoli/data/hayden_243809_traces/step000110/trace_rank008_step000110.json, scratch output under /tmp, live home read-only, every paired round faster at load 1.10-1.25 one-minute; artifact 21.5 MB.gz same size both arms, decompressed-bytes sha256 parity 397ba886c7c4eacf identical; component attribution at load ~1.7: parse alone 2.75 s, walk+pipe-sink 3.81 s — the overlap's floor; a first draft without the pipe resize measured only 4.00-4.24 s, the blocking cost hiding in the pipe not the compress; no-regression witness: M88 direct-pass 2.82 s median on the branch, standing band 2.79-2.85 s, the direct-pass path untouched; 5510-passed suite plus the compressor-reap contract test) | the merged build compressed on the walk's own thread — `gzip.GzipFile.write` deflates inline between batch renders, serializing the 0.3-0.6 s compress behind the GIL-bound walk; the compress now runs in a `gzip -1` subprocess (the M88 direct-pass mechanism) fed over a 1 MB stdin pipe (F_SETPIPE_SZ — the default 64 KB pipe blocked every ~150 KB batch flush on the compressor's drain latency, which is what the first draft paid), so the compress hides under the walk and the build lands on the walk+pipe floor |
 | 2026-09-12 | this PR | M4 healthy range median < 300 s → < 600 s (docs-only calibration, no code change). Standing collector, verbatim: `195 user->master_done turns in last 24h: median 326s, max 6822s; 0 running sessions with last event older than 1h` (load 1.14/0.87/0.78) — the first 24 h window to cross the 300 s line. The nine prior rolling 24 h windows (one per day, oldest first): medians 234/178/144/181/220/33/147/182/187 s over 149/243/101/64/27/10/97/115/131 turns, all under the line; the climb tracks turn count (10–243/day) not a code change. Decomposition: a cron iteration's master turn walls include its delegation's worker+review+merge wait, and the code-side share of the turn wall already sits at its measured floors (M31 finalize read 0.8 ms, M52 append at the fdatasync floor, M74 turn-end rescan at the orjson parse floor) | the seed day's 53 s median priced a human-driven workload; the bot's own cron loops (latency-perf, code-health, improve) now generate most turns and their wait-heavy shape moves the median, so the line tripped on legitimate work. < 600 s clears the heaviest observed window (328 s) with 1.8x headroom while the p90 (2147 s) and the hung = 0 count stay the sharp tripwires a stuck loop or a finalize regression cannot pass |

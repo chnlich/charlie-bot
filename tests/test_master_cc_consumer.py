@@ -793,3 +793,52 @@ async def test_zero_output_guard_passes_through_independent_error(
   assert [e.get("content") for e in assist_errors] == ["Agent error: boom"
                                                       ], ("exactly the backend's own error event passes through")
   assert dones and dones[0]["exit_code"] == 2, "the backend's nonzero exit code passes through"
+
+
+@pytest.mark.asyncio
+async def test_handle_event_adopts_the_session_attach_signal_without_persisting_it() -> None:
+  """The run-start adoption signal is captured as the cc_session_id and never
+  reaches the persist funnel: no chat append, no broadcast, no compaction pass."""
+  persisted: list[dict] = []
+
+  async def persist(session_id: str, event: dict) -> None:
+    persisted.append(event)
+
+  cc_session_id = await master_cc_run._handle_event(
+      {"type": ET.SESSION_ATTACHED, "session_id": "oc-s-1"}, "session-id", None, persist)
+
+  assert cc_session_id == "oc-s-1"
+  assert persisted == []
+
+
+@pytest.mark.asyncio
+async def test_handle_event_keeps_an_already_adopted_session_id_over_the_signal() -> None:
+  """A run whose adoption signal arrives late cannot overwrite the session id
+  the caller already holds — and the signal still persists nothing."""
+  persisted: list[dict] = []
+
+  async def persist(session_id: str, event: dict) -> None:
+    persisted.append(event)
+
+  cc_session_id = await master_cc_run._handle_event(
+      {"type": ET.SESSION_ATTACHED, "session_id": "oc-late"}, "session-id", "oc-early", persist)
+
+  assert cc_session_id == "oc-early"
+  assert persisted == []
+
+
+@pytest.mark.asyncio
+async def test_handle_event_still_persists_events_beyond_the_signal() -> None:
+  """The skip is scoped to the adoption signal: every other event persists."""
+  persisted: list[dict] = []
+
+  async def persist(session_id: str, event: dict) -> None:
+    persisted.append(event)
+
+  cc_session_id = await master_cc_run._handle_event(
+      {"type": ET.SESSION_ATTACHED, "session_id": "oc-s-1"}, "session-id", None, persist)
+  cc_session_id = await master_cc_run._handle_event(
+      make_text_event("hello"), "session-id", cc_session_id, persist)
+
+  assert cc_session_id == "oc-s-1"
+  assert [e.get("type") for e in persisted] == [ET.ASSISTANT]

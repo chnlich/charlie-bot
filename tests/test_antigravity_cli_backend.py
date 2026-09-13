@@ -14,6 +14,7 @@ from conftest import (
 from src.agents.backends.antigravity_cli import AntigravityCliBackend
 from src.agents.backends.base import AgentBackend
 from src.agents.backends.registry import build_backend
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 
 
@@ -151,7 +152,7 @@ JSON
 
   events = await _consume(backend, tmp_path)
 
-  assert [e.get("type") for e in events] == [None, "assistant", "result"]
+  assert [e.get("type") for e in events] == [ET.SESSION_ATTACHED, "assistant", "result"]
   from src.agents.master_cc_run import _handle_event
 
   adopted_events: list[dict] = []
@@ -160,7 +161,7 @@ JSON
     adopted_events.append(event)
 
   assert await _handle_event(events[0], "session-id", None, fake_persist) == "conv-abc"
-  assert adopted_events == [events[0]]
+  assert adopted_events == []
   assert events[1] == assistant_text_event("the answer")
   assert events[2]["type"] == "result"
   assert events[2]["usage"]["input_tokens"] == 10
@@ -216,7 +217,7 @@ async def test_run_system_message_block_handling(
 
   events = await _consume(backend, tmp_path)
 
-  assert [e.get("type") for e in events] == [None, "assistant", "result"]
+  assert [e.get("type") for e in events] == [ET.SESSION_ATTACHED, "assistant", "result"]
   assert events[1]["message"]["content"][0]["text"] == expected_text
 
 
@@ -329,7 +330,7 @@ printf '%s' '{"status":"SUCCESS","conversation_id":"conv-abc","response":"hi","u
       )
   ]
 
-  assert [e.get("type") for e in events] == [None, "assistant", "result"]
+  assert [e.get("type") for e in events] == [ET.SESSION_ATTACHED, "assistant", "result"]
   assert events[1] == assistant_text_event("hi")
 
 
@@ -391,7 +392,7 @@ async def test_envelope_guard_violation_raises_and_yields_only_an_error(
 
 
 @pytest.mark.asyncio
-async def test_bare_session_id_event_is_adopted_as_anchor_by_handle_event(monkeypatch, tmp_path: Path) -> None:
+async def test_session_attach_event_is_adopted_but_never_persisted(monkeypatch, tmp_path: Path) -> None:
   _install_fake_agy(
       monkeypatch,
       tmp_path,
@@ -413,4 +414,4 @@ printf '%s' '{"status":"SUCCESS","conversation_id":"conv-abc","response":"hi","u
   cc_session_id = await _handle_event(events[0], "session-id", None, fake_persist)
 
   assert cc_session_id == "conv-abc"
-  assert captured == [events[0]]
+  assert captured == []

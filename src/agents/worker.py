@@ -436,6 +436,10 @@ class Worker:
 
   async def _process_event(self, event_data: dict, fd: int) -> None:
     """Write event to disk log and broadcast to WebSocket subscribers."""
+    # The run-start adoption signal carries no renderable content: it is never
+    # a worker-log row, a broadcast frame, or a relay input.
+    if event_data.get("type") == ET.SESSION_ATTACHED:
+      return
     # Detect quota exhaustion errors. The payload copies ride only the type the
     # pattern check reads: str() reprs the whole message dict and lower() copies
     # it per streamed event, while QUOTA_ERROR_PATTERNS can only match on ERROR.

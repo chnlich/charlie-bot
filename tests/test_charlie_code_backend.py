@@ -220,7 +220,10 @@ def test_translate_context_null_tokens_silent_and_string_window_warns(monkeypatc
 def test_translate_session_event(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
-  assert backend.translate_event({"type": "session", "session_id": "session-X"}) == [{"session_id": "session-X"}]
+  assert backend.translate_event({
+      "type": "session",
+      "session_id": "session-X"
+  }) == [{"type": ET.SESSION_ATTACHED, "session_id": "session-X"}]
 
 
 def test_build_command_writes_task_file_and_flags(monkeypatch, tmp_path: Path) -> None:

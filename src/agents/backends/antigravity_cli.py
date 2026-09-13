@@ -19,6 +19,7 @@ from src.agents.backends.base import (
     resolve_binary,
     strip_google_api_keys,
 )
+from src.core import event_types as ET
 
 _SYSTEM_MESSAGE_BLOCK_RE = re.compile(r"<SYSTEM_MESSAGE>.*?</SYSTEM_MESSAGE>\s*", re.DOTALL)
 
@@ -158,9 +159,10 @@ class AntigravityCliBackend(AgentBackend):
           f"antigravity envelope guard: resume envelope id {conversation_id} does not match "
           f"anchor {self._resume_session_id}")
 
-    # Bare session_id event first so the master adopts it as the frozen anchor,
-    # then assistant text, then usage.
-    yield {"session_id": conversation_id}
+    # Session-adopt event first so the master captures it as the frozen anchor
+    # (never persisted: the persist funnels skip ET.SESSION_ATTACHED), then
+    # assistant text, then usage.
+    yield {"type": ET.SESSION_ATTACHED, "session_id": conversation_id}
     yield make_text_event(_strip_platform_notifications(envelope.get("response", "")))
     usage = envelope.get("usage", {}) or {}
     yield make_result_event(

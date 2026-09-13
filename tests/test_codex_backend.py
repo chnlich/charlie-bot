@@ -66,6 +66,14 @@ def test_build_command_uses_custom_reasoning_effort(monkeypatch) -> None:
   assert cmd[idx - 1] == "--config"
 
 
+def test_thread_started_translates_to_the_typed_session_attach_signal(monkeypatch) -> None:
+  backend = _build_backend(monkeypatch, model="gpt-5.5")
+
+  translated = backend.translate_event({"type": "thread.started", "thread_id": "thread-9"})
+
+  assert translated == [{"type": ET.SESSION_ATTACHED, "session_id": "thread-9"}]
+
+
 def test_turn_completed_includes_codex_cost(monkeypatch) -> None:
   backend = _build_backend(monkeypatch, model="gpt-5.5")
 

@@ -581,6 +581,11 @@ async def _handle_event(
     if sid:
       cc_session_id = sid
 
+  # The run-start adoption signal is consumed above; it is never a chat event,
+  # a broadcast frame, or a compaction input.
+  if event.get("type") == ET.SESSION_ATTACHED:
+    return cc_session_id
+
   # Persist first (injects timestamp), then broadcast with timestamp included
   await persist_and_broadcast(session_id, event)
 

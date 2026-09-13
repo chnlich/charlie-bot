@@ -48,6 +48,13 @@ HANDLER_RESULT = "handler_result"
 SCHEDULED_TRIGGER = "scheduled_trigger"
 SCHEDULED_RUN_SKIPPED = "scheduled_run_skipped"
 
+# -- Backend run lifecycle ---------------------------------------------------
+# Run-start session adoption: the first event a spawned backend's run stream
+# yields names the session id the run attached to (opencode, antigravity,
+# gemini). The persist funnels capture that id and skip the wire entirely —
+# the signal is never a chat event, a worker-log row, or a broadcast frame.
+SESSION_ATTACHED = "session_attached"
+
 # -- Agent relay -------------------------------------------------------------
 # Cross-session agent message: carries the caller session's provenance and is
 # never a real user message (the authorization gate excludes it by type).

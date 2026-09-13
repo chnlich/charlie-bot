@@ -3679,13 +3679,8 @@ REPO = Path("/home/chaoli/workspace/charlie-bot")
 
 async def run_once() -> tuple[float, str]:
     t0 = time.perf_counter()
-    combined = getattr(git_mod, "git_remote_default_branch_and_tip", None)
-    if combined is not None:
-        branch, tip = await combined(REPO)
-        resolution = await git_mod.resolve_base_branch(REPO, f"origin/{branch}", remote_tip=tip)
-    else:
-        branch = await git_mod.git_remote_default_branch(REPO)
-        resolution = await git_mod.resolve_base_branch(REPO, f"origin/{branch}")
+    branch, tip = await git_mod.git_remote_default_branch_and_tip(REPO)
+    resolution = await git_mod.resolve_base_branch(REPO, f"origin/{branch}", remote_tip=tip)
     return time.perf_counter() - t0, resolution.start_point
 
 async def main():
@@ -5046,17 +5041,18 @@ thinking) lands through the streamed-turn loop's per-event append before its bro
 append's executor-hop count rides the same path the chat-event append (M52) rides. The collector
 copies no state: it appends one probe event to a scratch worker log under /tmp through the
 checkout's real append shape — the run holds one append handle for its whole life, so the timed
-shape is the per-event append exactly as the streamed-turn loop issues it (the checkout decides
-between the pre-fix aiofiles write+flush pair and the one-hop helper; the dispatch reads the
-module, and the probe line is the checkout's own ``_event_line`` output — the persisted shape,
-bytes since the streamed-turn landing — so a line-shape change can never desync the collector).
+shape is the per-event append exactly as the streamed-turn loop issues it (the append helper is
+read as a direct attribute so a renamed helper fails the collector instead of silently timing the
+removed pre-fix aiofiles shape, the M89/M90 repair standard, and the probe line is the checkout's
+own ``_event_line`` output — the persisted shape, bytes since the streamed-turn landing — so a
+line-shape change can never desync the collector).
 One warm pass, as a run's first events, then 50 timed appends. Evidence points the same
 collector at the before and after checkouts (``CHECKOUT`` at each root), the same shape as the
 M76 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, json, os, sys, tempfile, time
+import asyncio, os, sys, tempfile, time
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.agents import worker as worker_mod
 
@@ -5064,24 +5060,16 @@ from src.agents import worker as worker_mod
 path = os.path.join(tempfile.mkdtemp(prefix="m82-append-"), "events.jsonl")
 probe = {"type": "assistant", "message": {"content": "m82 probe " + "y" * 200}}
 
-append = getattr(worker_mod, "_append_event_line", None)
-event_line = getattr(worker_mod, "_event_line", None)
+append = worker_mod._append_event_line
+event_line = worker_mod._event_line
 
 
 async def main():
-    if append is not None and event_line is not None:
-        line = event_line(probe)
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+    line = event_line(probe)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
 
-        async def one():
-            await append(fd, line)
-    else:
-        line = json.dumps(probe) + "\n"
-        f = await aiofiles_open_append(path)
-
-        async def one():
-            await f.write(line)
-            await f.flush()
+    async def one():
+        await append(fd, line)
 
     for _ in range(5):
         await one()  # warm, as a run's first events; not timed
@@ -5093,11 +5081,6 @@ async def main():
     times.sort()
     print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: worker events-log append "
           f"median {times[24] * 1e6:.0f} us, max {times[-1] * 1e6:.0f} us over 50")
-
-
-async def aiofiles_open_append(path):
-    import aiofiles
-    return await aiofiles.open(path, "a", encoding="utf-8")
 
 
 asyncio.run(main())
@@ -6449,3 +6432,4 @@ EOF
 | 2026-09-11 | this PR | M36 list body 186100/186100 → 164386/164386 B, −11.7 %, and M63 view body 203192/203192 → 181478/181478 B, −10.7 %, byte-identical within each arm (four interleaved rounds of the verbatim collectors — main checkout before vs branch worktree after back-to-back, worst on-disk threads corpus 4551 KB / 517 rows of session dfe393f7, live home read-only, load 3.4-4.7 one-minute; handler medians within noise 2.2-2.7 ms list / 5.6-8.5 ms view at that load — the dumps was never the handler's budget, the bytes are the moved metric); conditional 204/0 B both arms both metrics; 5419-passed suite plus 2 new wire pins (epoch-ms row timestamps, the mixed thread+trigger sort's int-vs-int key) | the shared row builder serialized both timestamp fields as ISO strings (~52 B per field per row) on a body that scales with the session's thread count — the worst corpus grew 499 → 517 rows in the last day and would cross M36's < 200 KB range within the week; the client reads both fields through new Date(), which accepts the epoch-ms integer and the ISO string alike, so the rows now carry ints (the trigger row's fire_at/created_at convert the same way so _list_body's mixed sort stays int-vs-int) — zero client change, −21.7 KB per full body on both payloads, JSON.parse on the client shrinks with it |
 | 2026-09-12 | this PR | M94 tail-40 page body median 1.01 MB → 0.20 MB, −80 %, page dumps median 2.0 → 0.5 ms, build unchanged 1.0-1.2 ms (three interleaved rounds of the verbatim collector — origin/main tree extracted to a scratch checkout before vs branch worktree after, back-to-back ×3, worst active live corpus 9313ed43 with the 1.11 MB tool_result, live home read-only, load 0.88-1.07 one-minute); streamed replay serialized median 6.6 → 5.5 MB, dumps wall median 24 → 21-22 ms (the commit frames' tool rows join the stream deltas at the preview bound); M35 events page body 624218 → 347923 B, −44 %, median 2.67 → 2.58 ms, view body 179490 → 135521 B, −25 %, bootstrap body 93303 B both arms (the per-request trim is now identity on pre-trimmed rows; the digest move is the documented mark_read write-once skew of the shared snapshot); trim-contract parity: every message's non-tools fields byte-identical across arms and all 136 trimmed values strict prefixes with their markers set on the worst page; no-regression witnesses interleaved before/after: M26 advance 0.16 → 0.18 ms parity True digest e94c56635194 identical, M33 replay wall 0.035 → 0.037 s parity true, M34 body 251479 B byte-identical both arms, M38 fan-out 5 frames / 186 dumps 5 → 4 ms parity True, M45 loop-lag 0.0064 → 0.0067 s at the 5 ms ticker floor with wall flat (the frame-list digest moves by design — the replayed commit frames now carry preview-shaped rows); 5498-passed suite plus 607-passed node suite with the committed-shape contract tests flipped to the preview bound | the events pages and the WS commit frames were the last chat wire shapes still carrying whole tool rows — 20 KB-capped outputs plus full input values (the M94 worst page read 76 % tool outputs, 16 % inputs, while the renderer displays an output's first 500 characters and reads from an input only a bounded summary, all inside the tools block hidden behind the "N tool calls" toggle) — the trim now lands once at ingestion (tool_preview on every buffered row), so the stream delta, the committed message, and the bootstrap payload share one wire bound and the buffered fold itself stays bounded; TOOL_OUTPUT_RENDER_CAP remains the worker-events projection's cap (src/api/threads.py, the M34 contract, body byte-identical this round); the committed bubble's shape now matches the streaming bubble's (500 chars + the raw-events note) instead of expanding at commit time; full text stays on the persisted event where the raw download, the fork reference, and the review scans already read it |
 | 2026-09-12 | this PR | M71 capped search handler wall median 1.996/2.032/1.996/2.017/1.934 → 1.680/1.691/1.683/1.662/1.654 ms, −16 %, every paired round faster (five interleaved rounds of the direct-handler harness — search_sessions(q="e") awaited 30x per arm after one warm call, 200 rows, shared snapshot of the 1090-meta scratch home, main checkout before vs branch worktree after back-to-back at load 0.84-0.85, body 208496 B and sha1 6ac7eb4b99e7388d byte-identical across all ten arms); route-level corroboration through the verbatim TestClient collector, six interleaved rounds: 4.63/4.13/4.14/4.42/4.12/4.09 → 4.20/4.14/3.83/4.35/3.97/4.46 ms medians (digest 631e3b9ba12e identical across all twelve arms; the ~±0.3 ms TestClient floor noise bounds the route reading, the handler wall is the signal); no-regression re-measures interleaved ×2: M56 /status handler 0.12 ms flat, byte-parity suite (the merged-render test) passed, 5509-passed suite | the capped search's per-row splice re-rendered each derived key's wire prefix per row per request (b'"' + name.encode() + b'":', ~1000 encode+concat pairs per 200-row response) and ran the pydantic dump_python call for both datetime fields even when None — the common idle row's shape; the five prefixes are prebuilt module bytes the splice joins directly, and a None datetime field rides its whole prebuilt ``"key":null`` piece so neither the dump_python call nor the scalar render runs for it; the spliced body is byte-identical (pinned by the merged-render reference test) |
+| 2026-09-13 | this PR | M62/M82 standing-collector repair: both collectors read their helpers as direct attributes and the getattr(…, None) fallback arms are gone — M62's else-arm re-priced the removed pre-fix three-probe chain through `git_remote_default_branch`, a name no checkout has carried since the M62 landing, and M82's aiofiles arm silently timed the removed pre-fix write+flush pair, the exact fallback the M89/M90 repair removed from its collectors (collector commands only, no product code); repaired commands read, three interleaved rounds at load 1.32-1.34 one-minute: M82 events-log append median 2/2/2 µs, maxima 7/12/8 µs, and M62 base-less base-resolution chain median 0.1896/0.1968/0.1956 s, maxima 0.2226/0.2101/0.2306 s, start_point origin/main round-stable across all rounds — both inside their standing ranges (< 200 µs and < 0.5 s) and consistent with the M91-row and 2026-09-13 M62-row readings | the getattr-plus-fallback dispatch was each landing's before/after A/B form and became a trap once the landing completed: the fallback has no failure mode, so a renamed helper silently re-prices a removed shape (the #1285 vacuous-read class, the M89/M90 repair's stated standard) — a checkout whose module lacks the name now fails the collector loudly instead of timing a shape the code no longer runs |

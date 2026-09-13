@@ -444,32 +444,35 @@ async def tail_follow_events(
 
   with open(raw_path, "rb") as f:
     f.seek(offset)
-    # The carry is a bytearray appended per chunk and compacted once per chunk,
-    # and the terminator search resumes at the previously scanned boundary: a
-    # line spanning N chunks must cost O(line), not the O(chunks × line) the
-    # bytes-concat carry pays (a 10 MB line measured ~80 ms of copy+rescan).
-    buf = bytearray()
-    consumed = 0  # bytes of buf before the next unprocessed line
-    scanned = 0  # bytes of buf already searched for the terminator
+    # The drain reads to EOF once per round and carries only the trailing
+    # partial line into the next round, so a completed backlog costs one
+    # C-level readall plus one slice per line; the chunked bytearray carry
+    # re-grew and compacted the whole accumulated buffer per 64 KB round, and
+    # a 10 MB backlog measured ~14 ms of that churn against a ~13 ms parse
+    # floor (the live read side of every covered backend's streamed turn).
+    carry = b""
     while True:
-      chunk = f.read(65536)
-      if chunk:
+      fresh = f.read()
+      if fresh:
         last_growth = time.monotonic()
         # The producer's last write, anchored to the monotonic clock (the
         # file's mtime — reading pre-mount backlog must not count as output).
         last_output_at = last_growth - max(0.0, time.time() - os.fstat(f.fileno()).st_mtime)
-        if consumed:
-          del buf[:consumed]
-          scanned -= consumed
-          consumed = 0
-        buf += chunk
+        data = carry + fresh if carry else fresh
+        carry = b""
+        view = memoryview(data)
+        start = 0
         while True:
-          nl = buf.find(b"\n", scanned)
+          nl = data.find(b"\n", start)
           if nl < 0:
-            scanned = len(buf)
+            carry = data[start:]
             break
-          raw_line = bytes(memoryview(buf)[consumed:nl])
-          consumed = scanned = nl + 1
+          # The line rides a zero-copy view: orjson parses straight from the
+          # read buffer, where a bytes slice paid a full copy per line (the
+          # 10 MB worst line measured ~5 ms of copy plus ~8 ms of parse
+          # inflation from the copy's cold cache).
+          raw_line = view[start:nl]
+          start = nl + 1
           offset += len(raw_line) + 1
           event = parse_ndjson_line(raw_line, log_event="backend_line_not_json", log_fields={})
           if event is None:
@@ -537,12 +540,12 @@ async def tail_follow_events(
         await on_silence()
       await asyncio.sleep(poll_interval)
 
-    # Only the unprocessed tail past *consumed* is a torn final write; the
-    # consumed prefix stays in buf until the next chunk compacts it.
-    if len(buf) > consumed and buf[consumed:].strip():
+    # Only the unprocessed tail past the last newline is a torn final write;
+    # it rides the carry into the next round's read.
+    if carry.strip():
       # Dropping it makes a restart replay the run's tail as at most a
       # duplicate — never a loss.
-      log.warning("raw_trailing_torn_line_dropped", bytes=len(buf) - consumed)
+      log.warning("raw_trailing_torn_line_dropped", bytes=len(carry))
 
 
 def _rotate_stale_transport(log_dir: Path, raw_path: Path, stderr_path: Path, cursor_path: Path) -> None:

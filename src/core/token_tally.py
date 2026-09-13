@@ -428,15 +428,19 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
   thread event logs (``threads/*/data/events.jsonl``, kind ``"thread"``) and master raw
   captures (``data/master_runs/*/agent.raw.ndjson``, kind ``"master"``).
 
-  The two shapes are scoped by subtree, not by name: under ``threads/`` the only jsonl files
-  are event logs, and under ``data/master_runs/`` the only ndjson files are raw captures, so
-  the walk never sees the session-level ``chat_events.jsonl`` or the workers' own
-  ``threads/*/data/agent.raw.ndjson`` (those runs' usage is already in their thread's event
-  log). A missing sessions root or session subtree is an empty corpus, not an error — the
-  same contract _iter_jsonl_stats runs under; anything else unreadable becomes a note. Each
-  directory's listing memoizes on the directory's own stat pair (``_charliebot_listing``),
-  so a repeat walk pays one stat per remembered directory plus the corpus files' own stats
-  instead of a full scandir pass.
+  Both file names are pinned by their writers — a thread's event log is always
+  ``events.jsonl`` under its ``data/`` (threads.thread_events_log_path) and a run's capture always
+  ``agent.raw.ndjson`` (runs.RAW_LOG_NAME) — so the walk lists only the three levels whose
+  entries it must discover (the sessions root, each ``threads/``, each ``data/master_runs/``,
+  each memoized on the directory's own stat pair by ``_charliebot_listing``) and stats each
+  candidate file directly every pass. The listed levels do not move when a deep file appears
+  or disappears (that moves only the file's own containing directory, which the walk never
+  lists), so the fresh per-candidate stat is the only thing that can see it; one stat per
+  candidate plus one per discovered directory is the walk's floor, and the deeper directories
+  (thread dirs, their ``data/``, run dirs) are never listed or statted at all.
+  A missing sessions root or session subtree is an empty corpus, not an error — the same
+  contract _iter_jsonl_stats runs under; anything else unreadable becomes a note, and a
+  candidate stat failing with anything but an absent file yields its error row.
   """
   try:
     session_listing = _charliebot_listing(str(sessions))
@@ -447,25 +451,24 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
   for session_path, session_is_dir, session_is_symlink in session_listing:
     if not session_is_dir or session_is_symlink:
       continue
-    for kind, sub, suffixes in (("thread", "threads", (".jsonl",)), ("master", "data/master_runs", (".ndjson",))):
-      stack = [os.path.join(session_path, sub)]
-      while stack:
-        dirpath = stack.pop()
-        try:
-          listing = _charliebot_listing(dirpath)
-        except OSError as exc:
-          if not isinstance(exc, FileNotFoundError):
-            t.notes.append(f"charlie-bot: unreadable {dirpath}: {exc}")
+    for kind, container, name in (("thread", "threads", os.path.join("data", "events.jsonl")),
+                                  ("master", "data/master_runs", "agent.raw.ndjson")):
+      try:
+        listing = _charliebot_listing(os.path.join(session_path, container))
+      except OSError as exc:
+        if not isinstance(exc, FileNotFoundError):
+          t.notes.append(f"charlie-bot: unreadable {session_path}/{container}: {exc}")
+        continue
+      for entry_path, entry_is_dir, entry_is_symlink in listing:
+        if not entry_is_dir or entry_is_symlink:
           continue
-        for path, is_dir, is_symlink in listing:
-          if is_dir:
-            if not is_symlink:
-              stack.append(path)
-          elif path.endswith(suffixes):
-            try:
-              yield kind, path, os.stat(path), None
-            except OSError as exc:
-              yield kind, path, None, repr(exc)
+        path = os.path.join(entry_path, name)
+        try:
+          yield kind, path, os.stat(path), None
+        except FileNotFoundError:
+          continue
+        except OSError as exc:
+          yield kind, path, None, repr(exc)
 
 
 def _walk_charliebot(sessions: Path, t: _Tally) -> list[tuple[str, str, int | None, int | None, str | None]]:

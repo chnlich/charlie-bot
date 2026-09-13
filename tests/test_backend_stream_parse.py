@@ -187,7 +187,7 @@ async def test_tail_follow_events_warns_torn_bytes_only_for_the_partial() -> Non
 
 
 @pytest.mark.asyncio
-async def test_opencode_sse_events_rejects_nan_boundary(monkeypatch) -> None:
+async def test_opencode_sse_events_rejects_nan_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
   """The stdlib parser accepted NaN literals; orjson fails the frame loudly
   (the boundary the stream funnels deliberately adopt, as the file readers
   did — machine-written upstream events carry none)."""

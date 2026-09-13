@@ -1,10 +1,11 @@
+import pytest
 from conftest import GEMINI_RESOLVE_BINARY_PATCH_TARGET, assistant_text_event, build_cli_backend
 
 from src.agents.backends.gemini_cli import GeminiCliBackend
 from src.core import event_types as ET
 
 
-def _build_backend(monkeypatch, **kwargs) -> GeminiCliBackend:
+def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> GeminiCliBackend:
   return build_cli_backend(
       monkeypatch,
       GeminiCliBackend,
@@ -15,7 +16,7 @@ def _build_backend(monkeypatch, **kwargs) -> GeminiCliBackend:
   )
 
 
-def test_build_command_wraps_instructions_and_resume(monkeypatch) -> None:
+def test_build_command_wraps_instructions_and_resume(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(
       monkeypatch,
       model="gemini-test-model",
@@ -43,7 +44,7 @@ def test_build_command_wraps_instructions_and_resume(monkeypatch) -> None:
   ]
 
 
-def test_build_command_preserves_dash_prefixed_prompt(monkeypatch) -> None:
+def test_build_command_preserves_dash_prefixed_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model="gemini-test-model")
 
   cmd = backend._build_command("--watch-pid only local")
@@ -61,7 +62,7 @@ def test_build_command_preserves_dash_prefixed_prompt(monkeypatch) -> None:
   ]
 
 
-def test_prepare_env_strips_api_keys(monkeypatch) -> None:
+def test_prepare_env_strips_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
   original_env = {
       "PATH": "/usr/bin",
@@ -76,7 +77,7 @@ def test_prepare_env_strips_api_keys(monkeypatch) -> None:
   assert prepared["PATH"] == "/usr/bin"
 
 
-def test_translate_event_mappings(monkeypatch) -> None:
+def test_translate_event_mappings(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   assert backend.translate_event({
@@ -146,7 +147,7 @@ def test_translate_event_mappings(monkeypatch) -> None:
   ]
 
 
-def test_translate_event_tool_result_error_and_unknown(monkeypatch) -> None:
+def test_translate_event_tool_result_error_and_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   assert backend.translate_event(

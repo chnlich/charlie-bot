@@ -8,6 +8,7 @@ import pytest
 from conftest import stub_credentials
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.middleware.gzip import GZipMiddleware
 
 from src.api import files as files_api
 from src.api import pages as pages_api
@@ -248,8 +249,6 @@ def test_serve_file_clean_reinjects_when_page_is_rewritten(sessions_root: Path) 
 def _build_gzip_client(access_key: str | None) -> TestClient:
   """The files router behind the gzip middleware every production request
   passes through, so the test sees the skip the pre-compressed response buys."""
-  from starlette.middleware.gzip import GZipMiddleware
-
   app = FastAPI()
   app.include_router(files_api.router, prefix="/files")
   app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)

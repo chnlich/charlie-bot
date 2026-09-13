@@ -5,6 +5,7 @@ from copy import deepcopy
 
 import pytest
 from conftest import assistant_event as _assistant_event
+from conftest import assistant_text_event as _assistant_text_event
 from conftest import assistant_text_tool_use_event as _assistant_text_tool_use_event
 from conftest import delegate_invocation as _delegate_invocation
 from conftest import queued_user_reorder_events as _reorder_events
@@ -40,18 +41,7 @@ def test_user_event_emits_a_user_message_delta() -> None:
 
 def test_assistant_text_event_emits_a_stream_delta() -> None:
   agg = MessageAggregator()
-  deltas = list(
-      agg.feed(
-          {
-              "type": "assistant",
-              "message": {
-                  "content": [{
-                      "type": "text",
-                      "text": "Hello "
-                  }]
-              },
-              "timestamp": "2026-04-29T00:00:00Z",
-          }))
+  deltas = list(agg.feed({**_assistant_text_event("Hello "), "timestamp": "2026-04-29T00:00:00Z"}))
   assert deltas == [
       {
           "type": "stream",
@@ -70,7 +60,7 @@ def test_assistant_text_event_emits_a_stream_delta() -> None:
 
 def test_assistant_text_then_master_done_commits_message() -> None:
   agg = MessageAggregator()
-  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}, "timestamp": "t1"}))
+  list(agg.feed({**_assistant_text_event("Hi"), "timestamp": "t1"}))
   master_done_deltas = list(agg.feed({"type": "master_done", "thinking_seconds": 3, "timestamp": "t2"}))
 
   assert master_done_deltas == [
@@ -101,7 +91,7 @@ def test_assistant_text_then_master_done_commits_message() -> None:
 
 def test_master_done_with_still_thinking_skips_separator() -> None:
   agg = MessageAggregator()
-  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}, "timestamp": "t1"}))
+  list(agg.feed({**_assistant_text_event("Hi"), "timestamp": "t1"}))
   deltas = list(agg.feed({"type": "master_done", "still_thinking": True, "timestamp": "t2"}))
   # Pending assistant draft commits, but no separator is emitted.
   assert deltas == [
@@ -276,18 +266,7 @@ def test_exit_plan_mode_emits_plan_message_with_explicit_text() -> None:
 
 def test_exit_plan_mode_without_explicit_plan_promotes_buffer() -> None:
   agg = MessageAggregator()
-  list(
-      agg.feed(
-          {
-              "type": "assistant",
-              "message": {
-                  "content": [{
-                      "type": "text",
-                      "text": "Plan body"
-                  }]
-              },
-              "timestamp": "t1"
-          }))
+  list(agg.feed({**_assistant_text_event("Plan body"), "timestamp": "t1"}))
   deltas = list(
       agg.feed(
           {
@@ -317,18 +296,8 @@ def test_exit_plan_mode_without_explicit_plan_promotes_buffer() -> None:
 
 def test_consecutive_assistant_text_events_split_into_separate_bubbles() -> None:
   agg = MessageAggregator()
-  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "First"}]}, "timestamp": "t1"}))
-  deltas = list(
-      agg.feed({
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "Second"
-              }]
-          },
-          "timestamp": "t2"
-      }))
+  list(agg.feed({**_assistant_text_event("First"), "timestamp": "t1"}))
+  deltas = list(agg.feed({**_assistant_text_event("Second"), "timestamp": "t2"}))
   # First bubble is committed before the second buffer starts; matches the
   # legacy events_to_messages flushing rule.
   commit = deltas[0]
@@ -360,17 +329,7 @@ def test_consecutive_assistant_text_events_split_into_separate_bubbles() -> None
 
 def test_handler_result_flushes_draft_and_emits_system_message() -> None:
   agg = MessageAggregator()
-  list(
-      agg.feed({
-          "type": "assistant",
-          "message": {
-              "content": [{
-                  "type": "text",
-                  "text": "Working"
-              }]
-          },
-          "timestamp": "t1"
-      }))
+  list(agg.feed({**_assistant_text_event("Working"), "timestamp": "t1"}))
   deltas = list(
       agg.feed({
           "type": "handler_result",
@@ -463,7 +422,7 @@ def test_system_event_projects_to_one_system_message(
 
 def test_init_system_event_is_ignored() -> None:
   agg = MessageAggregator()
-  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "draft"}]}, "timestamp": "t1"}))
+  list(agg.feed({**_assistant_text_event("draft"), "timestamp": "t1"}))
 
   assert not list(agg.feed({"type": "system", "subtype": "init", "timestamp": "t2"}))
   assert agg.pending_draft_message()["content"] == "draft"
@@ -471,7 +430,7 @@ def test_init_system_event_is_ignored() -> None:
 
 def test_flush_pending_emits_dangling_draft() -> None:
   agg = MessageAggregator()
-  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "tail"}]}, "timestamp": "t"}))
+  list(agg.feed({**_assistant_text_event("tail"), "timestamp": "t"}))
   flushed = list(agg.flush_pending())
   assert flushed == [
       {
@@ -491,7 +450,7 @@ def test_flush_pending_emits_dangling_draft() -> None:
 
 def test_pending_draft_message_is_a_pure_snapshot() -> None:
   agg = MessageAggregator()
-  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "snap"}]}, "timestamp": "t"}))
+  list(agg.feed({**_assistant_text_event("snap"), "timestamp": "t"}))
   first = agg.pending_draft_message()
   second = agg.pending_draft_message()
   assert first == second
@@ -515,7 +474,7 @@ def test_event_id_is_propagated_when_present() -> None:
 
 def test_thinking_delta_appends_to_assistant_draft() -> None:
   agg = MessageAggregator()
-  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}, "timestamp": "t1"}))
+  list(agg.feed({**_assistant_text_event("Hi"), "timestamp": "t1"}))
   deltas = list(agg.feed({"type": "thinking", "content": "planning", "timestamp": "t2"}))
 
   assert [d["type"] for d in deltas] == ["stream"]
@@ -600,7 +559,7 @@ def test_cc_thinking_snapshot_is_cumulative() -> None:
 
 def test_thinking_is_flushed_with_assistant_draft() -> None:
   agg = MessageAggregator()
-  list(agg.feed({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi"}]}, "timestamp": "t1"}))
+  list(agg.feed({**_assistant_text_event("Hi"), "timestamp": "t1"}))
   list(agg.feed({"type": "thinking", "content": "planning", "timestamp": "t2"}))
   deltas = list(agg.feed({"type": "master_done", "thinking_seconds": 1, "timestamp": "t3"}))
 

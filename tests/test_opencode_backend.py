@@ -3,8 +3,9 @@ import base64
 import json
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -37,12 +38,16 @@ from src.core.streaming import handle_compaction_events
 from src.core.timeouts import OPENCODE_ABORT_TIMEOUT, OPENCODE_HTTP_API_TIMEOUT
 
 
-def _build_backend(monkeypatch, **kwargs) -> OpenCodeBackend:
+def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> OpenCodeBackend:
   return build_cli_backend(
       monkeypatch, OpenCodeBackend, OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", **kwargs)
 
 
-def _rig_end_to_end_run(monkeypatch, backend: OpenCodeBackend, response) -> MagicMock:
+def _rig_end_to_end_run(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: OpenCodeBackend,
+    response: "_FakeDelayedStreamResponse | FakeChunkedResponse",
+) -> MagicMock:
   """Mock the serve-and-connect path so backend.run() consumes `response` as the
   /event stream end-to-end; returns the spawned process mock for spawn assertions."""
   process = stub_subprocess_spawn(monkeypatch, OPENCODE_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, 4321)
@@ -65,7 +70,7 @@ class _FakeEventStream:
   def __init__(self, events: list[dict]) -> None:
     self._events = events
 
-  async def __aiter__(self):
+  async def __aiter__(self) -> AsyncIterator[dict]:
     for event in self._events:
       yield event
 
@@ -76,7 +81,7 @@ class _FakeSseResponse:
   def __init__(self, lines: list[str]) -> None:
     self._lines = lines
 
-  async def aiter_bytes(self):
+  async def aiter_bytes(self) -> AsyncIterator[bytes]:
     for line in self._lines:
       yield (line + "\n").encode("utf-8")
 
@@ -106,7 +111,7 @@ def _session_attached(session_id: str) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_iter_sse_events_ignores_comments_and_metadata(monkeypatch) -> None:
+async def test_iter_sse_events_ignores_comments_and_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
   response = _FakeSseResponse(
       [
@@ -140,7 +145,8 @@ async def test_iter_sse_events_ignores_comments_and_metadata(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkeypatch, tmp_path: Path) -> None:
+async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """Regression for run 6dc42358: a message.part.updated frame whose JSON string
   carries raw U+0085/U+2028 (which JSON.stringify leaves unescaped and the SSE
   spec keeps inside the line) must parse as exactly one event through the full
@@ -185,7 +191,7 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
 
 
 @pytest.mark.asyncio
-async def test_run_opens_with_the_typed_session_attach_signal(monkeypatch, tmp_path: Path) -> None:
+async def test_run_opens_with_the_typed_session_attach_signal(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """The run's first event is the typed adoption signal carrying the attached
   session id — never a bare session_id dict the persist funnels would write."""
   backend = _build_backend(monkeypatch, model="provider/model")
@@ -203,7 +209,7 @@ async def test_run_opens_with_the_typed_session_attach_signal(monkeypatch, tmp_p
   assert backend.exit_code == 0
 
 
-def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch) -> None:
+def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   assert not backend._translate_sse_event(_part_updated(_text_part("message-1", "part-1", "text", "Hello")))
@@ -214,7 +220,7 @@ def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch) 
   assert translated == [assistant_text_event("Hello"), assistant_text_event(" world")]
 
 
-def test_translate_sse_event_discards_buffered_non_assistant_parts(monkeypatch) -> None:
+def test_translate_sse_event_discards_buffered_non_assistant_parts(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   assert not backend._translate_sse_event(_part_updated(_text_part("message-1", "part-1", "text", "Hello")))
@@ -225,7 +231,7 @@ def test_translate_sse_event_discards_buffered_non_assistant_parts(monkeypatch) 
   assert not backend._pending_parts
 
 
-def test_prepare_env_sets_charliebot_opencode_config(monkeypatch) -> None:
+def test_prepare_env_sets_charliebot_opencode_config(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   env = backend._prepare_env({"PATH": "/usr/bin"})
@@ -237,7 +243,8 @@ def test_prepare_env_sets_charliebot_opencode_config(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_passes_proxy_environment_to_serve_subprocess(monkeypatch, tmp_path: Path) -> None:
+async def test_run_passes_proxy_environment_to_serve_subprocess(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   backend = _build_backend(monkeypatch, model="provider/model", proxy_url="http://proxy.test:8080")
   process = MagicMock()
   process.pid = 1234
@@ -277,7 +284,7 @@ def _assert_pdeathsig_preexec(kwargs: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatch) -> None:
+async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model="provider/model", proxy_url="http://proxy.test:8080")
   monkeypatch.setenv("NO_PROXY", "internal.test,localhost")
   monkeypatch.setenv("HTTP_PROXY", "http://ambient-http.test:8080")
@@ -298,7 +305,7 @@ async def test_one_shot_text_passes_proxy_environment_and_deny_policy(monkeypatc
   _assert_pdeathsig_preexec(create_process.await_args.kwargs)
 
 
-def test_translate_tool_error_emits_tool_result(monkeypatch) -> None:
+def test_translate_tool_error_emits_tool_result(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   translated = backend.translate_event(
@@ -346,12 +353,12 @@ def test_translate_tool_error_emits_tool_result(monkeypatch) -> None:
   ]
 
 
-async def _drain(events):
+async def _drain(events: AsyncIterator[dict]) -> list[dict]:
   return [event async for event in events]
 
 
 @pytest.mark.asyncio
-async def test_consume_sse_events_parent_permission_ask_fails_fast(monkeypatch) -> None:
+async def test_consume_sse_events_parent_permission_ask_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
   """A permission ask for the parent session is a terminal error that ends the turn."""
   backend = _build_backend(monkeypatch)
   backend._session_id = "parent-session"
@@ -387,7 +394,7 @@ async def test_consume_sse_events_parent_permission_ask_fails_fast(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_consume_sse_events_child_permission_ask_fails_before_filtering(monkeypatch) -> None:
+async def test_consume_sse_events_child_permission_ask_fails_before_filtering(monkeypatch: pytest.MonkeyPatch) -> None:
   """A child-session permission ask must be caught before the parent-session filter drops it."""
   backend = _build_backend(monkeypatch)
   backend._session_id = "parent-session"
@@ -416,7 +423,7 @@ async def test_consume_sse_events_child_permission_ask_fails_before_filtering(mo
 
 
 @pytest.mark.asyncio
-async def test_consume_sse_events_normal_parent_turn(monkeypatch) -> None:
+async def test_consume_sse_events_normal_parent_turn(monkeypatch: pytest.MonkeyPatch) -> None:
   """Assistant text, parent-session filtering, idle, and usage aggregation still work."""
   backend = _build_backend(monkeypatch)
   backend._session_id = "parent-session"
@@ -448,21 +455,21 @@ async def test_consume_sse_events_normal_parent_turn(monkeypatch) -> None:
   assert backend._failed is False
 
 
-def test_is_cancellation_disconnect_true_after_terminate(monkeypatch) -> None:
+def test_is_cancellation_disconnect_true_after_terminate(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
   backend.terminated = True
 
   assert backend._is_cancellation_disconnect(httpx.RemoteProtocolError("incomplete chunked read")) is True
 
 
-def test_is_cancellation_disconnect_false_without_terminate(monkeypatch) -> None:
+def test_is_cancellation_disconnect_false_without_terminate(monkeypatch: pytest.MonkeyPatch) -> None:
   """An unexpected disconnect with no deliberate terminate stays a visible backend failure."""
   backend = _build_backend(monkeypatch)
 
   assert backend._is_cancellation_disconnect(httpx.RemoteProtocolError("incomplete chunked read")) is False
 
 
-def test_translate_sse_event_reasoning_part_emits_thinking_delta(monkeypatch) -> None:
+def test_translate_sse_event_reasoning_part_emits_thinking_delta(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch)
 
   assert not backend._translate_sse_event(_part_updated(_text_part("message-1", "part-r", "reasoning", "I need")))
@@ -488,7 +495,8 @@ def test_translate_sse_event_reasoning_part_emits_thinking_delta(monkeypatch) ->
 # ---------------------------------------------------------------------------
 
 
-def _step_finish_part(input_t, output_t, reasoning_t, cache_read_t, cache_write_t, cost):
+def _step_finish_part(
+    input_t: int, output_t: int, reasoning_t: int, cache_read_t: int, cache_write_t: int, cost: float) -> dict:
   return {
       "messageID": "m1",
       "id": "p1",
@@ -507,7 +515,7 @@ def _step_finish_part(input_t, output_t, reasoning_t, cache_read_t, cache_write_
   }
 
 
-def test_make_accumulated_result_snapshot_carries_last_step_tokens_not_sum(monkeypatch) -> None:
+def test_make_accumulated_result_snapshot_carries_last_step_tokens_not_sum(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   backend._model_limit = {"context": 409600, "input": 270000, "output": 131072}
   backend._accumulate_step_finish(_step_finish_part(100, 10, 5, 20, 30, 0.1))
@@ -532,7 +540,7 @@ def test_make_accumulated_result_snapshot_carries_last_step_tokens_not_sum(monke
   assert snapshot["limit"] == {"context": 409600, "input": 270000, "output": 131072}
 
 
-def test_make_accumulated_result_omits_snapshot_when_no_step_finish(monkeypatch) -> None:
+def test_make_accumulated_result_omits_snapshot_when_no_step_finish(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   backend._model_limit = {"context": 409600, "input": 270000, "output": 131072}
 
@@ -541,7 +549,7 @@ def test_make_accumulated_result_omits_snapshot_when_no_step_finish(monkeypatch)
   assert "context_snapshot" not in result
 
 
-def test_make_accumulated_result_snapshot_limit_none_when_catalog_unavailable(monkeypatch) -> None:
+def test_make_accumulated_result_snapshot_limit_none_when_catalog_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   backend._model_limit = None  # catalog unavailable -> limit stays None
   backend._accumulate_step_finish(_step_finish_part(100, 10, 0, 0, 0, 0.1))
@@ -553,7 +561,7 @@ def test_make_accumulated_result_snapshot_limit_none_when_catalog_unavailable(mo
   assert snapshot["tokens"] == {"input": 100, "output": 10, "reasoning": 0, "cache_read": 0, "cache_write": 0}
 
 
-def test_reset_run_state_clears_model_limit_and_last_step_tokens(monkeypatch) -> None:
+def test_reset_run_state_clears_model_limit_and_last_step_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   backend._model_limit = {"context": 409600, "input": 270000, "output": 131072}
   backend._accumulate_step_finish(_step_finish_part(100, 10, 0, 0, 0, 0.1))
@@ -567,7 +575,7 @@ def test_reset_run_state_clears_model_limit_and_last_step_tokens(monkeypatch) ->
 
 class _FakeConfigResponse:
 
-  def __init__(self, payload=None, exc: Exception | None = None, status: int = 200) -> None:
+  def __init__(self, payload: dict | list[dict] | None = None, exc: Exception | None = None, status: int = 200) -> None:
     self._payload = payload
     self._exc = exc
     self._status = status
@@ -576,7 +584,7 @@ class _FakeConfigResponse:
     if self._status >= 400:
       raise httpx.HTTPStatusError("bad status", request=None, response=self)
 
-  def json(self):
+  def json(self) -> dict | list[dict] | None:
     return self._payload
 
 
@@ -595,7 +603,7 @@ class _FakeConfigClient:
 
 
 @pytest.mark.asyncio
-async def test_fetch_model_limit_returns_limit_from_recorded_providers(monkeypatch) -> None:
+async def test_fetch_model_limit_returns_limit_from_recorded_providers(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   # Recorded /config/providers payload: top-level {"providers": [...]}, each
   # provider's models is a dict keyed by model id.
@@ -639,7 +647,7 @@ async def test_fetch_model_limit_returns_limit_from_recorded_providers(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_fetch_model_limit_accepts_bare_list_and_list_models(monkeypatch) -> None:
+async def test_fetch_model_limit_accepts_bare_list_and_list_models(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model="prov/model-id")
   # Alternative shapes: bare top-level list and list-shaped models.
   providers = [
@@ -697,7 +705,8 @@ async def test_fetch_model_limit_accepts_bare_list_and_list_models(monkeypatch) 
     ],
     ids=["request-error", "provider-absent", "model-absent", "malformed-payload"],
 )
-async def test_fetch_model_limit_returns_none_and_warns(monkeypatch, capsys, client_kwargs) -> None:
+async def test_fetch_model_limit_returns_none_and_warns(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], client_kwargs: dict) -> None:
   backend = _build_backend(monkeypatch, model=SYNTHETIC_MODEL)
   client = _FakeConfigClient(**client_kwargs)
 
@@ -710,7 +719,7 @@ async def test_fetch_model_limit_returns_none_and_warns(monkeypatch, capsys, cli
 
 
 @pytest.mark.asyncio
-async def test_fetch_model_limit_returns_none_when_model_unset(monkeypatch) -> None:
+async def test_fetch_model_limit_returns_none_when_model_unset(monkeypatch: pytest.MonkeyPatch) -> None:
   backend = _build_backend(monkeypatch, model=None)
   client = _FakeConfigClient(response=_FakeConfigResponse(payload=[]))
 
@@ -720,7 +729,7 @@ async def test_fetch_model_limit_returns_none_when_model_unset(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_consume_sse_events_emits_snapshot_with_last_step_tokens(monkeypatch) -> None:
+async def test_consume_sse_events_emits_snapshot_with_last_step_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
   """A recorded SSE step-finish sequence yields a result event whose
   context_snapshot carries the last step's tokens while the usage block carries
   the turn's accumulated sum; the catalog failure (limit None) does not fail the
@@ -841,7 +850,7 @@ def _compaction_parts(message_id: str) -> list[dict]:
   ]
 
 
-def test_compaction_message_full_sequence_emits_no_chat_content(monkeypatch) -> None:
+def test_compaction_message_full_sequence_emits_no_chat_content(monkeypatch: pytest.MonkeyPatch) -> None:
   """message.updated (created) -> parts -> message.updated (completed): zero text/thinking."""
   backend = _build_backend(monkeypatch)
   message_id = "msg_compaction_full"
@@ -856,7 +865,7 @@ def test_compaction_message_full_sequence_emits_no_chat_content(monkeypatch) -> 
   assert not any(event["type"] == ET.THINKING for event in translated)
 
 
-def test_compaction_message_adversarial_buffered_order_emits_no_chat_content(monkeypatch) -> None:
+def test_compaction_message_adversarial_buffered_order_emits_no_chat_content(monkeypatch: pytest.MonkeyPatch) -> None:
   """Adversarial order (parts buffered before message.updated arrives): still zero leak."""
   backend = _build_backend(monkeypatch)
   message_id = "msg_compaction_adversarial"
@@ -871,7 +880,7 @@ def test_compaction_message_adversarial_buffered_order_emits_no_chat_content(mon
   assert not backend._pending_parts
 
 
-def test_compaction_step_finish_usage_is_conserved(monkeypatch) -> None:
+def test_compaction_step_finish_usage_is_conserved(monkeypatch: pytest.MonkeyPatch) -> None:
   """Accumulated usage after one normal message and one compaction message, each with a
   step-finish part, equals the sum over every step-finish part fed."""
   backend = _build_backend(monkeypatch)
@@ -893,7 +902,7 @@ def test_compaction_step_finish_usage_is_conserved(monkeypatch) -> None:
   assert backend._usage_cost == pytest.approx(normal_step_finish["cost"] + _COMPACTION_COST)
 
 
-def test_compaction_boundary_emitted_exactly_once_per_message(monkeypatch) -> None:
+def test_compaction_boundary_emitted_exactly_once_per_message(monkeypatch: pytest.MonkeyPatch) -> None:
   """Two summary messages, each message.updated delivered twice, yield exactly two
   compact_boundary events; pre_tokens reflects the _last_step_tokens snapshot in effect
   at registration (None before any step has completed)."""
@@ -915,7 +924,7 @@ def test_compaction_boundary_emitted_exactly_once_per_message(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_compaction_boundary_event_wires_into_handle_compaction_events(monkeypatch) -> None:
+async def test_compaction_boundary_event_wires_into_handle_compaction_events(monkeypatch: pytest.MonkeyPatch) -> None:
   """The synthesized compact_boundary event feeds handle_compaction_events and yields
   exactly one persisted ET.CONTEXT_COMPACTED event carrying the same trigger/pre_tokens."""
   backend = _build_backend(monkeypatch)
@@ -946,11 +955,11 @@ async def test_compaction_boundary_event_wires_into_handle_compaction_events(mon
 _WATCHDOG_TEST_TIMEOUT = 0.2  # seconds
 
 
-def _patch_watchdog_timeout(monkeypatch) -> None:
+def _patch_watchdog_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr("src.agents.backends.opencode.OPENCODE_SSE_PROGRESS_TIMEOUT", _WATCHDOG_TEST_TIMEOUT)
 
 
-async def _timed_event_stream(schedule: list[tuple[float, dict]]):
+async def _timed_event_stream(schedule: list[tuple[float, dict]]) -> AsyncIterator[dict]:
   """Yield each event after its delay, simulating SSE arrival timing."""
   for delay, event in schedule:
     await asyncio.sleep(delay)
@@ -962,7 +971,8 @@ def _heartbeat_schedule(count: int, interval: float) -> list[tuple[float, dict]]
 
 
 @pytest.mark.asyncio
-async def test_sse_watchdog_heartbeat_is_not_progress(monkeypatch, capsys) -> None:
+async def test_sse_watchdog_heartbeat_is_not_progress(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """Acceptance 1: a stream of only server.heartbeat events fails at timeout expiry —
   the watchdog tracks session progress, not bytes on the wire."""
   _patch_watchdog_timeout(monkeypatch)
@@ -987,7 +997,7 @@ async def test_sse_watchdog_heartbeat_is_not_progress(monkeypatch, capsys) -> No
 
 
 @pytest.mark.asyncio
-async def test_sse_watchdog_resets_per_event_not_total_duration(monkeypatch) -> None:
+async def test_sse_watchdog_resets_per_event_not_total_duration(monkeypatch: pytest.MonkeyPatch) -> None:
   """Acceptance 2: session events arriving below the timeout interval keep the turn
   alive even when total stream duration exceeds the timeout — per-event reset,
   not a total-duration cap."""
@@ -1004,7 +1014,7 @@ async def test_sse_watchdog_resets_per_event_not_total_duration(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_sse_watchdog_child_session_event_is_progress(monkeypatch) -> None:
+async def test_sse_watchdog_child_session_event_is_progress(monkeypatch: pytest.MonkeyPatch) -> None:
   """Acceptance 3: events carrying a child (subagent) session id reset the timer —
   no false kill of a parent turn waiting on subagent work. Covers both the
   top-level and the info-nested session-id shapes."""
@@ -1052,7 +1062,7 @@ class _FakeDelayedStreamResponse:
   def raise_for_status(self) -> None:
     pass
 
-  async def aiter_bytes(self):
+  async def aiter_bytes(self) -> AsyncIterator[bytes]:
     for delay, line in self._lines_with_delays:
       await asyncio.sleep(delay)
       yield (line + "\n").encode("utf-8")
@@ -1082,13 +1092,14 @@ class _FakeRunHttpClient:
   async def __aexit__(self, *exc) -> bool:
     return False
 
-  def stream(self, method: str, path: str, timeout=None) -> _FakeStreamContextManager:
+  def stream(self, method: str, path: str, timeout: float | None = None) -> _FakeStreamContextManager:
     assert path == "/event"
     return _FakeStreamContextManager(self._response)
 
 
 @pytest.mark.asyncio
-async def test_sse_watchdog_timeout_fails_run_end_to_end(monkeypatch, tmp_path: Path, capsys) -> None:
+async def test_sse_watchdog_timeout_fails_run_end_to_end(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   """Acceptance 4: silence after server.connected yields an error event, a non-zero
   exit_code, and serve cleanup through the existing failure path."""
   _patch_watchdog_timeout(monkeypatch)
@@ -1115,7 +1126,7 @@ async def test_sse_watchdog_timeout_fails_run_end_to_end(monkeypatch, tmp_path: 
 
 
 @pytest.fixture(autouse=True)
-def _fresh_unhandled_part_type_registry():
+def _fresh_unhandled_part_type_registry() -> Iterator[None]:
   """Keep the process-wide warn-once registry from leaking across tests."""
   opencode_mod._UNHANDLED_PART_TYPES.clear()
   opencode_mod._UNHANDLED_SSE_EVENT_TYPES.clear()
@@ -1155,7 +1166,7 @@ _UNHANDLED_TYPE_ROWS = [
 
 @pytest.mark.parametrize(("feed_unhandled", "events", "log_event"), _UNHANDLED_TYPE_ROWS)
 def test_unhandled_type_logs_once_per_process(
-    monkeypatch, feed_unhandled: Callable[[OpenCodeBackend, dict], list[dict]], events: list[dict],
+    monkeypatch: pytest.MonkeyPatch, feed_unhandled: Callable[[OpenCodeBackend, dict], list[dict]], events: list[dict],
     log_event: str) -> None:
   """60 unhandled events of one type log one line; a second type earns one more."""
   backend = _build_backend(monkeypatch)
@@ -1227,7 +1238,7 @@ class _StubEventStreamResponse(_StubHttpResponse):
     super().__init__(status_code)
     self._sse_events = sse_events or []
 
-  async def aiter_bytes(self):
+  async def aiter_bytes(self) -> AsyncIterator[bytes]:
     for event in self._sse_events:
       yield ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
 
@@ -1290,13 +1301,13 @@ class _StubServeHttpClient:
       return _StubHttpResponse(200)
     raise AssertionError(f"unexpected POST {path}")
 
-  def stream(self, method: str, path: str, timeout=None) -> _StubStreamContext:
+  def stream(self, method: str, path: str, timeout: float | None = None) -> _StubStreamContext:
     assert method == "GET" and path == "/event"
     return _StubStreamContext(self._script.event_streams.pop(0))
 
 
 def _rig_stub_serve_run(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     backend: OpenCodeBackend,
     script: _StubServeScript,
     stderr_chunks_per_attempt: list[list[bytes]],
@@ -1367,7 +1378,8 @@ def _assert_resumed_same_session(script: _StubServeScript, sid: str, prompt: str
 
 
 @pytest.mark.asyncio
-async def test_run_lock_failure_retries_same_session_mid_stream(monkeypatch, tmp_path: Path, capsys) -> None:
+async def test_run_lock_failure_retries_same_session_mid_stream(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   """Lock retry 1: an attempt dying on session.error with the lock stderr signature
   retries once, resuming the SAME opencode session with a byte-identical prompt.
   The run yields attempt-1 partial events + attempt-2 events; the held
@@ -1412,7 +1424,8 @@ async def test_run_lock_failure_retries_same_session_mid_stream(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
-async def test_run_lock_failure_retries_after_event_connect_500(monkeypatch, tmp_path: Path, capsys) -> None:
+async def test_run_lock_failure_retries_after_event_connect_500(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   """Lock retry 2 (boot death): /event connect dies with HTTP 500 + lock stderr on
   attempt 1; attempt 2 uses the resume branch (no second POST /session) and succeeds."""
   sid = "ses-lock-boot"
@@ -1441,7 +1454,8 @@ async def test_run_lock_failure_retries_after_event_connect_500(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
-async def test_run_lock_failure_retries_after_prompt_async_500(monkeypatch, tmp_path: Path, capsys) -> None:
+async def test_run_lock_failure_retries_after_prompt_async_500(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   """Lock retry 3 (the production-observed case): prompt_async's boot-time HTTP 500
   with the lock stderr signature MUST retry; attempt 2 re-sends the identical
   prompt to the same session and succeeds."""
@@ -1477,7 +1491,8 @@ async def test_run_lock_failure_retries_after_prompt_async_500(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
-async def test_run_lock_failure_exhausts_budget_with_single_error_event(monkeypatch, tmp_path: Path, capsys) -> None:
+async def test_run_lock_failure_exhausts_budget_with_single_error_event(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   """Lock retry 4 (budget): both attempts locked -> exactly 2 attempts, exactly one
   terminal error event (attempt 2's; attempt 1's held error is discarded), one
   recorded 10-second backoff, exit_code 1."""
@@ -1558,8 +1573,9 @@ _NO_SIGNATURE_ROWS = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("sid", "build_streams", "stderr_chunks", "build_error"), _NO_SIGNATURE_ROWS)
 async def test_run_failure_without_lock_signature_never_retries(
-    monkeypatch, tmp_path: Path, capsys, sid: str, build_streams: Callable[[str], list[_StubEventStreamResponse]],
-    stderr_chunks: list[list[bytes]], build_error: Callable[[str, OpenCodeBackend], dict]) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], sid: str,
+    build_streams: Callable[[str], list[_StubEventStreamResponse]], stderr_chunks: list[list[bytes]],
+    build_error: Callable[[str, OpenCodeBackend], dict]) -> None:
   """Lock retry 5 (no signature): a failed attempt whose stderr tail carries no lock
   signature never retries — one spawn, no backoff sleep, the attempt's terminal error
   emitted once, exit 1."""
@@ -1581,7 +1597,8 @@ async def test_run_failure_without_lock_signature_never_retries(
 
 
 @pytest.mark.asyncio
-async def test_run_lock_failure_never_retries_after_terminate(monkeypatch, tmp_path: Path, capsys) -> None:
+async def test_run_lock_failure_never_retries_after_terminate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
   """Lock retry 6 (cancellation): terminate() never retries, even with the lock
   signature present; the held error is emitted on that single attempt."""
   sid = "ses-cancel"
@@ -1605,7 +1622,7 @@ async def test_run_lock_failure_never_retries_after_terminate(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_per_call_clients_carry_shared_ssl_context(monkeypatch, tmp_path: Path) -> None:
+async def test_per_call_clients_carry_shared_ssl_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """Both per-call client constructions — the run-start client (health through
   the SSE stream) and the cleanup abort POST — pass the process-wide context:
   httpx's default verify builds a fresh default SSL context per AsyncClient,
@@ -1617,7 +1634,7 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch, tmp_path: 
     def __init__(self, **kwargs) -> None:
       captured.append(kwargs)
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_KwargsClient":
       return self
 
     async def __aexit__(self, *exc) -> bool:
@@ -1646,7 +1663,7 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch, tmp_path: 
         return _StubHttpResponse(204)
       return _StubHttpResponse(200)
 
-    def stream(self, method: str, path: str, timeout=None) -> _FakeStreamContextManager:
+    def stream(self, method: str, path: str, timeout: float | None = None) -> _FakeStreamContextManager:
       return _FakeStreamContextManager(
           _FakeDelayedStreamResponse(
               [
@@ -1710,7 +1727,8 @@ class _RecordingPostClient:
 
 
 @pytest.mark.asyncio
-async def test_send_prompt_text_part_first_then_file_parts_in_ref_order(monkeypatch, tmp_path: Path) -> None:
+async def test_send_prompt_text_part_first_then_file_parts_in_ref_order(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """Parts assembly: the unchanged prompt text part first, then one file part per
   readable image attachment in reference order; non-image and missing-file refs
   produce no part; each file part carries the extension-derived mime and a
@@ -1767,7 +1785,7 @@ def test_image_file_parts_skips_non_image_refs_silently() -> None:
       ]) == []
 
 
-def test_image_file_parts_skips_missing_image_file_with_warning(capsys) -> None:
+def test_image_file_parts_skips_missing_image_file_with_warning(capsys: pytest.CaptureFixture[str]) -> None:
   """A missing image file is skipped with one log.warning — it never fails the turn."""
 
   parts = opencode_mod._image_file_parts([{"filename": "ghost.png", "path": "/nonexistent/ghost.png"}])
@@ -1784,7 +1802,7 @@ def test_image_file_parts_none_yields_no_parts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_threads_uploaded_files_into_prompt_parts(monkeypatch, tmp_path: Path) -> None:
+async def test_run_threads_uploaded_files_into_prompt_parts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """run() hands its uploaded_files to _send_prompt: the prompt_async body carries
   the text part plus one file part per readable image."""
   sid = "ses-attach"
@@ -1817,7 +1835,8 @@ async def test_run_threads_uploaded_files_into_prompt_parts(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_stdout_startup_line_and_stream_land_through_one_fd(monkeypatch, tmp_path: Path) -> None:
+async def test_stdout_startup_line_and_stream_land_through_one_fd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """The run's stdout fd serves both phases: the startup URL line and the
   stream chunks append through the one held fd, and closing twice is a no-op."""
   backend = _build_backend(monkeypatch, model="provider/model")

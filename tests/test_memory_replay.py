@@ -1564,74 +1564,58 @@ PLOT_CAPTURE_TEXT = (
 
 
 def two_theme_manifest_dict() -> dict:
-  return {
-      "version": 1,
-      "base_commit": "mem-base-0002",
-      "topics": ["render", "plotting"],
-      "sources":
-          [
-              {
-                  "ref": "guideline",
-                  "kind": "guideline",
-                  "text": GUIDELINE_TEXT
-              },
-              {
-                  "ref": "entry-cache-eviction",
-                  "kind": "entry",
-                  "path": "entries/render/cache-eviction.md",
-                  "text": ENTRY_WITH_INSTANCE,
-              },
-              {
-                  "ref": "entry-axis-scale",
-                  "kind": "entry",
-                  "path": "entries/plotting/axis-scale.md",
-                  "text": PLOT_ENTRY_WITH_INSTANCE,
-              },
-              {
-                  "ref": "capture-eviction",
-                  "kind": "candidate",
-                  "text": CAPTURE_TEXT
-              },
-              {
-                  "ref": "capture-axis-scale",
-                  "kind": "candidate",
-                  "text": PLOT_CAPTURE_TEXT
-              },
-          ],
-      "feedback_examples":
-          [
-              {
-                  "comment_event": "fb-001",
-                  "comment_text":
-                      "Drop the per-run warm-up instance names; keep the mechanism and its tuning range. "
-                      "fb-comment-marker",
-                  "tags": ["instance-names-out", "mechanism-in"],
-                  "approved_change":
-                      {
-                          "approved_change_ref": "approved-001",
-                          "before": ENTRY_WITH_INSTANCE,
-                          "after": ENTRY_WITHOUT_INSTANCE,
-                      },
-              }
-          ],
-      "themes":
+  """The base corpus reshaped into two themes: the eviction theme loses its owning document and a
+  plotting theme joins. Builds on ``base_manifest_dict`` so the scaffold (version, topics, and the
+  one feedback example both themes share) is defined once; every call returns fresh objects.
+  """
+  manifest = base_manifest_dict()
+  manifest["base_commit"] = "mem-base-0002"
+  manifest["sources"] = [
+      {
+          "ref": "guideline",
+          "kind": "guideline",
+          "text": GUIDELINE_TEXT
+      },
+      {
+          "ref": "entry-cache-eviction",
+          "kind": "entry",
+          "path": "entries/render/cache-eviction.md",
+          "text": ENTRY_WITH_INSTANCE,
+      },
+      {
+          "ref": "entry-axis-scale",
+          "kind": "entry",
+          "path": "entries/plotting/axis-scale.md",
+          "text": PLOT_ENTRY_WITH_INSTANCE,
+      },
+      {
+          "ref": "capture-eviction",
+          "kind": "candidate",
+          "text": CAPTURE_TEXT
+      },
+      {
+          "ref": "capture-axis-scale",
+          "kind": "candidate",
+          "text": PLOT_CAPTURE_TEXT
+      },
+  ]
+  manifest["themes"] = {
+      "eviction":
           {
-              "eviction":
-                  {
-                      "principles": ["instance-names-out"],
-                      "candidate_refs": ["capture-eviction"],
-                      "entry_refs": ["entry-cache-eviction"],
-                      "document_refs": [],
-                  },
-              "plotting":
-                  {
-                      "principles": ["instance-names-out"],
-                      "candidate_refs": ["capture-axis-scale"],
-                      "entry_refs": ["entry-axis-scale"],
-                      "document_refs": [],
-                  },
+              "principles": ["instance-names-out"],
+              "candidate_refs": ["capture-eviction"],
+              "entry_refs": ["entry-cache-eviction"],
+              "document_refs": [],
+          },
+      "plotting":
+          {
+              "principles": ["instance-names-out"],
+              "candidate_refs": ["capture-axis-scale"],
+              "entry_refs": ["entry-axis-scale"],
+              "document_refs": [],
           },
   }
+  return manifest
 
 
 def plot_rewrite(text: str, path: str = "entries/plotting/axis-scale.md") -> dict:

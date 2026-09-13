@@ -644,9 +644,7 @@ def test_stable_history_orders_queued_user_behind_a_typed_attach_marker() -> Non
 
   messages = events_to_messages(events)
 
-  assert [message["id"] for message in messages] == [
-      "assistant-1", "done-1", "queued-user", "assistant-2", "done-2"
-  ]
+  assert [message["id"] for message in messages] == ["assistant-1", "done-1", "queued-user", "assistant-2", "done-2"]
 
 
 def test_stable_history_preserves_still_thinking_separator_semantics() -> None:

@@ -222,7 +222,10 @@ def test_translate_session_event(monkeypatch) -> None:
   assert backend.translate_event({
       "type": "session",
       "session_id": "session-X"
-  }) == [{"type": ET.SESSION_ATTACHED, "session_id": "session-X"}]
+  }) == [{
+      "type": ET.SESSION_ATTACHED,
+      "session_id": "session-X"
+  }]
 
 
 def test_build_command_writes_task_file_and_flags(monkeypatch, tmp_path: Path) -> None:

@@ -270,6 +270,7 @@ function buildAppContext() {
     fetchTuiStatus: noop('fetchTuiStatus'),
     pollActiveSessionView: noop('pollActiveSessionView'),
     updateThinkingTime: noop('updateThinkingTime'),
+    resumeThinkingIfMidThought: noop('resumeThinkingIfMidThought'),
     pollSessionStatus: async () => { calls.push('pollSessionStatus'); return false; },
     platform: {onChange() {}},
     localStorage: {getItem: () => null, setItem() {}},

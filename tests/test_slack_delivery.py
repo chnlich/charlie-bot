@@ -252,6 +252,18 @@ def _notices(events: list[dict]) -> list[dict]:
   return [ev for ev in events if "slack_notice" in ev]
 
 
+async def _assert_round_not_audited(
+    client: _FakeSlackClient, cfg: CharlieBotConfig, session_mgr: SessionManager, sid: str, done: dict) -> None:
+  """deliver_done answers no on this round: no Slack post, no master wake, no appended event."""
+  trigger = AsyncMock()
+  before = len(session_mgr.load_chat_events_sync(sid))
+  with _listener_seam(client, trigger=trigger):
+    assert await deliver_done(sid, done, cfg, session_mgr) is False
+  assert not client.posts
+  assert trigger.await_count == 0
+  assert len(session_mgr.load_chat_events_sync(sid)) == before
+
+
 # ---------------------------------------------------------------------------
 # Reply: post_reply
 # ---------------------------------------------------------------------------
@@ -832,15 +844,8 @@ async def test_summon_round_with_a_reply_is_left_alone(tmp_path: Path) -> None:
   summon = await _append(session_mgr, sid, _summon())
   await _append(session_mgr, sid, _reply(summon["id"]))
   done = await _append(session_mgr, sid, _done(summon["id"]))
-  before = len(session_mgr.load_chat_events_sync(sid))
-  trigger = AsyncMock()
 
-  with _listener_seam(client, trigger=trigger):
-    assert await deliver_done(sid, done, cfg, session_mgr) is False
-
-  assert not client.posts
-  assert trigger.await_count == 0
-  assert len(session_mgr.load_chat_events_sync(sid)) == before
+  await _assert_round_not_audited(client, cfg, session_mgr, sid, done)
 
 
 @pytest.mark.asyncio
@@ -988,15 +993,8 @@ async def test_rounds_outside_a_summon_are_not_audited(tmp_path: Path, kind: str
       done = await _append(session_mgr, sid, _done(typed["id"]))
     else:
       done = await _append(session_mgr, sid, _done(None, exit_code=1))
-  before = len(session_mgr.load_chat_events_sync(sid))
-  trigger = AsyncMock()
 
-  with _listener_seam(client, trigger=trigger):
-    assert await deliver_done(sid, done, cfg, session_mgr) is False
-
-  assert not client.posts
-  assert trigger.await_count == 0
-  assert len(session_mgr.load_chat_events_sync(sid)) == before
+  await _assert_round_not_audited(client, cfg, session_mgr, sid, done)
 
 
 @pytest.mark.asyncio

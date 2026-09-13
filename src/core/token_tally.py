@@ -739,10 +739,16 @@ def _parse_lines(fh: BinaryIO, markers: tuple[bytes, ...]) -> tuple[list[dict], 
           starts.add(data.rfind(b"\n", 0, i) + 1)
         i = data.find(marker, i + 1)
     for start in sorted(starts):
+      line = data[start:data.find(b"\n", start) + 1]
       try:
-        objects.append(json.loads(data[start:data.find(b"\n", start) + 1].decode("utf-8", errors="replace")))
+        objects.append(orjson.loads(line))
       except ValueError:
-        continue
+        # orjson rejects invalid UTF-8, NaN/Infinity, and >8-byte float overflow; the
+        # stdlib replace-decode restores the tolerant parse those lines had before.
+        try:
+          objects.append(json.loads(line.decode("utf-8", errors="replace")))
+        except ValueError:
+          continue
   return objects, consumed
 
 
@@ -1220,7 +1226,7 @@ def _thread_metadata(path: str) -> dict | None:
   meta_path = Path(path).parent.parent / "metadata.json"
   try:
     with open(meta_path, "rb") as fh:
-      meta = json.loads(fh.read())
+      meta = orjson.loads(fh.read())
   except FileNotFoundError:
     return None
   if not isinstance(meta, dict):

@@ -456,6 +456,25 @@ def feedback_history_payload(manifest: Manifest) -> list[dict]:
 # --- request builders --------------------------------------------------------------------------
 
 
+def _evidence_payload(
+    manifest: Manifest,
+    theme: Theme,
+    selections: list[FeedbackSelection],
+    feedback_view: str,
+) -> dict:
+  """The evidence context with the variant's feedback view riding in its payload key.
+
+  Raw history rides as ``feedback_history``; the selected structured view replaces it with
+  ``feedback``. Every request builder shares this so the view-to-key rule stays single-homed.
+  """
+  payload = exchange.evidence_context_payload(manifest, theme)
+  if feedback_view == RAW_HISTORY_VIEW:
+    payload["feedback_history"] = feedback_history_payload(manifest)
+  else:
+    payload["feedback"] = exchange.feedback_selections_payload(selections)
+  return payload
+
+
 def build_editor_request(
     manifest: Manifest,
     theme: Theme,
@@ -469,11 +488,7 @@ def build_editor_request(
   the whole-entry editor reads the same theme base, candidates, and feedback view the
   candidate-merge editor reads, only framed as one whole-theme decision.
   """
-  payload = exchange.evidence_context_payload(manifest, theme)
-  if feedback_view == RAW_HISTORY_VIEW:
-    payload["feedback_history"] = feedback_history_payload(manifest)
-  else:
-    payload["feedback"] = exchange.feedback_selections_payload(selections)
+  payload = _evidence_payload(manifest, theme, selections, feedback_view)
   return exchange.render_evidence_request(theme, payload)
 
 
@@ -493,11 +508,7 @@ def build_reviewer_request(
   when hidden, every such field stays out of this request and of every repair request built
   from it.
   """
-  payload = exchange.evidence_context_payload(manifest, theme)
-  if feedback_view == RAW_HISTORY_VIEW:
-    payload["feedback_history"] = feedback_history_payload(manifest)
-  else:
-    payload["feedback"] = exchange.feedback_selections_payload(selections)
+  payload = _evidence_payload(manifest, theme, selections, feedback_view)
   proposals = exchange.editor_proposals_payload(editor_output)
   if rationale_visible:
     proposals["dispositions"] = [

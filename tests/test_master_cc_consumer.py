@@ -20,6 +20,7 @@ from conftest import (
     fresh_master_state,
     make_work_item,
     mock_session_callbacks,
+    mocked_callback_fields,
     patch_instructions_content,
     patch_resume_seams,
     run_resume_round,
@@ -158,10 +159,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
   workers_mock._has_running_tasks = probe_hook
   callbacks = SessionCallbacks(
       persist_and_broadcast=persist_hook,
-      update_thinking_state=AsyncMock(),
-      mark_unread=AsyncMock(),
-      persist_cc_session_id=AsyncMock(side_effect=lambda sid, ccid: ccid),
-      has_completed_round=AsyncMock(return_value=False),
+      **mocked_callback_fields(),
       persist_master_run=AsyncMock(),
   )
 

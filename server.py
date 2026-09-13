@@ -200,9 +200,9 @@ def _provision_speech_models(cfg: CharlieBotConfig) -> None:
   """Provision the speech models on a worker thread.
 
   src.agents.transcriber carries the numpy import (~90 ms), so the module loads
-  here instead of the event loop's startup path — the server import floor the
-  M99 collector measures (docs/perf_baseline.md) prices this thread's span, not
-  the import's.
+  here instead of the event loop's startup path: the M99 import floor
+  (docs/perf_baseline.md) prices the import's wall, and this thread's span is
+  exactly the cost the metric does not see.
   """
   from src.agents import transcriber
 

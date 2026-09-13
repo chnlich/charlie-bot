@@ -10,12 +10,15 @@ import time
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, BinaryIO, NamedTuple
+from typing import TYPE_CHECKING, Any, BinaryIO, NamedTuple
 
 import aiofiles
 import structlog
 
 from src.core import event_types as ET
+
+if TYPE_CHECKING:
+  import numpy as np
 from src.core import plan_paths, sidebar_state
 from src.core.chat_events import ChatEventStore
 from src.core.config import CharlieBotConfig
@@ -613,7 +616,7 @@ _REFERENCE_LINE_WS = b" \t\r\n\x0b\x0c"
 _REFERENCE_SCAN_CHUNK = 1 << 20
 
 
-def _reference_newlines(arr):
+def _reference_newlines(arr: "np.ndarray") -> "np.ndarray":
   """Return the positions of 0x0A bytes in ``arr`` (uint8 view of the corpus)."""
   # numpy rides the fork's parent-reference stream (the M99 server import floor):
   # the module sits on the sessions chain every server start pulls, and the

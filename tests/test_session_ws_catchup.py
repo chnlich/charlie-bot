@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from conftest import FakeWebSocket, scheduled_trigger_event, user_event
+from conftest import FakeWebSocket, assistant_text_event, scheduled_trigger_event, user_event
 
 from server import _catchup_frames, _replay_aggregated_catchup, _send_session_catchup
 
@@ -11,7 +11,7 @@ VOICE_KEY = "is_" + "voice"
 
 
 def _assistant_event(text: str, ts: str) -> dict:
-  return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}, "timestamp": ts}
+  return {**assistant_text_event(text), "timestamp": ts}
 
 
 def _master_done_event(thinking_seconds: int, ts: str) -> dict:

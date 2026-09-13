@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from conftest import assistant_text_event
 
 from core import byte_count_open
 from src.core.message_aggregator import extract_text_from_message
@@ -69,12 +70,8 @@ def _reference_report(events_path: Path) -> str:
   return ""
 
 
-def _assistant_event(text: str) -> dict:
-  return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
-
-
 def _corpus_cases() -> dict[str, list[dict]]:
-  assistant = _assistant_event
+  assistant = assistant_text_event
   return {
       "result_payload_at_tail": [assistant("checked"), {
           "type": "result",

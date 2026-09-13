@@ -1,8 +1,9 @@
 """Streaming merge support for Chrome-format JSON traces."""
 
+import fcntl
 import gc
-import gzip
 import re
+import subprocess
 from pathlib import Path
 from typing import BinaryIO
 
@@ -19,6 +20,12 @@ _MERGE_COMPRESSLEVEL = 1
 # per-event form; batching cut the serializer pass from 3.0 s to 1.7 s on the input
 # above. The batch is the only buffering beyond the gzip stream.
 _MERGE_BATCH_EVENTS = 512
+
+# The merge walk's stdin pipe capacity. The default 64 KB pipe blocks every batch
+# flush until the compressor drains it — measured +0.3-0.6 s per worst-corpus build
+# — while 1 MB (this kernel's pipe-max-size) holds several batches, so a flush
+# completes without waiting and the compress overlaps the GIL-bound walk.
+_MERGE_PIPE_BYTES = 1 << 20
 
 
 def _rank_label(path: Path) -> str:
@@ -228,10 +235,34 @@ def merge_traces(paths: list[Path], out_path: Path, slim: bool) -> None:
 def _merge_all(paths: list[Path], out_path: Path, slim: bool) -> None:
   tid_seq = _IdSequencer()
   flow_seq = _IdSequencer()
-  with gzip.open(out_path, "wb", compresslevel=_MERGE_COMPRESSLEVEL) as output:
-    output.write(b'{"traceEvents":[')
-    batcher = _EventBatcher(output)
-    for file_index, path in enumerate(paths):
-      _merge_one_trace(path, file_index, batcher, tid_seq, flow_seq, slim)
-    batcher.flush()
-    output.write(b"]}")
+  # The walk is GIL-bound Python, so the compress must leave the process to overlap
+  # it (the same reason the direct-pass build compresses in a gzip run); the pipe
+  # capacity that keeps the walk's flushes from blocking on the compressor is set
+  # by _MERGE_PIPE_BYTES. A walk failure kills the gzip run so no writer blocks on
+  # a pipe whose reader is gone; a nonzero wait raises with the gzip stderr.
+  with out_path.open("wb") as compressed, subprocess.Popen(["gzip", f"-{_MERGE_COMPRESSLEVEL}"], stdin=subprocess.PIPE,
+                                                           stdout=compressed, stderr=subprocess.PIPE) as gzip_proc:
+    try:
+      fcntl.fcntl(gzip_proc.stdin.fileno(), fcntl.F_SETPIPE_SZ, _MERGE_PIPE_BYTES)
+      output = gzip_proc.stdin
+      output.write(b'{"traceEvents":[')
+      batcher = _EventBatcher(output)
+      for file_index, path in enumerate(paths):
+        _merge_one_trace(path, file_index, batcher, tid_seq, flow_seq, slim)
+      batcher.flush()
+      output.write(b"]}")
+      output.close()
+      if gzip_proc.wait() != 0:
+        detail = gzip_proc.stderr.read().decode(errors="replace").strip()
+        raise RuntimeError(f"gzip -{_MERGE_COMPRESSLEVEL} failed: {detail}")
+    except BaseException:
+      # __exit__ closes stdin again; a killed child makes that flush raise EPIPE,
+      # so close the write end here first (idempotent once closed) or the walk's
+      # own error would be replaced by it.
+      try:
+        output.close()
+      except BrokenPipeError:
+        pass
+      gzip_proc.kill()
+      gzip_proc.wait()
+      raise

@@ -50,7 +50,7 @@ def _pending(tid: str, hours_ahead: int) -> dict:
   }
 
 
-def _probe(triggers_dir: Path):
+def _probe(triggers_dir: Path) -> tuple[int, datetime | None]:
   return pending_trigger_state_sync(triggers_dir)
 
 

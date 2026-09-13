@@ -210,7 +210,7 @@ async def test_populate_sidebar_state_skips_archived_sessions(tmp_path: Path) ->
   # constant-False shortcut through the assertions below.
   original_has_running = session_mgr._has_running_tasks
 
-  async def _fail_for_archived_running(session_id: str):
+  async def _fail_for_archived_running(session_id: str) -> bool:
     if session_id == archived.id:
       raise AssertionError("archived session should not query running tasks")
     return await original_has_running(session_id)

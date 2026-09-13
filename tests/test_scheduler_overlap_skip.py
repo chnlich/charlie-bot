@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -39,7 +40,7 @@ class _Clock:
   def __init__(self, start: datetime) -> None:
     self._now = start
 
-  def now(self, tz=None) -> datetime:
+  def now(self, tz: tzinfo | None = None) -> datetime:
     if tz is None:
       return self._now
     return self._now.astimezone(tz)
@@ -59,7 +60,7 @@ class _FakeDate(datetime):
   _clock: _Clock
 
   @classmethod
-  def now(cls, tz=None) -> datetime:
+  def now(cls, tz: tzinfo | None = None) -> datetime:
     return cls._clock.now(tz)
 
 
@@ -88,13 +89,13 @@ def _install_clock(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> None:
   )
 
 
-def _task(name: str = "code-health", cron: str = "* * * * *", **kw) -> ScheduledTaskConfig:
+def _task(name: str = "code-health", cron: str = "* * * * *", **kw: Any) -> ScheduledTaskConfig:
   base: dict = {"name": name, "cron": cron, "timezone": "UTC", "prompt": "run the round"}
   base.update(kw)
   return ScheduledTaskConfig(**base)
 
 
-def install_pending_executor(scheduler, clock, pending: _PendingRound):
+def install_pending_executor(scheduler: Scheduler, clock: _Clock, pending: _PendingRound) -> None:
   """Replace ``_execute_task`` with a fire-and-forget scheduled fire.
 
   Births a live pending asyncio round (registered as the in-flight handle when
@@ -119,12 +120,19 @@ def install_pending_executor(scheduler, clock, pending: _PendingRound):
   scheduler._execute_task = _execute
 
 
-async def _tick(scheduler, task_cfg, session_mgr, clock, minute: int, second: int = 0) -> None:
+async def _tick(
+    scheduler: Scheduler,
+    task_cfg: ScheduledTaskConfig,
+    session_mgr: SessionManager,
+    clock: _Clock,
+    minute: int,
+    second: int = 0,
+) -> None:
   clock.set(datetime(2026, 6, 1, 0, minute, second, tzinfo=UTC))
   await scheduler._maybe_run(task_cfg, session_mgr, {}, None)
 
 
-def _skip_events_since(session_mgr, since: int) -> int:
+def _skip_events_since(session_mgr: SessionManager, since: int) -> int:
   """Count scheduled_run_skipped events emitted since ``since`` (len-based cursor)."""
   count = 0
   for call in session_mgr.persist_and_broadcast.await_args_list[since:]:
@@ -373,7 +381,7 @@ async def test_master_mode_skips_rather_than_queuing_a_second_wake(
   woken = asyncio.Event()
   wake_count = {"n": 0}
 
-  def fake_trigger_master(*_args, **_kwargs):
+  def fake_trigger_master(*_args: Any, **_kwargs: Any) -> Any:
     wake_count["n"] += 1
 
     async def _wake() -> None:

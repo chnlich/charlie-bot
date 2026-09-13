@@ -607,6 +607,12 @@ def _append_worker_events(
   for data in raw_events:
     event_timestamp = data.get("timestamp") or datetime.now(UTC)
     event_type = data.get('type', '')
+    # The run-start adoption signal is the log's session-id record (the token
+    # tally's codex reconciliation reads it from the raw line), never a panel
+    # row: the typed gate sits before the WorkerEvent construction a type-less
+    # line cannot pass.
+    if event_type == ET.SESSION_ATTACHED:
+      continue
     if event_type == ET.ASSISTANT and isinstance(data.get('message'), dict):
       text = extract_text_from_message(data['message'])
       if text:

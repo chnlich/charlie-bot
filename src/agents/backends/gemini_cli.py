@@ -13,6 +13,7 @@ from src.agents.backends.base import (
     resolve_binary,
     strip_google_api_keys,
 )
+from src.core import event_types as ET
 
 log = structlog.get_logger()
 
@@ -53,7 +54,7 @@ class GeminiCliBackend(AgentBackend):
 
     # --- init ---
     if ev_type == "init":
-      return [{"session_id": ev.get("session_id", "")}]
+      return [{"type": ET.SESSION_ATTACHED, "session_id": ev.get("session_id", "")}]
 
     # --- message ---
     if ev_type == "message":

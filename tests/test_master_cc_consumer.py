@@ -793,3 +793,36 @@ async def test_zero_output_guard_passes_through_independent_error(
   assert [e.get("content") for e in assist_errors] == ["Agent error: boom"
                                                       ], ("exactly the backend's own error event passes through")
   assert dones and dones[0]["exit_code"] == 2, "the backend's nonzero exit code passes through"
+
+
+@pytest.mark.asyncio
+async def test_handle_event_adopts_the_typed_session_attach_signal_and_persists_the_marker() -> None:
+  """The typed adoption signal is captured as the cc_session_id and persists as
+  the chat history's run-start marker (the stable-history projection's interval
+  key) — the same persist-and-broadcast the bare pre-typed signal rode."""
+  persisted: list[dict] = []
+
+  async def persist(session_id: str, event: dict) -> None:
+    persisted.append(event)
+
+  cc_session_id = await master_cc_run._handle_event(
+      {"type": ET.SESSION_ATTACHED, "session_id": "oc-s-1"}, "session-id", None, persist)
+
+  assert cc_session_id == "oc-s-1"
+  assert persisted == [{"type": ET.SESSION_ATTACHED, "session_id": "oc-s-1"}]
+
+
+@pytest.mark.asyncio
+async def test_handle_event_keeps_an_already_adopted_session_id_over_the_signal() -> None:
+  """A run whose adoption signal arrives late cannot overwrite the session id
+  the caller already holds; the marker still persists."""
+  persisted: list[dict] = []
+
+  async def persist(session_id: str, event: dict) -> None:
+    persisted.append(event)
+
+  cc_session_id = await master_cc_run._handle_event(
+      {"type": ET.SESSION_ATTACHED, "session_id": "oc-late"}, "session-id", "oc-early", persist)
+
+  assert cc_session_id == "oc-early"
+  assert [e.get("type") for e in persisted] == [ET.SESSION_ATTACHED]

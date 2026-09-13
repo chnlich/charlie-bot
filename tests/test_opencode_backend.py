@@ -179,6 +179,25 @@ async def test_raw_splitline_chars_in_frame_parse_as_one_event_end_to_end(monkey
   assert backend.exit_code == 0
 
 
+@pytest.mark.asyncio
+async def test_run_opens_with_the_typed_session_attach_signal(monkeypatch, tmp_path: Path) -> None:
+  """The run's first event is the typed adoption signal carrying the attached
+  session id — never a bare session_id dict the persist funnels would write."""
+  backend = _build_backend(monkeypatch, model="provider/model")
+  chunks = [
+      b'data: {"type": "server.connected", "properties": {}}\n',
+      b"\n",
+      b'data: {"type": "session.idle", "properties": {"sessionID": "session-1"}}\n',
+      b"\n",
+  ]
+  _rig_end_to_end_run(monkeypatch, backend, FakeChunkedResponse(chunks))
+
+  events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
+
+  assert events[0] == {"type": ET.SESSION_ATTACHED, "session_id": "session-1"}
+  assert backend.exit_code == 0
+
+
 def test_translate_sse_event_buffers_part_until_message_role_known(monkeypatch) -> None:
   backend = _build_backend(monkeypatch)
 
@@ -1370,10 +1389,12 @@ async def test_run_lock_failure_retries_same_session_mid_stream(monkeypatch, tmp
   assert json.loads(bodies[0])["parts"] == [{"type": "text", "text": prompt}]
   assert events == [
       {
+          "type": ET.SESSION_ATTACHED,
           "session_id": sid
       },
       make_text_event("hello "),
       {
+          "type": ET.SESSION_ATTACHED,
           "session_id": sid
       },
       make_text_event("world"),
@@ -1408,9 +1429,11 @@ async def test_run_lock_failure_retries_after_event_connect_500(monkeypatch, tmp
   assert [path for path, _ in script.prompt_posts] == [f"/session/{sid}/prompt_async"]
   assert events == [
       {
+          "type": ET.SESSION_ATTACHED,
           "session_id": sid
       },
       {
+          "type": ET.SESSION_ATTACHED,
           "session_id": sid
       },
       backend._make_accumulated_result(),
@@ -1451,9 +1474,11 @@ async def test_run_lock_failure_retries_after_prompt_async_500(monkeypatch, tmp_
   assert json.loads(bodies[0])["parts"] == [{"type": "text", "text": prompt}]
   assert events == [
       {
+          "type": ET.SESSION_ATTACHED,
           "session_id": sid
       },
       {
+          "type": ET.SESSION_ATTACHED,
           "session_id": sid
       },
       make_text_event("recovered"),
@@ -1485,9 +1510,11 @@ async def test_run_lock_failure_exhausts_budget_with_single_error_event(monkeypa
   assert script.create_session_calls == 1
   assert events == [
       {
+          "type": ET.SESSION_ATTACHED,
           "session_id": sid
       },
       {
+          "type": ET.SESSION_ATTACHED,
           "session_id": sid
       },
       make_error_event("lock boom 2"),
@@ -1565,6 +1592,7 @@ async def test_run_failure_without_lock_signature_never_retries(
   assert sleep_calls == []
   assert events == [
       {
+          "type": ET.SESSION_ATTACHED,
           "session_id": sid
       },
       build_error(sid, backend),
@@ -1592,6 +1620,7 @@ async def test_run_lock_failure_never_retries_after_terminate(monkeypatch, tmp_p
   assert sleep_calls == []
   assert events == [
       {
+          "type": ET.SESSION_ATTACHED,
           "session_id": sid
       },
       make_error_event("lock boom"),
@@ -1662,7 +1691,7 @@ async def test_per_call_clients_carry_shared_ssl_context(monkeypatch, tmp_path: 
 
   events = [event async for event in backend.run("prompt", str(tmp_path), {"PATH": "/usr/bin"})]
 
-  assert events[0] == {"session_id": "session-1"}
+  assert events[0] == {"type": ET.SESSION_ATTACHED, "session_id": "session-1"}
   assert backend.exit_code == 0
   assert captured == [
       {

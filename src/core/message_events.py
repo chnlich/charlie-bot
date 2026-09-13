@@ -71,11 +71,14 @@ def normalize_user_message_event(ev: dict) -> dict:
 
 
 def _stable_history_projection(events: list[dict]) -> list[tuple[int, dict]]:
-  """Move queued users behind completed OpenCode runs without changing source events."""
+  """Move queued users behind completed runs without changing source events."""
   complete_intervals: list[tuple[int, int]] = []
   interval_start: int | None = None
   for idx, event in enumerate(events):
-    if event.get("type") is None and event.get("session_id"):
+    # The run-start adoption signal marks an interval's first event; the bare
+    # session_id-only shape is the pre-typed corpus's spelling of the same
+    # signal, so histories written before the type existed keep ordering.
+    if event.get("type") in (None, ET.SESSION_ATTACHED) and event.get("session_id"):
       interval_start = idx
     elif event.get("type") == ET.MASTER_DONE and interval_start is not None:
       complete_intervals.append((interval_start, idx))
@@ -117,7 +120,9 @@ def stable_closed_prefix_len(events: list[dict]) -> int:
   interval_open = False
   closed = 0
   for idx, event in enumerate(events):
-    if event.get("type") is None and event.get("session_id"):
+    # Mirrors _stable_history_projection's interval-open test (both shapes of
+    # the adoption signal) — the two must move together.
+    if event.get("type") in (None, ET.SESSION_ATTACHED) and event.get("session_id"):
       interval_open = True
     elif event.get("type") == ET.MASTER_DONE and interval_open:
       interval_open = False

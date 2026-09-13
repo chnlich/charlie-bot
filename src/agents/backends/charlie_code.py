@@ -167,7 +167,7 @@ class CharlieCodeBackend(AgentBackend):
     event_type = event.get("type")
 
     if event_type == "session":
-      return [{"session_id": event["session_id"]}]
+      return [{"type": ET.SESSION_ATTACHED, "session_id": event["session_id"]}]
 
     if event_type == "thought":
       return [make_text_event(event["text"])]

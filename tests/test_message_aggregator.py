@@ -633,6 +633,22 @@ def test_stable_history_orders_queued_user_between_completed_runs() -> None:
   assert messages[0]["tools"][0]["output"] == "report contents"
 
 
+def test_stable_history_orders_queued_user_behind_a_typed_attach_marker() -> None:
+  """The typed session-adopt signal (the shape every backend emits since the
+  M100 typing) opens the run interval exactly as the bare pre-typed marker did:
+  the queued user still renders after the run's separator."""
+  events = _reorder_events()
+  for event in events:
+    if event.get("type") is None and event.get("session_id"):
+      event["type"] = ET.SESSION_ATTACHED
+
+  messages = events_to_messages(events)
+
+  assert [message["id"] for message in messages] == [
+      "assistant-1", "done-1", "queued-user", "assistant-2", "done-2"
+  ]
+
+
 def test_stable_history_preserves_still_thinking_separator_semantics() -> None:
   for still_thinking, expected_roles in [
       (False, ["assistant", "separator", "user"]),

@@ -30,7 +30,6 @@ if TYPE_CHECKING:
 
   from src.core.config import CharlieBotConfig, Credentials
 
-from src.core.buildinfo import read_repo_head_sha
 from src.core.constants import SESSION_ID_ENV_VAR
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
@@ -208,6 +207,10 @@ def _best_effort_server_version(cfg: CharlieBotConfig) -> tuple[str | None, str 
 
 def _maybe_version_skew_hint(cfg: CharlieBotConfig) -> str | None:
   """Gather server + local SHAs and compose the hint. Pure-failure-safe (never raises)."""
+  # buildinfo pulls subprocess (measured ~4 ms of the M92 floor) and serves
+  # only the version-skew failure path; the parser-build path never reads a SHA.
+  from src.core.buildinfo import read_repo_head_sha
+
   server_sha, started_at = _best_effort_server_version(cfg)
   local_sha = read_repo_head_sha(SUBPROCESS_GIT_SHA_TIMEOUT)
   return compose_version_skew_hint(server_sha, started_at, local_sha)

@@ -379,7 +379,7 @@ def test_codex_usage_transform_raw_rate_limit_shapes(rate_limits: dict, expected
   assert usage == expected_usage
 
 
-def test_codex_usage_transform_drops_unreadable_credits_and_warns(monkeypatch) -> None:
+def test_codex_usage_transform_drops_unreadable_credits_and_warns(monkeypatch: pytest.MonkeyPatch) -> None:
   """An unreadable credits shape emits no payload and no state, and warns instead.
 
   ``plan_type == "business"`` rides along in every case to prove a present
@@ -406,7 +406,7 @@ def test_codex_usage_transform_drops_unreadable_credits_and_warns(monkeypatch) -
   assert reasons == ["credits is not an object", "unlimited is not a bool", "missing or unparseable balance"]
 
 
-def test_spend_aggregation_prices_recent_turns_by_model(tmp_path) -> None:
+def test_spend_aggregation_prices_recent_turns_by_model(tmp_path: Path) -> None:
   now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
   rollout_path = tmp_path / "rollout-recent.jsonl"
 
@@ -439,7 +439,7 @@ def test_spend_aggregation_prices_recent_turns_by_model(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_fetch_keeps_quota_when_historical_spend_row_is_malformed(tmp_path,) -> None:
+async def test_codex_provider_fetch_keeps_quota_when_historical_spend_row_is_malformed(tmp_path: Path,) -> None:
   # The provider reads rollout logs from <home_dir>/sessions, so the test seeds
   # that subtree and constructs the instance with home_dir pointing at tmp_path.
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
@@ -464,15 +464,15 @@ async def test_codex_provider_fetch_keeps_quota_when_historical_spend_row_is_mal
 
 @pytest.mark.asyncio
 async def test_codex_provider_fetch_returns_quota_when_spend_aggregations_raises(
-    tmp_path,
-    monkeypatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   now, rollout_dir = _seed_rollout_dir(tmp_path)
 
   _write_live_quota_rollout(rollout_dir, now)
 
-  def _broken_compute(self, rollout_paths) -> None:
+  def _broken_compute(self: CodexUsageProvider, rollout_paths: list[Path]) -> None:
     raise RuntimeError("simulated spend failure")
 
   monkeypatch.setattr(CodexUsageProvider, "_compute_spend", _broken_compute)
@@ -485,7 +485,8 @@ async def test_codex_provider_fetch_returns_quota_when_spend_aggregations_raises
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_spend_reparses_only_changed_files(tmp_path, monkeypatch) -> None:
+async def test_codex_provider_spend_reparses_only_changed_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Steady-state rounds reuse parsed spend events; only a file with a new (mtime, size) re-parses."""
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   now, rollout_dir = _seed_rollout_dir(tmp_path)
@@ -504,7 +505,7 @@ async def test_codex_provider_spend_reparses_only_changed_files(tmp_path, monkey
   extracted: list[str] = []
   real_extract = ext_usage_mod._extract_codex_spend_events
 
-  def _counting_extract(path):
+  def _counting_extract(path: Path) -> list[ext_usage_mod._SpendEvent] | None:
     extracted.append(path.name)
     return real_extract(path)
 
@@ -545,12 +546,12 @@ def _filler_lines(byte_floor: int) -> list[str]:
   return lines
 
 
-def _counting_scan(monkeypatch) -> list[int]:
+def _counting_scan(monkeypatch: pytest.MonkeyPatch) -> list[int]:
   """Record the line count of every _latest_token_count_event call."""
   scanned: list[int] = []
   real_scan = ext_usage_mod._latest_token_count_event
 
-  def _wrapped(lines, match=None):
+  def _wrapped(lines: list[str], match: Callable[[dict[str, Any]], bool] | None = None) -> dict[str, Any] | None:
     scanned.append(len(lines))
     return real_scan(lines, match)
 
@@ -559,7 +560,8 @@ def _counting_scan(monkeypatch) -> list[int]:
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_usage_scrape_skips_read_for_unchanged_file(tmp_path, monkeypatch) -> None:
+async def test_codex_provider_usage_scrape_skips_read_for_unchanged_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Steady-state rounds serve the memoized event with no file read; an append re-reads."""
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   now, rollout_dir = _seed_rollout_dir(tmp_path)
@@ -584,7 +586,8 @@ async def test_codex_provider_usage_scrape_skips_read_for_unchanged_file(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_usage_scrape_reads_tail_only_on_hit(tmp_path, monkeypatch) -> None:
+async def test_codex_provider_usage_scrape_reads_tail_only_on_hit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """When the tail window holds a token_count, the scan never sees the full file."""
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   now, rollout_dir = _seed_rollout_dir(tmp_path)
@@ -603,7 +606,8 @@ async def test_codex_provider_usage_scrape_reads_tail_only_on_hit(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_usage_scrape_full_read_on_tail_miss(tmp_path, monkeypatch) -> None:
+async def test_codex_provider_usage_scrape_full_read_on_tail_miss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A tail window without a token_count falls back to the full-file read."""
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   now, rollout_dir = _seed_rollout_dir(tmp_path)
@@ -656,7 +660,7 @@ def _model_pool_line(moment: datetime) -> str:
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_fetch_picks_freshest_plan_event_across_recent_files(tmp_path) -> None:
+async def test_codex_provider_fetch_picks_freshest_plan_event_across_recent_files(tmp_path: Path) -> None:
   """The in-flight file holds the newest mtime but an old plan event; the finished file's fresher event wins."""
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   now, rollout_dir = _seed_rollout_dir(tmp_path)
@@ -678,7 +682,7 @@ async def test_codex_provider_fetch_picks_freshest_plan_event_across_recent_file
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_fetch_keeps_older_file_inside_scan_window(tmp_path) -> None:
+async def test_codex_provider_fetch_keeps_older_file_inside_scan_window(tmp_path: Path) -> None:
   """Every file written inside the window counts; an outside file's fresher event never contributes."""
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   now, rollout_dir = _seed_rollout_dir(tmp_path)
@@ -702,7 +706,7 @@ async def test_codex_provider_fetch_keeps_older_file_inside_scan_window(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_fetch_falls_back_to_single_newest_file_past_scan_window(tmp_path) -> None:
+async def test_codex_provider_fetch_falls_back_to_single_newest_file_past_scan_window(tmp_path: Path) -> None:
   """All files past the window: the newest-mtime file alone yields its event, fresher events elsewhere are ignored."""
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   now, rollout_dir = _seed_rollout_dir(tmp_path)
@@ -724,7 +728,7 @@ async def test_codex_provider_fetch_falls_back_to_single_newest_file_past_scan_w
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_fetch_reports_no_plan_reading_when_scan_set_is_model_only(tmp_path) -> None:
+async def test_codex_provider_fetch_reports_no_plan_reading_when_scan_set_is_model_only(tmp_path: Path) -> None:
   """A scan set with only model-level events is a no-reading state, never an empty-windows payload."""
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   now, rollout_dir = _seed_rollout_dir(tmp_path)
@@ -738,7 +742,7 @@ async def test_codex_provider_fetch_reports_no_plan_reading_when_scan_set_is_mod
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_fetch_finds_plan_event_buried_under_model_events(tmp_path) -> None:
+async def test_codex_provider_fetch_finds_plan_event_buried_under_model_events(tmp_path: Path) -> None:
   """A mid-session model switch leaves newer model-level lines above the file's last plan event."""
   provider = CodexUsageProvider(label="main", home_dir=str(tmp_path))
   now, rollout_dir = _seed_rollout_dir(tmp_path)
@@ -756,7 +760,7 @@ async def test_codex_provider_fetch_finds_plan_event_buried_under_model_events(t
   assert usage["token_count_observed_at"] == _iso_z(plan_event_at)
 
 
-def test_spend_aggregation_skips_bad_rows_without_poisoning_totals(tmp_path) -> None:
+def test_spend_aggregation_skips_bad_rows_without_poisoning_totals(tmp_path: Path) -> None:
   now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
   rollout_path = tmp_path / "rollout-mixed.jsonl"
 
@@ -796,7 +800,7 @@ def test_spend_aggregation_skips_bad_rows_without_poisoning_totals(tmp_path) -> 
   assert spend["last_7d_usd"] == pytest.approx(7.275)
 
 
-def test_spend_aggregation_skips_unreadable_file(tmp_path) -> None:
+def test_spend_aggregation_skips_unreadable_file(tmp_path: Path) -> None:
   now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
   unreadable_path = tmp_path / "rollout-unreadable.jsonl"
@@ -826,7 +830,7 @@ def test_spend_aggregation_skips_unreadable_file(tmp_path) -> None:
   assert spend["last_7d_usd"] == pytest.approx(5.00)
 
 
-def test_codex_provider_spend_prunes_files_untouched_for_a_week(tmp_path) -> None:
+def test_codex_provider_spend_prunes_files_untouched_for_a_week(tmp_path: Path) -> None:
   """A fresh-looking event inside a stale-mtime file stays unpriced.
 
   Rollout logs are append-only, so a file untouched for seven days is skipped
@@ -889,7 +893,7 @@ def test_transform_response_preserves_claude_payload_shape() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_derive_accounts_always_includes_defaults_and_dedupes_explicit_default(monkeypatch) -> None:
+def test_derive_accounts_always_includes_defaults_and_dedupes_explicit_default(monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = CharlieBotConfig(
       accounts={
           "claude":
@@ -912,7 +916,7 @@ def test_derive_accounts_always_includes_defaults_and_dedupes_explicit_default(m
   }
 
 
-def test_derive_accounts_label_collision_skip_fail_loud(monkeypatch) -> None:
+def test_derive_accounts_label_collision_skip_fail_loud(monkeypatch: pytest.MonkeyPatch) -> None:
   # Two distinct dirs both labelled "invite-1": the later one is skipped (logged)
   # rather than overwriting the first.
   cfg = CharlieBotConfig(
@@ -959,7 +963,13 @@ class _FakeProvider:
     return value
 
 
-def _run_poll_cycles(monkeypatch, *, accounts_fn, create_provider, n: int) -> dict:
+def _run_poll_cycles(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    accounts_fn: Callable[[], dict],
+    create_provider: Callable[[str, str, str], _FakeProvider],
+    n: int,
+) -> dict:
   """Drive the real ``_poll_loop`` for ``n`` round-gap sleeps, then return counters.
 
   Under round-robin scheduling one sleep == one single-account fetch, so a full
@@ -967,12 +977,12 @@ def _run_poll_cycles(monkeypatch, *, accounts_fn, create_provider, n: int) -> di
   """
   state: dict = {"sleeps": 0, "broadcasts": 0, "payloads": []}
 
-  async def _fake_sleep(_) -> None:
+  async def _fake_sleep(delay: float) -> None:
     state["sleeps"] += 1
     if state["sleeps"] >= n:
       raise _StopAfter
 
-  async def _track_broadcast(_channel, event) -> None:
+  async def _track_broadcast(thread_id: str, event: dict[str, Any]) -> None:
     state["broadcasts"] += 1
     state["payloads"].append(event)
 
@@ -1003,10 +1013,10 @@ def _claude_fetch_value(utilization: float) -> dict:
   }
 
 
-def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeypatch) -> None:
+def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeypatch: pytest.MonkeyPatch) -> None:
   main_value = _claude_fetch_value(42.0)
 
-  def create_provider(provider, label, dir_path):
+  def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
     if label == "main":
       return _FakeProvider(lambda: main_value)
     return _FakeProvider(lambda: None, error="credentials not found")
@@ -1029,13 +1039,13 @@ def test_poll_multi_account_keys_and_error_placeholder_for_never_fetched(monkeyp
   assert state["broadcasts"] == 2
 
 
-def test_poll_stale_keep_on_fetch_failure(monkeypatch) -> None:
+def test_poll_stale_keep_on_fetch_failure(monkeypatch: pytest.MonkeyPatch) -> None:
   fetch_no = {"i": 0}
   original = _claude_fetch_value(42.0)
 
-  def create_provider(provider, label, dir_path):
+  def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
 
-    def get_value():
+    def get_value() -> dict | None:
       fetch_no["i"] += 1
       return original if fetch_no["i"] == 1 else None
 
@@ -1052,12 +1062,12 @@ def test_poll_stale_keep_on_fetch_failure(monkeypatch) -> None:
   assert state["broadcasts"] == 2
 
 
-def test_poll_drops_removed_account_on_next_rebuild(monkeypatch) -> None:
+def test_poll_drops_removed_account_on_next_rebuild(monkeypatch: pytest.MonkeyPatch) -> None:
   fetch_no = {"i": 0}
 
-  def create_provider(provider, label, dir_path):
+  def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
 
-    def get_value():
+    def get_value() -> dict | None:
       fetch_no["i"] += 1
       return _claude_fetch_value(float(fetch_no["i"]))
 
@@ -1075,7 +1085,7 @@ def test_poll_drops_removed_account_on_next_rebuild(monkeypatch) -> None:
       },
   }
 
-  def accounts_fn():
+  def accounts_fn() -> dict:
     call["i"] += 1
     return accounts_by_cycle[call["i"]]
 
@@ -1092,12 +1102,12 @@ def test_poll_drops_removed_account_on_next_rebuild(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_poll_round_robin_fetches_accounts_in_derivation_order(monkeypatch) -> None:
+def test_poll_round_robin_fetches_accounts_in_derivation_order(monkeypatch: pytest.MonkeyPatch) -> None:
   fetch_order: list[str] = []
 
-  def create_provider(provider, label, dir_path):
+  def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
 
-    def get_value():
+    def get_value() -> dict | None:
       fetch_order.append(label)
       return _claude_fetch_value(1.0)
 
@@ -1115,15 +1125,15 @@ def test_poll_round_robin_fetches_accounts_in_derivation_order(monkeypatch) -> N
   assert state["broadcasts"] == 3
 
 
-def test_poll_broadcasts_once_per_fetch_not_per_round(monkeypatch) -> None:
+def test_poll_broadcasts_once_per_fetch_not_per_round(monkeypatch: pytest.MonkeyPatch) -> None:
 
-  def create_provider(provider, label, dir_path):
+  def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
     return _FakeProvider(lambda: _claude_fetch_value(1.0))
 
   accounts = {"claude": [("main", "/fake/main"), ("invite-1", "/fake/invite-1")], "codex": []}
   derive_count = {"i": 0}
 
-  def accounts_fn():
+  def accounts_fn() -> dict:
     derive_count["i"] += 1
     return accounts
 
@@ -1136,15 +1146,15 @@ def test_poll_broadcasts_once_per_fetch_not_per_round(monkeypatch) -> None:
   assert state["broadcasts"] != derive_count["i"]
 
 
-def test_poll_prunes_removed_account_cache_key_at_round_boundary(monkeypatch) -> None:
+def test_poll_prunes_removed_account_cache_key_at_round_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
   good = _claude_fetch_value(7.0)
   main_calls = {"i": 0}
 
-  def main_get():
+  def main_get() -> dict | None:
     main_calls["i"] += 1
     return good if main_calls["i"] == 1 else None
 
-  def create_provider(provider, label, dir_path):
+  def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
     if label == "main":
       return _FakeProvider(main_get, error="rate limited")
     return _FakeProvider(lambda: good)
@@ -1161,7 +1171,7 @@ def test_poll_prunes_removed_account_cache_key_at_round_boundary(monkeypatch) ->
       },
   }
 
-  def accounts_fn():
+  def accounts_fn() -> dict:
     call["i"] += 1
     return accounts_by_cycle[call["i"]]
 
@@ -1177,14 +1187,14 @@ def test_poll_prunes_removed_account_cache_key_at_round_boundary(monkeypatch) ->
   assert "error" not in kept
 
 
-def test_poll_empty_round_guard_sleeps_once_before_rederiving(monkeypatch) -> None:
+def test_poll_empty_round_guard_sleeps_once_before_rederiving(monkeypatch: pytest.MonkeyPatch) -> None:
 
-  def create_provider(provider, label, dir_path):
+  def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
     return _FakeProvider(dict)
 
   derive_count = {"i": 0}
 
-  def accounts_fn():
+  def accounts_fn() -> dict:
     derive_count["i"] += 1
     return {"claude": [], "codex": []}
 
@@ -1196,20 +1206,20 @@ def test_poll_empty_round_guard_sleeps_once_before_rederiving(monkeypatch) -> No
   assert state["broadcasts"] == 0
 
 
-def test_poll_outer_exception_still_backs_off_before_retrying(monkeypatch) -> None:
+def test_poll_outer_exception_still_backs_off_before_retrying(monkeypatch: pytest.MonkeyPatch) -> None:
   """A non-fetch exception (e.g. from ``_derive_accounts``) must hit a backoff
   sleep, not spin the outer loop with no await point."""
   good = _claude_fetch_value(1.0)
   accounts = {"claude": [("main", "/fake/main")], "codex": []}
   derive_count = {"i": 0}
 
-  def accounts_fn():
+  def accounts_fn() -> dict:
     derive_count["i"] += 1
     if derive_count["i"] == 1:
       raise RuntimeError("boom")
     return accounts
 
-  def create_provider(provider, label, dir_path):
+  def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
     return _FakeProvider(lambda: good)
 
   # If the outer except swallowed the exception without sleeping, derivation
@@ -1312,7 +1322,7 @@ async def test_get_ext_usage_annotates_claude_windows_at_read_time() -> None:
   assert all("expired" not in w for w in ext_usage_mod._cached_usage["claude:main"]["windows"])
 
 
-def test_poll_broadcast_carries_emit_time_expiry_annotation(monkeypatch) -> None:
+def test_poll_broadcast_carries_emit_time_expiry_annotation(monkeypatch: pytest.MonkeyPatch) -> None:
   stale_value = {
       "windows":
           [{
@@ -1324,7 +1334,7 @@ def test_poll_broadcast_carries_emit_time_expiry_annotation(monkeypatch) -> None
       "provider": "claude",
   }
 
-  def create_provider(provider, label, dir_path):
+  def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
     if provider == "claude":
       return _FakeProvider(lambda: stale_value)
     return _FakeProvider(lambda: None, error="no sessions found")
@@ -1483,7 +1493,7 @@ def test_transform_response_scopes_are_sorted_before_planwide() -> None:
   ]
 
 
-def test_transform_response_scoped_skip_and_warn_paths(monkeypatch) -> None:
+def test_transform_response_scoped_skip_and_warn_paths(monkeypatch: pytest.MonkeyPatch) -> None:
   warns: list[dict] = []
   monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
 
@@ -1518,7 +1528,7 @@ def test_transform_response_scoped_skip_and_warn_paths(monkeypatch) -> None:
   assert events == ["ext_usage_unknown_limit_shape", "ext_usage_unknown_limit_shape"]
 
 
-def test_transform_response_unknown_shape_warns_once_per_process(monkeypatch) -> None:
+def test_transform_response_unknown_shape_warns_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
   """An unchanged response re-transformed every poll round fires its alarm once, not every round."""
   warns: list[dict] = []
   monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
@@ -1562,7 +1572,7 @@ def test_transform_response_unknown_shape_warns_once_per_process(monkeypatch) ->
   assert repeat_events == []
 
 
-def test_read_credentials_tokenless_file_warns_once_per_streak(monkeypatch, tmp_path) -> None:
+def test_read_credentials_tokenless_file_warns_once_per_streak(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """A tokenless file re-read every poll round fires its alarm once, not every round."""
   warns: list[dict] = []
   monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
@@ -1579,7 +1589,7 @@ def test_read_credentials_tokenless_file_warns_once_per_streak(monkeypatch, tmp_
   assert warns == []
 
 
-def test_read_credentials_recovery_rearms_the_warning(monkeypatch, tmp_path) -> None:
+def test_read_credentials_recovery_rearms_the_warning(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """A token read clears the streak: a later relapse is a new onset and earns one new line."""
   warns: list[dict] = []
   monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
@@ -1598,7 +1608,8 @@ def test_read_credentials_recovery_rearms_the_warning(monkeypatch, tmp_path) -> 
   assert [w["event"] for w in warns] == ["ext_usage_no_access_token"]
 
 
-def test_read_credentials_missing_and_tokenless_are_separate_alarms(monkeypatch, tmp_path) -> None:
+def test_read_credentials_missing_and_tokenless_are_separate_alarms(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """A path whose failure state changes warns once per state, not once per path forever."""
   warns: list[dict] = []
   monkeypatch.setattr(ext_usage_mod.log, "warning", lambda event, **kw: warns.append({"event": event, **kw}))
@@ -1617,7 +1628,8 @@ def test_read_credentials_missing_and_tokenless_are_separate_alarms(monkeypatch,
   ]
 
 
-def test_read_credentials_flip_without_success_stays_one_line_per_event(monkeypatch, tmp_path) -> None:
+def test_read_credentials_flip_without_success_stays_one_line_per_event(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """A state flip inside one broken streak adds a line for the new state only.
 
   A streak ends on a token, not on a state flip: missing -> tokenless ->
@@ -1664,7 +1676,7 @@ def test_transform_response_absent_limits_produces_exactly_today_windows() -> No
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_fetch_reads_newest_rollout_beyond_three_days(tmp_path) -> None:
+async def test_codex_provider_fetch_reads_newest_rollout_beyond_three_days(tmp_path: Path) -> None:
   """No date cliff: the last known reading stays visible however old it is.
 
   Under a weekly window a reading from days ago is the only information there
@@ -1694,14 +1706,14 @@ async def test_codex_provider_fetch_reads_newest_rollout_beyond_three_days(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_codex_provider_fetch_reports_no_sessions_for_empty_home(tmp_path) -> None:
+async def test_codex_provider_fetch_reports_no_sessions_for_empty_home(tmp_path: Path) -> None:
   provider = CodexUsageProvider(label="personal", home_dir=str(tmp_path))
 
   assert await provider.fetch() is None
   assert provider.last_error == "no sessions found"
 
 
-def test_list_rollout_files_finds_nested_rollout_logs(tmp_path) -> None:
+def test_list_rollout_files_finds_nested_rollout_logs(tmp_path: Path) -> None:
   """The usage scrape and the spend aggregation share one directory walk."""
   sessions_dir = tmp_path / "sessions"
   rollout_dir = sessions_dir / "2026" / "06" / "01"
@@ -1712,7 +1724,8 @@ def test_list_rollout_files_finds_nested_rollout_logs(tmp_path) -> None:
   assert _list_rollout_files(sessions_dir) == [rollout_path]
 
 
-def test_poll_seeds_pending_rows_so_no_account_is_missing_from_the_first_broadcast(monkeypatch) -> None:
+def test_poll_seeds_pending_rows_so_no_account_is_missing_from_the_first_broadcast(
+    monkeypatch: pytest.MonkeyPatch) -> None:
   """A restart must not hide accounts the round-robin has not reached yet.
 
   One fetch per round gap means the last account is N-1 gaps behind the first, so
@@ -1723,7 +1736,7 @@ def test_poll_seeds_pending_rows_so_no_account_is_missing_from_the_first_broadca
   """
   main_value = _claude_fetch_value(42.0)
 
-  def create_provider(provider, label, dir_path):
+  def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
     if provider == "claude" and label == "main":
       return _FakeProvider(lambda: main_value)
     return _FakeProvider(lambda: None, error="credentials not found")
@@ -1745,10 +1758,10 @@ def test_poll_seeds_pending_rows_so_no_account_is_missing_from_the_first_broadca
   assert providers["codex:main"] == {"provider": "codex", "account": "main", "pending": True}
 
 
-def test_poll_pending_placeholder_is_replaced_by_the_real_error(monkeypatch) -> None:
+def test_poll_pending_placeholder_is_replaced_by_the_real_error(monkeypatch: pytest.MonkeyPatch) -> None:
   """A pending row is a not-yet-read marker, not data worth keeping."""
 
-  def create_provider(provider, label, dir_path):
+  def create_provider(provider: str, label: str, dir_path: str) -> _FakeProvider:
     return _FakeProvider(lambda: None, error="credentials not found")
 
   accounts = {"claude": [("main", "/fake/main")], "codex": []}
@@ -1819,26 +1832,37 @@ class _FakeUsageHTTP:
     self.gets: list[dict] = []
     self.posts: list[dict] = []
 
-  async def get(self, url, headers=None, timeout=None):
+  async def get(self, url: str, headers: dict | None = None, timeout: float | None = None) -> _FakeResponse:
     self.gets.append({"url": url, "headers": dict(headers or {})})
     status = self._get_statuses.pop(0)
     if self._on_get is not None:
       self._on_get(len(self.gets))
     return _FakeResponse(status, _CLAUDE_USAGE_PAYLOAD if status == 200 else {})
 
-  async def post(self, url, json=None, headers=None, timeout=None):
+  async def post(
+      self,
+      url: str,
+      json: dict | None = None,
+      headers: dict | None = None,
+      timeout: float | None = None) -> _FakeResponse:
     self.posts.append({"url": url, "json": dict(json or {}), "headers": dict(headers or {})})
     return _FakeResponse(self._renewal_status, self._renewal, text=self._renewal_body)
 
 
-def _write_credentials(path, *, access="tok-stored", refresh="ref-stored", expires_at=_STALE_EXPIRES_AT_MS) -> None:
+def _write_credentials(
+    path: Path,
+    *,
+    access: str = "tok-stored",
+    refresh: str = "ref-stored",
+    expires_at: int | None = _STALE_EXPIRES_AT_MS) -> None:
   payload = {"claudeAiOauth": {"accessToken": access, "refreshToken": refresh}}
   if expires_at is not None:
     payload["claudeAiOauth"]["expiresAt"] = expires_at
   path.write_text(json.dumps(payload))
 
 
-def _claude_provider(monkeypatch, tmp_path, fake, **creds) -> ClaudeUsageProvider:
+def _claude_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake: _FakeUsageHTTP, **creds: Any) -> ClaudeUsageProvider:
   credentials_path = tmp_path / ".credentials.json"
   _write_credentials(credentials_path, **creds)
   monkeypatch.setattr(ext_usage_mod, "get_http_client", lambda: fake)
@@ -1846,7 +1870,8 @@ def _claude_provider(monkeypatch, tmp_path, fake, **creds) -> ClaudeUsageProvide
 
 
 @pytest.mark.asyncio
-async def test_claude_fetch_renews_once_and_retries_once_after_401(monkeypatch, tmp_path) -> None:
+async def test_claude_fetch_renews_once_and_retries_once_after_401(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   fake = _FakeUsageHTTP([401, 200])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -1862,7 +1887,8 @@ async def test_claude_fetch_renews_once_and_retries_once_after_401(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_claude_fetch_yields_to_a_concurrent_renewal_without_rotating(monkeypatch, tmp_path) -> None:
+async def test_claude_fetch_yields_to_a_concurrent_renewal_without_rotating(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   credentials_path = tmp_path / ".credentials.json"
 
   def _cli_renews_after_first_get(call_number: int) -> None:
@@ -1881,7 +1907,8 @@ async def test_claude_fetch_yields_to_a_concurrent_renewal_without_rotating(monk
 
 
 @pytest.mark.asyncio
-async def test_claude_fetch_backs_off_after_a_second_401_and_then_issues_no_request(monkeypatch, tmp_path) -> None:
+async def test_claude_fetch_backs_off_after_a_second_401_and_then_issues_no_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   fake = _FakeUsageHTTP([401, 401])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -1895,7 +1922,8 @@ async def test_claude_fetch_backs_off_after_a_second_401_and_then_issues_no_requ
 
 
 @pytest.mark.asyncio
-async def test_claude_fetch_does_not_renew_on_a_long_past_stored_expiry(monkeypatch, tmp_path) -> None:
+async def test_claude_fetch_does_not_renew_on_a_long_past_stored_expiry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   fake = _FakeUsageHTTP([200])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -1906,7 +1934,8 @@ async def test_claude_fetch_does_not_renew_on_a_long_past_stored_expiry(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_claude_renewal_writes_back_advancing_expiry_and_rotated_token(monkeypatch, tmp_path) -> None:
+async def test_claude_renewal_writes_back_advancing_expiry_and_rotated_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   fake = _FakeUsageHTTP([401, 200])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -1921,7 +1950,8 @@ async def test_claude_renewal_writes_back_advancing_expiry_and_rotated_token(mon
 
 
 @pytest.mark.asyncio
-async def test_claude_renewal_without_expiry_keeps_the_stored_value(monkeypatch, tmp_path) -> None:
+async def test_claude_renewal_without_expiry_keeps_the_stored_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   fake = _FakeUsageHTTP([401, 200], renewal={"access_token": "tok-new"})
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -1933,7 +1963,7 @@ async def test_claude_renewal_without_expiry_keeps_the_stored_value(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_claude_requests_identify_as_claude_code(monkeypatch, tmp_path) -> None:
+async def test_claude_requests_identify_as_claude_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   fake = _FakeUsageHTTP([401, 200])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -1944,7 +1974,8 @@ async def test_claude_requests_identify_as_claude_code(monkeypatch, tmp_path) ->
 
 
 @pytest.mark.asyncio
-async def test_claude_renewal_posts_to_the_platform_token_endpoint(monkeypatch, tmp_path) -> None:
+async def test_claude_renewal_posts_to_the_platform_token_endpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   fake = _FakeUsageHTTP([401, 200])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -1956,7 +1987,8 @@ async def test_claude_renewal_posts_to_the_platform_token_endpoint(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_claude_renewal_failure_arms_backoff_and_reports_token_refresh_failed(monkeypatch, tmp_path) -> None:
+async def test_claude_renewal_failure_arms_backoff_and_reports_token_refresh_failed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   fake = _FakeUsageHTTP([401], renewal_body="boom", renewal_status=400)
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -1972,7 +2004,8 @@ async def test_claude_renewal_failure_arms_backoff_and_reports_token_refresh_fai
 
 
 @pytest.mark.asyncio
-async def test_claude_rate_limited_arms_backoff_and_reports_rate_limited(monkeypatch, tmp_path) -> None:
+async def test_claude_rate_limited_arms_backoff_and_reports_rate_limited(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   fake = _FakeUsageHTTP([429])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -1985,7 +2018,8 @@ async def test_claude_rate_limited_arms_backoff_and_reports_rate_limited(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_claude_renewal_succeeds_but_retried_get_401_reports_auth_rejected(monkeypatch, tmp_path) -> None:
+async def test_claude_renewal_succeeds_but_retried_get_401_reports_auth_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   fake = _FakeUsageHTTP([401, 401])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
 
@@ -2001,13 +2035,13 @@ async def test_claude_renewal_succeeds_but_retried_get_401_reports_auth_rejected
 # ---------------------------------------------------------------------------
 
 
-def _capture_user_agent_resolutions(monkeypatch) -> list[dict]:
+def _capture_user_agent_resolutions(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
   """Record every log call at the two levels the resolution event can take."""
   events: list[dict] = []
 
-  def record(level: str):
+  def record(level: str) -> Callable[..., None]:
 
-    def sink(event, **kw) -> None:
+    def sink(event: str, **kw: object) -> None:
       events.append({"level": level, "event": event, **kw})
 
     return sink
@@ -2018,7 +2052,7 @@ def _capture_user_agent_resolutions(monkeypatch) -> list[dict]:
 
 
 def _arm_user_agent_probe(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     *,
     stdout: bytes = b"",
     returncode: int = 0,
@@ -2032,7 +2066,7 @@ def _arm_user_agent_probe(
   ext_usage_mod._user_agent_cache = None
   calls: list[tuple[list[str], dict]] = []
 
-  def fake_run(args, **kwargs):
+  def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
     calls.append((list(args), kwargs))
     if error is not None:
       raise error
@@ -2047,7 +2081,7 @@ def _user_agent_resolution_events(events: list[dict]) -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_claude_requests_carry_the_probed_cli_version(monkeypatch, tmp_path) -> None:
+async def test_claude_requests_carry_the_probed_cli_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """Usage GET and refresh POST share the probed version, probed exactly once."""
   fake = _FakeUsageHTTP([401, 200, 200])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
@@ -2100,7 +2134,8 @@ async def test_claude_requests_carry_the_probed_cli_version(monkeypatch, tmp_pat
     ],
     ids=["missing-binary", "nonzero-exit", "unparseable-output"],
 )
-async def test_user_agent_probe_failure_falls_back_with_warning(monkeypatch, tmp_path, probe_kwargs) -> None:
+async def test_user_agent_probe_failure_falls_back_with_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, probe_kwargs: dict) -> None:
   fake = _FakeUsageHTTP([200])
   provider = _claude_provider(monkeypatch, tmp_path, fake)
   events = _capture_user_agent_resolutions(monkeypatch)

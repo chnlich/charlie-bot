@@ -43,14 +43,20 @@ async def test_process_event_persists_a_line_that_parses_back(tmp_path: Path, mo
 
 
 @pytest.mark.asyncio
-async def test_process_event_never_persists_the_session_attach_signal(tmp_path: Path, monkeypatch) -> None:
-  """The run-start adoption signal carries no renderable content: it appends no
-  worker-log line and broadcasts nothing, so no read of the log ever pays the
-  WorkerEvent validation failure a type-less line forces."""
+async def test_process_event_persists_the_attach_signal_without_broadcasting_it(
+    tmp_path: Path, monkeypatch) -> None:
+  """The typed adoption signal is the worker log's session-id record (the token
+  tally's codex reconciliation reads it from the raw line) but no thread
+  subscriber reads it and the projection skips it, so it appends exactly one
+  typed line and broadcasts nothing."""
   worker = make_worker(tmp_path, "attach-signal")
   broadcast = AsyncMock()
   monkeypatch.setattr(worker_module.streaming_manager, "broadcast", broadcast)
   event = {"type": ET.SESSION_ATTACHED, "session_id": "oc-s-1"}
   lines = (await process_worker_event(worker, tmp_path, event, monkeypatch)).splitlines()
-  assert lines == []
+  assert len(lines) == 1
+  persisted = json.loads(lines[0])
+  assert persisted["type"] == ET.SESSION_ATTACHED
+  assert persisted["session_id"] == "oc-s-1"
+  assert persisted["timestamp"]
   broadcast.assert_not_called()

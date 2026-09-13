@@ -436,9 +436,14 @@ class Worker:
 
   async def _process_event(self, event_data: dict, fd: int) -> None:
     """Write event to disk log and broadcast to WebSocket subscribers."""
-    # The run-start adoption signal carries no renderable content: it is never
-    # a worker-log row, a broadcast frame, or a relay input.
+    # The run-start adoption signal is the worker log's session-id record (the
+    # token tally's codex reconciliation reads the id from the raw line), but
+    # it carries no renderable content: the projection skips it and no thread
+    # subscriber reads it, so the broadcast frame is pure waste.
     if event_data.get("type") == ET.SESSION_ATTACHED:
+      if not event_data.get("timestamp"):
+        event_data["timestamp"] = datetime.now(UTC).isoformat()
+      await _append_event_line(fd, _event_line(event_data))
       return
     # Detect quota exhaustion errors. The payload copies ride only the type the
     # pattern check reads: str() reprs the whole message dict and lower() copies

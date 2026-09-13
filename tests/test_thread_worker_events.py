@@ -6,6 +6,7 @@ from pathlib import Path
 from conftest import fresh_state_fixture
 
 from src.api import threads as threads_api
+from src.core import event_types as ET
 
 TS = "2026-08-31T00:00:00+00:00"
 
@@ -166,3 +167,23 @@ def test_cache_evicts_beyond_cap(tmp_path: Path) -> None:
   assert len(threads_api._thread_events_cache) == cap
   assert str(paths[0]) not in threads_api._thread_events_cache
   assert str(paths[-1]) in threads_api._thread_events_cache
+
+
+def test_session_attach_signal_is_never_a_panel_row(tmp_path: Path) -> None:
+  """The typed adoption signal stays in the raw log (the token tally's codex
+  reconciliation reads its id from the line) but the projection skips it before
+  row construction — no row, and none of the validation failure the bare
+  pre-typed spelling forced on every cold read."""
+  path = tmp_path / "events.jsonl"
+  _write_events(path, [
+      json.dumps({
+          "type": ET.SESSION_ATTACHED,
+          "session_id": "oc-s-1",
+          "timestamp": TS
+      }) + "\n",
+      _assistant_block("hello"),
+  ])
+
+  events = threads_api.read_thread_worker_events(path)
+
+  assert [e.type for e in events] == [ET.ASSISTANT]

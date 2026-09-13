@@ -1231,7 +1231,8 @@ def _thread_records(objects: list[dict], meta: dict | None, registry: dict) -> t
   output]`` — the envelope's four usage numbers verbatim (missing keys are 0; a CLC result
   carries no cache fields, a codex result's input arrives with its cached reads included in
   the same field the envelope names). Session ids come off every line carrying one at top
-  level: the codex translation emits one bare ``session_id`` event per thread.started, and
+  level: the codex translation emits one session-adopt event per thread.started (the typed
+  ``session_attached`` signal, or its bare pre-typed spelling in older logs), and
   the claude-style init envelope embeds its own — both feed the rollout reconciliation.
   """
   if meta is None:

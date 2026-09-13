@@ -50,9 +50,12 @@ SCHEDULED_RUN_SKIPPED = "scheduled_run_skipped"
 
 # -- Backend run lifecycle ---------------------------------------------------
 # Run-start session adoption: the first event a spawned backend's run stream
-# yields names the session id the run attached to (opencode, antigravity,
-# gemini). The persist funnels capture that id and skip the wire entirely —
-# the signal is never a chat event, a worker-log row, or a broadcast frame.
+# yields names the session id the run attached to (opencode, codex, gemini,
+# charlie-code, antigravity). The master funnel persists it as the chat
+# history's run-start marker (the stable-history projection's interval key)
+# and the worker funnel keeps it as the worker log's session-id record (the
+# token tally's codex reconciliation reads it from the raw line); neither
+# funnel renders it — the worker projection skips it before row construction.
 SESSION_ATTACHED = "session_attached"
 
 # -- Agent relay -------------------------------------------------------------

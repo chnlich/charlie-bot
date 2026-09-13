@@ -161,7 +161,7 @@ JSON
     adopted_events.append(event)
 
   assert await _handle_event(events[0], "session-id", None, fake_persist) == "conv-abc"
-  assert adopted_events == []
+  assert adopted_events == [events[0]]
   assert events[1] == assistant_text_event("the answer")
   assert events[2]["type"] == "result"
   assert events[2]["usage"]["input_tokens"] == 10
@@ -392,7 +392,7 @@ async def test_envelope_guard_violation_raises_and_yields_only_an_error(
 
 
 @pytest.mark.asyncio
-async def test_session_attach_event_is_adopted_but_never_persisted(monkeypatch, tmp_path: Path) -> None:
+async def test_typed_session_attach_event_is_adopted_as_anchor_by_handle_event(monkeypatch, tmp_path: Path) -> None:
   _install_fake_agy(
       monkeypatch,
       tmp_path,
@@ -414,4 +414,4 @@ printf '%s' '{"status":"SUCCESS","conversation_id":"conv-abc","response":"hi","u
   cc_session_id = await _handle_event(events[0], "session-id", None, fake_persist)
 
   assert cc_session_id == "conv-abc"
-  assert captured == []
+  assert captured == [events[0]]

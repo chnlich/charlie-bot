@@ -8,7 +8,6 @@ from itertools import islice
 from pathlib import Path
 from typing import Any, BinaryIO
 
-import numpy as np
 import orjson
 import structlog
 
@@ -45,6 +44,10 @@ def _count_lines(f: BinaryIO) -> int:
   (a final line without a trailing newline counts), which the tail reader's
   ``total_line_count`` feeds into global ordinal math. The SIMD count is ~4x
   ``bytes.count`` on the production host (~3 GB/s vs ~0.7 GB/s measured)."""
+  # numpy rides this call site (the M99 server import floor): the module
+  # imports on the sessions chain every server start pulls, and its ~90 ms
+  # load serves only this one SIMD count.
+  import numpy as np
   total = 0
   last_byte = b""
   while chunk := f.read(_COUNT_CHUNK_SIZE):

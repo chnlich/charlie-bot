@@ -16,7 +16,6 @@ from starlette.middleware.gzip import GZipMiddleware, GZipResponder
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from src.agents import transcriber
 from src.api import (
     anthropic_proxy,
     backlog,
@@ -197,6 +196,19 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context) -> 
     log.info(f"{log_label}_closed", reason=str(e), **log_context)
 
 
+def _provision_speech_models(cfg: CharlieBotConfig) -> None:
+  """Provision the speech models on a worker thread.
+
+  src.agents.transcriber carries the numpy import (~90 ms), so the module loads
+  here instead of the event loop's startup path — the server import floor the
+  M99 collector measures (docs/perf_baseline.md) prices this thread's span, not
+  the import's.
+  """
+  from src.agents import transcriber
+
+  transcriber.provision_models(cfg)
+
+
 async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task | None = None) -> None:
   """Background startup recovery; logs completion and never swallows failures.
 
@@ -277,7 +289,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   except Exception:
     pass  # reported where the task is awaited: crash recovery logs it loudly
   app.state.recovery_task = asyncio.create_task(_run_crash_recovery(cfg, boot_time, identity))
-  app.state.speech_model_task = transcriber.start_model_provisioning(cfg)
+  app.state.speech_model_task = create_logged_task(
+      asyncio.to_thread(_provision_speech_models, cfg), name="speech-model-provisioning")
 
   scheduler = Scheduler(cfg, session_mgr)
   app.state.scheduler = scheduler

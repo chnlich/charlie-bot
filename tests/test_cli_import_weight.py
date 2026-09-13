@@ -165,3 +165,33 @@ def test_module_defers_structlog_until_the_first_log_call(module_name: str, impo
   before, after = json.loads(proc.stderr)
   assert before is False, f"{module_name} imported structlog at module import; {import_cost}"
   assert after is True, f"{module_name}.log did not resolve structlog on first use"
+
+
+# The server import floor's ban set (docs/perf_baseline.md M99): numpy rides
+# src.agents.transcriber (voice) and the two SIMD scanners (ndjson's count,
+# sessions' parent-reference frames), all of which load lazily at their use
+# sites. The framework + config stacks a server process legitimately pays are
+# out of the ban set.
+SERVER_HEAVY_MODULES = ("numpy", "src.agents.transcriber")
+
+
+def test_server_import_defers_the_speech_stack() -> None:
+  loaded = _modules_loaded_after_import("import server", SERVER_HEAVY_MODULES)
+  assert loaded == [], (
+      "import server pulled the speech stack (numpy, src.agents.transcriber) at "
+      f"module import: {loaded}; the M99 server import floor "
+      "(docs/perf_baseline.md) depends on it loading on the provisioning thread "
+      "and at the voice use sites — import it lazily there")
+  code = (
+      "import sys; import server; "
+      "from src.api import voice; "
+      "print('numpy' in sys.modules or 'src.agents.transcriber' in sys.modules)")
+  pulled = subprocess.run(
+      [sys.executable, "-c", code],
+      cwd=REPO_ROOT,
+      capture_output=True,
+      text=True,
+      timeout=120,
+      check=True,
+  ).stdout.strip()
+  assert pulled == "False", "importing the voice route pulled the speech stack at module import"

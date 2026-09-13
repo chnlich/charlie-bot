@@ -38,7 +38,7 @@ the named curation variants over several frozen cases — is documented in
   malformed input exits nonzero without touching an endpoint.
 
 The pipeline lives in `src/core/memory_replay/` (manifest, retrieval, exchange,
-validation, transport, report, runner); `src/cli/memory.py` only parses
+validate, transport, report, runner); `src/cli/memory.py` only parses
 arguments and prints the outcome.
 
 ## Manifest format
